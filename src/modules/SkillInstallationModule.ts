@@ -108,7 +108,7 @@ export class SkillInstallationModule extends BaseModule {
   // -------------------------------------------------------------------------
 
   async prepare(request: PrepareRequest): Promise<InstallSnapshot> {
-    const { sessions, events } = await this.getModels();
+    const { sessions, events, installations } = await this.getModels();
     const baseDescriptor = normalizeSkillSource(request.source);
     if (!baseDescriptor) {
       return this.errorSnapshot(
@@ -132,6 +132,27 @@ export class SkillInstallationModule extends BaseModule {
       );
       if (active.length > 0) {
         return this.snapshotFromEntity(active[0]);
+      }
+      // A healthy ready installation of the same source is REPORTED as
+      // ready — never re-acquired because the model asked again.
+      const ready = await installations.findReadyBySourceUri(
+        descriptor.canonicalUri
+      );
+      if (ready.length > 0) {
+        const verified = new SkillActivationService().verifyActivation(
+          ready[0].activationPath
+        );
+        if (verified) {
+          return {
+            sessionId: `installation:${ready[0].installationId}`,
+            installationId: ready[0].installationId,
+            state: "ready",
+            nextAction: "ready",
+            planRevision: null,
+            safeSummary: `'${ready[0].name}' is already installed and healthy; no changes made.`,
+            recoverable: true,
+          };
+        }
       }
     }
 
@@ -398,6 +419,9 @@ export class SkillInstallationModule extends BaseModule {
     // Update flows through prepare against the recorded source; the
     // activation service's backup mechanism retains the previous version
     // until the new one verifies.
+    // Update FORCES a fresh session (the ready-installation idempotency
+    // gate must not short-circuit an explicit update request): pass an
+    // explicit sessionId so prepare skips the resume/report-ready path.
     return this.prepare({
       conversationId: `update:${installationId}`,
       source: entity.sourceUri,
@@ -409,6 +433,7 @@ export class SkillInstallationModule extends BaseModule {
         entity.activationMode === "junction"
           ? "linked"
           : "managed-copy",
+      sessionId: `update-${installationId}-${Date.now()}`,
     });
   }
 

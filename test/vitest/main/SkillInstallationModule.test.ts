@@ -149,6 +149,32 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     );
   }, 120_000);
 
+  it("repeated prepare after approval REPORTS the ready installation (§10.2)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-ready-report",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(["ready", "installing_dependencies"]).toContain(approved.state);
+
+    const repeat = await module.prepare({
+      conversationId: "conv-ready-report-2",
+      source: fixtureRoot,
+    });
+    expect(repeat.state).toBe("ready");
+    expect(repeat.nextAction).toBe("ready");
+    expect(repeat.sessionId).toMatch(/^installation:/);
+    expect(repeat.installationId).toBe(approved.installationId);
+  }, 120_000);
+
   it("repeated prepare resumes the active session (no duplicate acquisition)", async () => {
     const module = new SkillInstallationModule();
     const first = await module.prepare({

@@ -53,3 +53,46 @@ jobs:
       # instrumentation interacts with some test). Re-enable coverage in CI once
       # root-caused (WS-2 R2.4 follow-up). Per-file coverage still works via
       # `yarn testmain run <file> --coverage`.
+
+  # ---------------------------------------------------------------------------
+  # Windows shell verification matrix (natural-language-skill-installation
+  # PRD §16.4 / §26.3): runs the process-provider diagnostic matrix on a REAL
+  # Windows runner — PowerShell sentinel/UTF-8/unicode/stderr+exit, cmd echo,
+  # native Git, timeout tree-kill, the PROCESS_OUTPUT_EMPTY_UNEXPECTED
+  # sentinel, and paths with spaces. This is the release gate for the
+  # observed "exit 0 with empty captured output" defect.
+  # ---------------------------------------------------------------------------
+  windows-shell-matrix:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      # Python 3.12+ removed distutils; bundled node-gyp still imports it.
+      # Pin 3.11 so native-module install scripts succeed (same as build.yml).
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run Windows process-provider diagnostic matrix (BLOCKING)
+        # The vitest globalSetup runs the tsc --noEmit gate first; the
+        # provider test then executes the live PowerShell/cmd/Git matrix.
+        run: npx vitest run --config vite.main.config.mjs test/vitest/main/process/PlatformProcessProvider.test.ts

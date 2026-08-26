@@ -121,6 +121,18 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
+  // Skill-installation isolation: enable the installer and confine config
+  // home, staging, and the credential store to the per-run temp root.
+  allowed[E2E_ENV.SKILL_INSTALL_ENABLED] = "true";
+  allowed[E2E_ENV.CONFIG_HOME] = testRoot.rootPath;
+  allowed[E2E_ENV.SKILL_STAGING_ROOT] = path.join(
+    testRoot.rootPath,
+    "skill-staging"
+  );
+  allowed[E2E_ENV.SKILL_CREDENTIAL_STORE] = path.join(
+    testRoot.rootPath,
+    "skill-state"
+  );
   const allowedOrigins = [RENDERER_ORIGIN];
   if (fakeAiBaseUrl) {
     allowed[E2E_ENV.AI_BASE_URL] = fakeAiBaseUrl;

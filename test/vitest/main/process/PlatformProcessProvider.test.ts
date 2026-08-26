@@ -14,6 +14,7 @@ import * as os from "os";
 import * as path from "path";
 import {
   PosixProcessProvider,
+  WindowsProcessProvider,
   buildChildEnvironment,
   decodeProcessOutput,
   getPlatformProcessProvider,
@@ -252,6 +253,152 @@ describe("PosixProcessProvider (live)", () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe(fs.realpathSync(spaced));
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// Windows verification matrix (PRD §16.4 / design §7.4) — runs ONLY on a
+// real Windows runner. These cases are the release gate for the observed
+// "exit 0 with empty output" defect; each asserts NON-EMPTY captured output.
+// ---------------------------------------------------------------------------
+
+const WINDOWS = process.platform === "win32";
+
+describe("WindowsProcessProvider live matrix (PRD §16.4)", () => {
+  const provider = new WindowsProcessProvider();
+  const cwd = tmpCwd();
+
+  const run = (command: string, expectOutput = false) =>
+    provider.execute({
+      executable: "powershell.exe",
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 30_000,
+      outputLimitBytes: 1_000_000,
+      ...(expectOutput ? { expectOutput: true } : {}),
+    });
+
+  it("PowerShell: Write-Output 'sentinel' → stdout contains sentinel", async () => {
+    if (!WINDOWS) return;
+    const r = await run("Write-Output 'sentinel'", true);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("sentinel");
+    expect(r.stdoutBytes).toBeGreaterThan(0);
+    expect(r.diagnosticCode).toBeUndefined();
+  }, 60_000);
+
+  it("PowerShell: Get-Content on a UTF-8 file → exact expected content", async () => {
+    if (!WINDOWS) return;
+    const fs = await import("fs");
+    const path = await import("path");
+    const file = path.join(cwd, "utf8-fixture.txt");
+    fs.writeFileSync(file, "expected-utf8-content", "utf-8");
+    // PowerShell accepts forward slashes in -LiteralPath, avoiding
+    // backslash-escaping in the generated command string.
+    const r = await run(
+      `Get-Content -LiteralPath '${file.split("\\").join("/")}'`,
+      true
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("expected-utf8-content");
+  }, 60_000);
+
+  it("PowerShell: unicode output round-trips", async () => {
+    if (!WINDOWS) return;
+    const r = await run("Write-Output '你好世界 🎬'", true);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("你好世界");
+  }, 60_000);
+
+  it("PowerShell: stderr and non-zero exit stay separated", async () => {
+    if (!WINDOWS) return;
+    const r = await run(
+      "Write-Output 'out-msg'; Write-Error 'err-msg'; exit 3"
+    );
+    expect(r.exitCode).toBe(3);
+    expect(r.stdout).toContain("out-msg");
+    expect(r.stderr).toContain("err-msg");
+  }, 60_000);
+
+  it("cmd: echo sentinel → stdout contains sentinel", async () => {
+    if (!WINDOWS) return;
+    const r = await provider.execute({
+      executable: "cmd.exe",
+      args: ["/d", "/s", "/c", "echo cmd-sentinel"],
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 30_000,
+      outputLimitBytes: 1_000_000,
+      expectOutput: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("cmd-sentinel");
+    expect(r.stdoutBytes).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("native Git: --version emits non-empty version output", async () => {
+    if (!WINDOWS) return;
+    const r = await provider.execute({
+      executable: "git.exe",
+      args: ["--version"],
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 30_000,
+      outputLimitBytes: 64 * 1024,
+      expectOutput: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/git version/i);
+  }, 60_000);
+
+  it("timeout terminates the process tree", async () => {
+    if (!WINDOWS) return;
+    const r = await provider.execute({
+      executable: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Start-Sleep -Seconds 30",
+      ],
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 3_000,
+      outputLimitBytes: 64 * 1024,
+    });
+    expect(r.timedOut).toBe(true);
+    expect(r.diagnosticCode).toBe("PROCESS_TIMEOUT");
+    expect(r.durationMs).toBeLessThan(20_000);
+  }, 60_000);
+
+  it("expect-output zero-byte success is flagged, never treated as verified", async () => {
+    if (!WINDOWS) return;
+    const r = await run("exit 0", true);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdoutBytes).toBe(0);
+    expect(r.stderrBytes).toBe(0);
+    expect(r.diagnosticCode).toBe("PROCESS_OUTPUT_EMPTY_UNEXPECTED");
+  }, 60_000);
+
+  it("commands run correctly in a cwd containing spaces", async () => {
+    if (!WINDOWS) return;
+    const fs = await import("fs");
+    const path = await import("path");
+    const spaced = path.join(cwd, "dir with spaces");
+    fs.mkdirSync(spaced, { recursive: true });
+    const r = await provider.execute({
+      executable: "cmd.exe",
+      args: ["/d", "/s", "/c", "cd"],
+      cwd: spaced,
+      environment: buildChildEnvironment(),
+      timeoutMs: 30_000,
+      outputLimitBytes: 64 * 1024,
+      expectOutput: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toLowerCase()).toContain("dir with spaces");
+  }, 60_000);
 });
 
 describe("getPlatformProcessProvider", () => {

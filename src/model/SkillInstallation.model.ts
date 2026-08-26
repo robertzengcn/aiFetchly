@@ -1,13 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
-import {
-  SkillInstallationEntity,
-} from "@/entity/SkillInstallation.entity";
-import {
-  SkillInstallationSessionEntity,
-} from "@/entity/SkillInstallationSession.entity";
-import {
-  SkillInstallationEventEntity,
-} from "@/entity/SkillInstallationEvent.entity";
+import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
+import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
+import { SkillInstallationEventEntity } from "@/entity/SkillInstallationEvent.entity";
 import { Repository } from "typeorm";
 
 export class SkillInstallationModel extends BaseDb {
@@ -44,16 +38,26 @@ export class SkillInstallationModel extends BaseDb {
     return this.repository.findOneBy({ installationId });
   }
 
+  /**
+   * Healthy ready installations for a source (PRD §10.2: a duplicate prepare
+   * reports the verified ready installation instead of re-acquiring).
+   */
+  async findReadyBySourceUri(
+    sourceUri: string
+  ): Promise<SkillInstallationEntity[]> {
+    return this.repository.find({
+      where: { sourceUri, status: "ready", enabled: true },
+      order: { updatedAt: "DESC" },
+    });
+  }
+
   async save(
     entity: SkillInstallationEntity
   ): Promise<SkillInstallationEntity> {
     return this.repository.save(entity);
   }
 
-  async setStatus(
-    installationId: string,
-    status: string
-  ): Promise<void> {
+  async setStatus(installationId: string, status: string): Promise<void> {
     await this.repository.update({ installationId }, { status });
   }
 
