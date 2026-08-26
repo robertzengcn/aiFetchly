@@ -3072,4 +3072,56 @@ export default {
     cooldown_active:
       "Checked recently. Please wait a minute before trying again.",
   },
+  aiContentReport: {
+    action: "Report AI output",
+    actionAriaLabel: "Report this AI-generated output",
+    dialogTitle: "Report AI output",
+    outputPreview: "AI output",
+    imagesLabel: "Images",
+    imageAlt: "Generated image {n}",
+    categoryLabel: "What is wrong with this output?",
+    commentLabel: "Additional details (optional)",
+    consent:
+      "The selected AI output and your description will be sent to AiFetchly for review. Your prompt, other messages, files, and AI reasoning will not be included.",
+    privacyPolicy: "Privacy policy",
+    submit: "Submit report",
+    cancel: "Cancel",
+    tryAgain: "Try again",
+    copyReference: "Copy reference",
+    success: "Report submitted. Reference: {reportId}",
+    reported: "Reported",
+    imageUnavailable:
+      "This image could not be attached. You can still submit the report with your description.",
+    categories: {
+      hate_or_harassment: "Hate or harassment",
+      sexual_content: "Sexual content",
+      violence_or_self_harm: "Violence or self-harm",
+      child_safety: "Child safety",
+      illegal_or_dangerous: "Illegal or dangerous",
+      privacy_or_personal_data: "Privacy or personal data",
+      misinformation_or_deception: "Misinformation or deception",
+      copyright_or_ownership: "Copyright or ownership",
+      other: "Other",
+    },
+    errors: {
+      categoryRequired: "Please choose a category.",
+      imageRequired: "Select at least one image to report.",
+      noEvidence: "Add a description so the report can be submitted.",
+      network:
+        "The report could not be submitted. Your details have been kept so you can try again.",
+      auth_failed:
+        "Authentication failed. Your details have been kept so you can try again.",
+      invalid_evidence:
+        "The report evidence was invalid. Your details have been kept so you can try again.",
+      payload_too_large:
+        "The report payload is too large. Your details have been kept so you can try again.",
+      rate_limited: "Too many reports were submitted. Please try again later.",
+      service_disabled:
+        "Reporting is temporarily unavailable. Please try again later.",
+      server_error:
+        "The report could not be submitted. Your details have been kept so you can try again.",
+      unknown:
+        "The report could not be submitted. Your details have been kept so you can try again.",
+    },
+  },
 };

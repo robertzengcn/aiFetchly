@@ -3103,4 +3103,57 @@ export default {
     cooldown_active:
       "Comprobado hace poco. Espera un minuto antes de intentarlo de nuevo.",
   },
+  aiContentReport: {
+    action: "Reportar contenido de IA",
+    actionAriaLabel: "Reportar este contenido generado por IA",
+    dialogTitle: "Reportar contenido de IA",
+    outputPreview: "Contenido de IA",
+    imagesLabel: "Imágenes",
+    imageAlt: "Imagen generada {n}",
+    categoryLabel: "¿Qué problema tiene este contenido?",
+    commentLabel: "Detalles adicionales (opcional)",
+    consent:
+      "El contenido de IA seleccionado y tu descripción se enviarán a AiFetchly para su revisión. Tu prompt, otros mensajes, archivos y el razonamiento de la IA no se incluirán.",
+    privacyPolicy: "Política de privacidad",
+    submit: "Enviar informe",
+    cancel: "Cancelar",
+    tryAgain: "Reintentar",
+    copyReference: "Copiar referencia",
+    success: "Informe enviado. Referencia: {reportId}",
+    reported: "Reportado",
+    imageUnavailable:
+      "No se pudo adjuntar esta imagen. Puedes enviar el informe con tu descripción.",
+    categories: {
+      hate_or_harassment: "Odio o acoso",
+      sexual_content: "Contenido sexual",
+      violence_or_self_harm: "Violencia o autolesión",
+      child_safety: "Seguridad infantil",
+      illegal_or_dangerous: "Ilegal o peligroso",
+      privacy_or_personal_data: "Privacidad o datos personales",
+      misinformation_or_deception: "Desinformación o engaño",
+      copyright_or_ownership: "Derechos de autor o propiedad",
+      other: "Otro",
+    },
+    errors: {
+      categoryRequired: "Selecciona una categoría.",
+      imageRequired: "Selecciona al menos una imagen para reportar.",
+      noEvidence: "Añade una descripción para poder enviar el informe.",
+      network:
+        "No se pudo enviar el informe. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+      auth_failed:
+        "Error de autenticación. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+      invalid_evidence:
+        "La evidencia del informe no es válida. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+      payload_too_large:
+        "El contenido del informe es demasiado grande. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+      rate_limited:
+        "Se han enviado demasiados informes. Inténtalo de nuevo más tarde.",
+      service_disabled:
+        "Los informes no están disponibles temporalmente. Inténtalo de nuevo más tarde.",
+      server_error:
+        "No se pudo enviar el informe. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+      unknown:
+        "No se pudo enviar el informe. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+    },
+  },
 };

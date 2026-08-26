@@ -3040,4 +3040,56 @@ export default {
     cooldown_active:
       "最近確認しました。しばらく待ってからもう一度お試しください。",
   },
+  aiContentReport: {
+    action: "AI コンテンツを報告",
+    actionAriaLabel: "この AI 生成コンテンツを報告",
+    dialogTitle: "AI コンテンツを報告",
+    outputPreview: "AI コンテンツ",
+    imagesLabel: "画像",
+    imageAlt: "生成された画像 {n}",
+    categoryLabel: "このコンテンツの問題は何ですか？",
+    commentLabel: "追加の詳細（任意）",
+    consent:
+      "選択した AI コンテンツとあなたの説明は、レビューのため AiFetchly に送信されます。プロンプト、他のメッセージ、ファイル、AI の推論は含まれません。",
+    privacyPolicy: "プライバシーポリシー",
+    submit: "報告を送信",
+    cancel: "キャンセル",
+    tryAgain: "再試行",
+    copyReference: "参照番号をコピー",
+    success: "報告を送信しました。参照番号：{reportId}",
+    reported: "報告済み",
+    imageUnavailable:
+      "この画像は添付できませんでした。説明を添えて報告を送信できます。",
+    categories: {
+      hate_or_harassment: "憎悪または嫌がらせ",
+      sexual_content: "性的コンテンツ",
+      violence_or_self_harm: "暴力または自傷行為",
+      child_safety: "児童の安全",
+      illegal_or_dangerous: "違法または危険",
+      privacy_or_personal_data: "プライバシーまたは個人データ",
+      misinformation_or_deception: "偽情報または欺瞞",
+      copyright_or_ownership: "著作権または所有権",
+      other: "その他",
+    },
+    errors: {
+      categoryRequired: "カテゴリを選択してください。",
+      imageRequired: "報告する画像を少なくとも 1 つ選択してください。",
+      noEvidence: "報告を送信できるよう説明を追加してください。",
+      network:
+        "報告を送信できませんでした。入力内容は保存されているので、再試行できます。",
+      auth_failed:
+        "認証に失敗しました。入力内容は保存されているので、再試行できます。",
+      invalid_evidence:
+        "報告の証拠が無効です。入力内容は保存されているので、再試行できます。",
+      payload_too_large:
+        "報告のペイロードが大きすぎます。入力内容は保存されているので、再試行できます。",
+      rate_limited: "報告が多すぎます。後でもう一度お試しください。",
+      service_disabled:
+        "報告機能は一時的に利用できません。後でもう一度お試しください。",
+      server_error:
+        "報告を送信できませんでした。入力内容は保存されているので、再試行できます。",
+      unknown:
+        "報告を送信できませんでした。入力内容は保存されているので、再試行できます。",
+    },
+  },
 };
