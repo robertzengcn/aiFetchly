@@ -31,6 +31,10 @@ import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  isAppPermissionCheckAllowed,
+  isAppPermissionRequestAllowed,
+} from "@/service/AppSessionPermissions";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import * as path from "path";
 import { pathToFileURL } from "url";
@@ -1315,24 +1319,16 @@ function configureContentSecurityPolicy() {
   // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
   // (video). Other permissions use a minimal allowlist instead of blanket-
   // approving, so unexpected requests (geolocation, midi, etc.) are denied.
-  const ALLOWED_PERMISSIONS = new Set([
-    "clipboard-sanitized",
-    "clipboard-read",
-    "fullscreen",
-    "window-management",
-    "openExternal",
-  ]);
+  // Clipboard copy uses clipboard-sanitized-write; Chromium checks AND
+  // requests it, so both handlers must allow it.
   defaultSession.setPermissionRequestHandler(
     (_wc, permission, callback, details) => {
-      if (permission === "media") {
-        const wantsVideo =
-          (
-            details as { mediaTypes?: string[] } | undefined
-          )?.mediaTypes?.includes("video") ?? false;
-        callback(!wantsVideo);
-        return;
-      }
-      callback(ALLOWED_PERMISSIONS.has(permission));
+      callback(isAppPermissionRequestAllowed(permission, details));
+    }
+  );
+  defaultSession.setPermissionCheckHandler(
+    (_wc, permission, _requestingOrigin, details) => {
+      return isAppPermissionCheckAllowed(permission, details);
     }
   );
 
