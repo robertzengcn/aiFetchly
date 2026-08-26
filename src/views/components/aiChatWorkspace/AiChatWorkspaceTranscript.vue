@@ -44,6 +44,7 @@
         @approve="onPlanApprove"
         @request-changes="onPlanRequestChanges()"
         @review-full-plan="openActivity"
+        @discard="emit('discard')"
       />
       <AiChatPlanReceipt
         v-else-if="item.kind === 'plan-receipt'"
@@ -101,6 +102,8 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "submit-plan-answers", answers: unknown[]): void;
   (e: "open-activity"): void;
+  /** FR-056: discard/reject from the decision card overflow. */
+  (e: "discard"): void;
 }>();
 
 type ProjectedItem =

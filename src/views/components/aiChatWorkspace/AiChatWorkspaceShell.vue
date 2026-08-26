@@ -107,6 +107,7 @@
           @approve-plan="onLegacyPlanAction('approve-plan')"
           @request-plan-changes="onLegacyPlanAction('request-plan-changes', $event)"
           @submit-plan-answers="onPlanAnswers"
+          @discard="onLegacyPlanAction('reject-plan')"
           @open-activity="workspaceStore.openInspector('activity')"
         />
         <button

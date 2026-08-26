@@ -51,6 +51,30 @@
       >
         {{ t('workspaceChat.plan.approve') || 'Approve plan' }}
       </button>
+      <!-- FR-056: Discard/reject is infrequent → overflow (§12.7). -->
+      <v-menu location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <button
+            v-bind="menuProps"
+            type="button"
+            class="decision-overflow"
+            data-testid="workspace-plan-overflow"
+            :aria-label="t('workspaceChat.plan.moreActions') || 'More actions'"
+          >
+            <v-icon icon="mdi-dots-horizontal" size="18" aria-hidden="true" />
+          </button>
+        </template>
+        <v-list density="compact" role="menu">
+          <v-list-item
+            role="menuitem"
+            class="destructive"
+            :title="t('workspaceChat.plan.discard') || 'Discard plan'"
+            prepend-icon="mdi-trash-can-outline"
+            data-testid="workspace-plan-discard"
+            @click="onDiscard"
+          />
+        </v-list>
+      </v-menu>
     </div>
   </section>
 </template>
@@ -68,11 +92,23 @@ const emit = defineEmits<{
   (e: "approve"): void;
   (e: "request-changes"): void;
   (e: "review-full-plan"): void;
+  /** FR-056: discard/reject — infrequent action in overflow (§12.7). */
+  (e: "discard"): void;
 }>();
 
 const { t } = useI18n();
 
 const stepCount = computed(() => props.plan.scopeSummary?.stepCount);
+
+/** FR-056: discard requires confirmation before emitting. */
+function onDiscard(): void {
+  if (window.confirm(
+    t('workspaceChat.plan.discardConfirm') ||
+      'Discard this plan? This cannot be undone.'
+  )) {
+    emit('discard');
+  }
+}
 </script>
 
 <style scoped>
@@ -155,6 +191,24 @@ const stepCount = computed(() => props.plan.scopeSummary?.stepCount);
   cursor: pointer;
 }
 
+.decision-overflow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--app-radius-control);
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  cursor: pointer;
+}
+
+.decision-overflow:hover {
+  background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+.decision-overflow:focus-visible,
 .decision-primary:focus-visible,
 .decision-secondary:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));

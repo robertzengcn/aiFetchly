@@ -153,6 +153,34 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(decisions.length).toBe(1);
   });
 
+  it("FR-042: tool progress from live events evolves the row in place", async () => {
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "Searching..."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-live",
+        toolName: "web_search",
+        // Simulate a tool_progress event that the presenter applied
+        toolProgress: { phase: "running", progress: 0.5, updatedAt: 123, partialCount: 10, expectedCount: 20 },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "streaming" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The execution group should contain one row with the live progress.
+    const groups = wrapper.findAllComponents({ name: "AiChatExecutionGroup" });
+    expect(groups.length).toBeGreaterThanOrEqual(1);
+    const rows = wrapper.findAllComponents({ name: "AiChatExecutionRow" });
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    // The row status should reflect the running tool.
+    const row = rows[0];
+    expect(row.props("execution").status).toBe("running");
+    expect(row.props("execution").phase).toBe("running");
+    expect(row.props("execution").progress).toBe(0.5);
+  });
+
   it("FR-062: no duplicate plan status across transcript surfaces", async () => {
     const planState = {
       planId: "plan-1",

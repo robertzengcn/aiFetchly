@@ -179,6 +179,15 @@ export function buildToolExecutionGroups(
         outputKind: "summary",
         isError: false,
         isLegacyUnpaired: !toolCallId,
+        // FR-042: read persisted toolProgress metadata (applied by the
+        // presenter from live tool_progress events) so the evolving row
+        // shows progress without a separate liveEvents overlay.
+        phase: metadata?.toolProgress?.phase ?? undefined,
+        progress: typeof metadata?.toolProgress?.progress === 'number'
+          ? metadata.toolProgress.progress
+          : undefined,
+        partialCount: metadata?.toolProgress?.partialCount ?? undefined,
+        expectedCount: metadata?.toolProgress?.expectedCount ?? undefined,
       };
       if (toolCallId) {
         byCallId.set(toolCallId, { view, order: order++ });
