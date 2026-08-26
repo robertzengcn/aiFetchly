@@ -16,6 +16,7 @@ import { z } from "zod";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
+  PROMPT_SKILL_INVOKE,
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_DISABLE,
@@ -258,6 +259,63 @@ export function registerSkillInstallationLifecycleIpcHandlers(): void {
       return ok(result);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Uninstall failed.");
+    }
+  });
+}
+
+const invokeSkillSchema = z.object({
+  conversationId: z.string().min(1),
+  skill: z.string().min(1),
+  arguments: z.string().max(4_000).optional(),
+});
+
+/**
+ * Explicit /skill invocation (PRD §9.5): resolves through the SAME
+ * PromptSkillInvocationService as use_skill with invocationSource
+ * "explicit". The hidden instruction block attaches via the assembler's
+ * invoked-skill reattachment on the following turn.
+ */
+export function registerPromptSkillInvokeIpcHandler(): void {
+  ipcMain.handle(PROMPT_SKILL_INVOKE, async (_event, data: unknown) => {
+    const decoded = decode(invokeSkillSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const { getDefaultPromptSkillInvocationService } = await import(
+        "@/service/PromptSkillInvocationService"
+      );
+      const { getDefaultFilesystemContextService } = await import(
+        "@/service/ConversationFilesystemContextService"
+      );
+      const scope = await getDefaultFilesystemContextService()
+        .resolve(decoded.value.conversationId)
+        .then((r) => (r.ok ? r.context : null))
+        .catch(() => null);
+      const outcome =
+        await getDefaultPromptSkillInvocationService().invoke(
+          {
+            skill: decoded.value.skill,
+            ...(decoded.value.arguments !== undefined
+              ? { arguments: decoded.value.arguments }
+              : {}),
+          },
+          {
+            conversationId: decoded.value.conversationId,
+            conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
+            ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
+              ? { workspaceId: scope.workspaceId }
+              : {}),
+            invocationSource: "explicit",
+          }
+        );
+      if (!outcome.ok) {
+        return denied(outcome.result.message);
+      }
+      // Never return the instruction body — only the short ack.
+      return ok({ ...outcome.result });
+    } catch (err) {
+      return denied(
+        err instanceof Error ? err.message : "Skill invocation failed."
+      );
     }
   });
 }

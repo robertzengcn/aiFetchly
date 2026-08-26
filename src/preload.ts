@@ -270,6 +270,7 @@ import {
   SKILL_INSTALL_DISABLE,
   SKILL_INSTALL_ENABLE,
   SKILL_INSTALL_UNINSTALL,
+  PROMPT_SKILL_INVOKE,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -965,6 +966,8 @@ contextBridge.exposeInMainWorld("api", {
       SKILL_INSTALL_DISABLE,
       SKILL_INSTALL_ENABLE,
       SKILL_INSTALL_UNINSTALL,
+      PROMPT_SKILL_INVOKE,
+  PROMPT_SKILL_INVOKE,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
       // AiChatV2 Local Voice Channels (all request/response invoke handlers)

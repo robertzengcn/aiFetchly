@@ -3125,4 +3125,7 @@ export default {
       rollback_required: "Rolling back",
     },
   },
+  skillSlash: {
+      notFound: "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
+    },
 };

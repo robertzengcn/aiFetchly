@@ -801,6 +801,11 @@ import {
 } from "@/views/utils/aiGoalCommand";
 import { parseAiLoopCommand } from "@/service/slashCommands/AiChatLoopCommandParser";
 import {
+  parseSkillSlashCommand,
+  SKILL_SLASH_DEFAULT_TASK,
+} from "@/service/slashCommands/skillSlashCommand";
+import { invokePromptSkill } from "@/views/api/skillInstallation";
+import {
   createScheduledLoop,
   controlScheduledLoop,
   getScheduledLoopStatus,
@@ -3496,6 +3501,27 @@ const onSend = async (
   if (cmd.type === "loop") {
     await runLoopCommand(cmd.count);
     return;
+  }
+  // `/skill <name> [task]` — explicit prompt-skill invocation (PRD §9.5):
+  // resolves through the SAME invocation service as use_skill, then sends
+  // the remaining task text; the invoked instructions attach as hidden
+  // context for the streamed turn.
+  const skillCmd = parseSkillSlashCommand(text);
+  if (skillCmd.type === "skill_invoke") {
+    const skillConversationId = ensureWorkspaceConversationId();
+    const ack = await invokePromptSkill({
+      conversationId: skillConversationId,
+      skill: skillCmd.name,
+      ...(skillCmd.taskText ? { arguments: skillCmd.taskText } : {}),
+    });
+    if (!ack) {
+      streamError.value =
+        t("aiChatV2.skillSlash.notFound", { name: skillCmd.name }) ||
+        `No installed prompt skill matches '${skillCmd.name}'.`;
+      return;
+    }
+    modelMessage =
+      skillCmd.taskText || SKILL_SLASH_DEFAULT_TASK;
   }
   if (cmd.type === "goal") {
     if (!cmd.objective) {

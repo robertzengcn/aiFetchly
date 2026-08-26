@@ -375,6 +375,8 @@ export const SKILL_INSTALL_REPAIR = "skill-install:repair";
 export const SKILL_INSTALL_DISABLE = "skill-install:disable";
 export const SKILL_INSTALL_ENABLE = "skill-install:enable";
 export const SKILL_INSTALL_UNINSTALL = "skill-install:uninstall";
+/** Explicit /skill-name invocation (PRD §9.5) — same invocation service as use_skill. */
+export const PROMPT_SKILL_INVOKE = "prompt-skill:invoke";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";

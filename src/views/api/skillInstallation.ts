@@ -1,5 +1,6 @@
 import { windowInvoke } from "@/views/utils/apirequest";
 import {
+  PROMPT_SKILL_INVOKE,
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_PREPARE,
@@ -76,3 +77,25 @@ export async function submitSkillInstallSecret(input: {
 }
 
 export type { SkillInstallPrepareArgs };
+
+export interface InvokePromptSkillAck {
+  readonly status: "loaded" | "already-loaded";
+  readonly runtimeId: string;
+  readonly name: string;
+  readonly contentHash: string;
+  readonly contextRevision: number;
+}
+
+/**
+ * Explicit `/skill <name>` invocation (PRD §9.5) — the same invocation
+ * service use_skill uses, with invocationSource "explicit". Returns only
+ * the short acknowledgement; the instructions attach as hidden context.
+ */
+export async function invokePromptSkill(input: {
+  conversationId: string;
+  skill: string;
+  arguments?: string;
+}): Promise<InvokePromptSkillAck | null> {
+  const resp = await windowInvoke(PROMPT_SKILL_INVOKE, input);
+  return (resp as InvokePromptSkillAck | null) ?? null;
+}

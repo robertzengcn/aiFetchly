@@ -29,6 +29,7 @@ import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communica
 import {
   registerSkillInstallationIpcHandlers,
   registerSkillInstallationLifecycleIpcHandlers,
+  registerPromptSkillInvokeIpcHandler,
 } from "@/main-process/communication/skill-installation-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
@@ -110,6 +111,7 @@ export function registerCommunicationIpcHandlers(
     registerAiChatScheduledLoopIpcHandlers();
     registerSkillInstallationIpcHandlers();
     registerSkillInstallationLifecycleIpcHandlers();
+    registerPromptSkillInvokeIpcHandler();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();

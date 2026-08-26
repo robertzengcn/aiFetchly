@@ -3002,4 +3002,7 @@ export default {
       rollback_required: "正在回滚",
     },
   },
+  skillSlash: {
+      notFound: "没有匹配 '{name}' 的已安装提示技能。使用 /skills 查看已安装技能。",
+    },
 };

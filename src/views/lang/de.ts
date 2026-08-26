@@ -3153,4 +3153,7 @@ export default {
       rollback_required: "Wird zurückgesetzt",
     },
   },
+  skillSlash: {
+      notFound: "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",
+    },
 };

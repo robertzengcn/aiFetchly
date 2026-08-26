@@ -3140,4 +3140,7 @@ export default {
       rollback_required: "Restauration",
     },
   },
+  skillSlash: {
+      notFound: "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
+    },
 };

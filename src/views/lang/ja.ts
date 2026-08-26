@@ -3093,4 +3093,7 @@ export default {
       rollback_required: "ロールバック中",
     },
   },
+  skillSlash: {
+      notFound: "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
+    },
 };

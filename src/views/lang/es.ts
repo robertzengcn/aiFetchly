@@ -3156,4 +3156,7 @@ export default {
       rollback_required: "Revirtiendo",
     },
   },
+  skillSlash: {
+      notFound: "Ninguna habilidad de prompt instalada coincide con '{name}'. Usa /skills para listarlas.",
+    },
 };
