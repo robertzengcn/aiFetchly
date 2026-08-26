@@ -2588,7 +2588,7 @@ export default {
         "3枚を超える画像が選択されました。独立した編集のバッチとして処理しますか？",
       batchConfirmTitle: "バッチで処理しますか？",
       batchConfirmBody:
-        "選択した各画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
+        "選択した{count}枚の画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
       send: "送信",
       progressSummary: "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
       errors: {

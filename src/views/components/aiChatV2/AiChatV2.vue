@@ -573,7 +573,9 @@
         <v-card-text>
           <p class="text-body-2 mb-3">
             {{
-              t("aiChatV2.generatedImageRefs.batchConfirmBody") ||
+              t("aiChatV2.generatedImageRefs.batchConfirmBody", {
+                count: pendingGeneratedImageBatchCount,
+              }) ||
               "Each selected image will be edited independently in a background batch. This may take a while."
             }}
           </p>
@@ -1312,6 +1314,10 @@ const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
 const showGeneratedImageChooser = ref(false);
 const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
 const showBatchConfirmDialog = ref(false);
+/** Number of references shown in the batch-confirmation copy. */
+const pendingGeneratedImageBatchCount = computed<number>(
+  () => pendingGeneratedImageSend.value?.confirmedReferences?.length ?? 0
+);
 const generatedImageNotice = ref<string | null>(null);
 const showGeneratedImageNotice = computed<boolean>({
   get: () => generatedImageNotice.value !== null,
@@ -3768,9 +3774,22 @@ function runGeneratedImagePreflight(
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
+    /** Internal: user-confirmed batch reference set (trusted resend). */
+    confirmedBatchReferences?: ChatV2GeneratedImageReference[];
   },
   bypassInference = false
 ): ChatV2GeneratedImageReference[] | null {
+  // Trusted resend channel: the user just approved this exact reference set in
+  // the batch-confirmation dialog. The confirmed set rides outside
+  // generatedImageReferences, so return an empty effective list and skip every
+  // guard — otherwise the explicit tray (still holding the selection) would
+  // re-trigger the same dialog in a loop.
+  if (
+    options?.confirmedBatchReferences &&
+    options.confirmedBatchReferences.length > 0
+  ) {
+    return [];
+  }
   const explicit = getGeneratedImageDraft(activeConversationId.value);
   let effective: ChatV2GeneratedImageReference[] = [];
   if (explicit.length > 0) {
@@ -3825,15 +3844,25 @@ function runGeneratedImagePreflight(
     }
   }
   if (effective.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
-    showGeneratedImageError(
-      isFusionWording(text)
-        ? t(
-            "aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit"
-          ) || "Combining images is limited to 3 at a time."
-        : t(
-            "aiChatV2.generatedImageRefs.errors.generated_image_reference_limit"
-          ) || "Too many referenced images for one request."
-    );
+    if (isFusionWording(text)) {
+      showGeneratedImageError(
+        t(
+          "aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit"
+        ) || "Combining images is limited to 3 at a time."
+      );
+      return null;
+    }
+    // Explicit multi-selections above three are paid work: ask for batch
+    // confirmation instead of hard-blocking. Confirm stages the approved set
+    // via the trusted channel; decline keeps the tray untouched.
+    pendingGeneratedImageSend.value = {
+      conversationId: draftKeyFor(activeConversationId.value),
+      text,
+      files,
+      options,
+      confirmedReferences: [...effective],
+    };
+    showBatchConfirmDialog.value = true;
     return null;
   }
   return effective;

@@ -2514,7 +2514,7 @@ export default {
       limitReached: "每次请求最多可参考 3 张图片。",
       batchOffer: "已选择超过 3 张图片。改为按批次独立处理它们吗？",
       batchConfirmTitle: "按批处理？",
-      batchConfirmBody: "每张所选图片将在后台批次中独立编辑，可能需要一些时间。",
+      batchConfirmBody: "所选的 {count} 张图片将在后台批次中独立编辑，可能需要一些时间。",
       send: "发送",
       progressSummary: "已完成 {completed}/{requested} · 并发数 {concurrency}",
       errors: {

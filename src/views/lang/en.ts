@@ -2625,7 +2625,7 @@ export default {
         "More than 3 images were selected. Run them as a batch of independent edits instead?",
       batchConfirmTitle: "Process as batch?",
       batchConfirmBody:
-        "Each selected image will be edited independently in a background batch. This may take a while.",
+        "All {count} selected images will be edited independently in a background batch. This may take a while.",
       send: "Send",
       progressSummary:
         "{completed} of {requested} completed · concurrency {concurrency}",

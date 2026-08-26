@@ -3,7 +3,8 @@
 // Component tests for conversation-scoped generated-image selection wiring in
 // AiChatV2.vue: message-event -> composer tray, per-conversation isolation,
 // deterministic inference preflight (ambiguity chooser / batch confirmation /
-// fusion guard), generatedImageReferences on the stream request, draft
+// fusion guard), explicit multi-selections above three routing to the batch
+// confirmation, generatedImageReferences on the stream request, draft
 // clearing on accepted turns, and localized generated_image_* error codes.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -166,7 +167,7 @@ const i18n = createI18n({
             "More than 3 images were selected. Run them as a batch of independent edits instead?",
           batchConfirmTitle: "Process as batch?",
           batchConfirmBody:
-            "Each selected image will be edited independently in a background batch. This may take a while.",
+            "All {count} selected images will be edited independently in a background batch. This may take a while.",
           send: "Send",
           errors: {
             generated_image_reference_invalid:
@@ -364,11 +365,16 @@ const MessagesStub = defineComponent({
       emit("use-generated-image", { messageId: "m1", imageIndex: 0 });
     const editImage = (): void =>
       emit("edit-generated-image", { messageId: "m1", imageIndex: 1 });
-    return { useImage, editImage };
+    const useAt = (imageIndex: number): void =>
+      emit("use-generated-image", { messageId: "m1", imageIndex });
+    return { useImage, editImage, useAt };
   },
   template: `<div data-testid="messages">
     <span data-testid="messages-error">{{ errorMessage ?? "" }}</span>
     <button data-testid="msg-use-img" @click="useImage">use</button>
+    <button data-testid="msg-use-img-1" @click="useAt(1)">use-1</button>
+    <button data-testid="msg-use-img-2" @click="useAt(2)">use-2</button>
+    <button data-testid="msg-use-img-3" @click="useAt(3)">use-3</button>
     <button data-testid="msg-edit-img" @click="editImage">edit</button>
   </div>`,
 });
@@ -474,6 +480,30 @@ async function mockHistoryWithImages(imageCount: number): Promise<void> {
       runtimeStatus: "idle",
     })
   );
+}
+
+type ChatWrapper = ReturnType<typeof mountChat>;
+
+/** Additively select `count` distinct references via the message stub. */
+async function selectReferences(
+  wrapper: ChatWrapper,
+  count: number
+): Promise<void> {
+  const selectors = [
+    '[data-testid="msg-use-img"]',
+    '[data-testid="msg-use-img-1"]',
+    '[data-testid="msg-use-img-2"]',
+    '[data-testid="msg-use-img-3"]',
+  ];
+  if (count > selectors.length) {
+    throw new Error(`cannot select more than ${selectors.length} references`);
+  }
+  for (let index = 0; index < count; index += 1) {
+    const selector = selectors[index];
+    if (!selector) break;
+    await wrapper.find(selector).trigger("click");
+    await flushPromises();
+  }
 }
 
 describe("AiChatV2 generated-image editing wiring", () => {
@@ -807,5 +837,126 @@ describe("AiChatV2 generated-image editing wiring", () => {
     expect(
       wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
     ).toBe(false);
+  });
+
+  it("routes an explicit selection above three to the batch dialog instead of the limit toast", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
+
+    // Non-fusion send with an explicit 4-selection must open the paid-work
+    // batch confirmation — no stream call, no reference-limit toast.
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-error-toast"]').exists()
+    ).toBe(false);
+    const confirmDialog = wrapper.find(
+      '[data-testid="ai-chat-generated-batch-confirm"]'
+    );
+    expect(confirmDialog.exists()).toBe(true);
+    expect(confirmDialog.text()).toContain("Process as batch?");
+    // The dialog shows the selected COUNT.
+    expect(confirmDialog.text()).toContain("All 4 selected images");
+  });
+
+  it("confirming an explicit multi-selection stages the confirmed set in selection order", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="ai-chat-generated-batch-confirm-accept"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    const { request } = lastStreamCall();
+    // The confirmed set rides the trusted channel — NOT generatedImageReferences.
+    expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.confirmedGeneratedImageBatch).toBeDefined();
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m1", imageIndex: 1 },
+      { messageId: "m1", imageIndex: 2 },
+      { messageId: "m1", imageIndex: 3 },
+    ]);
+    // The message text becomes the batch instruction.
+    expect(request.message).toContain("all of them");
+  });
+
+  it("declining an explicit multi-selection keeps the tray and does not stream", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(true);
+
+    await wrapper
+      .find('[data-testid="ai-chat-generated-batch-decline"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(false);
+    // The user's selection is preserved for retry/reduction.
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
+  });
+
+  it("fusion wording with an explicit selection above three never routes to batch", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper
+      .find('[data-testid="composer-send-fusion"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    const toast = wrapper.find('[data-testid="ai-chat-generated-error-toast"]');
+    expect(toast.exists()).toBe(true);
+    expect(toast.text()).toContain("Combining images is limited to 3");
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
   });
 });

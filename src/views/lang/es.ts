@@ -2650,7 +2650,7 @@ export default {
         "Se seleccionaron más de 3 imágenes. ¿Prefieres procesarlas como un lote de ediciones independientes?",
       batchConfirmTitle: "¿Procesar como lote?",
       batchConfirmBody:
-        "Cada imagen seleccionada se editará de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
+        "Las {count} imágenes seleccionadas se editarán de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
       send: "Enviar",
       progressSummary:
         "{completed} de {requested} completadas · concurrencia {concurrency}",

@@ -2630,7 +2630,7 @@ export default {
         "Plus de 3 images ont été sélectionnées. Les traiter plutôt comme un lot d'éditions indépendantes ?",
       batchConfirmTitle: "Traiter par lot ?",
       batchConfirmBody:
-        "Chaque image sélectionnée sera modifiée indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
+        "Les {count} images sélectionnées seront modifiées indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
       send: "Envoyer",
       progressSummary:
         "{completed} sur {requested} terminées · concurrence {concurrency}",

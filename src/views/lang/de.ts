@@ -2641,7 +2641,7 @@ export default {
         "Es wurden mehr als 3 Bilder ausgewählt. Stattdessen als Stapel unabhängiger Bearbeitungen verarbeiten?",
       batchConfirmTitle: "Als Stapel verarbeiten?",
       batchConfirmBody:
-        "Jedes ausgewählte Bild wird unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
+        "Alle {count} ausgewählten Bilder werden unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
       send: "Senden",
       progressSummary:
         "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
