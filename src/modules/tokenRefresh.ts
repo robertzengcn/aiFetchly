@@ -132,6 +132,46 @@ export class TokenRefreshService {
   private static readonly MAX_CONSECUTIVE_FAILURES = 3;
   private static _consecutiveFailures = 0;
 
+  // --- Refresh-success listener registry (FR-5.1) ---
+  /**
+   * Listeners invoked after a successful access-token refresh. Used by the
+   * entitlement reconciliation service to pull fresh plans from /api/user/info
+   * once a valid Bearer is in place. Kept here (rather than in the entitlement
+   * service) so TokenRefreshService does not import the entitlement service
+   * (avoids a circular dependency — design §15).
+   */
+  private static _refreshSuccessListeners = new Set<
+    (data: TokenRefreshData) => void
+  >();
+
+  /**
+   * Register a listener invoked after every successful access-token refresh.
+   * Returns an unsubscribe function. Safe to call multiple times; duplicate
+   * references are ignored by the Set.
+   */
+  static onRefreshSuccess(
+    listener: (data: TokenRefreshData) => void
+  ): () => void {
+    TokenRefreshService._refreshSuccessListeners.add(listener);
+    return () => {
+      TokenRefreshService._refreshSuccessListeners.delete(listener);
+    };
+  }
+
+  /** Notify all registered listeners. Swallows listener errors. */
+  private static _notifyRefreshSuccess(data: TokenRefreshData): void {
+    for (const listener of TokenRefreshService._refreshSuccessListeners) {
+      try {
+        listener(data);
+      } catch (err) {
+        log.error(
+          "[TokenRefresh] onRefreshSuccess listener threw:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+  }
+
   constructor() {
     const resolved = resolveViteLoginBase();
     let loginUrl: string | undefined = resolved?.value;
@@ -310,6 +350,9 @@ export class TokenRefreshService {
         }
         log.info("[TokenRefresh] Background token refresh successful");
         TokenRefreshService._consecutiveFailures = 0;
+        // FR-5.1: notify listeners (entitlement reconciliation) that a fresh
+        // access token is available so they can pull /api/user/info.
+        TokenRefreshService._notifyRefreshSuccess(result.data);
       } else {
         throw new Error(result.msg || "Refresh returned unsuccessful status");
       }
