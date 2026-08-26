@@ -132,6 +132,13 @@ export const VIDEO_INFORMATION_TRANSLATE = "video:information:translate";
 export const VIDEO_VOICE_TRANSLATE = "video:voice:translate";
 export const SYSTEM_SETTING_UPDATE = "system_setting:update";
 export const QUERY_USER_INFO = "user:info";
+// Subscription entitlement reconciliation (PRD: subscription-entitlement-reconciliation).
+// Manual / test / renderer-initiated pull — calls the service, never TypeORM.
+export const USER_REFRESH_ENTITLEMENT = "user:refresh-entitlement";
+// Renderer asks main to open the pricing page (records pricingOpenedAt + retry loop).
+export const USER_OPEN_PRICING_PLAN = "user:open-pricing-plan";
+// Main -> renderer broadcast of the new entitlement snapshot (only when changed).
+export const USER_INFO_UPDATED = "user:info:updated";
 export const OPENLOGINPAGE = "open:page";
 export const GET_LOGIN_URL = "user:get_login_url";
 export const CANCEL_DESKTOP_LOGIN = "user:cancel_desktop_login";
