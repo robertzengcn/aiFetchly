@@ -139,6 +139,26 @@ describe("AIChatGeneratedImageStorageService.rehomeImages", () => {
     );
   }
 
+  /** Recursively list all file paths under dir; missing dir yields []. */
+  async function collectFiles(dir: string): Promise<string[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      return [];
+    }
+    const files: string[] = [];
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      if ((await fs.stat(full)).isDirectory()) {
+        files.push(...(await collectFiles(full)));
+      } else {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
   async function seedAgentImage(
     root: string
   ): Promise<{ bytes: Buffer; oldPath: string; descriptor: OpenAIChatImage }> {
@@ -294,5 +314,64 @@ describe("AIChatGeneratedImageStorageService.rehomeImages", () => {
       "assistant-parent"
     );
     await expect(fs.readdir(parentDir)).resolves.toEqual([]);
+  });
+
+  it("passes through descriptors owned by another local user without touching their files", async () => {
+    const root = await makeTempDir();
+    const service = makeService(root);
+    const foreignUser = "attacker@example.com";
+    const foreignBytes = Buffer.from([9, 9, 9, 9]);
+    // Seed a real file inside the FOREIGN user's generated-image store.
+    const foreignDir = path.join(
+      root,
+      "ai-chat-generated-images",
+      foreignUser,
+      "agent-v2-x",
+      "agent-assistant-y"
+    );
+    await fs.mkdir(foreignDir, { recursive: true });
+    const foreignPath = path.join(foreignDir, "image-1.png");
+    await fs.writeFile(foreignPath, foreignBytes);
+
+    const foreignDescriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: foreignUser,
+        conversationId: "agent-v2-x",
+        messageId: "agent-assistant-y",
+        fileName: "image-1.png",
+      }),
+      local_path: foreignPath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+
+    const [result] = await service.rehomeImages({
+      images: [foreignDescriptor],
+      targetConversationId: "v2-parent",
+      targetMessageId: "assistant-parent",
+    });
+
+    // Returned unchanged...
+    expect(result).toEqual(foreignDescriptor);
+    // ...the current user's target directory was never created, and the
+    // foreign source file was neither copied nor modified.
+    await expect(
+      fs.access(
+        path.join(
+          root,
+          "ai-chat-generated-images",
+          EMAIL,
+          "v2-parent",
+          "assistant-parent"
+        )
+      )
+    ).rejects.toThrow();
+    await expect(fs.readFile(foreignPath)).resolves.toEqual(foreignBytes);
+    // No stray copies anywhere in the current user's tree.
+    const currentUserRoot = path.join(root, "ai-chat-generated-images", EMAIL);
+    const strayFiles = await collectFiles(currentUserRoot);
+    expect(strayFiles).toEqual([]);
   });
 });

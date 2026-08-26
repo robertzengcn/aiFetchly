@@ -8,6 +8,7 @@ import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   buildGeneratedImageProtocolUrl,
   getGeneratedImageUserRoot,
+  normalizeGeneratedImageUserEmail,
   parseGeneratedImageProtocolIdentity,
   sanitizeGeneratedImagePathPart,
 } from "@/service/AIChatGeneratedImageProtocol";
@@ -77,6 +78,9 @@ export class AIChatGeneratedImageStorageService {
    *
    * Per descriptor:
    *  - non-protocol URLs pass through untouched;
+   *  - protocol URLs owned by a DIFFERENT local user pass through untouched
+   *    (never read or copied — re-homing only touches the current user's own
+   *    store);
    *  - protocol URLs already matching the target identity pass through
    *    untouched (idempotent for direct completions);
    *  - otherwise the source file is COPIED (never moved) into the target
@@ -130,6 +134,15 @@ export class AIChatGeneratedImageStorageService {
       this.userDataPath
     );
     if (!identity) {
+      return image;
+    }
+    // Ownership guard: a descriptor may name ANOTHER local user's folder
+    // (the parser normalizes any user segment). Never read or copy another
+    // user's generated image — pass the descriptor through unchanged.
+    if (
+      identity.normalizedUser !==
+      normalizeGeneratedImageUserEmail(this.currentUserEmail)
+    ) {
       return image;
     }
     if (
