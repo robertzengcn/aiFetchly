@@ -939,6 +939,77 @@ describe("AIChatCompactAgentService", () => {
       expect(secondCall.messages[1]!.content).toContain("Current Goal");
     });
 
+    it("tool-group chunks advance the boundary by MESSAGE count, not group count (SMBW-010 regression)", async () => {
+      // Delta = [user msg, assistant+tool_call, tool result]. The atomic
+      // grouper collapses the assistant tool-call + tool result into ONE
+      // group, so 3 messages = 2 groups. A tiny window forces 2 chunks:
+      // chunk 1 = the tool group (2 messages), chunk 2 = the user msg.
+      // The persisted boundary after chunk 1 must be the tool RESULT row
+      // (message index 2), not the user msg (index 0) — otherwise the next
+      // run re-sends the tool group.
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "u1",
+          conversationId: "v2-tool",
+          role: "user",
+          content: "run the build",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "a1",
+          conversationId: "v2-tool",
+          role: "assistant",
+          content: "",
+          timestamp: new Date(2),
+          messageType: "message",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "build", arguments: "{}" },
+            },
+          ],
+        },
+        {
+          messageId: "t1",
+          conversationId: "v2-tool",
+          role: "tool",
+          content: "build ok",
+          timestamp: new Date(3),
+          messageType: "message",
+          tool_call_id: "call_1",
+        },
+      ]);
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({
+        completeChat,
+        // Tiny window forces the 3-message delta into 2 chunks.
+        getContextWindow: vi.fn().mockResolvedValue(120),
+      });
+
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-tool",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      // The LAST upsert (chunk 2's persisted boundary — the tool group)
+      // must point at the tool RESULT (t1, message index 2), not at the
+      // assistant tool-call (a1, message index 1). Group-count indexing
+      // would land on a1 and under-advance the boundary.
+      const upserts = mockUpsertMemory.mock.calls as unknown as ReadonlyArray<
+        ReadonlyArray<{ coveredThroughMessageId?: string }>
+      >;
+      const lastUpsertArg = upserts[upserts.length - 1]?.[0];
+      expect(lastUpsertArg).toBeDefined();
+      expect(lastUpsertArg!.coveredThroughMessageId).toBe("t1");
+    });
+
     it("one same-small formatting repair is attempted on invalid non-empty output", async () => {
       const completeChat = vi
         .fn()

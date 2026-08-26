@@ -422,6 +422,8 @@ export class AIChatCompactAgentService {
       let sourceMessageCount = existing?.sourceMessageCount ?? 0;
       let resolvedModel = input.model ?? "session-memory";
       let processedGroups = 0;
+      // MESSAGE count (parallel to the group count) for correct row indexing.
+      let processedMessages = 0;
       const startedAt = Date.now();
 
       for (const chunk of chunks) {
@@ -521,18 +523,25 @@ export class AIChatCompactAgentService {
           return;
         }
         // Advance the boundary to the LAST message of this chunk's groups.
+        // `processedMessages` is a MESSAGE count (not a group count) so the
+        // index into `newRows` stays aligned even when a chunk contains
+        // multi-message atomic tool groups (a tool group = 2+ messages = 1
+        // group). Using a group-count offset here would point at the wrong
+        // row and under-advance the boundary, re-sending covered messages.
         const chunkGroups = chunk.groups;
         const lastGroup = chunkGroups[chunkGroups.length - 1]!;
         const lastMsg = lastGroup.messages[lastGroup.messages.length - 1]!;
-        const lastRow = newRows[processedGroups + chunkGroups.length - 1];
-        currentSummary = normalized.summary;
-        coveredThroughMessageId = lastRow?.messageId ?? lastMsg.role;
-        coveredThroughTimestamp = lastRow?.timestamp ?? new Date();
-        sourceMessageCount += chunkGroups.reduce(
+        const messagesInChunk = chunkGroups.reduce(
           (n, g) => n + g.messages.length,
           0
         );
+        const lastRow = newRows[processedMessages + messagesInChunk - 1];
+        currentSummary = normalized.summary;
+        coveredThroughMessageId = lastRow?.messageId ?? lastMsg.role;
+        coveredThroughTimestamp = lastRow?.timestamp ?? new Date();
+        sourceMessageCount += messagesInChunk;
         processedGroups += chunkGroups.length;
+        processedMessages += messagesInChunk;
         const tokenEstimate = this.estimator.estimateText(currentSummary);
         // SMBW-011: check cancellation before persisting the chunk boundary.
         if (input.signal?.aborted) {
