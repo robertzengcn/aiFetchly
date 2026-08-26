@@ -15,7 +15,10 @@ import type {
   CreateAiMessageTaskRequest,
   UpdateAiMessageTaskRequest,
 } from "@/entityTypes/aiMessageTaskTypes";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerAiValidatedHandler,
+  registerValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   aiMessageTaskWriteInputSchema,
   aiMessageTaskByIdInputSchema,
@@ -25,10 +28,13 @@ import {
 } from "@/schemas/ipc/aiMessageTask";
 
 /**
- * AI Message Task IPC handlers — all 8 migrated to registerAiValidatedHandler.
+ * AI Message Task IPC handlers.
  *
- * Original code had a bespoke isAiEnabled() check at the top of every handler;
- * now centralized in the wrapper.
+ * Create/update/delete/list/detail/run handlers are AI-gated. The tools
+ * catalog is a local SkillRegistry lookup with no AI API call, so it stays
+ * on registerValidatedHandler — same pattern as RAG_GET_AVAILABLE_MODELS
+ * and SKILL_LIST_INSTALLED. The schedule create form needs that catalog
+ * even when hosted AI is off (local provider, or filling the form first).
  */
 export function registerAiMessageTaskIpcHandlers(): void {
   console.log("AI Message Task IPC handlers registered");
@@ -106,7 +112,8 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  // Local catalog only — do not gate on USER_AI_ENABLED.
+  registerValidatedHandler(
     AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
     aiMessageTaskListToolsInputSchema,
     async () => {
