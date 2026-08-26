@@ -275,6 +275,10 @@ const userEmail=ref('')
 const userPlan=ref('')
 const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
+// Local-cache AI-enabled baseline. Seeded by applyPlans() from the local
+// GetloginUserInfo() read on mount, so useEntitlement can tell a real
+// free→paid transition from a no-op refresh of an already-paid user.
+const aiEnabledBaseline=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
@@ -358,6 +362,11 @@ const applyPlans = (plans: Array<UserPlanType>): void => {
         currentPlans.value = displayPlans;
         isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan);
         userPlan.value = displayPlans.map(plan => plan.planName).join(', ');
+        // AI-enabled = any active plan that is not free/community. Mirrors
+        // UserController.plansEnableAi for the renderer's local baseline.
+        const activePlans = displayPlans.filter(plan => (plan.status || '').toLowerCase() === 'active');
+        aiEnabledBaseline.value = activePlans.length > 0
+            && activePlans.some(plan => !isFreeSubscriptionPlan(plan));
     }
 };
 const showNotice = ref(false);
@@ -618,6 +627,21 @@ const showWarningMessage = (content: string) => addMessage('warning', content);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showInfoMessage = (content: string) => addMessage('info', content);
 
+// FR-7.1: subscribe to entitlement broadcasts at top-level setup (not inside
+// onMounted) so onUnmounted registers in the active component instance and
+// the IPC listener is cleaned up on unmount. The baseline is read from
+// aiEnabledBaseline, which applyPlans() seeds from the local cache.
+useEntitlement({
+    readBaselineAiEnabled: () => aiEnabledBaseline.value,
+    onPlansChanged: (plans) => applyPlans(plans),
+    onUpgrade: () => {
+        showSuccessMessage(t('subscriptionEntitlement.unlocked') || 'Your subscription is active. Hosted AI features are unlocked.')
+    },
+    onDowngrade: () => {
+        showInfoMessage(t('subscriptionEntitlement.cancelled') || 'Your subscription has changed. Some AI features may be unavailable.')
+    },
+})
+
 const initializeSavedLanguage = async (): Promise<void> => {
     try {
         const systemLanguage = await getLanguagePreference()
@@ -652,19 +676,6 @@ onMounted(async () => {
     } catch (error) {
         console.error('Failed to load login user info:', error)
     }
-
-    // FR-7.1: subscribe to entitlement broadcasts so the header plan label,
-    // Upgrade button, and AI-enabled UI update without remount/re-login.
-    // Toast rules (PRD §10): success on free→paid, info on paid→free.
-    useEntitlement({
-        onPlansChanged: (plans) => applyPlans(plans),
-        onUpgrade: () => {
-            showSuccessMessage(t('subscriptionEntitlement.unlocked') || 'Your subscription is active. Hosted AI features are unlocked.')
-        },
-        onDowngrade: () => {
-            showInfoMessage(t('subscriptionEntitlement.cancelled') || 'Your subscription has changed. Some AI features may be unavailable.')
-        },
-    })
 
     try {
         const name = await getAppName()
