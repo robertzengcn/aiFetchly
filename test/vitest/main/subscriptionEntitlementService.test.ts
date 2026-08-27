@@ -61,9 +61,11 @@ vi.mock("electron", () => ({
     getAllWindows: vi.fn(() => [
       {
         isDestroyed: () => false,
-        webContents: { send: (channel: string, payload: unknown) => {
-          state.broadcasts.push({ channel, payload });
-        } },
+        webContents: {
+          send: (channel: string, payload: unknown) => {
+            state.broadcasts.push({ channel, payload });
+          },
+        },
       },
     ]),
   },
@@ -71,7 +73,11 @@ vi.mock("electron", () => ({
 
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn(() => ""),
+    // Return a non-empty access token so the no-token skip (TODO-6) does not
+    // short-circuit reconcile in these tests. Other keys stay empty.
+    getValue: vi.fn((key: string) =>
+      key === "user-social-market-token" ? "test-access-token" : ""
+    ),
     setValue: vi.fn((key: string, value: string) => {
       state.tokenSets.push({ key, value });
     }),
@@ -88,7 +94,9 @@ vi.mock("@/modules/Logger", () => ({
 }));
 
 vi.mock("@/config/viteLoginUrl", () => ({
-  resolveViteLoginBase: vi.fn(() => ({ value: "https://marketing.example.com" })),
+  resolveViteLoginBase: vi.fn(() => ({
+    value: "https://marketing.example.com",
+  })),
 }));
 
 // Mock the schema so broadcast() validates without importing real zod at runtime.
@@ -179,7 +187,10 @@ describe("SubscriptionEntitlementService", () => {
     expect(res.changed).toBe(true);
     expect(res.snapshot.aiEnabled).toBe(true);
     expect(state.broadcasts.length).toBe(1);
-    const bcast = state.broadcasts[0] as { channel: string; payload: { changed: boolean; aiEnabled: boolean } };
+    const bcast = state.broadcasts[0] as {
+      channel: string;
+      payload: { changed: boolean; aiEnabled: boolean };
+    };
     expect(bcast.channel).toBe("user:info:updated");
     expect(bcast.payload.changed).toBe(true);
     expect(bcast.payload.aiEnabled).toBe(true);
@@ -270,7 +281,9 @@ describe("SubscriptionEntitlementService", () => {
     expect(res.snapshot.plans).toEqual(PLUS);
     // The broadcast carries the notify type for toast copy, but plans came
     // from the GET (UserController), not the payload.
-    const bcast = state.broadcasts[0] as { payload: { notificationType: string; plans: unknown[] } };
+    const bcast = state.broadcasts[0] as {
+      payload: { notificationType: string; plans: unknown[] };
+    };
     expect(bcast.payload.notificationType).toBe("subscription_activated");
     expect(bcast.payload.plans).toEqual(PLUS);
   });
@@ -335,7 +348,8 @@ describe("SubscriptionEntitlementService", () => {
     expect(res).toBeUndefined();
     // The forced pricing reconcile should have broadcast the upgrade.
     const upgrade = state.broadcasts.find(
-      (b) => (b as { payload: { aiEnabled: boolean } }).payload.aiEnabled === true
+      (b) =>
+        (b as { payload: { aiEnabled: boolean } }).payload.aiEnabled === true
     );
     expect(upgrade).toBeDefined();
   });

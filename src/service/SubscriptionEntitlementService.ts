@@ -22,7 +22,7 @@ import { log } from "@/modules/Logger";
 import { UserController } from "@/controller/UserController";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { USER_INFO_UPDATED } from "@/config/channellist";
-import { USERPLANS, USER_AI_ENABLED } from "@/config/usersetting";
+import { USERPLANS, USER_AI_ENABLED, TOKENNAME } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { userInfoUpdatedEventSchema } from "@/schemas/ipc/subscriptionEntitlement";
 import type { UserPlanType } from "@/entityTypes/userType";
@@ -274,6 +274,31 @@ export class SubscriptionEntitlementService {
 
     const userController = new UserController();
 
+    // --- No access token → skip reconcile entirely (design §6.3 / §9).
+    //     Keeps the cache; no GET is issued. A signed-out user has no
+    //     entitlement to reconcile. ---
+    let accessToken: string | undefined;
+    try {
+      accessToken = new Token().getValue(TOKENNAME) || undefined;
+    } catch {
+      accessToken = undefined;
+    }
+    if (!accessToken) {
+      log.info(
+        `[entitlement] reconcile skip trigger=${trigger} reason=no_token (cache kept)`
+      );
+      this.touchCooldowns(trigger);
+      return {
+        ok: false,
+        changed: false,
+        skipped: true,
+        trigger,
+        snapshot: previous,
+        previous,
+        failReason: "auth",
+      };
+    }
+
     // --- Pricing-window guard: if inside the pricing window and the GET
     //     would write Community/empty, treat it as a transient failure and
     //     keep the previous cache (design §9). ---
@@ -288,8 +313,16 @@ export class SubscriptionEntitlementService {
       await userController.updateUserInfo();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Classify 401/auth-shape failures as "auth" (HttpClient already tried
+      // a refresh; this means the session is rejected). Do NOT sign out —
+      // matches the token-refresh policy of keeping the local session (§9).
+      const isAuth =
+        /\b401\b|403|Authentication failed|Please login again|RefreshTokenInvalidError|invalid or expired|refresh token rejected|Forbidden/i.test(
+          msg
+        );
+      const reason = isAuth ? "auth" : "network";
       log.warn(
-        `[entitlement] reconcile fail trigger=${trigger} reason=network (cache kept) plans=${
+        `[entitlement] reconcile fail trigger=${trigger} reason=${reason} (cache kept) plans=${
           previous.planNames.join(",") || "(none)"
         } aiEnabled=${previous.aiEnabled}: ${msg}`
       );
@@ -301,7 +334,7 @@ export class SubscriptionEntitlementService {
         trigger,
         snapshot: previous,
         previous,
-        failReason: "network",
+        failReason: reason,
       };
     }
 
