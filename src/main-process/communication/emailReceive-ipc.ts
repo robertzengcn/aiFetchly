@@ -14,6 +14,11 @@ import {
   EMAIL_REPLY_DRAFT_DETAIL,
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+  EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -31,6 +36,11 @@ import {
   emailReplyDraftDetailInputSchema,
   emailReplyDraftUpdateInputSchema,
   emailReplySendInputSchema,
+  emailReplyDraftApproveInputSchema,
+  emailReplySendAttemptDetailInputSchema,
+  emailReplyDeliveryReconcileInputSchema,
+  emailReplyKnowledgeScopeGetInputSchema,
+  emailReplyKnowledgeScopeUpdateInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
 } from "@/schemas/ipc/emailReply";
@@ -40,6 +50,8 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
 import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
@@ -87,7 +99,10 @@ export function registerEmailReceiveIpcHandlers(): void {
     emailReceiveConnectionTestInputSchema,
     async (input) => {
       const syncService = new EmailReceiveSyncService();
-      return await syncService.testConnection(input.emailServiceId, input.settings);
+      return await syncService.testConnection(
+        input.emailServiceId,
+        input.settings
+      );
     }
   );
 
@@ -217,6 +232,16 @@ export function registerEmailReceiveIpcHandlers(): void {
       );
       entity.discloseAutomation = input.discloseAutomation ?? 0;
       const saved = await module.upsertForEmailService(entity);
+      // FR-013: changing the identity invalidates every not-yet-sent draft for
+      // the mailbox (they were written in the old voice; re-review required).
+      try {
+        await new EmailReplyDraftModule().invalidateUnsentDraftsForMailbox(
+          input.emailServiceId,
+          "Identity profile changed"
+        );
+      } catch (e) {
+        console.error("Failed to invalidate drafts after identity change:", e);
+      }
       return toIdentityProfileDto(saved);
     }
   );
@@ -265,6 +290,14 @@ export function registerEmailReceiveIpcHandlers(): void {
     EMAIL_REPLY_DRAFT_CREATE,
     emailReplyDraftCreateInputSchema,
     async (input) => {
+      // Kill switch (P0.1): block draft generation. The AI gate already ran
+      // before this handler body; the kill switch is an independent emergency
+      // shutoff that leaves viewing/audit/recovery available.
+      if (isEmailReplyKillSwitchOn()) {
+        throw new Error(
+          "Reply drafting is temporarily disabled by the kill switch"
+        );
+      }
       const genService = new EmailReplyDraftGenerationService();
       const result = await genService.createDraft(input);
       if (!result.success) {
@@ -313,7 +346,39 @@ export function registerEmailReceiveIpcHandlers(): void {
       const module = new EmailReplyDraftModule();
       const existing = await module.read(input.id);
       if (!existing) throw new Error("emailreceive.draft_not_found");
-      await module.updateBody(input.id, input.bodyText, input.bodyHtml ?? null);
+
+      // Reliability: route the edit through materializeRevision1 so it appends
+      // an immutable revision (subject + body), invalidates any active approval
+      // (FR-014), and recomputes the canonical hash. Legacy drafts without a v2
+      // envelope identity fall back to the mutable updateBody path until backfill
+      // materializes their revision 1.
+      const canV2 =
+        !!existing.senderAddress &&
+        !!existing.recipientAddress &&
+        existing.emailServiceId != null;
+      if (canV2) {
+        const { materializeRevision1 } = await import(
+          "@/service/emailReply/EmailReplyRevisionMaterializer"
+        );
+        await materializeRevision1(module, {
+          draftId: input.id,
+          actor: "user",
+          subject: input.subject,
+          bodyText: input.bodyText,
+          bodyHtml: input.bodyHtml ?? null,
+          senderAddress: existing.senderAddress as string,
+          recipientAddress: existing.recipientAddress as string,
+          emailServiceId: existing.emailServiceId as number,
+          originalMessageId: existing.messageId,
+        });
+      } else {
+        await module.updateBody(
+          input.id,
+          input.bodyText,
+          input.bodyHtml ?? null
+        );
+      }
+
       // Best-effort audit of the human edit.
       try {
         const audit = new EmailReplyAuditLogEntity();
@@ -332,18 +397,161 @@ export function registerEmailReceiveIpcHandlers(): void {
   );
 
   // ---- Confirmed reply send (UI Send button) ----
+  // The reliable send path is authoritative (P0.1): every send requires a valid
+  // approval token and goes through the idempotent delivery service. There is no
+  // legacy branch and no mailbox override. The kill switch refuses new claims.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
     async (input) => {
-      // Delegate to the AI tool implementation so the send path, header
-      // preservation, and dual audit writes stay in one place.
-      const { sendEmailReply } = await import("@/service/EmailReceiveAiTools");
-      const result = await sendEmailReply(input);
-      if (!result.success) {
-        throw new Error(result.error);
+      if (isEmailReplyKillSwitchOn()) {
+        throw new Error(
+          "Reply sending is temporarily disabled by the kill switch"
+        );
       }
+      if (!input.approvalToken) {
+        throw new Error(
+          "Approve the draft before sending (EMAIL_REPLY_DRAFT_APPROVE issues the one-time token)"
+        );
+      }
+      const { EmailReplyDeliveryService } = await import(
+        "@/service/emailReply/EmailReplyDeliveryService"
+      );
+      return await new EmailReplyDeliveryService().sendApprovedReply({
+        draftId: input.draftId,
+        approvalToken: input.approvalToken,
+      });
+    }
+  );
+
+  // ---- Approve the current revision of a draft (reliability v2) ----
+  // Returns the one-time approval token ONCE. The renderer passes it straight
+  // back to EMAIL_REPLY_SEND; it is never persisted in the clear and never
+  // surfaced to the LLM transcript.
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_APPROVE,
+    emailReplyDraftApproveInputSchema,
+    async (input) => {
+      const { EmailReplyApprovalService } = await import(
+        "@/service/emailReply/EmailReplyApprovalService"
+      );
+      const result = await new EmailReplyApprovalService().approveDraft({
+        draftId: input.draftId,
+        approvedByType: "user",
+      });
       return result;
+    }
+  );
+
+  // ---- Send-attempt detail for a draft (audit / recovery UI) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+    emailReplySendAttemptDetailInputSchema,
+    async (input) => {
+      const attemptModule = new EmailReplySendAttemptModule();
+      const records = await attemptModule.listByDraft(input.draftId);
+      return {
+        records: records.map((a) => ({
+          id: a.id,
+          status: a.status,
+          claimedAt: a.claimedAt ? new Date(a.claimedAt).toISOString() : null,
+          completedAt: a.completedAt
+            ? new Date(a.completedAt).toISOString()
+            : null,
+          providerMessageId: a.providerMessageId,
+          failureCode: a.failureCode,
+          sanitizedError: a.sanitizedError,
+        })),
+      };
+    }
+  );
+
+  // ---- Recovery + manual reconciliation (operational) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_DELIVERY_RECONCILE,
+    emailReplyDeliveryReconcileInputSchema,
+    async (input) => {
+      const { EmailReplySendRecoveryService } = await import(
+        "@/service/emailReply/EmailReplySendRecoveryService"
+      );
+      const svc = new EmailReplySendRecoveryService();
+      // Manual per-attempt reconcile when an attemptId + action are supplied;
+      // otherwise run the bounded auto sweep of stale in-flight attempts.
+      if (input.attemptId && input.action) {
+        return await svc.reconcileAttempt({
+          attemptId: input.attemptId,
+          action: input.action,
+          evidence: input.evidence,
+          providerMessageId: input.providerMessageId,
+        });
+      }
+      return await svc.recoverStaleAttempts(input.ageMs);
+    }
+  );
+
+  // ---- Knowledge scope settings (FR-008, P3.1) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+    emailReplyKnowledgeScopeGetInputSchema,
+    async (input) => {
+      const { EmailReplyKnowledgeScopeModule } = await import(
+        "@/modules/EmailReplyKnowledgeScopeModule"
+      );
+      const scope =
+        await new EmailReplyKnowledgeScopeModule().getByEmailServiceId(
+          input.emailServiceId
+        );
+      // Defaults when unset: legacy behavior (search all eligible docs).
+      let documentIds: number[] = [];
+      let tags: string[] = [];
+      if (scope) {
+        try {
+          documentIds = JSON.parse(scope.documentIdsJson) as number[];
+        } catch {
+          documentIds = [];
+        }
+        try {
+          tags = JSON.parse(scope.tagsJson) as string[];
+        } catch {
+          tags = [];
+        }
+      }
+      return {
+        emailServiceId: input.emailServiceId,
+        version: scope?.version ?? 0,
+        documentIds,
+        tags,
+        allowAllDocuments: scope ? scope.allowAllDocuments === 1 : true,
+        excludeInactiveDocuments: scope
+          ? scope.excludeInactiveDocuments === 1
+          : true,
+      };
+    }
+  );
+
+  // ---- Knowledge scope update: upsert + invalidate unsent drafts (FR-008) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
+    emailReplyKnowledgeScopeUpdateInputSchema,
+    async (input) => {
+      const { EmailReplyKnowledgeScopeModule } = await import(
+        "@/modules/EmailReplyKnowledgeScopeModule"
+      );
+      const saved = await new EmailReplyKnowledgeScopeModule().upsert({
+        emailServiceId: input.emailServiceId,
+        documentIds: input.documentIds,
+        tags: input.tags,
+        allowAllDocuments: input.allowAllDocuments,
+        excludeInactiveDocuments: input.excludeInactiveDocuments,
+      });
+      // Changing the scope invalidates every not-yet-sent draft for the mailbox
+      // (FR-008): approved drafts return to 'draft' and approvals are consumed.
+      const invalidated =
+        await new EmailReplyDraftModule().invalidateUnsentDraftsForMailbox(
+          input.emailServiceId,
+          `Knowledge scope changed (v${saved.version})`
+        );
+      return { version: saved.version, invalidatedDrafts: invalidated };
     }
   );
 }

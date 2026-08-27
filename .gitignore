@@ -158,6 +158,7 @@ hyperframes-*
 .test-userData/plugins/installed/my-plugin/agents/optimizer.md
 .test-userData/plugins/installed/my-plugin/agents/reviewer.md
 .test-userData/*
-playwright-report/index.html
-test-results/playwright-results.json
-test-results/playwright/.last-run.json
+# Playwright E2E artifacts (HTML/JSON report, traces, screenshots, videos)
+playwright-report/
+test-results/
+test-results/playwright/

@@ -89,6 +89,11 @@ import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProf
 import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
+import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import * as fs from "fs";
@@ -508,6 +513,11 @@ export class SqliteDb {
           EmailAutoReplyRuleEntity,
           EmailReplyAuditLogEntity,
           EmailAutoReplyAuditLogEntity,
+          EmailReplyDraftRevisionEntity,
+          EmailReplyApprovalEntity,
+          EmailReplySendAttemptEntity,
+          EmailConversationEntity,
+          EmailReplyKnowledgeScopeEntity,
           AIChatPlanEntity,
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,

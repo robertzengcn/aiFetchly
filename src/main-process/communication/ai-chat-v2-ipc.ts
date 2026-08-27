@@ -57,6 +57,7 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
+import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
@@ -1010,15 +1011,20 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
-  if (!Array.isArray(parsed.answers)) {
-    return denied("answers must be an array");
+  // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
+  // the engine. Rejects malformed shapes and bounds free-text length.
+  const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
+    parsed.answers
+  );
+  if (!answersResult.success) {
+    return denied("answers payload is invalid");
   }
 
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: parsed.answers,
+    answers: answersResult.data,
   });
   return ok(result);
 }

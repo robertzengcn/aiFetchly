@@ -56,7 +56,7 @@ const TextareaStub = defineComponent({
   },
   emits: ["update:modelValue", "keydown", "input", "keyup", "click"],
   template:
-    '<textarea data-testid="composer-input" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value); $emit(\'input\', $event)" @keydown="$emit(\'keydown\', $event)" @keyup="$emit(\'keyup\', $event)" @click="$emit(\'click\', $event)" />',
+    '<textarea data-testid="ai-chat-composer" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value); $emit(\'input\', $event)" @keydown="$emit(\'keydown\', $event)" @keyup="$emit(\'keyup\', $event)" @click="$emit(\'click\', $event)" />',
 });
 
 const ButtonStub = defineComponent({
@@ -126,7 +126,7 @@ describe("AiChatV2Composer slash command selection", () => {
   it("closes suggestions after selecting a command and does not immediately reopen them", async () => {
     const wrapper = mountComposer();
 
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     expect(wrapper.find(".slash-suggestions").exists()).toBe(true);
@@ -148,7 +148,7 @@ describe("AiChatV2Composer slash command selection", () => {
       msg: "",
     });
     const wrapper = mountComposer();
-    const input = wrapper.find('[data-testid="composer-input"]');
+    const input = wrapper.find('[data-testid="ai-chat-composer"]');
 
     // Typing the command name opens the dropdown (command selection).
     await input.setValue("/loop");
@@ -174,7 +174,7 @@ describe("AiChatV2Composer slash command selection", () => {
   it("sends a message when a stale @-mention dropdown is still open but the cursor is no longer in a mention", async () => {
     const wrapper = mountComposer();
     const input = wrapper.find<HTMLTextAreaElement>(
-      '[data-testid="composer-input"]'
+      '[data-testid="ai-chat-composer"]'
     );
 
     await input.setValue("@data/");
@@ -196,7 +196,7 @@ describe("AiChatV2Composer slash command selection", () => {
   it("keeps the draft until the parent accepts the send", async () => {
     const wrapper = mountComposer();
     const input = wrapper.find<HTMLInputElement>(
-      '[data-testid="composer-input"]'
+      '[data-testid="ai-chat-composer"]'
     );
     const message = "/goal keep this draft";
 
@@ -210,7 +210,7 @@ describe("AiChatV2Composer slash command selection", () => {
   it("clears the draft after the parent accepts the send", async () => {
     const wrapper = mountComposer();
     const input = wrapper.find<HTMLInputElement>(
-      '[data-testid="composer-input"]'
+      '[data-testid="ai-chat-composer"]'
     );
 
     await input.setValue("accepted message");

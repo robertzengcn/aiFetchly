@@ -97,6 +97,7 @@ import {
   loadHtmlFileWithUrlFallback,
 } from "@/utils/loadHtmlFileWithUrlFallback";
 import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
+import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -121,6 +122,16 @@ async function stopChatScheduledBackgroundScheduler(): Promise<void> {
 }
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
+
+// Startup side-effect policy (design §7). E2E mode (AIFETCHLY_E2E=1) disables
+// external side effects (protocol registration, single-instance lock, updater,
+// DevTools, schedulers, orphaned-task inspection, marketing WebSocket, token
+// refresh, dev browser bridge, global config scan). Production and normal dev
+// behavior is unchanged (every flag true).
+const startupPolicy = resolveAppStartupPolicy(
+  process.env,
+  Boolean((app as { isPackaged?: boolean }).isPackaged)
+);
 // import { safeStorage } from 'electron';
 
 if (!app.isReady()) {
@@ -459,32 +470,36 @@ function initialize() {
   //   { scheme: appName, privileges: { secure: true,
   //     standard: true } }
   // ])
-  if (app.isPackaged) {
-    if (!app.isDefaultProtocolClient(protocolScheme)) {
-      app.setAsDefaultProtocolClient(protocolScheme);
-    }
-  } else {
-    console.log("protocolScheme:", protocolScheme);
-    console.log("process.execPath:", process.execPath);
-    console.log(
-      "path.resolve(process.argv[1]):",
-      path.resolve(process.argv[1])
-    );
-    console.log("path:", path.resolve(process.argv[1]));
-    ProtocolRegistry.register(
-      protocolScheme,
-      `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-      {
-        override: true,
-        appName: appName,
-        terminal: true,
+  if (startupPolicy.registerProtocol) {
+    if (app.isPackaged) {
+      if (!app.isDefaultProtocolClient(protocolScheme)) {
+        app.setAsDefaultProtocolClient(protocolScheme);
       }
-    )
-      .then(() => console.log("Successfully registered"))
-      .catch((e) => console.error(e));
-    // app.setAsDefaultProtocolClient(protocolScheme);
+    } else {
+      console.log("protocolScheme:", protocolScheme);
+      console.log("process.execPath:", process.execPath);
+      console.log(
+        "path.resolve(process.argv[1]):",
+        path.resolve(process.argv[1])
+      );
+      console.log("path:", path.resolve(process.argv[1]));
+      ProtocolRegistry.register(
+        protocolScheme,
+        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
+        {
+          override: true,
+          appName: appName,
+          terminal: true,
+        }
+      )
+        .then(() => console.log("Successfully registered"))
+        .catch((e) => console.error(e));
+      // app.setAsDefaultProtocolClient(protocolScheme);
+    }
   }
-  makeSingleInstance();
+  if (startupPolicy.acquireSingleInstanceLock) {
+    makeSingleInstance();
+  }
 
   function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
     const windowWithLoadFile = targetWindow as BrowserWindow & {
@@ -735,10 +750,12 @@ function initialize() {
 
       // Start the dev browser bridge (dev-only; no-op in production or when
       // disabled). Fire-and-forget so a bridge failure never blocks app startup.
-      void startDevBrowserBridge(win).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`[dev-browser] failed to start bridge: ${msg}`);
-      });
+      if (startupPolicy.startDevBrowserBridge) {
+        void startDevBrowserBridge(win).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`[dev-browser] failed to start bridge: ${msg}`);
+        });
+      }
 
       // Load persisted skills into runtime registry
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
@@ -766,9 +783,11 @@ function initialize() {
       if (phase14WatcherManager) {
         phase14ConfigManager.setWorkspaceWatchManager(phase14WatcherManager);
       }
-      phase14ConfigManager.initialize().catch((err: unknown) => {
-        console.warn("[Startup] AIFetchly config scan failed:", err);
-      });
+      if (startupPolicy.scanGlobalExtensions) {
+        phase14ConfigManager.initialize().catch((err: unknown) => {
+          console.warn("[Startup] AIFetchly config scan failed:", err);
+        });
+      }
       //}
     }
 
@@ -864,7 +883,9 @@ function initialize() {
       // Initialize GitHub Releases auto-updater for packaged desktop builds.
       // The service self-gates on packaging state, platform, and Microsoft
       // Store channel, and is idempotent across repeated window creation.
-      initializeAppUpdates();
+      if (startupPolicy.initializeUpdates) {
+        initializeAppUpdates();
+      }
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development.
@@ -1203,60 +1224,64 @@ function initialize() {
       // }
 
       // Initialize the legacy scheduler and the interval-based Chat V2 scheduler.
-      try {
-        await runafterbootup();
-        const scheduleManager = ScheduleManager.getInstance();
-        await scheduleManager.initializeWithDatabaseStatus();
-        chatScheduledBackgroundScheduler = new BackgroundScheduler(
-          userdataPath
-        );
-        await chatScheduledBackgroundScheduler.start();
-        // Expose lifecycle hooks to login/logout through the neutral registry.
-        // Those flows must not import this module (Electron-only deps break
-        // pure-Node test suites); the registry lets them refresh/stop the
-        // scheduler in lockstep with the SqliteDb path reset.
-        registerChatSchedulerLifecycle({
-          refreshAndStart: async () => {
-            if (chatScheduledBackgroundScheduler) {
-              await chatScheduledBackgroundScheduler.refreshDatabaseForUserPath();
-              await chatScheduledBackgroundScheduler.start();
-            }
-          },
-          stop: stopChatScheduledBackgroundScheduler,
-        });
-        log.info("Schedulers initialized with auto-start functionality");
-      } catch (error) {
-        log.error("Failed to initialize schedulers:", error);
+      if (startupPolicy.startSchedulers) {
+        try {
+          await runafterbootup();
+          const scheduleManager = ScheduleManager.getInstance();
+          await scheduleManager.initializeWithDatabaseStatus();
+          chatScheduledBackgroundScheduler = new BackgroundScheduler(
+            userdataPath
+          );
+          await chatScheduledBackgroundScheduler.start();
+          // Expose lifecycle hooks to login/logout through the neutral registry.
+          // Those flows must not import this module (Electron-only deps break
+          // pure-Node test suites); the registry lets them refresh/stop the
+          // scheduler in lockstep with the SqliteDb path reset.
+          registerChatSchedulerLifecycle({
+            refreshAndStart: async () => {
+              if (chatScheduledBackgroundScheduler) {
+                await chatScheduledBackgroundScheduler.refreshDatabaseForUserPath();
+                await chatScheduledBackgroundScheduler.start();
+              }
+            },
+            stop: stopChatScheduledBackgroundScheduler,
+          });
+          log.info("Schedulers initialized with auto-start functionality");
+        } catch (error) {
+          log.error("Failed to initialize schedulers:", error);
+        }
       }
 
       // Check for orphaned Yellow Pages processes on startup
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
+      if (startupPolicy.inspectOrphanedTasks) {
+        try {
+          const yellowPagesCtrl = YellowPagesController.getInstance();
 
-        // Handle tasks from previous session first
-        const previousSessionCount =
-          await yellowPagesCtrl.handleTasksFromPreviousSession();
-        log.info(
-          `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
-        );
+          // Handle tasks from previous session first
+          const previousSessionCount =
+            await yellowPagesCtrl.handleTasksFromPreviousSession();
+          log.info(
+            `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
+          );
 
-        // Then check for orphaned processes
-        const orphanedCheckResult =
-          await yellowPagesCtrl.checkForOrphanedProcesses();
-        log.info(
-          "Yellow Pages orphaned process check completed:",
-          orphanedCheckResult
-        );
-      } catch (error) {
-        log.error(
-          "Failed to check for orphaned Yellow Pages processes:",
-          error
-        );
+          // Then check for orphaned processes
+          const orphanedCheckResult =
+            await yellowPagesCtrl.checkForOrphanedProcesses();
+          log.info(
+            "Yellow Pages orphaned process check completed:",
+            orphanedCheckResult
+          );
+        } catch (error) {
+          log.error(
+            "Failed to check for orphaned Yellow Pages processes:",
+            error
+          );
+        }
       }
 
       // Initialize WebSocket connection to marketing server
       // This enables real-time notifications and updates
-      if (win) {
+      if (startupPolicy.connectMarketingWebSocket && win) {
         try {
           await initializeWebSocketConnection(win);
           log.info("WebSocket connection to marketing server initialized");
@@ -1266,12 +1291,19 @@ function initialize() {
       }
 
       // Start background token auto-refresh for already-logged-in user (only if not already running)
-      if (!TokenRefreshService.isAutoRefreshRunning()) {
+      if (
+        startupPolicy.startTokenRefresh &&
+        !TokenRefreshService.isAutoRefreshRunning()
+      ) {
         TokenRefreshService.startAutoRefresh();
       }
     }
 
-    if (isDevelopment && !process.env.IS_TEST) {
+    if (
+      isDevelopment &&
+      !process.env.IS_TEST &&
+      startupPolicy.installDevTools
+    ) {
       // Install Vue Devtools (route Session.* through session.extensions)
       try {
         patchSessionExtensionsApi(session.defaultSession);
