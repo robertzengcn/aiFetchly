@@ -1,8 +1,13 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   AIUserMemoryModel,
   AIUserMemoryCreateFields,
 } from "@/model/AIUserMemory.model";
+import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
+import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
+import { applyConsolidationPlanInTransaction } from "@/modules/lib/consolidationPlanApply";
+import type { ParseResult } from "@/service/AIAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import type {
   AIUserMemoryCreateInput,
@@ -130,13 +135,73 @@ export class AIUserMemoryModule extends BaseModule {
     try {
       await this.memoryModel.markUsed(memoryIds, usedAt);
     } catch (err) {
-      console.error("[ai-memory] markMemoriesUsed failed:", err);
+      log.error("[ai-memory] markMemoriesUsed failed:", err);
     }
   }
 
   async listActiveForRetrieval(limit = 50): Promise<AIUserMemoryView[]> {
     const rows = await this.memoryModel.listActiveForRetrieval(limit);
     return rows.map((e) => this.toView(e));
+  }
+
+  /**
+   * Apply a parsed consolidation plan AND mark the run completed in ONE
+   * TypeORM transaction. Archive, update, and create operations run through
+   * transaction-bound repositories; the run is marked completed with counts,
+   * resolved model, and source-derived reviewedThrough in the same
+   * transaction. Returns counts only AFTER commit.
+   *
+   * If either the memory-plan persistence or the run-completion update fails,
+   * the entire transaction rolls back — the previous successful cursor remains
+   * authoritative and no partial memory plan is applied. The caller must NOT
+   * call the model again after this; all mutations occur after response
+   * validation (tech-design §14.4, §9.5).
+   */
+  async applyPlanAndCompleteRun(input: {
+    runId: string;
+    plan: ParseResult;
+    chatConversationsReviewed: number;
+    agentTasksReviewed: number;
+    model?: string;
+    reviewedThrough?: Date | null;
+  }): Promise<void> {
+    await this.ensureConnection();
+    await this.sqliteDb.connection.transaction(async (manager) => {
+      await applyConsolidationPlanInTransaction({
+        manager,
+        memoryEntity: AIUserMemoryEntity,
+        runEntity: AIMemoryConsolidationRunEntity,
+        plan: input.plan,
+        runId: input.runId,
+        completion: {
+          chatConversationsReviewed: input.chatConversationsReviewed,
+          agentTasksReviewed: input.agentTasksReviewed,
+          model: input.model,
+          reviewedThrough: input.reviewedThrough,
+        },
+        buildCreateEntity: (c) => {
+          const e = new AIUserMemoryEntity();
+          e.memoryId = `mem-${randomUUID()}`;
+          e.type = c.type;
+          e.title = c.title;
+          e.content = c.content;
+          e.status = "active";
+          e.confidence = clampConfidence(c.confidence ?? 100);
+          e.sourceKind =
+            c.sourceKind === "chat_v2" || c.sourceKind === "agent_task"
+              ? c.sourceKind
+              : "manual";
+          e.sourceConversationId =
+            c.sourceKind === "chat_v2" ? c.sourceId ?? null : null;
+          e.sourceAgentTaskId =
+            c.sourceKind === "agent_task" ? c.sourceId ?? null : null;
+          e.sourceMessageIds = (c.sourceMessageIds as string[] | null) ?? null;
+          return e;
+        },
+        archiveWhere: (memoryId) => ({ memoryId }),
+        updateWhere: (memoryId) => ({ memoryId }),
+      });
+    });
   }
 
   private toView(e: {

@@ -41,6 +41,23 @@ export interface AiNavigationRouteManifestEntry {
 export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[] =
   [
     {
+      routeName: "CommunityPluginsList",
+      path: "/community-plugins/list",
+      titleKey: "route.community_plugins",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "community plugins",
+        "plugin store",
+        "plugin hub",
+        "community plugin page",
+        "browse plugins",
+        "plugin marketplace page",
+      ],
+      aiDescription:
+        "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+    },
+    {
       routeName: "Email_Marketing_Service_LIST",
       path: "/emailmarketing/emailservice/list",
       titleKey: "route.email_service",

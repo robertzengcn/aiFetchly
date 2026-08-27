@@ -5,6 +5,7 @@ type IpcMainEvent = {
   };
 };
 import { StreamEvent, StreamEventType } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import {
   ChatStreamChunk,
   Plan,
@@ -266,7 +267,7 @@ export class StreamEventProcessor {
       if (toolId) {
         this.state.pendingToolCalls.delete(toolId);
         this.localExecutingToolIds.delete(toolId);
-        console.log(
+        log.info(
           `Tool call completed after permission: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
         );
         this.sendDeferredCompletionIfReady();
@@ -298,7 +299,7 @@ export class StreamEventProcessor {
     try {
       return JSON.stringify(toolResult, null, 2);
     } catch (error) {
-      console.warn("Failed to serialize tool result content:", error);
+      log.warn("Failed to serialize tool result content:", error);
       return String(toolResult);
     }
   }
@@ -354,7 +355,7 @@ export class StreamEventProcessor {
         break;
 
       case StreamEventType.PONG:
-        console.log("Received keep-alive pong");
+        log.info("Received keep-alive pong");
         break;
 
       // Plan execute agent events
@@ -379,7 +380,7 @@ export class StreamEventProcessor {
         break;
 
       default:
-        console.warn("Unknown stream event type:", eventType);
+        log.warn("Unknown stream event type:", eventType);
         break;
     }
   }
@@ -424,7 +425,7 @@ export class StreamEventProcessor {
     const toolCallData = streamEvent.data.data;
     const toolName = toolCallData?.name || undefined;
     if (!toolName) {
-      console.warn(
+      log.warn(
         "Skipping malformed TOOL_CALL event: missing tool name.",
         JSON.stringify(streamEvent.data)
       );
@@ -441,7 +442,7 @@ export class StreamEventProcessor {
     if (toolId) {
       this.state.pendingToolCalls.add(toolId);
       this.localExecutingToolIds.add(toolId);
-      console.log(
+      log.info(
         `Tool call started: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
     }
@@ -454,7 +455,7 @@ export class StreamEventProcessor {
       toolName,
       toolParams
     ).catch((saveError) => {
-      console.error("Failed to save tool call to database:", saveError);
+      log.error("Failed to save tool call to database:", saveError);
     });
 
     // Notify UI that tool is being executed
@@ -546,7 +547,7 @@ export class StreamEventProcessor {
               diagnosis.cause === "missing_system_tool" &&
               diagnosis.dependency_id
             ) {
-              console.log(
+              log.info(
                 `Detected missing system dependency "${diagnosis.dependency_id}" for tool ${toolName}, prompting user for approval`
               );
 
@@ -638,7 +639,7 @@ export class StreamEventProcessor {
       // If the user stopped the stream while the tool was executing,
       // do NOT send the result to the AI server or start a continuation stream.
       if (this.isAborted()) {
-        console.log(
+        log.info(
           `Stream aborted — skipping tool result dispatch for ${toolName}`
         );
         this.state.pendingToolCalls.delete(toolId);
@@ -668,7 +669,7 @@ export class StreamEventProcessor {
           toolParams,
           toolStartMs,
         });
-        console.log(
+        log.info(
           `Tool call deferred for skill permission: ${toolName} (ID: ${toolId}), pending stream tools: ${this.state.pendingToolCalls.size}`
         );
         return;
@@ -687,14 +688,14 @@ export class StreamEventProcessor {
       if (toolId) {
         this.state.pendingToolCalls.delete(toolId);
         this.localExecutingToolIds.delete(toolId);
-        console.log(
+        log.info(
           `Tool call completed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
         );
         this.sendDeferredCompletionIfReady();
         this.tryReleaseRetainedMainProcessStreamBinding();
       }
     } catch (error) {
-      console.error(`Error executing tool ${toolName}:`, error);
+      log.error(`Error executing tool ${toolName}:`, error);
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error occurred";
 
@@ -773,7 +774,7 @@ export class StreamEventProcessor {
         abortSignal: this.state.abortSignal,
       });
     } catch (err) {
-      console.error("PreToolUse hook dispatch failed:", err);
+      log.error("PreToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -803,7 +804,7 @@ export class StreamEventProcessor {
         abortSignal: this.state.abortSignal,
       });
     } catch (err) {
-      console.error("PostToolUse hook dispatch failed:", err);
+      log.error("PostToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -843,7 +844,7 @@ export class StreamEventProcessor {
         abortSignal: this.state.abortSignal,
       });
     } catch (err) {
-      console.error("PostToolUseFailure hook dispatch failed:", err);
+      log.error("PostToolUseFailure hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -878,7 +879,7 @@ export class StreamEventProcessor {
         abortSignal: this.state.abortSignal,
       });
     } catch (err) {
-      console.error(`${eventName} hook dispatch failed:`, err);
+      log.error(`${eventName} hook dispatch failed:`, err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -938,7 +939,7 @@ export class StreamEventProcessor {
         metadata
       );
     } catch (saveError) {
-      console.error("Failed to save tool result to database:", saveError);
+      log.error("Failed to save tool result to database:", saveError);
     }
   }
 
@@ -988,7 +989,7 @@ export class StreamEventProcessor {
         { signal: this.state.abortSignal }
       );
     } catch (sendErr) {
-      console.error("Failed to send tool result to AI server:", sendErr);
+      log.error("Failed to send tool result to AI server:", sendErr);
     }
   }
 
@@ -1046,7 +1047,7 @@ export class StreamEventProcessor {
         errorMetadata
       );
     } catch (saveError) {
-      console.error("Failed to save error tool result to database:", saveError);
+      log.error("Failed to save error tool result to database:", saveError);
     }
 
     // Send error tool result back to AI server to continue the stream
@@ -1060,14 +1061,14 @@ export class StreamEventProcessor {
         this.state.planThreadId
       );
     } catch (sendErr) {
-      console.error("Failed to send error tool result to AI server:", sendErr);
+      log.error("Failed to send error tool result to AI server:", sendErr);
     }
 
     // Remove tool from pending set even on error
     if (toolId) {
       this.state.pendingToolCalls.delete(toolId);
       this.localExecutingToolIds.delete(toolId);
-      console.log(
+      log.info(
         `Tool call failed: ${toolName} (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
 
@@ -1112,7 +1113,7 @@ export class StreamEventProcessor {
             extendedMetadata
           );
         } catch (saveError) {
-          console.error(
+          log.error(
             "Failed to save server tool result to database:",
             saveError
           );
@@ -1124,7 +1125,7 @@ export class StreamEventProcessor {
     // acknowledgement before TOKEN/DONE. The renderer already received the result
     // from the local execution path, so skip sending a duplicate chunk.
     if (toolId && this.localExecutingToolIds.has(toolId)) {
-      console.log(
+      log.info(
         `Skipping duplicate server TOOL_RESULT for locally executed tool (ID: ${toolId})`
       );
       this.state.pendingToolCalls.delete(toolId);
@@ -1137,7 +1138,7 @@ export class StreamEventProcessor {
     // Remove tool from pending set if this is a server-managed result.
     if (toolId && this.state.pendingToolCalls.has(toolId)) {
       this.state.pendingToolCalls.delete(toolId);
-      console.log(
+      log.info(
         `Tool result received from server (ID: ${toolId}), pending: ${this.state.pendingToolCalls.size}`
       );
       this.sendDeferredCompletionIfReady();
@@ -1175,14 +1176,14 @@ export class StreamEventProcessor {
 
     if (this.canSendCompletion()) {
       this.saveMessageToDatabase().catch((err) => {
-        console.error("Error saving message on ERROR event:", err);
+        log.error("Error saving message on ERROR event:", err);
       });
       this.event.sender.send(
         AI_CHAT_STREAM_COMPLETE,
         JSON.stringify(errorChunk)
       );
     } else {
-      console.log(
+      log.info(
         `Deferring ERROR completion due to ${this.state.pendingToolCalls.size} pending tool calls`
       );
       this.state.deferredCompletionChunk = errorChunk;
@@ -1203,14 +1204,14 @@ export class StreamEventProcessor {
 
     if (this.canSendCompletion()) {
       this.saveMessageToDatabase().catch((err) => {
-        console.error("Error saving message on DONE:", err);
+        log.error("Error saving message on DONE:", err);
       });
       this.event.sender.send(
         AI_CHAT_STREAM_COMPLETE,
         JSON.stringify(completeChunk)
       );
     } else {
-      console.log(
+      log.info(
         `Deferring DONE completion due to ${this.state.pendingToolCalls.size} pending tool calls`
       );
       this.state.deferredCompletionChunk = completeChunk;
@@ -1238,7 +1239,7 @@ export class StreamEventProcessor {
    */
   private cleanupPlanData(): void {
     if (this.state.currentPlan) {
-      console.log(`Cleaning up plan: ${this.state.currentPlan.planId}`);
+      log.info(`Cleaning up plan: ${this.state.currentPlan.planId}`);
       this.state.currentPlan = null;
     }
   }
@@ -1248,7 +1249,7 @@ export class StreamEventProcessor {
    */
   private recoverPlanState(error: Error, context: string): void {
     const classifiedError = ErrorClassifier.classify(error, context);
-    console.error(
+    log.error(
       `Plan state inconsistency detected in ${context}:`,
       classifiedError
     );
@@ -1290,7 +1291,7 @@ export class StreamEventProcessor {
    * Handle retryable errors (network, timeout)
    */
   private handleRetryableError(classifiedError: ClassifiedError): void {
-    console.log(
+    log.info(
       `Retryable error detected: ${ErrorClassifier.getErrorDescription(
         classifiedError
       )}`
@@ -1304,7 +1305,7 @@ export class StreamEventProcessor {
    * Handle skippable errors (execution failures)
    */
   private handleSkippableError(classifiedError: ClassifiedError): void {
-    console.log(
+    log.info(
       `Skippable error detected: ${ErrorClassifier.getErrorDescription(
         classifiedError
       )}`
@@ -1318,7 +1319,7 @@ export class StreamEventProcessor {
    * Handle abort errors (validation, permission)
    */
   private handleAbortError(classifiedError: ClassifiedError): void {
-    console.error(
+    log.error(
       `Abort error detected: ${ErrorClassifier.getErrorDescription(
         classifiedError
       )}`
@@ -1344,7 +1345,7 @@ export class StreamEventProcessor {
    * Handle fallback errors (resource issues)
    */
   private handleFallbackError(classifiedError: ClassifiedError): void {
-    console.warn(
+    log.warn(
       `Fallback error detected: ${ErrorClassifier.getErrorDescription(
         classifiedError
       )}`
@@ -1358,7 +1359,7 @@ export class StreamEventProcessor {
    * Handle continue errors (unknown)
    */
   private handleContinueError(classifiedError: ClassifiedError): void {
-    console.log(
+    log.info(
       `Continue error detected: ${ErrorClassifier.getErrorDescription(
         classifiedError
       )}`
@@ -1440,7 +1441,7 @@ export class StreamEventProcessor {
 
     if (failedSteps > failureThreshold) {
       this.state.currentPlan.status = "failed";
-      console.warn(
+      log.warn(
         `Plan ${this.state.currentPlan.planId} marked as failed due to too many step failures`
       );
     }
@@ -1465,11 +1466,11 @@ export class StreamEventProcessor {
 
     if (this.canSendCompletion()) {
       this.saveMessageToDatabase().catch((err) => {
-        console.error("Error saving message on CONVERSATION_END:", err);
+        log.error("Error saving message on CONVERSATION_END:", err);
       });
       this.event.sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(chunk));
     } else {
-      console.log(
+      log.info(
         `Deferring CONVERSATION_END completion due to ${this.state.pendingToolCalls.size} pending tool calls`
       );
       this.state.deferredCompletionChunk = chunk;
@@ -1494,14 +1495,14 @@ export class StreamEventProcessor {
     }
     if (this.canSendCompletion() && this.state.deferredCompletionChunk) {
       this.saveMessageToDatabase().catch((err) => {
-        console.error("Error saving message on deferred completion:", err);
+        log.error("Error saving message on deferred completion:", err);
       });
       this.event.sender.send(
         AI_CHAT_STREAM_COMPLETE,
         JSON.stringify(this.state.deferredCompletionChunk)
       );
       this.state.deferredCompletionChunk = null;
-      console.log("Sent deferred completion message");
+      log.info("Sent deferred completion message");
     }
   }
 
@@ -1520,9 +1521,9 @@ export class StreamEventProcessor {
           messageType: MessageType.MESSAGE,
         });
         this.state.messageSaved = true;
-        console.log("Saved assistant message to database");
+        log.info("Saved assistant message to database");
       } catch (saveError) {
-        console.error(
+        log.error(
           "Failed to save assistant message to database:",
           saveError
         );
@@ -1541,7 +1542,7 @@ export class StreamEventProcessor {
       const planData = this.validatePlanCreatedData(planDataInput);
 
       if (!planData) {
-        console.error("Invalid plan creation data received");
+        log.error("Invalid plan creation data received");
         return;
       }
 
@@ -1555,14 +1556,14 @@ export class StreamEventProcessor {
       this.state.planThreadId = threadId;
       this.storePlanInState(plan);
 
-      console.log(
+      log.info(
         `Plan created: ${plan.title} with ${plan.steps.length} steps`
       );
 
       this.savePlanCreatedMessage(plan, threadId || undefined);
       this.sendPlanCreatedChunk(plan);
     } catch (error) {
-      console.error("Error handling plan created event:", error);
+      log.error("Error handling plan created event:", error);
     }
   }
 
@@ -1642,7 +1643,7 @@ export class StreamEventProcessor {
       planId: plan.planId,
       threadId,
     }).catch((err) =>
-      console.error("Failed to save plan created message:", err)
+      log.error("Failed to save plan created message:", err)
     );
   }
 
@@ -1711,7 +1712,7 @@ export class StreamEventProcessor {
         this.state.currentPlan.currentStepIndex = stepNumber - 1;
       }
 
-      console.log(`Plan step started: ${title} (Step ${stepNumber})`);
+      log.info(`Plan step started: ${title} (Step ${stepNumber})`);
 
       // Send chunk to UI with optimized payload
       const chunk: ChatStreamChunk = {
@@ -1754,7 +1755,7 @@ export class StreamEventProcessor {
       this.updatePlanStepState(stepInfo);
       this.updatePlanCompletionStatus();
 
-      console.log(
+      log.info(
         `Plan step completed: ${stepInfo.title} (Step ${
           stepInfo.stepNumber
         }) - ${stepInfo.success ? "Success" : "Failed"}`
@@ -1844,7 +1845,7 @@ export class StreamEventProcessor {
       error: stepInfo.error,
       planId: this.state.currentPlan?.planId,
     }).catch((err) =>
-      console.error("Failed to save plan step completion:", err)
+      log.error("Failed to save plan step completion:", err)
     );
   }
 
@@ -1910,7 +1911,7 @@ export class StreamEventProcessor {
         this.state.currentPlan.status = "paused";
       }
 
-      console.log(`Plan execution paused: ${pauseReason}`);
+      log.info(`Plan execution paused: ${pauseReason}`);
 
       // Send chunk to UI with optimized payload
       const chunk: ChatStreamChunk = {
@@ -1925,7 +1926,7 @@ export class StreamEventProcessor {
       };
       this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     } catch (error) {
-      console.error("Error handling plan execute pause event:", error);
+      log.error("Error handling plan execute pause event:", error);
     }
   }
 
@@ -1956,7 +1957,7 @@ export class StreamEventProcessor {
         this.state.currentPlan.status = "in_progress";
       }
 
-      console.log(`Plan execution resumed: ${resumeReason}`);
+      log.info(`Plan execution resumed: ${resumeReason}`);
 
       // Send chunk to UI with optimized payload
       const chunk: ChatStreamChunk = {
@@ -1971,7 +1972,7 @@ export class StreamEventProcessor {
       };
       this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
     } catch (error) {
-      console.error("Error handling plan execute resume event:", error);
+      log.error("Error handling plan execute resume event:", error);
     }
   }
 
@@ -1982,7 +1983,7 @@ export class StreamEventProcessor {
     const validation = PlanValidator.validatePlanControlData(data);
 
     if (!validation.isValid) {
-      console.warn(
+      log.warn(
         "Plan control validation failed:",
         validation.errors.join(", ")
       );
@@ -2050,7 +2051,7 @@ export class StreamEventProcessor {
         }));
     }
 
-    console.warn("No valid steps array found in plan data");
+    log.warn("No valid steps array found in plan data");
     return [];
   }
 
@@ -2061,7 +2062,7 @@ export class StreamEventProcessor {
     const validation = PlanValidator.validatePlanCreatedData(data);
 
     if (!validation.isValid) {
-      console.warn(
+      log.warn(
         "Plan creation validation failed:",
         validation.errors.join(", ")
       );
@@ -2078,7 +2079,7 @@ export class StreamEventProcessor {
     const validation = PlanValidator.validatePlanStepData(data);
 
     if (!validation.isValid) {
-      console.warn(
+      log.warn(
         "Plan step validation failed:",
         validation.errors.join(", ")
       );
@@ -2097,7 +2098,7 @@ export class StreamEventProcessor {
     metadata: Record<string, unknown>
   ): Promise<void> {
     if (!this.state.streamConversationId) {
-      console.warn("Cannot save plan message: no conversation ID available");
+      log.warn("Cannot save plan message: no conversation ID available");
       return;
     }
 
@@ -2115,7 +2116,7 @@ export class StreamEventProcessor {
       await this.state.chatModule.saveMessage(messageData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error(
+      log.error(
         `Failed to save plan message (${messageType}):`,
         errorMessage
       );
@@ -2135,7 +2136,7 @@ export class StreamEventProcessor {
           JSON.stringify(errorChunk)
         );
       } catch (emitError) {
-        console.error("Failed to emit error chunk:", emitError);
+        log.error("Failed to emit error chunk:", emitError);
       }
     }
   }
@@ -2153,7 +2154,7 @@ export class StreamEventProcessor {
   ): Promise<void> {
     const pending = this.pendingDependencyByToolId.get(toolId);
     if (!pending) {
-      console.warn(`No pending dependency install for toolId ${toolId}`);
+      log.warn(`No pending dependency install for toolId ${toolId}`);
       return;
     }
     this.pendingDependencyByToolId.delete(toolId);
@@ -2161,7 +2162,7 @@ export class StreamEventProcessor {
     let toolResult: Record<string, unknown>;
 
     if (approved) {
-      console.log(
+      log.info(
         `User approved install of "${pending.resolution.dependency_id}", proceeding`
       );
       const retryOutcome = await SystemDependencyRetryService.installAndRetry(
@@ -2180,7 +2181,7 @@ export class StreamEventProcessor {
               _dependency_id: retryOutcome.dependencyId,
               _retry_message: retryOutcome.message,
             };
-        console.log(
+        log.info(
           `Dependency retry ${
             retryOutcome.retrySuccess ? "succeeded" : "failed"
           } for ${pending.context.toolName}`
@@ -2197,7 +2198,7 @@ export class StreamEventProcessor {
       }
     } else {
       // User denied — log denial and return original error
-      console.log(
+      log.info(
         `User denied install of "${pending.resolution.dependency_id}"`
       );
       toolResult = {

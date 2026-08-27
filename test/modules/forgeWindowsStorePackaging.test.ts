@@ -261,7 +261,8 @@ describe("Windows Store packaging", (): void => {
     ) as ReleaseWorkflow;
 
     const assertChecksumPublishJob = (jobName: string): void => {
-      const steps = workflow.jobs?.[jobName]?.steps ?? [];
+      const job = workflow.jobs?.[jobName as keyof typeof workflow.jobs];
+      const steps = (job && "steps" in job ? job.steps : undefined) ?? [];
       const checksumStep = steps.find(
         (candidate: WorkflowStep): boolean =>
           candidate.name === "Generate SHA-256 checksums"

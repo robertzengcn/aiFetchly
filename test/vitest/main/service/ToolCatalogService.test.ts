@@ -127,6 +127,20 @@ describe("ToolCatalogService.buildFromOpenAITools", () => {
     expect(cat.totalEstimatedTokens).toBeGreaterThan(0);
     expect(cat.deferredEstimatedTokens).toBe(cat.totalEstimatedTokens);
   });
+
+  it("attaches search hints to verify_contact_info", () => {
+    const svc = new ToolCatalogService();
+    const cat = svc.buildFromOpenAITools({
+      tools: [tool("verify_contact_info")],
+      context: ctx,
+    });
+    const hints = cat.byName.get("verify_contact_info")?.searchHints ?? [];
+    expect(hints).toContain("verify email");
+    expect(hints).toContain("normalize phone");
+    expect(hints).toContain("disposable email");
+    expect(hints).toContain("get contact");
+    expect(hints).toContain("contact method");
+  });
 });
 
 describe("ToolCatalogService.filterForRound", () => {

@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import * as fs from 'fs'
 import * as path from 'path'
 import * as puppeteer from 'puppeteer'
@@ -61,11 +62,11 @@ export class PlatformTestingFramework extends BaseModule {
     const results: TestResult[] = []
 
     try {
-      console.log('🧪 Platform Testing Framework')
-      console.log('=============================')
-      console.log(`Platform: ${platformId}`)
-      console.log(`Target URL: ${targetUrl}`)
-      console.log('')
+      log.info('🧪 Platform Testing Framework')
+      log.info('=============================')
+      log.info(`Platform: ${platformId}`)
+      log.info(`Target URL: ${targetUrl}`)
+      log.info('')
 
       // Load platform configuration
       const platform = this.platformRegistry.getPlatformConfig(platformId)
@@ -106,7 +107,7 @@ export class PlatformTestingFramework extends BaseModule {
       return report
 
     } catch (error) {
-      console.error('❌ Test execution failed:', error)
+      log.error('❌ Test execution failed:', error)
       throw error
     } finally {
       await this.cleanup()
@@ -142,9 +143,9 @@ export class PlatformTestingFramework extends BaseModule {
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       )
 
-      console.log('✅ Browser initialized successfully')
+      log.info('✅ Browser initialized successfully')
     } catch (error) {
-      console.error('❌ Failed to initialize browser:', error)
+      log.error('❌ Failed to initialize browser:', error)
       throw error
     }
   }
@@ -158,14 +159,14 @@ export class PlatformTestingFramework extends BaseModule {
     }
 
     try {
-      console.log(`🌐 Navigating to: ${url}`)
+      log.info(`🌐 Navigating to: ${url}`)
       await this.page.goto(url, { 
         waitUntil: 'networkidle2',
         timeout 
       })
-      console.log('✅ Page loaded successfully')
+      log.info('✅ Page loaded successfully')
     } catch (error) {
-      console.error('❌ Failed to navigate to URL:', error)
+      log.error('❌ Failed to navigate to URL:', error)
       throw error
     }
   }
@@ -627,7 +628,7 @@ export class PlatformTestingFramework extends BaseModule {
       return results
     }
 
-    console.log('🔍 Validating all selectors...')
+    log.info('🔍 Validating all selectors...')
     
     // Test all basic selectors
     const basicSelectors = [
@@ -713,7 +714,7 @@ export class PlatformTestingFramework extends BaseModule {
         : `No elements found for ${selectorName}: ${selector}`
 
       // Get additional details for debugging
-      let details: any = { 
+      const details: any = { 
         selector, 
         key: selectorKey, 
         count: elements.length 
@@ -920,49 +921,49 @@ export class PlatformTestingFramework extends BaseModule {
    * Log test results
    */
   private logResults(report: TestReport, verbose: boolean): void {
-    console.log('\n📊 Test Results')
-    console.log('===============')
-    console.log(report.summary)
-    console.log(`⏱️  Total duration: ${report.totalTests > 0 ? Math.round(report.results.reduce((sum, r) => sum + r.duration, 0) / 1000) : 0}s`)
+    log.info('\n📊 Test Results')
+    log.info('===============')
+    log.info(report.summary)
+    log.info(`⏱️  Total duration: ${report.totalTests > 0 ? Math.round(report.results.reduce((sum, r) => sum + r.duration, 0) / 1000) : 0}s`)
     
     // Show selector validation summary
     const selectorSummary = this.getSelectorValidationSummary(report.results)
     if (selectorSummary.totalSelectors > 0) {
-      console.log('')
-      console.log('🎯 Selector Validation Summary')
-      console.log('=============================')
-      console.log(`Total selectors tested: ${selectorSummary.totalSelectors}`)
-      console.log(`Selectors found: ${selectorSummary.foundSelectors}`)
-      console.log(`Selectors missing: ${selectorSummary.missingSelectors}`)
-      console.log(`Success rate: ${selectorSummary.successRate.toFixed(1)}%`)
+      log.info('')
+      log.info('🎯 Selector Validation Summary')
+      log.info('=============================')
+      log.info(`Total selectors tested: ${selectorSummary.totalSelectors}`)
+      log.info(`Selectors found: ${selectorSummary.foundSelectors}`)
+      log.info(`Selectors missing: ${selectorSummary.missingSelectors}`)
+      log.info(`Success rate: ${selectorSummary.successRate.toFixed(1)}%`)
     }
     
-    console.log('')
+    log.info('')
 
     if (verbose) {
       report.results.forEach(result => {
         const status = result.passed ? '✅' : '❌'
-        console.log(`${status} ${result.testName}: ${result.message}`)
+        log.info(`${status} ${result.testName}: ${result.message}`)
         if (result.details && Object.keys(result.details).length > 0) {
-          console.log(`   Details: ${JSON.stringify(result.details)}`)
+          log.info(`   Details: ${JSON.stringify(result.details)}`)
         }
       })
     } else {
       // Show only failed tests
       const failedTests = report.results.filter(r => !r.passed)
       if (failedTests.length > 0) {
-        console.log('❌ Failed Tests:')
+        log.info('❌ Failed Tests:')
         failedTests.forEach(result => {
-          console.log(`   - ${result.testName}: ${result.message}`)
+          log.info(`   - ${result.testName}: ${result.message}`)
         })
       }
     }
 
-    console.log('')
+    log.info('')
     if (report.passedTests === report.totalTests) {
-      console.log('🎉 All tests passed!')
+      log.info('🎉 All tests passed!')
     } else {
-      console.log(`⚠️  ${report.failedTests} test(s) failed. Review the selectors and try again.`)
+      log.info(`⚠️  ${report.failedTests} test(s) failed. Review the selectors and try again.`)
     }
   }
 
@@ -980,7 +981,7 @@ export class PlatformTestingFramework extends BaseModule {
         this.browser = null
       }
     } catch (error) {
-      console.error('Warning: Failed to cleanup browser resources:', error)
+      log.error('Warning: Failed to cleanup browser resources:', error)
     }
   }
 
@@ -1000,7 +1001,7 @@ export class PlatformTestingFramework extends BaseModule {
     const filePath = path.join(reportDir, filename)
 
     fs.writeFileSync(filePath, JSON.stringify(report, null, 2))
-    console.log(`📄 Test report saved to: ${filePath}`)
+    log.info(`📄 Test report saved to: ${filePath}`)
   }
 }
 

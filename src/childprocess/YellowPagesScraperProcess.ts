@@ -1,6 +1,9 @@
 import { MessageType } from "@/modules/interface/IPCMessageProtocol";
+import { log } from "@/modules/Logger";
 import { TaskStatus } from "@/modules/interface/ITaskManager";
 import { YellowPagesScraper } from "./YellowPagesScraper";
+import { yellowPagesScraperProcessInboundSchema } from "@/schemas/worker/yellowPagesScraperProcess";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 
 // Define missing interfaces and enums
 enum ErrorSeverity {
@@ -119,7 +122,7 @@ export class YellowPagesScraperProcess {
    */
   async initialize(): Promise<void> {
     try {
-      console.log(
+      log.info(
         `YellowPagesScraperProcess initialized with PID: ${process.pid}`
       );
 
@@ -128,9 +131,9 @@ export class YellowPagesScraperProcess {
       // Send ready message to main process
       this.sendReadyMessage();
 
-      console.log("Child process ready to receive tasks");
+      log.info("Child process ready to receive tasks");
     } catch (error) {
-      console.error("Failed to initialize child process:", error);
+      log.error("Failed to initialize child process:", error);
       this.sendErrorMessage(
         "Initialization failed",
         ErrorSeverity.CRITICAL,
@@ -145,15 +148,26 @@ export class YellowPagesScraperProcess {
    */
   private setupIPC(): void {
     if (!process.send) {
-      console.error("Process.send is not available");
+      log.error("Process.send is not available");
       return;
     }
 
-    process.on("message", async (message: any) => {
+    process.on("message", async (raw: unknown) => {
+      const validation = parseWorkerMessage(
+        raw,
+        yellowPagesScraperProcessInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[YPScraperProcess] dropped malformed message:",
+          validation.error
+        );
+        return;
+      }
       try {
-        await this.handleMessage(message);
+        await this.handleMessage(validation.data);
       } catch (error) {
-        console.error("Error handling message:", error);
+        log.error("Error handling message:", error);
         this.sendErrorMessage(
           "Message handling failed",
           ErrorSeverity.ERROR,
@@ -164,18 +178,18 @@ export class YellowPagesScraperProcess {
 
     // Handle process termination
     process.on("SIGTERM", () => {
-      console.log("Received SIGTERM, shutting down gracefully");
+      log.info("Received SIGTERM, shutting down gracefully");
       this.shutdown();
     });
 
     process.on("SIGINT", () => {
-      console.log("Received SIGINT, shutting down gracefully");
+      log.info("Received SIGINT, shutting down gracefully");
       this.shutdown();
     });
 
     // Handle uncaught exceptions
     process.on("uncaughtException", (error) => {
-      console.error("Uncaught exception:", error);
+      log.error("Uncaught exception:", error);
       this.sendErrorMessage(
         "Uncaught exception",
         ErrorSeverity.CRITICAL,
@@ -185,7 +199,7 @@ export class YellowPagesScraperProcess {
     });
 
     process.on("unhandledRejection", (reason, promise) => {
-      console.error("Unhandled rejection:", reason);
+      log.error("Unhandled rejection:", reason);
       this.sendErrorMessage(
         "Unhandled rejection",
         ErrorSeverity.CRITICAL,
@@ -199,7 +213,7 @@ export class YellowPagesScraperProcess {
    */
   private async handleMessage(message: any): Promise<void> {
     try {
-      console.log(`Received message: ${message.type}`);
+      log.info(`Received message: ${message.type}`);
 
       switch (message.type) {
         case MessageType.START_TASK:
@@ -231,10 +245,10 @@ export class YellowPagesScraperProcess {
           break;
 
         default:
-          console.warn(`Unknown message type: ${message.type}`);
+          log.warn(`Unknown message type: ${message.type}`);
       }
     } catch (error) {
-      console.error("Error handling message:", error);
+      log.error("Error handling message:", error);
       this.sendErrorMessage(
         "Message handling failed",
         ErrorSeverity.ERROR,
@@ -257,7 +271,7 @@ export class YellowPagesScraperProcess {
       this.isRunning = true;
       this.isPaused = false;
 
-      console.log(`Starting task: ${message.taskId}`);
+      log.info(`Starting task: ${message.taskId}`);
 
       // Send task started message
       this.sendStatusUpdate(
@@ -269,7 +283,7 @@ export class YellowPagesScraperProcess {
       // Start the scraping process
       await this.startScraping(message.taskId);
     } catch (error) {
-      console.error("Error starting task:", error);
+      log.error("Error starting task:", error);
       this.sendErrorMessage("Failed to start task", ErrorSeverity.ERROR, error);
     }
   }
@@ -280,11 +294,11 @@ export class YellowPagesScraperProcess {
   private async handleStopTask(message: TaskControlMessage): Promise<void> {
     try {
       if (!this.isRunning) {
-        console.log("No task running to stop");
+        log.info("No task running to stop");
         return;
       }
 
-      console.log(`Stopping task: ${message.taskId}`);
+      log.info(`Stopping task: ${message.taskId}`);
 
       this.isRunning = false;
       this.isPaused = false;
@@ -297,7 +311,7 @@ export class YellowPagesScraperProcess {
       // Send task stopped message
       this.sendStatusUpdate(message.taskId, TaskStatus.Failed, "Task stopped");
     } catch (error) {
-      console.error("Error stopping task:", error);
+      log.error("Error stopping task:", error);
       this.sendErrorMessage("Failed to stop task", ErrorSeverity.ERROR, error);
     }
   }
@@ -308,11 +322,11 @@ export class YellowPagesScraperProcess {
   private async handlePauseTask(message: TaskControlMessage): Promise<void> {
     try {
       if (!this.isRunning || this.isPaused) {
-        console.log("No task running or already paused");
+        log.info("No task running or already paused");
         return;
       }
 
-      console.log(`Pausing task: ${message.taskId}`);
+      log.info(`Pausing task: ${message.taskId}`);
 
       this.isPaused = true;
 
@@ -324,7 +338,7 @@ export class YellowPagesScraperProcess {
       // Send task paused message
       this.sendStatusUpdate(message.taskId, TaskStatus.Paused, "Task paused");
     } catch (error) {
-      console.error("Error pausing task:", error);
+      log.error("Error pausing task:", error);
       this.sendErrorMessage("Failed to pause task", ErrorSeverity.ERROR, error);
     }
   }
@@ -335,11 +349,11 @@ export class YellowPagesScraperProcess {
   private async handleResumeTask(message: TaskControlMessage): Promise<void> {
     try {
       if (!this.isRunning || !this.isPaused) {
-        console.log("No task running or not paused");
+        log.info("No task running or not paused");
         return;
       }
 
-      console.log(`Resuming task: ${message.taskId}`);
+      log.info(`Resuming task: ${message.taskId}`);
 
       this.isPaused = false;
 
@@ -355,7 +369,7 @@ export class YellowPagesScraperProcess {
         "Task resumed"
       );
     } catch (error) {
-      console.error("Error resuming task:", error);
+      log.error("Error resuming task:", error);
       this.sendErrorMessage(
         "Failed to resume task",
         ErrorSeverity.ERROR,
@@ -369,7 +383,7 @@ export class YellowPagesScraperProcess {
    */
   private async handleTaskData(message: TaskDataMessage): Promise<void> {
     try {
-      console.log(`Received task data for task: ${message.taskId}`);
+      log.info(`Received task data for task: ${message.taskId}`);
 
       // Initialize scraper with task data if not already done
       if (!this.scraper) {
@@ -415,7 +429,7 @@ export class YellowPagesScraperProcess {
         this.scraper = new YellowPagesScraper(taskData, platformInfo);
       }
     } catch (error) {
-      console.error("Error handling task data:", error);
+      log.error("Error handling task data:", error);
       this.sendErrorMessage(
         "Failed to process task data",
         ErrorSeverity.ERROR,
@@ -445,7 +459,7 @@ export class YellowPagesScraperProcess {
 
       this.sendMessage(healthResponse);
     } catch (error) {
-      console.error("Error handling health check:", error);
+      log.error("Error handling health check:", error);
       this.sendErrorMessage("Health check failed", ErrorSeverity.ERROR, error);
     }
   }
@@ -455,7 +469,7 @@ export class YellowPagesScraperProcess {
    */
   private async handleExit(message: { reason?: string }): Promise<void> {
     const reason = message.reason ?? "Requested by main process";
-    console.log(
+    log.info(
       `Received EXIT command, shutting down gracefully. Reason: ${reason}`
     );
     this.isRunning = false;
@@ -464,7 +478,7 @@ export class YellowPagesScraperProcess {
       try {
         await this.scraper.stop();
       } catch (error) {
-        console.warn("Error stopping scraper on EXIT:", error);
+        log.warn("Error stopping scraper on EXIT:", error);
       }
       this.scraper = null;
     }
@@ -536,7 +550,7 @@ export class YellowPagesScraperProcess {
       // Start scraping
       await this.scraper.start();
     } catch (error) {
-      console.error("Error starting scraping:", error);
+      log.error("Error starting scraping:", error);
       this.sendErrorMessage(
         "Failed to start scraping",
         ErrorSeverity.ERROR,
@@ -657,7 +671,7 @@ export class YellowPagesScraperProcess {
     if (process.send) {
       process.send(message);
     } else {
-      console.error("Cannot send message: process.send is not available");
+      log.error("Cannot send message: process.send is not available");
     }
   }
 
@@ -686,7 +700,7 @@ export class YellowPagesScraperProcess {
    */
   private async shutdown(): Promise<void> {
     try {
-      console.log("Shutting down child process...");
+      log.info("Shutting down child process...");
 
       // Stop any running tasks
       if (this.isRunning && this.scraper) {
@@ -700,10 +714,10 @@ export class YellowPagesScraperProcess {
         "Process shutting down"
       );
 
-      console.log("Child process shutdown complete");
+      log.info("Child process shutdown complete");
       process.exit(0);
     } catch (error) {
-      console.error("Error during shutdown:", error);
+      log.error("Error during shutdown:", error);
       process.exit(1);
     }
   }
@@ -713,7 +727,7 @@ export class YellowPagesScraperProcess {
 if (require.main === module) {
   const scraperProcess = new YellowPagesScraperProcess();
   scraperProcess.initialize().catch((error) => {
-    console.error("Failed to initialize child process:", error);
+    log.error("Failed to initialize child process:", error);
     process.exit(1);
   });
 }

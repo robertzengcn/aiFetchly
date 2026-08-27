@@ -1,15 +1,17 @@
 import * as puppeteer from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { browserManager, BrowserManager } from './browserManager';
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 /**
  * Example 1: Using the default browser manager instance
  */
 export async function exampleWithDefaultManager() {
-    console.log('=== Example 1: Using Default Browser Manager ===');
+    log.info('=== Example 1: Using Default Browser Manager ===');
     
     // Get browser information
     const browserInfo = await browserManager.getBrowserInfo();
-    console.log('Browser Info:', browserInfo);
+    log.info('Browser Info:', browserInfo);
     
     // Create launch options
     const launchOptions = await browserManager.createLaunchOptions({
@@ -21,11 +23,11 @@ export async function exampleWithDefaultManager() {
     const browser = await puppeteer.launch(launchOptions);
     const page = await browser.newPage();
     
-    console.log('Browser launched successfully');
+    log.info('Browser launched successfully');
     
     // Do something with the page
     await page.goto('https://example.com');
-    console.log('Page title:', await page.title());
+    log.info('Page title:', await page.title());
     
     await browser.close();
 }
@@ -34,7 +36,7 @@ export async function exampleWithDefaultManager() {
  * Example 2: Creating a custom browser manager instance
  */
 export async function exampleWithCustomManager() {
-    console.log('=== Example 2: Using Custom Browser Manager ===');
+    log.info('=== Example 2: Using Custom Browser Manager ===');
     
     // Create a custom browser manager with specific options
     const customManager = new BrowserManager({
@@ -45,7 +47,7 @@ export async function exampleWithCustomManager() {
     
     // Get browser executable path
     const browserInfo = await customManager.getBrowserExecutablePath();
-    console.log('Custom Browser Info:', browserInfo);
+    log.info('Custom Browser Info:', browserInfo);
     
     // Create launch options with custom settings
     const launchOptions = await customManager.createLaunchOptions({
@@ -65,11 +67,11 @@ export async function exampleWithCustomManager() {
     const browser = await puppeteer.launch(launchOptions);
     const page = await browser.newPage();
     
-    console.log('Custom browser launched successfully');
+    log.info('Custom browser launched successfully');
     
     await page.goto('https://httpbin.org/user-agent');
     const userAgent = await page.$eval('pre', el => el.textContent);
-    console.log('User Agent:', userAgent);
+    log.info('User Agent:', userAgent);
     
     await browser.close();
 }
@@ -78,7 +80,7 @@ export async function exampleWithCustomManager() {
  * Example 3: Using browser manager with puppeteer-extra
  */
 export async function exampleWithPuppeteerExtra() {
-    console.log('=== Example 3: Using Browser Manager with Puppeteer-Extra ===');
+    log.info('=== Example 3: Using Browser Manager with Puppeteer-Extra ===');
     
     const vanillaPuppeteer = require('puppeteer');
     const { addExtra } = require('puppeteer-extra');
@@ -98,11 +100,11 @@ export async function exampleWithPuppeteerExtra() {
     const browser = await puppeteers.launch(launchOptions);
     const page = await browser.newPage();
     
-    console.log('Puppeteer-extra browser launched successfully');
+    log.info('Puppeteer-extra browser launched successfully');
     
     // Test stealth capabilities
     await page.goto('https://bot.sannysoft.com/');
-    console.log('Stealth test completed');
+    log.info('Stealth test completed');
     
     await browser.close();
 }
@@ -111,38 +113,38 @@ export async function exampleWithPuppeteerExtra() {
  * Example 4: Error handling and fallback strategies
  */
 export async function exampleWithErrorHandling() {
-    console.log('=== Example 4: Error Handling and Fallbacks ===');
+    log.info('=== Example 4: Error Handling and Fallbacks ===');
     
     try {
         // Try to get browser info
         const browserInfo = await browserManager.getBrowserInfo();
-        console.log('Browser found:', browserInfo);
+        log.info('Browser found:', browserInfo);
         
         // Create launch options
         const launchOptions = await browserManager.createLaunchOptions();
         
         // Launch browser
         const browser = await puppeteer.launch(launchOptions);
-        console.log('Browser launched successfully');
+        log.info('Browser launched successfully');
         
         await browser.close();
         
     } catch (error) {
-        console.error('Failed to launch browser:', error);
+        log.error('Failed to launch browser:', error);
         
         // Fallback: Try with system Chrome
-        console.log('Attempting fallback with system Chrome...');
+        log.info('Attempting fallback with system Chrome...');
         try {
             const fallbackOptions = await browserManager.createLaunchOptions({
                 executablePath: '/usr/bin/google-chrome' // Force system Chrome
             });
             
             const browser = await puppeteer.launch(fallbackOptions);
-            console.log('Fallback browser launched successfully');
+            log.info('Fallback browser launched successfully');
             
             await browser.close();
         } catch (fallbackError) {
-            console.error('Fallback also failed:', fallbackError);
+            log.error('Fallback also failed:', fallbackError);
         }
     }
 }
@@ -151,7 +153,7 @@ export async function exampleWithErrorHandling() {
  * Example 5: Batch browser operations
  */
 export async function exampleBatchOperations() {
-    console.log('=== Example 5: Batch Browser Operations ===');
+    log.info('=== Example 5: Batch Browser Operations ===');
     
     const browsers: puppeteer.Browser[] = [];
     const pages: puppeteer.Page[] = [];
@@ -170,14 +172,14 @@ export async function exampleBatchOperations() {
             browsers.push(browser);
             pages.push(page);
             
-            console.log(`Browser ${i + 1} launched`);
+            log.info(`Browser ${i + 1} launched`);
         }
         
         // Perform operations on all pages
         const promises = pages.map(async (page, index) => {
             await page.goto(`https://httpbin.org/delay/${index + 1}`);
             const title = await page.title();
-            console.log(`Page ${index + 1} title:`, title);
+            log.info(`Page ${index + 1} title:`, title);
         });
         
         await Promise.all(promises);
@@ -188,10 +190,10 @@ export async function exampleBatchOperations() {
             try {
                 await browser.close();
             } catch (error) {
-                console.error('Failed to close browser:', error);
+                log.error('Failed to close browser:', error);
             }
         }
-        console.log('All browsers closed');
+        log.info('All browsers closed');
     }
 }
 
@@ -203,3 +205,4 @@ export const examples = {
     errorHandling: exampleWithErrorHandling,
     batchOperations: exampleBatchOperations
 }; 
+/* eslint-enable @typescript-eslint/no-var-requires */

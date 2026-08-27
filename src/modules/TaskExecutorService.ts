@@ -1,5 +1,6 @@
 //import { BaseDb } from "@/model/Basedb";
 import { ScheduleTaskEntity, TaskType } from "@/entity/ScheduleTask.entity";
+import { log } from "@/modules/Logger";
 //import { SearchTaskModel } from "@/model/SearchTask.model";
 //import { EmailMarketingTaskModel } from "@/model/EmailMarketingTask.model";
 //import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
@@ -28,6 +29,22 @@ import type { YandexMapsSearchInput } from "@/entityTypes/yandexMapsTypes";
 //     CANCELLED = 'cancelled'
 // }
 
+/* eslint-disable no-case-declarations */
+/**
+ * WS-5 R5.1 — injectable collaborators for {@link TaskExecutorService}.
+ * Each is optional in the constructor; omitting one yields the real module.
+ */
+export interface TaskExecutorServiceDeps {
+  searchTaskModel: SearchTaskModule;
+  buckEmailTaskModel: BuckEmailTaskModule;
+  searchModel: SearchModule;
+  emailSeachTaskModule: EmailSearchTaskModule;
+  yellowPagesModule: YellowPagesModule;
+  googleMapsModule: GoogleMapsModule;
+  yandexMapsModule: YandexMapsModule;
+  aiMessageTaskModule: AiMessageTaskModule;
+}
+
 export class TaskExecutorService {
   private searchTaskModel: SearchTaskModule;
   //private emailMarketingTaskModel: EmailMarketingTaskModule;
@@ -41,18 +58,27 @@ export class TaskExecutorService {
   private aiMessageTaskModule: AiMessageTaskModule;
   //private socialTaskModel: SocialTaskModel;
 
-  constructor() {
+  /**
+   * WS-5 R5.1 — collaborators are constructor-injected so unit tests can
+   * substitute fakes (the PRD acceptance: "a passing unit test that substitutes
+   * a fake collaborator"). Production callers pass no args and get the real
+   * modules (defaults); tests pass a Partial with the collaborators they fake.
+   */
+  constructor(deps?: Partial<TaskExecutorServiceDeps>) {
     //super();
-    this.searchTaskModel = new SearchTaskModule();
+    this.searchTaskModel = deps?.searchTaskModel ?? new SearchTaskModule();
     //this.emailMarketingTaskModel = new EmailMarketingTaskModule();
-    this.buckEmailTaskModel = new BuckEmailTaskModule();
+    this.buckEmailTaskModel =
+      deps?.buckEmailTaskModel ?? new BuckEmailTaskModule();
     //this.videoDownloadTaskModel = new VideoDownloadTaskModule();
-    this.searchModel = new SearchModule();
-    this.emailSeachTaskModule = new EmailSearchTaskModule();
-    this.yellowPagesModule = new YellowPagesModule();
-    this.googleMapsModule = new GoogleMapsModule();
-    this.yandexMapsModule = new YandexMapsModule();
-    this.aiMessageTaskModule = new AiMessageTaskModule();
+    this.searchModel = deps?.searchModel ?? new SearchModule();
+    this.emailSeachTaskModule =
+      deps?.emailSeachTaskModule ?? new EmailSearchTaskModule();
+    this.yellowPagesModule = deps?.yellowPagesModule ?? new YellowPagesModule();
+    this.googleMapsModule = deps?.googleMapsModule ?? new GoogleMapsModule();
+    this.yandexMapsModule = deps?.yandexMapsModule ?? new YandexMapsModule();
+    this.aiMessageTaskModule =
+      deps?.aiMessageTaskModule ?? new AiMessageTaskModule();
 
     //this.socialTaskModel = new SocialTaskModel(filepath);
   }
@@ -68,7 +94,7 @@ export class TaskExecutorService {
     parentExecutionId?: number
   ): Promise<number> {
     try {
-      console.log(
+      log.info(
         `Executing scheduled task ${schedule.id} of type ${schedule.task_type}`
       );
 
@@ -105,12 +131,12 @@ export class TaskExecutorService {
           throw new Error(`Unsupported task type: ${schedule.task_type}`);
       }
 
-      console.log(
+      log.info(
         `Task ${schedule.id} executed successfully with output ID: ${taskOutputId}`
       );
       return taskOutputId;
     } catch (error) {
-      console.error(`Failed to execute scheduled task ${schedule.id}:`, error);
+      log.error(`Failed to execute scheduled task ${schedule.id}:`, error);
       throw error;
     }
   }
@@ -122,7 +148,7 @@ export class TaskExecutorService {
    */
   async executeSearchTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing search task ${taskId}`);
+      log.info(`Executing search task ${taskId}`);
 
       // Get the search task entity
       const searchTask = await this.searchTaskModel.read(taskId);
@@ -148,13 +174,13 @@ export class TaskExecutorService {
       // console.log(`Search task ${taskId} executed with status: ${status}`);
       // return result.outputId || taskId; // Return output ID or task ID as fallback
     } catch (error) {
-      console.error(`Failed to execute search task ${taskId}:`, error);
+      log.error(`Failed to execute search task ${taskId}:`, error);
 
       // Update task status to failed
       try {
         await this.searchTaskModel.updateTaskStatus(taskId, "failed" as any);
       } catch (updateError) {
-        console.error("Failed to update search task status:", updateError);
+        log.error("Failed to update search task status:", updateError);
       }
 
       throw error;
@@ -168,7 +194,7 @@ export class TaskExecutorService {
    */
   async executeEmailExtractionTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing email marketing task ${taskId}`);
+      log.info(`Executing email marketing task ${taskId}`);
 
       // Get the email marketing task entity
       const emailTask = await this.emailSeachTaskModule.getTaskDetail(taskId);
@@ -187,7 +213,7 @@ export class TaskExecutorService {
       // console.log(`Email marketing task ${taskId} executed successfully`);
       // return result.outputId || taskId; // Return output ID or task ID as fallback
     } catch (error) {
-      console.error(`Failed to execute email marketing task ${taskId}:`, error);
+      log.error(`Failed to execute email marketing task ${taskId}:`, error);
       throw error;
     }
   }
@@ -199,7 +225,7 @@ export class TaskExecutorService {
    */
   async executeBuckEmailTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing bulk email task ${taskId}`);
+      log.info(`Executing bulk email task ${taskId}`);
 
       // Get the bulk email task entity
       const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
@@ -219,7 +245,7 @@ export class TaskExecutorService {
       // return result.outputId || taskId; // Return output ID or task ID as fallback
       return taskId;
     } catch (error) {
-      console.error(`Failed to execute bulk email task ${taskId}:`, error);
+      log.error(`Failed to execute bulk email task ${taskId}:`, error);
       throw error;
     }
   }
@@ -231,15 +257,15 @@ export class TaskExecutorService {
    */
   async executeYellowPagesTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing Yellow Pages task ${taskId}`);
+      log.info(`Executing Yellow Pages task ${taskId}`);
 
       // Start the Yellow Pages task using the YellowPagesModule
       await this.yellowPagesModule.startTask(taskId);
 
-      console.log(`Yellow Pages task ${taskId} started successfully`);
+      log.info(`Yellow Pages task ${taskId} started successfully`);
       return taskId;
     } catch (error) {
-      console.error(`Failed to execute Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to execute Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -251,7 +277,7 @@ export class TaskExecutorService {
    */
   async executeGoogleMapsTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing Google Maps task ${taskId}`);
+      log.info(`Executing Google Maps task ${taskId}`);
 
       const record = await this.googleMapsModule.getSearchRecord(taskId);
       if (!record) {
@@ -269,10 +295,10 @@ export class TaskExecutorService {
         `schedule-google-maps-${taskId}`
       );
 
-      console.log(`Google Maps task ${taskId} completed successfully`);
+      log.info(`Google Maps task ${taskId} completed successfully`);
       return taskId;
     } catch (error) {
-      console.error(`Failed to execute Google Maps task ${taskId}:`, error);
+      log.error(`Failed to execute Google Maps task ${taskId}:`, error);
       throw error;
     }
   }
@@ -284,7 +310,7 @@ export class TaskExecutorService {
    */
   async executeYandexMapsTask(taskId: number): Promise<number> {
     try {
-      console.log(`Executing Yandex Maps task ${taskId}`);
+      log.info(`Executing Yandex Maps task ${taskId}`);
 
       const record = await this.yandexMapsModule.getSearchRecord(taskId);
       if (!record) {
@@ -299,10 +325,10 @@ export class TaskExecutorService {
         externalRequestId: `schedule-yandex-maps-${taskId}`,
       });
 
-      console.log(`Yandex Maps task ${taskId} completed successfully`);
+      log.info(`Yandex Maps task ${taskId} completed successfully`);
       return taskId;
     } catch (error) {
-      console.error(`Failed to execute Yandex Maps task ${taskId}:`, error);
+      log.error(`Failed to execute Yandex Maps task ${taskId}:`, error);
       throw error;
     }
   }
@@ -315,18 +341,18 @@ export class TaskExecutorService {
     scheduleId?: number
   ): Promise<number> {
     try {
-      console.log(`Executing AI message task ${taskId}`);
+      log.info(`Executing AI message task ${taskId}`);
 
       const runner = new ScheduledAiMessageRunner();
       const result = await runner.run(taskId, scheduleId);
 
-      console.log(
+      log.info(
         `AI message task ${taskId} run completed with status: ${result.status}, run ID: ${result.runId}`
       );
 
       return result.runId || taskId;
     } catch (error) {
-      console.error(`Failed to execute AI message task ${taskId}:`, error);
+      log.error(`Failed to execute AI message task ${taskId}:`, error);
       throw error;
     }
   }
@@ -338,7 +364,7 @@ export class TaskExecutorService {
    */
   /*async executeVideoDownloadTask(taskId: number): Promise<number> {
         try {
-            console.log(`Executing video download task ${taskId}`);
+            log.info(`Executing video download task ${taskId}`);
 
             // Get the video download task entity
             const videoTask = await this.videoDownloadTaskModel.getVideoDownloadTask(taskId);
@@ -353,11 +379,11 @@ export class TaskExecutorService {
             // Start the video download execution
             await this.videoDownloadTaskModel.processDownloadVideo(taskId)
             
-            console.log(`Video download task ${taskId} executed successfully`);
+            log.info(`Video download task ${taskId} executed successfully`);
             return taskId; // Return output ID or task ID as fallback
 
         } catch (error) {
-            console.error(`Failed to execute video download task ${taskId}:`, error);
+            log.error(`Failed to execute video download task ${taskId}:`, error);
             throw error;
         }
     }
@@ -541,7 +567,7 @@ export class TaskExecutorService {
       //         return TaskStatus.PENDING;
       // }
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to get task status for ${taskType} task ${taskId}:`,
         error
       );
@@ -556,7 +582,7 @@ export class TaskExecutorService {
    */
   async cancelTask(taskId: number, taskType: TaskType): Promise<void> {
     try {
-      console.log(`Cancelling ${taskType} task ${taskId}`);
+      log.info(`Cancelling ${taskType} task ${taskId}`);
 
       switch (taskType) {
         case TaskType.SEARCH:
@@ -629,9 +655,9 @@ export class TaskExecutorService {
           throw new Error(`Unsupported task type: ${taskType}`);
       }
 
-      console.log(`Task ${taskId} cancelled successfully`);
+      log.info(`Task ${taskId} cancelled successfully`);
     } catch (error) {
-      console.error(`Failed to cancel ${taskType} task ${taskId}:`, error);
+      log.error(`Failed to cancel ${taskType} task ${taskId}:`, error);
       throw error;
     }
   }
@@ -646,7 +672,7 @@ export class TaskExecutorService {
     parentExecutionId?: number
   ): Promise<void> {
     try {
-      console.log(
+      log.info(
         `Executing dependency chain starting from schedule ${scheduleId}`
       );
 
@@ -662,11 +688,11 @@ export class TaskExecutorService {
         parentExecutionId
       );
 
-      console.log(
+      log.info(
         `Dependency chain execution completed for schedule ${scheduleId}`
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to execute dependency chain for schedule ${scheduleId}:`,
         error
       );
@@ -699,7 +725,7 @@ export class TaskExecutorService {
         averageExecutionTime: 0,
       };
     } catch (error) {
-      console.error("Failed to get task execution statistics:", error);
+      log.error("Failed to get task execution statistics:", error);
       throw error;
     }
   }
@@ -782,7 +808,7 @@ export class TaskExecutorService {
         warnings,
       };
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to validate task configuration for ${taskType} task ${taskId}:`,
         error
       );
@@ -798,3 +824,5 @@ export class TaskExecutorService {
     }
   }
 }
+
+/* eslint-enable no-case-declarations */

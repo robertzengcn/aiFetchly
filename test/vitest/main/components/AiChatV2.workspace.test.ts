@@ -20,6 +20,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
     default_model: undefined,
   }),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
 }));
 
 vi.mock("@/views/api/workspace", () => ({

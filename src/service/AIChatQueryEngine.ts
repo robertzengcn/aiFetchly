@@ -14,6 +14,13 @@ import type {
   ToolFunction,
 } from "@/api/aiChatApi";
 import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import { GeneratedImageReferenceService } from "@/service/GeneratedImageReferenceService";
+import {
+  GeneratedImageReferenceError,
+  type GeneratedImageReferenceErrorCode,
+  type ResolveGeneratedImagesResult,
+} from "@/entityTypes/generatedImageReferenceTypes";
+import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
@@ -21,6 +28,7 @@ import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { DesktopNotifyService } from "@/service/DesktopNotifyService";
@@ -37,7 +45,7 @@ import {
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
-import { userSafeError } from "@/service/AIChatErrorMapper";
+import { userSafeError, isContextWindowExceededError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -67,6 +75,8 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
+  ChatV2GeneratedImageReference,
+  ChatV2GeneratedImageReferenceMetadata,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
@@ -80,6 +90,7 @@ import type {
   ToolCatalogModeDecision,
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
+import { log } from "@/modules/Logger";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -111,8 +122,70 @@ function collectRecentUserMessages(
   return collected.reverse();
 }
 
+/**
+ * Detect whether the assembled transcript contains any AI-generated image
+ * references (the `<generated_images>` marker injected by
+ * {@link augmentContentWithGeneratedImages}). Informational context flag for
+ * tool-catalog awareness only: the tool-load policy no longer auto-promotes
+ * export/attach tools for follow-up edits, because a selected generated image
+ * arrives attached to the current user turn and is edited directly.
+ */
+function messagesHaveGeneratedImages(
+  messages: readonly OpenAIChatMessage[]
+): boolean {
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    const text = openAIContentToString(m.content);
+    if (text.includes("<generated_images>")) return true;
+  }
+  return false;
+}
+
 /** Maximum persisted reasoning characters per assistant message (32 KB). */
 const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
+
+/**
+ * Stable English fallback strings per generated-image error code. The
+ * renderer localizes via `errorCode`; these keep terminal chunks readable
+ * when shown raw.
+ */
+const GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES: Record<
+  GeneratedImageReferenceErrorCode,
+  string
+> = {
+  generated_image_reference_invalid:
+    "The selected generated image reference is invalid.",
+  generated_image_not_owned:
+    "You do not have access to the selected generated image.",
+  generated_image_missing: "The selected generated image no longer exists.",
+  generated_image_outside_store:
+    "The selected generated image is outside the allowed storage location.",
+  generated_image_symlink_rejected:
+    "The selected generated image failed a security check.",
+  generated_image_unsupported_type:
+    "The selected generated image has an unsupported format.",
+  generated_image_too_large: "The generated image exceeds the size limit.",
+  generated_image_dimension_limit:
+    "The generated image exceeds the dimension limit.",
+  generated_image_reference_limit: "Too many images attached to this request.",
+  generated_image_ambiguous:
+    "The selected generated image reference is ambiguous.",
+  generated_image_fusion_limit:
+    "Too many generated images selected for this request.",
+  generated_image_batch_partial:
+    "Some selected generated images could not be prepared.",
+  generated_image_batch_cancelled:
+    "Generated image preparation was cancelled.",
+};
+
+/**
+ * Trigger a proactive pre-turn compact when the assembled context's token
+ * estimate reaches this fraction of the model's context window. Kept in sync
+ * with AIChatCompactAgentService.AUTO_COMPACT_THRESHOLD_FRACTION so the
+ * pre-turn gate and the post-turn auto-compact agree on when to compact.
+ * Gives ~30% headroom for intra-turn tool-call/result growth.
+ */
+const AUTO_COMPACT_THRESHOLD_FRACTION = 0.7;
 
 /**
  * Build persisted reasoning metadata from the loop's final reasoning string.
@@ -238,6 +311,13 @@ export interface AIChatQueryEngineDeps {
       images: OpenAIChatImage[];
     }): Promise<OpenAIChatImage[]>;
   };
+  /** Optional. Resolves renderer-supplied generated-image references into
+   * transient edit-input artifacts before the user message is persisted.
+   * When omitted, a default GeneratedImageReferenceService is used. */
+  generatedImageReferenceResolver?: Pick<
+    GeneratedImageReferenceService,
+    "resolveGeneratedImages"
+  >;
   /** Optional filter scoping which built-in tool schemas the engine advertises
    * to the model. Scheduled (unattended) profiles use this to expose only
    * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
@@ -269,9 +349,11 @@ export class AIChatQueryEngine {
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
+  private readonly modelCatalog: AIChatModelCatalogService;
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
+  private readonly generatedImageReferenceResolver?: AIChatQueryEngineDeps["generatedImageReferenceResolver"];
   /** Optional filter that scopes which tool schemas the engine advertises to
    * the model. Used by the scheduled (unattended) profile to expose only
    * task-policy-approved tools (FR-16), narrowing the prompt-injection
@@ -291,9 +373,12 @@ export class AIChatQueryEngine {
     this.contextAssembler =
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
+    this.modelCatalog = new AIChatModelCatalogService();
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
+    this.generatedImageReferenceResolver =
+      deps?.generatedImageReferenceResolver;
     this.toolFilter = deps?.toolFilter;
   }
 
@@ -309,6 +394,21 @@ export class AIChatQueryEngine {
       return "running";
     }
     return "idle";
+  }
+
+  /**
+   * Resolve the real context window (tokens) for a model. Falls back to
+   * the model catalog's default (128k) when the model is unknown. Never
+   * throws. Used by the pre-turn proactive compact gate.
+   */
+  private async resolveContextWindowForModel(
+    model?: string
+  ): Promise<number> {
+    try {
+      return await this.modelCatalog.getContextWindow(model);
+    } catch {
+      return 128_000;
+    }
   }
 
   /**
@@ -366,7 +466,7 @@ export class AIChatQueryEngine {
         });
       } else {
         // Document was too large or staging failed — skip enrichment
-        console.log(
+        log.info(
           `[ai-chat-v2] document ${file.fileName} not staged — skipping enrichment`
         );
       }
@@ -419,7 +519,7 @@ export class AIChatQueryEngine {
 
     for (const file of files) {
       if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
-        console.log(
+        log.info(
           `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — staging skipped`
         );
         continue;
@@ -438,7 +538,7 @@ export class AIChatQueryEngine {
         );
         staged.push(ref);
       } catch (err) {
-        console.error(
+        log.error(
           `[ai-chat-v2] failed to stage document ${file.fileName}:`,
           err
         );
@@ -474,6 +574,50 @@ export class AIChatQueryEngine {
     new ConversationToolStateService();
 
   /**
+   * Resolve renderer-supplied generated-image references into transient
+   * data-URL artifacts for the current turn, enforcing the combined image
+   * count (uploaded + referenced) and the data-URL budget. Returns the
+   * resolver result, or a stable error code to emit as a terminal chunk.
+   */
+  private async resolveGeneratedImageInputs(input: {
+    conversationId: string;
+    references: readonly ChatV2GeneratedImageReference[];
+    uploadedImageCount: number;
+  }): Promise<
+    | { ok: true; result: ResolveGeneratedImagesResult }
+    | { ok: false; errorCode: GeneratedImageReferenceErrorCode }
+  > {
+    let resolved: ResolveGeneratedImagesResult;
+    try {
+      const resolver =
+        this.generatedImageReferenceResolver ??
+        new GeneratedImageReferenceService();
+      resolved = await resolver.resolveGeneratedImages({
+        conversationId: input.conversationId,
+        references: input.references,
+        detail: "auto",
+      });
+    } catch (err: unknown) {
+      if (err instanceof GeneratedImageReferenceError) {
+        return { ok: false, errorCode: err.code };
+      }
+      throw err;
+    }
+    if (
+      input.uploadedImageCount + resolved.artifacts.length >
+      CHAT_IMAGE_LIMITS.maxImagesPerRequest
+    ) {
+      return { ok: false, errorCode: "generated_image_reference_limit" };
+    }
+    if (
+      resolved.totalDataUrlChars > CHAT_IMAGE_LIMITS.targetTotalDataUrlChars
+    ) {
+      return { ok: false, errorCode: "generated_image_too_large" };
+    }
+    return { ok: true, result: resolved };
+  }
+
+  /**
    * Build the deferred tool catalog + mode decision for a turn (FR-8, design
    * §15.1). Returns undefined when the feature flag is off or catalog building
    * fails, so the loop falls back to standard full-tool behavior.
@@ -487,6 +631,7 @@ export class AIChatQueryEngine {
     readonly recentUserMessages?: readonly string[];
     readonly model?: string;
     readonly contextWindowTokens?: number;
+    readonly hasRecentGeneratedImages?: boolean;
     readonly initialState?: ToolCatalogRuntimeContext;
   }): {
     toolCatalog?: ToolCatalog;
@@ -507,6 +652,7 @@ export class AIChatQueryEngine {
       recentUserMessages: input.recentUserMessages,
       uploadedFileTypes: [],
       contextWindowTokens: input.contextWindowTokens,
+      hasRecentGeneratedImages: input.hasRecentGeneratedImages,
       ...(input.initialState ?? {}),
     };
 
@@ -517,7 +663,7 @@ export class AIChatQueryEngine {
         context,
       });
     } catch (err) {
-      console.warn(
+      log.warn(
         `[tool-catalog] catalog build failed, using standard mode:`,
         err
       );
@@ -673,9 +819,62 @@ export class AIChatQueryEngine {
         ];
       }
 
+      // Resolve selected generated images into transient edit-input parts.
+      // Runs AFTER the final conversation id is known and BEFORE any
+      // user-message persistence so a failed resolution leaves the
+      // transcript untouched. Artifacts carry dataUrls in memory only.
+      let generatedImageRefMetadata:
+        | ChatV2GeneratedImageReferenceMetadata[]
+        | undefined;
+      if (
+        request.generatedImageReferences &&
+        request.generatedImageReferences.length > 0
+      ) {
+        const uploadedImageCount =
+          currentUserContentParts?.filter(
+            (part) => part.type === "image_url"
+          ).length ?? 0;
+        const resolution = await this.resolveGeneratedImageInputs({
+          conversationId,
+          references: request.generatedImageReferences,
+          uploadedImageCount,
+        });
+        if (!resolution.ok) {
+          log.warn(
+            `[ai-chat-v2] rejecting generated-image edit conv=${conversationId} code=${resolution.errorCode}`
+          );
+          eventSink.emit({
+            type: "error",
+            conversationId,
+            errorMessage:
+              GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES[resolution.errorCode],
+            errorCode: resolution.errorCode,
+          });
+          return;
+        }
+        const generatedParts: OpenAIImageUrlContentPart[] =
+          resolution.result.artifacts.map((artifact) => ({
+            type: "image_url",
+            image_url: { url: artifact.dataUrl, detail: artifact.detail },
+          }));
+        const effectiveText =
+          modelUserMessage.trim().length > 0
+            ? modelUserMessage
+            : "Describe the selected image.";
+        currentUserContentParts = [
+          { type: "text", text: effectiveText },
+          ...(currentUserContentParts ? currentUserContentParts.slice(1) : []),
+          ...generatedParts,
+        ];
+        generatedImageRefMetadata = [...resolution.result.metadata];
+      }
+
       // Build user-message metadata (source + attachments + @-mentions).
       const userMetadata: ChatV2MessageMetadata = {
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
+        ...(generatedImageRefMetadata
+          ? { generatedImageReferences: generatedImageRefMetadata }
+          : {}),
       };
       if (scheduledContext) {
         userMetadata.scheduledLoop = {
@@ -698,7 +897,8 @@ export class AIChatQueryEngine {
         !!attachmentMetadata ||
         atMentionResolution.metadata.length > 0 ||
         pastedTextResolution.pastedBlocks.length > 0 ||
-        !!scheduledContext;
+        !!scheduledContext ||
+        !!generatedImageRefMetadata;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
@@ -745,8 +945,62 @@ export class AIChatQueryEngine {
         ? scheduledContext.assistantMessageId
         : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       messages = [...assembled.messages];
+
+      // Proactive pre-turn compact: if the assembled context's token estimate
+      // already exceeds the auto-compact threshold, run a full compact NOW
+      // (before sending) and re-assemble so the request stays within the
+      // model's context window. Without this, a long conversation can grow
+      // past 100% on the next turn and hit a ContextWindowExceededError —
+      // which the post-turn compact (case "completed") can't prevent because
+      // it only runs AFTER a successful turn.
+      const compactAgent = this.compactAgent;
+      if (compactAgent && assembled.tokenEstimate > 0) {
+        const contextWindow = await this.resolveContextWindowForModel(
+          request.model
+        );
+        const threshold = Math.floor(
+          AUTO_COMPACT_THRESHOLD_FRACTION * contextWindow
+        );
+        if (assembled.tokenEstimate >= threshold) {
+          log.info(
+            `[ai-chat-compact] pre-turn compact triggered conv=${conversationId} estimate=${assembled.tokenEstimate} threshold=${threshold} window=${contextWindow}`
+          );
+          try {
+            const compacted = await compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "pre_turn_proactive",
+              promptTokens: assembled.tokenEstimate,
+              model: request.model,
+            });
+            if (compacted) {
+              // Re-assemble with the fresh compact boundary so the request
+              // uses the shrunk context.
+              const reassembled = await this.contextAssembler.assemble({
+                conversationId,
+                currentUserMessage: modelUserMessage,
+                currentUserMessageId: savedUser.messageId,
+                baseSystemPrompt: basePrompt,
+                mode: isPlanMode ? "plan" : "chat",
+                model: request.model,
+                maxTokens: request.maxTokens,
+                planState,
+                currentUserContentParts,
+              });
+              messages = [...reassembled.messages];
+              log.info(
+                `[ai-chat-compact] pre-turn compact done, re-assembled conv=${conversationId} newEstimate=${reassembled.tokenEstimate}`
+              );
+            }
+          } catch (err) {
+            log.error(
+              "[ai-chat-compact] pre-turn compact failed (continuing with original context):",
+              err
+            );
+          }
+        }
+      }
     } catch (err) {
-      console.error("[ai-chat-v2] pre-stream error:", err);
+      log.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
       void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
@@ -824,6 +1078,7 @@ export class AIChatQueryEngine {
       userMessage: request.message,
       recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
+      hasRecentGeneratedImages: messagesHaveGeneratedImages(messages),
     });
 
     // Load persisted discovered-tool state so tools discovered in earlier turns
@@ -1176,6 +1431,9 @@ export class AIChatQueryEngine {
           matchedByToolId.conversationMessages
         ),
         model: matchedByToolId.request.model,
+        hasRecentGeneratedImages: messagesHaveGeneratedImages(
+          matchedByToolId.conversationMessages
+        ),
       });
 
       const loopInput: AIChatQueryLoopInput = {
@@ -1207,7 +1465,7 @@ export class AIChatQueryEngine {
           await this.handleLoopResult(result, module, eventSink);
         })
         .catch((err) => {
-          console.error("[ai-chat-v2] resume loop failed:", err);
+          log.error("[ai-chat-v2] resume loop failed:", err);
           void redirectToLoginOnAuthExpired(err);
           matchedByToolId.eventSink.emit({
             type: "error",
@@ -1326,6 +1584,9 @@ export class AIChatQueryEngine {
         pending.conversationMessages
       ),
       model: pending.request.model,
+      hasRecentGeneratedImages: messagesHaveGeneratedImages(
+        pending.conversationMessages
+      ),
     });
 
     const loopInput: AIChatQueryLoopInput = {
@@ -1359,7 +1620,7 @@ export class AIChatQueryEngine {
         await this.handleLoopResult(result, module, eventSink);
       })
       .catch((err) => {
-        console.error("[ai-chat-v2] answer-question loop failed:", err);
+        log.error("[ai-chat-v2] answer-question loop failed:", err);
         void redirectToLoginOnAuthExpired(err);
         pending.eventSink.emit({
           type: "error",
@@ -1452,7 +1713,7 @@ export class AIChatQueryEngine {
                 : compactAgent.enqueueSessionMemoryUpdate(compactInput)
             )
             .catch((err) =>
-              console.error(
+              log.error(
                 "[ai-chat-compact] post-turn compaction failed:",
                 err
               )
@@ -1465,7 +1726,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[ai-auto-dream] chat trigger failed:", err)
+              log.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
         if (this.workspaceAutoDreamService) {
@@ -1475,7 +1736,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[workspace-auto-dream] chat trigger failed:", err)
+              log.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
         DesktopNotifyService.getInstance()
@@ -1486,7 +1747,7 @@ export class AIChatQueryEngine {
             conversationId,
           })
           .catch((err: unknown) =>
-            console.error("[desktop-notify] turn_complete failed:", err)
+            log.error("[desktop-notify] turn_complete failed:", err)
           );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
@@ -1545,6 +1806,32 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
         });
+        // Emergency auto-compact: when the turn failed because the context
+        // window was exceeded, immediately run a full compact so the next
+        // turn has a smaller context. Without this the user is stuck in a
+        // failure loop — every retry sends the same oversized history.
+        const compactAgent = this.compactAgent;
+        if (compactAgent && isContextWindowExceededError(result.error)) {
+          log.info(
+            `[ai-chat-compact] emergency compact triggered (context window exceeded) conv=${conversationId}`
+          );
+          compactAgent
+            .enqueueAutoCompact({
+              conversationId,
+              reason: "context_window_exceeded",
+              // Use a very high token count to force the compact past the
+              // threshold check, since we don't have the exact prompt token
+              // count on a failed turn.
+              promptTokens: Number.MAX_SAFE_INTEGER,
+              model: result.model,
+            })
+            .catch((err) =>
+              log.error(
+                "[ai-chat-compact] emergency compact after context window failure failed:",
+                err
+              )
+            );
+        }
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
         break;
@@ -1558,7 +1845,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
-        console.log(
+        log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
         break;
@@ -1569,7 +1856,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
-        console.log(
+        log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
         break;
@@ -1654,7 +1941,7 @@ export class AIChatQueryEngine {
                 tokensUsed: latestUsage?.totalTokens,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool call failed:", err);
+                log.error("[ai-chat-v2] save tool call failed:", err);
               })
           );
         }
@@ -1672,7 +1959,7 @@ export class AIChatQueryEngine {
                   event.replacesPermissionPromptForToolId,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool result failed:", err);
+                log.error("[ai-chat-v2] save tool result failed:", err);
               })
           );
         }
@@ -1723,7 +2010,7 @@ export class AIChatQueryEngine {
       });
       return stored.length > 0 ? stored : undefined;
     } catch (err) {
-      console.warn(
+      log.warn(
         `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,
         err
       );
@@ -1741,7 +2028,7 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): void {
     this.dispatchStop(conversationId, "error");
-    console.error("[ai-chat-v2] engine failure:", err);
+    log.error("[ai-chat-v2] engine failure:", err);
     void redirectToLoginOnAuthExpired(err);
     eventSink.emit({
       type: "error",

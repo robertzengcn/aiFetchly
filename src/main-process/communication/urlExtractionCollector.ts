@@ -17,7 +17,10 @@
  *   rejects.
  */
 
-/** A single URL's extraction outcome (no DB write — AI tool flow). */
+/** A single URL's extraction outcome (no DB write — AI tool flow).
+ * The optional `verification` block is carried through from the worker when
+ * present; otherwise the main process composes it (compatibility fallback,
+ * design §15.4). This type carries verification — it does NOT perform it. */
 export interface UrlContactExtractionResult {
   url: string;
   success: boolean;
@@ -26,6 +29,10 @@ export interface UrlContactExtractionResult {
     phones?: string[];
     address?: string | null;
     socialLinks?: string[] | null;
+    /** Per-value DOM evidence (design §11.4), when captured by the worker. */
+    contactEvidence?: unknown;
+    /** Verification result (snake_case contract, design §8.5). */
+    verification?: unknown;
   };
   error?: string;
 }

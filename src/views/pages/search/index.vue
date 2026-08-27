@@ -192,7 +192,7 @@ const useAccount = ref(false);
 const form = ref<HTMLFormElement>();
 const loading = ref(false);
 const rules = {
-  required: (value) => !!value || "Field is required",
+  required: (value: unknown) => !!value || "Field is required",
 };
 const useLocalBrowser = ref(false)
 const enginer = ref<string>();
@@ -516,7 +516,7 @@ async function onSubmit() {
     return;
   }
   
-  const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
+  const subkeyword = keywords.value.split('\n').map((keyword: string) => keyword.trim());
   let localbowser = ""
   if (useLocalBrowser.value) {
     localbowser = localBrowser.value
@@ -610,7 +610,7 @@ async function onSaveOnly() {
     return;
   }
   
-  const subkeyword = keywords.value.split('\n').map(keyword => keyword.trim());
+  const subkeyword = keywords.value.split('\n').map((keyword: string) => keyword.trim());
   let localbowser = ""
   if (useLocalBrowser.value) {
     localbowser = localBrowser.value
@@ -669,8 +669,8 @@ async function onGenerateKeywords() {
     // Get current keywords from textarea
     const currentKeywords = keywords.value
       .split('\n')
-      .map(k => k.trim())
-      .filter(k => k.length > 0);
+      .map((k: string) => k.trim())
+      .filter((k: string) => k.length > 0);
 
     if (currentKeywords.length === 0) {
       setAlert(t("search.keywords_empty"), "Error", "error");

@@ -5,6 +5,7 @@ import {
   EmailAiCandidate,
 } from "@/entityTypes/emailextraction-type";
 import type { EmailAiResponse } from "@/modules/EmailAiEnrichmentHandler";
+import { log } from "@/modules/Logger";
 import { Page, InterceptResolutionAction } from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { convertProxyServertourl } from "@/modules/lib/function";
@@ -50,12 +51,12 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
   // Do NOT set up proxy interception here to avoid duplicate handlers that cause
   // race conditions and browser crashes.
 
-  console.log(`[extractLink] Navigating to ${url}`);
+  log.info(`[extractLink] Navigating to ${url}`);
   await page.goto(url, {
     waitUntil: "networkidle2",
     timeout: 60000,
   });
-  console.log(`[extractLink] Page loaded successfully: ${url}`);
+  log.info(`[extractLink] Page loaded successfully: ${url}`);
   const pageTitle = await page.evaluate(() => document.title);
 
   // Extract all links from the page
@@ -64,7 +65,7 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
       (anchor) => anchor.href
     );
   });
-  console.log(`[extractLink] Found ${links.length} total links on ${url}`);
+  log.info(`[extractLink] Found ${links.length} total links on ${url}`);
 
   // Filter links with page level less than 3
   const filteredLinks = links.filter((link) => {
@@ -81,7 +82,7 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
       return false;
     }
   });
-  console.log(
+  log.info(
     `[extractLink] Filtered to ${filteredLinks.length} internal links on ${url}`
   );
   const emails = await page.evaluate(() => {
@@ -96,7 +97,7 @@ export const extractLink = async (page: Page, val: EmailClusterdata) => {
     pageContent = await page.evaluate(() => document.body.innerText);
   }
 
-  console.log(`[extractLink] Found ${emails.length} emails on ${url}`);
+  log.info(`[extractLink] Found ${emails.length} emails on ${url}`);
   if (val.callback) {
     if (emails.length > 0) {
       const er: EmailResult = {
@@ -153,14 +154,14 @@ export async function crawlSite({
 }) {
   try {
     if (data.url.length == 0) {
-      console.log("[crawlSite] Empty URL, skipping");
+      log.info("[crawlSite] Empty URL, skipping");
       return;
     }
     if (!data.visited) {
       data.visited = new Set();
     }
     if (data.visited.has(data.url)) {
-      console.log(`[crawlSite] Already visited ${data.url}, skipping`);
+      log.info(`[crawlSite] Already visited ${data.url}, skipping`);
       return;
     }
     data.visited.add(data.url);
@@ -168,7 +169,7 @@ export async function crawlSite({
     // Check if we've exceeded maxPageNumber
     const maxPageNumber = data.maxPageNumber ?? 0;
     if (maxPageNumber > 0 && data.visited.size > maxPageNumber) {
-      console.log(`[crawlSite] Reached maximum page limit of ${maxPageNumber}`);
+      log.info(`[crawlSite] Reached maximum page limit of ${maxPageNumber}`);
       return;
     }
 
@@ -177,7 +178,7 @@ export async function crawlSite({
       (data.proxy || data.blockAssets) &&
       !(page as unknown as Record<string, unknown>).__proxyInterceptionSet
     ) {
-      console.log(`[crawlSite] Setting up request interception for page`);
+      log.info(`[crawlSite] Setting up request interception for page`);
       await page.setRequestInterception(true);
       page.on("request", async (interceptedRequest) => {
         if (
@@ -200,7 +201,7 @@ export async function crawlSite({
             );
           }
         } catch (proxyErr) {
-          console.error("[crawlSite] Proxy request error:", proxyErr);
+          log.error("[crawlSite] Proxy request error:", proxyErr);
         }
         if (
           interceptedRequest.interceptResolutionState().action ===
@@ -214,7 +215,7 @@ export async function crawlSite({
         true;
     }
 
-    console.log(
+    log.info(
       `[crawlSite] Extracting links from ${data.url} (visited: ${data.visited.size})`
     );
     const result = await extractLink(page, {
@@ -224,7 +225,7 @@ export async function crawlSite({
       callback: data.callback,
       aiSupportEnabled: data.aiSupportEnabled,
     });
-    console.log(
+    log.info(
       `[crawlSite] Extract link result for ${data.url}:`,
       result
         ? `found ${result.emails?.length ?? 0} emails, ${
@@ -234,7 +235,7 @@ export async function crawlSite({
     );
     if (!result) return;
 
-    console.log(
+    log.info(
       `[crawlSite] Page Title: ${result.pageTitle}, URL: ${data.url}`
     );
 
@@ -261,7 +262,7 @@ export async function crawlSite({
       data.bestCandidate &&
       !data.aiEnrichmentRequested
     ) {
-      console.log(
+      log.info(
         `[crawlSite] Requesting AI enrichment for best candidate: ${data.bestCandidate.url} (score: ${data.bestCandidate.score})`
       );
       data.aiEnrichmentRequested = true;
@@ -270,7 +271,7 @@ export async function crawlSite({
       // After enrichment, send a result with the enrichment data via callback
       // so the main process can save it alongside the domain's email results
       if (data.aiEnrichmentResult && data.callback) {
-        console.log(
+        log.info(
           `[crawlSite] AI enrichment result status: ${data.aiEnrichmentResult.status}`
         );
         const enrichmentResult: EmailResult = {
@@ -292,7 +293,7 @@ export async function crawlSite({
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[crawlSite] Error crawling ${data.url}: ${errMsg}`);
+    log.error(`[crawlSite] Error crawling ${data.url}: ${errMsg}`);
     // Re-throw so puppeteer-cluster can handle the task failure
     throw error;
   }
@@ -316,7 +317,7 @@ async function requestAiEnrichmentForBestCandidate(
       }
     ).parentPort;
     if (!parentPort) {
-      console.warn("No parentPort available for AI enrichment request");
+      log.warn("No parentPort available for AI enrichment request");
       data.aiEnrichmentResult = {
         status: "skipped",
         error: "No parent process channel available for AI enrichment",
@@ -360,7 +361,7 @@ async function requestAiEnrichmentForBestCandidate(
     });
 
     parentPort.postMessage(JSON.stringify(request));
-    console.log(
+    log.info(
       `[Email AI] Sent enrichment request for ${candidate.url} (score: ${candidate.score})`
     );
 
@@ -374,9 +375,9 @@ async function requestAiEnrichmentForBestCandidate(
         status: "completed" as const,
         confidence: response.confidence,
       };
-      console.log(`[Email AI] Enrichment successful for ${candidate.url}`);
+      log.info(`[Email AI] Enrichment successful for ${candidate.url}`);
     } else {
-      console.warn(`[Email AI] Enrichment failed: ${response.errorMessage}`);
+      log.warn(`[Email AI] Enrichment failed: ${response.errorMessage}`);
       data.aiEnrichmentResult = {
         status: "failed" as const,
         error: response.errorMessage || "AI enrichment failed",
@@ -388,6 +389,6 @@ async function requestAiEnrichmentForBestCandidate(
       status: "failed",
       error: message,
     };
-    console.error(`[Email AI] Enrichment error: ${message}`);
+    log.error(`[Email AI] Enrichment error: ${message}`);
   }
 }

@@ -154,7 +154,7 @@ const totalItems = ref(0);
 const search = ref('');
 const startAutoRefresh = () => {
   refreshInterval = setInterval(function () {
-    loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+    loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
   }, 10000); // Refresh every 5 seconds
 }
 const stopAutoRefresh = () => {
@@ -164,7 +164,7 @@ const stopAutoRefresh = () => {
   }
 };
 
-function loadItems({ page = 1, itemsPerPage = 10, sortBy }) {
+function loadItems({ page = 1, itemsPerPage = 10, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
   options.page = page;
   loading.value = true
   options.page = page;
@@ -218,7 +218,7 @@ const openfolder = async (item: EmailsearchTaskEntityDisplay) => {
     console.error('openfolder navigation failed:', error);
   }
 }
-const downloadErrorlog = async (item) => {
+const downloadErrorlog = async (item: EmailsearchTaskEntityDisplay) => {
     try {
         const content = await downloadErrorLog(item.id)
         // Create a blob and download the file
@@ -258,7 +258,7 @@ const killTask = async (item: EmailsearchTaskEntityDisplay) => {
   if (confirm(t('emailextraction.confirm_kill'))) {
     try {
       await killEmailSearchTask(item.id)
-      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] })
     } catch (error) {
       console.error('Failed to stop task:', error)
       alert(t('emailextraction.kill_error'))
@@ -271,7 +271,7 @@ const startTask = async (item: EmailsearchTaskEntityDisplay) => {
   if (confirm(t('emailextraction.confirm_start'))) {
     try {
       await startEmailSearchTask(item.id)
-      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] })
     } catch (error) {
       console.error('Failed to start task:', error)
       alert(t('emailextraction.start_error'))
@@ -296,7 +296,7 @@ const deleteTask = async (item: EmailsearchTaskEntityDisplay) => {
     try {
       await deleteEmailSearchTask(item.id)
       // Refresh the table after deletion
-      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" })
+      loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] })
     } catch (error) {
       console.error('Failed to delete task:', error)
       alert(t('emailextraction.delete_error'))

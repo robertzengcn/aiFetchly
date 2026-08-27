@@ -18,7 +18,7 @@ test('start-puppeteer', async function () {
             
         const page = await browser.newPage();
         await page.evaluate(() => {
-            debugger;
+            // debugger removed
           });    
         // Navigate the page to a URL
         await page.goto('https://www.baidu.com');
@@ -77,7 +77,7 @@ describe('Puppeteer Stealth Tests', () => {
             });
 
             // Check if WebDriver is detected
-            const webdriverTest = results.find(r => r?.test?.includes('WebDriver'));
+            const webdriverTest = results.find((r: { test?: string }) => r?.test?.includes('WebDriver'));
             expect(webdriverTest?.result).toContain('present');
         } catch (error) {
             console.error('Test failed:', error);
@@ -137,14 +137,14 @@ describe('Puppeteer Stealth Tests', () => {
             
 
             // Check if WebDriver is detected
-            const webdriverTest = results.find(r => r?.test?.includes('WebDriver'));
+            const webdriverTest = results.find((r: { test?: string }) => r?.test?.includes('WebDriver'));
             expect(webdriverTest?.result).not.toContain('present');
 
             // Additional checks for other detection methods
-            const chromeTest = results.find(r => r?.test?.includes('Chrome'));
+            const chromeTest = results.find((r: { test?: string }) => r?.test?.includes('Chrome'));
             expect(chromeTest?.result).not.toContain('missing');
 
-            const pluginsTest = results.find(r => r?.test?.includes('Plugins Length'));
+            const pluginsTest = results.find((r: { test?: string }) => r?.test?.includes('Plugins Length'));
             expect(pluginsTest?.result).not.toContain('0');
         } catch (error) {
             console.error('Test failed:', error);
@@ -183,7 +183,7 @@ describe('Puppeteer Cluster Tests', () => {
             monitor: true
         });
 
-        await cluster.task(async ({ page, data: url  }) => {
+        await cluster.task(async ({ page, data: url }: { page: import("puppeteer").Page; data: string }) => {
             try {
                 await page.goto(url);
                 
@@ -227,7 +227,7 @@ describe('Puppeteer Cluster Tests', () => {
             }
         });
 
-        cluster.on('taskerror', (err, data, willRetry) => {
+        cluster.on('taskerror', (err: Error, data: unknown, willRetry: boolean) => {
             // if (willRetry) {
             //     console.warn(`Encountered an error while crawling ${data}. ${err.message}\nThis job will be retried`);
             // } else {

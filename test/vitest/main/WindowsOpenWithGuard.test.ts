@@ -19,7 +19,7 @@ import { extname, join, relative } from "path";
 
 const SRC_ROOT = "src";
 const HELPER_MODULE = "src/utils/windowsOpenWith.ts";
-const AI_CHAT_IPC = "src/main-process/communication/ai-chat-ipc.ts";
+const AI_CHAT_IPC = "src/main-process/communication/ai-file-open-ipc.ts";
 
 /** Broken Windows open patterns that must never be invoked in live code. */
 const BANNED_OPENAS =

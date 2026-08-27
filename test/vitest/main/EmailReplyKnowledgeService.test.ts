@@ -17,6 +17,7 @@ beforeEach(() => {
 describe("retrieveReplyKnowledge", () => {
   it("returns disabled warning when useKnowledgeLibrary is false", async () => {
     const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
       subject: "Pricing",
       bodyText: "What does it cost?",
       useKnowledgeLibrary: false,
@@ -44,6 +45,7 @@ describe("retrieveReplyKnowledge", () => {
     });
 
     const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
       subject: "Pricing question",
       bodyText: "How much?",
       fromName: "Prospect",
@@ -73,15 +75,17 @@ describe("retrieveReplyKnowledge", () => {
           documentId: 1,
           documentName: "d",
           content: long,
-          score: 0.5,
+          score: 0.9,
         },
       ],
     });
     const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
       subject: "s",
       bodyText: "b",
       useKnowledgeLibrary: true,
     });
+    expect(res.abstained).toBe(false);
     expect(res.sources[0].content.length).toBeLessThanOrEqual(801); // 800 + ellipsis
     expect(res.sources[0].content.endsWith("…")).toBe(true);
   });
@@ -89,6 +93,7 @@ describe("retrieveReplyKnowledge", () => {
   it("returns a warning (no throw) when rag search fails", async () => {
     searchKnowledgeForToolMock.mockRejectedValue(new Error("boom"));
     const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
       subject: "s",
       bodyText: "b",
       useKnowledgeLibrary: true,
@@ -97,17 +102,43 @@ describe("retrieveReplyKnowledge", () => {
     expect(res.warning).toMatch(/failed/);
   });
 
-  it("returns a warning when rag returns no results", async () => {
+  it("returns a warning + abstention when rag returns no results", async () => {
     searchKnowledgeForToolMock.mockResolvedValue({
       success: true,
       results: [],
     });
     const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
       subject: "s",
       bodyText: "b",
       useKnowledgeLibrary: true,
     });
     expect(res.sources).toEqual([]);
-    expect(res.warning).toMatch(/no results/);
+    expect(res.abstained).toBe(true);
+    expect(res.warning).toMatch(/no in-scope knowledge results/);
+  });
+
+  it("abstains when the best score is below the relevance threshold", async () => {
+    searchKnowledgeForToolMock.mockResolvedValue({
+      success: true,
+      results: [
+        {
+          chunkId: 1,
+          documentId: 1,
+          documentName: "d",
+          content: "weak",
+          score: 0.2,
+        },
+      ],
+    });
+    const res = await retrieveReplyKnowledge({
+      emailServiceId: 7,
+      subject: "s",
+      bodyText: "b",
+      useKnowledgeLibrary: true,
+    });
+    expect(res.abstained).toBe(true);
+    expect(res.sources).toEqual([]);
+    expect(res.warning).toMatch(/relevance threshold/);
   });
 });

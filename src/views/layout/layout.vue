@@ -117,7 +117,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
+                    <v-btn variant="text" icon="mdi-chat" data-testid="ai-chat-toggle" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
                 </div>
@@ -198,10 +198,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
             class="chat-resize-handle"
             @mousedown="startResize"
           ></div>
-          <AiChatBox
-            :visible="chatPanelOpen"
-            @close="toggleChatPanel"
-          />
         </div>
 
         <!-- Backdrop overlay -->
@@ -225,7 +221,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
-import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
+
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
@@ -284,9 +280,7 @@ const v2ChatPanelOpen = ref(false);
 const activeArtifact = ref<AIArtifactRecord | null>(null);
 const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
-const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
-const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(720);
+const chatPanelWidth = ref(600);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
 const pendingOpenConversationRequest = ref<AiOpenConversationRequest | null>(null);
@@ -443,13 +437,9 @@ const toggleV2ChatPanel = () => {
     }
 }
 
-/** Unified chat toggle: opens V2 when the feature flag is on, legacy chat otherwise. */
+/** Unified chat toggle: always opens V2 (v1 retired R6.2). */
 const toggleChat = () => {
-    if (aiChatV2Enabled.value) {
-        toggleV2ChatPanel();
-    } else {
-        toggleChatPanel();
-    }
+    toggleV2ChatPanel();
 };
 
 const openAiChatFromDashboard = (event: Event): void => {
@@ -457,18 +447,12 @@ const openAiChatFromDashboard = (event: Event): void => {
     const text = detail?.prompt?.trim();
     if (!text) return;
 
-    if (aiChatV2Enabled.value) {
-        pendingAiPromptRequest.value = {
-            id: ++aiPromptRequestId,
-            text,
-        };
-        v2ChatPanelOpen.value = true;
-        chatPanelOpen.value = false;
-        return;
-    }
-
-    chatPanelOpen.value = true;
-    v2ChatPanelOpen.value = false;
+    pendingAiPromptRequest.value = {
+        id: ++aiPromptRequestId,
+        text,
+    };
+    v2ChatPanelOpen.value = true;
+    chatPanelOpen.value = false;
 }
 
 const handleOpenFromNotify = (raw: unknown): void => {
@@ -481,20 +465,15 @@ const handleOpenFromNotify = (raw: unknown): void => {
             ? payload.conversationId.trim()
             : "";
 
-    if (aiChatV2Enabled.value) {
-        v2ChatPanelOpen.value = true;
-        chatPanelOpen.value = false;
-        if (conversationId.length > 0) {
-            pendingOpenConversationRequest.value = {
-                id: ++openConversationRequestId,
-                conversationId,
-            };
-        }
-        return;
+    // v2 is the sole chat (v1 retired R6.2) — always route to the v2 panel.
+    v2ChatPanelOpen.value = true;
+    chatPanelOpen.value = false;
+    if (conversationId.length > 0) {
+        pendingOpenConversationRequest.value = {
+            id: ++openConversationRequestId,
+            conversationId,
+        };
     }
-
-    chatPanelOpen.value = true;
-    v2ChatPanelOpen.value = false;
 };
 
 const startResize = (e: MouseEvent) => {

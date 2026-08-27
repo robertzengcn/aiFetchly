@@ -4,7 +4,10 @@
 // recovery layers can look up a model's context window without paying
 // the round-trip on every turn. The cache is invalidated when a fetch
 // fails or when refresh() is explicitly called.
-import type { OpenAIModelsResponse } from "@/api/aiChatApi";
+import type {
+  OpenAIModelsResponse,
+  OpenAISmallModelCapability,
+} from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 
@@ -23,6 +26,7 @@ export interface AIChatModelCatalogEntry {
 export class AIChatModelCatalogService {
   private cache: ReadonlyMap<string, AIChatModelCatalogEntry> | null = null;
   private defaultModelId: string | null = null;
+  private smallModelCapability: OpenAISmallModelCapability | null = null;
   private fetchedAt = 0;
   private fetching: Promise<void> | null = null;
   private readonly api: AiChatApi;
@@ -61,8 +65,7 @@ export class AIChatModelCatalogService {
       for (const m of resp.data) {
         const id = m.id;
         if (!id) continue;
-        const ctx =
-          (m.context_window ?? m.context_length ?? m.context_size) ?? 0;
+        const ctx = m.context_window ?? m.context_length ?? m.context_size ?? 0;
         map.set(id, {
           id,
           contextWindow: ctx > 0 ? ctx : this.fallbackContextWindow,
@@ -72,6 +75,7 @@ export class AIChatModelCatalogService {
       }
       this.cache = map;
       this.defaultModelId = defaultId;
+      this.smallModelCapability = resp.small_model ?? null;
       this.fetchedAt = Date.now();
     } catch {
       // Leave previous cache in place if we have one; otherwise mark as
@@ -119,6 +123,19 @@ export class AIChatModelCatalogService {
   /** The server-reported default model id, when known. */
   getDefaultModelId(): string | null {
     return this.defaultModelId;
+  }
+
+  /**
+   * The hosted `small` model route capability, when reported by the server's
+   * `/api/ai/v1/models` endpoint. Returns null when the server reported no
+   * `small_model` metadata (older servers, local/custom providers, or before
+   * the first refresh). Lightweight workload routing uses this to budget
+   * requests against the resolved model's real context window; absence is
+   * meaningful and must not be retried on every turn.
+   */
+  async getSmallModelCapability(): Promise<OpenAISmallModelCapability | null> {
+    await this.ensureLoaded();
+    return this.smallModelCapability;
   }
 
   /** The timestamp of the last successful refresh, in ms since epoch. */

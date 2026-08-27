@@ -26,6 +26,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "file_edit",
       "attach_local_images",
       "process_artifact_batch",
+      "export_generated_artifacts",
       "list_email_inboxes",
       "fetch_unread_emails",
       "create_email_reply_draft",
@@ -34,6 +35,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "create_schedule",
       "knowledge_library_import_attachment",
       "scrape_urls_from_search_engine",
+      "extract_contact_info",
+      "verify_contact_info",
       "shell_execute",
     ];
     for (const name of must) {
@@ -67,10 +70,47 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s.toLowerCase()).toContain("row-by-row");
   });
 
+  it("routes contact extraction to verify_contact_info before presenting results", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    expect(s).toContain("verify_contact_info");
+    expect(s).toContain("MUST call");
+  });
+
   it("explicitly flags the email-reply tools as not auto-promoted", () => {
     const s = buildBuiltInToolCapabilitiesSection();
     // Reply tools are deferred-by-default (no intent regex) — the table must
     // call this out so the model loads them via search rather than failing.
     expect(s.toLowerCase()).toContain("not auto-promoted");
+  });
+
+  it("routes generated-image edits to direct attachment, not export+attach", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    // The obsolete two-step workflow (export to workspace, then attach) must
+    // be gone: selected generated images arrive attached to the current turn.
+    expect(s).not.toContain("export_generated_artifacts` (copy");
+    expect(s).not.toContain(
+      "then `attach_local_images` with the workspace path"
+    );
+    expect(s).not.toContain("aifetchly-generated-image://");
+    // Direct-attachment guidance must tell the model no workspace is needed.
+    const lower = s.toLowerCase();
+    expect(lower).toContain("attached to the current user turn");
+    expect(lower).toContain("no workspace");
+    // Explicit save/copy requests still route to export_generated_artifacts.
+    expect(s).toContain("`export_generated_artifacts`");
+  });
+
+  it("describes the full range of image editing operations, not just background", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    // The image-edit row must cover general edits, not be narrowly scoped
+    // to background changes. Users may adjust contrast, crop, resize, add
+    // or remove objects, retouch product photos, etc.
+    expect(s).toContain("contrast");
+    expect(s).toContain("crop");
+    expect(s).toContain("resize");
+    expect(s).toContain("add/remove");
+    expect(s).toContain("product photo");
+    // Background operations are still mentioned but not the only focus.
+    expect(s).toContain("background");
   });
 });

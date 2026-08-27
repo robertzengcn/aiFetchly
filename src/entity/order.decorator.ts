@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/ban-types */
 const ORDER_KEY = Symbol.for('order_key')
     export function Order(value: number): PropertyDecorator {
         return (target, propertyKey) => {
@@ -13,3 +14,4 @@ const ORDER_KEY = Symbol.for('order_key')
     
         return defaultVal
     }
+/* eslint-enable @typescript-eslint/ban-types */

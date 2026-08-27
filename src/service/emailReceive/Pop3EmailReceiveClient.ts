@@ -9,7 +9,10 @@ import {
   addressListToStrings,
   firstAddress,
 } from "@/service/emailReceive/EmailReceiveClient";
-import { sanitizeEmailHtml, htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
+import {
+  sanitizeEmailHtml,
+  htmlToPlainText,
+} from "@/service/emailReceive/EmailHtmlSanitizer";
 import {
   buildSnippet,
   extractThreadKey,
@@ -28,11 +31,19 @@ const POP3_SSL_PORT = 995;
  */
 export class Pop3EmailReceiveClient implements EmailReceiveClient {
   async testConnection(config: EmailReceiveConnectionConfig): Promise<void> {
-    const client = new Pop3Connection(config.host, config.port, config.ssl, config.username, config.password);
+    const client = new Pop3Connection(
+      config.host,
+      config.port,
+      config.ssl,
+      config.username,
+      config.password
+    );
     try {
       await client.connect();
     } finally {
-      await client.quit().catch(() => { /* ignore */ });
+      await client.quit().catch(() => {
+        /* ignore */
+      });
     }
   }
 
@@ -41,7 +52,13 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
     options: EmailReceiveFetchOptions
   ): Promise<ParsedInboundEmail[]> {
     const limit = Math.max(1, Math.min(options.limit, 50));
-    const client = new Pop3Connection(config.host, config.port, config.ssl, config.username, config.password);
+    const client = new Pop3Connection(
+      config.host,
+      config.port,
+      config.ssl,
+      config.username,
+      config.password
+    );
 
     try {
       await client.connect();
@@ -64,7 +81,9 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
 
       return results;
     } finally {
-      await client.quit().catch(() => { /* ignore */ });
+      await client.quit().catch(() => {
+        /* ignore */
+      });
     }
   }
 
@@ -92,10 +111,10 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
     const threadKey = extractThreadKey(messageId, inReplyTo, referencesHeader);
 
     const toAddresses = addressListToStrings(
-      (parsed.to?.value as { address?: string; name?: string }[] | undefined)
+      parsed.to?.value as { address?: string; name?: string }[] | undefined
     );
     const ccAddresses = addressListToStrings(
-      (parsed.cc?.value as { address?: string; name?: string }[] | undefined)
+      parsed.cc?.value as { address?: string; name?: string }[] | undefined
     );
     const replyTo = firstAddress(parsed.replyTo?.value?.[0] ?? null);
 
@@ -122,6 +141,9 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       isAnswered: false,
       autoSubmitted: autoSubmittedHeader ? String(autoSubmittedHeader) : null,
       precedence: precedenceHeader ? String(precedenceHeader) : null,
+      listIdHeader: null,
+      listUnsubscribeHeader: null,
+      attachments: [],
     };
   }
 }
@@ -172,7 +194,9 @@ class Pop3Connection {
         try {
           await this.waitForResponse(1000);
           if (!this.buffer.startsWith("+OK")) {
-            throw new Error(`POP3 server rejected greeting: ${this.buffer.trim()}`);
+            throw new Error(
+              `POP3 server rejected greeting: ${this.buffer.trim()}`
+            );
           }
           this.buffer = "";
 
@@ -280,7 +304,9 @@ class Pop3Connection {
           return;
         }
         if (this.buffer.startsWith("-ERR")) {
-          reject(new Error(`POP3 error: ${this.buffer.replace("-ERR", "").trim()}`));
+          reject(
+            new Error(`POP3 error: ${this.buffer.replace("-ERR", "").trim()}`)
+          );
           return;
         }
         const endMarkerIndex = this.buffer.indexOf("\r\n.\r\n");
@@ -290,7 +316,8 @@ class Pop3Connection {
         }
         const full = this.buffer.substring(0, endMarkerIndex);
         const firstLineEnd = full.indexOf("\r\n");
-        const body = firstLineEnd === -1 ? "" : full.substring(firstLineEnd + 2);
+        const body =
+          firstLineEnd === -1 ? "" : full.substring(firstLineEnd + 2);
         resolve(body);
       };
       checkBuffer();

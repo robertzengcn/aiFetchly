@@ -12,6 +12,7 @@ import {
   isSameRegistrableHost,
   ALLOWED_HOSTS,
 } from "@/modules/lib/urlHostAllowlist";
+import { log } from "@/modules/Logger";
 
 /**
  * YellowPages.com Platform Adapter
@@ -33,7 +34,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
     location: string
   ): Promise<SearchResult[]> {
     const searchUrl = this.buildSearchUrl(keywords, location, 1);
-    console.log(`Searching YellowPages.com: ${searchUrl}`);
+    log.info(`Searching YellowPages.com: ${searchUrl}`);
     return [];
   }
 
@@ -41,7 +42,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
    * Custom business data extraction for YellowPages.com
    */
   async extractBusinessData(page: Page): Promise<BusinessData> {
-    console.log("Extracting business data from YellowPages.com");
+    log.info("Extracting business data from YellowPages.com");
 
     // Wait for results to load
     await page.waitForSelector(
@@ -144,14 +145,14 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
     const currentPage = await this.getCurrentPage(page);
 
     if (currentPage >= maxPages) {
-      console.log(`Reached maximum pages (${maxPages})`);
+      log.info(`Reached maximum pages (${maxPages})`);
       return;
     }
 
     // Check if next page button exists and is clickable
     const nextButton = await page.$("a.next");
     if (!nextButton) {
-      console.log("No next page button found");
+      log.info("No next page button found");
       return;
     }
 
@@ -164,7 +165,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
     // Wait for new results to load
     await page.waitForSelector("div.result", { timeout: 10000 });
 
-    console.log(`Navigated to page ${currentPage + 1}`);
+    log.info(`Navigated to page ${currentPage + 1}`);
   }
 
   /**
@@ -219,7 +220,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
 
       return details;
     } catch (error) {
-      console.error(
+      log.error(
         `Error extracting detailed info from ${businessUrl}:`,
         error
       );
@@ -322,7 +323,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
    */
   async applyCookies(page: Page, cookies: any): Promise<void> {
     if (!cookies || !Array.isArray(cookies)) {
-      console.log("No cookies to apply for YellowPages.com");
+      log.info("No cookies to apply for YellowPages.com");
       return;
     }
 
@@ -336,12 +337,12 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
 
       if (yellowPagesCookies.length > 0) {
         await page.setCookie(...yellowPagesCookies);
-        console.log(
+        log.info(
           `Applied ${yellowPagesCookies.length} cookies for YellowPages.com`
         );
       }
     } catch (error) {
-      console.error("Error applying cookies for YellowPages.com:", error);
+      log.error("Error applying cookies for YellowPages.com:", error);
     }
   }
 
@@ -363,7 +364,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
         );
         if (acceptButton) {
           await acceptButton.click();
-          console.log("Accepted cookie banner on YellowPages.com");
+          log.info("Accepted cookie banner on YellowPages.com");
         }
       }
 
@@ -375,11 +376,11 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
         );
         if (closeButton) {
           await closeButton.click();
-          console.log("Closed popup on YellowPages.com");
+          log.info("Closed popup on YellowPages.com");
         }
       }
     } catch (error) {
-      console.log("No site-specific features to handle on YellowPages.com");
+      log.info("No site-specific features to handle on YellowPages.com");
     }
   }
 }

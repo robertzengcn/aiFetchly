@@ -63,14 +63,24 @@ src/
 
 ### Key Components
 
-#### Database & Storage (Three-Layer Architecture)
-- **SQLite with TypeORM** for local data persistence
-- **sqlite-vec** integration for vector operations (in progress on current branch)
-- Database configuration in `src/config/SqliteDb.ts`
-- Entities in `src/entity/` following TypeORM patterns
-- **Models** in `src/model/` for data access (extend `BaseDb`)
-- **Modules** in `src/modules/` for business logic (extend `BaseModule`)
-- **IPC Handlers** in `src/main-process/communication/` use Modules (never direct database access)
+#### Database & Storage (Four-Layer Architecture)
+
+The real layering is **four** layers, not three. IPC handlers delegate to a
+**Service** (orchestration / AI / streaming) *or* a **Module** (single-domain
+CRUD + rules), which use **Models** for data access over **Entities** → DB.
+
+- **SQLite with TypeORM** for local data persistence; **sqlite-vec** for vector operations.
+- Database config in `src/config/SqliteDb.ts`; entities in `src/entity/` (TypeORM `@Entity`).
+- **Models** (`src/model/`, extend `BaseDb`) — data access via TypeORM repositories. Legacy raw-SQL `*db.ts` files via `Scraperdb` are being consolidated into Models (WS-3).
+- **Modules** (`src/modules/`, extend `BaseModule`) — single-domain CRUD + business rules over one entity family.
+- **Services** (`src/service/`) — orchestration that spans multiple Modules and owns AI / streaming / tool-call flows (e.g. `AIChatQueryLoop`, `StreamEventProcessor`, `ToolExecutor`, `AiFeatureGate`). **This layer was previously undocumented in CLAUDE.md** despite holding ~166 files — it is the application's "AI brain."
+- **IPC Handlers** (`src/main-process/communication/`) — thin: validate input with Zod (`registerValidatedHandler` / `registerAiValidatedHandler`) → call a Service/Module → return the `CommonMessage<T>` `{status,msg,data}` envelope. **Never** touch TypeORM repositories directly.
+
+**Where does new code go?**
+- **Service** (`src/service/`) — if it orchestrates multiple Modules, owns a long-running/streaming flow, or invokes AI models / tools.
+- **Module** (`src/modules/`) — if it is single-domain CRUD + business rules over one entity family.
+- **Model** (`src/model/`) — data access only (queries, repositories).
+- **Entity** (`src/entity/`) — schema only (`@Entity`, columns, indices). Add `@Index()` to FK columns (`*_id`) and frequently-filtered columns (e.g. `status`, `ai_analysis_status`) — these are the hot query paths (WS-3 R3.5).
 
 #### IPC Communication
 - Main process handlers in `src/main-process/communication/`
@@ -98,7 +108,7 @@ src/
 - **Vite** - Build tool and dev server
 - **Pinia** - State management
 - **Vuetify** - UI component library
-- **Zod v4** (`zod/v4`) - Full-stack type validation infrastructure
+- **Zod v3** (`zod ^3.24.0`) - Full-stack type validation infrastructure
 
 ### Key Dependencies
 - **Puppeteer** - Web automation and scraping
@@ -106,7 +116,7 @@ src/
 - **better-sqlite3** - SQLite database driver
 - **node-cron** - Task scheduling
 - **openai** - AI integration
-- **zod** - Schema definition and runtime validation (imported via `zod/v4`)
+- **zod** - Schema definition and runtime validation (imported via `zod`)
 
 ## Development Patterns
 
@@ -116,13 +126,13 @@ src/
 - All functions must have explicit return types
 - Use proper error handling with `unknown` instead of `any` for catch blocks
 
-### Zod v4 Validation Infrastructure - MANDATORY RULE
-**This project uses Zod v4** (`zod/v4`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
+### Zod Validation Infrastructure - MANDATORY RULE
+**This project uses Zod** (`zod ^3.24.0`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
 
 #### Import Convention
-- Always import from `zod/v4` (not from bare `zod`) to opt into the v4 API:
+- Always import from `zod` (the standard import — 66 files use this convention):
   ```typescript
-  import { z } from "zod/v4";
+  import { z } from "zod";
   ```
 - Derive TypeScript types from schemas with `z.infer<typeof schema>` rather than hand-writing interfaces that mirror the schema.
 
@@ -460,6 +470,15 @@ private getRepository(): Repository<SomeEntity> {
 
 **Remember**: Worker processes are for CPU-intensive tasks only. All CRUD operations (Create, Read, Update, Delete) MUST be handled by the main process through Modules and Models.
 
+### Small-Model Routing for Background Workloads
+AiFetchly routes four bounded, text-only background AI workloads (`user_auto_dream`, `workspace_auto_dream`, `session_memory_summary`, `conversation_compact`) through the hosted AI server's virtual `small` model alias when the user is on the hosted provider and the kill switch is enabled. The central router is `src/service/AIChatLightweightCompletionService.ts` (process singleton via `AIChatLightweightCompletionFactory`); profiles, budget helpers, and the typed failure classifier live alongside it. Normal interactive chat, tools, plan execution, agents, and image inputs are **not** routed through the small model, and `small` never appears in the user model selector.
+
+- **Kill switch:** env var `AIFETCHLY_SMALL_MODEL_ROUTING_ENABLED` (absent → **disabled**; `true`/`1` enables; invalid → disabled + logged). Read at service construction; changing it requires an app restart. When disabled, every lightweight workload uses the provider-normal path and all small-specific retry/cooldown/fallback is bypassed.
+- **Hard invariants:** optional background workloads never fall back to the normal model; `conversation_compact` may fall back at most once; ambiguous timeout/network failures are never resubmitted; persistence failure never invokes a model again; the general chat recovery chain is never entered.
+- **Auto-dream cursors** are source-derived (greatest `updatedAt` among included packets), committed with the successful result in a transactional `applyPlanAndCompleteRun`, so the watermark never advances past unprocessed material.
+- **Full compact** is hierarchical (map/reduce chunking via `AIChatPromptBudget`) and capability-gated (`AIChatModelCatalogService.getSmallModelCapability()`); absent metadata means compact goes directly to the normal model (not counted as the one failure fallback).
+- Operations, rollout phases, observability fields, and rollback: `docs/small-model-routing-operations.md`. PRD: `docs/prd/small-model-background-workloads-prd.md`. Technical design: `docs/prd/small-model-background-workloads-technical-design.md`.
+
 ### Security Best Practices
 - Context isolation enabled, Node.js integration disabled in renderer
 - All IPC communication through contextBridge
@@ -555,6 +574,22 @@ alert(t('contactExtraction.select_items_hint') || 'Please select at least one it
 
 **FAILURE TO UPDATE ALL LANGUAGE FILES WILL RESULT IN INCOMPLETE INTERNATIONALIZATION AND USER EXPERIENCE ISSUES.**
 
+### UI Changes Require UI Tests - MANDATORY RULE
+**CRITICAL: When adding or updating any UI, you MUST also add or update the corresponding UI test cases in the same change. A UI change without its tests is incomplete work.**
+
+#### Scope
+This applies to any renderer-facing change:
+- New Vue components, pages, or dialogs
+- Modified components: new/changed props, emits, conditional rendering, user interactions, loading/error/disabled states
+- UI behavior driven by IPC results that is visible to users
+
+#### Required Workflow
+1. **New component/page/dialog** → create `test/vitest/main/components/<ComponentName>.test.ts` covering rendering and the main interactions.
+2. **Existing component changed** → extend its test in `test/vitest/main/components/` (create the file if none exists). Update assertions to match the new behavior — do not just delete failing tests.
+3. **Verify locally**: `yarn test:components` must pass. This suite is a hard CI gate.
+4. **Critical user flows** (multi-step, cross-component, streaming) → also add/extend a Playwright E2E spec in `test/e2e/specs/` (run: `yarn test:e2e`).
+5. **Commit the UI change and its tests together** as one logical unit.
+
 ### AI App Navigation (open_app_page tool) - MANDATORY RULE
 **CRITICAL: The AI navigation catalog is driven by the route manifest, NOT the router. The manifest is the single source of truth for model-facing route discovery.**
 
@@ -603,6 +638,8 @@ test/
 #### Test Frameworks
 - **Mocha**: Used for module tests (CommonJS style) - `test/modules/*.test.ts`
 - **Vitest**: Used for main process and utility code tests - `test/vitest/*/*.test.ts`
+- **Vitest + @vue/test-utils**: Vue component (UI) tests - `test/vitest/main/components/*.test.ts` (see "UI Changes Require UI Tests" above)
+- **Playwright**: Electron end-to-end tests - `test/e2e/specs/*.test.ts` (see "Electron E2E (Playwright)" below)
 - All test files use `.test.ts` extension
 
 #### Test Placement Guidelines
@@ -613,11 +650,13 @@ test/
 - **IPC handler tests**: `test/vitest/main/`
 - **Utility function tests**: `test/vitest/utilitycode/`
 - **Task code tests**: `test/vitest/taskCode/`
+- **Vue component tests**: `test/vitest/main/components/` (mirrors `src/views/components/`)
 
 #### Running Tests
 - Run all Mocha tests: `yarn test`
 - Run specific test: `yarn test <test-file-path>`
 - Run main process tests: `yarn testmain`
+- Run Vue component tests: `yarn test:components`
 - Run utility code tests: `yarn vitest-puppeteer`
 - Use DEBUG flags for detailed logging: `DEBUG='module:*' yarn test`
 
@@ -626,6 +665,29 @@ Vitest's default esbuild mode strips types without checking them, so type errors
 
 - **Behavior**: If `tsc` reports any error, the whole vitest run aborts before tests execute.
 - **To bypass** (only for tight inner loops when you know types are clean): `AIFETCHLY_SKIP_TSC=1 yarn testmain`. Do not commit code that needs this.
+
+##### Renderer Node-Leak Guard (Vite render build)
+`vite-plugin-renderer-node-guard.ts` is wired into `vite.render.config.mjs` and fails the render build (dev + `yarn build` + CI) **loudly** if a project-authored `src/` module that uses a Node-only / main-process-only API (`node:module`, `node:fs`, `electron`, `electron-log`, `@/modules/Logger`, …) would enter the **renderer** module graph. This prevents the recurring launch crash where such a module was silently externalized for the browser, the chunk threw at runtime (`Cannot access "node:module.createRequire"`), and the page aborted with `ERR_ABORTED (-3) loading http://localhost:5173/`.
+
+- **Behavior**: `generateBundle` walks the emitted chunk graph; for every denied module whose importer chain reaches a renderer root (`src/views/**`, `src/api/**`, `src/preload.ts`, or a `build.lib` entry), it throws with the full `import chain:` so the offending import is obvious. Third-party `node_modules/` (Vuetify, typeorm/browser, …) and `__vite-browser-external:` stubs are intentionally **not** flagged — Vite's browser-compat proxy + the `src/shims/*.empty.ts` aliases handle those.
+- **When it fires**: fix by moving the renderer-needed value into a pure, Node-free module (see `src/service/AIChatErrorSentinels.ts` for the pattern) or making the renderer import `import type`-only. Never silence by bypassing.
+- **To bypass** (tight inner loops only — committed code MUST pass clean, mirroring `AIFETCHLY_SKIP_TSC`): `AIFETCHLY_DISABLE_RENDERER_NODE_GUARD=1`.
+- **Test**: `test/vitest/main/rendererNodeLeakGuard.test.ts` (runs in `yarn testmain`). Extend the denylist in `vite-plugin-renderer-node-guard.ts` (`RENDERER_NODE_GUARD_DENYLIST`) when a new Node-only internal module is identified.
+
+#### Electron E2E (Playwright)
+The E2E suite launches the source-built Electron app via Playwright's `_electron.launch()` (NOT electron-forge) and drives the real renderer → preload → IPC → module → SQLite path. See `docs/prd/playwright_for_uitest.md` + `docs/prd/playwright-ui-testing-technical-design.md`.
+
+- **Build the E2E artifacts** (main + preload into `.vite/e2e/build`): `yarn build:e2e`
+- **Run the E2E suite** (Linux requires `xvfb-run`): `xvfb-run -a yarn playwright test` (or `yarn test:e2e` which builds first)
+- **HTML report**: `yarn test:e2e:report`
+
+Key invariants (enforced by the bootstrap under `AIFETCHLY_E2E=1`):
+- **Isolation**: every run gets a unique temp root under `${tmpdir}/aifetchly-e2e/...` redirected via `ELECTRON_USER_DATA_PATH` + `app.setPath("userData")`; Token/USERSDBPATH/AI-provider config never touch real data.
+- **No external network**: the main-process `E2ENetworkGuard` default-denies non-loopback fetch/http/https; the renderer route guard aborts external origins. `AppStartupPolicy` disables schedulers, WebSocket, token-refresh, protocol registration, single-instance lock, updater, dev-tools, and the global config scan.
+- **Deterministic AI**: the `FakeOpenAI` loopback server serves OpenAI-compatible SSE scenarios; the `E2EStateSeeder` seeds `local-enabled` or `hosted-disabled` state via the production `AIProviderSettingsService`. The test layer (`test/e2e/`) is compiled by Playwright and is deliberately decoupled from `src/` (relative imports only, no `@/`).
+- **E2E harness unit tests** live in `test/vitest/main/e2e/` (env validation, startup policy, network guard, fake-server scenarios parsed through the production `OpenAIStreamParser`) and run via `yarn testmain`.
+- **Test ID contract**: AI chat exposes `data-testid` landmarks (`ai-chat-root`, `ai-chat-composer`, `ai-chat-send`, `ai-chat-stop`); prefer roles/accessible names and add IDs only where those are unstable (design §14).
+
 - **To extend to other configs**: add `globalSetup: ['./test/vitest/_typecheck/globalSetup.ts']` to the config's `test` block.
 
 ## Database Schema
@@ -651,6 +713,7 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 4. Implement scrapers following existing patterns
 5. Add frontend components in `src/views/pages/`
 6. Update IPC handlers to use Module methods (never database directly)
+7. Add/update component tests in `test/vitest/main/components/` for the new UI (see "UI Changes Require UI Tests")
 
 ### Adding New Tasks
 1. Define task schema in entity types
@@ -659,6 +722,7 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 4. Create controller in `src/controller/` (if needed for coordination)
 5. Add frontend UI components
 6. Register IPC handlers that call Module/Controller methods (never database directly)
+7. Add/update component tests in `test/vitest/main/components/` for the new UI (see "UI Changes Require UI Tests")
 
 ### Database Changes
 1. Update TypeORM entities in `src/entity/`
@@ -726,3 +790,51 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
   - Added `handleWorkerProgress()` in main process to handle database operations
   - Worker now sends IPC messages to main process for all CRUD operations
   - Models enforce no database access from worker processes (check `process.env.WORKER_TYPE`)
+
+## gstack (REQUIRED — global install)
+
+**Before doing ANY work, verify gstack is installed:**
+
+```bash
+_GS=""
+for _D in "${GSTACK_ROOT:-}" "$HOME/.claude/skills/gstack" "$HOME/.codex/skills/gstack" "$HOME/.factory/skills/gstack" "$HOME/.kiro/skills/gstack" "$HOME/.config/opencode/skills/gstack" "$HOME/.slate/skills/gstack" "$HOME/.cursor/skills/gstack" "$HOME/.openclaw/skills/gstack" "$HOME/.hermes/skills/gstack" "$HOME/.gbrain/skills/gstack" "$HOME/.gstack/repos/gstack"; do
+  [ -z "$_GS" ] && [ -n "$_D" ] && [ -d "$_D/bin" ] && _GS="$_D"
+done
+[ -n "$_GS" ] && echo "GSTACK_OK: $_GS" || echo "GSTACK_MISSING"
+```
+
+If GSTACK_MISSING: STOP. Do not proceed. Tell the user:
+
+> gstack is required for all AI-assisted work in this repo.
+> Install it:
+> ```bash
+> git clone --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+> cd ~/.claude/skills/gstack && ./setup --team
+> ```
+> Then restart your AI coding tool.
+
+Do not skip skills, ignore gstack errors, or work around missing gstack.
+
+Using gstack skills: After install, skills like /qa, /ship, /review, /investigate,
+and /browse are available. Use /browse for all web browsing.
+Use the resolved install path above for gstack file paths
+(default: ~/.claude/skills/gstack).
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec

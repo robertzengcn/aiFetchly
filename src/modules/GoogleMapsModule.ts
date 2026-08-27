@@ -8,6 +8,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -181,7 +182,7 @@ export class GoogleMapsModule extends BaseModule {
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
           },
         });
-        console.debug(
+        log.debug(
           `[GoogleMaps] Spawning worker: path=${resolvedWorkerPath}, cwd=${process.cwd()}, nodePath=${String(
             workerEnv.NODE_PATH
           )}`
@@ -208,7 +209,7 @@ export class GoogleMapsModule extends BaseModule {
 
       worker.stdout?.on("data", (chunk: Buffer) => {
         workerStdout = appendWorkerOutput(workerStdout, chunk);
-        console.debug(
+        log.debug(
           `[GoogleMaps] Worker stdout (${requestId}): ${chunk
             .toString("utf8")
             .trimEnd()}`
@@ -216,14 +217,14 @@ export class GoogleMapsModule extends BaseModule {
       });
       worker.stderr?.on("data", (chunk: Buffer) => {
         workerStderr = appendWorkerOutput(workerStderr, chunk);
-        console.error(
+        log.error(
           `[GoogleMaps] Worker stderr (${requestId}): ${chunk
             .toString("utf8")
             .trimEnd()}`
         );
       });
 
-      console.debug(
+      log.debug(
         `[GoogleMaps] Worker spawned: requestId=${requestId}, pid=${String(
           worker.pid
         )}, execPath=${process.execPath}`
@@ -231,7 +232,7 @@ export class GoogleMapsModule extends BaseModule {
 
       const timeoutTimer = setTimeout(() => {
         this.activeSearches.delete(requestId);
-        console.error(
+        log.error(
           `[GoogleMaps] Worker timed out: requestId=${requestId}, pid=${String(
             worker.pid
           )}`
@@ -249,12 +250,12 @@ export class GoogleMapsModule extends BaseModule {
       this.activeSearches.set(requestId, search);
 
       worker.on("message", (raw: unknown) => {
-        console.debug(
+        log.debug(
           `[GoogleMaps] Worker message (${requestId}): ${JSON.stringify(raw)}`
         );
         const data = parseWorkerMessage(raw);
         if (!data) {
-          console.warn(
+          log.warn(
             `[GoogleMaps] Ignoring invalid worker message (${requestId})`
           );
           return;
@@ -305,7 +306,7 @@ export class GoogleMapsModule extends BaseModule {
             result.summary,
             result.results
           ).catch((saveErr: unknown) => {
-            console.error(
+            log.error(
               "[GoogleMaps] Failed to save search result:",
               saveErr
             );
@@ -316,7 +317,7 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error(
+        log.error(
           `[GoogleMaps] Worker process error (${requestId}, pid=${String(
             worker.pid
           )}):`,
@@ -335,7 +336,7 @@ export class GoogleMapsModule extends BaseModule {
             stderr: workerStderr,
             stdout: workerStdout,
           });
-          console.error(
+          log.error(
             `[GoogleMaps] Worker exited unexpectedly (${requestId}, pid=${String(
               worker.pid
             )}): ${diagnostic}`
@@ -350,7 +351,7 @@ export class GoogleMapsModule extends BaseModule {
             )
           );
         } else {
-          console.debug(
+          log.debug(
             `[GoogleMaps] Worker exited after request completion (${requestId}): code=${String(
               code
             )}, signal=${String(signal)}`

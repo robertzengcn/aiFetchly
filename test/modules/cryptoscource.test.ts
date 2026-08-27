@@ -1,5 +1,6 @@
 'use strict';
 import {CryptoSource} from '@/modules/cryptosource'
+/* eslint-disable @typescript-eslint/no-var-requires */
 const expect = require('expect.js');
 describe('Module CryptoSource', function(){
     const crytocource=new CryptoSource()
@@ -15,3 +16,4 @@ describe('Module CryptoSource', function(){
         expect(decry).to.be.an('string');
     });
 });
+/* eslint-enable @typescript-eslint/no-var-requires */

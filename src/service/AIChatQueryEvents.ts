@@ -181,6 +181,9 @@ export interface AIChatQueryErrorEvent {
   conversationId: string;
   messageId?: string;
   errorMessage: string;
+  /** Renderer-safe machine code (e.g. GeneratedImageReferenceErrorCode) for
+   * localized handling; omitted for unclassified errors. */
+  errorCode?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {

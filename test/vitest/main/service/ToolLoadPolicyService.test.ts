@@ -476,4 +476,143 @@ describe("ToolLoadPolicyService.classify", () => {
     });
     expect(policy).toBe("always");
   });
+
+  // ---- Contact verification (verify_contact_info) ----
+  it("keeps verify_contact_info deferred by default", () => {
+    expect(classify("verify_contact_info", "builtin")).toBe("deferred");
+  });
+
+  it("promotes verify_contact_info for 'verify these emails'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "verify these emails for me",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'normalize these phone numbers'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "normalize these phone numbers",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'clean these contacts'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "clean these contacts and remove invalid ones",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for lead-research contact gathering", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "get computer wholesale in USA and get their contact method",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "extract contact info from these company websites",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info after plan approval using the original goal", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: [
+          "get computer wholesale in USA and get their contact method",
+        ],
+      })
+    ).toBe("contextual");
+  });
+
+  it("does not promote verify_contact_info on plan approval without contact intent", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
+  it("does NOT promote verify_contact_info for generic email questions", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "how does email work?",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "what is phone verification?",
+      })
+    ).toBe("deferred");
+  });
+
+  describe("generated-image followups stay deferred", () => {
+    it("does NOT promote export_generated_artifacts on generated-image edit wording", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote attach_local_images on generated-image edit wording", () => {
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+
+    it("still promotes export_generated_artifacts for explicit workspace save intent", () => {
+      // CONTEXTUAL_FILE_WRITE_TOOL_NAMES + FILE_WRITE_INTENT_RE path is
+      // untouched: explicit save/copy requests keep the export tool available.
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "save the generated files into my workspace",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
+    });
+
+    it("does NOT promote when the message has no edit-like verb", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "what is the capital of France",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote non-image tools even with hasRecentGeneratedImages", () => {
+      expect(
+        classify("create_html_artifact", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+  });
 });

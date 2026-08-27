@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-shell">
+  <div class="v2-shell" data-testid="ai-chat-root">
     <!-- Header with icon actions like old AiChatBox -->
     <div class="v2-shell__header">
       <div class="v2-shell__header-left">
@@ -183,6 +183,8 @@
         @request-plan-changes="handleRequestPlanChanges"
         @open-artifact="(id: string) => emit('open-artifact', id)"
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @use-generated-image="onUseGeneratedImage"
+        @edit-generated-image="onEditGeneratedImage"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -209,6 +211,7 @@
         />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
+          ref="questionCardRef"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
         />
@@ -300,6 +303,16 @@
           :conversation-id="activeConversationId"
           @approved="onWorkspaceApproved"
           @cancel="showWorkspaceRequired = false"
+        />
+        <!-- Phase 14 (Plan 14-04): inline trust card (D-03). Renders only
+             when an approved workspace with .aifetchly instructions is
+             active and not yet dismissed this session. NOT a modal/banner. -->
+        <WorkspaceTrustCard
+          v-if="showWorkspaceTrustCard && activeWorkspaceWatchId && activeConversationId"
+          :workspace-id="activeWorkspaceWatchId"
+          :conversation-id="activeConversationId"
+          @trusted="onWorkspaceTrustAccepted"
+          @dismissed="onWorkspaceTrustDismissed"
         />
       </div>
 
@@ -408,6 +421,9 @@
         :voice-speaking="voiceSpeaking"
         :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
+        :selected-generated-images="selectedGeneratedImageViews"
+        :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
+        :generated-image-focus-signal="composerFocusSignal"
         @send="onSend"
         @stop="onStop"
         @request-workspace="handleWorkspaceSetupRequest"
@@ -416,6 +432,9 @@
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
         @open-voice-settings="openAIProviderSettings"
+        @remove-generated-image="onRemoveGeneratedImage"
+        @clear-generated-images="onClearGeneratedImages"
+        @reorder-generated-images="onReorderGeneratedImages"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -467,6 +486,127 @@
       @confirm="onScheduledLoopApprovalConfirm"
       @cancel="onScheduledLoopApprovalCancel"
     />
+
+    <!-- Ambiguity chooser: several generated images could match the request;
+         the user picks one to proceed as the sole reference. Persistent so an
+         outside click cannot dismiss it and strand a stale pending send. -->
+    <v-dialog
+      v-model="showGeneratedImageChooser"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-chooser"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.referenceTrayTitle") ||
+              "Reference images"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t(
+                "aiChatV2.generatedImageRefs.errors.generated_image_ambiguous"
+              ) || "Several images could match your request."
+            }}
+          </p>
+          <div class="d-flex flex-wrap ga-2">
+            <v-btn
+              v-for="(candidate, idx) in ambiguityCandidates"
+              :key="`${candidate.reference.messageId}:${candidate.reference.imageIndex}`"
+              variant="outlined"
+              size="small"
+              :data-testid="`ai-chat-generated-candidate-${idx}`"
+              @click="chooseAmbiguityCandidate(candidate)"
+            >
+              <img
+                v-if="candidate.thumbUrl"
+                :src="candidate.thumbUrl"
+                :alt="
+                  candidate.fileName ||
+                  t('aiChatV2.generatedImageRefs.useAsReference') ||
+                  'Reference image'
+                "
+                class="mr-1"
+                style="max-height: 32px; max-width: 48px; border-radius: 4px"
+              />
+              <v-icon v-else size="small" class="mr-1">mdi-image-outline</v-icon>
+              {{ candidate.fileName || `#${idx + 1}` }}
+            </v-btn>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-chooser-cancel"
+            @click="cancelAmbiguityChooser"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Batch confirmation: more than 3 images inferred; confirm sends plain
+         text (main process runs them as a batch), decline aborts. -->
+    <v-dialog
+      v-model="showBatchConfirmDialog"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-batch-confirm"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmTitle") ||
+              "Process as batch?"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmBody") ||
+              "Each selected image will be edited independently in a background batch. This may take a while."
+            }}
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-batch-decline"
+            @click="declineGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            data-testid="ai-chat-generated-batch-confirm-accept"
+            @click="confirmGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.generatedImageRefs.send") || "Send" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Generated-image preflight errors (fusion limit, reference limit). -->
+    <v-snackbar
+      v-model="showGeneratedImageNotice"
+      timeout="4000"
+      location="bottom"
+      data-testid="ai-chat-generated-error-toast"
+    >
+      {{ generatedImageNotice }}
+    </v-snackbar>
 
 
 
@@ -677,11 +817,11 @@ import type {
   ChatV2StreamRequest,
   ChatV2MessageMetadata,
   ChatV2UploadedAttachment,
-  ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
+  ChatV2GeneratedImageReference,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -727,6 +867,7 @@ import {
   setVoiceSettings,
 } from "@/views/api/aiChatV2Voice";
 import {
+  getLocalAiRuntimeStatus,
   installLocalAiRuntime,
   onLocalAiRuntimeProgress,
   prepareLocalAiRuntimeInstall,
@@ -740,14 +881,20 @@ import type {
 import type {
   LocalAiRuntimeDownloadProgress,
   LocalAiRuntimeInstallOffer,
+  LocalAiRuntimeStatus,
 } from "@/entityTypes/localAiRuntimeTypes";
+import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
 } from "@/views/api/aiProvider";
 import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
-import { dispatchSlashCommand } from "@/views/api/slashCommands";
+import {
+  dispatchSlashCommand,
+  listSlashCommands,
+  onAifetchlyConfigChanged,
+} from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -765,7 +912,13 @@ import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.v
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
+import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import {
+  acquireWorkspaceWatch,
+  releaseWorkspaceWatch,
+  previewWorkspaceAgents,
+} from "@/views/api/workspaceWatch";
 import {
   createGoal,
   getActiveGoal,
@@ -794,7 +947,9 @@ import type {
   ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
+import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
+import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
@@ -819,10 +974,6 @@ import {
 } from "./toolExecutionStateUtil";
 import { isPlanStateActive } from "./planStateUtil";
 import {
-  downscaleImageAttachment,
-  arrayBufferToBase64,
-} from "./imageScaleUtil";
-import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
@@ -830,7 +981,12 @@ import {
 import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
-} from "@/service/AIChatErrorMapper";
+} from "@/service/AIChatErrorSentinels";
+import {
+  inferGeneratedImageReferences,
+  isFusionWording,
+} from "./generatedImageReferenceInference";
+import type { GeneratedImageReferenceView } from "./generatedImageReferenceView";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1030,6 +1186,182 @@ const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
   markConversationRuntimeStopped(activeConversationId.value, errorMessage);
 };
 
+// --- Conversation-scoped generated-image selection (composer tray) ---
+interface GeneratedImageDraftState {
+  readonly references: ChatV2GeneratedImageReference[];
+}
+
+type GeneratedImageDraftMap = Map<string, GeneratedImageDraftState>;
+
+/** Hard cap on stored selections per conversation (direct requests cap at 3). */
+const GENERATED_IMAGE_DRAFT_CAP = 50;
+/** Max generated-image refs attached to a single direct request. */
+const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
+/** Draft key used before a conversation id exists (brand-new chat). */
+const DRAFT_KEY_PENDING = "__pending_conversation__";
+/** Neutral instruction sent when the user attaches refs but no text. */
+const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
+
+const draftKeyFor = (conversationId: string | null): string =>
+  conversationId ?? DRAFT_KEY_PENDING;
+
+const generatedImageDrafts = ref<GeneratedImageDraftMap>(new Map());
+
+const sameGeneratedImageRef = (
+  a: ChatV2GeneratedImageReference,
+  b: ChatV2GeneratedImageReference
+): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+
+const setGeneratedImageDraft = (
+  key: string,
+  references: ChatV2GeneratedImageReference[]
+): void => {
+  const nextMap: GeneratedImageDraftMap = new Map(generatedImageDrafts.value);
+  if (references.length === 0) nextMap.delete(key);
+  else nextMap.set(key, { references });
+  generatedImageDrafts.value = nextMap;
+};
+
+const getGeneratedImageDraft = (
+  conversationId: string | null
+): ChatV2GeneratedImageReference[] =>
+  [...(generatedImageDrafts.value.get(draftKeyFor(conversationId))?.references ?? [])];
+
+const activeGeneratedImageRefs = computed<ChatV2GeneratedImageReference[]>(() =>
+  getGeneratedImageDraft(activeConversationId.value)
+);
+
+function resolveGeneratedImageViewModel(
+  reference: ChatV2GeneratedImageReference
+): GeneratedImageReferenceView {
+  const message = messages.value.find((m) => m.id === reference.messageId);
+  const image = message?.metadata?.generatedImages?.[reference.imageIndex];
+  return {
+    reference,
+    fileName:
+      typeof image?.file_name === "string" ? image.file_name : undefined,
+    thumbUrl: typeof image?.url === "string" ? image.url : undefined,
+  };
+}
+
+const selectedGeneratedImageViews = computed<GeneratedImageReferenceView[]>(
+  () => activeGeneratedImageRefs.value.map(resolveGeneratedImageViewModel)
+);
+
+const composerFocusSignal = ref(0);
+
+function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  const key = draftKeyFor(activeConversationId.value);
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  if (current.some((ref) => sameGeneratedImageRef(ref, reference))) {
+    setGeneratedImageDraft(
+      key,
+      current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+    );
+    return;
+  }
+  if (current.length >= GENERATED_IMAGE_DRAFT_CAP) return;
+  setGeneratedImageDraft(key, [...current, reference]);
+}
+
+function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [reference]);
+  composerFocusSignal.value += 1;
+}
+
+function onRemoveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): void {
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  setGeneratedImageDraft(
+    draftKeyFor(activeConversationId.value),
+    current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+  );
+}
+
+function onClearGeneratedImages(): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), []);
+}
+
+function onReorderGeneratedImages(
+  references: ChatV2GeneratedImageReference[]
+): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    ...references,
+  ]);
+}
+
+// Ambiguity chooser / batch confirmation / error toast state.
+interface PendingGeneratedImageSend {
+  /** Draft key of the conversation that created this pending send. */
+  readonly conversationId: string;
+  readonly text: string;
+  readonly files: File[];
+  readonly options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  };
+}
+
+const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
+const showGeneratedImageChooser = ref(false);
+const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
+const batchConfirmReferences = ref<ChatV2GeneratedImageReference[]>([]);
+const showBatchConfirmDialog = ref(false);
+const generatedImageNotice = ref<string | null>(null);
+const showGeneratedImageNotice = computed<boolean>({
+  get: () => generatedImageNotice.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) generatedImageNotice.value = null;
+  },
+});
+
+function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  if (
+    !pending ||
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    // The pending send belongs to a different conversation (stale chooser
+    // state); discard it instead of replaying it into the active one.
+    return;
+  }
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    view.reference,
+  ]);
+  void onSend(pending.text, pending.files, pending.options);
+}
+
+function cancelAmbiguityChooser(): void {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+}
+
+function confirmGeneratedImageBatch(): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  batchConfirmReferences.value = [];
+  showBatchConfirmDialog.value = false;
+  if (!pending) return;
+  void onSend(pending.text, pending.files, {
+    ...pending.options,
+    bypassGeneratedImageInference: true,
+  });
+}
+
+function declineGeneratedImageBatch(): void {
+  pendingGeneratedImageSend.value = null;
+  batchConfirmReferences.value = [];
+  showBatchConfirmDialog.value = false;
+}
+
+
 const setAuthoritativeRuntimeStatus = (
   conversationId: string,
   status: ChatV2RuntimeStatus
@@ -1131,82 +1463,14 @@ const mergePersistedAndLiveMessages = (
 const isPreparingAttachments = ref(false);
 const attachmentError = ref<string | null>(null);
 
-const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 
-function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
-  const name = fileName.toLowerCase();
-  const mime = mimeType.toLowerCase();
-
-  if (mime.startsWith("image/")) return "image";
-  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
-  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
-
-  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
-  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
-  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
-  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
-
-  return null;
-}
-
-function defaultPromptForAttachments(files: File[]): string {
-  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
-  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
-    return "What is in this image?";
-  }
-  return "";
-}
-
-function resolveMimeType(file: File): string {
-  if (file.type && file.type !== "application/octet-stream") {
-    return file.type;
-  }
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".pdf")) return "application/pdf";
-  if (name.endsWith(".csv")) return "text/csv";
-  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
-  if (name.endsWith(".png")) return "image/png";
-  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
-  if (name.endsWith(".webp")) return "image/webp";
-  if (name.endsWith(".gif")) return "image/gif";
-  return file.type || "application/octet-stream";
-}
-
-async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
-  const out: ChatV2UploadedAttachment[] = [];
-  for (const file of files) {
-    const kind = classifyAttachment(file.name, file.type);
-    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
-    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
-
-    if (kind === "image") {
-      // Downscale + recompress before base64 so the inline data URL stays
-      // small enough for the AI server's request-body limit (large photos
-      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
-      // the original bytes if canvas processing fails.
-      const processed = await downscaleImageAttachment(file);
-      out.push({
-        fileName: file.name,
-        mimeType: processed.mimeType,
-        sizeBytes: processed.sizeBytes,
-        contentBase64: processed.contentBase64,
-        kind,
-      });
-    } else {
-      const buffer = await file.arrayBuffer();
-      out.push({
-        fileName: file.name,
-        mimeType: resolveMimeType(file),
-        sizeBytes: file.size,
-        contentBase64: arrayBufferToBase64(buffer),
-        kind,
-      });
-    }
-  }
-  return out;
-}
+// Pure utility functions extracted to aiChatV2Utils.ts (R5.6/R6.3 split)
+import {
+  defaultPromptForAttachments,
+  truncateText,
+  formatTimestamp,
+} from "./aiChatV2Utils";
+import { buildUploadedAttachments } from "./aiChatV2Attachment";
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
@@ -1666,6 +1930,9 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Drop any stale ambiguity-chooser / pending send from the previous
+    // conversation so it can never replay into the newly active one.
+    cancelAmbiguityChooser();
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
@@ -1673,6 +1940,203 @@ watch(activeConversationId, (id, previousId) => {
     void refreshScheduledLoopStatus();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Slash command cache + config-changed subscription
+// (Phase 13 — Plan 04 CMD-04/05; Phase 14 — Plan 14-04 D-04 workspace filter)
+// ---------------------------------------------------------------------------
+// Local cache of the renderer-safe command views. Refreshed on mount and on
+// AIFETCHLY_CONFIG_CHANGED events. The composer fetches its own dropdown
+// contents via listSlashCommands; this cache lets future status badges /
+// tooltips reflect the current command count without re-fetching on every
+// render.
+const slashCommandCache = ref<readonly SlashCommandView[]>([]);
+// Unsubscribe function for the AIFETCHLY_CONFIG_CHANGED subscription.
+// Null when no subscription is active (before mount / after unmount).
+let slashConfigUnsub: (() => void) | null = null;
+
+async function refreshSlashCommandCount(): Promise<void> {
+  try {
+    const resp = await listSlashCommands({});
+    slashCommandCache.value = [...resp.commands];
+  } catch {
+    // Non-fatal: leave the cache at its previous value. The user can still
+    // type slash commands; the dropdown will fetch fresh on '/'.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card
+// ---------------------------------------------------------------------------
+// activeWorkspaceWatchId holds the workspaceId token returned by acquire.
+// Null before acquire resolves, after release, or when no approved workspace
+// exists. Drives BOTH the subscriber filter (compare against event.workspaceId
+// — D-04) and the trust-card mount condition.
+const activeWorkspaceWatchId = ref<string | null>(null);
+// True when the active workspace's preview carried AGENTS.md content (i.e.
+// the workspace contains .aifetchly). Used as the trust-card mount gate so
+// the card does NOT render for approved workspaces without .aifetchly.
+const activeWorkspaceHasAgents = ref(false);
+// Per-session dismissal set. The trust card does not reappear for a
+// workspace the user dismissed this session. Persistence across app
+// restarts is deferred to Phase 17 (AIFetchlyWorkspaceTrust entity) —
+// Plan 14-04 reuses in-session state per the plan's "do NOT create a new
+// persistence layer" rule.
+const dismissedTrustWorkspaces = ref<ReadonlySet<string>>(new Set());
+
+/**
+ * Inline trust card mounts when ALL of:
+ *   - active workspace is approved (existing approval state),
+ *   - acquireWorkspaceWatch returned a watch token (worker is watching),
+ *   - previewWorkspaceAgents returned non-empty content (workspace has
+ *     AGENTS.md / .aifetchly instructions — TRS-07 preview path),
+ *   - the user has not dismissed the card for this workspace this session.
+ *
+ * The card is rendered INLINE near the existing WorkspaceRequiredCard — NOT
+ * a modal/banner (D-03).
+ */
+const showWorkspaceTrustCard = computed(() => {
+  const wid = activeWorkspaceWatchId.value;
+  if (!wid) return false;
+  if (!activeWorkspace.value) return false;
+  if (activeWorkspace.value.approvalState !== "approved") return false;
+  if (!activeWorkspaceHasAgents.value) return false;
+  if (dismissedTrustWorkspaces.value.has(wid)) return false;
+  return true;
+});
+
+/**
+ * Acquire a workspace watch for the supplied conversation. Idempotent —
+ * releasing the previous watch (if any) before acquiring the new one
+ * covers the workspace-switch path. Non-fatal on IPC failure: chat still
+ * works without live-update; the user can /reload-config to retry.
+ *
+ * After a successful acquire, probes previewWorkspaceAgents to learn
+ * whether the workspace contains .aifetchly content. That probe is the
+ * sole source of the hasAgents flag (TRS-07 — the renderer NEVER touches
+ * the filesystem).
+ */
+async function acquireActiveWorkspaceWatch(
+  conversationId: string
+): Promise<void> {
+  // Release any previous watch first (covers switch).
+  await releaseActiveWorkspaceWatch();
+  // Reset hasAgents — the new workspace's probe repopulates it.
+  activeWorkspaceHasAgents.value = false;
+  try {
+    const result = await acquireWorkspaceWatch({ conversationId });
+    if (!result) {
+      // No approved workspace / resolver miss — fail-closed, no watch.
+      activeWorkspaceWatchId.value = null;
+      return;
+    }
+    activeWorkspaceWatchId.value = result.workspaceId;
+    // Probe for AGENTS.md content via the TRS-07 preview channel.
+    try {
+      const content = await previewWorkspaceAgents(result.workspaceId);
+      activeWorkspaceHasAgents.value = content.length > 0;
+    } catch {
+      // Preview failure is non-fatal — treat as "no agents content" so the
+      // card stays hidden. The user can still chat; the watcher is active.
+      activeWorkspaceHasAgents.value = false;
+    }
+  } catch (err) {
+    // Non-fatal: log and leave watchId null. Chat still works.
+    console.error(
+      "[AiChatV2] acquireWorkspaceWatch failed (non-fatal):",
+      err
+    );
+    activeWorkspaceWatchId.value = null;
+  }
+}
+
+/**
+ * Release the active workspace watch, if any. Idempotent — safe to call on
+ * unmount, on switch, or when no watch is active.
+ */
+async function releaseActiveWorkspaceWatch(): Promise<void> {
+  const wid = activeWorkspaceWatchId.value;
+  const convId = activeConversationId.value;
+  if (!wid || !convId) {
+    activeWorkspaceWatchId.value = null;
+    return;
+  }
+  try {
+    await releaseWorkspaceWatch({ conversationId: convId, workspaceId: wid });
+  } catch (err) {
+    // Non-fatal: worst case is a transient consumer leak; main will GC the
+    // consumer when the worker sees no other consumers for this workspace.
+    console.error(
+      "[AiChatV2] releaseWorkspaceWatch failed (non-fatal):",
+      err
+    );
+  } finally {
+    activeWorkspaceWatchId.value = null;
+  }
+}
+
+/**
+ * Watch the active workspace to drive acquire/release. Fires whenever the
+ * resolved active workspace changes (conversation switch, pick-folder flow,
+ * approval). The watcher is additive to the existing activeConversationId
+ * watcher — that one refreshes the badge; this one manages the watcher
+ * lifecycle.
+ */
+watch(
+  activeWorkspace,
+  (next, prev) => {
+    // Only re-acquire when something material changed. approvalState flips
+    // from pending→approved after the WorkspaceRequiredCard flow, so we
+    // DO want to fire on that transition.
+    const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
+    const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
+    if (prevKey === nextKey) return;
+    if (!next || next.approvalState !== "approved") {
+      // Not eligible — release any stale watch and bail.
+      void releaseActiveWorkspaceWatch();
+      return;
+    }
+    const convId = activeConversationId.value;
+    if (!convId) return;
+    void acquireActiveWorkspaceWatch(convId);
+  }
+);
+
+/**
+ * Trust-card 'trusted' handler. The IPC was already called inside the card
+ * (setWorkspaceTrust). Hide the card by adding the workspace to the
+ * dismissed set — Phase 14 binary gate reuses the approval state, so trust
+ * equals the existing approval (already set by the card's setTrust call).
+ */
+function onWorkspaceTrustAccepted(scope: WorkspaceTrustScope): void {
+  const wid = activeWorkspaceWatchId.value;
+  if (wid) {
+    dismissedTrustWorkspaces.value = new Set([
+      ...dismissedTrustWorkspaces.value,
+      wid,
+    ]);
+  }
+  // The trust-set IPC triggers a manager.rescan → AIFETCHLY_CONFIG_CHANGED
+  // event with the matching workspaceId. The subscriber filter refreshes
+  // the command cache from that event.
+  void scope; // Phase 17 branches on scope for per-capability trust.
+}
+
+/**
+ * Trust-card 'dismissed' handler (Keep disabled). Persist the dismissal
+ * in-session so the card does not reappear on the next chat open for this
+ * workspace. The user keeps chatting with the workspace config untrusted
+ * (Phase 14: untrusted means the watcher still runs but applyWorkspaceSnapshot
+ * drops instructions/commands at the trust-filter boundary — TRS-01).
+ */
+function onWorkspaceTrustDismissed(): void {
+  const wid = activeWorkspaceWatchId.value;
+  if (!wid) return;
+  dismissedTrustWorkspaces.value = new Set([
+    ...dismissedTrustWorkspaces.value,
+    wid,
+  ]);
+}
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -2227,6 +2691,9 @@ const scheduledLoopDescriptor = computed(() => {
   }
 });
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// Template handle on the pinned question card so we can un-lock it if the
+// answer IPC rejects (see handleQuestionAnswered's catch path).
+const questionCardRef = ref<{ resetSubmitted: () => void } | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
 // approves/rejects/requests changes, it is moved into the message flow and
@@ -2332,18 +2799,7 @@ const streamStatus = computed<Status>(() => {
   return "idle";
 });
 
-const truncateText = (text: string | undefined, max: number): string => {
-  if (!text) return "";
-  return text.length > max ? text.slice(0, max) + "..." : text;
-};
-
-const formatTimestamp = (iso: string): string => {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return "";
-  }
-};
+// truncateText + formatTimestamp extracted to aiChatV2Utils.ts
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
@@ -2371,6 +2827,21 @@ const mapStreamErrorMessage = (raw: string): string => {
     );
   }
   return raw;
+};
+
+/**
+ * Localize machine-readable generated-image error codes carried by terminal
+ * stream chunks (mapped onto the Error by the api layer). Falls back to the
+ * existing raw-message mapping when no translation exists for the code.
+ */
+const displayStreamErrorMessage = (error: Error): string => {
+  const code = (error as { errorCode?: unknown }).errorCode;
+  if (typeof code === "string" && code.startsWith("generated_image_")) {
+    const key = `aiChatV2.generatedImageRefs.errors.${code}`;
+    const translated = t(key);
+    if (translated && translated !== key) return translated;
+  }
+  return mapStreamErrorMessage(error.message);
 };
 
 const loadConversations = async (): Promise<void> => {
@@ -2669,6 +3140,7 @@ async function clearCurrentConversation(): Promise<void> {
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
+      setGeneratedImageDraft(conversationId, []);
       const next = new Map(fileOps.value);
       next.delete(conversationId);
       fileOps.value = next;
@@ -3133,6 +3605,8 @@ const handleQuestionAnswered = async (
   answers: AskUserQuestionAnswer[]
 ): Promise<void> => {
   if (!activeConversationId.value) return;
+  // Clear any previous error so a retry isn't pre-emptively flagged.
+  streamError.value = null;
   try {
     await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
@@ -3140,6 +3614,9 @@ const handleQuestionAnswered = async (
     applyPlanState(await getChatV2PlanState(activeConversationId.value));
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
+    // Un-lock the card so the user can correct and resubmit instead of being
+    // stuck with a frozen UI until reload (their in-progress draft is kept).
+    questionCardRef.value?.resetSubmitted();
   }
 };
 
@@ -3267,6 +3744,97 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
+function showGeneratedImageError(message: string): void {
+  generatedImageNotice.value = message;
+}
+
+/**
+ * Resolve the generated-image references for an outgoing turn.
+ *
+ * Returns the effective reference list (empty = plain text send), or null
+ * when the send must abort because a dialog is now waiting on the user
+ * (ambiguity chooser / batch confirmation) or a guard tripped (fusion /
+ * reference limit toast).
+ */
+function runGeneratedImagePreflight(
+  text: string,
+  files: File[],
+  options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  },
+  bypassInference = false
+): ChatV2GeneratedImageReference[] | null {
+  const explicit = getGeneratedImageDraft(activeConversationId.value);
+  let effective: ChatV2GeneratedImageReference[] = [];
+  if (explicit.length > 0) {
+    effective = [...explicit];
+  } else if (!bypassInference) {
+    const result = inferGeneratedImageReferences({
+      text,
+      messages: messages.value,
+      explicitSelection: [],
+    });
+    if (result.kind === "ambiguous") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
+      ambiguityCandidates.value = result.candidates.map((candidate) => ({
+        reference: candidate.reference,
+        fileName: candidate.fileName,
+        thumbUrl:
+          resolveGeneratedImageViewModel(candidate.reference).thumbUrl ??
+          candidate.thumbUrl,
+      }));
+      showGeneratedImageChooser.value = true;
+      return null;
+    }
+    if (
+      (result.kind === "resolved" || result.kind === "batch_confirmation") &&
+      result.references.length > GENERATED_IMAGE_REFERENCE_LIMIT &&
+      isFusionWording(text)
+    ) {
+      showGeneratedImageError(
+        t("aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit") ||
+          "Combining images is limited to 3 at a time."
+      );
+      return null;
+    }
+    if (result.kind === "batch_confirmation") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
+      batchConfirmReferences.value = [...result.references];
+      showBatchConfirmDialog.value = true;
+      return null;
+    }
+    if (result.kind === "resolved") {
+      effective = [...result.references];
+    }
+  }
+  if (effective.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
+    showGeneratedImageError(
+      isFusionWording(text)
+        ? t(
+            "aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit"
+          ) || "Combining images is limited to 3 at a time."
+        : t(
+            "aiChatV2.generatedImageRefs.errors.generated_image_reference_limit"
+          ) || "Too many referenced images for one request."
+    );
+    return null;
+  }
+  return effective;
+}
+
 const onSend = async (
   text: string,
   files?: File[],
@@ -3275,6 +3843,8 @@ const onSend = async (
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
+    /** Internal: skip generated-image inference (batch-confirm resend). */
+    bypassGeneratedImageInference?: boolean;
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
@@ -3451,9 +4021,52 @@ const onSend = async (
     isPreparingAttachments.value = false;
   }
 
+  // Generated-image preflight: resolve which images this turn references.
+  // Explicit tray selections win; otherwise deterministic inference runs over
+  // the visible conversation. Ambiguous matches open the chooser dialog and
+  // over-limit batches ask for confirmation — both abort this send (the user's
+  // selection is preserved) until resolved.
+  const effectiveGeneratedImageRefs = runGeneratedImagePreflight(
+    text,
+    files ?? [],
+    options,
+    options?.bypassGeneratedImageInference === true
+  );
+  if (effectiveGeneratedImageRefs === null) return;
+
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    modelMessage.trim().length === 0
+  ) {
+    modelMessage = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
+
   // Resolve text: if only images with no text, use default prompt
-  const displayText = text || defaultPromptForAttachments(files ?? []);
+  let displayText = text || defaultPromptForAttachments(files ?? []);
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    displayText.trim().length === 0
+  ) {
+    displayText = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
   const streamConversationId = ensureWorkspaceConversationId();
+  const sentDraftKey = draftKeyFor(streamConversationId);
+  // A brand-new chat just received its real id: move any pending draft entry
+  // so the tray keeps showing the selection under the new key.
+  if (
+    sentDraftKey !== DRAFT_KEY_PENDING &&
+    generatedImageDrafts.value.has(DRAFT_KEY_PENDING)
+  ) {
+    const pendingEntry = generatedImageDrafts.value.get(DRAFT_KEY_PENDING);
+    if (
+      pendingEntry &&
+      !generatedImageDrafts.value.has(sentDraftKey) &&
+      activeConversationId.value === streamConversationId
+    ) {
+      setGeneratedImageDraft(sentDraftKey, [...pendingEntry.references]);
+      setGeneratedImageDraft(DRAFT_KEY_PENDING, []);
+    }
+  }
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
@@ -3566,6 +4179,10 @@ const onSend = async (
       reasoning: showReasoning.value
         ? { enabled: true, summary: "auto" }
         : undefined,
+      generatedImageReferences:
+        effectiveGeneratedImageRefs.length > 0
+          ? [...effectiveGeneratedImageRefs]
+          : undefined,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
@@ -3880,6 +4497,12 @@ const onSend = async (
       },
       (complete: ChatV2StreamChunk) => {
         if (!isCurrentStreamChunk(complete)) return;
+        // The turn was accepted end-to-end: drop this conversation's
+        // generated-image selection. Error paths intentionally keep it so the
+        // user can retry without re-picking.
+        if (complete.eventType === "complete") {
+          setGeneratedImageDraft(sentDraftKey, []);
+        }
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -3997,7 +4620,7 @@ const onSend = async (
         void loadConversations();
       },
       (error: Error) => {
-        const displayMessage = mapStreamErrorMessage(error.message);
+        const displayMessage = displayStreamErrorMessage(error);
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -4014,7 +4637,9 @@ const onSend = async (
     const runtimeError = getConversationRuntimeState(streamConversationId)
       .streamError;
     if (!runtimeError) {
-      const displayMessage = mapStreamErrorMessage(rawMessage);
+      const displayMessage = displayStreamErrorMessage(
+        err instanceof Error ? err : new Error(rawMessage)
+      );
       patchConversationRuntimeState(streamConversationId, {
         isStreaming: false,
         activeAssistantMessageId: null,
@@ -4159,6 +4784,8 @@ const unsubscribeSpeaking = speechController.subscribe((speaking) => {
 const voiceAutoSend = ref(false);
 const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceLocalRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
+const VOICE_SHERPA_RUNTIME_ID = "voice-sherpa" as const;
 const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
 const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
 const voiceSettingsSaving = ref(false);
@@ -4192,9 +4819,15 @@ const voiceMissingModel = computed(
     (voiceStatus.value?.sttState === "missing_model" ||
       voiceStatus.value?.sttState === "unavailable"),
 );
-const voiceRuntimeUnavailable = computed(
-  () => voiceInputEnabled.value && voiceStatus.value?.sttState === "unavailable",
-);
+const voiceRuntimeUnavailable = computed(() => {
+  if (!voiceInputEnabled.value) return false;
+  // PRD §10.4: prompt for the downloadable voice-sherpa runtime when absent,
+  // even if a legacy bundled sherpa addon still satisfies sttState.
+  if (!isLocalAiRuntimeUsable(voiceLocalRuntimeStatus.value?.state)) {
+    return true;
+  }
+  return voiceStatus.value?.sttState === "unavailable";
+});
 /**
  * Whether the chat can accept a voice auto-send right now. The renderer has no
  * synchronous AI-entitlement flag, so model availability is the proxy: if no
@@ -4293,12 +4926,14 @@ function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
 
 async function loadVoiceSettings(): Promise<void> {
   try {
-    const [settings, status] = await Promise.all([
+    const [settings, status, localRuntimeStatus] = await Promise.all([
       getVoiceSettings(),
       getVoiceStatus(),
+      getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID).catch(() => null),
     ]);
     applyVoiceSettings(settings);
     voiceStatus.value = status;
+    voiceLocalRuntimeStatus.value = localRuntimeStatus;
     if (
       status.sttState !== "missing_model" &&
       status.sttState !== "unavailable"
@@ -4313,6 +4948,7 @@ async function loadVoiceSettings(): Promise<void> {
     voiceTtsMode.value = "disabled";
     speechController.updateOptions({ ttsMode: "disabled" });
     voiceStatus.value = null;
+    voiceLocalRuntimeStatus.value = null;
   }
 }
 
@@ -4433,9 +5069,7 @@ async function confirmInstallVoiceRuntime(): Promise<void> {
   voiceRuntimeInstallProgress.value = null;
   voiceRuntimeModelProgress.value = null;
   try {
-    const offer =
-      voiceRuntimeInstallOffer.value ??
-      (await prepareLocalAiRuntimeInstall("voice-sherpa"));
+    const offer = await prepareLocalAiRuntimeInstall("voice-sherpa");
     voiceRuntimeInstallOffer.value = offer;
     await installLocalAiRuntime({
       operationId: offer.operationId,
@@ -4514,8 +5148,15 @@ onMounted(() => {
     handleReasoningVisibilityChanged
   );
   unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
-    if (progress.runtimeId !== "voice-sherpa") return;
+    if (progress.runtimeId !== VOICE_SHERPA_RUNTIME_ID) return;
     voiceRuntimeInstallProgress.value = progress;
+    if (progress.phase === "done") {
+      void getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID)
+        .then((status) => {
+          voiceLocalRuntimeStatus.value = status;
+        })
+        .catch(() => undefined);
+    }
   });
   unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
     if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;
@@ -4535,6 +5176,30 @@ onMounted(() => {
   subscribeConversationUpdated(handleConversationUpdated);
   // Live scheduled-turn token stream (strict routing renderer-side).
   subscribeScheduledStream(handleScheduledStream);
+  // Phase 13 (Plan 04) + Phase 14 (Plan 14-04): subscribe to AiFetchly
+  // config-changed events so the local command cache refreshes whenever
+  // the main process reloads the global config OR a workspace-config
+  // change is forwarded with the active workspace's id (design §16.3,
+  // §18.2, D-04).
+  //
+  // D-04 filter: refresh only when the event is global (source === "user")
+  // OR the event's workspaceId matches the active workspace's watch token.
+  // Non-matching workspace events are intended for a different conversation
+  // and would cause a stale refresh here. The subscriber returns an
+  // unsubscribe function that we invoke on unmount to avoid leaking
+  // listeners across AiChatV2 instance re-mounts.
+  slashConfigUnsub = onAifetchlyConfigChanged((event) => {
+    const isGlobal = event.source === "user";
+    const isForActiveWorkspace =
+      event.workspaceId !== undefined &&
+      event.workspaceId === activeWorkspaceWatchId.value;
+    if (!isGlobal && !isForActiveWorkspace) return;
+    // Refresh the local command count cache so any badge / status indicator
+    // reflects the latest config. Non-fatal on failure — the cache stays
+    // stale until the next event, which is acceptable (the user can also
+    // run /reload-config to force a refresh).
+    void refreshSlashCommandCount();
+  });
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
@@ -4573,6 +5238,14 @@ onBeforeUnmount(() => {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
   }
+  if (slashConfigUnsub) {
+    slashConfigUnsub();
+    slashConfigUnsub = null;
+  }
+  // Phase 14 (Plan 14-04): release the active workspace watch so the worker
+  // can GC consumers. Non-fatal on failure; main will eventually drop the
+  // consumer when no other consumers reference the workspace.
+  void releaseActiveWorkspaceWatch();
 });
 </script>
 

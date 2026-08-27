@@ -1,25 +1,45 @@
 import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
+import { log } from "@/modules/Logger";
 import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
+import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import { AIWorkspaceMemoryConsolidationRunModule } from "@/modules/AIWorkspaceMemoryConsolidationRunModule";
 import {
   AIAutoDreamSourceCollector,
   groupByWorkspace,
 } from "@/service/AIAutoDreamSourceCollector";
 import type { WorkspaceAwareAutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 import {
   buildWorkspaceAutoDreamSystemPrompt,
   buildWorkspaceAutoDreamUserPrompt,
   parseWorkspaceAutoDreamModelOutput,
 } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
 import type {
   AIWorkspaceMemoryConsolidationRunView,
   AIWorkspaceAutoDreamStatusView,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
+import type {
+  OpenAIChatMessage,
+  OpenAISmallModelCapability,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { runBatchedAutoDreamConsolidation } from "@/service/AIAutoDreamBatchRunner";
+import type { AIWorkspaceMemoryView } from "@/entityTypes/aiWorkspaceMemoryTypes";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
+
+/** Frozen profile for the workspace_auto_dream workload. */
+const WORKSPACE_AUTO_DREAM_PROFILE = getLightweightProfile(
+  "workspace_auto_dream"
+);
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -27,12 +47,23 @@ const MIN_CHANGED_MESSAGES_PER_WORKSPACE = 6;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIWorkspaceAutoDreamServiceDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route for the `workspace_auto_dream` workload.
+   * Hosted + kill-switch-on sends `model: "small"`; optional background
+   * workloads never fall back to the normal model.
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   isAIEnabled(): boolean;
   /** Reads the workspace auto-dream toggle; defaults to enabled when absent. */
   isAutoDreamEnabled(): Promise<boolean>;
+  /**
+   * Resolves the hosted small-model capability metadata. Workspace auto-dream
+   * uses a conservative 32k context when metadata is absent (tech-design
+   * §8.4). Optional so tests can omit it.
+   */
+  getSmallModelCapability?(): Promise<OpenAISmallModelCapability | null>;
 }
 
 interface WorkspacePacketGroup {
@@ -53,6 +84,9 @@ interface WorkspacePacketGroup {
 export class AIWorkspaceAutoDreamService {
   private readonly memoryModule = new AIWorkspaceMemoryModule();
   private readonly runModule = new AIWorkspaceMemoryConsolidationRunModule();
+  private readonly scopeModule = new WorkspaceMemoryScopeModule();
+  private readonly portableModule = new PortableWorkspaceMemoryModule();
+  private readonly portableMemory = new PortableWorkspaceMemoryService();
   private readonly sourceCollector = new AIAutoDreamSourceCollector();
   private readonly deps: AIWorkspaceAutoDreamServiceDeps;
   private inFlight: Promise<
@@ -70,7 +104,7 @@ export class AIWorkspaceAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[workspace-auto-dream] chat trigger failed:", err);
+      log.error("[workspace-auto-dream] chat trigger failed:", err);
     }
   }
 
@@ -81,18 +115,26 @@ export class AIWorkspaceAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[workspace-auto-dream] agent trigger failed:", err);
+      log.error("[workspace-auto-dream] agent trigger failed:", err);
     }
   }
 
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Manual panel run: focus this conversation so it is never sliced off by
+     * the oldest-first batch cap (dev's portable-memory Phase F). */
+    conversationId?: string;
+    /** Caller cancellation signal, propagated to every lightweight request
+     * and checked before retry/repair/transactional apply (SMBW-011). */
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      conversationId: input?.conversationId,
+      signal: input?.signal,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -117,6 +159,8 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -131,7 +175,10 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
+    if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
 
@@ -149,16 +196,29 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
-    const collected = await this.sourceCollector.collect({ reviewedSince });
+    const collected = await this.sourceCollector.collect({
+      reviewedSince,
+      focusConversationId: input.conversationId,
+    });
     const groups = this.buildGroups(collected.packets);
-    if (groups.length === 0) return null;
+    if (groups.length === 0) {
+      log.info(
+        `[workspace-auto-dream] skipped: no workspace-bound sources (packets=${
+          collected.packets.length
+        } focus=${input.conversationId ?? "-"})`
+      );
+      return null;
+    }
 
     const results: AIWorkspaceMemoryConsolidationRunView[] = [];
     for (const group of groups) {
+      // SMBW-011: stop processing further workspace groups once cancelled.
+      if (input.signal?.aborted) break;
       const view = await this.runForGroup(
         group,
         reviewedSince,
-        input.force === true
+        input.force === true,
+        input.signal
       );
       if (view) results.push(view);
     }
@@ -187,12 +247,33 @@ export class AIWorkspaceAutoDreamService {
   private async runForGroup(
     group: WorkspacePacketGroup,
     reviewedSince: Date | null,
-    force: boolean
+    force: boolean,
+    signal?: AbortSignal
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
-    const scope: WorkspaceMemoryScope = {
+    let scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
       workspaceRoot: group.workspaceRoot,
     };
+    let scopeContext: WorkspaceMemoryScopeContext | null = null;
+    // Portable-memory Phase A/F (design §19.5): resolve the internal scope so
+    // writes land in the scope-keyed rows and legacy rows converge. Best
+    // effort — a scope-table failure falls back to the legacy key path.
+    try {
+      const resolved: WorkspaceMemoryScopeContext =
+        await this.scopeModule.resolveLegacyScope({
+          workspaceKey: group.workspaceKey,
+          workspaceRoot: group.workspaceRoot,
+          displayName: group.displayName,
+        });
+      scopeContext = resolved;
+      scope = {
+        workspaceKey: resolved.workspaceKey,
+        workspaceRoot: resolved.workspaceRoot,
+        scopeId: resolved.scopeId,
+      };
+    } catch {
+      // Legacy path unchanged.
+    }
 
     if (!force) {
       // Per-workspace cooldown.
@@ -217,93 +298,216 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
+    // Source-derived cursor: the greatest updatedAt among this workspace
+    // group's packets. Never use new Date() as a success cursor — advancing
+    // the watermark past unprocessed material would skip eligible sources
+    // (tech-design §14.1, §14.5).
+    const groupReviewedThrough = maxPacketUpdatedAt(group.packets);
+
+    // SMBW-008: do not pass the candidate reviewedThrough to startRun — the
+    // watermark commits only with the successful applyPlanAndCompleteRun.
     const runView = await this.runModule.startRun({
       workspaceKey: group.workspaceKey,
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: new Date(),
+      reviewedThrough: null,
     });
 
     try {
-      const activeMemories = await this.memoryModule.listActiveForRetrieval(
-        scope,
-        200
-      );
-
       const validWorkspaceKeys = new Set([group.workspaceKey]);
-      const req: OpenAIChatCompletionRequest = {
-        messages: [
-          { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
-          {
-            role: "user",
-            content: buildWorkspaceAutoDreamUserPrompt({
-              workspaceKey: group.workspaceKey,
-              workspaceRoot: group.workspaceRoot,
-              activeMemories,
-              packets: group.packets,
+      const isManual = force;
+
+      // Total-budgeted batching (SMBW-007): shared runner packs workspace
+      // packets into bounded batches, processes each through the lightweight
+      // route with one same-route JSON repair, merges the plans, and applies
+      // the merged plan + run completion in one transaction scoped to this
+      // workspace.
+      const outcome =
+        await runBatchedAutoDreamConsolidation<WorkspaceAutoDreamParseResult>({
+          runId: runView.runId,
+          packets: group.packets,
+          reviewedThrough: groupReviewedThrough,
+          isManual,
+          signal,
+          completeLightweight: (lwInput) =>
+            this.deps.completeLightweight({
+              ...lwInput,
+              ...(signal ? { signal } : {}),
             }),
+          getSmallModelCapability: this.deps.getSmallModelCapability,
+          profile: WORKSPACE_AUTO_DREAM_PROFILE,
+          memory: {
+            listActiveMemories: async () =>
+              this.memoryModule.listActiveForRetrieval(scope, 200),
+            applyPlanAndCompleteRun: async (applyInput) => {
+              signal?.throwIfAborted();
+              const parsed = applyInput.plan;
+              // Dev's portable-memory handling (Phase A/F, design D-09 / §19.5):
+              // portable records are file-first; a SQLite-only archive/update
+              // would be reverted. Apply file mutations, then filter portable
+              // records out of the SQLite plan. Integrated into the SMBW-007
+              // batch runner's apply boundary so the merged plan is handled
+              // the same way dev's single-shot path handled parsed.
+              let planToApply = parsed;
+              let extraMemoriesCreated = 0;
+              let extraMemoriesUpdated = 0;
+              let extraMemoriesArchived = 0;
+              let fileMutationsApplied = false;
+
+              if (scopeContext?.portableEnabled) {
+                try {
+                  const fileResult =
+                    await this.portableMemory.applyAutoDreamFileMutations(
+                      scopeContext,
+                      parsed
+                    );
+                  planToApply = fileResult.sqlitePlan;
+                  extraMemoriesCreated = fileResult.fileCreated;
+                  extraMemoriesUpdated = fileResult.fileUpdated;
+                  extraMemoriesArchived = fileResult.fileArchived;
+                  fileMutationsApplied = true;
+                } catch (err) {
+                  log.warn(
+                    "[workspace-auto-dream] portable file write failed; sqlite fallback:",
+                    err
+                  );
+                }
+              }
+
+              if (!fileMutationsApplied) {
+                let skippedPortable = 0;
+                const isPortable = async (
+                  memoryId: string
+                ): Promise<boolean> => {
+                  if (!scope.scopeId) return false;
+                  try {
+                    const state = await this.portableModule.getPortableState(
+                      {
+                        scopeId: scope.scopeId,
+                        workspaceKey: scope.workspaceKey,
+                        workspaceRoot: scope.workspaceRoot,
+                        displayName: group.displayName,
+                        portableEnabled: false,
+                        defaultStorageMode: "private-only",
+                        importPolicy: "review-new",
+                      },
+                      memoryId
+                    );
+                    return state !== null;
+                  } catch {
+                    return false;
+                  }
+                };
+                const filteredArchive: typeof parsed.archive = [];
+                for (const a of parsed.archive) {
+                  if (await isPortable(a.memoryId)) {
+                    skippedPortable += 1;
+                    continue;
+                  }
+                  filteredArchive.push(a);
+                }
+                const filteredUpdate: typeof parsed.update = [];
+                for (const u of parsed.update) {
+                  if (await isPortable(u.memoryId)) {
+                    skippedPortable += 1;
+                    continue;
+                  }
+                  filteredUpdate.push(u);
+                }
+                if (skippedPortable > 0) {
+                  log.info(
+                    `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
+                  );
+                }
+                planToApply = {
+                  ...parsed,
+                  archive: filteredArchive,
+                  update: filteredUpdate,
+                };
+              }
+
+              if (
+                parsed.create.length === 0 &&
+                parsed.update.length === 0 &&
+                parsed.archive.length === 0
+              ) {
+                log.info(
+                  `[workspace-auto-dream] empty plan workspace=${group.workspaceKey}`
+                );
+              }
+
+              return this.memoryModule.applyPlanAndCompleteRun({
+                scope,
+                runId: applyInput.runId,
+                plan: planToApply,
+                chatConversationsReviewed: applyInput.chatConversationsReviewed,
+                agentTasksReviewed: applyInput.agentTasksReviewed,
+                model: applyInput.model,
+                reviewedThrough: applyInput.reviewedThrough,
+                extraMemoriesCreated,
+                extraMemoriesUpdated,
+                extraMemoriesArchived,
+              });
+            },
           },
-        ],
-      };
-      const resp = await this.deps.completeChat(req);
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const parsed = parseWorkspaceAutoDreamModelOutput(
-        raw,
-        validWorkspaceKeys,
-        activeMemories
-      );
-      if (!parsed.ok) {
+          prompt: {
+            buildSystemPrompt: () => buildWorkspaceAutoDreamSystemPrompt(),
+            buildUserPrompt: ({
+              activeMemories,
+              packets,
+            }: {
+              activeMemories: ReadonlyArray<AIWorkspaceMemoryView>;
+              packets: readonly WorkspaceAwareAutoDreamSourcePacket[];
+            }) =>
+              buildWorkspaceAutoDreamUserPrompt({
+                workspaceKey: group.workspaceKey,
+                workspaceRoot: group.workspaceRoot,
+                activeMemories,
+                packets,
+              }),
+            parse: (
+              raw: string,
+              _packets: readonly WorkspaceAwareAutoDreamSourcePacket[],
+              activeMemories: ReadonlyArray<AIWorkspaceMemoryView>
+            ) =>
+              parseWorkspaceAutoDreamModelOutput(
+                raw,
+                validWorkspaceKeys,
+                activeMemories
+              ),
+          },
+        });
+
+      if (outcome.outcome === "unprocessable") {
         await this.runModule.failRun(
           runView.runId,
-          `parse_error: ${parsed.error ?? "unknown"}`
+          `oversized_packet: ${outcome.sourceId}`
         );
         return await this.runModule.getByRunId(runView.runId);
       }
-
-      // Apply archives first to clear contradictions, then updates, then creates.
-      for (const a of parsed.archive) {
-        await this.memoryModule.archiveMemory(scope, a.memoryId);
+      if (outcome.outcome === "parse_error") {
+        log.warn(
+          `[workspace-auto-dream] parse_error workspace=${
+            group.workspaceKey
+          } error=${outcome.error ?? "unknown"}`
+        );
+        await this.runModule.failRun(
+          runView.runId,
+          `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
       }
-      for (const u of parsed.update) {
-        await this.memoryModule.updateMemory(scope, {
-          memoryId: u.memoryId,
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.content !== undefined ? { content: u.content } : {}),
-          ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
-        });
+      if (outcome.outcome === "cancelled") {
+        // SMBW-011: cancellation is not a failure — no cursor advance, no
+        // failure recorded. The run record is left for stale-run recovery.
+        log.info(
+          `[workspace-auto-dream] run cancelled ws=${group.workspaceKey} — no cursor advance, no failure recorded`
+        );
+        return await this.runModule.getByRunId(runView.runId);
       }
-      for (const c of parsed.create) {
-        await this.memoryModule.createMemory(scope, {
-          type: c.type,
-          title: c.title,
-          content: c.content,
-          confidence: c.confidence,
-          sourceKind: "auto_dream",
-          sourceConversationId:
-            c.sourceKind === "chat_v2" ? c.sourceId : undefined,
-          sourceAgentTaskId:
-            c.sourceKind === "agent_task" ? c.sourceId : undefined,
-          sourceMessageIds: c.sourceMessageIds,
-        });
-      }
-
-      await this.runModule.completeRun({
-        runId: runView.runId,
-        chatConversationsReviewed: group.packets.filter(
-          (p) => p.sourceKind === "chat_v2"
-        ).length,
-        agentTasksReviewed: group.packets.filter(
-          (p) => p.sourceKind === "agent_task"
-        ).length,
-        memoriesCreated: parsed.create.length,
-        memoriesUpdated: parsed.update.length,
-        memoriesArchived: parsed.archive.length,
-        model: resp.model,
-      });
-
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[workspace-auto-dream] consolidation failed:", err);
+      log.error("[workspace-auto-dream] consolidation failed:", err);
       try {
         await this.runModule.failRun(runView.runId, message);
       } catch {

@@ -49,7 +49,7 @@ export function redirectChildProcessOutput(childProcess: NodeJS.Process, process
   }
   
   // Log when process exits
-  childProcess.on('exit', (code, signal) => {
+  childProcess.on('exit', (code: number | null, signal: string | null) => {
     logger.info(`Process exited with code ${code} and signal ${signal}`);
   });
   

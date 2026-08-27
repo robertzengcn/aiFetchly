@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app } from "electron";
+import { log } from "@/modules/Logger";
 import {
   EMAILEXTRACTIONAPI,
   EMAILEXTRACTIONMESSAGE,
@@ -469,6 +470,6 @@ export function registerEmailextractionIpcHandlers() {
   // Reset any tasks stuck in "Processing" from a previous app session
   const emailTaskModule = new EmailSearchTaskModule();
   emailTaskModule.resetOrphanedProcessingTasks().catch((err) => {
-    console.error("Failed to reset orphaned email tasks:", err);
+    log.error("Failed to reset orphaned email tasks:", err);
   });
 }

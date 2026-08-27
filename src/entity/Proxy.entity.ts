@@ -5,13 +5,13 @@ import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity
 @Entity("proxy")
 export class ProxyEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("text", { nullable: false })
-    host: string;
+    host!: string;
     
     @Column("text", { nullable: false })
-    port: string;
+    port!: string;
     
     @Column("text", { nullable: true })
     user?: string;
@@ -29,5 +29,5 @@ export class ProxyEntity extends AuditableEntity {
     addtime?: string;
     
     @OneToMany(() => EmailSearchTaskProxyEntity, taskProxy => taskProxy.proxy)
-    taskProxies: EmailSearchTaskProxyEntity[];
+    taskProxies!: EmailSearchTaskProxyEntity[];
 } 

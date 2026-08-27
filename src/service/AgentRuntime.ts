@@ -1,5 +1,6 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
+import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
@@ -159,15 +160,20 @@ export class AgentRuntime {
       taskPacket: request.taskPacket,
     });
 
-    const { systemMessage, userMessage } = this.promptBuilder.build({
-      definition,
-      packet: request.taskPacket,
-    });
+    const { systemMessage, userMessage, userMessageText } =
+      this.promptBuilder.build({
+        definition,
+        packet: request.taskPacket,
+        // Trusted runtime-only channel: artifacts ride into the prompt here
+        // and nowhere else. createTask above persists the packet only, and
+        // the transcript below records the text projection (no bytes).
+        initialImageArtifacts: request.initialImageArtifacts,
+      });
     await transcript.appendSystemText(agentTaskId, systemMessage.content);
     await this.taskModule.appendMessage({
       agentTaskId,
       role: "user",
-      content: userMessage.content,
+      content: userMessageText,
     });
 
     await this.taskModule.setStatus(agentTaskId, "running", {
@@ -577,7 +583,7 @@ export class AgentRuntime {
           reason: "agent_task_completed",
         })
         .catch((err) =>
-          console.error("[ai-auto-dream] agent trigger failed:", err)
+          log.error("[ai-auto-dream] agent trigger failed:", err)
         );
     }
     if (deps?.workspaceAutoDreamService) {
@@ -587,7 +593,7 @@ export class AgentRuntime {
           reason: "agent_task_completed",
         })
         .catch((err) =>
-          console.error("[workspace-auto-dream] agent trigger failed:", err)
+          log.error("[workspace-auto-dream] agent trigger failed:", err)
         );
     }
     return result;

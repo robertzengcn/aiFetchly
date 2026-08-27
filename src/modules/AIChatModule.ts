@@ -107,6 +107,20 @@ export class AIChatModule extends BaseModule {
   }
 
   /**
+   * Get message by conversation ID and message ID
+   */
+  async getMessageByConversationAndMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    await this.ensureConnection();
+    return await this.chatMessageModel.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
+  }
+
+  /**
    * Clear conversation history
    */
   async clearConversation(conversationId: string): Promise<number> {

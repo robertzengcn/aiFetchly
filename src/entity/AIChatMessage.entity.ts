@@ -9,27 +9,27 @@ import { MessageType } from '@/entityTypes/commonType';
 @Index(['role'])
 export class AIChatMessageEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column('varchar', { length: 100, nullable: false })
-    messageId: string;
+    messageId!: string;
 
     @Order(2)
     @Column('varchar', { length: 100, default: 'default', nullable: false })
-    conversationId: string;
+    conversationId!: string;
 
     @Order(3)
     @Column('varchar', { length: 20, nullable: false })
-    role: string; // 'user', 'assistant', 'system'
+    role!: string; // 'user', 'assistant', 'system'
 
     @Order(4)
     @Column('text', { nullable: false })
-    content: string;
+    content!: string;
 
     @Order(5)
     @Column('datetime', { nullable: false })
-    timestamp: Date;
+    timestamp!: Date;
 
     @Order(6)
     @Column('varchar', { length: 100, nullable: true })
@@ -51,7 +51,7 @@ export class AIChatMessageEntity extends AuditableEntity {
         nullable: false,
         enum: MessageType
     })
-    messageType: MessageType;
+    messageType!: MessageType;
 }
 
 

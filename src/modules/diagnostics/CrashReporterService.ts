@@ -1,6 +1,10 @@
 "use strict";
 import { randomUUID } from "crypto";
-import type { CrashRecord, DiagnosticBreadcrumb } from "./DiagnosticSchemas";
+import type {
+  CrashRecord,
+  DiagnosticBreadcrumb,
+  ErrorRecord,
+} from "./DiagnosticSchemas";
 import { CrashLogSink } from "./CrashLogSink";
 import { ErrorLogSink } from "./ErrorLogSink";
 import { DiagnosticBreadcrumbBuffer } from "./DiagnosticBreadcrumbBuffer";
@@ -71,6 +75,19 @@ export class CrashReporterService {
   }
   getRecentErrors() {
     return this.buffer.getRecentErrors();
+  }
+  /**
+   * Push a pre-redacted, pre-truncated ErrorRecord into the in-memory error
+   * ring buffer so it appears in the next crash upload's `recentErrors`.
+   * Does not write to disk — the caller (ErrorLogSink or the Logger bridge)
+   * owns persistence. Best-effort: never throws.
+   */
+  pushError(rec: ErrorRecord): void {
+    try {
+      this.buffer.addError(rec);
+    } catch {
+      // ignore — best-effort
+    }
   }
   /** Expose config sessionId for IPC handlers — read-only. */
   get sessionId(): string {

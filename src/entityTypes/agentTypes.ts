@@ -137,6 +137,26 @@ export interface AgentFinding {
   confidence: number;
 }
 
+/** Trusted, runtime-only transient image handed to one isolated worker agent.
+ *
+ * CHANNEL CONTRACT (security boundary):
+ * - Accepted ONLY as an in-process field on {@link RunAgentRequest} consumed
+ *   by AgentRuntime.runSync. NEVER parse these from tool arguments or
+ *   taskPacket JSON — data URLs are coordinator-prepared trusted input that
+ *   has already passed authorization, not model-controlled data.
+ * - Transient: the runtime strips them before taskModule.createTask (only
+ *   the packet is persisted), never copies them into {@link AgentResult},
+ *   and never exposes them to hooks. They flow into the prompt builder only.
+ */
+export interface AgentInitialImageArtifact {
+  /** Origin `${messageId}:${imageIndex}` of the source generated image. */
+  readonly sourceId: string;
+  readonly fileName: string;
+  readonly mimeType: "image/png" | "image/jpeg";
+  readonly dataUrl: string;
+  readonly detail: "auto" | "low" | "high";
+}
+
 /** Request to run one specialist agent. */
 export interface RunAgentRequest {
   agentId: string;
@@ -148,6 +168,10 @@ export interface RunAgentRequest {
   model?: string;
   executionMode: AgentExecutionMode;
   outputSchemaOverride?: Record<string, unknown>;
+  /** Runtime-only transient images (see {@link AgentInitialImageArtifact}).
+   * Forwarded into the initial user prompt ONLY — stripped from persistence,
+   * results, and hooks. */
+  initialImageArtifacts?: readonly AgentInitialImageArtifact[];
 }
 
 /** Result of one specialist agent run. */

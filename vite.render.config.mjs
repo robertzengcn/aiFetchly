@@ -4,6 +4,7 @@ import * as path from 'path';
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
+import rendererNodeGuard from './vite-plugin-renderer-node-guard.ts'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
 // import { nodePolyfills } from 'vite-plugin-node-polyfills'
@@ -45,6 +46,11 @@ export default defineConfig({
     vuetify({
       autoImport: true,
     }),
+    // Fail fast + loudly (dev AND build) if a Node-only / main-process-only
+    // module would enter the renderer graph — prevents the recurring
+    // ERR_ABORTED / "Cannot access node:module.createRequire" launch crash.
+    // Bypass (NOT for committed code): AIFETCHLY_DISABLE_RENDERER_NODE_GUARD=1
+    rendererNodeGuard(),
     ClosePlugin(),
     ...optionalChecker(() => checker({
       // e.g. use TypeScript check

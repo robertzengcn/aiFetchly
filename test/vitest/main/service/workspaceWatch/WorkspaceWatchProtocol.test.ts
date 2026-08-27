@@ -260,3 +260,110 @@ describe("workerEventSchema (worker → main) — WAT-06 reject cases", () => {
     expect(r.success).toBe(false);
   });
 });
+
+
+// --- Portable-memory payload bounds (design §12.5) ---------------------------
+
+describe("WorkspaceWatchProtocol — portable memory snapshot bounds", () => {
+  function portableBase(): Record<string, unknown> {
+    return {
+      schemaVersion: 1,
+      directoryPresent: true,
+      complete: true,
+      records: [],
+      seenRelativePaths: [],
+      totalBytes: 0,
+      diagnostics: [],
+    };
+  }
+
+  function snapshotWith(portable: unknown): unknown {
+    return {
+      type: "snapshot",
+      workspaceId: "w1",
+      snapshot: {
+        source: "workspace",
+        sourceId: "workspace:w1",
+        rootPath: "/tmp/w1",
+        version: 1,
+        files: [],
+        instructions: [],
+        commands: [],
+        agents: [],
+        hooks: [],
+        skills: [],
+        diagnostics: [],
+        portableMemory: portable,
+      },
+    };
+  }
+
+  it("accepts a bounded portable payload", () => {
+    const r = workerEventSchema.safeParse(snapshotWith(portableBase()));
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts an absent portable payload", () => {
+    const r = workerEventSchema.safeParse({
+      type: "snapshot",
+      workspaceId: "w1",
+      snapshot: {
+        source: "workspace",
+        sourceId: "workspace:w1",
+        rootPath: "/tmp/w1",
+        version: 1,
+        files: [],
+        instructions: [],
+        commands: [],
+        agents: [],
+        hooks: [],
+        skills: [],
+        diagnostics: [],
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects malformed portable payloads (bad hash, over caps, wrong version)", () => {
+    const badHash = {
+      ...portableBase(),
+      records: [
+        {
+          relativePath: ".aifetchly/memory/wmem-x.md",
+          fileName: "wmem-x.md",
+          contentHash: "not-a-hash",
+          sizeBytes: 10,
+          mtimeMs: 1,
+          rawFrontmatter: null,
+          markdownBody: "x",
+          isSymbolicLink: false,
+        },
+      ],
+    };
+    expect(workerEventSchema.safeParse(snapshotWith(badHash)).success).toBe(
+      false
+    );
+
+    const badVersion = { ...portableBase(), schemaVersion: 2 };
+    expect(workerEventSchema.safeParse(snapshotWith(badVersion)).success).toBe(
+      false
+    );
+
+    const overCount = {
+      ...portableBase(),
+      records: Array.from({ length: 1001 }, (_, i) => ({
+        relativePath: `.aifetchly/memory/wmem-${i}.md`,
+        fileName: `wmem-${i}.md`,
+        contentHash: "a".repeat(64),
+        sizeBytes: 1,
+        mtimeMs: 1,
+        rawFrontmatter: null,
+        markdownBody: "x",
+        isSymbolicLink: false,
+      })),
+    };
+    expect(workerEventSchema.safeParse(snapshotWith(overCount)).success).toBe(
+      false
+    );
+  });
+});

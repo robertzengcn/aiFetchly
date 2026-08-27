@@ -6,25 +6,25 @@ import { ProxyEntity } from "@/entity/Proxy.entity";
 @Entity("emailsearch_task_proxy")
 export class EmailSearchTaskProxyEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer", { nullable: false })
-    email_search_task_id: number;
+    email_search_task_id!: number;
     
     @Column("integer", { nullable: false })
-    proxy_id: number;
+    proxy_id!: number;
     
     @Column("boolean", { default: true })
-    is_active: boolean;
+    is_active!: boolean;
     
     @Column("text", { nullable: true })
     notes?: string;
     
     @ManyToOne(() => EmailSearchTaskEntity, emailSearchTask => emailSearchTask.id)
     @JoinColumn({ name: "email_search_task_id" })
-    emailSearchTask: EmailSearchTaskEntity;
+    emailSearchTask!: EmailSearchTaskEntity;
     
     @ManyToOne(() => ProxyEntity, proxy => proxy.id)
     @JoinColumn({ name: "proxy_id" })
-    proxy: ProxyEntity;
+    proxy!: ProxyEntity;
 } 
