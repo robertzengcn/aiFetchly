@@ -277,6 +277,7 @@ import { convertVariableInTemplate } from "@/views/utils/emailFun"
 import { QUERY_USER_INFO } from "@/config/channellist"
 import { windowInvoke } from "@/views/utils/apirequest"
 import { UserInfoType } from "@/entityTypes/userType"
+import { useEntitlement } from "@/views/utils/subscriptionEntitlement"
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
@@ -619,6 +620,14 @@ onMounted(async () => {
     console.error('Failed to check AI enabled status:', e);
     aiEnabled.value = false;
   }
+  // FR-7.1: keep aiEnabled in sync with entitlement broadcasts so chrome
+  // unlocks without a remount when the user pays while this page is open.
+  useEntitlement({
+    readBaselineAiEnabled: () => aiEnabled.value,
+    onPlansChanged: (_plans, enabled) => {
+      aiEnabled.value = enabled;
+    },
+  });
 });
 onBeforeUnmount(() => {
   document.removeEventListener("focusin", handleFocus);
