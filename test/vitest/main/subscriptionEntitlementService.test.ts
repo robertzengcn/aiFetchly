@@ -119,12 +119,15 @@ function resetState(): void {
   state.tokenSets = [];
 }
 
-function newService(): SubscriptionEntitlementService {
+function newService(opts?: {
+  hasAccessToken?: () => boolean;
+}): SubscriptionEntitlementService {
   // Reset the singleton with fake-timer-friendly injectables.
   SubscriptionEntitlementService.resetInstance();
   const timers: ReturnType<typeof setTimeout>[] = [];
   return SubscriptionEntitlementService.getInstance({
     now: () => Date.now(),
+    hasAccessToken: opts?.hasAccessToken,
     setTimer: (fn, ms) => {
       const id = setTimeout(fn, ms) as unknown as ReturnType<typeof setTimeout>;
       timers.push(id);
@@ -352,5 +355,38 @@ describe("SubscriptionEntitlementService", () => {
         (b as { payload: { aiEnabled: boolean } }).payload.aiEnabled === true
     );
     expect(upgrade).toBeDefined();
+  });
+
+  it("GET empty plans OUTSIDE the pricing window persists Community (design §12.1)", async () => {
+    const svc = newService();
+    state.current = { plans: [...PLUS], aiEnabled: true };
+    // No pricing window opened. Kill Bill returns empty -> updateUserInfo
+    // writes Community + USER_AI_ENABLED=false (the mock simulates this by
+    // clearing plans + aiEnabled when nextPlans is set to COMMUNITY).
+    state.nextPlans = COMMUNITY;
+
+    const res = await svc.reconcile("startup");
+
+    expect(res.ok).toBe(true);
+    // Community persisted: snapshot reflects the empty/free state.
+    expect(res.snapshot.aiEnabled).toBe(false);
+    expect(res.changed).toBe(true);
+    // Broadcast fired because the snapshot changed (Plus -> Community).
+    expect(state.broadcasts.length).toBe(1);
+  });
+
+  it("skips reconcile with no access token, keeping the cache (TODO-6)", async () => {
+    // Inject hasAccessToken: () => false to simulate a signed-out user.
+    const svc = newService({ hasAccessToken: () => false });
+    state.current = { plans: [...PLUS], aiEnabled: true };
+    // Use a forced trigger so we reach doReconcile (focus would short-circuit
+    // on the paid-skip path before the no-token check runs).
+    const res = await svc.reconcile("pricing", { force: true });
+
+    expect(res.ok).toBe(false);
+    expect(res.skipped).toBe(true);
+    expect(res.failReason).toBe("auth");
+    expect(res.snapshot.aiEnabled).toBe(true);
+    expect(res.snapshot.plans).toEqual(PLUS);
   });
 });

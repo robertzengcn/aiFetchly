@@ -59,6 +59,11 @@ export interface EntitlementServiceOptions {
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   /** Inject clearTimeout for tests. */
   clearTimer?: (id: ReturnType<typeof setTimeout>) => void;
+  /**
+   * Inject the access-token presence check for tests (default reads Token).
+   * Returning false skips the reconcile (no-token auth skip, design §6.3).
+   */
+  hasAccessToken?: () => boolean;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -113,11 +118,21 @@ export class SubscriptionEntitlementService {
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => Timer;
   private readonly clearTimer: (id: Timer) => void;
+  private readonly hasAccessToken: () => boolean;
 
   private constructor(opts?: EntitlementServiceOptions) {
     this.now = opts?.now ?? Date.now;
     this.setTimer = opts?.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts?.clearTimer ?? ((id) => clearTimeout(id));
+    this.hasAccessToken =
+      opts?.hasAccessToken ??
+      (() => {
+        try {
+          return (new Token().getValue(TOKENNAME) || "").length > 0;
+        } catch {
+          return false;
+        }
+      });
   }
 
   /** Set by userIpc once the main BrowserWindow exists. */
@@ -277,13 +292,7 @@ export class SubscriptionEntitlementService {
     // --- No access token → skip reconcile entirely (design §6.3 / §9).
     //     Keeps the cache; no GET is issued. A signed-out user has no
     //     entitlement to reconcile. ---
-    let accessToken: string | undefined;
-    try {
-      accessToken = new Token().getValue(TOKENNAME) || undefined;
-    } catch {
-      accessToken = undefined;
-    }
-    if (!accessToken) {
+    if (!this.hasAccessToken()) {
       log.info(
         `[entitlement] reconcile skip trigger=${trigger} reason=no_token (cache kept)`
       );
