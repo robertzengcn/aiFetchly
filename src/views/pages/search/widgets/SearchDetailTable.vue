@@ -269,8 +269,16 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
                 <!-- AI Analysis Information -->
                 <v-row class="mb-4">
                     <v-col cols="12">
-                        <div class="text-subtitle-2 font-weight-bold mb-2">
-                            {{ t('websiteAnalysis.ai_analysis') || 'AI Analysis' }}
+                        <div class="d-flex align-center justify-space-between mb-2">
+                            <div class="text-subtitle-2 font-weight-bold">
+                                {{ t('websiteAnalysis.ai_analysis') || 'AI Analysis' }}
+                            </div>
+                            <AIContentReportButton
+                                v-if="websiteAnalysisReportDescriptor"
+                                :descriptor="websiteAnalysisReportDescriptor"
+                                :reported="websiteAnalysisReported"
+                                @report="websiteAnalysisReportDialog = true"
+                            />
                         </div>
                         <v-divider></v-divider>
                     </v-col>
@@ -446,6 +454,14 @@ v-model:items-per-page="itemsPerPage" v-model="selectedItems"
         :type="extractionNotice.type"
         :timeout="extractionNotice.timeout"
     />
+
+    <!-- AI Content Report dialog (PRD §8.2 website-analysis narrative) -->
+    <AIContentReportDialog
+        v-model="websiteAnalysisReportDialog"
+        :descriptor="websiteAnalysisReportDescriptor"
+        :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+        @submitted="websiteAnalysisReported = true"
+    />
 </template>
 
 <script setup lang="ts">
@@ -463,6 +479,10 @@ import {CapitalizeFirstLetter} from "@/views/utils/function"
 import WebsiteAnalysisDialog from '@/views/components/widgets/websiteAnalysisDialog.vue'
 import { getSystemSettinglist, updateSystemSetting } from '@/views/api/systemsetting'
 import { ai_website_analysis_business_info } from '@/config/settinggroupInit'
+import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue'
+import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue'
+import { buildWebsiteAnalysisDescriptor } from '@/views/components/aiContentReport/reportableOutput'
+import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo'
 
 const $route = useRoute();
 const {t} = useI18n({inheritLocale: true});
@@ -741,6 +761,23 @@ const extractionNotice = reactive({
 // Detail dialog state
 const showDetailDialog = ref(false);
 const selectedResult = ref<SearchResEntityDisplay | null>(null);
+
+// AI Content Report state (PRD §8.2 website-analysis narrative). The report
+// action appears only when the selected result has AI-generated analysis; the
+// descriptor is null otherwise, which also gates the button via v-if.
+const websiteAnalysisReportDialog = ref(false);
+const websiteAnalysisReported = ref(false);
+const websiteAnalysisReportDescriptor = computed(() => {
+  const r = selectedResult.value;
+  if (!r) return null;
+  const parts = [r.ai_industry, r.ai_reasoning, r.ai_client_business].filter(
+    (s): s is string => typeof s === "string" && s.length > 0
+  );
+  if (parts.length === 0) return null;
+  return buildWebsiteAnalysisDescriptor(parts.join("\n\n"), {
+    messageId: String(r.id ?? ""),
+  });
+});
 
 // Column visibility state
 // Default hidden columns: ai_analysis_status, extraction_status, contact_email, contact_phone, contact_address

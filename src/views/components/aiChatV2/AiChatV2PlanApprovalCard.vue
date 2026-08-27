@@ -79,6 +79,7 @@
       <AIContentReportDialog
         v-model="reportDialogOpen"
         :descriptor="reportDescriptor"
+        :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
         @submitted="reportSubmitted = true"
       />
     </v-card-actions>
@@ -122,6 +123,7 @@ import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildPlanDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 const props = defineProps<{
   planState: AIChatPlanStateView;

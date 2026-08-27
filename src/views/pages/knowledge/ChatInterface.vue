@@ -242,6 +242,7 @@
     <AIContentReportDialog
       v-model="reportDialogOpen"
       :descriptor="activeReportDescriptor"
+      :privacy-policy-url="privacyPolicyUrl"
       @submitted="onKnowledgeReportSubmitted"
     />
   </div>
@@ -251,6 +252,7 @@
 import { defineComponent, ref, onMounted, nextTick, watch } from 'vue';
 import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
+import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
 export default defineComponent({
   name: 'ChatInterface',
@@ -278,7 +280,12 @@ export default defineComponent({
       surface: 'knowledge_chat',
       contentType: 'text',
       text: message.content,
-      context: { messageId: `knowledge-${index}-${message.timestamp?.getTime?.() ?? index}` },
+      context: {
+        messageId: `knowledge-${index}-${message.timestamp?.getTime?.() ?? index}`,
+        generatedAt: message.timestamp instanceof Date
+          ? message.timestamp.toISOString()
+          : undefined,
+      },
     });
 
     /**
@@ -512,6 +519,7 @@ export default defineComponent({
       inputMessage,
       isTyping,
       regenerating,
+      privacyPolicyUrl: AIFETCHLY_PRIVACY_POLICY_URL,
       chatContainer,
       showSettings,
       settings,

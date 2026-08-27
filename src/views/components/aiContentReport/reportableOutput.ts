@@ -1,5 +1,4 @@
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
-import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   AIContentType,
@@ -87,10 +86,18 @@ export function buildChatV2Descriptor(
  * Build a descriptor for a generated artifact. The artifact's bounded
  * plaintext representation (title + description) is the report evidence —
  * never executable HTML, scripts, or a live file:// reference (PRD §13.2,
- * §14.5).
+ * §14.5). Accepts the minimal structural shape so both the artifact card
+ * (AIArtifactToolMetadata) and the workspace (AIArtifactRecord) can reuse it.
  */
+export interface ReportableArtifact {
+  id: string;
+  conversationId: string;
+  title: string;
+  description?: string;
+  createdAt: string;
+}
 export function buildArtifactDescriptor(
-  artifact: AIArtifactToolMetadata
+  artifact: ReportableArtifact
 ): ReportableOutputDescriptor {
   const parts = [artifact.title];
   if (artifact.description) {
@@ -142,12 +149,82 @@ export function buildPlanDescriptor(
 export function buildEmailTemplateDescriptor(
   subject: string,
   body: string,
-  context: { conversationId?: string; messageId?: string; model?: string } = {}
+  context: {
+    conversationId?: string;
+    messageId?: string;
+    model?: string;
+    generatedAt?: string;
+  } = {}
 ): ReportableOutputDescriptor {
   return {
     surface: "email_template_editor",
     contentType: "email_template",
     text: `${subject}\n\n${body}`,
+    context,
+  };
+}
+
+/**
+ * Build a descriptor for an AI-generated keyword set (search + Yellow Pages
+ * keyword generation, PRD §8.2). The generated list is captured as text
+ * before the user accepts/merges it.
+ */
+export function buildKeywordSetDescriptor(
+  keywords: string[],
+  context: {
+    conversationId?: string;
+    messageId?: string;
+    model?: string;
+    generatedAt?: string;
+  } = {}
+): ReportableOutputDescriptor {
+  return {
+    surface: "keyword_generator",
+    contentType: "keyword_set",
+    text: keywords.filter(Boolean).join("\n"),
+    context,
+  };
+}
+
+/**
+ * Build a descriptor for an AI-generated automatic email reply (PRD §8.2).
+ * The generated reply body is captured as text.
+ */
+export function buildAutoReplyDescriptor(
+  replyBody: string,
+  context: {
+    conversationId?: string;
+    messageId?: string;
+    model?: string;
+    generatedAt?: string;
+  } = {}
+): ReportableOutputDescriptor {
+  return {
+    surface: "automatic_email_reply",
+    contentType: "text",
+    text: replyBody,
+    context,
+  };
+}
+
+/**
+ * Build a descriptor for a website-analysis / scrape-assist AI narrative
+ * (PRD §8.2). The displayed generated narrative (industry + reasoning +
+ * client business) is captured as bounded text.
+ */
+export function buildWebsiteAnalysisDescriptor(
+  narrative: string,
+  context: {
+    conversationId?: string;
+    messageId?: string;
+    model?: string;
+    generatedAt?: string;
+  } = {}
+): ReportableOutputDescriptor {
+  return {
+    surface: "other",
+    contentType: "text",
+    text: narrative,
     context,
   };
 }

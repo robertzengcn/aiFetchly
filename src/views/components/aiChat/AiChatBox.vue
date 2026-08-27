@@ -804,6 +804,7 @@ class="message-bubble" :class="{
     <AIContentReportDialog
       v-model="reportDialogOpen"
       :descriptor="activeReportDescriptor"
+      :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
       @submitted="onReportSubmitted"
     />
   </div>
@@ -824,6 +825,7 @@ import type { FileOperationRecord } from '@/entityTypes/fileOperationTypes';
 import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
 import type { ReportableOutputDescriptor } from '@/views/components/aiContentReport/reportableOutput';
+import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -909,6 +911,10 @@ function buildLegacyChatDescriptor(message: ChatMessage): ReportableOutputDescri
     context: {
       conversationId: message.conversationId,
       messageId: message.id,
+      // message.timestamp is a Date; emit RFC3339 for triage (FR-3.8).
+      generatedAt: message.timestamp instanceof Date
+        ? message.timestamp.toISOString()
+        : undefined,
     },
   };
 }

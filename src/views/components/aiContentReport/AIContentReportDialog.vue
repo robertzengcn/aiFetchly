@@ -6,7 +6,11 @@
     @update:model-value="onToggle"
   >
     <v-card data-testid="ai-content-report-dialog">
-      <v-card-title id="ai-content-report-dialog-title" tabindex="-1">
+      <v-card-title
+        id="ai-content-report-dialog-title"
+        ref="titleRef"
+        tabindex="-1"
+      >
         {{ titleText }}
       </v-card-title>
       <v-card-text>
@@ -142,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { createAIContentReport } from "@/views/api/aiContentReport";
 import { encodeReportImagePreview } from "./AIContentReportImageEncoder";
@@ -159,12 +163,22 @@ const props = defineProps<{
   descriptor: ReportableOutputDescriptor | null;
   /** Optional privacy-policy URL (PRD FR-2.6). Not a precondition. */
   privacyPolicyUrl?: string;
+  /**
+   * The element that opened the dialog, so focus can be restored to it on
+   * close (PRD §11.3). Passed by the parent via the button ref.
+   */
+  activatorEl?: HTMLElement | null;
 }>();
 const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "submitted", reportId: string): void;
 }>();
 const { t } = useI18n();
+
+// Focus management (PRD §11.3): focus the title on open, restore to the
+// originating Report button on close.
+const titleRef = ref<{ $el?: HTMLElement } | null>(null);
+let lastFocusedEl: HTMLElement | null = null;
 
 const category = ref<AIContentReportCategory | null>(null);
 const comment = ref("");
@@ -247,11 +261,13 @@ function toggleImage(index: number): void {
 }
 
 // Generate clientReportId ONCE per dialog open; reuse on retry (PRD §13.2,
-// FR-4.8). Reset form state on each open.
+// FR-4.8). Reset form state on each open. Manage focus on open/close (§11.3).
 watch(
   () => props.modelValue,
   (open) => {
     if (open) {
+      lastFocusedEl =
+        (document.activeElement as HTMLElement | null) ?? props.activatorEl ?? null;
       clientReportId.value = generateClientReportId();
       category.value = null;
       comment.value = "";
@@ -260,11 +276,25 @@ watch(
       reportId.value = null;
       categoryError.value = "";
       imageSelectionError.value = "";
-      // Default-select all images when there is more than one (PRD §9.2).
+      // Default-select EVERY available image, including a single one (PRD
+      // §9.2: thumbnails with each image selected by default). The user may
+      // deselect extras when there are multiple, but at least one must remain.
       const imgCount = props.descriptor?.images?.length ?? 0;
       selectedImageIndices.value = new Set(
-        imgCount > 1 ? Array.from({ length: imgCount }, (_, i) => i) : []
+        Array.from({ length: imgCount }, (_, i) => i)
       );
+      // Move focus to the dialog title on open (PRD §11.3). nextTick lets
+      // Vuetify mount the card before we focus it.
+      nextTick(() => {
+        const el = titleRef.value?.$el ?? null;
+        el?.focus?.();
+      });
+    } else {
+      // Closing (cancel, overlay, or post-success dismiss) restores focus to
+      // the originating Report button (PRD §11.3).
+      const target = lastFocusedEl ?? props.activatorEl ?? null;
+      target?.focus?.();
+      lastFocusedEl = null;
     }
   }
 );

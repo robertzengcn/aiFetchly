@@ -362,15 +362,22 @@ const isPlanCard = computed(
 
 // Report AI output (PRD §8.1). Only completed assistant text/image messages
 // are reportable — not tool calls, tool results, user/system messages,
-// streaming, errors, or empty placeholders (PRD FR-1.2). The dialog is hosted
-// by the list parent (AiChatV2Messages) so only one instance exists per chat.
-const isReportableAssistant = computed(
-  () =>
-    props.message.role === "assistant" &&
-    props.message.messageType !== MessageType.TOOL_CALL &&
-    props.message.messageType !== MessageType.TOOL_RESULT &&
-    status.value === "idle"
-);
+// streaming, errors, or EMPTY placeholders (PRD FR-1.2). Requires non-empty
+// text and/or generated images so the action never appears on an empty
+// assistant bubble. The dialog is hosted by the list parent
+// (AiChatV2Messages) so only one instance exists per chat.
+const isReportableAssistant = computed(() => {
+  if (props.message.role !== "assistant") return false;
+  if (props.message.messageType === MessageType.TOOL_CALL) return false;
+  if (props.message.messageType === MessageType.TOOL_RESULT) return false;
+  if (status.value !== "idle") return false;
+  const hasText =
+    typeof props.message.content === "string" && props.message.content.trim().length > 0;
+  const hasImages =
+    Array.isArray(props.message.metadata?.generatedImages) &&
+    (props.message.metadata?.generatedImages as unknown[]).length > 0;
+  return hasText || hasImages;
+});
 const reportDescriptor = computed(() =>
   isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
 );

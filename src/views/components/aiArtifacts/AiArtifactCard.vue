@@ -56,6 +56,7 @@
       <AIContentReportDialog
         v-model="reportDialogOpen"
         :descriptor="reportDescriptor"
+        :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
         @submitted="reportSubmitted = true"
       />
     </div>
@@ -69,6 +70,7 @@ import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildArtifactDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 const props = defineProps<{
   artifact: AIArtifactToolMetadata;

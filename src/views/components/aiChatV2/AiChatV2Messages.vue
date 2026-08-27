@@ -33,6 +33,7 @@
     <AIContentReportDialog
       v-model="reportDialogOpen"
       :descriptor="activeReportDescriptor"
+      :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
       @submitted="onReportSubmitted"
     />
     <div
@@ -77,6 +78,7 @@ import AiChatV2Message from "./AiChatV2Message.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 

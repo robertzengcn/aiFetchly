@@ -276,6 +276,7 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
   <AIContentReportDialog
     v-model="emailTemplateReportDialog"
     :descriptor="emailTemplateReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
     @submitted="emailTemplateReported = true"
   />
 </template>
@@ -293,16 +294,21 @@ import { UserInfoType } from "@/entityTypes/userType"
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildEmailTemplateDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
 
 // AI Content Report state (PRD §8.1, §9.3). Reports the generated version
-// currently displayed, not later user edits.
+// currently displayed, not later user edits. generatedAt is captured when
+// streaming completes so the report carries an RFC3339 timestamp (FR-3.8).
 const emailTemplateReportDialog = ref(false);
 const emailTemplateReported = ref(false);
+const emailTemplateGeneratedAt = ref<string | undefined>(undefined);
 const emailTemplateReportDescriptor = computed(() =>
-  buildEmailTemplateDescriptor(tplTitle.value, streamedContent.value)
+  buildEmailTemplateDescriptor(tplTitle.value, streamedContent.value, {
+    generatedAt: emailTemplateGeneratedAt.value,
+  })
 );
 
 
@@ -577,6 +583,7 @@ async function generateTemplate() {
       },
       onComplete: (response) => {
         isStreaming.value = false;
+        emailTemplateGeneratedAt.value = new Date().toISOString();
         if (response.status && response.data) {
           const { title, content, hasInvalidVariables, invalidVariables } = response.data;
           tplTitle.value = title || "";
