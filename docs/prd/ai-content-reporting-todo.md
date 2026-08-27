@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Open leftovers after worktree implementation |
+| Status | TODO-2, -5, -6, -7, -8, -9, -10, -11, -1(desktop), -3(docs) closed. TODO-3(cert account/screenshots), -4(backend), -12 remain (out of this desktop worktree). |
 | Created | 2026-08-27 |
 | Source PRD | `docs/prd/ai-content-reporting-prd.md` |
 | Technical design | `docs/prd/ai-content-reporting-technical-design.md` |
