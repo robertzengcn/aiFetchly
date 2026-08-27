@@ -12,6 +12,38 @@ import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
+ * Pattern for HTTP 402 / payment-required / quota-exhausted errors. A hosted
+ * AI call returning 402 means the user's subscription token quota is exhausted
+ * OR the plan is no longer active. Used to decide whether to lazy-reconcile
+ * entitlement once before surfacing the error (PRD FR-6.3).
+ */
+const QUOTA_ERROR_PATTERN =
+  /\b402\b|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i;
+
+/**
+ * True when the error represents a hosted 402 / payment-required / quota
+ * exhaustion. Detects both classified {@link AIChatRecoverableError} reasons
+ * (`"quota"`) and raw error messages that carry the HTTP status / quota
+ * string. Local-provider {@link AIProviderError}s are excluded — a local
+ * API key quota is not a hosted-entitlement problem.
+ */
+export function isQuotaError(err: unknown): boolean {
+  if (err instanceof AIProviderError) {
+    return false;
+  }
+  if (isAIChatRecoverableError(err) && err.reason === "quota") {
+    return true;
+  }
+  if (err instanceof Error) {
+    return QUOTA_ERROR_PATTERN.test(err.message || "");
+  }
+  if (typeof err === "string") {
+    return QUOTA_ERROR_PATTERN.test(err);
+  }
+  return false;
+}
+
+/**
  * Broad pattern for transient, retryable server-side failures: empty
  * responses, finish_reason=error, rate limits, timeouts, 502s, AI-server 5xx
  * codes, and the SQLite "database connection is not open" hiccup. These

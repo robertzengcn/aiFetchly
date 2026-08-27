@@ -32,19 +32,19 @@ import {
 } from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
-  AIChatRecoverableError,
   buildRecoveryMetadata,
   createRecoveryAttemptState,
   isAIChatRecoverableError,
   type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
-import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
+import {
+  isContentLevelTransientError,
+  isQuotaError,
+} from "@/service/AIChatErrorMapper";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
-import {
-  AI_CHAT_RECOVERY_DEFAULTS,
-  AIChatRetryPolicy,
-} from "@/service/AIChatRetryPolicy";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import {
   checkPlanModeToolPolicy,
   isPlanToolName,
@@ -775,6 +775,12 @@ export class AIChatQueryLoop {
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
     const tracker: RoundContentTracker = { delivered: false };
+    // FR-6.3: a hosted 402 / quota-exhausted error may be a stale-cache lag
+    // (user just paid while a call was in flight). Lazy-reconcile entitlement
+    // ONCE before surfacing the error; if USER_AI_ENABLED flips true, retry the
+    // call once. Bounded by ensureHostedAiEnabled's 30s cooldown so a user
+    // mashing send can't stampede /api/user/info. Do not loop.
+    let quotaRetried = false;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
       const attemptInput: AIChatQueryLoopInput =
@@ -784,6 +790,27 @@ export class AIChatQueryLoop {
 
       if (result.type !== "failed") {
         return result;
+      }
+
+      // FR-6.3: quota error + no content delivered + not already retried ->
+      // lazy-reconcile once; if entitlement is now unlocked, retry this attempt.
+      if (
+        !quotaRetried &&
+        !tracker.delivered &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        isQuotaError(result.error)
+      ) {
+        quotaRetried = true;
+        const unlocked = await ensureHostedAiEnabled();
+        if (unlocked) {
+          // Entitlement flipped to active (the user just paid). Re-run this
+          // same attempt once: the for-loop's `attempt += 1` is offset by the
+          // decrement here so the next iteration re-runs the same attempt
+          // number with a pristine transcript snapshot.
+          attempt -= 1;
+          continue;
+        }
       }
 
       const canRetry =
