@@ -41,21 +41,29 @@ export interface AiNavigationRouteManifestEntry {
 export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[] =
   [
     {
-      routeName: "CommunityPluginsList",
-      path: "/community-plugins/list",
-      titleKey: "route.community_plugins",
+      // Unified Plugin page (community discovery + installed + sources +
+      // issues). Replaces the deprecated CommunityPluginsList manifest
+      // entry — the legacy route name still resolves via an invisible
+      // redirect, but AI navigation now targets the canonical route
+      // (unified plugin page tech design §12.4).
+      routeName: "PluginsManagement",
+      path: "/plugins/management",
+      titleKey: "route.plugins",
       visible: true,
       aiNavigable: true,
       aiAliases: [
+        "plugins",
+        "plugin management",
         "community plugins",
         "plugin store",
         "plugin hub",
         "community plugin page",
         "browse plugins",
+        "discover plugins",
         "plugin marketplace page",
       ],
       aiDescription:
-        "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+        "Discover community plugins and manage installed plugins and sources",
     },
     {
       routeName: "Email_Marketing_Service_LIST",
