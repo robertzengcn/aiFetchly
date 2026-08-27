@@ -7,6 +7,7 @@
 | Status | Draft |
 | Owner | AiFetchly engineering |
 | Source PRD | `docs/prd/workspace-memory-prd.md` |
+| Follow-on designs | `docs/prd/workspace-memory-ai-tools-technical-design.md`, `docs/prd/workspace-memory-auto-remember-technical-design.md`, `docs/prd/portable-workspace-memory-technical-design.md` |
 | Primary code paths | `src/service/AIChatContextAssembler.ts`, `src/service/AIAutoDreamService.ts`, `src/service/AIAutoDreamSourceCollector.ts`, `src/modules/WorkspaceModule.ts`, `src/service/WorkspaceResolver.ts`, `src/main-process/communication/ai-workspace-ipc.ts`, `src/main-process/communication/ai-user-memory-ipc.ts`, `src/views/components/aiChatV2/AiChatV2.vue` |
 
 ## 1. Purpose
@@ -1221,7 +1222,14 @@ In `AIAutoDreamSourceCollector`, resolve workspace per conversation:
 const workspace = await workspaceResolver.resolveWithKey(convId);
 ```
 
-Agent tasks need a conversation link. If an agent task does not have a conversation ID, skip it for workspace memory in phase 1 or add a source mapping only when already present in task metadata. Do not infer workspace from tool paths in phase 1.
+**Agent tasks:** `AgentTaskEntity` has `parentConversationId` and `agentConversationId`. Resolve workspace in this order:
+
+1. `parentConversationId` if present
+2. else `agentConversationId`
+3. `WorkspaceResolver.resolveWithKey(conversationId)`
+4. if no approved workspace, leave `workspace` unset (packet may still feed user auto-dream)
+
+Do not infer workspace from tool paths or `taskPacket`. The original phase-1 skip ("no conversation link") is obsolete. Implementation: `docs/prd/workspace-memory-auto-remember-technical-design.md` §5.
 
 ### 15.4 Grouping
 
@@ -1254,8 +1262,13 @@ Do not store facts that can be read directly from source files.
 Prefer explicit user statements over inferred facts.
 Merge duplicates with existing memories.
 Archive memories contradicted by newer explicit user statements.
+If a completed task established a durable procedure, create or update a workflow.
+If a tool or command failed for a workspace-specific reason that would recur, create a warning.
+Skip transient failures (rate limit, network, user cancel). Never paste CSV, contact lists, or raw logs.
 Return JSON only.
 ```
+
+Failure-oriented prompt text and the capped Layer C path: `docs/prd/workspace-memory-auto-remember-technical-design.md` §6–7.
 
 User prompt includes:
 
@@ -1300,6 +1313,8 @@ Ordering:
 3. Workspace auto-dream evaluates in background.
 
 Failures are logged only. They must not alter the chat response.
+
+Also trigger workspace auto-dream after agent `failed` and `timeout` (not `cancelled`). Failed tasks are workspace sources; they stay completed-only for **user** auto-dream. Durable failures may take a separate capped warning path that must not advance the batch `reviewedThrough` watermark. See `docs/prd/workspace-memory-auto-remember-technical-design.md`.
 
 ## 16. Security Design
 
@@ -1580,6 +1595,26 @@ Acceptance:
 - grouped workspace consolidation works.
 - invalid workspace key output is rejected.
 - run status is visible.
+
+### Phase 5: Auto-Remember After Task And Failure
+
+Specified in `docs/prd/workspace-memory-auto-remember-technical-design.md`.
+
+Files:
+
+- `AIAutoDreamSourceCollector.ts` (agent workspace attach, failed statuses, chat tool-failure slice)
+- `AgentTask.model.ts` / `AgentTaskModule.ts` (`listTerminalAfter`)
+- `AgentRuntime.ts` (failed/timeout trigger)
+- `AIWorkspaceAutoDreamService.ts` / prompt builders (Layer C)
+- `AIWorkspaceMemoryConsolidationRun` (`runKind`)
+- `WorkspaceFailureClassifier.ts`
+
+Acceptance:
+
+- agent packets with `parentConversationId` group by that workspace
+- failed/timeout tasks can produce a capped `warning`
+- Layer C does not move the Layer B cursor
+- user auto-dream remains completed-only
 
 ## 21. Open Engineering Decisions
 

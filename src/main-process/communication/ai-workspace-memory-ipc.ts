@@ -57,10 +57,7 @@ async function isManualMemoryEnabled(): Promise<boolean> {
     );
     return v !== "false";
   } catch (err) {
-    log.error(
-      "[workspace-memory] failed to read manual-memory toggle:",
-      err
-    );
+    log.error("[workspace-memory] failed to read manual-memory toggle:", err);
     return true;
   }
 }
@@ -197,12 +194,21 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        const req = (safeParse<{ force?: boolean }>(data) ?? {}) as {
+        const req = (safeParse<{
           force?: boolean;
+          conversationId?: string;
+        }>(data) ?? {}) as {
+          force?: boolean;
+          conversationId?: string;
         };
+        const conversationId =
+          typeof req.conversationId === "string" && req.conversationId.trim()
+            ? req.conversationId.trim()
+            : undefined;
         const result = await getSharedWorkspaceAutoDreamService().runNow({
           force: req.force === true,
           reason: "manual_ipc",
+          conversationId,
         });
         return ok(result);
       } catch (err) {

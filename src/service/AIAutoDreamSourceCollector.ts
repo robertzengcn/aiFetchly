@@ -7,6 +7,7 @@ import type {
   AgentToolCallRecord,
 } from "@/entityTypes/agentTypes";
 import type { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import type { ChatV2ConversationSummary } from "@/entityTypes/aiChatV2Types";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 
@@ -56,6 +57,17 @@ export interface WorkspaceAwareAutoDreamSourcePacket
   };
 }
 
+export interface CollectSourcesInput {
+  reviewedSince: Date | null;
+  /**
+   * Manual "Run Auto Summary" from a conversation's workspace panel.
+   * Always includes this conversation and restricts chat packets to the
+   * same resolved workspace so the newest chat is not dropped by the
+   * oldest-first batch cap.
+   */
+  focusConversationId?: string;
+}
+
 export interface CollectSourcesResult {
   packets: WorkspaceAwareAutoDreamSourcePacket[];
   chatConversationCount: number;
@@ -68,29 +80,34 @@ export class AIAutoDreamSourceCollector {
   private readonly agentModule = new AgentTaskModule();
   private readonly workspaceResolver = new WorkspaceResolver();
 
-  async collect(input: {
-    reviewedSince: Date | null;
-  }): Promise<CollectSourcesResult> {
-    // Build lightweight descriptors for BOTH source kinds first, then merge
-    // into ONE chronological queue sorted by (updatedAt, sourceKind, sourceId)
-    // and apply a SHARED bound before hydration (SMBW-008, tech-design §14.1).
-    // This bounds DB+memory work to only the selected sources and guarantees
-    // no eligible source is skipped when the queue exceeds one batch.
+  async collect(input: CollectSourcesInput): Promise<CollectSourcesResult> {
+    // SMBW-008 + dev focus feature, merged: build lightweight descriptors for
+    // BOTH source kinds, merge into ONE chronological queue sorted by
+    // (updatedAt, sourceKind, sourceId), and apply a SHARED bound before
+    // hydration. A panel run passes focusConversationId so the open
+    // conversation is never sliced off by the oldest-first cap, and sibling
+    // chats from other workspaces are excluded — dev's selectChatConversations
+    // returns the focused chat set, which is then descriptor-ized and merged
+    // with agent tasks under SMBW-008's shared bound.
     const conversations = await this.chatModule.getConversations();
-    const chatDescriptors: SourceDescriptor[] = conversations
-      .filter((c) => {
-        if (!c.conversationId) return false;
-        const ts = new Date(c.lastMessageTimestamp).getTime();
-        if (!Number.isFinite(ts)) return true;
-        return input.reviewedSince ? ts >= input.reviewedSince.getTime() : true;
-      })
-      .map((c) => ({
-        sourceKind: "chat_v2" as const,
-        sourceId: c.conversationId!,
-        updatedAt: c.lastMessageTimestamp ?? toIsoNow(),
-        title: c.title ?? c.conversationId!,
-        raw: c,
-      }));
+    const eligibleChat = conversations.filter((c) => {
+      if (!c.conversationId) return false;
+      const ts = new Date(c.lastMessageTimestamp).getTime();
+      if (!Number.isFinite(ts)) return true;
+      return input.reviewedSince ? ts >= input.reviewedSince.getTime() : true;
+    });
+    const selectedChat = await this.selectChatConversations(
+      eligibleChat,
+      conversations,
+      input.focusConversationId
+    );
+    const chatDescriptors: SourceDescriptor[] = selectedChat.map((c) => ({
+      sourceKind: "chat_v2" as const,
+      sourceId: c.conversationId!,
+      updatedAt: c.lastMessageTimestamp ?? toIsoNow(),
+      title: c.title ?? c.conversationId!,
+      raw: c,
+    }));
 
     // Fetch eligible agent tasks with a generous limit so the merged queue can
     // choose them alongside chat sources (the shared bound is applied after
@@ -118,7 +135,14 @@ export class AIAutoDreamSourceCollector {
         compareAscending(a.sourceKind, b.sourceKind) ||
         compareAscending(a.sourceId, b.sourceId)
     );
-    const selected = merged.slice(0, MAX_MERGED_SOURCES);
+    // When focusing, the chat set was already bounded by selectChatConversations;
+    // keep all focused chats plus agent tasks. Otherwise apply the shared bound.
+    const selected = input.focusConversationId
+      ? merged.slice(
+          0,
+          Math.max(chatDescriptors.length + agentDescriptors.length, 1)
+        )
+      : merged.slice(0, MAX_MERGED_SOURCES);
 
     // Hydrate only the selected descriptors (bounded DB + memory work).
     const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
@@ -126,7 +150,7 @@ export class AIAutoDreamSourceCollector {
     let agentTaskCount = 0;
     for (const desc of selected) {
       if (desc.sourceKind === "chat_v2") {
-        const conv = desc.raw as (typeof conversations)[number];
+        const conv = desc.raw as ChatV2ConversationSummary;
         const convId = conv.conversationId!;
         const rows: AIChatMessageEntity[] =
           await this.chatModule.getConversationMessages(convId);
@@ -142,7 +166,9 @@ export class AIAutoDreamSourceCollector {
                 ? r.timestamp.toISOString()
                 : undefined,
           }));
-        // Resolve the durable workspace identity for this conversation.
+        // Resolve the durable workspace identity for this conversation. Failures
+        // (no approved workspace, revoked, etc.) yield no workspace context — the
+        // packet is still useful for global user-memory consolidation.
         let workspace: WorkspaceAwareAutoDreamSourcePacket["workspace"];
         try {
           const resolved = await this.workspaceResolver.resolveWithKey(convId);
@@ -211,6 +237,63 @@ export class AIAutoDreamSourceCollector {
       reviewedThrough,
     };
   }
+
+  /**
+   * Background batches take the oldest `MAX_CHAT_CONVERSATIONS` eligible
+   * chats. A panel run passes `focusConversationId` so the open conversation
+   * (almost always the newest) is never sliced off, and sibling chats from
+   * other workspaces are not summarized into a different panel. SMBW-008
+   * keeps the merged-queue hydration, so this returns the chat summaries to
+   * descriptor-ize rather than hydrated packets.
+   */
+  private async selectChatConversations(
+    eligible: ChatV2ConversationSummary[],
+    all: ChatV2ConversationSummary[],
+    focusConversationId: string | undefined
+  ): Promise<ChatV2ConversationSummary[]> {
+    const focusId = focusConversationId?.trim();
+    if (!focusId) {
+      // SMBW-008: the shared merged bound (MAX_MERGED_SOURCES) is applied
+      // AFTER the descriptor merge in collect(), so do NOT pre-slice here —
+      // returning all eligible lets the merged queue choose the oldest
+      // across chat + agent sources. (Dev's original pre-slice to
+      // MAX_CHAT_CONVERSATIONS is superseded by the shared bound.)
+      return eligible;
+    }
+
+    const focusConv =
+      eligible.find((c) => c.conversationId === focusId) ??
+      all.find((c) => c.conversationId === focusId) ??
+      syntheticFocusSummary(focusId);
+
+    let focusKey: string | undefined;
+    try {
+      const resolved = await this.workspaceResolver.resolveWithKey(focusId);
+      focusKey = resolved?.workspaceKey;
+    } catch {
+      focusKey = undefined;
+    }
+    if (!focusKey) {
+      return [focusConv];
+    }
+
+    const others: ChatV2ConversationSummary[] = [];
+    for (const c of eligible) {
+      if (c.conversationId === focusId) continue;
+      if (others.length >= MAX_CHAT_CONVERSATIONS - 1) break;
+      try {
+        const resolved = await this.workspaceResolver.resolveWithKey(
+          c.conversationId
+        );
+        if (resolved?.workspaceKey === focusKey) {
+          others.push(c);
+        }
+      } catch {
+        // Skip conversations whose workspace cannot be resolved.
+      }
+    }
+    return [...others, focusConv];
+  }
 }
 
 /** Lightweight descriptor used to merge sources before hydration. */
@@ -243,6 +326,20 @@ export function groupByWorkspace(
     }
   }
   return groups;
+}
+
+function syntheticFocusSummary(
+  conversationId: string
+): ChatV2ConversationSummary {
+  const ts = toIsoNow();
+  return {
+    conversationId,
+    title: conversationId,
+    lastMessage: "",
+    lastMessageTimestamp: ts,
+    messageCount: 0,
+    createdAt: ts,
+  };
 }
 
 function clamp(s: string, max: number): string {

@@ -50,12 +50,15 @@ import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-p
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
+import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
+import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
+import { ensurePortableMemoryDefault } from "@/service/PortableWorkspaceMemoryBootstrap";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 
 type GlobalIpcState = typeof globalThis & {
@@ -127,6 +130,7 @@ export function registerCommunicationIpcHandlers(
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
+    registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
     // Best-effort reply-reliability startup: lift legacy drafts onto immutable
     // revisions and sweep stale in-flight send attempts to delivery_unknown.
@@ -140,6 +144,13 @@ export function registerCommunicationIpcHandlers(
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
     const workspaceWatchManager = initWorkspaceWatchManager(win);
+    setApprovedWorkspaceAcquireHook((workspaceRoot) => {
+      void ensurePortableMemoryDefault({ workspaceRoot }).catch(
+        (err: unknown) => {
+          log.warn("[portable-memory] default layout bootstrap failed:", err);
+        }
+      );
+    });
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
     AsyncMsg();

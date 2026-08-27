@@ -257,4 +257,67 @@ describe("AIAutoDreamSourceCollector — batch-safe cursors", () => {
     expect(result.packets.map((p) => p.sourceId)).toContain("c-tie-a");
     expect(result.packets.map((p) => p.sourceId)).toContain("c-tie-b");
   });
+
+  it("always includes the focused conversation even when it is the newest of many", async () => {
+    const convs = Array.from({ length: 7 }, (_, i) =>
+      conv(`c${i + 1}`, `2026-01-0${i + 1}T00:00:00.000Z`)
+    );
+    mockGetConversations.mockResolvedValue([...convs]);
+    mockGetConversationMessages.mockResolvedValue([
+      msgRow("m", "user", "x", "2026-01-01T00:00:00.000Z"),
+    ]);
+    mockResolveWithKey.mockImplementation(async (id: string) => ({
+      workspaceId: 1,
+      conversationId: id,
+      rootPath: "/p",
+      canonicalRootPath: "/p",
+      workspaceKey: "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      displayName: "p",
+    }));
+
+    const collector = new AIAutoDreamSourceCollector();
+    const result = await collector.collect({
+      reviewedSince: null,
+      focusConversationId: "c7",
+    });
+
+    expect(result.packets.map((p) => p.sourceId)).toContain("c7");
+    expect(result.packets.length).toBeLessThanOrEqual(5);
+  });
+
+  it("restricts a focused collect to the focused conversation's workspace", async () => {
+    mockGetConversations.mockResolvedValue([
+      conv("c1", "2026-01-01T00:00:00.000Z"),
+      conv("c2", "2026-01-02T00:00:00.000Z"),
+      conv("c3", "2026-01-03T00:00:00.000Z"),
+    ]);
+    mockGetConversationMessages.mockResolvedValue([
+      msgRow("m", "user", "x", "2026-01-01T00:00:00.000Z"),
+    ]);
+    mockResolveWithKey.mockImplementation(async (id: string) => {
+      const key =
+        id === "c3"
+          ? "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          : "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      return {
+        workspaceId: id === "c3" ? 2 : 1,
+        conversationId: id,
+        rootPath: "/p",
+        canonicalRootPath: "/p",
+        workspaceKey: key,
+        displayName: "p",
+      };
+    });
+
+    const collector = new AIAutoDreamSourceCollector();
+    const result = await collector.collect({
+      reviewedSince: null,
+      focusConversationId: "c3",
+    });
+
+    expect(result.packets.map((p) => p.sourceId)).toEqual(["c3"]);
+    expect(result.packets[0]?.workspace?.workspaceKey).toBe(
+      "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+  });
 });

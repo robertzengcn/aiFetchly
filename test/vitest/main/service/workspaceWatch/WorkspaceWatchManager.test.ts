@@ -78,6 +78,7 @@ interface ManagerSetup {
   readonly configChangedEmitter: ReturnType<typeof vi.fn>;
   readonly trustResolver: ReturnType<typeof vi.fn>;
   readonly restarter: WorkspaceWatchRestarter;
+  readonly portableMemorySnapshotCallback: ReturnType<typeof vi.fn>;
   /** Push the next fake worker that forkStub will return. */
   nextWorker(w: FakeWorker): void;
 }
@@ -114,10 +115,13 @@ function createManager(
     return w;
   });
 
+  const portableMemorySnapshotCallback = vi.fn();
+
   const manager = new WorkspaceWatchManager({
     applySnapshotCallback,
     configChangedEmitter,
     trustResolver,
+    portableMemorySnapshotCallback,
     fork: forkStub,
     workerEntry: "/fake/worker",
     restarter,
@@ -132,6 +136,7 @@ function createManager(
     configChangedEmitter,
     trustResolver,
     restarter,
+    portableMemorySnapshotCallback,
     nextWorker(w: FakeWorker) {
       queue.push(w);
     },
@@ -568,5 +573,98 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     expect(status.watched[0]?.hasSnapshot).toBe(false);
     expect(status.restartCapExceeded).toBe(false);
     expect(status.recentRestarts).toHaveLength(1);
+  });
+});
+
+
+// --- Portable-memory snapshot forwarding (design §13.1) ----------------------
+
+describe("WorkspaceWatchManager — portable memory snapshot callback", () => {
+  function portableSnapshot(): AIFetchlyConfigSnapshot["portableMemory"] {
+    return {
+      schemaVersion: 1,
+      directoryPresent: true,
+      complete: true,
+      records: [],
+      seenRelativePaths: [],
+      totalBytes: 0,
+      diagnostics: [],
+    };
+  }
+
+  it("forwards snapshots carrying portableMemory with trust + root", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledTimes(1);
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledWith({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      approved: true,
+      snapshot: portableSnapshot(),
+    });
+  });
+
+  it("does not call the callback when the snapshot has no portableMemory", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    w.emit("message", {
+      type: "snapshot",
+      workspaceId: "w1",
+      snapshot: snapshot("w1"),
+    });
+    expect(s.portableMemorySnapshotCallback).not.toHaveBeenCalled();
+  });
+
+  it("forwards unapproved snapshots (coordinator clears state, §13.2)", () => {
+    const s = createManager({ trustApproved: false });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ approved: false })
+    );
+  });
+
+  it("survives a throwing callback without breaking event processing", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+    s.portableMemorySnapshotCallback.mockImplementation(() => {
+      throw new Error("coordinator exploded");
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+    // The changed event still flowed out — the manager stayed responsive.
+    expect(s.configChangedEmitter).toHaveBeenCalled();
   });
 });

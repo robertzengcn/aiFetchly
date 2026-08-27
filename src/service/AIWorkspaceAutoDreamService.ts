@@ -1,6 +1,10 @@
 import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
 import { log } from "@/modules/Logger";
 import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
+import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import { AIWorkspaceMemoryConsolidationRunModule } from "@/modules/AIWorkspaceMemoryConsolidationRunModule";
 import {
   AIAutoDreamSourceCollector,
@@ -80,6 +84,9 @@ interface WorkspacePacketGroup {
 export class AIWorkspaceAutoDreamService {
   private readonly memoryModule = new AIWorkspaceMemoryModule();
   private readonly runModule = new AIWorkspaceMemoryConsolidationRunModule();
+  private readonly scopeModule = new WorkspaceMemoryScopeModule();
+  private readonly portableModule = new PortableWorkspaceMemoryModule();
+  private readonly portableMemory = new PortableWorkspaceMemoryService();
   private readonly sourceCollector = new AIAutoDreamSourceCollector();
   private readonly deps: AIWorkspaceAutoDreamServiceDeps;
   private inFlight: Promise<
@@ -115,6 +122,9 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Manual panel run: focus this conversation so it is never sliced off by
+     * the oldest-first batch cap (dev's portable-memory Phase F). */
+    conversationId?: string;
     /** Caller cancellation signal, propagated to every lightweight request
      * and checked before retry/repair/transactional apply (SMBW-011). */
     signal?: AbortSignal;
@@ -123,6 +133,7 @@ export class AIWorkspaceAutoDreamService {
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      conversationId: input?.conversationId,
       signal: input?.signal,
     });
     if (!result) {
@@ -148,6 +159,7 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
     signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
@@ -163,6 +175,7 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
     signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (input.signal?.aborted) return null;
@@ -183,9 +196,19 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
-    const collected = await this.sourceCollector.collect({ reviewedSince });
+    const collected = await this.sourceCollector.collect({
+      reviewedSince,
+      focusConversationId: input.conversationId,
+    });
     const groups = this.buildGroups(collected.packets);
-    if (groups.length === 0) return null;
+    if (groups.length === 0) {
+      log.info(
+        `[workspace-auto-dream] skipped: no workspace-bound sources (packets=${
+          collected.packets.length
+        } focus=${input.conversationId ?? "-"})`
+      );
+      return null;
+    }
 
     const results: AIWorkspaceMemoryConsolidationRunView[] = [];
     for (const group of groups) {
@@ -227,10 +250,30 @@ export class AIWorkspaceAutoDreamService {
     force: boolean,
     signal?: AbortSignal
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
-    const scope: WorkspaceMemoryScope = {
+    let scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
       workspaceRoot: group.workspaceRoot,
     };
+    let scopeContext: WorkspaceMemoryScopeContext | null = null;
+    // Portable-memory Phase A/F (design §19.5): resolve the internal scope so
+    // writes land in the scope-keyed rows and legacy rows converge. Best
+    // effort — a scope-table failure falls back to the legacy key path.
+    try {
+      const resolved: WorkspaceMemoryScopeContext =
+        await this.scopeModule.resolveLegacyScope({
+          workspaceKey: group.workspaceKey,
+          workspaceRoot: group.workspaceRoot,
+          displayName: group.displayName,
+        });
+      scopeContext = resolved;
+      scope = {
+        workspaceKey: resolved.workspaceKey,
+        workspaceRoot: resolved.workspaceRoot,
+        scopeId: resolved.scopeId,
+      };
+    } catch {
+      // Legacy path unchanged.
+    }
 
     if (!force) {
       // Per-workspace cooldown.
@@ -297,14 +340,112 @@ export class AIWorkspaceAutoDreamService {
               this.memoryModule.listActiveForRetrieval(scope, 200),
             applyPlanAndCompleteRun: async (applyInput) => {
               signal?.throwIfAborted();
+              const parsed = applyInput.plan;
+              // Dev's portable-memory handling (Phase A/F, design D-09 / §19.5):
+              // portable records are file-first; a SQLite-only archive/update
+              // would be reverted. Apply file mutations, then filter portable
+              // records out of the SQLite plan. Integrated into the SMBW-007
+              // batch runner's apply boundary so the merged plan is handled
+              // the same way dev's single-shot path handled parsed.
+              let planToApply = parsed;
+              let extraMemoriesCreated = 0;
+              let extraMemoriesUpdated = 0;
+              let extraMemoriesArchived = 0;
+              let fileMutationsApplied = false;
+
+              if (scopeContext?.portableEnabled) {
+                try {
+                  const fileResult =
+                    await this.portableMemory.applyAutoDreamFileMutations(
+                      scopeContext,
+                      parsed
+                    );
+                  planToApply = fileResult.sqlitePlan;
+                  extraMemoriesCreated = fileResult.fileCreated;
+                  extraMemoriesUpdated = fileResult.fileUpdated;
+                  extraMemoriesArchived = fileResult.fileArchived;
+                  fileMutationsApplied = true;
+                } catch (err) {
+                  log.warn(
+                    "[workspace-auto-dream] portable file write failed; sqlite fallback:",
+                    err
+                  );
+                }
+              }
+
+              if (!fileMutationsApplied) {
+                let skippedPortable = 0;
+                const isPortable = async (
+                  memoryId: string
+                ): Promise<boolean> => {
+                  if (!scope.scopeId) return false;
+                  try {
+                    const state = await this.portableModule.getPortableState(
+                      {
+                        scopeId: scope.scopeId,
+                        workspaceKey: scope.workspaceKey,
+                        workspaceRoot: scope.workspaceRoot,
+                        displayName: group.displayName,
+                        portableEnabled: false,
+                        defaultStorageMode: "private-only",
+                        importPolicy: "review-new",
+                      },
+                      memoryId
+                    );
+                    return state !== null;
+                  } catch {
+                    return false;
+                  }
+                };
+                const filteredArchive: typeof parsed.archive = [];
+                for (const a of parsed.archive) {
+                  if (await isPortable(a.memoryId)) {
+                    skippedPortable += 1;
+                    continue;
+                  }
+                  filteredArchive.push(a);
+                }
+                const filteredUpdate: typeof parsed.update = [];
+                for (const u of parsed.update) {
+                  if (await isPortable(u.memoryId)) {
+                    skippedPortable += 1;
+                    continue;
+                  }
+                  filteredUpdate.push(u);
+                }
+                if (skippedPortable > 0) {
+                  log.info(
+                    `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
+                  );
+                }
+                planToApply = {
+                  ...parsed,
+                  archive: filteredArchive,
+                  update: filteredUpdate,
+                };
+              }
+
+              if (
+                parsed.create.length === 0 &&
+                parsed.update.length === 0 &&
+                parsed.archive.length === 0
+              ) {
+                log.info(
+                  `[workspace-auto-dream] empty plan workspace=${group.workspaceKey}`
+                );
+              }
+
               return this.memoryModule.applyPlanAndCompleteRun({
                 scope,
                 runId: applyInput.runId,
-                plan: applyInput.plan,
+                plan: planToApply,
                 chatConversationsReviewed: applyInput.chatConversationsReviewed,
                 agentTasksReviewed: applyInput.agentTasksReviewed,
                 model: applyInput.model,
                 reviewedThrough: applyInput.reviewedThrough,
+                extraMemoriesCreated,
+                extraMemoriesUpdated,
+                extraMemoriesArchived,
               });
             },
           },
@@ -344,6 +485,11 @@ export class AIWorkspaceAutoDreamService {
         return await this.runModule.getByRunId(runView.runId);
       }
       if (outcome.outcome === "parse_error") {
+        log.warn(
+          `[workspace-auto-dream] parse_error workspace=${
+            group.workspaceKey
+          } error=${outcome.error ?? "unknown"}`
+        );
         await this.runModule.failRun(
           runView.runId,
           `parse_error: ${outcome.error}`

@@ -4,6 +4,9 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
+import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
@@ -79,7 +82,15 @@ export class AIChatContextAssembler {
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
-  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
+  // Portable exclusion enabled in production wiring (design §19.4): the
+  // optional module makes retrieval fail-closed for rejected/conflicted/
+  // missing/pending-review portable records.
+  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService(
+    new AIWorkspaceMemoryModule(),
+    new WorkspaceMemoryContextResolver(),
+    new AIChatTokenEstimator(),
+    new PortableWorkspaceMemoryModule()
+  );
   private readonly systemSettings = new SystemSettingModule();
   private readonly aifetchlyContext = new AIFetchlyContextLoader();
 
@@ -338,7 +349,8 @@ export class AIChatContextAssembler {
         content: augmentContentWithGeneratedImages(
           r.content,
           r.role,
-          r.metadata
+          r.metadata,
+          r.messageId
         ),
       });
     }

@@ -170,9 +170,12 @@ const HTML_ARTIFACT_INTENT_RE =
  * Surfaces `attach_local_images` so the model does not fall back to
  * shell/Pillow for workspace image edits (PRD UC1).
  * `backgroun\w*` tolerates common typos such as "backgroud".
+ * The last branch covers extension-named files ("edit the logo.png") which
+ * the earlier noun branches miss: their `[^.]` gap cannot cross the dot of
+ * the file extension.
  */
 const IMAGE_ATTACH_INTENT_RE =
-  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b/i;
+  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b|\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.!?\n]{0,60}?\.(?:png|jpe?g|jfif|webp|gif|bmp|tiff?)\b/i;
 
 const IMAGE_EDIT_ACTION_RE =
   /\b(edit|modify|update|change|fix|replace|remove|make|set|convert|transform)\b|\bbackgroun\w*\b[^.]{0,60}?\b(white|transparent|color|colour)\b/i;
@@ -188,17 +191,6 @@ export function hasBatchImageEditIntent(message: string): boolean {
 }
 
 /**
- * Broad edit-action verb regex for follow-up edits on a previously
- * AI-generated image. Only used when {@link ToolCatalogRuntimeContext.hasRecentGeneratedImages}
- * is true, so the broad verb list is safe — it never fires in conversations
- * without recent generated images. Catches natural-language edit
- * instructions like "add a tree in front of the house" that lack
- * image-specific keywords.
- */
-const GENERATED_IMAGE_EDIT_FOLLOWUP_RE =
-  /\b(add|remove|change|update|modify|make|put|replace|delete|move|resize|crop|rotate|flip|invert|adjust|enhance|fix|edit|draw|paint|color|colour|erase|clear|insert|place|swap|switch|turn|convert|transform|regenerate|redo|rework)\b/i;
-
-/**
  * Natural-language inbound mailbox check intent.
  * Surfaces list/fetch/read inbox tools so "check my email / inbox / mailbox"
  * does not leave those tools deferred. Tolerates common typos such as
@@ -208,14 +200,22 @@ const EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
 
 /**
- * Contact verification intent (design §16.1). Requires a verification action
- * verb (verify|validate|check|clean|normalize|classify) within ~40 chars of a
- * contact noun (email|mail address|phone|telephone|mobile|contact). Generic
- * questions like "how does email work?" or "what is phone verification?" must
- * NOT match — they lack the action verb near the noun.
+ * Contact verification intent (design §16.1).
+ *
+ * Branch 1: a verification action verb (verify|validate|check|clean|normalize|
+ * classify) within ~40 chars of a contact noun. Generic questions like
+ * "how does email work?" or "what is phone verification?" must NOT match.
+ *
+ * Branch 2: a gather/extract verb near a contact noun ("get their contact
+ * method", "find emails and phones", "extract contact info"). Lead-research
+ * requests must promote the tool so plan execution can call it; otherwise it
+ * stays deferred after "Plan approved" and the model skips verification.
  */
 const VERIFY_CONTACT_INTENT_RE =
   /\b(?:verify|validate|check|clean|normalize|normalise|classify)\b[^.!?\n]{0,40}?\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b|\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b[^.!?\n]{0,40}?\b(?:verify|validate|check|clean|normalize|normalise|classify)\b/i;
+
+const GATHER_CONTACT_INTENT_RE =
+  /\b(?:get|find|extract|collect|gather|scrape|discover)\b[^.!?\n]{0,80}?\b(?:emails?|e-mails?|phones?|telephone|mobile|contacts?|contact\s+(?:info|information|method|details|list))\b/i;
 
 /**
  * Short follow-ups that should inherit intent from recent prior user messages
@@ -223,6 +223,15 @@ const VERIFY_CONTACT_INTENT_RE =
  */
 const CONTINUATION_MESSAGE_RE =
   /^(continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)\.?$/i;
+
+/**
+ * Plan-approval / begin-execution turns are not short "continue" replies, but
+ * they should still inherit contextual tool promotion from the original goal.
+ * Without this, specialized tools stay deferred after "Plan approved. Please
+ * begin executing the plan now."
+ */
+const PLAN_EXECUTION_MESSAGE_RE =
+  /\bplan approved\b|\bbegin executing\b|\bexecute the plan\b|\bstart executing\b/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -362,25 +371,12 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
 
-    // 9b. Contextual promotion: when the conversation has recent AI-generated
-    // images and the user's message contains an edit-like verb, auto-promote
-    // the generated-image export + local image attach tools so the model can
-    // edit the prior image without falling back to glob_files/shell_execute.
-    // The broad verb regex is safe because it is gated by
-    // hasRecentGeneratedImages — it only fires in conversations that actually
-    // have generated images in recent history.
-    if (
-      input.context.hasRecentGeneratedImages &&
-      (name === "export_generated_artifacts" ||
-        name === "attach_local_images") &&
-      this.messageMatchesIntent(input.context, (msg) =>
-        GENERATED_IMAGE_EDIT_FOLLOWUP_RE.test(msg)
-      )
-    ) {
-      return "contextual";
-    }
-
     // 10. Built-in default: specialized tools are deferred and discoverable.
+    // Note: follow-up edits on AI-generated images are intentionally NOT
+    // force-promoted here — selected generated images arrive attached to the
+    // current user turn, so no export/attach tool is needed for them. The
+    // workspace-file IMAGE_ATTACH_INTENT_RE path above still promotes
+    // attach_local_images for real workspace image files.
     return "deferred";
   }
 
@@ -392,7 +388,11 @@ export class ToolLoadPolicyService {
   private intentMessages(context: ToolCatalogRuntimeContext): string[] {
     const current = context.currentUserMessage ?? "";
     const recent = context.recentUserMessages ?? [];
-    if (CONTINUATION_MESSAGE_RE.test(current.trim()) && recent.length > 0) {
+    if (
+      (CONTINUATION_MESSAGE_RE.test(current.trim()) ||
+        PLAN_EXECUTION_MESSAGE_RE.test(current)) &&
+      recent.length > 0
+    ) {
       return [current, ...recent];
     }
     return [current];
@@ -448,6 +448,9 @@ export class ToolLoadPolicyService {
   }
 
   private hasVerifyContactIntent(message: string): boolean {
-    return VERIFY_CONTACT_INTENT_RE.test(message);
+    return (
+      VERIFY_CONTACT_INTENT_RE.test(message) ||
+      GATHER_CONTACT_INTENT_RE.test(message)
+    );
   }
 }

@@ -1,3 +1,7 @@
+/** Canonical built-in tool names for contact extraction and verification. */
+export const EXTRACT_CONTACT_INFO_TOOL_NAME = "extract_contact_info";
+export const VERIFY_CONTACT_INFO_TOOL_NAME = "verify_contact_info";
+
 /**
  * Contact Verification configuration constants (design §12.3).
  *

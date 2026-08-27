@@ -183,6 +183,8 @@
         @request-plan-changes="handleRequestPlanChanges"
         @open-artifact="(id: string) => emit('open-artifact', id)"
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @use-generated-image="onUseGeneratedImage"
+        @edit-generated-image="onEditGeneratedImage"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -419,6 +421,9 @@
         :voice-speaking="voiceSpeaking"
         :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
+        :selected-generated-images="selectedGeneratedImageViews"
+        :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
+        :generated-image-focus-signal="composerFocusSignal"
         @send="onSend"
         @stop="onStop"
         @request-workspace="handleWorkspaceSetupRequest"
@@ -427,6 +432,9 @@
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
         @open-voice-settings="openAIProviderSettings"
+        @remove-generated-image="onRemoveGeneratedImage"
+        @clear-generated-images="onClearGeneratedImages"
+        @reorder-generated-images="onReorderGeneratedImages"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -478,6 +486,127 @@
       @confirm="onScheduledLoopApprovalConfirm"
       @cancel="onScheduledLoopApprovalCancel"
     />
+
+    <!-- Ambiguity chooser: several generated images could match the request;
+         the user picks one to proceed as the sole reference. Persistent so an
+         outside click cannot dismiss it and strand a stale pending send. -->
+    <v-dialog
+      v-model="showGeneratedImageChooser"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-chooser"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.referenceTrayTitle") ||
+              "Reference images"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t(
+                "aiChatV2.generatedImageRefs.errors.generated_image_ambiguous"
+              ) || "Several images could match your request."
+            }}
+          </p>
+          <div class="d-flex flex-wrap ga-2">
+            <v-btn
+              v-for="(candidate, idx) in ambiguityCandidates"
+              :key="`${candidate.reference.messageId}:${candidate.reference.imageIndex}`"
+              variant="outlined"
+              size="small"
+              :data-testid="`ai-chat-generated-candidate-${idx}`"
+              @click="chooseAmbiguityCandidate(candidate)"
+            >
+              <img
+                v-if="candidate.thumbUrl"
+                :src="candidate.thumbUrl"
+                :alt="
+                  candidate.fileName ||
+                  t('aiChatV2.generatedImageRefs.useAsReference') ||
+                  'Reference image'
+                "
+                class="mr-1"
+                style="max-height: 32px; max-width: 48px; border-radius: 4px"
+              />
+              <v-icon v-else size="small" class="mr-1">mdi-image-outline</v-icon>
+              {{ candidate.fileName || `#${idx + 1}` }}
+            </v-btn>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-chooser-cancel"
+            @click="cancelAmbiguityChooser"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Batch confirmation: more than 3 images inferred; confirm sends plain
+         text (main process runs them as a batch), decline aborts. -->
+    <v-dialog
+      v-model="showBatchConfirmDialog"
+      max-width="420"
+      persistent
+      data-testid="ai-chat-generated-batch-confirm"
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmTitle") ||
+              "Process as batch?"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t("aiChatV2.generatedImageRefs.batchConfirmBody") ||
+              "Each selected image will be edited independently in a background batch. This may take a while."
+            }}
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="ai-chat-generated-batch-decline"
+            @click="declineGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.cancel") || "Cancel" }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            data-testid="ai-chat-generated-batch-confirm-accept"
+            @click="confirmGeneratedImageBatch"
+          >
+            {{ t("aiChatV2.generatedImageRefs.send") || "Send" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Generated-image preflight errors (fusion limit, reference limit). -->
+    <v-snackbar
+      v-model="showGeneratedImageNotice"
+      timeout="4000"
+      location="bottom"
+      data-testid="ai-chat-generated-error-toast"
+    >
+      {{ generatedImageNotice }}
+    </v-snackbar>
 
 
 
@@ -692,6 +821,7 @@ import type {
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
+  ChatV2GeneratedImageReference,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -852,6 +982,11 @@ import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
 } from "@/service/AIChatErrorSentinels";
+import {
+  inferGeneratedImageReferences,
+  isFusionWording,
+} from "./generatedImageReferenceInference";
+import type { GeneratedImageReferenceView } from "./generatedImageReferenceView";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1050,6 +1185,182 @@ const markConversationRuntimeStopped = (
 const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
   markConversationRuntimeStopped(activeConversationId.value, errorMessage);
 };
+
+// --- Conversation-scoped generated-image selection (composer tray) ---
+interface GeneratedImageDraftState {
+  readonly references: ChatV2GeneratedImageReference[];
+}
+
+type GeneratedImageDraftMap = Map<string, GeneratedImageDraftState>;
+
+/** Hard cap on stored selections per conversation (direct requests cap at 3). */
+const GENERATED_IMAGE_DRAFT_CAP = 50;
+/** Max generated-image refs attached to a single direct request. */
+const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
+/** Draft key used before a conversation id exists (brand-new chat). */
+const DRAFT_KEY_PENDING = "__pending_conversation__";
+/** Neutral instruction sent when the user attaches refs but no text. */
+const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
+
+const draftKeyFor = (conversationId: string | null): string =>
+  conversationId ?? DRAFT_KEY_PENDING;
+
+const generatedImageDrafts = ref<GeneratedImageDraftMap>(new Map());
+
+const sameGeneratedImageRef = (
+  a: ChatV2GeneratedImageReference,
+  b: ChatV2GeneratedImageReference
+): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+
+const setGeneratedImageDraft = (
+  key: string,
+  references: ChatV2GeneratedImageReference[]
+): void => {
+  const nextMap: GeneratedImageDraftMap = new Map(generatedImageDrafts.value);
+  if (references.length === 0) nextMap.delete(key);
+  else nextMap.set(key, { references });
+  generatedImageDrafts.value = nextMap;
+};
+
+const getGeneratedImageDraft = (
+  conversationId: string | null
+): ChatV2GeneratedImageReference[] =>
+  [...(generatedImageDrafts.value.get(draftKeyFor(conversationId))?.references ?? [])];
+
+const activeGeneratedImageRefs = computed<ChatV2GeneratedImageReference[]>(() =>
+  getGeneratedImageDraft(activeConversationId.value)
+);
+
+function resolveGeneratedImageViewModel(
+  reference: ChatV2GeneratedImageReference
+): GeneratedImageReferenceView {
+  const message = messages.value.find((m) => m.id === reference.messageId);
+  const image = message?.metadata?.generatedImages?.[reference.imageIndex];
+  return {
+    reference,
+    fileName:
+      typeof image?.file_name === "string" ? image.file_name : undefined,
+    thumbUrl: typeof image?.url === "string" ? image.url : undefined,
+  };
+}
+
+const selectedGeneratedImageViews = computed<GeneratedImageReferenceView[]>(
+  () => activeGeneratedImageRefs.value.map(resolveGeneratedImageViewModel)
+);
+
+const composerFocusSignal = ref(0);
+
+function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  const key = draftKeyFor(activeConversationId.value);
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  if (current.some((ref) => sameGeneratedImageRef(ref, reference))) {
+    setGeneratedImageDraft(
+      key,
+      current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+    );
+    return;
+  }
+  if (current.length >= GENERATED_IMAGE_DRAFT_CAP) return;
+  setGeneratedImageDraft(key, [...current, reference]);
+}
+
+function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [reference]);
+  composerFocusSignal.value += 1;
+}
+
+function onRemoveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): void {
+  const current = getGeneratedImageDraft(activeConversationId.value);
+  setGeneratedImageDraft(
+    draftKeyFor(activeConversationId.value),
+    current.filter((ref) => !sameGeneratedImageRef(ref, reference))
+  );
+}
+
+function onClearGeneratedImages(): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), []);
+}
+
+function onReorderGeneratedImages(
+  references: ChatV2GeneratedImageReference[]
+): void {
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    ...references,
+  ]);
+}
+
+// Ambiguity chooser / batch confirmation / error toast state.
+interface PendingGeneratedImageSend {
+  /** Draft key of the conversation that created this pending send. */
+  readonly conversationId: string;
+  readonly text: string;
+  readonly files: File[];
+  readonly options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  };
+}
+
+const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
+const showGeneratedImageChooser = ref(false);
+const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
+const batchConfirmReferences = ref<ChatV2GeneratedImageReference[]>([]);
+const showBatchConfirmDialog = ref(false);
+const generatedImageNotice = ref<string | null>(null);
+const showGeneratedImageNotice = computed<boolean>({
+  get: () => generatedImageNotice.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) generatedImageNotice.value = null;
+  },
+});
+
+function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  if (
+    !pending ||
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    // The pending send belongs to a different conversation (stale chooser
+    // state); discard it instead of replaying it into the active one.
+    return;
+  }
+  setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
+    view.reference,
+  ]);
+  void onSend(pending.text, pending.files, pending.options);
+}
+
+function cancelAmbiguityChooser(): void {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+}
+
+function confirmGeneratedImageBatch(): void {
+  const pending = pendingGeneratedImageSend.value;
+  pendingGeneratedImageSend.value = null;
+  batchConfirmReferences.value = [];
+  showBatchConfirmDialog.value = false;
+  if (!pending) return;
+  void onSend(pending.text, pending.files, {
+    ...pending.options,
+    bypassGeneratedImageInference: true,
+  });
+}
+
+function declineGeneratedImageBatch(): void {
+  pendingGeneratedImageSend.value = null;
+  batchConfirmReferences.value = [];
+  showBatchConfirmDialog.value = false;
+}
+
 
 const setAuthoritativeRuntimeStatus = (
   conversationId: string,
@@ -1619,6 +1930,9 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Drop any stale ambiguity-chooser / pending send from the previous
+    // conversation so it can never replay into the newly active one.
+    cancelAmbiguityChooser();
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
@@ -2515,6 +2829,21 @@ const mapStreamErrorMessage = (raw: string): string => {
   return raw;
 };
 
+/**
+ * Localize machine-readable generated-image error codes carried by terminal
+ * stream chunks (mapped onto the Error by the api layer). Falls back to the
+ * existing raw-message mapping when no translation exists for the code.
+ */
+const displayStreamErrorMessage = (error: Error): string => {
+  const code = (error as { errorCode?: unknown }).errorCode;
+  if (typeof code === "string" && code.startsWith("generated_image_")) {
+    const key = `aiChatV2.generatedImageRefs.errors.${code}`;
+    const translated = t(key);
+    if (translated && translated !== key) return translated;
+  }
+  return mapStreamErrorMessage(error.message);
+};
+
 const loadConversations = async (): Promise<void> => {
   try {
     const nextConversations = await getChatV2Conversations();
@@ -2811,6 +3140,7 @@ async function clearCurrentConversation(): Promise<void> {
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
+      setGeneratedImageDraft(conversationId, []);
       const next = new Map(fileOps.value);
       next.delete(conversationId);
       fileOps.value = next;
@@ -3414,6 +3744,97 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
+function showGeneratedImageError(message: string): void {
+  generatedImageNotice.value = message;
+}
+
+/**
+ * Resolve the generated-image references for an outgoing turn.
+ *
+ * Returns the effective reference list (empty = plain text send), or null
+ * when the send must abort because a dialog is now waiting on the user
+ * (ambiguity chooser / batch confirmation) or a guard tripped (fusion /
+ * reference limit toast).
+ */
+function runGeneratedImagePreflight(
+  text: string,
+  files: File[],
+  options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  },
+  bypassInference = false
+): ChatV2GeneratedImageReference[] | null {
+  const explicit = getGeneratedImageDraft(activeConversationId.value);
+  let effective: ChatV2GeneratedImageReference[] = [];
+  if (explicit.length > 0) {
+    effective = [...explicit];
+  } else if (!bypassInference) {
+    const result = inferGeneratedImageReferences({
+      text,
+      messages: messages.value,
+      explicitSelection: [],
+    });
+    if (result.kind === "ambiguous") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
+      ambiguityCandidates.value = result.candidates.map((candidate) => ({
+        reference: candidate.reference,
+        fileName: candidate.fileName,
+        thumbUrl:
+          resolveGeneratedImageViewModel(candidate.reference).thumbUrl ??
+          candidate.thumbUrl,
+      }));
+      showGeneratedImageChooser.value = true;
+      return null;
+    }
+    if (
+      (result.kind === "resolved" || result.kind === "batch_confirmation") &&
+      result.references.length > GENERATED_IMAGE_REFERENCE_LIMIT &&
+      isFusionWording(text)
+    ) {
+      showGeneratedImageError(
+        t("aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit") ||
+          "Combining images is limited to 3 at a time."
+      );
+      return null;
+    }
+    if (result.kind === "batch_confirmation") {
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
+      batchConfirmReferences.value = [...result.references];
+      showBatchConfirmDialog.value = true;
+      return null;
+    }
+    if (result.kind === "resolved") {
+      effective = [...result.references];
+    }
+  }
+  if (effective.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
+    showGeneratedImageError(
+      isFusionWording(text)
+        ? t(
+            "aiChatV2.generatedImageRefs.errors.generated_image_fusion_limit"
+          ) || "Combining images is limited to 3 at a time."
+        : t(
+            "aiChatV2.generatedImageRefs.errors.generated_image_reference_limit"
+          ) || "Too many referenced images for one request."
+    );
+    return null;
+  }
+  return effective;
+}
+
 const onSend = async (
   text: string,
   files?: File[],
@@ -3422,6 +3843,8 @@ const onSend = async (
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
     onAccepted?: () => void;
+    /** Internal: skip generated-image inference (batch-confirm resend). */
+    bypassGeneratedImageInference?: boolean;
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
@@ -3598,9 +4021,52 @@ const onSend = async (
     isPreparingAttachments.value = false;
   }
 
+  // Generated-image preflight: resolve which images this turn references.
+  // Explicit tray selections win; otherwise deterministic inference runs over
+  // the visible conversation. Ambiguous matches open the chooser dialog and
+  // over-limit batches ask for confirmation — both abort this send (the user's
+  // selection is preserved) until resolved.
+  const effectiveGeneratedImageRefs = runGeneratedImagePreflight(
+    text,
+    files ?? [],
+    options,
+    options?.bypassGeneratedImageInference === true
+  );
+  if (effectiveGeneratedImageRefs === null) return;
+
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    modelMessage.trim().length === 0
+  ) {
+    modelMessage = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
+
   // Resolve text: if only images with no text, use default prompt
-  const displayText = text || defaultPromptForAttachments(files ?? []);
+  let displayText = text || defaultPromptForAttachments(files ?? []);
+  if (
+    effectiveGeneratedImageRefs.length > 0 &&
+    displayText.trim().length === 0
+  ) {
+    displayText = GENERATED_IMAGE_FALLBACK_PROMPT;
+  }
   const streamConversationId = ensureWorkspaceConversationId();
+  const sentDraftKey = draftKeyFor(streamConversationId);
+  // A brand-new chat just received its real id: move any pending draft entry
+  // so the tray keeps showing the selection under the new key.
+  if (
+    sentDraftKey !== DRAFT_KEY_PENDING &&
+    generatedImageDrafts.value.has(DRAFT_KEY_PENDING)
+  ) {
+    const pendingEntry = generatedImageDrafts.value.get(DRAFT_KEY_PENDING);
+    if (
+      pendingEntry &&
+      !generatedImageDrafts.value.has(sentDraftKey) &&
+      activeConversationId.value === streamConversationId
+    ) {
+      setGeneratedImageDraft(sentDraftKey, [...pendingEntry.references]);
+      setGeneratedImageDraft(DRAFT_KEY_PENDING, []);
+    }
+  }
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
@@ -3713,6 +4179,10 @@ const onSend = async (
       reasoning: showReasoning.value
         ? { enabled: true, summary: "auto" }
         : undefined,
+      generatedImageReferences:
+        effectiveGeneratedImageRefs.length > 0
+          ? [...effectiveGeneratedImageRefs]
+          : undefined,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
@@ -4027,6 +4497,12 @@ const onSend = async (
       },
       (complete: ChatV2StreamChunk) => {
         if (!isCurrentStreamChunk(complete)) return;
+        // The turn was accepted end-to-end: drop this conversation's
+        // generated-image selection. Error paths intentionally keep it so the
+        // user can retry without re-picking.
+        if (complete.eventType === "complete") {
+          setGeneratedImageDraft(sentDraftKey, []);
+        }
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -4144,7 +4620,7 @@ const onSend = async (
         void loadConversations();
       },
       (error: Error) => {
-        const displayMessage = mapStreamErrorMessage(error.message);
+        const displayMessage = displayStreamErrorMessage(error);
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
           activeAssistantMessageId: null,
@@ -4161,7 +4637,9 @@ const onSend = async (
     const runtimeError = getConversationRuntimeState(streamConversationId)
       .streamError;
     if (!runtimeError) {
-      const displayMessage = mapStreamErrorMessage(rawMessage);
+      const displayMessage = displayStreamErrorMessage(
+        err instanceof Error ? err : new Error(rawMessage)
+      );
       patchConversationRuntimeState(streamConversationId, {
         isStreaming: false,
         activeAssistantMessageId: null,

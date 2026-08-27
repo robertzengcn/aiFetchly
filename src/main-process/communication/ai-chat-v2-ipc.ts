@@ -93,6 +93,11 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
+import {
+  normalizeGeneratedImageReferences,
+  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+} from "@/service/generatedImageReferenceNormalize";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -532,6 +537,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             conversationId: e.conversationId,
             messageId: e.messageId,
             errorMessage: e.errorMessage,
+            errorCode: e.errorCode,
           });
           break;
       }
@@ -548,12 +554,17 @@ function validateStreamRequest(
 ): string | null {
   const hasFiles =
     Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
+  // Generated-image references count as message content: the engine supplies
+  // a neutral instruction when the text is blank.
+  const hasReferences =
+    Array.isArray(req.generatedImageReferences) &&
+    req.generatedImageReferences.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    if (!hasFiles) {
+    if (!hasFiles && !hasReferences) {
       return "Message must be a non-empty string";
     }
   }
@@ -795,9 +806,47 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
   // Normalize uploaded files
   const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
+  const uploadedImageCount = uploadedFiles.filter(
+    (file) => file.kind === "image"
+  ).length;
+
+  // Validate opaque generated-image references (never trust the renderer).
+  const normalizedReferences = normalizeGeneratedImageReferences(
+    req.generatedImageReferences,
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  );
+  if (!normalizedReferences.ok) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId: "",
+      errorMessage: normalizedReferences.reason,
+      errorCode: normalizedReferences.errorCode,
+    });
+    return;
+  }
+
+  // Combined image cap: uploaded image attachments + referenced generated
+  // images share one per-request budget.
+  if (
+    uploadedImageCount + normalizedReferences.references.length >
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  ) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId: "",
+      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
+      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+    });
+    return;
+  }
+
   const processedReq = {
     ...req,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    generatedImageReferences:
+      normalizedReferences.references.length > 0
+        ? normalizedReferences.references
+        : undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });

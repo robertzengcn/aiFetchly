@@ -59,6 +59,10 @@ export function computeSnapshotDiff(
     added,
     changed,
     removed,
+    portableMemoryChanged: portableMemoryChanged(
+      prev ? prev.portableMemory : undefined,
+      next.portableMemory
+    ),
     instructionsChanged: instructionsChanged(
       prev ? prev.instructions : [],
       next.instructions
@@ -75,6 +79,31 @@ export function computeSnapshotDiff(
       next.diagnostics
     ),
   };
+}
+
+function portableMemoryChanged(
+  prev: AIFetchlyConfigSnapshot["portableMemory"],
+  next: AIFetchlyConfigSnapshot["portableMemory"]
+): boolean {
+  if (!prev && !next) return false;
+  if (!prev || !next) return true;
+  if (
+    prev.complete !== next.complete ||
+    prev.directoryPresent !== next.directoryPresent ||
+    prev.totalBytes !== next.totalBytes ||
+    prev.identity?.contentHash !== next.identity?.contentHash ||
+    prev.readmeHash !== next.readmeHash ||
+    prev.indexHash !== next.indexHash
+  ) {
+    return true;
+  }
+  if (prev.records.length !== next.records.length) return true;
+  const prevByPath = new Map(prev.records.map((r) => [r.relativePath, r]));
+  for (const rec of next.records) {
+    const p = prevByPath.get(rec.relativePath);
+    if (!p || p.contentHash !== rec.contentHash) return true;
+  }
+  return false;
 }
 
 function indexFiles(

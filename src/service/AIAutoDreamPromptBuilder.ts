@@ -4,6 +4,7 @@ import type {
 } from "@/entityTypes/aiUserMemoryTypes";
 import { isAIUserMemoryType } from "@/entityTypes/aiUserMemoryTypes";
 import type { AutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import { extractJsonObject } from "@/service/autoDreamJsonExtract";
 
 const MAX_TITLE_LEN = 200;
 const MAX_CONTENT_LEN = 8000;
@@ -108,7 +109,7 @@ export function parseAutoDreamModelOutput(
   packets: readonly AutoDreamSourcePacket[],
   existing: readonly AIUserMemoryView[]
 ): ParseResult {
-  const cleaned = stripCodeFence(raw).trim();
+  const cleaned = extractJsonObject(raw);
   if (!cleaned) {
     return { ok: false, create: [], update: [], archive: [], error: "empty" };
   }
@@ -271,17 +272,4 @@ const SECRET_PATTERNS: RegExp[] = [
 
 function isSecretLike(s: string): boolean {
   return SECRET_PATTERNS.some((re) => re.test(s));
-}
-
-function stripCodeFence(raw: string): string {
-  const s = raw.trim();
-  if (s.startsWith("```")) {
-    const end = s.lastIndexOf("```");
-    if (end > 3) {
-      const inner = s.slice(3, end);
-      const nl = inner.indexOf("\n");
-      return nl >= 0 ? inner.slice(nl + 1) : inner;
-    }
-  }
-  return s;
 }

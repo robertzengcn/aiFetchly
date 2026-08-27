@@ -59,6 +59,10 @@ import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
 import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
+import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
+import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
+import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
@@ -187,6 +191,10 @@ export const DB_ENTITIES = [
   AIMemoryConsolidationRunEntity,
   AIWorkspaceMemoryEntity,
   AIWorkspaceMemoryConsolidationRunEntity,
+  AIWorkspaceMemoryScopeEntity,
+  AIWorkspaceMemoryScopePathEntity,
+  AIWorkspaceMemoryPortableStateEntity,
+  AIWorkspaceMemorySyncAuditEntity,
   WorkspaceEntity,
   AIFetchlyWorkspaceTrustEntity,
   HookConfigEntity,

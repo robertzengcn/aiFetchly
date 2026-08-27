@@ -82,6 +82,15 @@ vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
 
+const { applyAutoDreamFileMutations } = vi.hoisted(() => ({
+  applyAutoDreamFileMutations: vi.fn(),
+}));
+vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
+  PortableWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+    applyAutoDreamFileMutations,
+  })),
+}));
+
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 
 const WS = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -139,6 +148,22 @@ describe("AIWorkspaceAutoDreamService", () => {
     recoverStale.mockResolvedValue(0);
     listActive.mockResolvedValue([]);
     applyPlanAndCompleteRun.mockResolvedValue(undefined);
+    applyAutoDreamFileMutations.mockImplementation(
+      async (
+        _scope: unknown,
+        plan: {
+          ok: boolean;
+          create: unknown[];
+          update: unknown[];
+          archive: unknown[];
+        }
+      ) => ({
+        sqlitePlan: plan,
+        fileCreated: 0,
+        fileUpdated: 0,
+        fileArchived: 0,
+      })
+    );
     collect.mockResolvedValue({
       packets: [],
       chatConversationCount: 0,
@@ -473,5 +498,21 @@ describe("AIWorkspaceAutoDreamService", () => {
       expect.stringContaining("oversized_packet")
     );
     expect(applyPlanAndCompleteRun).not.toHaveBeenCalled();
+  });
+
+  it("passes conversationId through to the collector on a manual run", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "conv-x")],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    await svc(true, false).runNow({
+      force: true,
+      conversationId: "conv-x",
+    });
+    expect(collect).toHaveBeenCalledWith(
+      expect.objectContaining({ focusConversationId: "conv-x" })
+    );
   });
 });

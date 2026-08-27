@@ -67,6 +67,7 @@ import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import { VERIFY_CONTACT_INFO_TOOL_NAME } from "@/config/contactVerification";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
@@ -1821,6 +1822,12 @@ export class AIChatQueryLoop {
           const toolPayload = normalizeToolResult(toolResult);
           if (toolResult.success) {
             lastFailedTool = null;
+            // PRD FR-13/FR-16: a successful extract_contact_info call must
+            // expose verify_contact_info on the next round even when the
+            // tool is normally deferred.
+            if (call.name === "extract_contact_info") {
+              discoveredToolNames.add(VERIFY_CONTACT_INFO_TOOL_NAME);
+            }
           } else {
             lastFailedTool = {
               name: call.name,
