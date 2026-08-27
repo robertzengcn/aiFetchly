@@ -60,6 +60,20 @@ export class AIChatMessageModel extends BaseDb {
   }
 
   /**
+   * Ownership-safe composite lookup: both fields are matched in the SQL WHERE
+   * clause, so a messageId reused across conversations resolves only within
+   * the requested conversation.
+   */
+  async getMessageByConversationAndMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return await this.repository.findOne({
+      where: { conversationId, messageId },
+    });
+  }
+
+  /**
    * Delete all messages for a conversation
    */
   async deleteConversation(conversationId: string): Promise<number> {

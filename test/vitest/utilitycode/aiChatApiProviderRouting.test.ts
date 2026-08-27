@@ -160,6 +160,116 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
+  it("forwards the caller AbortSignal to fetch on a local non-stream completion", async () => {
+    enableLocalProvider();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "x",
+          object: "chat.completion",
+          created: 0,
+          model: "llama3.1",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "pong" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    ) as unknown as typeof fetch;
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const controller = new AbortController();
+      await api.openAIChatCompletion(
+        { messages: [{ role: "user", content: "ping" }] },
+        controller.signal
+      );
+      // The local client links the caller's signal to an internal
+      // AbortController (so timeout-abort and caller-abort are
+      // distinguishable), so the fetch RequestInit's signal is an
+      // AbortSignal that aborts when the caller aborts.
+      const init = (fetchMock as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls[0]![1] as RequestInit;
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("links caller abort to the fetch signal on a local non-stream completion", async () => {
+    enableLocalProvider();
+    // A fetch that never resolves on its own — the caller's abort must
+    // propagate to the internal controller's signal (listener linkage).
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise(() => {
+        /* never resolves */
+      })
+    ) as unknown as typeof fetch;
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const controller = new AbortController();
+      // Don't await — the call hangs and then rejects on abort. Swallow the
+      // expected rejection; we only care that abort propagates to fetch's signal.
+      void api
+        .openAIChatCompletion(
+          { messages: [{ role: "user", content: "ping" }] },
+          controller.signal
+        )
+        .catch(() => {
+          /* expected: abort surfaces as a network error */
+        });
+      // Wait until the client has actually issued the fetch call (the
+      // resolver + client construction add a few async hops).
+      await vi.waitFor(() => {
+        expect(fetchMock).toHaveBeenCalled();
+      });
+      const init = (fetchMock as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls[0]![1] as RequestInit;
+      const fetchSignal = init.signal as AbortSignal;
+      expect(fetchSignal.aborted).toBe(false);
+      controller.abort();
+      // The internal controller aborts synchronously via the listener.
+      expect(fetchSignal.aborted).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("forwards the caller AbortSignal to postJson on a hosted non-stream completion", async () => {
+    enableHosted();
+    mockPostJson.mockResolvedValueOnce({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "hosted-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "ok" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const controller = new AbortController();
+    await api.openAIChatCompletion(
+      { messages: [{ role: "user", content: "ping" }] },
+      controller.signal
+    );
+    // postJson's third arg carries { signal } so it flows into _fetchJSON's fetch.
+    expect(mockPostJson).toHaveBeenCalledWith(
+      "/api/ai/v1/chat/completions",
+      expect.anything(),
+      { signal: controller.signal }
+    );
+  });
+
   it("openAIChatCompletionStream parses local SSE chunks", async () => {
     enableLocalProvider();
     const sseBody =

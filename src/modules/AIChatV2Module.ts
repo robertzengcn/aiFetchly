@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
@@ -26,6 +27,29 @@ function uuid(): string {
     return crypto.randomUUID();
   }
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Defensively parse the JSON `metadata` column into a record. Returns null for
+ * absent/corrupt/non-object payloads instead of throwing.
+ */
+function parseMetadataRecord(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export class AIChatV2Module extends BaseModule {
@@ -207,13 +231,44 @@ export class AIChatV2Module extends BaseModule {
     );
   }
 
+  /**
+   * Resolve a v2 assistant message by composite (conversation, messageId).
+   * Guards: conversation must be v2-scoped, role assistant, messageType
+   * MESSAGE, and metadata must carry source "chat-v2". Returns null otherwise;
+   * never touches the filesystem.
+   */
+  async getGeneratedImageSourceMessage(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    if (!conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return null;
+    }
+    const message =
+      await this.chatModule.getMessageByConversationAndMessageId(
+        conversationId,
+        messageId
+      );
+    if (!message || message.role !== "assistant") {
+      return null;
+    }
+    if (message.messageType !== MessageType.MESSAGE) {
+      return null;
+    }
+    const metadata = parseMetadataRecord(message.metadata);
+    if (!metadata || metadata.source !== "chat-v2") {
+      return null;
+    }
+    return message;
+  }
+
   async clearConversation(conversationId: string): Promise<number> {
     const deleted = await this.chatModule.clearConversation(conversationId);
     // Cascade compact + session memory clear. Failures are logged, not thrown.
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: session memory clear failed:",
         err
       );
@@ -221,7 +276,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: compact clear failed:",
         err
       );
@@ -230,7 +285,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: artifact clear failed:",
         err
       );
@@ -248,7 +303,7 @@ export class AIChatV2Module extends BaseModule {
       try {
         await new AIArtifactModule().deleteByConversation(s.conversationId);
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-v2] clearAllV2History: artifact clear failed:",
           err
         );
@@ -257,7 +312,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.sessionMemoryModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: session memory clearAll failed:",
         err
       );
@@ -265,7 +320,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: compact clearAll failed:",
         err
       );

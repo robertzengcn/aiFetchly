@@ -61,7 +61,7 @@ const TextareaStub = defineComponent({
   },
   emits: ["update:modelValue", "keydown", "input", "keyup", "click", "paste"],
   template:
-    '<textarea data-testid="composer-input" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value); $emit(\'input\', $event)" @keydown="$emit(\'keydown\', $event)" @keyup="$emit(\'keyup\', $event)" @click="$emit(\'click\', $event)" @paste="$emit(\'paste\', $event)" />',
+    '<textarea data-testid="ai-chat-composer" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value); $emit(\'input\', $event)" @keydown="$emit(\'keydown\', $event)" @keyup="$emit(\'keyup\', $event)" @click="$emit(\'click\', $event)" @paste="$emit(\'paste\', $event)" />',
 });
 
 const ButtonStub = defineComponent({
@@ -108,7 +108,7 @@ describe("AiChatV2Composer pasted text", () => {
   it("collapses large pasted text and emits pastedContents on send", async () => {
     const wrapper = mountComposer();
     const textarea = wrapper.find<HTMLTextAreaElement>(
-      '[data-testid="composer-input"]'
+      '[data-testid="ai-chat-composer"]'
     );
 
     const partA = "A".repeat(200);

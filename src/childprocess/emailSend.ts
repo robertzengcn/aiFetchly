@@ -1,4 +1,5 @@
 import { Buckemailremotedata } from "@/entityTypes/emailmarketingType";
+import { log } from "@/modules/Logger";
 import nodemailer from "nodemailer";
 import { convertVariableInTemplate } from "@/views/utils/emailFun";
 import { EmailTemplatePreviewdata } from "@/entityTypes/emailmarketingType";
@@ -68,13 +69,13 @@ export class EmailSend {
                   return;
                 }
               } catch (rerr) {
-                console.log(
+                log.info(
                   `Invalid regular expression second: ${filterdetail.content}`,
                   rerr
                 );
               }
             } else {
-              console.log(
+              log.info(
                 `Invalid regular expression: ${filterdetail.content}`,
                 error
               );
@@ -86,7 +87,7 @@ export class EmailSend {
       //get random one from email send list
       const randomEmailservice = this.getRandomItem(param.Emailservicelist);
       if (!randomEmailservice) {
-        console.error(
+        log.error(
           "No email service available, skipping recipient:",
           item.address
         );

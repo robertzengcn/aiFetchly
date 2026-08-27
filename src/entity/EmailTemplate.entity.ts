@@ -4,17 +4,17 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity('email_template')
 export class EmailTemplateEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: 'varchar', length: 255 })
-  title: string;
+  title!: string;
 
   @Column({ type: 'text' })
-  content: string;
+  content!: string;
 
   @Column({ type: 'varchar', length: 500, nullable: true })
-  description: string | null;
+  description!: string | null;
 
   @Column({ type: 'integer', default: 1 })
-  status: number;
+  status!: number;
 } 

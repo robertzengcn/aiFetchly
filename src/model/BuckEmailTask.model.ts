@@ -1,7 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
-import { BuckEmailType } from "./buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { SortBy } from "@/entityTypes/commonType";
 import { getRecorddatetime, getStatusName } from "@/modules/lib/function";

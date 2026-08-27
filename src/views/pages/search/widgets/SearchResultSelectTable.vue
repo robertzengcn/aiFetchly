@@ -101,14 +101,14 @@ const totalItems = ref(0);
 const search = ref('');
 const selected=ref<SearchtaskItem>();
 
-function loadItems({ page=1, itemsPerPage=10, sortBy }) {
+function loadItems({ page=1, itemsPerPage=10, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     options.page = page;
     loading.value = true
     // console.log(page);
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -139,7 +139,7 @@ const emit = defineEmits(['change'])
 onMounted(() => {
   if (props.selectedValue && props.selectedValue > 0) {
     // Load items to find the selected one
-    loadItems({ page: 1, itemsPerPage: 10, sortBy: undefined });
+    loadItems({ page: 1, itemsPerPage: 10, sortBy: [] });
   }
 });
 

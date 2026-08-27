@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
+import { log } from "@/modules/Logger";
 import type { MenuItemConstructorOptions } from "electron";
 import * as path from "path";
 import * as fs from "fs";
@@ -115,7 +116,7 @@ export class MenuManager {
     this.isRecordingEnabled = !this.isRecordingEnabled;
     this.saveRecordingPreference();
 
-    console.log(
+    log.info(
       `Session recording ${this.isRecordingEnabled ? "enabled" : "disabled"}`
     );
 
@@ -138,9 +139,9 @@ export class MenuManager {
 
       // Open folder in default file manager
       shell.openPath(this.sessionsDirectory);
-      console.log(`Opened sessions folder: ${this.sessionsDirectory}`);
+      log.info(`Opened sessions folder: ${this.sessionsDirectory}`);
     } catch (error) {
-      console.error("Failed to open sessions folder:", error);
+      log.error("Failed to open sessions folder:", error);
     }
   }
 
@@ -148,7 +149,7 @@ export class MenuManager {
    * Open recording settings (placeholder for future implementation)
    */
   openRecordingSettings(): void {
-    console.log("Opening session recording settings...");
+    log.info("Opening session recording settings...");
     // TODO: Implement settings dialog
     // This could open a modal window with recording configuration options
   }
@@ -157,7 +158,7 @@ export class MenuManager {
    * Show about dialog
    */
   showAbout(): void {
-    console.log("Showing about dialog...");
+    log.info("Showing about dialog...");
     // TODO: Implement about dialog
   }
 
@@ -180,12 +181,12 @@ export class MenuManager {
             (bw as any).webContents.openDevTools();
           }
         }
-        console.log("Toggled developer console");
+        log.info("Toggled developer console");
       } else {
-        console.warn("No window available to show dev console");
+        log.warn("No window available to show dev console");
       }
     } catch (error) {
-      console.error("Failed to show dev console:", error);
+      log.error("Failed to show dev console:", error);
     }
   }
 
@@ -213,14 +214,14 @@ export class MenuManager {
         const configData = fs.readFileSync(configPath, "utf8");
         const config = JSON.parse(configData);
         this.isRecordingEnabled = config.enabled || false;
-        console.log(`Loaded recording preference: ${this.isRecordingEnabled}`);
+        log.info(`Loaded recording preference: ${this.isRecordingEnabled}`);
       } else {
         // Default to disabled
         this.isRecordingEnabled = false;
-        console.log("No recording preference found, defaulting to disabled");
+        log.info("No recording preference found, defaulting to disabled");
       }
     } catch (error) {
-      console.error("Failed to load recording preference:", error);
+      log.error("Failed to load recording preference:", error);
       this.isRecordingEnabled = false;
     }
   }
@@ -243,9 +244,9 @@ export class MenuManager {
       };
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-      console.log(`Saved recording preference: ${this.isRecordingEnabled}`);
+      log.info(`Saved recording preference: ${this.isRecordingEnabled}`);
     } catch (error) {
-      console.error("Failed to save recording preference:", error);
+      log.error("Failed to save recording preference:", error);
     }
   }
 
@@ -255,7 +256,7 @@ export class MenuManager {
   private notifyRecordingStateChange(): void {
     // This will be used to communicate with the main process
     // and potentially other parts of the application
-    console.log(`Recording state changed: ${this.isRecordingEnabled}`);
+    log.info(`Recording state changed: ${this.isRecordingEnabled}`);
 
     // TODO: Implement IPC communication to notify main process
     // and update global recording state

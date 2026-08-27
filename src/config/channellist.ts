@@ -84,6 +84,15 @@ export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
 export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
 export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
+// Thread-aware reply reliability (Milestone 1): approval + send-safety.
+export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
+  "email:reply:send:attempt:detail";
+export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_GET =
+  "email:reply:knowledge:scope:get";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
+  "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
@@ -589,6 +598,15 @@ export const PLUGIN_MARKETPLACE_GET_PLUGIN = "plugin:marketplace:get-plugin";
 export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
   "plugin:marketplace:install-plugin";
 
+// ==================== Community Plugins Channels (Community Plugin Page PRD §7.3) ====================
+// NON-AI-gated: Free (Community) users must be able to browse the catalog
+// (precedent: plugin-ipc.ts — "plugin management is NOT an AI feature").
+export const PLUGIN_COMMUNITY_LIST = "plugin:community:list";
+export const PLUGIN_COMMUNITY_DETAIL = "plugin:community:detail";
+export const PLUGIN_COMMUNITY_INSTALL = "plugin:community:install";
+/** Renderer→Main: open the marketing plans page (Upgrade CTA) via shell.openExternal. */
+export const PLUGIN_COMMUNITY_OPEN_PLANS = "plugin:community:open-plans";
+
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
 // AI Artifacts (read; creation happens through the Chat V2 stream tool)
@@ -601,6 +619,70 @@ export const AI_USER_MEMORY_DELETE = "ai:user-memory:delete";
 export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
+
+// Portable workspace memory (Markdown files under .aifetchly/memory/)
+// Non-AI operations — available without an AI subscription (design §20.4).
+export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
+  "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
+  "ai:portable-workspace-memory:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CREATE =
+  "ai:portable-workspace-memory:create";
+export const AI_PORTABLE_WORKSPACE_MEMORY_UPDATE =
+  "ai:portable-workspace-memory:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE =
+  "ai:portable-workspace-memory:archive-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE =
+  "ai:portable-workspace-memory:delete-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
+  "ai:portable-workspace-memory:enable:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =
+  "ai:portable-workspace-memory:enable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW =
+  "ai:portable-workspace-memory:export:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT =
+  "ai:portable-workspace-memory:export";
+export const AI_PORTABLE_WORKSPACE_MEMORY_RESCAN =
+  "ai:portable-workspace-memory:rescan";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST =
+  "ai:portable-workspace-memory:diagnostics:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST =
+  "ai:portable-workspace-memory:conflicts:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE =
+  "ai:portable-workspace-memory:conflict:resolve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE =
+  "ai:portable-workspace-memory:policy:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE =
+  "ai:portable-workspace-memory:promote";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE =
+  "ai:portable-workspace-memory:privatize";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
+  "ai:portable-workspace-memory:review:approve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
+  "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST =
+  "ai:portable-workspace-memory:review:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION =
+  "ai:portable-workspace-memory:review:approve-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION =
+  "ai:portable-workspace-memory:review:reject-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE =
+  "ai:portable-workspace-memory:reveal-file";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
+  "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =
+  "ai:portable-workspace-memory:get-state";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
+  "ai:portable-workspace-memory:bridge:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =
+  "ai:portable-workspace-memory:bridge:apply";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE =
+  "ai:portable-workspace-memory:bridge:remove";
+export const AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE =
+  "ai:portable-workspace-memory:identity:regenerate";
+// Renderer push event (main → renderer): one summary per reconciliation.
+export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
+  "ai:portable-workspace-memory:changed";
 
 // Workspace Management Channels
 export const AI_WORKSPACE_SET = "ai-workspace:set";

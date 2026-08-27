@@ -9,7 +9,8 @@ export type PluginMarketplaceSourceKind =
   | "git"
   | "local-folder"
   | "local-file"
-  | "url";
+  | "url"
+  | "aifetch-hub";
 
 export interface PluginMarketplaceSource {
   readonly kind: PluginMarketplaceSourceKind;
@@ -210,7 +211,8 @@ export interface PluginMarketplacePluginSummary {
   readonly errors: readonly PluginMarketplaceError[];
 }
 
-export interface PluginMarketplacePluginDetail extends PluginMarketplacePluginSummary {
+export interface PluginMarketplacePluginDetail
+  extends PluginMarketplacePluginSummary {
   readonly homepage?: string;
   readonly repository?: string;
   readonly license?: string;

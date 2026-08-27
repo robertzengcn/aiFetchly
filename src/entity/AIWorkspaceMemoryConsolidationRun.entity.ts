@@ -11,15 +11,15 @@ import { Order } from "./order.decorator";
 @Index("idx_workspace_memory_runs_finished", ["finishedAt"])
 export class AIWorkspaceMemoryConsolidationRunEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  runId: string;
+  runId!: string;
 
   @Order(2)
   @Column("varchar", { length: 30, nullable: false })
-  status: string;
+  status!: string;
 
   @Order(3)
   @Column("varchar", { length: 100, nullable: true })
@@ -27,7 +27,7 @@ export class AIWorkspaceMemoryConsolidationRunEntity extends AuditableEntity {
 
   @Order(4)
   @Column("datetime", { nullable: false })
-  startedAt: Date;
+  startedAt!: Date;
 
   @Order(5)
   @Column("datetime", { nullable: true })
@@ -43,23 +43,23 @@ export class AIWorkspaceMemoryConsolidationRunEntity extends AuditableEntity {
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  chatConversationsReviewed: number;
+  chatConversationsReviewed!: number;
 
   @Order(9)
   @Column("int", { nullable: false, default: 0 })
-  agentTasksReviewed: number;
+  agentTasksReviewed!: number;
 
   @Order(10)
   @Column("int", { nullable: false, default: 0 })
-  memoriesCreated: number;
+  memoriesCreated!: number;
 
   @Order(11)
   @Column("int", { nullable: false, default: 0 })
-  memoriesUpdated: number;
+  memoriesUpdated!: number;
 
   @Order(12)
   @Column("int", { nullable: false, default: 0 })
-  memoriesArchived: number;
+  memoriesArchived!: number;
 
   @Order(13)
   @Column("varchar", { length: 100, nullable: true })

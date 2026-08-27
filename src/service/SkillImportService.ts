@@ -11,6 +11,7 @@
  */
 
 import AdmZip from "adm-zip";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
 import * as path from "path";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -931,7 +932,7 @@ async function importFromZip(zipPath: string): Promise<
   try {
     registerImportedSkill(manifest, skillDir);
   } catch (regError) {
-    console.warn(
+    log.warn(
       `Failed to hot-register skill "${manifest.name}": ${
         regError instanceof Error ? regError.message : regError
       }`
@@ -1327,7 +1328,7 @@ function loadPersistedSkillEntity(skill: InstalledSkillEntity): boolean {
     }
 
     if (!fs.existsSync(skillDir)) {
-      console.warn(
+      log.warn(
         `Skill directory missing for "${skill.name}" at "${skillDir}", skipping`
       );
       return false;
@@ -1338,7 +1339,7 @@ function loadPersistedSkillEntity(skill: InstalledSkillEntity): boolean {
     });
     return true;
   } catch (error) {
-    console.warn(
+    log.warn(
       `Failed to load skill "${skill.name}": ${
         error instanceof Error ? error.message : error
       }`

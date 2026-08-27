@@ -164,7 +164,8 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   }
 
   async complete(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse> {
     const payload = buildNonStreamingPayload({
       ...request,
@@ -179,7 +180,8 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
           headers: this.jsonHeaders("application/json"),
           body: JSON.stringify(payload),
         },
-        this.responseTimeoutMs
+        this.responseTimeoutMs,
+        signal
       );
     } catch (err) {
       throw toNetworkProviderError(err);

@@ -32,6 +32,81 @@
       </div>
     </v-slide-y-reverse-transition>
 
+    <!-- Generated-image reference tray (conversation artifacts, ordered) -->
+    <div v-if="selectedGeneratedImages.length > 0" class="v2-composer__generated-refs" data-testid="ai-chat-generated-ref-tray">
+      <div class="v2-composer__generated-refs-title">
+        <v-icon size="x-small" class="mr-1">mdi-image-multiple-outline</v-icon>
+        {{ t("aiChatV2.generatedImageRefs.referenceTrayTitle") || "Reference images" }}
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          data-testid="ai-chat-generated-ref-clear"
+          :aria-label="t('aiChatV2.generatedImageRefs.clearAll') || 'Clear all'"
+          :title="t('aiChatV2.generatedImageRefs.clearAll') || 'Clear all'"
+          @click="onClearGeneratedImages"
+        >
+          <v-icon size="x-small">mdi-close-circle-outline</v-icon>
+        </v-btn>
+      </div>
+      <div
+        v-for="(item, idx) in selectedGeneratedImages"
+        :key="`${item.reference.messageId}:${item.reference.imageIndex}`"
+        class="v2-composer__generated-ref-chip"
+        data-testid="ai-chat-generated-ref-chip"
+      >
+        <span class="v2-composer__generated-ref-badge">{{ idx + 1 }}</span>
+        <img
+          v-if="item.thumbUrl"
+          :src="item.thumbUrl"
+          :alt="item.fileName || t('aiChatV2.generatedImageRefs.referenceTrayTitle') || 'Reference image'"
+          class="v2-composer__generated-ref-thumb"
+        />
+        <v-icon v-else size="small">mdi-image-outline</v-icon>
+        <span v-if="item.fileName" class="v2-composer__generated-ref-name">{{ item.fileName }}</span>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          :disabled="idx === 0"
+          :aria-label="t('aiChatV2.generatedImageRefs.moveUp') || 'Move up'"
+          :title="t('aiChatV2.generatedImageRefs.moveUp') || 'Move up'"
+          @click="onMoveGeneratedImage(idx, -1)"
+        >
+          <v-icon size="x-small">mdi-arrow-up</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          :disabled="idx === selectedGeneratedImages.length - 1"
+          :aria-label="t('aiChatV2.generatedImageRefs.moveDown') || 'Move down'"
+          :title="t('aiChatV2.generatedImageRefs.moveDown') || 'Move down'"
+          @click="onMoveGeneratedImage(idx, 1)"
+        >
+          <v-icon size="x-small">mdi-arrow-down</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          :aria-label="t('aiChatV2.generatedImageRefs.remove') || 'Remove'"
+          :title="t('aiChatV2.generatedImageRefs.remove') || 'Remove'"
+          @click="emit('remove-generated-image', item.reference)"
+        >
+          <v-icon size="x-small">mdi-close</v-icon>
+        </v-btn>
+      </div>
+      <div
+        v-if="generatedRefLimitReached"
+        class="v2-composer__notice"
+        data-testid="ai-chat-generated-ref-limit"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
+        {{ t("aiChatV2.generatedImageRefs.limitReached") || "You can reference up to 3 images per request." }}
+      </div>
+    </div>
+
     <!-- Selected file chips -->
     <div v-if="selectedFiles.length > 0" class="v2-composer__files">
       <v-chip
@@ -71,6 +146,7 @@
 
     <v-textarea
       v-model="draft"
+      ref="textareaField"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
       auto-grow
@@ -79,6 +155,7 @@
       hide-details
       density="comfortable"
       :disabled="isStreaming || isProcessing"
+      data-testid="ai-chat-composer"
       :aria-label="t('aiChatV2.input_placeholder') || 'Send a message'"
       @keydown="onKeydown"
       @input="onTextareaInput"
@@ -224,9 +301,10 @@
           color="primary"
           icon="mdi-send"
           size="small"
-          :disabled="(draft.trim().length === 0 && selectedFiles.length === 0) || isProcessing"
+          :disabled="hasNothingToSend || isProcessing"
           :loading="isProcessing"
           :aria-label="t('aiChatV2.send') || 'Send'"
+          data-testid="ai-chat-send"
           @click="onSend"
         />
         <v-btn
@@ -235,6 +313,7 @@
           icon="mdi-stop"
           size="small"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
+          data-testid="ai-chat-stop"
           @click="$emit('stop')"
         />
       </div>
@@ -268,6 +347,8 @@ import {
   type VoiceRecorderErrorKind,
 } from "./voice/voiceErrors";
 import type { ChatV2PastedBlockKind } from "@/entityTypes/pastedTextTypes";
+import type { ChatV2GeneratedImageReference } from "@/entityTypes/aiChatV2Types";
+import type { GeneratedImageReferenceView } from "./generatedImageReferenceView";
 import {
   PASTED_TEXT_COLLAPSE_MAX_CHARS,
   PASTED_TEXT_COLLAPSE_MAX_NEWLINES,
@@ -334,6 +415,19 @@ const props = defineProps<{
    * just for suggestions (design §9.1).
    */
   conversationId?: string | null;
+  /**
+   * Conversation-scoped generated-image references selected in the composer
+   * tray. The parent owns this state; the composer only renders it and emits
+   * mutation intents (design §12.4).
+   */
+  selectedGeneratedImages?: readonly GeneratedImageReferenceView[];
+  /** Maximum generated-image references accepted by a direct request. */
+  generatedImageReferenceLimit?: number;
+  /**
+   * Monotonic counter the parent bumps when an action (e.g. "edit this
+   * generated image") should move focus back into the composer textarea.
+   */
+  generatedImageFocusSignal?: number;
 }>();
 const emit = defineEmits<{
   (
@@ -353,8 +447,55 @@ const emit = defineEmits<{
   (e: "voice-recording-start"): void;
   (e: "stop-speaking"): void;
   (e: "open-voice-settings"): void;
+  (e: "remove-generated-image", reference: ChatV2GeneratedImageReference): void;
+  (e: "clear-generated-images"): void;
+  (e: "reorder-generated-images", references: ChatV2GeneratedImageReference[]): void;
 }>();
 const { t } = useI18n();
+
+const selectedGeneratedImages = computed<readonly GeneratedImageReferenceView[]>(
+  () => props.selectedGeneratedImages ?? []
+);
+const generatedImageReferenceLimit = computed<number>(
+  () => props.generatedImageReferenceLimit ?? 3
+);
+const generatedRefLimitReached = computed<boolean>(
+  () => selectedGeneratedImages.value.length >= generatedImageReferenceLimit.value
+);
+const hasNothingToSend = computed<boolean>(
+  () =>
+    draft.value.trim().length === 0 &&
+    selectedFiles.value.length === 0 &&
+    selectedGeneratedImages.value.length === 0
+);
+
+function onClearGeneratedImages(): void {
+  emit("clear-generated-images");
+}
+
+function onMoveGeneratedImage(fromIndex: number, direction: -1 | 1): void {
+  const toIndex = fromIndex + direction;
+  if (toIndex < 0 || toIndex >= selectedGeneratedImages.value.length) return;
+  const references = selectedGeneratedImages.value.map((item) => item.reference);
+  const [moved] = references.splice(fromIndex, 1);
+  if (!moved) return;
+  references.splice(toIndex, 0, moved);
+  emit("reorder-generated-images", references);
+}
+
+interface FocusableTextarea {
+  focus: () => void;
+}
+
+const textareaField = ref<FocusableTextarea | null>(null);
+
+watch(
+  () => props.generatedImageFocusSignal,
+  (signal: number | undefined) => {
+    if (!signal || signal <= 0) return;
+    void nextTick(() => textareaField.value?.focus());
+  }
+);
 
 const draft = ref("");
 const selectedFiles = ref<File[]>([]);
@@ -997,7 +1138,7 @@ function syncAtMentionFromKeyboardEvent(event: KeyboardEvent): void {
 
 const onSend = (): void => {
   const text = draft.value.trim();
-  if ((!text && selectedFiles.value.length === 0) || props.isStreaming) return;
+  if ((!text && selectedFiles.value.length === 0 && selectedGeneratedImages.value.length === 0) || props.isStreaming) return;
   closeAtMention();
   const files = [...selectedFiles.value];
   const pastedContents =
@@ -1086,7 +1227,14 @@ watch(
   () => props.conversationId,
   () => {
     closeAtMention();
-    closeSlash();
+    // If the user is mid-slash-command, keep the dropdown open and let the
+    // earlier conversation-switch watcher (above) refresh it for the new
+    // conversation. Calling closeSlash() here would clearTimeout the debounced
+    // refresh it just scheduled, silently breaking the FR-1 refetch; the
+    // slashGeneration guard already drops any stale result from the old chat.
+    if (!draft.value.startsWith("/")) {
+      closeSlash();
+    }
     resetPastedState();
   }
 );
@@ -1156,6 +1304,47 @@ watch(
   flex-wrap: wrap;
   gap: 2px;
   padding-bottom: 4px;
+}
+.v2-composer__generated-refs {
+  padding-bottom: 4px;
+}
+.v2-composer__generated-refs-title {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.8;
+}
+.v2-composer__generated-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 2px 4px 2px 0;
+  padding: 1px 4px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 14px;
+}
+.v2-composer__generated-ref-badge {
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 8px;
+  background: rgba(25, 118, 210, 0.85);
+  color: #fff;
+  font-size: 10px;
+  text-align: center;
+}
+.v2-composer__generated-ref-thumb {
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.v2-composer__generated-ref-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
 }
 .v2-composer__file-size {
   font-size: 11px;

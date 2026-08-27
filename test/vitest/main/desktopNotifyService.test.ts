@@ -104,11 +104,15 @@ describe("DesktopNotifyService", () => {
   let main: BrowserWindow;
   let floatWin: BrowserWindow;
   let createWindow: ReturnType<
-    typeof vi.fn<(...args: [Electron.BrowserWindowConstructorOptions]) => BrowserWindow>
+    typeof vi.fn<
+      (options: Electron.BrowserWindowConstructorOptions) => BrowserWindow
+    >
   >;
-  let isSettingEnabled: ReturnType<typeof vi.fn<(...args: []) => Promise<boolean>>>;
+  let isSettingEnabled: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
   let sendOpenConversation: ReturnType<
-    typeof vi.fn<(...args: [BrowserWindow, string | undefined]) => void>
+    typeof vi.fn<
+      (win: BrowserWindow, conversationId: string | undefined) => void
+    >
   >;
   let now: number;
   let service: DesktopNotifyService;
@@ -131,16 +135,9 @@ describe("DesktopNotifyService", () => {
     DesktopNotifyService._resetForTesting();
     main = createMockWindow({ isFocused: false });
     floatWin = createMockWindow();
-    createWindow = vi.fn(
-      (_options: Electron.BrowserWindowConstructorOptions): BrowserWindow =>
-        floatWin
-    );
+    createWindow = vi.fn((): BrowserWindow => floatWin);
     isSettingEnabled = vi.fn(async (): Promise<boolean> => true);
-    sendOpenConversation = vi.fn(
-      (_main: BrowserWindow, _conversationId: string | undefined): void => {
-        // mock
-      }
-    );
+    sendOpenConversation = vi.fn((): void => {});
     now = 1_000_000;
     service = new DesktopNotifyService(buildDeps());
   });

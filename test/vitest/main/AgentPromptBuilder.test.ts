@@ -37,8 +37,8 @@ describe("AgentPromptBuilder", () => {
       files: ["/ws/a.png", "/ws/b.png", "/ws/c.png"],
       instruction: "make the background white",
     };
-    const { userMessage } = builder.build({ definition: baseDefinition(), packet });
-    const parsed = JSON.parse(userMessage.content) as Record<string, unknown>;
+    const { userMessageText } = builder.build({ definition: baseDefinition(), packet });
+    const parsed = JSON.parse(userMessageText) as Record<string, unknown>;
     expect(parsed.files).toEqual(["/ws/a.png", "/ws/b.png", "/ws/c.png"]);
     expect(parsed.instruction).toBe("make the background white");
     // schema is still attached so the model sees the output contract
@@ -54,8 +54,8 @@ describe("AgentPromptBuilder", () => {
       priorFindings: [],
       requiredOutputSchema: { type: "object" },
     };
-    const { userMessage } = builder.build({ definition: baseDefinition(), packet });
-    const parsed = JSON.parse(userMessage.content) as Record<string, unknown>;
+    const { userMessageText } = builder.build({ definition: baseDefinition(), packet });
+    const parsed = JSON.parse(userMessageText) as Record<string, unknown>;
     expect(parsed.lead).toEqual({ companyName: "Acme" });
     expect(parsed.userGoal).toBe("enrich");
   });
@@ -68,5 +68,39 @@ describe("AgentPromptBuilder", () => {
     });
     expect(systemMessage.content).toContain("Output format (MANDATORY)");
     expect(systemMessage.content).toContain("NO markdown fences");
+  });
+
+  // Task 16: trusted initialImageArtifacts turn the user message into
+  // multimodal content parts — packet JSON text first, then one image_url
+  // part per artifact with the exact dataUrl and detail preserved.
+  it("emits multimodal content parts when initialImageArtifacts are present", () => {
+    const builder = new AgentPromptBuilder();
+    const artifact = {
+      sourceId: "msg-1:0",
+      fileName: "generated.png",
+      mimeType: "image/png" as const,
+      dataUrl: "data:image/png;base64,YXJ0aWZhY3Q=",
+      detail: "high" as const,
+    };
+    const { userMessage, userMessageText } = builder.build({
+      definition: baseDefinition(),
+      packet: { files: [], instruction: "brighten" },
+      initialImageArtifacts: [artifact],
+    });
+
+    expect(Array.isArray(userMessage.content)).toBe(true);
+    const parts = userMessage.content as Array<Record<string, unknown>>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toEqual({
+      type: "text",
+      text: userMessageText,
+    });
+    expect(JSON.parse(userMessageText)).toMatchObject({
+      instruction: "brighten",
+    });
+    expect(parts[1]).toEqual({
+      type: "image_url",
+      image_url: { url: artifact.dataUrl, detail: "high" },
+    });
   });
 });

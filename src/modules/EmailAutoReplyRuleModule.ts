@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { EmailAutoReplyRuleModel } from "@/model/EmailAutoReplyRule.model";
 import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 
@@ -16,7 +17,7 @@ export class EmailAutoReplyRuleModule extends BaseModule {
       await this.ensureConnection();
       return await this.ruleModel.read(id);
     } catch (error) {
-      console.error("Error reading auto-reply rule:", error);
+      log.error("Error reading auto-reply rule:", error);
       throw error;
     }
   }
@@ -28,7 +29,7 @@ export class EmailAutoReplyRuleModule extends BaseModule {
       await this.ensureConnection();
       return await this.ruleModel.listByEmailService(emailServiceId);
     } catch (error) {
-      console.error("Error listing auto-reply rules:", error);
+      log.error("Error listing auto-reply rules:", error);
       throw error;
     }
   }
@@ -40,7 +41,7 @@ export class EmailAutoReplyRuleModule extends BaseModule {
       await this.ensureConnection();
       return await this.ruleModel.getEffectiveRule(emailServiceId);
     } catch (error) {
-      console.error("Error resolving effective auto-reply rule:", error);
+      log.error("Error resolving effective auto-reply rule:", error);
       throw error;
     }
   }
@@ -50,7 +51,7 @@ export class EmailAutoReplyRuleModule extends BaseModule {
       await this.ensureConnection();
       return await this.ruleModel.create(entity);
     } catch (error) {
-      console.error("Error creating auto-reply rule:", error);
+      log.error("Error creating auto-reply rule:", error);
       throw error;
     }
   }
@@ -60,7 +61,7 @@ export class EmailAutoReplyRuleModule extends BaseModule {
       await this.ensureConnection();
       await this.ruleModel.update(id, entity);
     } catch (error) {
-      console.error("Error updating auto-reply rule:", error);
+      log.error("Error updating auto-reply rule:", error);
       throw error;
     }
   }

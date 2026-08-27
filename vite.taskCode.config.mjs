@@ -198,6 +198,18 @@ export default ({ mode }) => {
         },
         test: {
             include: ['test/vitest/taskCode/*.test.ts'],
+            // WS-2: coverage (only active when run with --coverage).
+            coverage: {
+                provider: 'v8',
+                reporter: ['text', 'html', 'lcov'],
+                reportsDirectory: './coverage/taskcode',
+                include: [
+                    'src/main-process/**', 'src/service/**', 'src/modules/**',
+                    'src/model/**', 'src/controller/**', 'src/utils/**',
+                    'src/config/**', 'src/schemas/**', 'src/entity/**', 'src/entityTypes/**',
+                ],
+                exclude: ['**/*.test.ts', 'test/**', 'src/**/*.d.ts', '**/index.ts'],
+            },
         }
 
     })

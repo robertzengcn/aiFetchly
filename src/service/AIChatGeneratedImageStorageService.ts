@@ -8,6 +8,7 @@ import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   buildGeneratedImageProtocolUrl,
   getGeneratedImageUserRoot,
+  sanitizeGeneratedImagePathPart,
 } from "@/service/AIChatGeneratedImageProtocol";
 
 type FetchLike = typeof fetch;
@@ -84,8 +85,10 @@ export class AIChatGeneratedImageStorageService {
 
     const mimeType = this.resolveMimeType(image);
     const extension = MIME_EXTENSION[mimeType] ?? "png";
-    const conversationPathPart = sanitizePathPart(input.conversationId);
-    const messagePathPart = sanitizePathPart(input.messageId);
+    const conversationPathPart = sanitizeGeneratedImagePathPart(
+      input.conversationId
+    );
+    const messagePathPart = sanitizeGeneratedImagePathPart(input.messageId);
     const directory = path.join(
       getGeneratedImageUserRoot(this.userDataPath, this.currentUserEmail),
       conversationPathPart,
@@ -166,10 +169,6 @@ function isHttpUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function sanitizePathPart(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 160) || "unknown";
 }
 
 function readCurrentUserEmail(): string {

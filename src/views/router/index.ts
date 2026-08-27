@@ -959,6 +959,40 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/community-plugins",
+    name: "CommunityPlugins",
+    redirect: "/community-plugins/list",
+    meta: {
+      visible: true,
+      title: "route.community_plugins",
+      icon: "mdi-storefront-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "list",
+        component: () => import("@/views/pages/communityPlugins/index.vue"),
+        name: "CommunityPluginsList",
+        meta: {
+          visible: true,
+          title: "route.community_plugins",
+          icon: "mdi-storefront-outline",
+          aiNavigable: true,
+          aiAliases: [
+            "community plugins",
+            "plugin store",
+            "plugin hub",
+            "community plugin page",
+            "browse plugins",
+            "plugin marketplace page",
+          ],
+          aiDescription:
+            "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+        },
+      },
+    ],
+  },
+  {
     path: "/socialaccount",
     name: "Socialaccount",
     redirect: "/socialaccount/list",
@@ -1111,12 +1145,6 @@ export const constantRoutes: RouteRecordRaw[] = [
 // route.afterEach(() => {
 //     checkVersion();
 // });
-
-/**
- * asyncRoutes
- * the routes that need to be dynamically loaded based on user roles
- */
-export const asyncRoutes: RouteRecordRaw[] = [];
 
 const router = createRouter({
   history: createWebHashHistory(),

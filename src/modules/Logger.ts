@@ -1,6 +1,11 @@
 import * as path from "path";
 import * as os from "os";
 import fs from "fs";
+import { randomUUID } from "crypto";
+import { createRequire as nodeCreateRequire } from "node:module";
+import { getCrashReporterFromGlobal } from "@/modules/diagnostics/CrashReporterGlobal";
+import { redactString } from "@/modules/diagnostics/DiagnosticRedactor";
+import type { ErrorRecord } from "@/modules/diagnostics/DiagnosticSchemas";
 
 /** True when running in a worker/child process that has process.send (e.g. contact-extraction worker). */
 const isWorker =
@@ -10,6 +15,28 @@ const isWorker =
 
 /** True outside production builds. Used to gate dev-only behavior like console mirroring. */
 const isDevelopment = process.env.NODE_ENV !== "production";
+
+/**
+ * A `require` that works in every runtime this module can load from:
+ *   - Electron main process (CJS bundle) — global `require` exists.
+ *   - ESM contexts (ts-node ESM loader, plain `node --input-type=module`,
+ *     vitest native ESM) — global `require` is undefined, so synthesize one
+ *     from `node:module`'s `createRequire` relative to this file.
+ *
+ * Without this, `require("electron-log/main")` at module scope throws
+ * `ReferenceError: require is not defined` when Logger.ts is loaded as ESM
+ * (the bundled CJS output is unaffected because rolldown rewrites these to
+ * its own `require_*` interop). `createRequire(__filename)` is the Node
+ * blessed bridge and mirrors the pattern in LocalTransformersLoader /
+ * SherpaOnnxNative / LocalAiRuntimeHealthService.
+ */
+const safeRequire: NodeRequire =
+  typeof require === "function"
+    ? require
+    : nodeCreateRequire(
+        // In ESM, `__filename` is undefined; use the URL of this module.
+        typeof __filename === "string" ? __filename : import.meta.url
+      );
 
 /**
  * Returns true when verbose "debug-level" file logging should be active.
@@ -26,11 +53,11 @@ function isDebugLoggingEnabled(): boolean {
   if (process.env.AIFETCHLY_DEBUG_LOGS === "true") return true;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require("electron") as typeof import("electron");
+    const electron = safeRequire("electron") as typeof import("electron");
     const app = electron?.app;
     if (!app) return false;
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const debugPath = require("path").join(
+    const debugPath = safeRequire("path").join(
       app.getPath("userData"),
       "diagnostics",
       ".debug-enabled"
@@ -102,7 +129,7 @@ function createWorkerLoggerStub(
 function getLogDirectory(): string {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require("electron") as typeof import("electron");
+    const electron = safeRequire("electron") as typeof import("electron");
     const app = electron?.app;
     if (app && typeof app.getPath === "function") {
       return path.join(app.getPath("userData"), "logs");
@@ -130,7 +157,7 @@ export class Logger {
 
   private constructor() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electronLogModule = require("electron-log/main");
+    const electronLogModule = safeRequire("electron-log/main");
     // Ensure electron-log has the required methods, fall back to console if not
     if (electronLogModule && typeof electronLogModule.info === "function") {
       this.electronLog = electronLogModule;
@@ -354,19 +381,79 @@ let logger: {
   stopLogCleanup: () => void;
 };
 
+/** Render a log argument as a string without ever throwing. */
+function argToString(a: unknown): string {
+  if (typeof a === "string") return a;
+  if (a instanceof Error) return a.stack ?? a.message;
+  try {
+    return JSON.stringify(a) ?? String(a);
+  } catch {
+    return String(a);
+  }
+}
+
+/**
+ * Wrap a log method so each call also feeds the diagnostics buffers: one
+ * breadcrumb (category "log") and one ErrorRecord in the recent-errors ring.
+ * Best-effort — failures are swallowed so diagnostics can never break
+ * logging. No-ops while the crash reporter is not yet initialised (very
+ * early startup) and is entirely inactive in worker processes.
+ */
+function bridgeLogLevel(
+  original: (...args: unknown[]) => void,
+  level: "warn" | "error"
+): (...args: unknown[]) => void {
+  return (...args: unknown[]) => {
+    original(...args);
+    try {
+      const reporter = getCrashReporterFromGlobal();
+      if (!reporter) return;
+      const message = redactString(args.map(argToString).join(" "));
+      if (!message) return;
+      const timestamp = new Date().toISOString();
+      reporter.addBreadcrumb({
+        timestamp,
+        category: "log",
+        // Breadcrumb message cap (wire contract caps at 1024).
+        message: message.slice(0, 1024),
+        level,
+      });
+      const rec: ErrorRecord = {
+        schemaVersion: 1,
+        timestamp,
+        errorId: randomUUID(),
+        sessionId: reporter.sessionId,
+        level,
+        processType: "main",
+        // ErrorRecord message cap (schema max 8 KB).
+        message: message.slice(0, 8 * 1024),
+      };
+      reporter.pushError(rec);
+    } catch {
+      // never throw from diagnostics
+    }
+  };
+}
+
 if (isWorker) {
   const workerLog = createWorkerLogProxy();
   log = workerLog;
   logger = createWorkerLoggerStub(workerLog);
 } else {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const electronLogModule = require("electron-log/main");
+  const electronLogModule = safeRequire("electron-log/main");
   // Ensure electron-log has the required methods, fall back to console if not
+  let resolved: {
+    info: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+  };
   if (electronLogModule && typeof electronLogModule.info === "function") {
-    log = electronLogModule;
+    resolved = electronLogModule;
   } else {
     // Fallback to console if electron-log is not available
-    log = {
+    resolved = {
       info: console.log.bind(console),
       error: console.error.bind(console),
       warn: console.warn.bind(console),
@@ -374,6 +461,16 @@ if (isWorker) {
     };
   }
   logger = Logger.getInstance();
+  // Diagnostics bridge: every warn/error log also feeds the crash reporter's
+  // breadcrumb + recent-error buffers so crash uploads carry pre-crash
+  // context. Methods are wrapped explicitly (not spread) because electron-log
+  // method enumerability is not guaranteed. info/debug stay unbridged.
+  log = {
+    info: (...args: unknown[]) => resolved.info(...args),
+    debug: (...args: unknown[]) => resolved.debug(...args),
+    error: bridgeLogLevel(resolved.error, "error"),
+    warn: bridgeLogLevel(resolved.warn, "warn"),
+  };
 }
 
 export { log, logger };

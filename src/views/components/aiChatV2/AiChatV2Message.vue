@@ -104,6 +104,47 @@
             {{ message.metadata.summary }}
           </div>
           <div
+            v-if="batchProgressView"
+            class="v2-message__batch-progress"
+          >
+            <div class="v2-message__batch-summary">
+              <span>{{
+                t("aiChatV2.generatedImageRefs.progressSummary", {
+                  completed: batchProgressView.completedCount,
+                  requested: batchProgressView.requestedCount,
+                  concurrency: batchProgressView.concurrency,
+                }) ||
+                `${batchProgressView.completedCount} of ${batchProgressView.requestedCount} completed`
+              }}</span>
+              <span class="v2-message__batch-status">{{
+                batchProgressView.status
+              }}</span>
+            </div>
+            <details
+              v-if="batchProgressView.failures.length > 0"
+              class="v2-message__details v2-message__batch-failures"
+            >
+              <summary
+                :title="
+                  t(
+                    'aiChatV2.generatedImageRefs.errors.generated_image_batch_partial'
+                  ) || ''
+                "
+              >
+                <v-icon size="x-small" color="error">mdi-alert-circle-outline</v-icon>
+                {{ batchProgressView.failures.length }}
+              </summary>
+              <div
+                v-for="(failure, failureIndex) in batchProgressView.failures"
+                :key="failureIndex"
+                class="v2-message__batch-failure-row"
+              >
+                <span class="v2-message__batch-item-label">{{ failure.label }}</span>
+                <span class="v2-message__batch-error">{{ failure.errorText }}</span>
+              </div>
+            </details>
+          </div>
+          <div
             v-if="attachLocalImagesAttachments.length > 0"
             class="v2-message__attachments"
           >
@@ -142,7 +183,15 @@
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
-          <template v-for="image in generatedImages" :key="image.key">
+          <div
+            v-for="image in generatedImages"
+            :key="image.key"
+            class="v2-message__generated-image"
+          >
+            <span
+              class="v2-message__generated-image-index"
+              aria-hidden="true"
+            >{{ image.imageIndex + 1 }}</span>
             <a
               v-if="image.externalHref"
               :href="image.externalHref"
@@ -173,7 +222,25 @@
                 loading="lazy"
               />
             </button>
-          </template>
+            <div class="v2-message__image-actions">
+              <button
+                type="button"
+                class="v2-message__use-reference-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.useAsReference') || 'Use as reference'"
+                @click="emitUseGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.useAsReference") || "Use as reference" }}
+              </button>
+              <button
+                type="button"
+                class="v2-message__edit-image-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.edit') || 'Edit'"
+                @click="emitEditGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
+              </button>
+            </div>
+          </div>
         </div>
         <!-- User-sent attachments: render inline so the user sees what they
              attached, scrolling with the message history. -->
@@ -303,6 +370,7 @@ import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
+  ChatV2GeneratedImageReference,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
@@ -353,6 +421,14 @@ const emit = defineEmits<{
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
   (e: "report", descriptor: ReportableOutputDescriptor): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
 }>();
 const { t, te } = useI18n();
 
@@ -402,6 +478,10 @@ const messageTime = computed(() => {
 interface RenderableGeneratedImage {
   key: string;
   src: string;
+  /** Position in `metadata.generatedImages` — the opaque reference index. */
+  imageIndex: number;
+  /** Always `props.message.id` — the opaque reference message id. */
+  messageId: string;
   externalHref?: string;
   localPath?: string;
 }
@@ -414,6 +494,8 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         ? {
             key: `${src}-${index}`,
             src,
+            imageIndex: index,
+            messageId: props.message.id,
             ...(isExternalImageUrl(src) ? { externalHref: src } : {}),
             ...(image.local_path ? { localPath: image.local_path } : {}),
           }
@@ -421,6 +503,20 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
     })
     .filter((image): image is RenderableGeneratedImage => image !== null);
 });
+
+function emitUseGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("use-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitEditGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("edit-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
 
 interface RenderableAttachment {
   key: string;
@@ -683,6 +779,133 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
+
+// Batch progress card for process_artifact_batch results. Renders aggregate
+// counters plus an expandable per-item failure list. Trust boundary: only
+// counters, statuses, error strings and safe identity labels are read —
+// outputImages/base64 bytes and absolute paths are never surfaced.
+const BATCH_TOOL_NAME = "process_artifact_batch";
+const GENERATED_IMAGE_ERROR_KEY_PREFIX = "generated_image_";
+const BATCH_RESULT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+]);
+
+interface BatchFailureRowView {
+  readonly label: string;
+  readonly errorText: string;
+}
+
+interface BatchProgressView {
+  readonly status: string;
+  readonly requestedCount: number;
+  readonly completedCount: number;
+  readonly concurrency: number;
+  readonly failures: readonly BatchFailureRowView[];
+}
+
+function asNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** Workspace-file items are identified by file name only — never the path. */
+function pathBaseName(path: string): string {
+  const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
+  const last = segments[segments.length - 1];
+  return last && last.length > 0 ? last : path;
+}
+
+/**
+ * Safe item label: workspace files show their base name; generated-image
+ * references are opaque, so they fall back to the order position "#N".
+ */
+function batchItemLabel(input: unknown, orderPosition: number): string {
+  if (input && typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    if (
+      record.kind === "workspace_file" &&
+      typeof record.path === "string" &&
+      record.path.length > 0
+    ) {
+      return pathBaseName(record.path);
+    }
+  }
+  return `#${orderPosition}`;
+}
+
+function translatedBatchError(errorCode: string): string {
+  if (!errorCode.startsWith(GENERATED_IMAGE_ERROR_KEY_PREFIX)) return "";
+  const key = `aiChatV2.generatedImageRefs.errors.${errorCode}`;
+  return te(key) ? t(key) : "";
+}
+
+const batchProgressView = computed<BatchProgressView | null>(() => {
+  if (String(props.message.metadata?.toolName || "") !== BATCH_TOOL_NAME) {
+    return null;
+  }
+  const result = toolResult.value;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return null;
+  }
+  const record = result as Record<string, unknown>;
+  const status =
+    typeof record.status === "string" && BATCH_RESULT_STATUSES.has(record.status)
+      ? record.status
+      : null;
+  const requestedCount = asNonNegativeInteger(record.requestedCount);
+  const completedCount = asNonNegativeInteger(record.completedCount);
+  const concurrency = asNonNegativeInteger(record.concurrency);
+  if (
+    status === null ||
+    requestedCount === null ||
+    completedCount === null ||
+    concurrency === null
+  ) {
+    return null;
+  }
+  const items: readonly unknown[] = Array.isArray(record.items)
+    ? record.items
+    : [];
+  const failures: BatchFailureRowView[] = [];
+  items.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const itemRecord = item as Record<string, unknown>;
+    if (
+      itemRecord.status !== "failed" &&
+      itemRecord.status !== "cancelled"
+    ) {
+      return;
+    }
+    const errorCode =
+      typeof itemRecord.errorCode === "string" ? itemRecord.errorCode : "";
+    let errorText = translatedBatchError(errorCode);
+    if (
+      !errorText &&
+      typeof itemRecord.error === "string" &&
+      itemRecord.error.trim().length > 0
+    ) {
+      errorText = itemRecord.error.trim();
+    }
+    if (!errorText) {
+      errorText = t(
+        `aiChatV2.generatedImageRefs.errors.${
+          itemRecord.status === "cancelled"
+            ? "generated_image_batch_cancelled"
+            : "generated_image_batch_partial"
+        }`
+      );
+    }
+    failures.push({
+      label: batchItemLabel(itemRecord.input, index + 1),
+      errorText,
+    });
+  });
+  return { status, requestedCount, completedCount, concurrency, failures };
+});
 
 interface MentionChip {
   variant: "resolved" | "warning";
@@ -968,6 +1191,40 @@ const pastedChips = computed<PastedChip[]>(() => {
   max-height: 360px;
   object-fit: contain;
 }
+.v2-message__generated-image {
+  position: relative;
+}
+.v2-message__generated-image-index {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.v2-message__image-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.v2-message__use-reference-btn,
+.v2-message__edit-image-btn {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
 /* User-sent attachment previews. Images use a smaller max-height than
    AI-generated images so multi-attachment user bubbles stay compact. */
 .v2-message__attachments {
@@ -1036,6 +1293,48 @@ const pastedChips = computed<PastedChip[]>(() => {
   margin: 0;
   white-space: pre-wrap;
   font-size: 12px;
+}
+.v2-message__batch-progress {
+  margin-top: 6px;
+}
+.v2-message__batch-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.v2-message__batch-status {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-family: monospace;
+  font-size: 11px;
+}
+.v2-message__batch-failures {
+  margin-top: 4px;
+}
+.v2-message__batch-failures summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.v2-message__batch-failure-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 12px;
+}
+.v2-message__batch-item-label {
+  font-family: monospace;
+  white-space: nowrap;
+}
+.v2-message__batch-error {
+  color: rgb(var(--v-theme-error));
 }
 .v2-message__mentions {
   display: flex;

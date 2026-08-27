@@ -5,24 +5,24 @@ import { SearchTaskEntity } from "./SearchTask.entity"
 @Entity("search_task_proxy")
 export class SearchTaskProxyEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column("integer")
-    task_id: number;
+    task_id!: number;
 
     @Column("integer")
-    proxy_id: number;
+    proxy_id!: number;
 
     @Column("text")
-    host:string;
+    host!:string;
     @Column("text")
-    port:string;
+    port!:string;
     @Column("text")
-    user:string;
+    user!:string;
     @Column("text")
-    pass:string;
+    pass!:string;
 
     @ManyToOne(() => SearchTaskEntity)
     @JoinColumn({ name: "task_id" })
-    task: SearchTaskEntity;
+    task!: SearchTaskEntity;
 } 

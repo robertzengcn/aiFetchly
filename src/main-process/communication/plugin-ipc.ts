@@ -1,4 +1,5 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { log } from "@/modules/Logger";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
@@ -250,7 +251,7 @@ function pluginHookViews(pluginName: string): {
 }
 
 export function registerPluginIpcHandlers(): void {
-  console.log("Plugin IPC handlers registered");
+  log.info("Plugin IPC handlers registered");
 
   registerValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
     await syncUserPluginFoldersForList();
@@ -365,7 +366,7 @@ export function registerPluginIpcHandlers(): void {
       try {
         await PluginComponentRegistryService.applyLoadedPlugins();
       } catch (promotionError) {
-        console.warn(
+        log.warn(
           "[plugin-ipc] command promotion after import failed (recoverable):",
           promotionError
         );
@@ -453,7 +454,7 @@ export function registerPluginIpcHandlers(): void {
       try {
         await PluginComponentRegistryService.applyLoadedPlugins();
       } catch (promotionError) {
-        console.warn(
+        log.warn(
           "[plugin-ipc] command promotion after install-from-source failed (recoverable):",
           promotionError
         );
@@ -653,7 +654,7 @@ export function registerPluginIpcHandlers(): void {
 async function syncUserPluginFoldersForList(): Promise<void> {
   const result = await UserPluginAutoInstallService.syncDefaultUserPlugins();
   if (result.errors.length > 0) {
-    console.warn(
+    log.warn(
       `[Plugin IPC] Failed to auto-install ${result.errors.length} user plugin folder(s).`,
       result.errors
     );

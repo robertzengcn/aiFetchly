@@ -1,5 +1,11 @@
 import { ToolFunction } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import { MCPToolService } from "@/service/MCPToolService";
+import {
+  CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+  CONTACT_VERIFICATION_TOOL_PARAMETERS,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
+} from "@/schemas/contactVerification";
 
 // Static tool functions
 const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
@@ -276,7 +282,8 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     name: "extract_contact_info",
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
-      "IMPORTANT: To avoid timeouts, call this tool in SMALL BATCHES of about 5 URLs or fewer per call; for a larger URL list, make multiple sequential calls instead of one large call. If a batch times out, contacts already collected are returned with partial: true — retry the remaining URLs in a smaller batch.",
+      "IMPORTANT: To avoid timeouts, call this tool in SMALL BATCHES of about 5 URLs or fewer per call; for a larger URL list, make multiple sequential calls instead of one large call. If a batch times out, contacts already collected are returned with partial: true — retry the remaining URLs in a smaller batch. " +
+      EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
       type: "object",
       properties: {
@@ -289,6 +296,12 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
       },
       required: ["urls"],
     },
+  },
+  {
+    type: "function",
+    name: "verify_contact_info",
+    description: CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+    parameters: CONTACT_VERIFICATION_TOOL_PARAMETERS,
   },
 ];
 
@@ -304,7 +317,7 @@ export async function getAvailableToolFunctions(): Promise<ToolFunction[]> {
     const mcpTools = await mcpService.getEnabledMCPToolsAsFunctions();
     return [...staticTools, ...mcpTools];
   } catch (error) {
-    console.error("Failed to load MCP tools:", error);
+    log.error("Failed to load MCP tools:", error);
     // Return static tools if MCP tools fail to load
     return staticTools;
   }

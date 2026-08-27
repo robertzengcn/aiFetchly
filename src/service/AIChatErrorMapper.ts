@@ -2,14 +2,30 @@
 
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
+import { log } from "@/modules/Logger";
+// Import the renderer-safe sentinel constants into local scope for use in the
+// functions below, and re-export them so existing main-process importers keep
+// working unchanged. The constants live in the pure, Node-free
+// AIChatErrorSentinels module so the renderer can import them without pulling
+// `@/modules/Logger` (and thus `node:module.createRequire`) into the browser
+// bundle. See AIChatErrorSentinels.ts for the rationale.
+import {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+} from "./AIChatErrorSentinels";
+export {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+} from "./AIChatErrorSentinels";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
  * HTTP 402 / "Payment Required" — i.e. the user's subscription token quota
  * is exhausted. The renderer detects this and shows a translated, actionable
  * recharge prompt instead of the raw sentinel.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
  * Broad pattern for transient, retryable server-side failures: empty
@@ -31,9 +47,36 @@ const TRANSIENT_ERROR_PATTERN =
  * loop's auto-retry — use {@link isContentLevelTransientError} instead, so
  * transport-layer conditions (502/429/timeout) are not retried at two layers.
  */
+/**
+ * True when the error indicates the conversation exceeded the model's
+ * context window. This is NOT a transient error — retrying with the same
+ * oversized input will always fail. Used to:
+ *   - exclude it from {@link isTransientRetryableError}
+ *   - trigger an emergency auto-compact on failed turns so the next turn
+ *     has a smaller context.
+ */
+export function isContextWindowExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const lowerMsg = (err.message || "").toLowerCase();
+  return (
+    lowerMsg.includes("context_window_exceeded") ||
+    lowerMsg.includes("context window") ||
+    lowerMsg.includes("context length") ||
+    lowerMsg.includes("contextwindowexceeded") ||
+    lowerMsg.includes("longer than the model")
+  );
+}
+
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
+  // Context window exceeded is NOT transient — retrying with the same
+  // oversized input will always fail. Exclude it before the pattern check
+  // so the user gets the actionable "conversation too long" message instead
+  // of "service is busy, try again".
+  if (isContextWindowExceededError(err)) {
+    return false;
+  }
   if (isAIChatRecoverableError(err)) {
     return (
       err.reason === "server_error" ||
@@ -78,8 +121,9 @@ export function isContentLevelTransientError(err: unknown): boolean {
  * HTTP 401/403 (session/access token expired or rejected). The main process
  * signs the user out and navigates to login; the renderer maps this sentinel
  * to a short translated message if the UI is still visible briefly.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const AUTH_EXPIRED_SENTINEL = "AUTH_EXPIRED";
 
 const AUTH_EXPIRED_MESSAGE_PATTERN =
   /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
@@ -184,6 +228,18 @@ export function userSafeError(err: unknown): string {
     if (/413|Request Entity Too Large|Payload Too Large/i.test(msg)) {
       return "The attachment is too large for the AI server. Please try a smaller image or file.";
     }
+    // Context window exceeded: the conversation history (including tool
+    // call/result pairs) grew beyond the model's context length. This is
+    // NOT a transient error — retrying with the same input will always
+    // fail. Surface a clear, actionable message so the user knows to start
+    // a new conversation or clear history instead of retrying blindly.
+    if (
+      /context_window_exceeded|context window|context length|contextwindowexceeded|longer than the model/i.test(
+        msg
+      )
+    ) {
+      return "The conversation is too long for the model's context window. Please start a new conversation or clear some history.";
+    }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";
     }
@@ -194,7 +250,7 @@ export function userSafeError(err: unknown): string {
     if (isTransientRetryableError(err)) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
-    console.error(
+    log.error(
       `[ai-chat-v2] unmapped error: ${msg} — ${describeErrorDetail(err)}`
     );
     return "An unexpected error occurred. Please try again.";

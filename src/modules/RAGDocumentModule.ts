@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { RAGDocumentModel } from "@/model/RAGDocument.model";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import * as fs from "fs";
@@ -474,7 +475,7 @@ export class RAGDocumentModule extends BaseModule {
     const document = await this.ragDocumentModel.getDocumentById(id);
 
     if (!document) {
-      console.warn(`Document ${id} not found`);
+      log.warn(`Document ${id} not found`);
       return false;
     }
 
@@ -492,7 +493,7 @@ export class RAGDocumentModule extends BaseModule {
         ) {
           // Extract chunk IDs
           const chunkIds = chunks.map((chunk) => chunk.id);
-          console.log(
+          log.info(
             `Found ${chunkIds.length} chunks for document ${id}, deleting associated vectors...`
           );
 
@@ -517,21 +518,21 @@ export class RAGDocumentModule extends BaseModule {
 
           // Delete vectors by chunk IDs using VectorStoreService
           await vectorStoreService.deleteVectorsByChunkIds(chunkIds);
-          console.log(
+          log.info(
             `Deleted ${chunkIds.length} vectors from vector database for document ${id}`
           );
         } else if (
           chunks.length > 0 &&
           (!document.modelName || !document.vectorDimensions)
         ) {
-          console.warn(
+          log.warn(
             `Document ${id} has chunks but missing model information (modelName: ${document.modelName}, vectorDimensions: ${document.vectorDimensions}), skipping vector deletion`
           );
         } else {
-          console.log(`Document ${id} has no chunks, skipping vector deletion`);
+          log.info(`Document ${id} has no chunks, skipping vector deletion`);
         }
       } catch (error) {
-        console.error(
+        log.error(
           `Failed to delete vectors from vector database for document ${id}:`,
           error
         );
@@ -574,13 +575,10 @@ export class RAGDocumentModule extends BaseModule {
         try {
           if (fs.existsSync(candidate)) {
             fs.unlinkSync(candidate);
-            console.log(`Deleted vector index file: ${candidate}`);
+            log.info(`Deleted vector index file: ${candidate}`);
           }
         } catch (error) {
-          console.warn(
-            `Failed to delete vector index file: ${candidate}`,
-            error
-          );
+          log.warn(`Failed to delete vector index file: ${candidate}`, error);
         }
       }
     }
@@ -595,12 +593,12 @@ export class RAGDocumentModule extends BaseModule {
       if (this.isPathUnderUploadStaging(document.filePath)) {
         try {
           fs.unlinkSync(document.filePath);
-          console.log(`Deleted document file: ${document.filePath}`);
+          log.info(`Deleted document file: ${document.filePath}`);
         } catch (error) {
-          console.warn(`Failed to delete file: ${document.filePath}`, error);
+          log.warn(`Failed to delete file: ${document.filePath}`, error);
         }
       } else {
-        console.warn(
+        log.warn(
           `Refusing to delete file outside upload staging directory: ${document.filePath}`
         );
       }
@@ -609,7 +607,7 @@ export class RAGDocumentModule extends BaseModule {
     // Delete from database (cascade will handle chunks)
     const success = await this.ragDocumentModel.deleteDocument(id);
     if (!success) {
-      console.error(`Failed to delete document ${id} from database`);
+      log.error(`Failed to delete document ${id} from database`);
       return false;
     }
 
@@ -714,12 +712,10 @@ export class RAGDocumentModule extends BaseModule {
         errorLogPath
       );
 
-      console.log(
-        `Error log saved for document ${documentId}: ${errorLogPath}`
-      );
+      log.info(`Error log saved for document ${documentId}: ${errorLogPath}`);
       return errorLogPath;
     } catch (logError) {
-      console.error(
+      log.error(
         `Failed to save error log for document ${documentId}:`,
         logError
       );
@@ -800,13 +796,13 @@ export class RAGDocumentModule extends BaseModule {
       try {
         resolvedLog = fs.realpathSync(document.log);
       } catch {
-        console.warn(`Error log path cannot be resolved: ${document.log}`);
+        log.warn(`Error log path cannot be resolved: ${document.log}`);
         return null;
       }
       const resolvedDir = fs.realpathSync(errorLogsDir);
       const rel = path.relative(resolvedDir, resolvedLog);
       if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        console.warn(
+        log.warn(
           `Error log path outside allowed directory; refusing read: ${document.log}`
         );
         return null;
@@ -814,7 +810,7 @@ export class RAGDocumentModule extends BaseModule {
 
       // Check if log file exists
       if (!fs.existsSync(resolvedLog)) {
-        console.warn(`Error log file not found: ${document.log}`);
+        log.warn(`Error log file not found: ${document.log}`);
         return null;
       }
 
@@ -822,10 +818,7 @@ export class RAGDocumentModule extends BaseModule {
       const logContent = fs.readFileSync(resolvedLog, "utf-8");
       return logContent;
     } catch (error) {
-      console.error(
-        `Failed to read error log for document ${documentId}:`,
-        error
-      );
+      log.error(`Failed to read error log for document ${documentId}:`, error);
       return null;
     }
   }

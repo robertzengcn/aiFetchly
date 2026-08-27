@@ -59,6 +59,11 @@ import {
   EMAIL_REPLY_DRAFT_DETAIL,
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+  EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
   SOCIALACCOUNTlIST,
@@ -389,6 +394,11 @@ import {
   PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
   PLUGIN_MARKETPLACE_GET_PLUGIN,
   PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+  // Community Plugins Channels (NON-AI-gated; Free users browse the catalog)
+  PLUGIN_COMMUNITY_LIST,
+  PLUGIN_COMMUNITY_DETAIL,
+  PLUGIN_COMMUNITY_INSTALL,
+  PLUGIN_COMMUNITY_OPEN_PLANS,
   // AI user memory (durable cross-session memory)
   AI_USER_MEMORY_LIST,
   AI_USER_MEMORY_CREATE,
@@ -411,6 +421,36 @@ import {
   AI_WORKSPACE_MEMORY_DELETE,
   AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
   AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
+  AI_PORTABLE_WORKSPACE_MEMORY_RESCAN,
+  AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
+  AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
+  AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
   // Slash Command + AiFetchly Config Channels
   SLASH_COMMAND_LIST,
   SLASH_COMMAND_DISPATCH,
@@ -461,9 +501,12 @@ import {
 // contextBridge.exposeInMainWorld('electronAPI', {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
+// IPC payloads must not be logged in production (they may carry tokens/PII).
+const isDev = process.env.NODE_ENV !== "production";
+
 contextBridge.exposeInMainWorld("api", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  send: (channel, data) => {
+  send: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -506,22 +549,22 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_STREAM,
       AI_EMAIL_TEMPLATE_STOP,
     ];
-    console.log("send", channel, data);
+    if (isDev) console.log("send", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("send2", channel, data);
+      if (isDev) console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  sendBinary: (channel, data) => {
+  sendBinary: (channel: string, data?: unknown) => {
     // whitelist channels for binary data
     const validChannels = [SAVE_TEMP_FILE];
-    console.log("sendBinary", channel, data);
+    if (isDev) console.log("sendBinary", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("sendBinary2", channel, data);
+      if (isDev) console.log("sendBinary2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  receive: (channel, func) => {
+  receive: (channel: string, func: (...args: unknown[]) => void) => {
     const validChannels = [
       "user:Login",
       "socialtask:start",
@@ -585,6 +628,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Portable workspace memory sync summary (main -> renderer)
+      AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -597,7 +642,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on(channel, wrapped);
     }
   },
-  removeListener: (channel, func) => {
+  removeListener: (channel: string, func: (...args: unknown[]) => void) => {
     // Use same whitelist as receive
     const validChannels = [
       "user:Login",
@@ -673,7 +718,7 @@ contextBridge.exposeInMainWorld("api", {
       }
     }
   },
-  removeAllListeners: (channel) => {
+  removeAllListeners: (channel: string) => {
     const validChannels = [
       AI_CHAT_STREAM_CHUNK,
       AI_CHAT_STREAM_COMPLETE,
@@ -706,7 +751,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.removeAllListeners(channel);
     }
   },
-  invoke: (channel, data) => {
+  invoke: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -781,6 +826,11 @@ contextBridge.exposeInMainWorld("api", {
       EMAIL_REPLY_DRAFT_DETAIL,
       EMAIL_REPLY_DRAFT_UPDATE,
       EMAIL_REPLY_SEND,
+      EMAIL_REPLY_DRAFT_APPROVE,
+      EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+      EMAIL_REPLY_DELIVERY_RECONCILE,
+      EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+      EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
       EMAIL_AUTO_REPLY_AUDIT_LIST,
       EMAIL_AUTO_REPLY_AUDIT_DETAIL,
       VIDEODOWNLOAD_LIST,
@@ -789,6 +839,13 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD_DETAIL_QUERY,
       SYSTEM_SETTING_LIST,
       SYSTEM_SETTING_UPDATE,
+      // Session Recording Channels
+      "session-recording:toggle",
+      "session-recording:get-status",
+      "session-recording:get-sessions",
+      "session-recording:export",
+      "session-recording:clear",
+      "session-recording:get-directory",
       QUERY_USER_INFO,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,
@@ -1053,6 +1110,11 @@ contextBridge.exposeInMainWorld("api", {
       PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
       PLUGIN_MARKETPLACE_GET_PLUGIN,
       PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+      // Community Plugins Channels
+      PLUGIN_COMMUNITY_LIST,
+      PLUGIN_COMMUNITY_DETAIL,
+      PLUGIN_COMMUNITY_INSTALL,
+      PLUGIN_COMMUNITY_OPEN_PLANS,
       // AI user memory (durable cross-session memory)
       AI_USER_MEMORY_LIST,
       AI_USER_MEMORY_CREATE,
@@ -1075,6 +1137,35 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_MEMORY_DELETE,
       AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
       AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
+      AI_PORTABLE_WORKSPACE_MEMORY_RESCAN,
+      AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
+      AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
+      AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE,
       // Slash Command + AiFetchly Config Channels
       SLASH_COMMAND_LIST,
       SLASH_COMMAND_DISPATCH,

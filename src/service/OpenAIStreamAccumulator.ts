@@ -15,6 +15,11 @@ export interface OpenAIStreamTextState {
   sawToolCallDelta: boolean;
   usage?: OpenAIUsage;
   images: OpenAIChatImage[];
+  /** Stream-level error (from the SSE chunk's top-level `error` field).
+   * Present when the server signals finish_reason="error" with an error body.
+   * Carries the error code (e.g. "context_window_exceeded") so downstream
+   * error mapping can distinguish non-retryable errors from transient ones. */
+  streamError?: { message: string; type?: string; code?: string };
 }
 
 export interface OpenAIStreamIngestResult {
@@ -102,6 +107,12 @@ export class OpenAIStreamAccumulator {
     // usage object with empty choices. Capture it for downstream reporting.
     if (chunk.usage) {
       this._state.usage = chunk.usage;
+    }
+    // Capture the stream-level error (present when finish_reason="error") so
+    // downstream error mapping can distinguish e.g. context_window_exceeded
+    // from generic transient failures.
+    if (chunk.error) {
+      this._state.streamError = chunk.error;
     }
 
     let contentDelta = "";

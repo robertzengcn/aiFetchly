@@ -1,4 +1,5 @@
 import { AIUserMemoryModule } from "@/modules/AIUserMemoryModule";
+import { log } from "@/modules/Logger";
 import { AIMemoryConsolidationRunModule } from "@/modules/AIMemoryConsolidationRunModule";
 import { AIAutoDreamSourceCollector } from "@/service/AIAutoDreamSourceCollector";
 import {
@@ -6,30 +7,53 @@ import {
   buildAutoDreamUserPrompt,
   parseAutoDreamModelOutput,
 } from "@/service/AIAutoDreamPromptBuilder";
+import { runBatchedAutoDreamConsolidation } from "@/service/AIAutoDreamBatchRunner";
+import type {
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
 import type {
   AIMemoryConsolidationRunView,
   AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
-import {
-  openAIContentToString,
-} from "@/api/aiChatApi";
 import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
+  OpenAIChatMessage,
+  OpenAISmallModelCapability,
 } from "@/api/aiChatApi";
+import type { AIUserMemoryView } from "@/entityTypes/aiUserMemoryTypes";
+import type { AutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import type { ParseResult } from "@/service/AIAutoDreamPromptBuilder";
+import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
+
+/** Frozen profile for the user_auto_dream workload. */
+const AUTO_DREAM_PROFILE = getLightweightProfile("user_auto_dream");
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES = 5;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIAutoDreamServiceDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route for the `user_auto_dream` workload. When the
+   * kill switch is on and the provider is hosted, the first attempt sends
+   * `model: "small"`; otherwise the provider-normal path is used. Optional
+   * background workloads never fall back to the normal model
+   * (tech-design §8.1, §9.2).
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   isAIEnabled(): boolean;
   /** Resolves to the user-controllable auto-dream toggle. Reads from the
    * system_setting table; defaults to enabled when the row is absent. */
   isAutoDreamEnabled(): Promise<boolean>;
+  /**
+   * Resolves the hosted small-model capability metadata. Auto-dream uses a
+   * conservative 32k context when metadata is absent — it does NOT require a
+   * discovered context window (tech-design §8.4). Optional so tests can omit
+   * it; an omitted resolver uses the conservative fallback.
+   */
+  getSmallModelCapability?(): Promise<OpenAISmallModelCapability | null>;
 }
 
 export class AIAutoDreamService {
@@ -50,7 +74,7 @@ export class AIAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[ai-auto-dream] chat trigger failed:", err);
+      log.error("[ai-auto-dream] chat trigger failed:", err);
     }
   }
 
@@ -61,18 +85,22 @@ export class AIAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[ai-auto-dream] agent trigger failed:", err);
+      log.error("[ai-auto-dream] agent trigger failed:", err);
     }
   }
 
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Caller cancellation signal, propagated to every lightweight request
+     * and checked before retry/repair/transactional apply (SMBW-011). */
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      signal: input?.signal,
     });
     if (!result) {
       throw new Error("Auto-dream run skipped");
@@ -97,6 +125,7 @@ export class AIAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -111,7 +140,9 @@ export class AIAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView | null> {
+    if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
 
@@ -141,85 +172,86 @@ export class AIAutoDreamService {
       if (totalChanged < MIN_CHANGED_SOURCES) return null;
     }
 
+    // SMBW-008: do not pass the candidate reviewedThrough to startRun — the
+    // watermark commits only with the successful applyPlanAndCompleteRun.
     const runView = await this.runModule.startRun({
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: collected.reviewedThrough,
+      reviewedThrough: null,
     });
 
     try {
-      const activeMemories = await this.memoryModule.listMemories({
-        status: "active",
-        limit: 200,
+      // Total-budgeted batching (SMBW-007): resolve the small-model context
+      // (or the conservative 32k fallback), pack active memories + source
+      // packets into bounded batches, process each through the lightweight
+      // route with one same-route JSON repair, merge the plans, and apply the
+      // merged plan in one transactional call. Overflow packets are processed
+      // in later batches; an unprocessable packet fails the run locally
+      // without advancing the cursor.
+      const isManual = input.reason === "manual" || input.force === true;
+      const outcome = await runBatchedAutoDreamConsolidation<ParseResult>({
+        runId: runView.runId,
+        packets: collected.packets,
+        reviewedThrough: collected.reviewedThrough,
+        isManual,
+        signal: input.signal,
+        completeLightweight: (lwInput) =>
+          this.deps.completeLightweight({
+            ...lwInput,
+            ...(input.signal ? { signal: input.signal } : {}),
+          }),
+        getSmallModelCapability: this.deps.getSmallModelCapability,
+        profile: AUTO_DREAM_PROFILE,
+        memory: {
+          listActiveMemories: async () =>
+            this.memoryModule.listMemories({ status: "active", limit: 200 }),
+          applyPlanAndCompleteRun: async (applyInput) => {
+            input.signal?.throwIfAborted();
+            return this.memoryModule.applyPlanAndCompleteRun(applyInput);
+          },
+        },
+        prompt: {
+          buildSystemPrompt: () => buildAutoDreamSystemPrompt(),
+          buildUserPrompt: ({
+            activeMemories,
+            packets,
+          }: {
+            activeMemories: ReadonlyArray<AIUserMemoryView>;
+            packets: readonly AutoDreamSourcePacket[];
+          }) => buildAutoDreamUserPrompt({ activeMemories, packets }),
+          parse: (
+            raw: string,
+            packets: readonly AutoDreamSourcePacket[],
+            activeMemories: ReadonlyArray<AIUserMemoryView>
+          ) => parseAutoDreamModelOutput(raw, packets, activeMemories),
+        },
       });
 
-      const req: OpenAIChatCompletionRequest = {
-        messages: [
-          { role: "system", content: buildAutoDreamSystemPrompt() },
-          {
-            role: "user",
-            content: buildAutoDreamUserPrompt({
-              activeMemories,
-              packets: collected.packets,
-            }),
-          },
-        ],
-      };
-      const resp = await this.deps.completeChat(req);
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const parsed = parseAutoDreamModelOutput(
-        raw,
-        collected.packets,
-        activeMemories
-      );
-      if (!parsed.ok) {
+      if (outcome.outcome === "unprocessable") {
         await this.runModule.failRun(
           runView.runId,
-          `parse_error: ${parsed.error ?? "unknown"}`
+          `oversized_packet: ${outcome.sourceId}`
         );
         return await this.runModule.getByRunId(runView.runId);
       }
-
-      // Apply archives first to clear contradictions.
-      for (const a of parsed.archive) {
-        await this.memoryModule.archiveMemory(a.memoryId);
+      if (outcome.outcome === "parse_error") {
+        await this.runModule.failRun(
+          runView.runId,
+          `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
       }
-      for (const u of parsed.update) {
-        await this.memoryModule.updateMemory({
-          memoryId: u.memoryId,
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.content !== undefined ? { content: u.content } : {}),
-          ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
-        });
+      if (outcome.outcome === "cancelled") {
+        // SMBW-011: cancellation is not a failure — leave the run record for
+        // stale-run recovery and do NOT advance the cursor or record a failure.
+        log.info(
+          `[ai-auto-dream] run cancelled conv-run=${runView.runId} — no cursor advance, no failure recorded`
+        );
+        return await this.runModule.getByRunId(runView.runId);
       }
-      for (const c of parsed.create) {
-        await this.memoryModule.createMemory({
-          type: c.type,
-          title: c.title,
-          content: c.content,
-          confidence: c.confidence,
-          sourceKind: c.sourceKind === "chat_v2" ? "chat_v2" : "agent_task",
-          sourceConversationId:
-            c.sourceKind === "chat_v2" ? c.sourceId : undefined,
-          sourceAgentTaskId:
-            c.sourceKind === "agent_task" ? c.sourceId : undefined,
-          sourceMessageIds: c.sourceMessageIds,
-        });
-      }
-
-      await this.runModule.completeRun({
-        runId: runView.runId,
-        chatConversationsReviewed: collected.chatConversationCount,
-        agentTasksReviewed: collected.agentTaskCount,
-        memoriesCreated: parsed.create.length,
-        memoriesUpdated: parsed.update.length,
-        memoriesArchived: parsed.archive.length,
-        model: resp.model,
-      });
-
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[ai-auto-dream] consolidation failed:", err);
+      log.error("[ai-auto-dream] consolidation failed:", err);
       try {
         await this.runModule.failRun(runView.runId, message);
       } catch {

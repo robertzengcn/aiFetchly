@@ -229,11 +229,14 @@ describe("RendererServiceImportGuard", () => {
       entries.length,
       "expected at least one src/views value-import of @/service/*"
     ).toBeGreaterThan(0);
+    // 2cc6d5b7 moved the renderer import to the pure Node-free
+    // AIChatErrorSentinels module (Mapper is main-process-only now); the
+    // sentinel contract tracks the module the renderer actually imports.
     expect(
       entries.some(
-        (abs) => toPosixRel(abs) === "src/service/AIChatErrorMapper.ts"
+        (abs) => toPosixRel(abs) === "src/service/AIChatErrorSentinels.ts"
       ),
-      "AiChatV2 must keep value-importing AIChatErrorMapper (sentinel contract)"
+      "AiChatV2 must keep value-importing AIChatErrorSentinels (sentinel contract)"
     ).toBe(true);
   });
 

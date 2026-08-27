@@ -4,14 +4,14 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("extra_modules")
 export class ExtraModuleEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("text", { unique: true })
-    name: string;
+    name!: string;
     
     @Column("text")
-    version: string;
+    version!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 }

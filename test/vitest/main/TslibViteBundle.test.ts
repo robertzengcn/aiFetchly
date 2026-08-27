@@ -25,9 +25,14 @@ const viteMainConfigPath = path.resolve(process.cwd(), "vite.main.config.mjs");
  */
 describe("tslib Vite bundle __extends regression", () => {
   it("keeps the tslib CJS alias and pdf-lib external in vite.main.config", () => {
-    const configSource = fs.readFileSync(viteMainConfigPath, "utf-8");
+    const configSource =
+      fs.readFileSync(viteMainConfigPath, "utf-8") +
+      fs.readFileSync(
+        path.resolve(process.cwd(), "vite.main.shared.mjs"),
+        "utf-8"
+      );
     expect(configSource).toContain("node_modules/tslib/tslib.js");
-    expect(configSource).toMatch(/["']tslib["']\s*:/);
+    expect(configSource).toMatch(/["']?tslib["']?\s*:/);
     expect(configSource).toMatch(/["']pdf-lib["']/);
     expect(fs.existsSync(tslibCjsPath)).toBe(true);
   });

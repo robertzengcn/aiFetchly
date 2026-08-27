@@ -42,10 +42,9 @@ import { WorkspaceWatchRestarter } from "@/service/workspaceWatch/WorkspaceWatch
 // --- Fake worker ------------------------------------------------------------
 
 interface FakeWorker extends EventEmitter {
-  connected: boolean;
   pid: number;
-  send: (cmd: WorkspaceWatchCommand) => void;
-  kill: (signal?: string) => void;
+  postMessage: (cmd: WorkspaceWatchCommand) => void;
+  kill: () => void;
   sendCalls: WorkspaceWatchCommand[];
   killCalls: string[];
 }
@@ -54,20 +53,18 @@ function createFakeWorker(): FakeWorker {
   const sendCalls: WorkspaceWatchCommand[] = [];
   const killCalls: string[] = [];
   const w = new EventEmitter() as FakeWorker;
-  w.connected = true;
   w.pid = Math.floor(Math.random() * 1_000_000);
   w.sendCalls = sendCalls;
   w.killCalls = killCalls;
-  w.send = (cmd: WorkspaceWatchCommand) => {
+  w.postMessage = (cmd: WorkspaceWatchCommand) => {
     sendCalls.push(cmd);
   };
-  w.kill = (signal?: string) => {
-    killCalls.push(signal ?? "SIGTERM");
-    w.connected = false;
+  w.kill = () => {
+    killCalls.push("kill");
     // Real child_process kill() triggers an async 'exit' event. The fake
     // emits it synchronously so tests can assert post-exit state without
     // awaiting. Tests that need to delay the exit can re-emit later.
-    w.emit("exit", null, signal ?? "SIGTERM");
+    w.emit("exit", 0);
   };
   return w;
 }
@@ -81,6 +78,7 @@ interface ManagerSetup {
   readonly configChangedEmitter: ReturnType<typeof vi.fn>;
   readonly trustResolver: ReturnType<typeof vi.fn>;
   readonly restarter: WorkspaceWatchRestarter;
+  readonly portableMemorySnapshotCallback: ReturnType<typeof vi.fn>;
   /** Push the next fake worker that forkStub will return. */
   nextWorker(w: FakeWorker): void;
 }
@@ -117,10 +115,13 @@ function createManager(
     return w;
   });
 
+  const portableMemorySnapshotCallback = vi.fn();
+
   const manager = new WorkspaceWatchManager({
     applySnapshotCallback,
     configChangedEmitter,
     trustResolver,
+    portableMemorySnapshotCallback,
     fork: forkStub,
     workerEntry: "/fake/worker",
     restarter,
@@ -135,6 +136,7 @@ function createManager(
     configChangedEmitter,
     trustResolver,
     restarter,
+    portableMemorySnapshotCallback,
     nextWorker(w: FakeWorker) {
       queue.push(w);
     },
@@ -347,7 +349,6 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     s.nextWorker(w2);
 
     // Simulate unexpected crash: emit 'exit' WITHOUT kill (real crash).
-    w1.connected = false;
     w1.emit("exit", 1, "SIGSEGV");
 
     // Manager re-forked once.
@@ -381,7 +382,6 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     });
 
     // Crash — this will be the 4th restart in the window (over cap).
-    w1.connected = false;
     w1.emit("exit", 1, "SIGSEGV");
 
     // No re-fork.
@@ -401,12 +401,10 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     // Override kill so the first call (SIGTERM/SIGINT from shutdown path
     // if any) does not emit exit; we want to observe the SIGKILL.
     const killSignals: string[] = [];
-    w.kill = (signal?: string) => {
-      killSignals.push(signal ?? "SIGTERM");
-      if (signal === "SIGKILL") {
-        w.connected = false;
-        w.emit("exit", null, "SIGKILL");
-      }
+    w.kill = () => {
+      killSignals.push("kill");
+      // utilityProcess kill() is unconditional — emit exit immediately.
+      w.emit("exit", 1);
     };
 
     s.nextWorker(w);
@@ -421,7 +419,7 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     // shutdown command was sent.
     expect(w.sendCalls.filter((c) => c.type === "shutdown")).toHaveLength(1);
     // SIGKILL was eventually issued.
-    expect(killSignals).toContain("SIGKILL");
+    expect(killSignals).toContain("kill");
     // disposed → no auto-restart from the SIGKILL exit.
     expect(s.forkStub).toHaveBeenCalledTimes(1);
   });
@@ -575,5 +573,98 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     expect(status.watched[0]?.hasSnapshot).toBe(false);
     expect(status.restartCapExceeded).toBe(false);
     expect(status.recentRestarts).toHaveLength(1);
+  });
+});
+
+
+// --- Portable-memory snapshot forwarding (design §13.1) ----------------------
+
+describe("WorkspaceWatchManager — portable memory snapshot callback", () => {
+  function portableSnapshot(): AIFetchlyConfigSnapshot["portableMemory"] {
+    return {
+      schemaVersion: 1,
+      directoryPresent: true,
+      complete: true,
+      records: [],
+      seenRelativePaths: [],
+      totalBytes: 0,
+      diagnostics: [],
+    };
+  }
+
+  it("forwards snapshots carrying portableMemory with trust + root", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledTimes(1);
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledWith({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      approved: true,
+      snapshot: portableSnapshot(),
+    });
+  });
+
+  it("does not call the callback when the snapshot has no portableMemory", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    w.emit("message", {
+      type: "snapshot",
+      workspaceId: "w1",
+      snapshot: snapshot("w1"),
+    });
+    expect(s.portableMemorySnapshotCallback).not.toHaveBeenCalled();
+  });
+
+  it("forwards unapproved snapshots (coordinator clears state, §13.2)", () => {
+    const s = createManager({ trustApproved: false });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+    expect(s.portableMemorySnapshotCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ approved: false })
+    );
+  });
+
+  it("survives a throwing callback without breaking event processing", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+    s.portableMemorySnapshotCallback.mockImplementation(() => {
+      throw new Error("coordinator exploded");
+    });
+
+    const snap = { ...snapshot("w1"), portableMemory: portableSnapshot() };
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+    // The changed event still flowed out — the manager stayed responsive.
+    expect(s.configChangedEmitter).toHaveBeenCalled();
   });
 });

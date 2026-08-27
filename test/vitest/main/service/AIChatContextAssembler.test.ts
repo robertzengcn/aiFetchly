@@ -67,6 +67,7 @@ function row(opts: Partial<AIChatMessageEntity>): AIChatMessageEntity {
     content: opts.content ?? "",
     timestamp: opts.timestamp ?? new Date(0),
     messageType: opts.messageType ?? MessageType.MESSAGE,
+    metadata: opts.metadata,
   } as AIChatMessageEntity;
 }
 
@@ -227,6 +228,44 @@ describe("AIChatContextAssembler", () => {
     });
   });
 
+  it("threads row.messageId into generated-image annotations without leaking paths", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "assistant-123",
+        role: "assistant",
+        content: "Here's your house!",
+        timestamp: new Date(2),
+        metadata: JSON.stringify({
+          generatedImages: [
+            {
+              url: "aifetchly-generated-image://local/u/c/m/image-1.png",
+              file_name: "image-1.png",
+              local_path: "/home/user/data/generated/image-1.png",
+            },
+          ],
+        }),
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "next",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const assistantMsg = r.messages[r.messages.length - 2];
+    expect(assistantMsg.role).toBe("assistant");
+    const text = assistantMsg.content as string;
+    expect(text).toContain("Here's your house!");
+    expect(text).toContain(
+      "[1] message=assistant-123 image=0 file=image-1.png"
+    );
+    expect(text).not.toContain("aifetchly-generated-image://");
+    expect(text).not.toContain("/home/user/data/generated");
+  });
+
   it("does not duplicate the current user message when it was already saved", async () => {
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
@@ -334,6 +373,61 @@ describe("AIChatContextAssembler", () => {
     });
     expect(mockDurableRetrieve).not.toHaveBeenCalled();
     expect(r.usedDurableMemory).toBe(false);
+  });
+
+  it("augments assistant messages with generated image references for the model", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    const generatedMeta = JSON.stringify({
+      source: "chat-v2",
+      generatedImages: [
+        {
+          type: "image",
+          url: "aifetchly-generated-image://local/user@example.com/conv1/msg1/image-1.png",
+          file_name: "image-1.png",
+          local_path: "/home/user/.config/aiFetchly/ai-chat-generated-images/user@example.com/conv1/msg1/image-1.png",
+        },
+      ],
+    });
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "u1",
+        role: "user",
+        content: "please generate a image with a house in it",
+        timestamp: new Date(1),
+      }),
+      row({
+        messageId: "a1",
+        role: "assistant",
+        content: "Here's your generated image of a house!",
+        timestamp: new Date(2),
+        metadata: generatedMeta,
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "please add tree in front of the house",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    // Find the assistant message in the assembled messages.
+    const assistantMsg = r.messages.find(
+      (m) =>
+        m.role === "assistant" &&
+        typeof m.content === "string" &&
+        m.content.includes("Here's your generated image")
+    );
+    expect(assistantMsg).toBeTruthy();
+    // The content must include the generated_images annotation so the model
+    // can reference the prior image in the next turn — via compact semantic
+    // markers only, never URLs or local paths.
+    const text = assistantMsg!.content as string;
+    expect(text).toContain("<generated_images>");
+    expect(text).toContain("[1] message=a1 image=0 file=image-1.png");
+    expect(text).not.toContain("aifetchly-generated-image://");
+    expect(text).not.toContain("/home/user/.config/aiFetchly");
   });
 });
 
