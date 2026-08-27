@@ -289,13 +289,8 @@
       <div v-if="isReportableAssistant" class="v2-message__report">
         <AIContentReportButton
           :descriptor="reportDescriptor!"
-          :reported="reportSubmitted"
-          @report="reportDialogOpen = true"
-        />
-        <AIContentReportDialog
-          v-model="reportDialogOpen"
-          :descriptor="reportDescriptor"
-          @submitted="onReportSubmitted"
+          :reported="reported"
+          @report="emit('report', reportDescriptor!)"
         />
       </div>
     </div>
@@ -318,8 +313,8 @@ import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
-import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
@@ -342,6 +337,8 @@ const props = defineProps<{
   workspaceRoot?: string;
   /** Global "Show reasoning" preference — gates whether the panel renders. */
   showReasoning?: boolean;
+  /** True when this output was reported this session (parent-owned). */
+  reported?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -355,6 +352,7 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();
 const { t, te } = useI18n();
 
@@ -364,7 +362,8 @@ const isPlanCard = computed(
 
 // Report AI output (PRD §8.1). Only completed assistant text/image messages
 // are reportable — not tool calls, tool results, user/system messages,
-// streaming, errors, or empty placeholders (PRD FR-1.2).
+// streaming, errors, or empty placeholders (PRD FR-1.2). The dialog is hosted
+// by the list parent (AiChatV2Messages) so only one instance exists per chat.
 const isReportableAssistant = computed(
   () =>
     props.message.role === "assistant" &&
@@ -375,8 +374,6 @@ const isReportableAssistant = computed(
 const reportDescriptor = computed(() =>
   isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
 );
-const reportDialogOpen = ref(false);
-const reportSubmitted = ref(false);
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -521,11 +518,6 @@ function openGeneratedImageFile(image: RenderableGeneratedImage): void {
       console.error("[ai-chat-v2] Failed to open generated image:", openErr);
     }
   );
-}
-
-/** Mark this output reported for the session (PRD FR-1.4). */
-function onReportSubmitted(): void {
-  reportSubmitted.value = true;
 }
 
 const toolResult = computed<Record<string, unknown>>(

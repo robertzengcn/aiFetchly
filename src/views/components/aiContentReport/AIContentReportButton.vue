@@ -34,8 +34,6 @@ const props = defineProps<{
   descriptor: ReportableOutputDescriptor;
   /** True after a successful submission this session. */
   reported?: boolean;
-  /** Dense layouts may hide the text label (icon-only); defaults to false. */
-  iconOnly?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "report", descriptor: ReportableOutputDescriptor): void;

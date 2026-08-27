@@ -72,6 +72,46 @@ describe("AIContentReportService", () => {
     expect(postJson.mock.calls[0][0]).toBe("/api/ai/content-reports");
   });
 
+  it("overwrites renderer placeholder appVersion/platform and fills installId in submitReport", async () => {
+    const postJson = vi.fn().mockResolvedValue(makeResponse());
+    const service = new AIContentReportService({
+      httpClient: { postJson },
+      appVersion: () => "9.9.9",
+      installId: () => "stable-install-id",
+    });
+    await service.submitReport(
+      makeValidRequest({
+        context: {
+          conversationId: "c1",
+          messageId: "m1",
+          appVersion: "unknown",
+          platform: "win32",
+          locale: "en-US",
+        },
+      })
+    );
+    const sent = postJson.mock.calls[0][1] as CreateAIContentReportRequest;
+    expect(sent.context.appVersion).toBe("9.9.9");
+    expect(sent.context.platform).toBe(
+      process.platform as "win32" | "darwin" | "linux"
+    );
+    expect(sent.context.installId).toBe("stable-install-id");
+  });
+
+  it("truncates long text in submitReport so the Zod 32000 cap is not tripped", async () => {
+    const postJson = vi.fn().mockResolvedValue(makeResponse());
+    const service = new AIContentReportService({
+      httpClient: { postJson },
+      appVersion: () => "1.0.0",
+      installId: () => "id",
+    });
+    const long = "a".repeat(32001);
+    await service.submitReport(makeValidRequest({ output: { text: long } }));
+    const sent = postJson.mock.calls[0][1] as CreateAIContentReportRequest;
+    expect(sent.output.textTruncated).toBe(true);
+    expect(sent.output.text?.length).toBeLessThanOrEqual(32000);
+  });
+
   it("fills appVersion, platform, and installId in assembleContext", () => {
     const service = new AIContentReportService({
       httpClient: { postJson: vi.fn() },
@@ -81,6 +121,8 @@ describe("AIContentReportService", () => {
     const ctx = service.assembleContext({
       conversationId: "c1",
       messageId: "m1",
+      appVersion: "placeholder",
+      platform: "win32",
       locale: "fr-FR",
     });
     expect(ctx.appVersion).toBe("9.9.9");

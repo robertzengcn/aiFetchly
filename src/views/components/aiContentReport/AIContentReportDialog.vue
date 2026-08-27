@@ -164,7 +164,7 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "submitted", reportId: string): void;
 }>();
-const { t, tm } = useI18n();
+const { t } = useI18n();
 
 const category = ref<AIContentReportCategory | null>(null);
 const comment = ref("");
@@ -386,11 +386,27 @@ async function onSubmit(): Promise<void> {
   }
 }
 
+const VALID_ERROR_CODES: readonly AIContentReportErrorCode[] = [
+  "network",
+  "auth_failed",
+  "invalid_evidence",
+  "payload_too_large",
+  "rate_limited",
+  "service_disabled",
+  "server_error",
+  "unknown",
+];
+
 function resolveErrorCode(err: unknown): AIContentReportErrorCode {
-  // windowInvoke throws an Error with the envelope msg; the main-process
-  // service maps HTTP status to a code, but the envelope msg may be the
-  // raw error string. Best-effort mapping from the message text.
+  // The service throws AIContentReportError whose .message IS the code (e.g.
+  // "rate_limited"). registerValidatedHandler extracts err.message into
+  // envelope.msg, and windowInvoke re-throws it. So the thrown message is
+  // the structured code itself — check for an exact match first.
   const message = err instanceof Error ? err.message : String(err);
+  if ((VALID_ERROR_CODES as readonly string[]).includes(message)) {
+    return message as AIContentReportErrorCode;
+  }
+  // Fallback: best-effort text matching for any unexpected message shape.
   const m = message.toLowerCase();
   if (m.includes("rate") || m.includes("429")) return "rate_limited";
   if (m.includes("network") || m.includes("fetch")) return "network";
@@ -404,28 +420,19 @@ function resolveErrorCode(err: unknown): AIContentReportErrorCode {
 }
 
 function errorText(code: AIContentReportErrorCode): string {
-  const key = `aiContentReport.errors.${code}`;
-  const fallbackMap: Record<AIContentReportErrorCode, string> = {
-    network:
-      "The report could not be submitted. Your details have been kept so you can try again.",
-    auth_failed:
-      "Authentication failed. Your details have been kept so you can try again.",
-    invalid_evidence:
-      "The report evidence was invalid. Your details have been kept so you can try again.",
-    payload_too_large:
-      "The report payload is too large. Your details have been kept so you can try again.",
-    rate_limited: "Too many reports were submitted. Please try again later.",
-    service_disabled:
-      "Reporting is temporarily unavailable. Please try again later.",
-    server_error:
-      "The report could not be submitted. Your details have been kept so you can try again.",
-    unknown:
-      "The report could not be submitted. Your details have been kept so you can try again.",
-  };
-  // tm() returns an object if the key exists; fall back to the English map.
-  const known = tm(key);
-  if (known && typeof known === "object") return String(known);
-  return fallbackMap[code];
+  // t() returns the translated string for a leaf key; the English fallback
+  // is the second arg. tm() is wrong here because these keys map to strings,
+  // not objects.
+  return (
+    t(`aiContentReport.errors.${code}`) ||
+    (code === "rate_limited"
+      ? "Too many reports were submitted. Please try again later."
+      : code === "auth_failed"
+        ? "Authentication failed. Your details have been kept so you can try again."
+        : code === "service_disabled"
+          ? "Reporting is temporarily unavailable. Please try again later."
+          : "The report could not be submitted. Your details have been kept so you can try again.")
+  );
 }
 
 function copyReference(): void {

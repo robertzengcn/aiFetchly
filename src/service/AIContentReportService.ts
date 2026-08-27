@@ -70,13 +70,11 @@ export class AIContentReportService {
    * Fill the context fields the renderer cannot know (appVersion, platform,
    * installId) and clamp the locale. The renderer supplies the rest
    * (conversationId, messageId, artifactId, model, generatedAt, locale).
+   *
+   * Accepts the full context (the renderer sends placeholders for the three
+   * main-process-owned fields); the placeholders are overwritten here.
    */
-  assembleContext(
-    partial: Omit<
-      AIContentReportContext,
-      "appVersion" | "platform" | "installId"
-    >
-  ): AIContentReportContext {
+  assembleContext(partial: AIContentReportContext): AIContentReportContext {
     return {
       ...partial,
       appVersion: this.appVersion(),
@@ -108,8 +106,32 @@ export class AIContentReportService {
   }
 
   /**
+   * Normalize the output evidence: truncate text to the 32000-char limit
+   * (PRD FR-3.2). Image previews are already bounded by the Zod schema and
+   * the renderer-side encoder, so they pass through unchanged.
+   */
+  normalizeOutput(
+    output: CreateAIContentReportRequest["output"]
+  ): CreateAIContentReportRequest["output"] {
+    const normalized: CreateAIContentReportRequest["output"] = { ...output };
+    const textResult = this.normalizeText(output.text);
+    if (typeof textResult.text === "string") {
+      normalized.text = textResult.text;
+      normalized.textTruncated = textResult.textTruncated;
+    }
+    return normalized;
+  }
+
+  /**
    * Submit the report to the backend. Throws `AIContentReportError` (with a
-   * safe code) on any failure; the dialog catches and maps to i18n text.
+   * safe code) on any failure; the IPC handler wraps it and the dialog maps
+   * the code to a localized message.
+   *
+   * Server-side normalization (authoritative, PRD FR-3.1/3.2):
+   *  - text is truncated to 32000 chars preserving head+tail
+   *  - context.appVersion/platform/installId are filled from main-process
+   *    sources (the renderer cannot know these reliably)
+   * The renderer's placeholder values are overwritten here.
    */
   async submitReport(
     request: CreateAIContentReportRequest
@@ -117,12 +139,22 @@ export class AIContentReportService {
     const startedAt = Date.now();
     const { clientReportId, surface, category } = request;
 
+    // Normalize evidence + context server-side (the renderer sends
+    // placeholders for appVersion/platform/installId).
+    const normalizedOutput = this.normalizeOutput(request.output);
+    const normalizedContext = this.assembleContext(request.context);
+    const normalizedRequest: CreateAIContentReportRequest = {
+      ...request,
+      output: normalizedOutput,
+      context: normalizedContext,
+    };
+
     let raw: CommonApiresp<CreateAIContentReportResponse> | undefined;
     let httpStatus: number | undefined;
     try {
       raw = await this.httpClient.postJson<
         CommonApiresp<CreateAIContentReportResponse>
-      >(REPORT_ENDPOINT, request);
+      >(REPORT_ENDPOINT, normalizedRequest);
     } catch (err) {
       const code = mapReportError(err);
       const status = extractStatus(err);
@@ -135,7 +167,10 @@ export class AIContentReportService {
         durationMs: Date.now() - startedAt,
         code,
       });
-      throw new AIContentReportError(code, "Report submission failed");
+      // The message carries the code so it survives the IPC boundary
+      // (registerValidatedHandler extracts err.message into envelope.msg).
+      // The dialog reads the code directly to pick the localized message.
+      throw new AIContentReportError(code, code);
     }
 
     const data = raw?.data;
@@ -152,10 +187,7 @@ export class AIContentReportService {
         durationMs: Date.now() - startedAt,
         code,
       });
-      throw new AIContentReportError(
-        code,
-        "Report submission rejected by server"
-      );
+      throw new AIContentReportError(code, code);
     }
 
     log.info("[ai-content-report] submitted", {

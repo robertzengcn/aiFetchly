@@ -267,8 +267,13 @@ export default defineComponent({
     const reportDialogOpen = ref(false);
     const activeReportDescriptor = ref(null);
     const reportedKnowledgeIndices = ref(new Set());
-    const activeReportIndex = ref(null);
+    const activeReportIndex = ref(/** @type {number|null} */ (null));
 
+    /**
+     * @param {{ content: string, timestamp?: Date }} message
+     * @param {number} index
+     * @return {{ surface: string, contentType: string, text: string, context: { messageId: string } }}
+     */
     const buildKnowledgeDescriptor = (message, index) => ({
       surface: 'knowledge_chat',
       contentType: 'text',
@@ -276,6 +281,11 @@ export default defineComponent({
       context: { messageId: `knowledge-${index}-${message.timestamp?.getTime?.() ?? index}` },
     });
 
+    /**
+     * @param {{ content: string, timestamp?: Date }} message
+     * @param {number} index
+     * @return {void}
+     */
     const openKnowledgeReportDialog = (message, index) => {
       activeReportIndex.value = index;
       activeReportDescriptor.value = buildKnowledgeDescriptor(message, index);
