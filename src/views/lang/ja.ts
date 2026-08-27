@@ -2588,7 +2588,8 @@ export default {
       batchConfirmBody:
         "選択した各画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
       send: "送信",
-      progressSummary: "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
+      progressSummary:
+        "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "この画像参照は無効になりました。画像を再度選択してください。",
@@ -2777,6 +2778,16 @@ export default {
   },
   plugins: {
     title: "プラグイン",
+    tabs: {
+      discover: "発見",
+      installed: "インストール済み",
+      sources: "ソース",
+      issues: "問題",
+    },
+    sources: {
+      browse: "ソースを閲覧",
+      manage: "ソースを管理",
+    },
     import_button: "プラグインをインポート",
     install_button: "インストール",
     validate_button: "パッケージを検証",
@@ -2998,7 +3009,8 @@ export default {
   portableMemory: {
     banner: "ポータブルメモリ",
     enable: "ポータブルメモリを有効化",
-    disabledHint: "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
+    disabledHint:
+      "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
     gitState: "Git",
     pendingReview: "レビュー待ち",
     rejected: "拒否済み",
@@ -3008,13 +3020,17 @@ export default {
     loadingPreview: "プレビューを読み込み中…",
     plannedFiles: "作成されるファイル",
     existingRecords: "既存のメモリファイルを検出",
-    identityInvalid: "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
+    identityInvalid:
+      "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
     visibility: "共有モード",
     visibilityLocal: "ローカルのみ",
-    visibilityLocalHint: "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
+    visibilityLocalHint:
+      "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
     visibilityTeam: "チーム共有可",
-    visibilityTeamHint: "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
-    teamWarning: "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
+    visibilityTeamHint:
+      "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
+    teamWarning:
+      "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
     importPolicy: "外部変更のレビュー",
     policyReviewNew: "新規レコードをレビュー",
     policyAutomatic: "自動的にインポート",
@@ -3024,7 +3040,8 @@ export default {
     exportActive: "アクティブなメモリをエクスポート",
     exportAll: "アクティブとアーカイブ済みをエクスポート",
     bridges: "エージェント指示ブリッジ",
-    bridgesHint: "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
+    bridgesHint:
+      "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
     enableConfirm: "有効化",
     bridgeAction: {
       create: "作成されます",
@@ -3038,8 +3055,10 @@ export default {
     storagePortableLocal: "ポータブル — ローカル",
     storagePortableTeam: "ポータブル — チーム",
     regenerateIdentity: "IDを再生成",
-    regenerateIdentityWarning: "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
-    regenerateGitWarning: "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
+    regenerateIdentityWarning:
+      "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
+    regenerateGitWarning:
+      "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
     regenerateConfirm: "再生成",
     sync: {
       synced: "同期済み",
@@ -3070,7 +3089,8 @@ export default {
     conflictTitle: "競合を解決",
     loadingConflict: "競合を読み込み中…",
     noConflict: "競合が見つかりません。",
-    conflictWarning: "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
+    conflictWarning:
+      "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
     aiFetchlyVersion: "AiFetchly プロジェクション",
     fileVersion: "現在のファイル",
     fileAbsent: "(ファイル不在)",
@@ -3202,5 +3222,25 @@ export default {
     sessionExpired: "セッションの有効期限が切れました",
     signInAgain: "再サインイン",
     installFailed: "インストールに失敗しました",
+    searchLabel: "プラグインを検索",
+    searchPlaceholder: "名前、説明、作成者、タグで検索",
+    allTags: "すべて",
+    moreTags: "その他",
+    filterLabel: "利用可否",
+    filterAll: "すべて",
+    filterAvailable: "利用可能",
+    filterInstalled: "インストール済み",
+    resultCount: "{count} 件のプラグイン",
+    noMatchesTitle: "「{query}」に一致するプラグインはありません",
+    noMatchesDescription:
+      "別のキーワードで検索するか、フィルターを解除してください。",
+    clearFilters: "フィルターを解除",
+    manage: "管理",
+    moreTagCount: "あと {count} 件のタグ",
+    statusInstalled: "インストール済み",
+    statusUpgradeRequired: "アップグレードが必要",
+    statusSignInRequired: "サインインが必要",
+    statusComingSoon: "近日公開",
+    statusUnavailable: "利用不可",
   },
 };

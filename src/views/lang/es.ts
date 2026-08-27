@@ -2643,7 +2643,8 @@ export default {
       moveUp: "Subir",
       moveDown: "Bajar",
       referenceTrayTitle: "Imágenes de referencia",
-      limitReached: "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
+      limitReached:
+        "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
       batchOffer:
         "Se seleccionaron más de 3 imágenes. ¿Prefieres procesarlas como un lote de ediciones independientes?",
       batchConfirmTitle: "¿Procesar como lote?",
@@ -2840,6 +2841,16 @@ export default {
   },
   plugins: {
     title: "Complementos",
+    tabs: {
+      discover: "Descubrir",
+      installed: "Instalados",
+      sources: "Orígenes",
+      issues: "Problemas",
+    },
+    sources: {
+      browse: "Examinar orígenes",
+      manage: "Gestionar orígenes",
+    },
     import_button: "Importar complemento",
     install_button: "Instalar",
     validate_button: "Validar paquete",
@@ -3062,7 +3073,8 @@ export default {
   portableMemory: {
     banner: "Memoria portátil",
     enable: "Activar memoria portátil",
-    disabledHint: "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
+    disabledHint:
+      "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
     gitState: "Git",
     pendingReview: "Pendiente de revisión",
     rejected: "Rechazada",
@@ -3072,13 +3084,17 @@ export default {
     loadingPreview: "Cargando vista previa…",
     plannedFiles: "Archivos que se crearán",
     existingRecords: "Archivos de memoria existentes detectados",
-    identityInvalid: "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
+    identityInvalid:
+      "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
     visibility: "Modo de uso compartido",
     visibilityLocal: "Solo local",
-    visibilityLocalHint: "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
+    visibilityLocalHint:
+      "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
     visibilityTeam: "Compartible con el equipo",
-    visibilityTeamHint: "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
-    teamWarning: "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
+    visibilityTeamHint:
+      "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
+    teamWarning:
+      "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
     importPolicy: "Revisión de cambios externos",
     policyReviewNew: "Revisar registros nuevos",
     policyAutomatic: "Importar automáticamente",
@@ -3088,7 +3104,8 @@ export default {
     exportActive: "Exportar memorias activas",
     exportAll: "Exportar activas y archivadas",
     bridges: "Puentes de instrucciones para agentes",
-    bridgesHint: "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
+    bridgesHint:
+      "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
     enableConfirm: "Activar",
     bridgeAction: {
       create: "se creará",
@@ -3102,8 +3119,10 @@ export default {
     storagePortableLocal: "Portátil — local",
     storagePortableTeam: "Portátil — equipo",
     regenerateIdentity: "Regenerar identidad",
-    regenerateIdentityWarning: "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
-    regenerateGitWarning: "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
+    regenerateIdentityWarning:
+      "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
+    regenerateGitWarning:
+      "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
     regenerateConfirm: "Regenerar",
     sync: {
       synced: "Sincronizado",
@@ -3129,12 +3148,14 @@ export default {
     revealFile: "Mostrar archivo",
     diagnosticsTitle: "Diagnósticos de memoria portátil",
     loadingDiagnostics: "Cargando diagnósticos…",
-    noDiagnostics: "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
+    noDiagnostics:
+      "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
     notRecoverable: "no recuperable",
     conflictTitle: "Resolver conflicto",
     loadingConflict: "Cargando conflicto…",
     noConflict: "No se encontró conflicto.",
-    conflictWarning: "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
+    conflictWarning:
+      "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
     aiFetchlyVersion: "Proyección de AiFetchly",
     fileVersion: "Archivo actual",
     fileAbsent: "(archivo ausente)",
@@ -3266,5 +3287,24 @@ export default {
     sessionExpired: "Tu sesión ha expirado",
     signInAgain: "Inicia sesión de nuevo",
     installFailed: "Error al instalar",
+    searchLabel: "Buscar complementos",
+    searchPlaceholder: "Buscar por nombre, descripción, autor o etiqueta",
+    allTags: "Todos",
+    moreTags: "Más",
+    filterLabel: "Disponibilidad",
+    filterAll: "Todos",
+    filterAvailable: "Disponibles",
+    filterInstalled: "Instalados",
+    resultCount: "{count} complementos",
+    noMatchesTitle: 'Ningún complemento coincide con "{query}"',
+    noMatchesDescription: "Prueba otra búsqueda o borra los filtros.",
+    clearFilters: "Borrar filtros",
+    manage: "Gestionar",
+    moreTagCount: "{count} etiquetas más",
+    statusInstalled: "Instalado",
+    statusUpgradeRequired: "Se requiere mejora",
+    statusSignInRequired: "Se requiere inicio de sesión",
+    statusComingSoon: "Próximamente",
+    statusUnavailable: "No disponible",
   },
 };

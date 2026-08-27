@@ -2814,6 +2814,16 @@ export default {
   },
   plugins: {
     title: "Plugins",
+    tabs: {
+      discover: "Discover",
+      installed: "Installed",
+      sources: "Sources",
+      issues: "Issues",
+    },
+    sources: {
+      browse: "Browse sources",
+      manage: "Manage sources",
+    },
     import_button: "Import Plugin",
     install_button: "Install",
     validate_button: "Validate Package",
@@ -3033,7 +3043,8 @@ export default {
   portableMemory: {
     banner: "Portable memory",
     enable: "Enable portable memory",
-    disabledHint: "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
+    disabledHint:
+      "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
     gitState: "Git",
     pendingReview: "Pending review",
     rejected: "Rejected",
@@ -3043,13 +3054,16 @@ export default {
     loadingPreview: "Loading preview…",
     plannedFiles: "Files that will be created",
     existingRecords: "Existing memory files detected",
-    identityInvalid: "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
+    identityInvalid:
+      "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
     visibility: "Sharing mode",
     visibilityLocal: "Local only",
     visibilityLocalHint: "Files stay on this machine; usually ignored in Git.",
     visibilityTeam: "Team shareable",
-    visibilityTeamHint: "Files may be committed to Git for teammates and other agents.",
-    teamWarning: "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
+    visibilityTeamHint:
+      "Files may be committed to Git for teammates and other agents.",
+    teamWarning:
+      "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
     importPolicy: "External change review",
     policyReviewNew: "Review new records",
     policyAutomatic: "Import automatically",
@@ -3059,7 +3073,8 @@ export default {
     exportActive: "Export active memories",
     exportAll: "Export active and archived",
     bridges: "Agent instruction bridges",
-    bridgesHint: "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
+    bridgesHint:
+      "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
     enableConfirm: "Enable",
     bridgeAction: {
       create: "will be created",
@@ -3073,8 +3088,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — team",
     regenerateIdentity: "Regenerate identity",
-    regenerateIdentityWarning: "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
-    regenerateGitWarning: "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
+    regenerateIdentityWarning:
+      "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
+    regenerateGitWarning:
+      "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
     regenerateConfirm: "Regenerate",
     sync: {
       synced: "Synced",
@@ -3105,7 +3122,8 @@ export default {
     conflictTitle: "Resolve conflict",
     loadingConflict: "Loading conflict…",
     noConflict: "No conflict found.",
-    conflictWarning: "The memory file was edited externally between your read and save. Choose a version to keep.",
+    conflictWarning:
+      "The memory file was edited externally between your read and save. Choose a version to keep.",
     aiFetchlyVersion: "AiFetchly projection",
     fileVersion: "Current file",
     fileAbsent: "(file absent)",
@@ -3235,5 +3253,24 @@ export default {
     sessionExpired: "Your session expired",
     signInAgain: "Sign in again",
     installFailed: "Install failed",
+    searchLabel: "Search plugins",
+    searchPlaceholder: "Search by name, description, author, or tag",
+    allTags: "All",
+    moreTags: "More",
+    filterLabel: "Availability",
+    filterAll: "All",
+    filterAvailable: "Available",
+    filterInstalled: "Installed",
+    resultCount: "{count} plugins",
+    noMatchesTitle: 'No plugins match "{query}"',
+    noMatchesDescription: "Try another search or clear your filters.",
+    clearFilters: "Clear filters",
+    manage: "Manage",
+    moreTagCount: "{count} more tags",
+    statusInstalled: "Installed",
+    statusUpgradeRequired: "Upgrade required",
+    statusSignInRequired: "Sign in required",
+    statusComingSoon: "Coming soon",
+    statusUnavailable: "Unavailable",
   },
 };

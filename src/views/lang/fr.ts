@@ -2821,6 +2821,16 @@ export default {
   },
   plugins: {
     title: "Plugins",
+    tabs: {
+      discover: "Découvrir",
+      installed: "Installés",
+      sources: "Sources",
+      issues: "Problèmes",
+    },
+    sources: {
+      browse: "Parcourir les sources",
+      manage: "Gérer les sources",
+    },
     import_button: "Importer un plugin",
     install_button: "Installer",
     validate_button: "Valider le paquet",
@@ -3043,7 +3053,8 @@ export default {
   portableMemory: {
     banner: "Mémoire portable",
     enable: "Activer la mémoire portable",
-    disabledHint: "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
+    disabledHint:
+      "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
     gitState: "Git",
     pendingReview: "En attente de revue",
     rejected: "Rejetée",
@@ -3053,13 +3064,17 @@ export default {
     loadingPreview: "Chargement de l'aperçu…",
     plannedFiles: "Fichiers qui seront créés",
     existingRecords: "Fichiers de mémoire existants détectés",
-    identityInvalid: "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
+    identityInvalid:
+      "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
     visibility: "Mode de partage",
     visibilityLocal: "Local uniquement",
-    visibilityLocalHint: "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
+    visibilityLocalHint:
+      "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
     visibilityTeam: "Partageable avec l'équipe",
-    visibilityTeamHint: "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
-    teamWarning: "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
+    visibilityTeamHint:
+      "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
+    teamWarning:
+      "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
     importPolicy: "Revue des changements externes",
     policyReviewNew: "Examiner les nouveaux enregistrements",
     policyAutomatic: "Importer automatiquement",
@@ -3069,7 +3084,8 @@ export default {
     exportActive: "Exporter les mémoires actives",
     exportAll: "Exporter actives et archivées",
     bridges: "Ponts d'instructions pour agents",
-    bridgesHint: "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
+    bridgesHint:
+      "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
     enableConfirm: "Activer",
     bridgeAction: {
       create: "sera créé",
@@ -3083,8 +3099,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — équipe",
     regenerateIdentity: "Régénérer l'identité",
-    regenerateIdentityWarning: "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
-    regenerateGitWarning: "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
+    regenerateIdentityWarning:
+      "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
+    regenerateGitWarning:
+      "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
     regenerateConfirm: "Régénérer",
     sync: {
       synced: "Synchronisé",
@@ -3110,12 +3128,14 @@ export default {
     revealFile: "Révéler le fichier",
     diagnosticsTitle: "Diagnostics de la mémoire portable",
     loadingDiagnostics: "Chargement des diagnostics…",
-    noDiagnostics: "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
+    noDiagnostics:
+      "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
     notRecoverable: "non récupérable",
     conflictTitle: "Résoudre le conflit",
     loadingConflict: "Chargement du conflit…",
     noConflict: "Aucun conflit trouvé.",
-    conflictWarning: "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
+    conflictWarning:
+      "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
     aiFetchlyVersion: "Projection AiFetchly",
     fileVersion: "Fichier actuel",
     fileAbsent: "(fichier absent)",
@@ -3250,5 +3270,24 @@ export default {
     sessionExpired: "Votre session a expiré",
     signInAgain: "Se reconnecter",
     installFailed: "Échec de l'installation",
+    searchLabel: "Rechercher des extensions",
+    searchPlaceholder: "Rechercher par nom, description, auteur ou étiquette",
+    allTags: "Tout",
+    moreTags: "Plus",
+    filterLabel: "Disponibilité",
+    filterAll: "Tout",
+    filterAvailable: "Disponibles",
+    filterInstalled: "Installées",
+    resultCount: "{count} extensions",
+    noMatchesTitle: "Aucune extension ne correspond à « {query} »",
+    noMatchesDescription: "Essayez une autre recherche ou effacez vos filtres.",
+    clearFilters: "Effacer les filtres",
+    manage: "Gérer",
+    moreTagCount: "{count} étiquettes de plus",
+    statusInstalled: "Installée",
+    statusUpgradeRequired: "Amélioration requise",
+    statusSignInRequired: "Connexion requise",
+    statusComingSoon: "Bientôt disponible",
+    statusUnavailable: "Indisponible",
   },
 };

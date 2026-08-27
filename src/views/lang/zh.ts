@@ -2513,23 +2513,34 @@ export default {
       limitReached: "每次请求最多可参考 3 张图片。",
       batchOffer: "已选择超过 3 张图片。改为按批次独立处理它们吗？",
       batchConfirmTitle: "按批处理？",
-      batchConfirmBody: "每张所选图片将在后台批次中独立编辑，可能需要一些时间。",
+      batchConfirmBody:
+        "每张所选图片将在后台批次中独立编辑，可能需要一些时间。",
       send: "发送",
       progressSummary: "已完成 {completed}/{requested} · 并发数 {concurrency}",
       errors: {
         generated_image_reference_invalid: "该图片引用已失效，请重新选择图片。",
         generated_image_not_owned: "只能引用本对话中生成的图片。",
         generated_image_missing: "原图已不存在，请重新生成或选择其他参考图。",
-        generated_image_outside_store: "图片来源不在受信任的存储区域内，无法使用。",
-        generated_image_symlink_rejected: "该文件不是常规存储图片，请选择其他生成的作品。",
-        generated_image_unsupported_type: "不支持的图片类型，请选择 PNG、JPEG 或 WebP 图片。",
-        generated_image_too_large: "该图片超过大小限制，请尝试更少或更小的图片。",
-        generated_image_dimension_limit: "该图片超过尺寸限制，请调整大小或以更小尺寸重新生成。",
-        generated_image_reference_limit: "单次请求引用的图片过多，请使用批量处理来独立编辑。",
-        generated_image_ambiguous: "有多张图片可能符合您的请求，请选择目标图片。",
-        generated_image_fusion_limit: "组合图片一次最多 3 张，其余请单独或批量编辑。",
-        generated_image_batch_partial: "部分批量任务失败，已成功的结果会保留，失败的项目可以重试。",
-        generated_image_batch_cancelled: "批次已停止，已完成的结果会保留，您可以继续处理剩余项目。",
+        generated_image_outside_store:
+          "图片来源不在受信任的存储区域内，无法使用。",
+        generated_image_symlink_rejected:
+          "该文件不是常规存储图片，请选择其他生成的作品。",
+        generated_image_unsupported_type:
+          "不支持的图片类型，请选择 PNG、JPEG 或 WebP 图片。",
+        generated_image_too_large:
+          "该图片超过大小限制，请尝试更少或更小的图片。",
+        generated_image_dimension_limit:
+          "该图片超过尺寸限制，请调整大小或以更小尺寸重新生成。",
+        generated_image_reference_limit:
+          "单次请求引用的图片过多，请使用批量处理来独立编辑。",
+        generated_image_ambiguous:
+          "有多张图片可能符合您的请求，请选择目标图片。",
+        generated_image_fusion_limit:
+          "组合图片一次最多 3 张，其余请单独或批量编辑。",
+        generated_image_batch_partial:
+          "部分批量任务失败，已成功的结果会保留，失败的项目可以重试。",
+        generated_image_batch_cancelled:
+          "批次已停止，已完成的结果会保留，您可以继续处理剩余项目。",
       },
     },
   },
@@ -2687,6 +2698,16 @@ export default {
   },
   plugins: {
     title: "插件",
+    tabs: {
+      discover: "发现",
+      installed: "已安装",
+      sources: "来源",
+      issues: "问题",
+    },
+    sources: {
+      browse: "浏览来源",
+      manage: "管理来源",
+    },
     import_button: "导入插件",
     install_button: "安装",
     validate_button: "验证包",
@@ -2898,7 +2919,8 @@ export default {
   portableMemory: {
     banner: "便携记忆",
     enable: "启用便携记忆",
-    disabledHint: "记忆目前仅保存在 AiFetchly 内部。启用便携记忆后可与其它智能体共享项目上下文。",
+    disabledHint:
+      "记忆目前仅保存在 AiFetchly 内部。启用便携记忆后可与其它智能体共享项目上下文。",
     gitState: "Git",
     pendingReview: "待审核",
     rejected: "已拒绝",
@@ -2908,13 +2930,15 @@ export default {
     loadingPreview: "正在加载预览…",
     plannedFiles: "将要创建的文件",
     existingRecords: "检测到已有的记忆文件",
-    identityInvalid: "工作区身份文件无效。请先修复或删除 .aifetchly/workspace.json。",
+    identityInvalid:
+      "工作区身份文件无效。请先修复或删除 .aifetchly/workspace.json。",
     visibility: "共享模式",
     visibilityLocal: "仅本地",
     visibilityLocalHint: "文件仅保留在本机，通常在 Git 中忽略。",
     visibilityTeam: "可共享给团队",
     visibilityTeamHint: "文件可提交到 Git，供团队成员和其它智能体使用。",
-    teamWarning: "已提交的记忆即使之后删除也会留在 Git 历史中。提交前请检查差异。密钥过滤器可降低风险，但无法识别所有敏感内容。",
+    teamWarning:
+      "已提交的记忆即使之后删除也会留在 Git 历史中。提交前请检查差异。密钥过滤器可降低风险，但无法识别所有敏感内容。",
     importPolicy: "外部更改审核",
     policyReviewNew: "审核新记录",
     policyAutomatic: "自动导入",
@@ -2924,7 +2948,8 @@ export default {
     exportActive: "导出活跃记忆",
     exportAll: "导出活跃和已归档记忆",
     bridges: "智能体说明桥接",
-    bridgesHint: "可选的托管区块，引导 Claude Code、Codex 等智能体读取记忆索引。",
+    bridgesHint:
+      "可选的托管区块，引导 Claude Code、Codex 等智能体读取记忆索引。",
     enableConfirm: "启用",
     bridgeAction: {
       create: "将创建",
@@ -2938,8 +2963,10 @@ export default {
     storagePortableLocal: "便携 — 本地",
     storagePortableTeam: "便携 — 团队",
     regenerateIdentity: "重新生成身份",
-    regenerateIdentityWarning: "重新生成工作区身份会为有意的分叉创建新的便携 UUID。记录 ID 在作用域唯一性下保留。原始与分叉将共存，无共享变更。",
-    regenerateGitWarning: "当前身份被 Git 跟踪。重新生成会更改所有克隆的已提交身份；请与团队协调。",
+    regenerateIdentityWarning:
+      "重新生成工作区身份会为有意的分叉创建新的便携 UUID。记录 ID 在作用域唯一性下保留。原始与分叉将共存，无共享变更。",
+    regenerateGitWarning:
+      "当前身份被 Git 跟踪。重新生成会更改所有克隆的已提交身份；请与团队协调。",
     regenerateConfirm: "重新生成",
     sync: {
       synced: "已同步",
@@ -2970,7 +2997,8 @@ export default {
     conflictTitle: "解决冲突",
     loadingConflict: "正在加载冲突…",
     noConflict: "未找到冲突。",
-    conflictWarning: "在你读取与保存之间，记忆文件被外部编辑过。请选择要保留的版本。",
+    conflictWarning:
+      "在你读取与保存之间，记忆文件被外部编辑过。请选择要保留的版本。",
     aiFetchlyVersion: "AiFetchly 投影",
     fileVersion: "当前文件",
     fileAbsent: "(文件缺失)",
@@ -3097,5 +3125,24 @@ export default {
     sessionExpired: "登录已过期",
     signInAgain: "重新登录",
     installFailed: "安装失败",
+    searchLabel: "搜索插件",
+    searchPlaceholder: "按名称、描述、作者或标签搜索",
+    allTags: "全部",
+    moreTags: "更多",
+    filterLabel: "可用性",
+    filterAll: "全部",
+    filterAvailable: "可安装",
+    filterInstalled: "已安装",
+    resultCount: "{count} 个插件",
+    noMatchesTitle: "没有匹配“{query}”的插件",
+    noMatchesDescription: "请尝试其他搜索或清除筛选条件。",
+    clearFilters: "清除筛选",
+    manage: "管理",
+    moreTagCount: "还有 {count} 个标签",
+    statusInstalled: "已安装",
+    statusUpgradeRequired: "需要升级",
+    statusSignInRequired: "需要登录",
+    statusComingSoon: "即将推出",
+    statusUnavailable: "不可用",
   },
 };

@@ -2832,6 +2832,16 @@ export default {
   },
   plugins: {
     title: "Plugins",
+    tabs: {
+      discover: "Entdecken",
+      installed: "Installiert",
+      sources: "Quellen",
+      issues: "Probleme",
+    },
+    sources: {
+      browse: "Quellen durchsuchen",
+      manage: "Quellen verwalten",
+    },
     import_button: "Plugin importieren",
     install_button: "Installieren",
     validate_button: "Paket validieren",
@@ -3056,7 +3066,8 @@ export default {
   portableMemory: {
     banner: "Portable Speicher",
     enable: "Portablen Speicher aktivieren",
-    disabledHint: "Erinnerungen werden privat in AiFetchly gespeichert. Aktiviere den portablen Speicher, um Projektkontext mit anderen Agenten zu teilen.",
+    disabledHint:
+      "Erinnerungen werden privat in AiFetchly gespeichert. Aktiviere den portablen Speicher, um Projektkontext mit anderen Agenten zu teilen.",
     gitState: "Git",
     pendingReview: "Ausstehende Prüfung",
     rejected: "Abgelehnt",
@@ -3066,13 +3077,17 @@ export default {
     loadingPreview: "Vorschau wird geladen…",
     plannedFiles: "Dateien, die erstellt werden",
     existingRecords: "Vorhandene Speicherdateien erkannt",
-    identityInvalid: "Die Identitätsdatei des Arbeitsbereichs ist ungültig. Korrigiere oder entferne zuerst .aifetchly/workspace.json.",
+    identityInvalid:
+      "Die Identitätsdatei des Arbeitsbereichs ist ungültig. Korrigiere oder entferne zuerst .aifetchly/workspace.json.",
     visibility: "Freigabemodus",
     visibilityLocal: "Nur lokal",
-    visibilityLocalHint: "Dateien bleiben auf diesem Rechner; in Git meist ignoriert.",
+    visibilityLocalHint:
+      "Dateien bleiben auf diesem Rechner; in Git meist ignoriert.",
     visibilityTeam: "Team-freigabefähig",
-    visibilityTeamHint: "Dateien können für Teammitglieder und andere Agenten in Git committet werden.",
-    teamWarning: "Committete Erinnerungen bleiben auch nach späterer Löschung in der Git-Historie. Prüfe Diffs vor dem Commit. Der Secret-Filter reduziert das Risiko, erkennt aber nicht jeden sensiblen Wert.",
+    visibilityTeamHint:
+      "Dateien können für Teammitglieder und andere Agenten in Git committet werden.",
+    teamWarning:
+      "Committete Erinnerungen bleiben auch nach späterer Löschung in der Git-Historie. Prüfe Diffs vor dem Commit. Der Secret-Filter reduziert das Risiko, erkennt aber nicht jeden sensiblen Wert.",
     importPolicy: "Prüfung externer Änderungen",
     policyReviewNew: "Neue Einträge prüfen",
     policyAutomatic: "Automatisch importieren",
@@ -3082,7 +3097,8 @@ export default {
     exportActive: "Aktive Erinnerungen exportieren",
     exportAll: "Aktive und archivierte exportieren",
     bridges: "Agenten-Instruktionsbrücken",
-    bridgesHint: "Optionale verwaltete Blöcke, die Agenten wie Claude Code und Codex anweisen, den Speicherindex zu lesen.",
+    bridgesHint:
+      "Optionale verwaltete Blöcke, die Agenten wie Claude Code und Codex anweisen, den Speicherindex zu lesen.",
     enableConfirm: "Aktivieren",
     bridgeAction: {
       create: "wird erstellt",
@@ -3096,8 +3112,10 @@ export default {
     storagePortableLocal: "Portabel — lokal",
     storagePortableTeam: "Portabel — Team",
     regenerateIdentity: "Identität regenerieren",
-    regenerateIdentityWarning: "Das Regenerieren der Arbeitsbereich-Identität erstellt eine neue portable UUID für einen absichtlichen Fork. Record-IDs bleiben unter Scoped-Uniqueness erhalten. Original und Fork koexistieren ohne gemeinsame Mutation.",
-    regenerateGitWarning: "Die aktuelle Identität wird von Git verfolgt. Regenerieren ändert die committete Identität für alle Klone; koordiniere mit deinem Team.",
+    regenerateIdentityWarning:
+      "Das Regenerieren der Arbeitsbereich-Identität erstellt eine neue portable UUID für einen absichtlichen Fork. Record-IDs bleiben unter Scoped-Uniqueness erhalten. Original und Fork koexistieren ohne gemeinsame Mutation.",
+    regenerateGitWarning:
+      "Die aktuelle Identität wird von Git verfolgt. Regenerieren ändert die committete Identität für alle Klone; koordiniere mit deinem Team.",
     regenerateConfirm: "Regenerieren",
     sync: {
       synced: "Synchronisiert",
@@ -3123,12 +3141,14 @@ export default {
     revealFile: "Datei anzeigen",
     diagnosticsTitle: "Portable-Speicher-Diagnose",
     loadingDiagnostics: "Diagnose wird geladen…",
-    noDiagnostics: "Keine Diagnosen. Alle portablen Speicherdateien sind gültig.",
+    noDiagnostics:
+      "Keine Diagnosen. Alle portablen Speicherdateien sind gültig.",
     notRecoverable: "nicht behebbar",
     conflictTitle: "Konflikt lösen",
     loadingConflict: "Konflikt wird geladen…",
     noConflict: "Kein Konflikt gefunden.",
-    conflictWarning: "Die Datei wurde zwischen deinem Lesen und Speichern extern bearbeitet. Wähle eine zu behaltende Version.",
+    conflictWarning:
+      "Die Datei wurde zwischen deinem Lesen und Speichern extern bearbeitet. Wähle eine zu behaltende Version.",
     aiFetchlyVersion: "AiFetchly-Projektion",
     fileVersion: "Aktuelle Datei",
     fileAbsent: "(Datei fehlt)",
@@ -3263,5 +3283,24 @@ export default {
     sessionExpired: "Ihre Sitzung ist abgelaufen",
     signInAgain: "Erneut anmelden",
     installFailed: "Installation fehlgeschlagen",
+    searchLabel: "Plugins suchen",
+    searchPlaceholder: "Nach Name, Beschreibung, Autor oder Tag suchen",
+    allTags: "Alle",
+    moreTags: "Mehr",
+    filterLabel: "Verfügbarkeit",
+    filterAll: "Alle",
+    filterAvailable: "Verfügbar",
+    filterInstalled: "Installiert",
+    resultCount: "{count} Plugins",
+    noMatchesTitle: "Keine Plugins passen zu „{query}“",
+    noMatchesDescription: "Andere Suche versuchen oder Filter zurücksetzen.",
+    clearFilters: "Filter zurücksetzen",
+    manage: "Verwalten",
+    moreTagCount: "{count} weitere Tags",
+    statusInstalled: "Installiert",
+    statusUpgradeRequired: "Upgrade erforderlich",
+    statusSignInRequired: "Anmeldung erforderlich",
+    statusComingSoon: "Demnächst",
+    statusUnavailable: "Nicht verfügbar",
   },
 };
