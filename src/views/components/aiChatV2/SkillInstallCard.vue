@@ -136,6 +136,7 @@ import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import {
   approveSkillInstall,
   cancelSkillInstall,
+  getSkillInstallApprovalToken,
   submitSkillInstallSecret,
 } from "@/views/api/skillInstallation";
 
@@ -209,10 +210,20 @@ const secretVariableName = computed(() => {
 async function onApprove(approve: boolean): Promise<void> {
   busy.value = true;
   try {
+    // The opaque token binds approval to this card (review D1): the model
+    // can plan but never self-approve.
+    const approvalToken = await getSkillInstallApprovalToken(
+      props.snapshot.sessionId
+    );
+    if (!approvalToken) {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+      return;
+    }
     const snapshot = await approveSkillInstall({
       sessionId: props.snapshot.sessionId,
       planRevision: props.snapshot.planRevision ?? "",
       approve,
+      approvalToken,
     });
     if (snapshot) {
       emit("updated", snapshot);

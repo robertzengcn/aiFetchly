@@ -70,6 +70,19 @@ async function invoke<T>(
   );
 }
 
+async function approvalToken(
+  app: LaunchedApp,
+  sessionId: string | undefined
+): Promise<string> {
+  const token = await invoke<{ approvalToken: string }>(
+    app,
+    "skill-install:approval-token",
+    { sessionId }
+  );
+  expect(token?.approvalToken).toBeTruthy();
+  return token?.approvalToken as string;
+}
+
 test.beforeEach(async ({ aiApp }) => {
   // These specs drive the typed installer through the real preload/IPC path
   // and never need the chat dock UI — waiting for the bridge is enough.
@@ -106,6 +119,7 @@ test("install → approve → ready with managed-copy activation + discovery", a
     sessionId: prepared?.sessionId,
     planRevision: prepared?.planRevision,
     approve: true,
+    approvalToken: await approvalToken(app, prepared?.sessionId),
   });
   expect(approved).not.toBeNull();
   expect(["ready", "installing_dependencies"]).toContain(approved?.state);
@@ -167,6 +181,7 @@ test("explicit /skill invocation loads the installed skill", async ({
     sessionId: prepared?.sessionId,
     planRevision: prepared?.planRevision,
     approve: true,
+    approvalToken: await approvalToken(app, prepared?.sessionId),
   });
   if (snapshot?.state === "awaiting_secret") {
     snapshot = await invoke<InstallSnapshot>(app, "skill-install:status", {
@@ -233,6 +248,7 @@ test("uninstall removes the owned activation and preserves nothing foreign", asy
     sessionId: prepared?.sessionId,
     planRevision: prepared?.planRevision,
     approve: true,
+    approvalToken: await approvalToken(app, prepared?.sessionId),
   });
   expect(approved?.installationId).toBeTruthy();
 

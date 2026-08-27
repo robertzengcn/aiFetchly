@@ -80,7 +80,8 @@ async function installFixture(): Promise<{
     sessionId: prepared.sessionId,
     planRevision: prepared.planRevision as string,
     approve: true,
-  });
+    approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
   if (snapshot.state === "awaiting_secret") {
     snapshot = await module.resumeAfterSecret(prepared.sessionId);
   }
@@ -181,7 +182,8 @@ describe("SkillInstallationModule lifecycle", () => {
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: true,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     if (snapshot.state === "awaiting_secret") {
       snapshot = await module.resumeAfterSecret(prepared.sessionId);
     }

@@ -61,4 +61,14 @@ export class SkillInstallationSessionEntity extends AuditableEntity {
   @Order(11)
   @Column("boolean", { nullable: false, default: false })
   approved!: boolean;
+
+  /**
+   * Opaque approval token (review D1): generated at prepare, delivered ONLY
+   * through the renderer IPC channel (never in any model-visible tool
+   * result), and required by approve() — a prompt-injected model cannot
+   * self-approve an installation it planned.
+   */
+  @Order(12)
+  @Column("varchar", { length: 64, nullable: true })
+  approvalToken?: string;
 }

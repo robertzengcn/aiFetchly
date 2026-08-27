@@ -17,6 +17,7 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
   PROMPT_SKILL_INVOKE,
+  SKILL_INSTALL_APPROVAL_TOKEN,
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_DISABLE,
@@ -32,6 +33,7 @@ import {
   SkillInstallationModule,
   isSkillInstallerEnabled,
 } from "@/modules/SkillInstallationModule";
+import { SkillSessionIdSchema } from "@/entityTypes/skillInstallationTypes";
 import { SkillCredentialService } from "@/service/SkillCredentialService";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -56,9 +58,11 @@ const prepareSchema = z.object({
 });
 
 const approveSchema = z.object({
-  sessionId: z.string().min(1),
+  sessionId: SkillSessionIdSchema,
   planRevision: z.string().min(1),
   approve: z.boolean(),
+  /** Opaque token from the renderer approval card (review D1). */
+  approvalToken: z.string().min(16).max(128),
   selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
 });
 
@@ -71,7 +75,7 @@ const sessionSchema = z.object({ sessionId: z.string().min(1) });
  * status — the secret itself is never echoed back.
  */
 const submitSecretSchema = z.object({
-  sessionId: z.string().min(1),
+  sessionId: SkillSessionIdSchema,
   environmentVariable: z.string().min(3).max(100),
   value: z.string().min(1).max(8_192),
 });
@@ -125,12 +129,42 @@ export function registerSkillInstallationIpcHandlers(): void {
     if (!decoded.ok) return denied(decoded.message);
     try {
       const module = new SkillInstallationModule();
-      const snapshot = await module.approve(decoded.value);
+      const snapshot = await module.approve({
+        sessionId: decoded.value.sessionId,
+        planRevision: decoded.value.planRevision,
+        approve: decoded.value.approve,
+        approvalToken: decoded.value.approvalToken,
+        ...(decoded.value.selectedSkillIds !== undefined
+          ? { selectedSkillIds: decoded.value.selectedSkillIds }
+          : {}),
+      });
       return ok(snapshot);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Approve failed.");
     }
   });
+
+  // Renderer-only approval-token channel (review D1): the token binds
+  // approval to the install card. On the preload bridge but NOT a
+  // model-facing tool, so no tool result ever carries it.
+  ipcMain.handle(
+    SKILL_INSTALL_APPROVAL_TOKEN,
+    async (_event, data: unknown) => {
+      const decoded = decode(sessionSchema, data);
+      if (!decoded.ok) return denied(decoded.message);
+      try {
+        const token = await new SkillInstallationModule().getApprovalToken(
+          decoded.value.sessionId
+        );
+        if (token === null) return denied("Unknown installation session.");
+        return ok({ approvalToken: token });
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "Token lookup failed."
+        );
+      }
+    }
+  );
 
   ipcMain.handle(SKILL_INSTALL_STATUS, async (_event, data: unknown) => {
     const decoded = decode(sessionSchema, data);

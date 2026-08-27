@@ -109,7 +109,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       sessionId: prepared.sessionId,
       planRevision: "deadbeefdeadbeef",
       approve: true,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     expect(stale.errorCode).toBe("PLAN_REVISION_MISMATCH");
 
     // 3. unknown session ids fail before mutation.
@@ -123,7 +124,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: true,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     if (approved.state === "awaiting_secret") {
       expect(approved.nextAction).toBe("provide-secret-securely");
       approved = await module.resumeAfterSecret(prepared.sessionId);
@@ -159,7 +161,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: true,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     if (approved.state === "awaiting_secret") {
       approved = await module.resumeAfterSecret(prepared.sessionId);
     }
@@ -185,7 +188,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: true,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     // install.md declares ELEVENLABS_API_KEY= → deterministic pause.
     expect(approved.state).toBe("awaiting_secret");
     expect(approved.nextAction).toBe("provide-secret-securely");
@@ -207,6 +211,54 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     // The resumed activation carries the SAME installation identity the
     // credential was stored under.
     expect(resumed.installationId).toBe(approved.installationId);
+  }, 120_000);
+
+  it("a model-originated approve without the token is rejected (D1)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-token-guard",
+      source: fixtureRoot,
+    });
+    // No approvalToken — exactly what a model-originated tool call supplies.
+    const rejected = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+    });
+    expect(rejected.errorCode).toBe("APPROVAL_REQUIRED");
+    expect(rejected.state).toBe("awaiting_approval");
+    // Nothing activated by the rejected approval.
+    expect(
+      fs.existsSync(path.join(configHome, ".aifetchly", "skills", "video-use"))
+    ).toBe(false);
+
+    // The renderer card's token unlocks the same call.
+    const token = await module.getApprovalToken(prepared.sessionId);
+    expect(token).not.toBeNull();
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: token as string,
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(["ready", "installing_dependencies"]).toContain(approved.state);
+
+    // A WRONG token is rejected too.
+    const second = await module.prepare({
+      conversationId: "conv-token-wrong",
+      source: fixtureRoot,
+      sessionId: `fresh-${Date.now()}`,
+    });
+    const wrong = await module.approve({
+      sessionId: second.sessionId,
+      planRevision: second.planRevision as string,
+      approve: true,
+      approvalToken: "0".repeat(48),
+    });
+    expect(wrong.errorCode).toBe("APPROVAL_REQUIRED");
   }, 120_000);
 
   it("rejects traversal-shaped session ids at the schema boundary (S1)", async () => {
@@ -244,7 +296,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: false,
-    });
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
     expect(cancelled.state).toBe("cancelled");
   }, 120_000);
 

@@ -1,6 +1,7 @@
 import { windowInvoke } from "@/views/utils/apirequest";
 import {
   PROMPT_SKILL_INVOKE,
+  SKILL_INSTALL_APPROVAL_TOKEN,
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_PREPARE,
@@ -41,10 +42,28 @@ export async function approveSkillInstall(input: {
   sessionId: string;
   planRevision: string;
   approve: boolean;
+  /** Opaque token from the renderer approval card (review D1). */
+  approvalToken: string;
   selectedSkillIds?: readonly string[];
 }): Promise<InstallSnapshot | null> {
   const resp = await windowInvoke(SKILL_INSTALL_APPROVE, input);
   return (resp as InstallSnapshot | null) ?? null;
+}
+
+/**
+ * Fetch the opaque approval token for the renderer approval card only
+ * (review D1). Deliberately NOT a model-facing tool — the main-process
+ * approve() gate rejects any approve without this token, so a
+ * prompt-injected model cannot self-approve an installation.
+ */
+export async function getSkillInstallApprovalToken(
+  sessionId: string
+): Promise<string | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_APPROVAL_TOKEN, {
+    sessionId,
+  });
+  const data = resp as { approvalToken?: string } | null;
+  return data?.approvalToken ?? null;
 }
 
 export async function getSkillInstallStatus(

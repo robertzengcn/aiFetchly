@@ -2078,8 +2078,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "skill_install_approve",
     description:
-      "Approve or reject a reviewed installation plan. Requires the session_id and " +
-      "the CURRENT plan_revision — a changed plan invalidates prior approval.",
+      "Record the user's decision on a reviewed installation plan. The DECISION ITSELF " +
+      "comes from the user clicking Approve/Reject on the install card — approval is bound " +
+      "to an opaque renderer-side token this tool cannot supply. Calling it before the user " +
+      "has decided returns APPROVAL_REQUIRED; poll skill_install_status to observe the " +
+      "card-driven outcome instead.",
     parameters: {
       type: "object",
       properties: {
