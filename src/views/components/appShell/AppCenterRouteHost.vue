@@ -58,7 +58,7 @@ const frameComponent = computed<Component>(() => {
   const surface = route.name
     ? findSurfaceByRouteName(String(route.name))
     : undefined;
-  const converged = surface?.state === "converged" && shellFlag.scheduleEnabled;
+  const converged = surface?.state === "converged" && shellFlag.shellEnabled.value;
   const Frame = converged ? BareFrame : LegacyPageFrame;
   return Frame;
 });
