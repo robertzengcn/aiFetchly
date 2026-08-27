@@ -77,6 +77,8 @@ export function isTransientBackendError(error: unknown): boolean {
   return false;
 }
 
+type RefreshSuccessListener = () => void;
+
 /**
  * Service for refreshing access tokens using refresh tokens.
  *
@@ -120,6 +122,13 @@ export class TokenRefreshService {
   private static _inFlight: Promise<CommonApiresp<TokenRefreshData>> | null =
     null;
 
+  /**
+   * Listeners notified after a successful token refresh. Used by the
+   * WebSocket client to reconnect when startup skipped the socket because
+   * the access token was expired.
+   */
+  private static _refreshSuccessListeners: RefreshSuccessListener[] = [];
+
   // --- Singleton background auto-refresh state ---
   private static _autoRefreshTimer: ReturnType<typeof setInterval> | null =
     null;
@@ -133,45 +142,6 @@ export class TokenRefreshService {
   private static _consecutiveFailures = 0;
 
   // --- Refresh-success listener registry (FR-5.1) ---
-  /**
-   * Listeners invoked after a successful access-token refresh. Used by the
-   * entitlement reconciliation service to pull fresh plans from /api/user/info
-   * once a valid Bearer is in place. Kept here (rather than in the entitlement
-   * service) so TokenRefreshService does not import the entitlement service
-   * (avoids a circular dependency — design §15).
-   */
-  private static _refreshSuccessListeners = new Set<
-    (data: TokenRefreshData) => void
-  >();
-
-  /**
-   * Register a listener invoked after every successful access-token refresh.
-   * Returns an unsubscribe function. Safe to call multiple times; duplicate
-   * references are ignored by the Set.
-   */
-  static onRefreshSuccess(
-    listener: (data: TokenRefreshData) => void
-  ): () => void {
-    TokenRefreshService._refreshSuccessListeners.add(listener);
-    return () => {
-      TokenRefreshService._refreshSuccessListeners.delete(listener);
-    };
-  }
-
-  /** Notify all registered listeners. Swallows listener errors. */
-  private static _notifyRefreshSuccess(data: TokenRefreshData): void {
-    for (const listener of TokenRefreshService._refreshSuccessListeners) {
-      try {
-        listener(data);
-      } catch (err) {
-        log.error(
-          "[TokenRefresh] onRefreshSuccess listener threw:",
-          err instanceof Error ? err.message : String(err)
-        );
-      }
-    }
-  }
-
   constructor() {
     const resolved = resolveViteLoginBase();
     let loginUrl: string | undefined = resolved?.value;
@@ -351,8 +321,9 @@ export class TokenRefreshService {
         log.info("[TokenRefresh] Background token refresh successful");
         TokenRefreshService._consecutiveFailures = 0;
         // FR-5.1: notify listeners (entitlement reconciliation) that a fresh
-        // access token is available so they can pull /api/user/info.
-        TokenRefreshService._notifyRefreshSuccess(result.data);
+        // access token is available. The actual notification fires in
+        // _performRefreshNetwork so it covers manual refreshOnce calls too;
+        // no duplicate call here.
       } else {
         throw new Error(result.msg || "Refresh returned unsuccessful status");
       }
@@ -459,6 +430,30 @@ export class TokenRefreshService {
    */
   static isRefreshInFlight(): boolean {
     return TokenRefreshService._inFlight !== null;
+  }
+
+  /**
+   * Register a callback that runs after access tokens are persisted from a
+   * successful refresh. Returns an unsubscribe function.
+   */
+  static onRefreshSuccess(listener: RefreshSuccessListener): () => void {
+    TokenRefreshService._refreshSuccessListeners.push(listener);
+    return (): void => {
+      TokenRefreshService._refreshSuccessListeners =
+        TokenRefreshService._refreshSuccessListeners.filter(
+          (item) => item !== listener
+        );
+    };
+  }
+
+  private static notifyRefreshSuccess(): void {
+    for (const listener of TokenRefreshService._refreshSuccessListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.error("[TokenRefresh] Refresh-success listener failed:", error);
+      }
+    }
   }
 
   /**
@@ -584,6 +579,8 @@ export class TokenRefreshService {
           Date.now() + response.data.refreshExpiresIn * 1000;
         tokenService.setValue(REFRESHTOKENEXPIRY, newRefreshExpiry.toString());
       }
+
+      TokenRefreshService.notifyRefreshSuccess();
     }
 
     return response;

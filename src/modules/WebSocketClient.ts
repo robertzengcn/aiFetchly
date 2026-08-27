@@ -213,19 +213,59 @@ export class WebSocketClient {
     this.win = win;
     this.manualDisconnect = false;
 
-    // Check if already connected
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.hasActiveSocket()) {
       log.info("WebSocket already connected");
       return;
     }
 
     // Check for valid token
     if (!this.hasValidToken()) {
-      log.info("No valid token found, skipping WebSocket connection");
+      log.info(
+        "No valid token found, skipping WebSocket connection (will retry after token refresh)"
+      );
       return;
     }
 
     this.doConnect();
+  }
+
+  /**
+   * Retry connecting after a successful token refresh.
+   *
+   * Startup often sees an expired JWT, skips the socket, then refreshes the
+   * token a moment later. Without this retry, purchase notifications never
+   * reach the desktop app because the hub only delivers to live connections.
+   */
+  public retryConnectIfDisconnected(win?: BrowserWindow): boolean {
+    if (win) {
+      this.win = win;
+    }
+
+    if (this.hasActiveSocket()) {
+      return true;
+    }
+
+    if (!this.win || this.win.isDestroyed()) {
+      log.info("Cannot retry WebSocket connection: no active window");
+      return false;
+    }
+
+    if (!this.hasValidToken()) {
+      log.info("Cannot retry WebSocket connection: token still invalid");
+      return false;
+    }
+
+    this.manualDisconnect = false;
+    this.doConnect();
+    return true;
+  }
+
+  private hasActiveSocket(): boolean {
+    return (
+      this.ws !== null &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    );
   }
 
   /**
@@ -672,32 +712,6 @@ export class WebSocketClient {
     if (this.win && this.hasValidToken()) {
       this.doConnect();
     }
-  }
-
-  /**
-   * Reconnect after a token refresh if the socket is currently disconnected.
-   *
-   * Companion to the entitlement reconciliation listener (design §7.3): at
-   * startup, if the access JWT was expired the socket was skipped
-   * (`connect()` logs "No valid token found" and returns). After a successful
-   * refresh, this re-attempts the connection so the fast WS notify path is
-   * restored — not just the slower reconcile-on-event path.
-   *
-   * Idempotent: no-op if already connected, or if there is no window / token.
-   */
-  public retryConnectIfDisconnected(): void {
-    if (this.isConnected()) {
-      return;
-    }
-    if (this.manualDisconnect) {
-      // User explicitly disconnected; don't override.
-      return;
-    }
-    if (!this.win || !this.hasValidToken()) {
-      return;
-    }
-    log.info("[WebSocket] retrying connection after token refresh");
-    this.doConnect();
   }
 
   /**

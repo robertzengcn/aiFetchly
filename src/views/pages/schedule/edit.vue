@@ -70,6 +70,7 @@
               :ai-message-task-data="aiMessageTask"
               @submit="handleSubmit"
               @cancel="goBack"
+              @error="handleFormError"
             />
           </v-card-text>
         </v-card>
@@ -188,6 +189,10 @@ const handleSubmit = async (data: ScheduleUpdateRequest) => {
   } finally {
     submitting.value = false
   }
+}
+
+const handleFormError = (message: string): void => {
+  showAlert('Error', message, 'error')
 }
 
 const goBack = () => {

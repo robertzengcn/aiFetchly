@@ -1,16 +1,12 @@
 import { BaseModule } from "./baseModule";
 import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import {
   AI_MESSAGE_TASK_DEFAULTS,
   type CreateAiMessageTaskRequest,
   type UpdateAiMessageTaskRequest,
-  type AiMessageTaskStatus,
 } from "@/entityTypes/aiMessageTaskTypes";
-
-function generateConversationId(): string {
-  return `ai-msg-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-}
 
 export class AiMessageTaskModule extends BaseModule {
   private model: AiMessageTaskModel;
@@ -33,13 +29,17 @@ export class AiMessageTaskModule extends BaseModule {
     const allowedTools =
       request.allowedTools ?? AI_MESSAGE_TASK_DEFAULTS.allowedTools;
 
+    const conversationId = new AIChatV2Module().createConversationIfNeeded(
+      request.conversationId
+    );
+
     const entity: Partial<AiMessageTaskEntity> = {
       name: request.name.trim(),
       description: request.description?.trim() ?? undefined,
       message: request.message.trim(),
       system_prompt: request.systemPrompt?.trim() ?? undefined,
       model: request.model ?? undefined,
-      conversation_id: request.conversationId || generateConversationId(),
+      conversation_id: conversationId,
       allowed_tools_json: JSON.stringify(allowedTools),
       auto_approve_tools:
         request.autoApproveTools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools,
@@ -50,6 +50,7 @@ export class AiMessageTaskModule extends BaseModule {
       max_continue_calls:
         request.maxContinueCalls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls,
       status: "active",
+      source_type: "schedule_ui",
     };
 
     return this.model.create(entity);

@@ -1785,6 +1785,7 @@ export default {
     ai_message_task_create: "创建AI消息任务",
     ai_message_task_edit: "编辑AI消息任务",
     ai_message_task_name: "任务名称",
+    ai_message_task_name_hint: "为此AI消息任务输入一个名称",
     ai_message_task_description: "描述",
     ai_message_task_message: "AI消息",
     ai_message_task_message_hint: "每次定时运行时发送给AI服务器的提示",

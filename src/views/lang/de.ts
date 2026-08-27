@@ -1855,6 +1855,8 @@ export default {
     ai_message_task_create: "KI-Nachrichtenaufgabe erstellen",
     ai_message_task_edit: "KI-Nachrichtenaufgabe bearbeiten",
     ai_message_task_name: "Aufgabenname",
+    ai_message_task_name_hint:
+      "Geben Sie einen Namen für diese KI-Nachrichtenaufgabe ein",
     ai_message_task_description: "Beschreibung",
     ai_message_task_message: "KI-Nachricht",
     ai_message_task_message_hint:
