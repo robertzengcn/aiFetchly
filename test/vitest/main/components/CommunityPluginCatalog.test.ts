@@ -4,15 +4,31 @@ import { createI18n } from "vue-i18n";
 import CommunityPluginCatalog from "@/views/components/plugins/CommunityPluginCatalog.vue";
 import type { PluginCommunityEntry } from "@/entityTypes/communityPluginTypes";
 
-const { api, receive, removeListener } = vi.hoisted(() => ({
+const { api, receive, removeListener, registeredWrappers } = vi.hoisted(() => ({
   api: {
     list: vi.fn(),
     install: vi.fn(),
     openPlans: vi.fn(),
     getLoginUrl: vi.fn(),
   },
-  receive: vi.fn(),
-  removeListener: vi.fn(),
+  // Model the REAL windowReceive semantics: it wraps the callback in a new
+  // closure and registers THAT wrapper with the transport; removal is keyed
+  // by the wrapper reference. A bare vi.fn() mock would hide the leak this
+  // test exists to catch (passing the original cb to removeListener no-ops).
+  registeredWrappers: new Map<string, Set<(value: unknown) => void>>(),
+  receive: vi.fn((channel: string, cb: (value: unknown) => void) => {
+    const wrapper = (value: unknown): void => cb(value);
+    let set = registeredWrappers.get(channel);
+    if (!set) {
+      set = new Set();
+      registeredWrappers.set(channel, set);
+    }
+    set.add(wrapper);
+    return wrapper;
+  }),
+  removeListener: vi.fn((channel: string, cb: (value: unknown) => void) => {
+    registeredWrappers.get(channel)?.delete(cb);
+  }),
 }));
 
 vi.mock("@/views/api/communityPlugins", () => ({
@@ -138,8 +154,11 @@ describe("CommunityPluginCatalog", () => {
     api.install.mockReset();
     api.openPlans.mockReset();
     api.getLoginUrl.mockReset();
-    receive.mockReset();
-    removeListener.mockReset();
+    // mockClear (not mockReset) so the wrapper-creating implementations from
+    // the hoisted factory survive; only call history + the transport map reset.
+    receive.mockClear();
+    removeListener.mockClear();
+    registeredWrappers.clear();
     api.list.mockResolvedValue([]);
   });
 
@@ -325,23 +344,30 @@ describe("CommunityPluginCatalog", () => {
     expect(api.list).not.toHaveBeenCalled();
   });
 
-  it("removes the exact listener on unmount", async () => {
+  it("removes the wrapper handle (not the original cb) on unmount", async () => {
+    // windowReceive wraps the callback in a new closure and keys transport
+    // removal by THAT wrapper. The catalog must pass the returned handle to
+    // windowRemoveListener, not the original onWebSocketEvent — otherwise the
+    // transport finds no match and the listener leaks. This test models the
+    // real wrapper semantics so a regression actually fails.
     api.list.mockResolvedValue([]);
     const w = mountCatalog();
     await flushPromises();
     expect(removeListener).not.toHaveBeenCalled();
+    // The wrapper was registered with the transport; capture it before unmount.
+    const wsWrappers = registeredWrappers.get("websocket:event");
+    expect(wsWrappers?.size).toBe(1);
+    const registeredWrapper = [...(wsWrappers ?? [])][0];
     w.unmount();
     expect(removeListener).toHaveBeenCalledTimes(1);
-    const [, removedCb] = removeListener.mock.calls[0] as [
+    // The handle passed to removeListener is the registered wrapper (not the
+    // original onWebSocketEvent), and the transport map is now empty (no leak).
+    const [, removedHandle] = removeListener.mock.calls[0] as [
       string,
-      (event: unknown) => void
+      (value: unknown) => void
     ];
-    // The removed callback is the same stable reference that was registered.
-    const [, registeredCb] = receive.mock.calls[0] as [
-      string,
-      (event: unknown) => void
-    ];
-    expect(removedCb).toBe(registeredCb);
+    expect(removedHandle).toBe(registeredWrapper);
+    expect(registeredWrappers.get("websocket:event")?.size ?? 0).toBe(0);
   });
 
   it("opens the marketing plans page from the Upgrade CTA", async () => {

@@ -10,6 +10,9 @@ const { api } = vi.hoisted(() => ({
     toggle: vi.fn(),
     uninstall: vi.fn(),
     reload: vi.fn(),
+    // Catalog stub's reload — a vi.fn so the uninstall test can assert it is
+    // called with force=false (Discover sync after uninstall).
+    catalogReload: vi.fn(),
   },
 }));
 
@@ -66,10 +69,7 @@ const CommunityPluginCatalogStub = {
     function emitManage(name: string): void {
       emit("manage", name);
     }
-    function reload(): Promise<void> {
-      return Promise.resolve();
-    }
-    return { emitInstalled, emitManage, reload };
+    return { emitInstalled, emitManage, reload: api.catalogReload };
   },
   template: '<div data-testid="stub-catalog"></div>',
 };
@@ -145,6 +145,8 @@ describe("PluginManager", () => {
     api.toggle.mockReset();
     api.uninstall.mockReset();
     api.reload.mockReset();
+    api.catalogReload.mockReset();
+    api.catalogReload.mockResolvedValue(undefined);
     api.list.mockResolvedValue([]);
   });
 
@@ -260,5 +262,8 @@ describe("PluginManager", () => {
 
     expect(api.uninstall).toHaveBeenCalledWith("gone");
     expect(api.list).toHaveBeenCalled();
+    // Discover catalog is reloaded with force=false to recompute installed
+    // cross-references after uninstall (PRD AC-INSTALL-04).
+    expect(api.catalogReload).toHaveBeenCalledWith(false);
   });
 });

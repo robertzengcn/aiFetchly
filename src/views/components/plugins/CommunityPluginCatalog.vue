@@ -131,7 +131,11 @@ async function onInstall(entry: PluginCommunityEntry): Promise<void> {
       );
     }
     // Use the install result's canonical name for Manage, not the slug.
-    installedNameBySlug.value.set(entry.slug, installed.name);
+    // Immutable Map replacement (ref does not track in-place .set, and the
+    // project mandates immutable updates).
+    const nextMap = new Map(installedNameBySlug.value);
+    nextMap.set(entry.slug, installed.name);
+    installedNameBySlug.value = nextMap;
     // Immutable entry-array replacement so computed filters update predictably.
     entries.value = entries.value.map((candidate) =>
       candidate.slug === entry.slug
@@ -197,15 +201,25 @@ function onWebSocketEvent(event: unknown): void {
   }
 }
 
+// windowReceive wraps the callback in a new closure before registering it with
+// the transport; removal is keyed by THAT wrapper reference, not the original
+// callback. Capture the returned handle and pass it verbatim to
+// windowRemoveListener so the subscription is actually released — otherwise
+// every mount leaks one permanent WEBSOCKET_EVENT listener and each
+// user_info_updated broadcast fires N duplicate reload(true) calls. Mirrors
+// the onUpdateStatus/offUpdateStatus pattern in src/views/api/app.ts.
+let wsListener: ((value: unknown) => void) | null = null;
+
 onMounted((): void => {
   void reload(false);
-  windowReceive(WEBSOCKET_EVENT, onWebSocketEvent);
+  wsListener = windowReceive(WEBSOCKET_EVENT, onWebSocketEvent);
 });
 
 onUnmounted((): void => {
   // Bump the counter so any late IPC response cannot touch disposed state.
   activeLoadRequest += 1;
-  windowRemoveListener(WEBSOCKET_EVENT, onWebSocketEvent);
+  if (wsListener) windowRemoveListener(WEBSOCKET_EVENT, wsListener);
+  wsListener = null;
 });
 </script>
 
@@ -426,8 +440,9 @@ onUnmounted((): void => {
       </v-btn>
     </div>
 
-    <!-- Plugin grid -->
-    <div v-if="showGrid" class="community-plugin-grid mt-4">
+    <!-- Plugin grid (v-else-if chains after no-matches so the empty grid
+         container never renders during a no-matches state). -->
+    <div v-else-if="showGrid" class="community-plugin-grid mt-4">
       <CommunityPluginCard
         v-for="entry in filteredEntries"
         :key="entry.slug"

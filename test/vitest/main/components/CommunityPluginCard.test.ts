@@ -102,14 +102,12 @@ describe("CommunityPluginCard", () => {
     expect(
       w.find('[data-testid="community-plugin-status-pdf-tools"]').text()
     ).toContain("Coming soon");
-    expect(
-      w.find('[data-testid="community-plugin-preview-pdf-tools"]').exists()
-    ).toBe(true);
-    expect(
-      w
-        .find('[data-testid="community-plugin-preview-pdf-tools"]')
-        .attributes("disabled")
-    ).toBeDefined();
+    const preview = w.find(
+      '[data-testid="community-plugin-preview-pdf-tools"]'
+    );
+    expect(preview.exists()).toBe(true);
+    // Bare `disabled` attr renders as "" on custom elements — present, not "true".
+    expect(preview.attributes("disabled")).toBe("");
   });
 
   it("emits upgrade for a subscription-required entry", () => {
@@ -194,12 +192,25 @@ describe("CommunityPluginCard", () => {
     expect(w.find(".community-plugin-card--unavailable").exists()).toBe(true);
   });
 
-  it("disables Install and shows loading only on the card whose install is in flight", () => {
+  it("shows loading on the Install button whose install is in flight", () => {
+    // The card binds :loading="installing" (this card) and :disabled="installBusy"
+    // (other cards). An in-flight install shows loading, NOT self-disable.
     const w = mountCard({}, { installing: true });
     const installBtn = w.find(
       '[data-testid="community-plugin-install-pdf-tools"]'
     );
-    expect(installBtn.attributes("disabled")).toBeDefined();
+    expect(installBtn.attributes("loading")).toBe("true");
+    // Not disabled by its own install (installBusy is false here).
+    expect(installBtn.attributes("disabled")).toBe("false");
+  });
+
+  it("does not show loading when no install is in flight", () => {
+    const w = mountCard();
+    expect(
+      w
+        .find('[data-testid="community-plugin-install-pdf-tools"]')
+        .attributes("loading")
+    ).toBe("false");
   });
 
   it("disables Install buttons on other cards when a global install is in flight", () => {
@@ -208,6 +219,6 @@ describe("CommunityPluginCard", () => {
       w
         .find('[data-testid="community-plugin-install-pdf-tools"]')
         .attributes("disabled")
-    ).toBeDefined();
+    ).toBe("true");
   });
 });
