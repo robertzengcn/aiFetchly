@@ -17,6 +17,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   cancelSkillInstall: vi.fn(),
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
+  getSkillInstallApprovalToken: vi.fn().mockResolvedValue("test-approval-token"),
 }));
 
 import { approveSkillInstall } from "@/views/api/skillInstallation";
@@ -125,6 +126,7 @@ describe("AiChatV2Message skill install card", () => {
       sessionId: "sess-9",
       planRevision: "rev-9",
       approve: true,
+      approvalToken: "test-approval-token",
     });
     // The message-level card now reflects the ready state locally.
     const updated = wrapper.findComponent(SkillInstallCard);

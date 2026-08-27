@@ -15,6 +15,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   cancelSkillInstall: vi.fn(),
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
+  getSkillInstallApprovalToken: vi.fn().mockResolvedValue("test-approval-token"),
 }));
 
 import {
@@ -108,6 +109,7 @@ describe("SkillInstallCard", () => {
       sessionId: "sess-1",
       planRevision: "rev-1",
       approve: true,
+      approvalToken: "test-approval-token",
     });
     expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
       state: "ready",
