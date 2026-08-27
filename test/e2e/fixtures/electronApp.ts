@@ -131,6 +131,16 @@ function buildSanitizedEnv(
     }
   }
   allowed[E2E_ENV.ALLOWED_ORIGINS] = allowedOrigins.join(",");
+
+  // The local-AI-runtime catalog refresh otherwise fetches the public GitHub
+  // release asset whenever the AI status is polled; the E2E network guard
+  // default-denies non-loopback traffic, the violation fails teardown, and a
+  // blocked fetch can stall provider resolution. Point the catalog at an
+  // unreachable LOOPBACK port instead: loopback is guard-allowed, the fetch
+  // fails instantly (connection refused), and the runtime surface reports the
+  // catalog as unavailable — deterministically, with no external traffic.
+  allowed.AIFETCHLY_RUNTIME_CATALOG_URL =
+    "http://127.0.0.1:9/local-ai-runtimes.json";
   return allowed;
 }
 

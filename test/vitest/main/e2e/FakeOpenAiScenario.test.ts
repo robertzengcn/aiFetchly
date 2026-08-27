@@ -4,6 +4,8 @@ import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
 import {
   resolveScenario,
   STREAM_TEXT_FINAL,
+  STREAM_IMAGE_B64,
+  STREAM_IMAGE_TEXT,
   FAKE_TOOL_NAME,
 } from "../../../e2e/scenarios/aiChatScenarios";
 import {
@@ -12,6 +14,7 @@ import {
   stopChunk,
   toolCallChunk,
   toolCallFinishChunk,
+  imagesChunk,
   MODELS_RESPONSE,
   FAKE_MODEL_ID,
 } from "../../../e2e/scenarios/openAiProtocol";
@@ -53,12 +56,19 @@ describe("FakeOpenAI scenarios vs production OpenAIStreamParser", () => {
 
   it("tool-requires-permission emits a tool_call delta then a tool_calls finish", async () => {
     const sse = encodeSseFrames([
-      toolCallChunk({ index: 0, id: "c1", name: FAKE_TOOL_NAME, arguments: "{}" }),
+      toolCallChunk({
+        index: 0,
+        id: "c1",
+        name: FAKE_TOOL_NAME,
+        arguments: "{}",
+      }),
       toolCallFinishChunk(),
     ]);
     const chunks = await parseSse(sse);
     const toolChunk = chunks.find((c) =>
-      c.choices?.some((ch) => ch.delta?.tool_calls && ch.delta.tool_calls.length > 0)
+      c.choices?.some(
+        (ch) => ch.delta?.tool_calls && ch.delta.tool_calls.length > 0
+      )
     );
     expect(toolChunk).toBeTruthy();
     const call = toolChunk?.choices?.[0]?.delta?.tool_calls?.[0];
@@ -97,8 +107,46 @@ describe("FakeOpenAI scenarios vs production OpenAIStreamParser", () => {
   });
 
   it("individual chunk builders produce parser-accepted payloads", async () => {
-    const chunks = await parseSse(encodeSseFrames([textChunk("x"), stopChunk()]));
+    const chunks = await parseSse(
+      encodeSseFrames([textChunk("x"), stopChunk()])
+    );
     expect(textOf(chunks)).toBe("x");
     expect(chunks[chunks.length - 1].choices?.[0]?.finish_reason).toBe("stop");
+  });
+
+  it("stream-generated-image parses through the production parser and carries delta.images", async () => {
+    const plan = resolveScenario("stream-generated-image");
+    expect(plan.kind).toBe("sse");
+    if (plan.kind !== "sse") return;
+    const chunks = await parseSse(
+      encodeSseFrames(plan.frames.map((f) => f.payload))
+    );
+    expect(textOf(chunks)).toBe(STREAM_IMAGE_TEXT);
+    const finish = chunks[chunks.length - 1];
+    expect(finish.choices?.[0]?.finish_reason).toBe("stop");
+    // The generated image rides completion metadata exactly the way the
+    // production accumulator collects it.
+    const imageChunk = chunks.find(
+      (c) => (c.choices?.[0]?.delta?.images ?? []).length > 0
+    );
+    expect(imageChunk).toBeTruthy();
+    expect(imageChunk?.choices?.[0]?.delta?.images?.[0]?.b64_json).toBe(
+      STREAM_IMAGE_B64
+    );
+  });
+
+  it("imagesChunk builder emits a parser-accepted payload", async () => {
+    const chunks = await parseSse(
+      encodeSseFrames([
+        imagesChunk([{ type: "image", b64_json: STREAM_IMAGE_B64, mime_type: "image/png" }]),
+        stopChunk(),
+      ])
+    );
+    const imageChunk = chunks.find(
+      (c) => (c.choices?.[0]?.delta?.images ?? []).length > 0
+    );
+    expect(imageChunk?.choices?.[0]?.delta?.images?.[0]?.mime_type).toBe(
+      "image/png"
+    );
   });
 });
