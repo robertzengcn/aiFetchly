@@ -170,6 +170,11 @@ export class AIContentReportService {
       // The message carries the code so it survives the IPC boundary
       // (registerValidatedHandler extracts err.message into envelope.msg).
       // The dialog reads the code directly to pick the localized message.
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
       throw new AIContentReportError(code, code);
     }
 
@@ -187,6 +192,11 @@ export class AIContentReportService {
         durationMs: Date.now() - startedAt,
         code,
       });
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
       throw new AIContentReportError(code, code);
     }
 
@@ -199,8 +209,38 @@ export class AIContentReportService {
       durationMs: Date.now() - startedAt,
     });
 
+    this.emitAnalyticsEvent("ai_content_report_submitted", {
+      surface,
+      contentType: request.contentType,
+      category,
+      appVersion: normalizedContext.appVersion,
+      durationBucket: durationBucket(Date.now() - startedAt),
+    });
+
     return data;
   }
+
+  /**
+   * Emit an allowed analytics event (PRD §15). Properties are strictly
+   * metadata-only — never report text, comments, image bytes, message/
+   * conversation identifiers, the report identifier, model prompts, or raw
+   * model output. Today this logs at info level; a future analytics sink can
+   * subscribe to the `[analytics]` log prefix without changing call sites.
+   */
+  private emitAnalyticsEvent(
+    event: "ai_content_report_submitted" | "ai_content_report_failed",
+    props: Record<string, unknown>
+  ): void {
+    log.info(`[analytics] ${event}`, props);
+  }
+}
+
+/** Bucket a millisecond duration into a coarse string for analytics (PRD §15). */
+function durationBucket(ms: number): string {
+  if (ms < 1000) return "<1s";
+  if (ms < 5000) return "1-5s";
+  if (ms < 30000) return "5-30s";
+  return ">30s";
 }
 
 /** Best-effort HTTP status extraction from an unknown thrown value. */

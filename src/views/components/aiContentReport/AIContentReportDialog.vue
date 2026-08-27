@@ -276,6 +276,17 @@ watch(
       reportId.value = null;
       categoryError.value = "";
       imageSelectionError.value = "";
+      // Analytics: report opened. Metadata-only — no report content
+      // (PRD §15, §14.3). A future analytics sink can subscribe to the
+      // `[analytics]` console prefix.
+      const d = props.descriptor;
+      if (d) {
+        // eslint-disable-next-line no-console
+        console.info("[analytics] ai_content_report_opened", {
+          surface: d.surface,
+          contentType: d.contentType,
+        });
+      }
       // Default-select EVERY available image, including a single one (PRD
       // §9.2: thumbnails with each image selected by default). The user may
       // deselect extras when there are multiple, but at least one must remain.

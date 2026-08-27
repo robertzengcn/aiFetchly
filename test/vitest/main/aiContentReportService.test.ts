@@ -218,6 +218,70 @@ describe("AIContentReportService", () => {
     infoSpy.mockRestore();
   });
 
+  it("emits ai_content_report_submitted with metadata-only properties", async () => {
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const postJson = vi.fn().mockResolvedValue(makeResponse());
+    const service = new AIContentReportService({
+      httpClient: { postJson },
+      appVersion: () => "1.0.0",
+      installId: () => "id",
+    });
+    await service.submitReport(
+      makeValidRequest({
+        surface: "chat_v2",
+        contentType: "text",
+        category: "other",
+        comment: "secret comment",
+        output: { text: "secret output" },
+      })
+    );
+    const analyticsCalls = infoSpy.mock.calls.filter((c) =>
+      String(c[0]).includes("[analytics]")
+    );
+    expect(analyticsCalls.length).toBeGreaterThan(0);
+    const submitted = analyticsCalls.find((c) =>
+      String(c[0]).includes("ai_content_report_submitted")
+    );
+    expect(submitted).toBeDefined();
+    const logged = JSON.stringify(analyticsCalls);
+    // Allowed properties present.
+    expect(logged).toContain("surface");
+    expect(logged).toContain("contentType");
+    expect(logged).toContain("category");
+    // Forbidden report content absent (PRD §15).
+    expect(logged).not.toContain("secret comment");
+    expect(logged).not.toContain("secret output");
+    infoSpy.mockRestore();
+  });
+
+  it("emits ai_content_report_failed with a safe error code on failure", async () => {
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
+    const postJson = vi.fn().mockRejectedValue(err);
+    const service = new AIContentReportService({
+      httpClient: { postJson },
+      appVersion: () => "1.0.0",
+      installId: () => "id",
+    });
+    await expect(
+      service.submitReport(makeValidRequest())
+    ).rejects.toMatchObject({
+      code: "rate_limited",
+    });
+    const failed = infoSpy.mock.calls.find(
+      (c) =>
+        String(c[0]).includes("[analytics]") &&
+        String(c[0]).includes("ai_content_report_failed")
+    );
+    expect(failed).toBeDefined();
+    const logged = JSON.stringify(failed);
+    expect(logged).toContain("rate_limited");
+    expect(logged).toContain("surface");
+    // No report content.
+    expect(logged).not.toContain("AI output");
+    infoSpy.mockRestore();
+  });
+
   it("reuses the same clientReportId across retries (idempotency)", async () => {
     // First call fails with network, second succeeds — same clientReportId.
     const postJson = vi
