@@ -25,6 +25,7 @@ import {
   USEREMAIL,
 } from "@/config/usersetting";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { WebSocketClient } from "@/modules/WebSocketClient";
 import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import {
   refreshEntitlementInputSchema,
@@ -186,8 +187,18 @@ export function registerUserIpcHandlers(
   // FR-5.1: reconcile entitlement after a successful access-token refresh.
   // Registered once here (not inside TokenRefreshService) to avoid a circular
   // import between tokenRefresh and the entitlement service.
+  // Also retry the WebSocket connection (design §7.3): at startup, an expired
+  // access JWT made connect() skip the socket. After refresh, retry so the
+  // fast WS notify path is restored — not just the slower reconcile-on-event.
   TokenRefreshService.onRefreshSuccess(() => {
     void entitlementService.reconcile("token_refresh");
+    try {
+      WebSocketClient.getInstance().retryConnectIfDisconnected();
+    } catch (err) {
+      log.warn("[entitlement] WS retry after token refresh failed:", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   // FR-3.2 / FR-4: reconcile on window focus. Ignore the first 2s after

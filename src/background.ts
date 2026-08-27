@@ -1255,8 +1255,33 @@ function initialize() {
         );
       }
 
-      // Initialize WebSocket connection to marketing server
-      // This enables real-time notifications and updates
+      // FR-2.1 / design §7.1: boot order for a logged-in user is
+      //   1. refresh access token (if expired),
+      //   2. reconcile entitlement (needs a valid Bearer),
+      //   3. connect WebSocket (the fast notify path),
+      //   4. start the background auto-refresh timer.
+      // A logged-in user with an expired JWT would otherwise issue the startup
+      // GET with a stale token and fail; the reconcile would keep the stale
+      // Community cache and the socket would be skipped forever.
+      try {
+        await TokenRefreshService.performAutoRefreshCheck();
+      } catch (err) {
+        log.error("[entitlement] startup token refresh check failed:", err);
+      }
+
+      // FR-2.1: Reconcile entitlement from GET /api/user/info at startup.
+      // Runs after the token refresh so the GET has a valid Bearer. If the WS
+      // "connected" welcome arrives shortly after, ws_connect coalesces
+      // within STARTUP_CONNECT_COALESCE_MS (10s). Failures keep the cache.
+      SubscriptionEntitlementService.getInstance()
+        .reconcile("startup")
+        .catch((err) => {
+          log.error("[entitlement] startup reconcile failed:", err);
+        });
+
+      // Initialize WebSocket connection to marketing server.
+      // This enables real-time notifications and updates. Runs after the
+      // token refresh so connect()'s hasValidToken() succeeds.
       if (win) {
         try {
           await initializeWebSocketConnection(win);
@@ -1265,17 +1290,6 @@ function initialize() {
           log.error("Failed to initialize WebSocket connection:", error);
         }
       }
-
-      // FR-2.1: Reconcile entitlement from GET /api/user/info at startup.
-      // A logged-in user already has a valid access token, so this runs
-      // immediately after WebSocket init. If the WS "connected" welcome
-      // arrives shortly after, ws_connect coalesces within
-      // STARTUP_CONNECT_COALESCE_MS (10s). Failures keep the existing cache.
-      SubscriptionEntitlementService.getInstance()
-        .reconcile("startup")
-        .catch((err) => {
-          log.error("[entitlement] startup reconcile failed:", err);
-        });
 
       // Start background token auto-refresh for already-logged-in user (only if not already running)
       if (!TokenRefreshService.isAutoRefreshRunning()) {

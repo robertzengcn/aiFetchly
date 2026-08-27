@@ -675,6 +675,32 @@ export class WebSocketClient {
   }
 
   /**
+   * Reconnect after a token refresh if the socket is currently disconnected.
+   *
+   * Companion to the entitlement reconciliation listener (design §7.3): at
+   * startup, if the access JWT was expired the socket was skipped
+   * (`connect()` logs "No valid token found" and returns). After a successful
+   * refresh, this re-attempts the connection so the fast WS notify path is
+   * restored — not just the slower reconcile-on-event path.
+   *
+   * Idempotent: no-op if already connected, or if there is no window / token.
+   */
+  public retryConnectIfDisconnected(): void {
+    if (this.isConnected()) {
+      return;
+    }
+    if (this.manualDisconnect) {
+      // User explicitly disconnected; don't override.
+      return;
+    }
+    if (!this.win || !this.hasValidToken()) {
+      return;
+    }
+    log.info("[WebSocket] retrying connection after token refresh");
+    this.doConnect();
+  }
+
+  /**
    * Check if connected to WebSocket server
    */
   public isConnected(): boolean {
