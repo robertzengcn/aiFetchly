@@ -132,3 +132,6 @@ export function hashTree(root: string): string {
   walk(root);
   return hash.digest("hex");
 }
+
+// (contentHash.ts's sha256Hex covers single-value hashes; hashTree is the
+// one legitimate streaming-hash owner — converted files import sha256Hex.)

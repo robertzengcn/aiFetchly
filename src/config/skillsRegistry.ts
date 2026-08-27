@@ -22,6 +22,7 @@ import { MCPToolService } from "@/service/MCPToolService";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
 import { executeShellCommand } from "@/service/ShellToolService";
+import { SKILL_INSTALL_COMPACT_REMINDER } from "@/service/SkillInstallationRoutingPromptSection";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
 import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
 import {
@@ -1981,7 +1982,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "skill_install_prepare",
     description:
-      "Start or resume a typed skill installation. Call this DIRECTLY when the user " +
+      SKILL_INSTALL_COMPACT_REMINDER +
+      " Start or resume a typed skill installation. Call this DIRECTLY when the user " +
       "asks to install, set up, register, update, repair, or configure a skill from a " +
       "repository URL or local package — it owns acquisition, inspection, planning, and " +
       "activation. Do NOT clone with shell tools, copy with file tools, or search the " +

@@ -16,11 +16,11 @@
  *     commands, helpers, hooks, or network requests).
  */
 
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { parseRestrictedFrontmatter } from "@/service/aifetchlyConfig/AIFetchlyConfigMarkdown";
 import type { PromptSkillManifest } from "@/entityTypes/promptSkillTypes";
+import { sha256Hex } from "@/utils/contentHash";
 
 export const SKILL_MD_FILE = "SKILL.md";
 export const SKILL_MD_MAX_BYTES = 256 * 1024;
@@ -152,7 +152,7 @@ export function loadSkillMarkdownFile(
     };
   }
 
-  const contentHash = crypto.createHash("sha256").update(bytes).digest("hex");
+  const contentHash = sha256Hex(bytes);
   const manifest = parseSkillManifest(text, path.basename(canonicalRoot));
   if (!manifest) {
     return {
@@ -246,7 +246,7 @@ export function parseSkillManifest(
   };
 }
 
-function normalizeFallbackName(dirName: string, firstHeading: string): string {
+export function normalizeFallbackName(dirName: string, firstHeading: string): string {
   const candidate = (dirName || firstHeading || "")
     .toLowerCase()
     .trim()

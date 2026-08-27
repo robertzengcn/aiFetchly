@@ -15,7 +15,10 @@
 
 import { spawn } from "child_process";
 import { FilePathGuard } from "@/service/FilePathGuard";
-import { getDefaultFilesystemContextService } from "@/service/ConversationFilesystemContextService";
+import {
+  assertFilesystemPathAllowed,
+  getDefaultFilesystemContextService,
+} from "@/service/ConversationFilesystemContextService";
 import {
   SHELL_MAX_TIMEOUT_MS,
   SHELL_MIN_TIMEOUT_MS,
@@ -43,6 +46,8 @@ import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
  * design §6.2 — `ShellToolService` stops resolving roots independently).
  */
 export interface ShellExecutionScope {
+  /** Owning conversation (capability-policy context). */
+  readonly conversationId: string;
   /** Canonical workspace root — the default cwd. */
   readonly defaultCwd: string;
   /** Roots an explicit `cwd` argument may target. */
@@ -65,6 +70,7 @@ export async function resolveShellExecutionScope(
   }
   const ctx = resolution.context;
   return {
+    conversationId: ctx.conversationId,
     defaultCwd: ctx.defaultCwd,
     allowedRoots: ctx.roots.map((r) => r.canonicalPath),
   };
@@ -184,6 +190,34 @@ function resolveCwd(
       valid: false,
       path: cwd,
       error: `Working directory '${cwd}' is outside allowed workspace roots`,
+    };
+  }
+
+  // Capability-aware second gate (design §6.3, review D3 wiring): the shell
+  // runs commands from this directory, so the root must grant 'execute'.
+  const capability = assertFilesystemPathAllowed({
+    path: validation.resolvedPath,
+    operation: "execute",
+    context: {
+      conversationId: scope.conversationId,
+      workspaceId: -1,
+      defaultCwd: scope.defaultCwd,
+      workspaceRoot: scope.defaultCwd,
+      canonicalWorkspaceRoot: scope.defaultCwd,
+      roots: scope.allowedRoots.map((root, i) => ({
+        id: `root:${i}`,
+        kind: "workspace" as const,
+        canonicalPath: root,
+        capabilities: new Set(["read", "write", "execute", "watch"] as const),
+      })),
+      revision: "shell",
+    },
+  });
+  if (!capability.allowed) {
+    return {
+      valid: false,
+      path: cwd,
+      error: `Working directory rejected: ${capability.message}`,
     };
   }
 

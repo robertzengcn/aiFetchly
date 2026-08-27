@@ -122,6 +122,12 @@ export class SkillCredentialService {
   /**
    * Retrieve a credential for injection into ONE approved child process.
    * Never log or return this value anywhere except the child environment.
+   *
+   * CONSUMER NOTE (review D3): the approved-command execution path that
+   * resolves ApprovedCommandTemplate.environmentNames does not exist yet —
+   * repository commands are parsed and shown for approval but never run.
+   * This method is the §13 injection API for that path; wire it when
+   * command execution ships.
    */
   retrieve(
     installationId: string,

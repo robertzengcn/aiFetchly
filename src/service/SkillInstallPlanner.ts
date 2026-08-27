@@ -127,6 +127,8 @@ function computePlanRevision(
   plan: Omit<SkillInstallPlan, "planRevision">,
   instructionFiles: readonly InstructionFile[]
 ): string {
+  // Streaming hash (JSON + per-file hashes) — sha256Hex is for single
+  // values; keep the stream here with the shared algorithm.
   const hash = crypto.createHash("sha256");
   hash.update(JSON.stringify(plan));
   for (const file of instructionFiles) {

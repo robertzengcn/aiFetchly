@@ -23,7 +23,6 @@
  *     every tool in one batch observes the identical roots.
  */
 
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
@@ -36,6 +35,7 @@ import type {
   FilesystemRootCapability,
   FilesystemContextResolution,
 } from "@/entityTypes/filesystemContextTypes";
+import { sha256Hex } from "@/utils/contentHash";
 
 /** Capabilities granted on the approved workspace root. */
 const WORKSPACE_CAPABILITIES: ReadonlySet<FilesystemCapability> = new Set([
@@ -171,10 +171,7 @@ export class ConversationFilesystemContextService {
       workspaceRoot: rootPath,
       canonicalWorkspaceRoot: canonicalRoot,
       roots: [workspaceRoot],
-      revision: crypto
-        .createHash("sha256")
-        .update(`${workspaceId}:${canonicalRoot}`)
-        .digest("hex")
+      revision: sha256Hex(`${workspaceId}:${canonicalRoot}`)
         .slice(0, 12),
     };
 

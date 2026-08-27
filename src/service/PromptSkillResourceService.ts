@@ -10,11 +10,11 @@
  * ~/.aifetchly/skills (PRD §14.4 — per-skill capability, no parent grant).
  */
 
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 import type { SkillResourceReadResult } from "@/entityTypes/promptSkillTypes";
+import { sha256Hex } from "@/utils/contentHash";
 
 export const SKILL_RESOURCE_MAX_BYTES = 256 * 1024;
 const BINARY_ZERO_SAMPLE = 8_000;
@@ -199,7 +199,7 @@ export async function readSkillResource(
   const payload: SkillResourceReadResult = {
     relativePath,
     content: bytes.toString("utf-8"),
-    contentHash: crypto.createHash("sha256").update(bytes).digest("hex"),
+    contentHash: sha256Hex(bytes),
     truncated: false,
     sizeBytes: bytes.length,
   };

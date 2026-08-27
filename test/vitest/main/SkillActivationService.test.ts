@@ -9,8 +9,8 @@ import * as path from "path";
 import {
   SkillActivationService,
   OWNERSHIP_FILE,
-  normalizeDirName,
 } from "@/service/SkillActivationService";
+import { normalizeFallbackName } from "@/service/PromptSkillLoader";
 
 let skillRoot: string;
 let sourceRoot: string;
@@ -187,9 +187,9 @@ describe("SkillActivationService — rollback", () => {
   });
 });
 
-describe("normalizeDirName", () => {
+describe("skill name slugs (shared normalizeFallbackName)", () => {
   it("produces a safe directory slug", () => {
-    expect(normalizeDirName("Video Use!")).toBe("video-use");
-    expect(normalizeDirName("../etc/passwd")).toBe("etc-passwd");
+    expect(normalizeFallbackName("Video Use!", "")).toBe("video-use");
+    expect(normalizeFallbackName("../etc/passwd", "")).toBe("etc-passwd");
   });
 });

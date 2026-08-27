@@ -20,6 +20,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import type { SkillActivationMode } from "@/entityTypes/skillInstallationTypes";
+import { normalizeFallbackName } from "@/service/PromptSkillLoader";
 
 export interface ActivationRequest {
   readonly sourceRoot: string;
@@ -85,7 +86,7 @@ export class SkillActivationService {
     }
 
     fs.mkdirSync(this.skillRoot, { recursive: true });
-    const target = path.join(this.skillRoot, normalizeDirName(request.skillName));
+    const target = path.join(this.skillRoot, normalizeFallbackName(request.skillName, ""));
 
     // Refuse unowned destinations (never silently replace foreign content).
     if (fs.existsSync(target) && !this.isOwnedActivation(target)) {
@@ -309,13 +310,7 @@ export class SkillActivationService {
   }
 }
 
-export function normalizeDirName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 64);
-}
+
 
 function copyTree(from: string, to: string): void {
   fs.mkdirSync(to, { recursive: true });

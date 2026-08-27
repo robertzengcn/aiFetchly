@@ -16,13 +16,13 @@
  * its commands (§12.1).
  */
 
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import type {
   DiscoveredSkillPackage,
 } from "@/entityTypes/skillInstallationTypes";
 import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
+import { sha256Hex } from "@/utils/contentHash";
 
 const INSTRUCTION_FILE_MAX_BYTES = 512 * 1024;
 const HELPER_DIRS = ["helpers", "scripts", "references", "assets"];
@@ -339,10 +339,7 @@ export class SkillPackageInspectionService {
           relativePath: path.relative(root, abs).split(path.sep).join("/"),
           precedence,
           content,
-          contentHash: crypto
-            .createHash("sha256")
-            .update(content)
-            .digest("hex"),
+          contentHash: sha256Hex(content),
         });
       } catch (err) {
         diagnostics.push(

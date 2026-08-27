@@ -14,7 +14,6 @@
  * an AIFETCHLY_SKILL_STAGING_ROOT override for tests/advanced deployments.
  */
 
-import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -32,6 +31,7 @@ import type {
   SkillSourceDescriptor,
   SkillSourceKind,
 } from "@/entityTypes/skillInstallationTypes";
+import { sha256Hex } from "@/utils/contentHash";
 
 export interface AcquisitionLimits {
   readonly maxFiles: number;
@@ -195,10 +195,7 @@ export class SkillSourceAcquisitionService {
       return {
         ok: true,
         source: {
-          sourceId: crypto
-            .createHash("sha256")
-            .update(`${descriptor.kind}:${descriptor.canonicalUri}`)
-            .digest("hex")
+          sourceId: sha256Hex(`${descriptor.kind}:${descriptor.canonicalUri}`)
             .slice(0, 16),
           canonicalUri: descriptor.canonicalUri,
           resolvedRevision,

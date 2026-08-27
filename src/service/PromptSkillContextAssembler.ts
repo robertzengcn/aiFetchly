@@ -19,7 +19,6 @@
  */
 
 import * as fs from "fs";
-import * as crypto from "crypto";
 import { extractBody, SKILL_MD_FILE } from "@/service/PromptSkillLoader";
 import { scopeLabel } from "@/service/PromptSkillCatalog";
 import {
@@ -31,6 +30,7 @@ import type {
   PromptSkillDefinition,
   UsePromptSkillError,
 } from "@/entityTypes/promptSkillTypes";
+import { sha256Hex } from "@/utils/contentHash";
 
 export const AIFETCHLY_SKILL_DIR_VAR = "${AIFETCHLY_SKILL_DIR}";
 export const CLAUDE_SKILL_DIR_VAR = "${CLAUDE_SKILL_DIR}";
@@ -87,7 +87,7 @@ export class PromptSkillContextAssembler {
         },
       };
     }
-    const currentHash = crypto.createHash("sha256").update(bytes).digest("hex");
+    const currentHash = sha256Hex(bytes);
     if (currentHash !== definition.contentHash) {
       return {
         ok: false,
