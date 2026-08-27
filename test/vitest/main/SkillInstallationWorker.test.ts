@@ -323,6 +323,30 @@ describe("SkillInstallationWorkerClient", () => {
   }, 30_000);
 });
 
+  it("a hung worker times out and falls back to inline staging (D2)", async () => {
+    const src = makeSourceTree();
+    const stubFork = (): WorkerHandle => ({
+      // Receives the request, never replies, never exits.
+      postMessage: () => undefined,
+      on: () => undefined,
+      kill: () => true,
+    });
+    const client = new SkillInstallationWorkerClient({
+      fork: stubFork,
+      timeoutMs: 80,
+    });
+    const outcome = await client.stage(src, path.join(tmpRoot, "hung"), {
+      maxFiles: 100,
+      maxTotalBytes: 1e9,
+      maxDepth: 20,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.viaWorker).toBe(false);
+    expect(outcome.result.fileCount).toBe(2);
+    client.dispose();
+  }, 30_000);
+
 describe("acquisition service uses the staging client", () => {
   it("acquire() stages through inline fallback in test contexts", async () => {
     const { SkillSourceAcquisitionService } = await import(

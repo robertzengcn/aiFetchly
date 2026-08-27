@@ -731,12 +731,35 @@ export class SkillInstallationModule extends BaseModule {
       planRevision: plan.planRevision,
       backupPath: result.backupPath,
     });
-    await installations.save(entity);
-    // Normally already set at session creation; backfill for sessions
-    // created before that invariant existed (same id, idempotent write).
-    if (session.installationId !== installationId) {
-      await this.setInstallationId(sessions, sessionId, installationId);
+    // Upsert by installation identity (D2 review test): a prior
+    // revoked/failed row for the same source+revision+mode must be
+    // REPLACED, not collide with the unique index.
+    const priorRow = await installations.findByIdentity({
+      sourceUri: entity.sourceUri,
+      sourceRevision: entity.sourceRevision,
+      sourceSubdirectory: entity.sourceSubdirectory,
+      scope: entity.scope,
+      workspaceId: entity.workspaceId,
+      activationMode: entity.activationMode,
+    });
+    if (priorRow) {
+      // Adopt the prior row's stable identity so re-installs keep ONE
+      // canonical installation per identity — and sync the SESSION to the
+      // adopted id so snapshots, credential bindings, and downstream
+      // uninstall lookups all agree (D2 review test).
+      entity.id = priorRow.id;
+      if (priorRow.installationId !== installationId) {
+        getDefaultPromptSkillCatalog().remove(`prompt:user:${installationId}`);
+        entity.installationId = priorRow.installationId;
+        await this.setInstallationId(
+          sessions,
+          sessionId,
+          priorRow.installationId
+        );
+        session.installationId = priorRow.installationId;
+      }
     }
+    await installations.save(entity);
     await this.transition(sessions, events, sessionId, "verifying");
 
     // Verification levels (design §18): activation structure + dependency
@@ -756,6 +779,17 @@ export class SkillInstallationModule extends BaseModule {
         result.activationPath,
         result.backupPath
       );
+      // A failed verification must leave NO active trace (D2 review test):
+      // unregister the catalog entry that registerPromptSkill just made,
+      // and mark the prematurely-saved installation record failed.
+      getDefaultPromptSkillCatalog().remove(`prompt:user:${installationId}`);
+      entity.status = "failed";
+      entity.enabled = false;
+      try {
+        await installations.save(entity);
+      } catch {
+        /* best-effort status update — the session failure below governs */
+      }
       await this.fail(
         sessions,
         events,
@@ -960,5 +994,3 @@ export class SkillInstallationModule extends BaseModule {
     };
   }
 }
-
-

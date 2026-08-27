@@ -21,6 +21,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
 import {
   approveSkillInstall,
   cancelSkillInstall,
+  getSkillInstallApprovalToken,
   submitSkillInstallSecret,
 } from "@/views/api/skillInstallation";
 
@@ -187,6 +188,53 @@ describe("SkillInstallCard", () => {
     await wrapper.find('[data-testid="skill-install-cancel"]').trigger("click");
     await flushPromises();
     expect(cancelSkillInstall).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("approve failure emits failed and clears busy (D2)", async () => {
+    vi.mocked(approveSkillInstall).mockResolvedValue(null);
+    const wrapper = mountCard(makeSnapshot());
+    const btn = wrapper.find('[data-testid="skill-install-approve"]');
+    await btn.trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("failed")?.[0]?.[0]).toBeTruthy();
+    // Buttons are usable again (busy reset).
+    expect(btn.attributes("loading")).toBeUndefined();
+  });
+
+  it("token fetch failure emits failed without calling approve (D2)", async () => {
+    vi.mocked(getSkillInstallApprovalToken).mockReset();
+    vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(null);
+    const wrapper = mountCard(makeSnapshot());
+    await wrapper
+      .find('[data-testid="skill-install-approve"]')
+      .trigger("click");
+    await flushPromises();
+    expect(approveSkillInstall).not.toHaveBeenCalled();
+    expect(wrapper.emitted("failed")?.[0]?.[0]).toBeTruthy();
+  });
+
+  it("secret submission failure keeps the typed value and emits failed (D2)", async () => {
+    vi.mocked(submitSkillInstallSecret).mockResolvedValue(null);
+    const wrapper = mountCard(
+      makeSnapshot({
+        state: "awaiting_secret",
+        safeSummary: "credentials: ELEVENLABS_API_KEY",
+      })
+    );
+    await wrapper
+      .find('input[label="ELEVENLABS_API_KEY"]')
+      .setValue("sk-keep-me-on-failure-123");
+    await wrapper
+      .find('[data-testid="skill-install-secret-submit"]')
+      .trigger("click");
+    await flushPromises();
+    // Failed submission does NOT discard what the user typed.
+    expect(
+      (
+        wrapper.find('input[label="ELEVENLABS_API_KEY"]').element as HTMLInputElement
+      ).value
+    ).toBe("sk-keep-me-on-failure-123");
+    expect(wrapper.emitted("failed")?.[0]?.[0]).toBeTruthy();
   });
 
   it("shows the ready banner without any execution hint", () => {

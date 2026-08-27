@@ -261,6 +261,90 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     expect(wrong.errorCode).toBe("APPROVAL_REQUIRED");
   }, 120_000);
 
+  it("verification failure rolls back the activation and fails the session (D2)", async () => {
+    const { SkillActivationService } = await import(
+      "@/service/SkillActivationService"
+    );
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-rollback",
+      source: fixtureRoot,
+    });
+    const realVerify = SkillActivationService.prototype.verifyActivation;
+    SkillActivationService.prototype.verifyActivation = () => false;
+    try {
+      let failed = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
+      if (failed.state === "awaiting_secret") {
+        failed = await module.resumeAfterSecret(prepared.sessionId);
+      }
+      expect(failed.state).toBe("failed");
+      expect(failed.errorCode).toBe("ACTIVATION_VERIFICATION_FAILED");
+      // The half-installed activation is gone and the skill is NOT
+      // registered for discovery.
+      expect(
+        fs.existsSync(path.join(configHome, ".aifetchly", "skills", "video-use"))
+      ).toBe(false);
+      expect(
+        getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+      ).toBeNull();
+    } finally {
+      SkillActivationService.prototype.verifyActivation = realVerify;
+    }
+  }, 120_000);
+
+  it("double approve with the same revision is idempotent (D2)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-double",
+      source: fixtureRoot,
+    });
+    const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+    const args = {
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: token,
+    };
+    let first = await module.approve(args);
+    if (first.state === "awaiting_secret") {
+      first = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    const firstInstallation = first.installationId;
+    // A duplicate approve (renderer retry / late message) returns the
+    // terminal snapshot WITHOUT creating a second installation.
+    const second = await module.approve(args);
+    expect(["ready", "installing_dependencies"]).toContain(second.state);
+    expect(second.installationId).toBe(firstInstallation);
+    const activation = path.join(configHome, ".aifetchly", "skills", "video-use");
+    const count = fs.readdirSync(path.dirname(activation)).filter(
+      (n) => n === "video-use"
+    ).length;
+    expect(count).toBe(1);
+  }, 120_000);
+
+  it("a source with no supported package fails with SKILL_FORMAT_INVALID (D2)", async () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "empty-src-"));
+    try {
+      fs.writeFileSync(path.join(empty, "README.md"), "# nothing here");
+      const module = new SkillInstallationModule();
+      const snapshot = await module.prepare({
+        conversationId: "conv-empty",
+        source: empty,
+      });
+      expect(snapshot.state).toBe("failed");
+      expect(snapshot.errorCode).toBe("SKILL_FORMAT_INVALID");
+      const status = await module.getStatus("never-a-session");
+      expect(status.errorCode).toBe("INSTALL_SESSION_REQUIRED");
+    } finally {
+      fs.rmSync(empty, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("rejects traversal-shaped session ids at the schema boundary (S1)", async () => {
     const { SkillInstallPrepareArgsSchema } = await import(
       "@/entityTypes/skillInstallationTypes"

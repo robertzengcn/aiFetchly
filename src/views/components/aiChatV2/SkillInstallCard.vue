@@ -243,9 +243,10 @@ async function onSubmitSecret(): Promise<void> {
       environmentVariable: secretVariableName.value,
       value: secretValue.value,
     });
-    // Clear the input immediately — the value lives only in the secure store.
-    secretValue.value = "";
     if (result?.snapshot) {
+      // Clear ONLY on success — the value lives in the secure store now.
+      // On failure the typed value stays so the user can retry (D2 test).
+      secretValue.value = "";
       emit("updated", result.snapshot);
     } else {
       emit("failed", t("skillInstall.errors.secretFailed"));
