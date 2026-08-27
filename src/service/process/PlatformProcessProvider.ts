@@ -114,6 +114,16 @@ export const SENSITIVE_ENV_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Pattern-based secret scrub (review S7): a fixed 10-key denylist misses
+ * GOOGLE_API_KEY, *_PASSWORD, DATABASE_URL with embedded credentials, etc.
+ * Children spawned here run repository-influenced commands (dependency
+ * probes, later approved helpers), so anything secret-SHAPED is dropped
+ * unless the caller explicitly injects it via `overrides`.
+ */
+const SENSITIVE_ENV_KEY_RE =
+  /(API_?KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIAL|PRIVATE_?KEY|AUTH)$/i;
+
+/**
  * Environment baseline shared by every provider: start from the application
  * environment and REMOVE known-sensitive keys instead of applying a
  * Unix-centric allowlist (design §7.2 — the allowlist stripped required
@@ -126,10 +136,13 @@ export function buildChildEnvironment(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined) continue;
-    if (SENSITIVE_ENV_KEYS.has(key.toUpperCase())) continue;
+    const upper = key.toUpperCase();
+    if (SENSITIVE_ENV_KEYS.has(upper)) continue;
+    if (SENSITIVE_ENV_KEY_RE.test(key)) continue;
     env[key] = value;
   }
   if (overrides) {
+    // Explicit overrides are the approved-injection channel and always win.
     for (const [key, value] of Object.entries(overrides)) {
       env[key] = value;
     }

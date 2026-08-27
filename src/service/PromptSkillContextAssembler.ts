@@ -20,10 +20,8 @@
 
 import * as fs from "fs";
 import * as crypto from "crypto";
-import {
-  extractBody,
-  SKILL_MD_FILE,
-} from "@/service/PromptSkillLoader";
+import { extractBody, SKILL_MD_FILE } from "@/service/PromptSkillLoader";
+import { scopeLabel } from "@/service/PromptSkillCatalog";
 import {
   PromptSkillTokenBudgetService,
   estimateTokens,
@@ -46,11 +44,6 @@ export interface AssembledPromptSkillContext {
   readonly budgetMode: "full" | "section-selected" | "metadata-only";
 }
 
-export type AssembleResult =
-  | { readonly ok: true; readonly context: AssembledPromptSkillContext }
-  | { readonly ok: true; readonly error: UsePromptSkillError }
-  | { readonly ok: false; readonly error: UsePromptSkillError };
-
 export interface AssembleOptions {
   readonly definition: PromptSkillDefinition;
   readonly conversationWorkspaceRoot: string;
@@ -62,7 +55,9 @@ export interface AssembleOptions {
 export class PromptSkillContextAssembler {
   private readonly budgetService = new PromptSkillTokenBudgetService();
 
-  assemble(options: AssembleOptions):
+  assemble(
+    options: AssembleOptions
+  ):
     | { ok: true; context: AssembledPromptSkillContext }
     | { ok: false; error: UsePromptSkillError } {
     const { definition } = options;
@@ -92,10 +87,7 @@ export class PromptSkillContextAssembler {
         },
       };
     }
-    const currentHash = crypto
-      .createHash("sha256")
-      .update(bytes)
-      .digest("hex");
+    const currentHash = crypto.createHash("sha256").update(bytes).digest("hex");
     if (currentHash !== definition.contentHash) {
       return {
         ok: false,
@@ -151,7 +143,7 @@ export class PromptSkillContextAssembler {
     const normalizedInstructions = [
       `<invoked_prompt_skill runtime_id="${definition.runtimeId}" content_hash="${definition.contentHash}">`,
       `Skill: ${definition.name}`,
-      `Source: ${scopeWording(definition)}`,
+      `Source: ${scopeLabel(definition.scope)}`,
       `Base directory for this skill: ${displayDir}`,
       `Writable workspace: ${options.conversationWorkspaceRoot}`,
       "",
@@ -175,18 +167,5 @@ export class PromptSkillContextAssembler {
         budgetMode: decision.mode,
       },
     };
-  }
-}
-
-function scopeWording(definition: PromptSkillDefinition): string {
-  switch (definition.scope) {
-    case "workspace":
-      return "workspace skill";
-    case "plugin":
-      return "plugin skill";
-    case "built-in":
-      return "built-in skill";
-    default:
-      return "user skill";
   }
 }

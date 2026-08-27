@@ -175,6 +175,51 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     expect(repeat.installationId).toBe(approved.installationId);
   }, 120_000);
 
+  it("approve pauses at awaiting_secret BEFORE activation, with the identity the secure channel needs (§19.3 / C3)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-secret-pause",
+      source: fixtureRoot,
+    });
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+    });
+    // install.md declares ELEVENLABS_API_KEY= → deterministic pause.
+    expect(approved.state).toBe("awaiting_secret");
+    expect(approved.nextAction).toBe("provide-secret-securely");
+    // The installation identity exists BEFORE activation — without it the
+    // SUBMIT_SECRET IPC cannot key the credential store (review C3).
+    expect(approved.installationId).not.toBeNull();
+    // Nothing activated while the secret is outstanding.
+    expect(
+      fs.existsSync(
+        path.join(configHome, ".aifetchly", "skills", "video-use")
+      )
+    ).toBe(false);
+    expect(
+      getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+    ).toBeNull();
+
+    const resumed = await module.resumeAfterSecret(prepared.sessionId);
+    expect(["ready", "installing_dependencies"]).toContain(resumed.state);
+    // The resumed activation carries the SAME installation identity the
+    // credential was stored under.
+    expect(resumed.installationId).toBe(approved.installationId);
+  }, 120_000);
+
+  it("rejects traversal-shaped session ids at the schema boundary (S1)", async () => {
+    const { SkillInstallPrepareArgsSchema } = await import(
+      "@/entityTypes/skillInstallationTypes"
+    );
+    const parsed = SkillInstallPrepareArgsSchema.safeParse({
+      source: "https://github.com/a/b",
+      sessionId: "../../..",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it("repeated prepare resumes the active session (no duplicate acquisition)", async () => {
     const module = new SkillInstallationModule();
     const first = await module.prepare({

@@ -158,10 +158,17 @@ export class SkillInstallationModule extends BaseModule {
 
     const sessionId =
       request.sessionId ?? crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+    // The installation identity is created WITH the session (review C3): the
+    // secure-secret channel keys credentials by it while the flow is paused
+    // in awaiting_secret — before any activation exists — and the same id
+    // later identifies the activation, ownership metadata, and catalog
+    // registration.
+    const installationId = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
     const acquisition = new SkillSourceAcquisitionService();
 
     const created = await sessions.create({
       sessionId,
+      installationId,
       conversationId: request.conversationId,
       state: "acquiring",
       planRevision: "none",
@@ -643,10 +650,8 @@ export class SkillInstallationModule extends BaseModule {
     await this.transition(sessions, events, sessionId, "activating");
 
     const activation = new SkillActivationService();
-    const sourceRoot =
-      plan.source.acquiredRoot && requiresStagingLookup(plan)
-        ? pathJoinStaging(sessionId, plan.source.acquiredRoot)
-        : plan.source.acquiredRoot;
+    // acquiredRoot IS the absolute staging path recorded at acquisition.
+    const sourceRoot = plan.source.acquiredRoot;
 
     const result = await activation.activate({
       sourceRoot,
@@ -669,8 +674,12 @@ export class SkillInstallationModule extends BaseModule {
       );
     }
 
-    // Persist the installation record (idempotent identity).
-    const installationId = crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+    // Persist the installation record. The identity came from the session
+    // (created at prepare) so credentials stored during awaiting_secret
+    // bind to the SAME installation (review C3).
+    const installationId =
+      session.installationId ??
+      crypto.randomUUID().replace(/-/g, "").slice(0, 32);
     const entity = new SkillInstallationEntity();
     entity.installationId = installationId;
     entity.name = selected.name;
@@ -690,10 +699,11 @@ export class SkillInstallationModule extends BaseModule {
       backupPath: result.backupPath,
     });
     await installations.save(entity);
-    // Record the installation id on the session. This is NOT a state
-    // transition, so it bypasses the CAS on stateRevision — the id is
-    // set-once and the session row is already exclusively owned by this run.
-    await this.setInstallationId(sessions, sessionId, installationId);
+    // Normally already set at session creation; backfill for sessions
+    // created before that invariant existed (same id, idempotent write).
+    if (session.installationId !== installationId) {
+      await this.setInstallationId(sessions, sessionId, installationId);
+    }
     await this.transition(sessions, events, sessionId, "verifying");
 
     // Verification levels (design §18): activation structure + dependency
@@ -918,13 +928,4 @@ export class SkillInstallationModule extends BaseModule {
   }
 }
 
-function requiresStagingLookup(plan: SkillInstallPlan): boolean {
-  // acquiredRoot is already absolute under the staging root for this run.
-  return Boolean(plan.source.acquiredRoot);
-}
 
-function pathJoinStaging(sessionId: string, acquiredRoot: string): string {
-  // acquiredRoot IS the staging path recorded by the acquisition service.
-  void sessionId;
-  return acquiredRoot;
-}

@@ -82,6 +82,27 @@ describe("stagePackage (shared staging logic)", () => {
     ).toThrow(/depth/);
   });
 
+  it("never stages symlinked entries that escape the source root (S4)", () => {
+    const src = makeSourceTree();
+    const outside = path.join(tmpRoot, "outside");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, "secret.txt"), "s3cret");
+    fs.symlinkSync(outside, path.join(src, "escape"));
+    // A symlinked FILE pointing outside is also skipped, never copied.
+    fs.symlinkSync(
+      path.join(outside, "secret.txt"),
+      path.join(src, "leaky-file.txt")
+    );
+    const staged = stagePackage(src, path.join(tmpRoot, "staged-escape"));
+    expect(fs.existsSync(path.join(tmpRoot, "staged-escape", "escape"))).toBe(
+      false
+    );
+    expect(
+      fs.existsSync(path.join(tmpRoot, "staged-escape", "leaky-file.txt"))
+    ).toBe(false);
+    expect(staged.fileCount).toBe(2); // SKILL.md + helpers/cut.py only
+  });
+
   it("hashTree is deterministic and order-independent of insertion", () => {
     const a = path.join(tmpRoot, "hash-a");
     const b = path.join(tmpRoot, "hash-b");

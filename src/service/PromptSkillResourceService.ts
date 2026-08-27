@@ -91,7 +91,11 @@ export async function listSkillResources(
       truncated = true;
       break;
     }
-    if (entry.isDirectory() || (entry.isSymbolicLink() && safeIsDir(resolved.absolute, entry.name))) {
+    const isDir =
+      entry.isDirectory() ||
+      (entry.isSymbolicLink() &&
+        safeIsDirWithinRoot(resolved.absolute, entry.name));
+    if (isDir) {
       dirs.push(entry.name);
     } else {
       let size = 0;
@@ -115,9 +119,20 @@ export async function listSkillResources(
   };
 }
 
-function safeIsDir(parent: string, name: string): boolean {
+/**
+ * A symlinked directory entry is traversable ONLY when its resolved target
+ * stays inside the listed parent (which is already inside the skill root)
+ * — an escaping link is skipped, not followed (review S3).
+ */
+function safeIsDirWithinRoot(parent: string, name: string): boolean {
   try {
-    return fs.statSync(path.join(parent, name)).isDirectory();
+    const linkPath = path.join(parent, name);
+    if (!fs.statSync(linkPath).isDirectory()) return false;
+    const real = fs.realpathSync(linkPath);
+    const parentWithSep = parent.endsWith(path.sep)
+      ? parent
+      : parent + path.sep;
+    return real === parent || real.startsWith(parentWithSep);
   } catch {
     return false;
   }

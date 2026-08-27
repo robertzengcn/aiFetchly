@@ -21,7 +21,6 @@ import * as fs from "fs";
 import * as path from "path";
 import type {
   DiscoveredSkillPackage,
-  PortableSkillKind,
 } from "@/entityTypes/skillInstallationTypes";
 import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
 
@@ -54,9 +53,19 @@ export class SkillPackageInspectionService {
     constraints: UserConstraints = {}
   ): InspectionResult {
     const diagnostics: string[] = [];
+    // Traversal guard (review S2): a model/renderer-supplied subdirectory
+    // must resolve strictly INSIDE the acquired staging root.
     const root = subdirectory
-      ? path.join(acquiredRoot, subdirectory)
+      ? resolveInside(acquiredRoot, subdirectory)
       : acquiredRoot;
+    if (root === null) {
+      return {
+        rootRelativePath: subdirectory ?? ".",
+        discovered: [],
+        instructionFiles: [],
+        diagnostics: ["subdirectory escapes the acquired root"],
+      };
+    }
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
       return {
         rootRelativePath: subdirectory ?? ".",
@@ -291,9 +300,17 @@ export class SkillPackageInspectionService {
     diagnostics: string[]
   ): InstructionFile[] {
     const wanted: { file: string; precedence: number }[] = [];
-    const named = (constraints.namedInstructionFiles ?? []).map((f) =>
-      f.replace(/^[./\\]+/, "").toLowerCase()
-    );
+    // Named files must stay inside the acquired root after normalization —
+    // the old leading-dot strip let 'a/../../b.txt' traverse (review S2).
+    const named = (constraints.namedInstructionFiles ?? [])
+      .map((f) => f.replace(/^[./\\]+/, "").toLowerCase())
+      .filter((f) => {
+        const contained = isRelativeInside(f);
+        if (!contained) {
+          diagnostics.push(`rejected instruction file outside the root: ${f}`);
+        }
+        return contained;
+      });
     for (const name of named) {
       wanted.push({ file: name, precedence: 0 });
     }
@@ -353,13 +370,23 @@ export class SkillPackageInspectionService {
   }
 }
 
-/** Classify a package kind for plan output (deterministic, pure). */
-export function classifyPackageKind(
-  discovered: readonly DiscoveredSkillPackage[]
-): PortableSkillKind {
-  if (discovered.length === 0) return "ambiguous";
-  if (discovered.length === 1) return discovered[0].kind;
-  const kinds = new Set(discovered.map((d) => d.kind));
-  if (kinds.size === 1) return discovered[0].kind;
-  return "ambiguous";
+
+/**
+ * True when a relative path has no '..' segment and is not absolute —
+ * safe to join under a confinement root.
+ */
+function isRelativeInside(relative: string): boolean {
+  if (!relative || path.isAbsolute(relative)) return false;
+  const parts = relative.split(/[\\/]+/);
+  return parts.every((part) => part !== ".." && part !== "");
+}
+
+/** Resolve `relative` under `root`, returning null when it escapes. */
+function resolveInside(root: string, relative: string): string | null {
+  if (!isRelativeInside(relative)) return null;
+  const resolved = path.resolve(root, relative);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  return resolved === root || resolved.startsWith(rootWithSep)
+    ? resolved
+    : null;
 }

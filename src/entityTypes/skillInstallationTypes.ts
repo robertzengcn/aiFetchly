@@ -238,7 +238,7 @@ const SECRET_KEY_RE =
 const SECRET_VALUE_RE =
   /(?:^|[\s=:,(])(sk-[a-zA-Z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})/;
 
-function rejectSecretShaped(value: unknown, path: string[]): string[] {
+export function rejectSecretShaped(value: unknown, path: string[]): string[] {
   if (typeof value === "string") {
     if (SECRET_VALUE_RE.test(value.trim())) {
       return [`${path.join(".") || "value"} looks like a secret value`];
@@ -267,6 +267,21 @@ export const secretFreeRecord = z
     }
   });
 
+/**
+ * Session/installation ids are app-generated opaque tokens (UUID hex or
+ * `update-<hex>-<ts>` shapes). A strict charset at every schema boundary
+ * keeps model/renderer-supplied ids from ever reaching path joins or
+ * recursive deletes (S1: acquisition staging traversal).
+ */
+export const SkillSessionIdSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(
+    /^[A-Za-z0-9:_-]+$/,
+    "Session ids may only contain letters, digits, ':', '_' and '-'."
+  );
+
 export const SkillInstallPrepareArgsSchema = z.object({
   source: z.string().min(1, "A repository URL or local path is required"),
   ref: z.string().max(200).optional(),
@@ -287,22 +302,22 @@ export const SkillInstallPrepareArgsSchema = z.object({
       }
     })
     .optional(),
-  sessionId: z.string().max(100).optional(),
+  sessionId: SkillSessionIdSchema.optional(),
 });
 
 export const SkillInstallApproveArgsSchema = z.object({
-  sessionId: z.string().min(1),
+  sessionId: SkillSessionIdSchema,
   planRevision: z.string().min(1),
   approve: z.boolean(),
   selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
 });
 
 export const SkillInstallStatusArgsSchema = z.object({
-  sessionId: z.string().min(1),
+  sessionId: SkillSessionIdSchema,
 });
 
 export const SkillInstallCancelArgsSchema = z.object({
-  sessionId: z.string().min(1),
+  sessionId: SkillSessionIdSchema,
 });
 
 export type SkillInstallPrepareArgs = z.infer<typeof SkillInstallPrepareArgsSchema>;

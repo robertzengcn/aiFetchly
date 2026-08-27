@@ -201,7 +201,6 @@ export class PromptSkillCatalog {
       return { definition: null, diagnostics };
     }
     // list() already applies precedence ordering and marks collisions.
-    const sameScope = visible.filter((s) => !s.sourceLabel?.includes("·"));
     if (visible.length > 1) {
       const candidates = visible.map((s) => ({
         runtimeId: s.runtimeId,
@@ -234,7 +233,6 @@ export class PromptSkillCatalog {
         message: `name '${nameOrRuntimeId}' exists in multiple scopes; highest-precedence scope wins`,
         sourceId: topScope[0].runtimeId,
       });
-      void sameScope;
       const winner = this.byRuntimeId.get(topScope[0].runtimeId);
       return {
         definition: winner ?? null,
@@ -330,7 +328,7 @@ export class PromptSkillCatalog {
   }
 }
 
-function scopeLabel(scope: SkillScope): string {
+export function scopeLabel(scope: SkillScope): string {
   switch (scope) {
     case "workspace":
       return "workspace skill";

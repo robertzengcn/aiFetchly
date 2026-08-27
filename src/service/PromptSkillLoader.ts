@@ -88,8 +88,23 @@ export function loadSkillMarkdownFile(
   const mdPath = path.join(canonicalRoot, SKILL_MD_FILE);
   let stat: fs.Stats;
   try {
-    // lstat then stat: a SYMLINKED SKILL.md is acceptable only when its
-    // target stays inside the canonical root (PRD §20.3).
+    // lstat first: a SYMLINKED SKILL.md is acceptable only when its
+    // resolved target stays inside the canonical root (PRD §20.3, review
+    // S4) — otherwise an installed skill could point at any local file.
+    const lstat = fs.lstatSync(mdPath);
+    if (lstat.isSymbolicLink()) {
+      const real = fs.realpathSync(mdPath);
+      const rootWithSep = canonicalRoot.endsWith(path.sep)
+        ? canonicalRoot
+        : canonicalRoot + path.sep;
+      if (real !== canonicalRoot && !real.startsWith(rootWithSep)) {
+        return {
+          ok: false,
+          code: "SKILL_MD_NOT_REGULAR_FILE",
+          message: `${SKILL_MD_FILE} is a symlink escaping the skill root`,
+        };
+      }
+    }
     stat = fs.statSync(mdPath);
   } catch {
     return {

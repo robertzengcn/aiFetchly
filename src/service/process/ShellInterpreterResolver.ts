@@ -26,13 +26,6 @@ const POWERSHELL_ARGS = [
 
 const CMD_ARGS = ["/d", "/s", "/c"] as const;
 
-function pwshExists(): boolean {
-  // Resolution happens at spawn time on PATH; existence probing here would
-  // require sync fs access per command. Instead prefer pwsh on PATH and let
-  // the spawn error surface PROCESS_SPAWN_FAILED when it is absent.
-  return true;
-}
-
 export function resolveShellInterpreter(
   requested: ShellInterpreter
 ): ResolvedInterpreter {
@@ -46,12 +39,10 @@ export function resolveShellInterpreter(
     };
   }
   if (requested === "powershell") {
+    // Prefer PowerShell Core on PATH; the WindowsProcessProvider falls back
+    // to powershell.exe when spawning pwsh fails (PROCESS_SPAWN_FAILED).
     if (process.platform === "win32") {
-      // Prefer PowerShell Core when it is plausibly installed; fall back to
-      // the always-present Windows PowerShell.
-      return pwshExists()
-        ? { executable: "pwsh.exe", args: POWERSHELL_ARGS }
-        : { executable: "powershell.exe", args: POWERSHELL_ARGS };
+      return { executable: "pwsh.exe", args: POWERSHELL_ARGS };
     }
     return { executable: "pwsh", args: POWERSHELL_ARGS };
   }

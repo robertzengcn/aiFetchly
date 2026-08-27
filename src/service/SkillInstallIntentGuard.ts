@@ -128,13 +128,13 @@ export function classifySkillRequestIntent(
   const isNotSkillInstall = NOT_SKILL_INSTALL_RE.test(text);
 
   // High-confidence explicit (FR-01): a lifecycle verb combined with EITHER
-  // a skill/package noun OR a supported source ("Set up <github url>"), or
-  // an unmistakable installed-skill lifecycle phrase — minus the negative
-  // guards for ordinary dependency/Git work.
+  // a skill/package noun OR a supported source ("Set up <github url>") —
+  // minus the negative guards for ordinary dependency/Git work.
+  // (hasExplicitLifecyclePhrase implies hasSkillNoun by construction.)
   if (
     !isNotSkillInstall &&
     hasLifecycleVerb &&
-    ((hasSkillNoun && (hasSource || hasSkillNoun)) || hasSource || hasExplicitLifecyclePhrase)
+    (hasSkillNoun || hasSource)
   ) {
     return {
       ...base,

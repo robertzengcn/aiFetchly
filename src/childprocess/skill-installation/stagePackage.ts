@@ -70,7 +70,13 @@ export function stagePackage(
       if (EXCLUDED_NAMES.has(entry.name)) continue;
       const srcPath = path.join(src, entry.name);
       const destPath = path.join(dest, entry.name);
-      const stat = fs.statSync(srcPath);
+      // lstat — NEVER follow repository-controlled symlinks (review S4):
+      // a link whose target escapes the checkout must not materialize
+      // out-of-tree content into app staging.
+      const stat = fs.lstatSync(srcPath);
+      if (stat.isSymbolicLink()) {
+        continue; // links are documented, never staged
+      }
       if (stat.isDirectory()) {
         walk(srcPath, destPath, depth + 1);
         continue;

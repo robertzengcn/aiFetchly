@@ -64,16 +64,6 @@ export function normalizeSkillSource(
   if (!trimmed) return null;
 
   const github = classifyGitHubUrl(trimmed);
-  if (github.type === "repo" || github.type === "unknown") {
-    if (
-      trimmed.startsWith("https://github.com/") ||
-      trimmed.startsWith("http://github.com/")
-    ) {
-      if (github.type !== "repo") {
-        return null;
-      }
-    }
-  }
 
   if (/^https:\/\/github\.com\//.test(trimmed) && github.type === "repo") {
     // Strip .git and trailing slash; subdirectory travels separately.
@@ -144,7 +134,7 @@ export class SkillSourceAcquisitionService {
     sessionId: string,
     descriptor: SkillSourceDescriptor
   ): Promise<AcquisitionResult> {
-    const sessionDir = path.join(this.stagingRoot, "sessions", sessionId);
+    const sessionDir = this.sessionDir(sessionId);
     const sourceDir = path.join(sessionDir, "source");
     try {
       fs.rmSync(sessionDir, { recursive: true, force: true });
@@ -223,10 +213,7 @@ export class SkillSourceAcquisitionService {
     } catch (err) {
       return {
         ok: false,
-        code:
-          err instanceof LimitError
-            ? "SOURCE_LIMIT_EXCEEDED"
-            : "SOURCE_ACQUISITION_FAILED",
+        code: "SOURCE_ACQUISITION_FAILED",
         message: err instanceof Error ? err.message : String(err),
       };
     } finally {
@@ -238,11 +225,36 @@ export class SkillSourceAcquisitionService {
     }
   }
 
+  /**
+   * Resolve a session's staging directory with a hard containment guard:
+   * the resolved path must sit strictly INSIDE <stagingRoot>/sessions
+   * (separator-aware), and the id must match the strict charset. Guards
+   * every recursive delete against traversal via model-controlled ids
+   * (NFR-05 / review S1).
+   */
+  private sessionDir(sessionId: string): string {
+    if (!/^[A-Za-z0-9:_-]+$/.test(sessionId)) {
+      throw new Error("Invalid session id.");
+    }
+    const sessionsRoot = path.resolve(this.stagingRoot, "sessions");
+    const resolved = path.resolve(sessionsRoot, sessionId);
+    const rootWithSep = sessionsRoot.endsWith(path.sep)
+      ? sessionsRoot
+      : sessionsRoot + path.sep;
+    if (resolved !== sessionsRoot && !resolved.startsWith(rootWithSep)) {
+      throw new Error("Session path escapes the staging root.");
+    }
+    return resolved;
+  }
+
   /** Remove one session's staging tree (cancel / cleanup path). */
   removeSession(sessionId: string): void {
-    const sessionDir = path.join(this.stagingRoot, "sessions", sessionId);
-    // Only ever delete inside our own staging root (NFR-05).
-    if (!sessionDir.startsWith(path.join(this.stagingRoot, "sessions"))) return;
+    let sessionDir: string;
+    try {
+      sessionDir = this.sessionDir(sessionId);
+    } catch {
+      return; // invalid id — nothing we own to remove
+    }
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
 
@@ -294,12 +306,8 @@ export class SkillSourceAcquisitionService {
     stagingRoot: string,
     descriptor: SkillSourceDescriptor
   ): Promise<string> {
-    // A cloned Git tree keeps .git in the ORIGINAL localRoot (the fetcher's
-    // temp dir) — but our copyTreeBounded skips .git. Re-derive from the
-    // fetcher temp root instead when possible: simplest reliable approach is
-    // hashing the staged content (prompt skills without a semantic version
-    // use the content hash as their immutable identity — PRD §11.2).
-    void stagingRoot;
+    // Prompt skills without a semantic version use the content hash of the
+    // staged tree as their immutable identity (PRD §11.2).
     if (
       descriptor.requestedRevision &&
       /^[0-9a-f]{40}$/i.test(descriptor.requestedRevision)
@@ -313,4 +321,3 @@ export class SkillSourceAcquisitionService {
   }
 }
 
-class LimitError extends Error {}

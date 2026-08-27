@@ -221,7 +221,15 @@ export class SkillActivationService {
     }
 
     if (stat.isSymbolicLink()) {
-      const target = fs.realpathSync(activationPath);
+      // The link is ours — removing it never touches the target. A BROKEN
+      // link (target vanished, PRD §17.3) must still be removable: realpath
+      // throws ENOENT there, so resolve best-effort instead of crashing.
+      let target: string | null;
+      try {
+        target = fs.realpathSync(activationPath);
+      } catch {
+        target = null;
+      }
       fs.unlinkSync(activationPath);
       return { ok: true, removed: "link", targetPreserved: target };
     }

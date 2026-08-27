@@ -19,7 +19,10 @@
  *     instructions.
  */
 
-import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
+import {
+  getDefaultPromptSkillCatalog,
+  scopeLabel,
+} from "@/service/PromptSkillCatalog";
 import { PromptSkillContextAssembler } from "@/service/PromptSkillContextAssembler";
 import {
   PromptSkillInvocationModule,
@@ -31,6 +34,7 @@ import type {
   UsePromptSkillInput,
   UsePromptSkillResult,
 } from "@/entityTypes/promptSkillTypes";
+import { rejectSecretShaped } from "@/entityTypes/skillInstallationTypes";
 
 /** Default context budgets (tokens) — deliberately conservative. */
 export const PROMPT_SKILL_DEFAULT_BUDGET = {
@@ -88,11 +92,40 @@ export class PromptSkillInvocationService {
         : {}),
     };
 
+    // FR-31 parity: ordinary tool arguments never carry secrets — the
+    // same deep validator the installer schemas use (review S6). Arguments
+    // are persisted verbatim as invocation state, so a pasted key would
+    // otherwise land in plaintext in SQLite.
+    const secretProblems = rejectSecretShaped(
+      {
+        ...(input.arguments !== undefined
+          ? { arguments: input.arguments }
+          : {}),
+        ...(input.invocationReason !== undefined
+          ? { invocationReason: input.invocationReason }
+          : {}),
+      },
+      ["arguments", "invocationReason"]
+    );
+    if (secretProblems.length > 0) {
+      return {
+        ok: false,
+        result: {
+          status: "error",
+          code: "SKILL_INSTALL_MUTATION_REJECTED",
+          message:
+            "use_skill arguments look like a secret. Credentials are never " +
+            "accepted through chat or tool arguments; use the secure input.",
+        },
+        attachment: null,
+      };
+    }
+
     // FR-27: use_skill resolves invocation only — never package mutation.
     if (
       INSTALL_MUTATION_RE.test(input.skill) ||
       (input.arguments !== undefined &&
-        INSTALL_MUTATION_RE.test(input.arguments ?? ""))
+        INSTALL_MUTATION_RE.test(input.arguments))
     ) {
       return {
         ok: false,
@@ -241,18 +274,7 @@ export class PromptSkillInvocationService {
   }
 }
 
-function scopeLabel(scope: string): string {
-  switch (scope) {
-    case "workspace":
-      return "workspace skill";
-    case "plugin":
-      return "plugin skill";
-    case "built-in":
-      return "built-in skill";
-    default:
-      return "user skill";
-  }
-}
+
 
 let defaultService: PromptSkillInvocationService | null = null;
 
