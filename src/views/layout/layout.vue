@@ -520,6 +520,18 @@ const handleOpenFromNotify = (raw: unknown): void => {
             ? payload.conversationId.trim()
             : "";
 
+    // When the workspace redesign is enabled, route notification clicks
+    // to /aiworkspace (with optional conversation selection) instead of
+    // opening the legacy dock.
+    if (workspaceRedesignEnabled.value) {
+        if (conversationId) {
+            void router.push({ path: '/aiworkspace', query: { conv: conversationId } });
+        } else {
+            void router.push('/aiworkspace');
+        }
+        return;
+    }
+
     if (aiChatV2Enabled.value) {
         v2ChatPanelOpen.value = true;
         chatPanelOpen.value = false;

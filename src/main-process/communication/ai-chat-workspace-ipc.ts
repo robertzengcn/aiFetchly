@@ -186,6 +186,20 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid bootstrap request");
       }
+      // FR-020/021: register the sender on bootstrap independently of
+      // selection so background summaries arrive immediately, even with
+      // no selected conversation.
+      eventRouter.register(
+        (
+          _e as {
+            sender: {
+              id: number;
+              isDestroyed(): boolean;
+              send(channel: string, payload: string): void;
+            };
+          }
+        ).sender
+      );
       const coordinator = getAiChatWorkspaceCoordinator();
       const conversationModule = new AIChatConversationModule();
       // Idempotent backfill once per process: inserts missing projection
@@ -195,9 +209,10 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).
         try {
-          const reconciled = await new AIChatRunModule().reconcileInterruptedRuns(
-            "Application restarted before the run finished"
-          );
+          const reconciled =
+            await new AIChatRunModule().reconcileInterruptedRuns(
+              "Application restarted before the run finished"
+            );
           if (reconciled > 0) {
             console.info(
               `[ai-chat-workspace] reconciled ${reconciled} interrupted run(s)`
@@ -414,7 +429,11 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       }
       // Never delete under a live run: the engine would keep executing and
       // re-persist its result, silently resurrecting the conversation.
-      if (getAiChatWorkspaceCoordinator().getLiveRuntime(parsed.data.conversationId)) {
+      if (
+        getAiChatWorkspaceCoordinator().getLiveRuntime(
+          parsed.data.conversationId
+        )
+      ) {
         return denied(
           "This conversation is running a task. Stop it before deleting."
         );
@@ -539,7 +558,6 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
     }
   });
 }
-
 
 function parsePayload(data: unknown): unknown {
   if (typeof data === "string" && data.length > 0) {

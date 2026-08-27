@@ -3082,6 +3082,7 @@ export default {
       runningTool: "正在运行 {tool}",
       legacyReceipt: "历史工具活动",
       artifactCreated: "HTML 报告已生成 — 可在“产物”中打开",
+        openArtifact: "打开",
       imagesGenerated: "已生成图片",
       filesChanged: "文件已更改 — 见“活动”",
       permissionNeeded: "需要权限决定",

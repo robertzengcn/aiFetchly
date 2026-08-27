@@ -51,6 +51,8 @@ export interface ToolExecutionView {
   readonly isLegacyUnpaired: boolean;
   /** Escaped-safe bounded arguments for the Activity details view. */
   readonly argumentsPreview?: string;
+  /** FR-030: persisted artifact ID for reopen from history. */
+  readonly artifactId?: string;
 }
 
 export interface ToolExecutionGroupView {
@@ -92,6 +94,7 @@ function statusFromResult(message: ChatV2MessageView): ToolExecutionStatus {
 function classifyOutput(message: ChatV2MessageView): {
   kind: ToolOutputKind;
   summary?: string;
+  artifactId?: string;
 } {
   const metadata = message.metadata;
   // FR-047: files (write_file/edit_file/list_files results with file changes)
@@ -112,7 +115,10 @@ function classifyOutput(message: ChatV2MessageView): {
   ) {
     return { kind: "permission" };
   }
-  if (metadata?.artifact) return { kind: "artifact" };
+  if (metadata?.artifact) {
+    const art = metadata.artifact as { id?: string } | undefined;
+    return { kind: "artifact" as const, artifactId: art?.id };
+  }
   if (metadata?.toolResultStatus === "error") {
     return {
       kind: "error",
@@ -183,9 +189,10 @@ export function buildToolExecutionGroups(
         // presenter from live tool_progress events) so the evolving row
         // shows progress without a separate liveEvents overlay.
         phase: metadata?.toolProgress?.phase ?? undefined,
-        progress: typeof metadata?.toolProgress?.progress === 'number'
-          ? metadata.toolProgress.progress
-          : undefined,
+        progress:
+          typeof metadata?.toolProgress?.progress === "number"
+            ? metadata.toolProgress.progress
+            : undefined,
         partialCount: metadata?.toolProgress?.partialCount ?? undefined,
         expectedCount: metadata?.toolProgress?.expectedCount ?? undefined,
       };
@@ -211,6 +218,7 @@ export function buildToolExecutionGroups(
             summary: classification.summary,
             outputKind: classification.kind,
             isError: classification.kind === "error",
+            artifactId: classification.artifactId,
             finishedAt,
             durationMs:
               Number.isNaN(startedMs) || Number.isNaN(finishedMs)

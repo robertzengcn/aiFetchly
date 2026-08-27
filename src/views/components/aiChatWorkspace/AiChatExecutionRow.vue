@@ -17,6 +17,8 @@
         :output-kind="execution.outputKind"
         :summary="execution.summary"
         :is-error="execution.isError"
+        :artifact-id="execution.artifactId"
+        @reopen-artifact="$emit('reopen-artifact', $event)"
       />
     </span>
     <span class="row-meta">
@@ -39,6 +41,11 @@ import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import SemanticToolResult from "./SemanticToolResult.vue";
 import AiChatExecutionDetail from "./AiChatExecutionDetail.vue";
 import { conversationStatusVisual, type ConversationStatusVisual } from "./workspaceStatusUtil";
+
+const emit = defineEmits<{
+  (e: 'reopen-artifact', artifactId: string): void;
+}>();
+void emit;
 
 const props = defineProps<{
   execution: ToolExecutionView;

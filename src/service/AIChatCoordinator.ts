@@ -116,10 +116,10 @@ export class AIChatCoordinator {
 
     // Attachment normalization is shared with the legacy stream path so both
     // surfaces enforce identical bounds (mime allowlist, image byte caps).
-    const uploadedFiles: ChatV2UploadedAttachment[] | undefined = request
-      .uploadedFiles
-      ? normalizeChatV2UploadedFiles(request.uploadedFiles)
-      : undefined;
+    const uploadedFiles: ChatV2UploadedAttachment[] | undefined =
+      request.uploadedFiles
+        ? normalizeChatV2UploadedFiles(request.uploadedFiles)
+        : undefined;
 
     const context = await this.resolveConversationContext(
       request.conversationId
@@ -381,12 +381,16 @@ export class AIChatCoordinator {
         : mapped === "awaiting_user"
         ? "user_input_required"
         : "run_started";
+    // FR-023/037: serialize the durable transition BEFORE broadcasting
+    // the summary hint — persistence must precede terminal hints.
     void this.deps.runModule
       .transition(live.runId, mapped)
+      .then(() => {
+        this.broadcastRunSummary(live.conversationId, reason);
+      })
       .catch((err) =>
         console.warn("[ai-chat-workspace] waiting transition failed:", err)
       );
-    this.broadcastRunSummary(live.conversationId, reason);
   }
 
   private buildEngineRequest(live: LiveRunState): ChatV2StreamRequest {

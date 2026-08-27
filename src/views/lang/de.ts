@@ -3230,6 +3230,7 @@ export default {
       runningTool: "{tool} wird ausgeführt",
       legacyReceipt: "Frühere Werkzeugaktivität",
       artifactCreated: "HTML-Bericht erstellt — in Artefakte öffnen",
+        openArtifact: "Öffnen",
       imagesGenerated: "Bilder generiert",
       filesChanged: "Dateien geändert — siehe Aktivität",
       permissionNeeded: "Berechtigungsentscheidung erforderlich",

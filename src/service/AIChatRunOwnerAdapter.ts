@@ -34,9 +34,7 @@ export async function createOwnerAdapterSink(
   inner: AIChatQueryEventSink,
   deps: OwnerAdapterDeps
 ): Promise<AIChatQueryEventSink> {
-  const runModule =
-    deps.runModule ??
-    new AIChatRunModule();
+  const runModule = deps.runModule ?? new AIChatRunModule();
   const run = await runModule.createRun({
     conversationId: deps.conversationId,
     owner: deps.owner,
@@ -47,6 +45,10 @@ export async function createOwnerAdapterSink(
   // Serialize durable transitions in emission order.
   let chain: Promise<unknown> = Promise.resolve();
 
+  // FR-024: derive unread from the terminal status — a completed run
+  // produces an unread result unless the conversation is actively selected.
+  const isUnreadFor = (s: ChatRunStatus): boolean => s === "completed";
+
   const broadcast = (reason: ConversationSummaryEvent["reason"]): void => {
     deps.broadcaster?.broadcastSummary({
       conversationId: deps.conversationId,
@@ -56,9 +58,9 @@ export async function createOwnerAdapterSink(
         status === "awaiting_permission"
           ? "permission"
           : status === "awaiting_user"
-            ? "user_input"
-            : "none",
-      unread: false,
+          ? "user_input"
+          : "none",
+      unread: isUnreadFor(status),
       lastActivityAt: new Date().toISOString(),
       runId,
       reason,
@@ -77,16 +79,16 @@ export async function createOwnerAdapterSink(
           next === "running"
             ? "run_started"
             : next === "awaiting_permission"
-              ? "permission_required"
-              : next === "awaiting_user"
-                ? "user_input_required"
-                : next === "completed"
-                  ? "run_completed"
-                  : next === "failed"
-                    ? "run_failed"
-                    : next === "cancelled"
-                      ? "run_cancelled"
-                      : "run_interrupted";
+            ? "permission_required"
+            : next === "awaiting_user"
+            ? "user_input_required"
+            : next === "completed"
+            ? "run_completed"
+            : next === "failed"
+            ? "run_failed"
+            : next === "cancelled"
+            ? "run_cancelled"
+            : "run_interrupted";
         broadcast(reason);
       })
       .catch((err: unknown) => {
@@ -119,10 +121,7 @@ export async function createOwnerAdapterSink(
           break;
         case "error":
           if (status !== "failed") {
-            transition(
-              "failed",
-              event.errorMessage?.slice(0, 500)
-            );
+            transition("failed", event.errorMessage?.slice(0, 500));
           }
           break;
         default:

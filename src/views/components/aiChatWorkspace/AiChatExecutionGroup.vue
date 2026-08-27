@@ -28,7 +28,7 @@
     </button>
     <ul v-if="expanded" class="execution-rows">
       <li v-for="execution in group.executions" :key="execution.key">
-        <AiChatExecutionRow :execution="execution" :with-details="withDetails" />
+        <AiChatExecutionRow :execution="execution" :with-details="withDetails" @reopen-artifact="$emit('reopen-artifact', $event)" />
       </li>
     </ul>
   </div>
@@ -39,6 +39,11 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ToolExecutionGroupView } from "./toolExecutionProjection";
 import AiChatExecutionRow from "./AiChatExecutionRow.vue";
+
+const emit = defineEmits<{
+  (e: 'reopen-artifact', artifactId: string): void;
+}>();
+void emit;
 
 const props = defineProps<{
   group: ToolExecutionGroupView;

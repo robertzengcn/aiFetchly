@@ -8,6 +8,17 @@
     <template v-if="outputKind === 'artifact'">
       <v-icon icon="mdi-language-html5" size="14" aria-hidden="true" />
       {{ t('workspaceChat.execution.artifactCreated') || 'HTML report created — open it in Artifacts' }}
+      <button
+        v-if="artifactId"
+        type="button"
+        class="artifact-reopen"
+        data-testid="workspace-artifact-reopen"
+        :aria-label="t('workspaceChat.execution.openArtifact') || 'Open artifact'"
+        @click="emit('reopen-artifact', artifactId)"
+      >
+        <v-icon icon="mdi-open-in-new" size="12" aria-hidden="true" />
+        {{ t('workspaceChat.execution.openArtifact') || 'Open' }}
+      </button>
     </template>
     <template v-else-if="outputKind === 'images'">
       <v-icon icon="mdi-image-multiple-outline" size="14" aria-hidden="true" />
@@ -40,6 +51,13 @@ const props = defineProps<{
   outputKind: ToolOutputKind;
   summary?: string;
   isError: boolean;
+  /** FR-030: persisted artifact ID for reopen from history. */
+  artifactId?: string;
+}>();
+
+const emit = defineEmits<{
+  /** FR-030: reopen a persisted artifact in the inspector. */
+  (e: "reopen-artifact", artifactId: string): void;
 }>();
 
 const { t } = useI18n();
@@ -70,6 +88,24 @@ const displaySummary = computed(() => props.summary ?? "");
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+}
+
+.artifact-reopen {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: none;
+  padding: 0 0 0 4px;
+  color: rgb(var(--v-theme-primary));
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.artifact-reopen:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
 }
 
 .kind-artifact {

@@ -29,6 +29,7 @@
       <AiChatExecutionGroup
         v-else-if="item.kind === 'execution-group'"
         :group="item.group"
+        @reopen-artifact="emit('reopen-artifact', $event)"
       />
 
       <!-- Legacy unpaired tool rows: compact receipts. -->
@@ -104,6 +105,8 @@ const emit = defineEmits<{
   (e: "open-activity"): void;
   /** FR-056: discard/reject from the decision card overflow. */
   (e: "discard"): void;
+  /** FR-030: reopen a persisted artifact from the transcript. */
+  (e: "reopen-artifact", artifactId: string): void;
 }>();
 
 type ProjectedItem =

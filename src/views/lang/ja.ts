@@ -3173,6 +3173,7 @@ export default {
       runningTool: "{tool} を実行中",
       legacyReceipt: "以前のツール活動",
       artifactCreated: "HTML レポートを作成しました — アーティファクトで開く",
+        openArtifact: "開く",
       imagesGenerated: "画像を生成しました",
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",

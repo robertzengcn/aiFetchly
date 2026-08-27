@@ -105,10 +105,11 @@
           :show-reasoning="true"
           :plan-submit-error="planSubmitError"
           @approve-plan="onLegacyPlanAction('approve-plan')"
-          @request-plan-changes="onLegacyPlanAction('request-plan-changes', $event)"
+          @request-plan-changes="onRequestPlanChangesWithFeedback"
           @submit-plan-answers="onPlanAnswers"
           @discard="onLegacyPlanAction('reject-plan')"
           @open-activity="workspaceStore.openInspector('activity')"
+          @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
         />
         <button
           v-if="selectedStore.hasOlder && conversationId"
@@ -157,11 +158,14 @@
            transcript (AiChatWorkspaceTranscript). The dock no longer
            duplicates plan-question/decision/receipt surfaces. The run
            strip carries plan status; Activity carries the full document. -->
+      <!-- Gap fix: transcript request-plan-changes emits empty string;
+           the shell collects feedback via the in-app prompt before IPC. -->
       />
 
       <AiChatV2Composer
         :is-streaming="selectedStore.isBusy"
         :conversation-id="conversationId"
+          :initial-text="pendingComposerSeed"
         @send="onComposerSend"
         @stop="selectedStore.stopActiveRun()"
         @install-voice-model="openVoiceSettings"
@@ -329,6 +333,9 @@ const recovering = computed(() => selectedStore.recovery !== null);
 
 /** FR-059: plan-question submission error surfaced to the transcript flow. */
 const planSubmitError = ref<string | null>(null);
+
+/** Dashboard prompt seed — pre-fills the composer without auto-sending. */
+const pendingComposerSeed = ref<string | null>(null);
 
 /** Goal objective while a goal loop is active (PRD §13.3). */
 const activeGoalObjective = computed(() => {
@@ -704,6 +711,16 @@ async function onClear(): Promise<void> {
   }
 }
 
+/** FR-051/056: collect feedback before submitting request-changes. */
+async function onRequestPlanChangesWithFeedback(): Promise<void> {
+  const feedback = await appPrompt(
+    t('workspaceChat.plan.changeFeedbackPrompt') ||
+      'What should change in this plan?'
+  );
+  if (feedback === null || !feedback.trim()) return;
+  await onLegacyPlanAction('request-plan-changes', feedback.trim());
+}
+
 /** Plan decisions flow through the existing durable plan APIs. */
 async function onLegacyPlanAction(
   action: "approve-plan" | "reject-plan" | "request-plan-changes",
@@ -752,11 +769,19 @@ async function onToggleMode(): Promise<void> {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   updateViewport();
   window.addEventListener("resize", updateViewport);
   void workspaceStore.bootstrap();
   void loadModels();
+  // Dashboard "ask AI" entry (layout passes ?prompt=): open a fresh chat
+  // and pre-fill the composer with the prompt text (no auto-send — the
+  // user reviews and presses Enter when ready).
+  const prompt = route.query.prompt;
+  if (typeof prompt === "string" && prompt.trim()) {
+    await onNewChat();
+    pendingComposerSeed.value = prompt;
+  }
   void isWorkspaceRedesignEnabled()
     .then((enabled) => {
       redesignDefault.value = enabled;
@@ -764,11 +789,6 @@ onMounted(() => {
     .catch(() => {
       redesignDefault.value = false;
     });
-  // Dashboard "ask AI" entry (layout passes ?prompt=): open a fresh chat.
-  // The prompt text itself is handled by the composer focus flow; carrying
-  // arbitrary text into an auto-send is avoided pending a seeded-composer
-  // contract (see review finding: prompt seeding).
-  void route.query.prompt;
 });
 
 onUnmounted(() => {

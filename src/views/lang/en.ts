@@ -3205,6 +3205,7 @@ export default {
       runningTool: "Running {tool}",
       legacyReceipt: "Previous tool activity",
       artifactCreated: "HTML report created — open it in Artifacts",
+        openArtifact: "Open",
       imagesGenerated: "Images generated",
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",

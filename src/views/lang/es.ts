@@ -3233,6 +3233,7 @@ export default {
       runningTool: "Ejecutando {tool}",
       legacyReceipt: "Actividad de herramientas anterior",
       artifactCreated: "Informe HTML creado — ábrelo en Artefactos",
+        openArtifact: "Abrir",
       imagesGenerated: "Imágenes generadas",
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
