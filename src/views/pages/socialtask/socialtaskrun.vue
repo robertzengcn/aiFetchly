@@ -1,5 +1,9 @@
 <template>
-    <v-container class="bg-surface-variant">
+    <AppPageShell
+      page-id="socialtask-list"
+      title-key="route.social_task_list"
+      content-width="full"
+    >
         <h1>{{ task_name }}</h1>
         <v-row no-gutters>
             <v-col cols="6" class="ps-3">
@@ -29,9 +33,11 @@ label="Log" clearable
                 </v-btn>
             </v-col>
         </v-row>
-    </v-container>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { v4 as uuidv4 } from 'uuid';

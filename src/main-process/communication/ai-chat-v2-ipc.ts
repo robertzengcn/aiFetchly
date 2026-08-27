@@ -1,21 +1,4 @@
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { noInputSchema } from "@/schemas/ipc/_shared/common";
-import { z } from "zod";
-import { lazySchema } from "@/utils/lazySchema";
-
-const unknownInputSchema = lazySchema(() => z.unknown());
-
-/** Unwrap a handleX CommonMessage return: throw on status:false, return data on success. */
-async function unwrap<T>(
-  p: Promise<{ status: boolean; msg?: string; data?: T }>
-): Promise<T> {
-  const res = await p;
-  if (!res.status) throw new Error(res.msg || "Unknown error");
-  return res.data as T;
-}
-
-import { ipcMain as ipcMain } from "electron";
-import { log } from "@/modules/Logger";
+import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
@@ -38,16 +21,11 @@ import {
   getSharedWorkspaceAutoDreamService,
   resetSharedWorkspaceAutoDreamService,
 } from "@/service/AIAutoDreamFactory";
-import {
-  getSharedLightweightCompletionService,
-  resetLightweightRuntime,
-} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
-  AIChatQueryEvent,
   AIChatQueryEventSink,
 } from "@/service/AIChatQueryEvents";
 import {
@@ -78,7 +56,6 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
-import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
@@ -93,11 +70,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
-import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
-import {
-  normalizeGeneratedImageReferences,
-  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
-} from "@/service/generatedImageReferenceNormalize";
+import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -147,14 +120,14 @@ function createQueryLoop(): AIChatQueryLoop {
             });
             if (decision.autoApprove) {
               context = { ...context, skipPermissionCheck: true };
-              log.info(
+              console.log(
                 `[ai-chat-v2] auto-approved tool "${name}" for conversation ${context.conversationId}: ${decision.reason}`
               );
             }
           }
         } catch (err) {
           // Non-fatal: fall back to normal permission flow
-          log.warn(
+          console.warn(
             "[ai-chat-v2] failed to evaluate tool approval mode, falling back to default:",
             err
           );
@@ -191,9 +164,6 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
-  // Clear the shared lightweight route cooldowns so one account/provider
-  // cannot suppress another (tech-design §12).
-  resetLightweightRuntime();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -210,23 +180,15 @@ function getCompactAgent(): AIChatCompactAgentService {
       compactModelCatalog = new AIChatModelCatalogService();
     }
     compactAgent = new AIChatCompactAgentService(tokenService, {
-      // Route session-memory and full-compact workloads through the shared
-      // lightweight completion service so the hosted provider (when the kill
-      // switch is enabled) sends model: "small" (tech-design §5.2).
-      completeLightweight: (input) =>
-        getSharedLightweightCompletionService().complete(input),
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
-      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
-      // Capability gate for full compact: absent metadata means the small
-      // route is not eligible and compact goes to the normal model
-      // (tech-design §16.1).
-      getSmallModelCapability: () =>
-        compactModelCatalog!.getSmallModelCapability(),
+      getContextWindow: (model) =>
+        compactModelCatalog!.getContextWindow(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
@@ -244,7 +206,8 @@ function getCompactAgent(): AIChatCompactAgentService {
   return compactAgent;
 }
 
-function getQueryEngine(): AIChatQueryEngine {
+/** Shared engine singleton — also used by the workspace coordinator. */
+export function getQueryEngine(): AIChatQueryEngine {
   const dbPath = getCurrentUserDbPath();
   if (queryEngine && queryEngineDbPath !== dbPath) {
     resetAiChatV2RuntimeForDatabaseSwitch();
@@ -281,7 +244,8 @@ function getChatResolver(): AIProviderResolver {
   return chatResolver;
 }
 
-function canUseChat(): { ok: true } | { ok: false; message: string } {
+/** Chat availability gate shared with the workspace coordinator. */
+export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };
@@ -333,7 +297,7 @@ function sendChunk(
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
-  log.info(
+  console.log(
     `[ai-chat-v2] IPC complete event=${chunk.eventType} conv=${
       chunk.conversationId || "(none)"
     } message=${chunk.messageId || "(none)"} fullContentLen=${
@@ -351,220 +315,28 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
  * (start, complete, cancelled, error) since the engine emits these.
  */
 function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
-  let tokenLogCount = 0;
-  return {
-    emit: (e: AIChatQueryEvent) => {
-      switch (e.type) {
-        case "start":
-          sendChunk(event, {
-            eventType: "start",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-          });
-          break;
-        case "token":
-          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            log.info(
-              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
-            );
-          }
-          tokenLogCount += 1;
-          sendChunk(event, {
-            eventType: "token",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            contentDelta: e.contentDelta,
-            model: e.model,
-          });
-          break;
-        case "reasoning_delta":
-          // Log length only — never the reasoning text itself (SSR-3 / §14).
-          console.debug(
-            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
-          );
-          sendChunk(event, {
-            eventType: "reasoning_delta",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            reasoningDelta: e.reasoningDelta,
-            model: e.model,
-          });
-          break;
-        case "retry_connect":
-          sendChunk(event, {
-            eventType: "retry_connect",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            retryAttempt: e.retryAttempt,
-            retryMaxAttempts: e.retryMaxAttempts,
-            retryDelayMs: e.retryDelayMs,
-          });
-          break;
-        case "recovery_status":
-          sendChunk(event, {
-            eventType: "recovery_status",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            recoveryLayer: e.layer,
-            recoveryReason: e.reason,
-            recoveryAttempt: e.attempt,
-            recoveryMaxAttempts: e.maxAttempts,
-            recoveryDelayMs: e.delayMs,
-            recoveryElapsedMs: e.elapsedMs,
-            recoveryOriginalModel: e.originalModel,
-            recoveryCurrentModel: e.currentModel,
-            recoveryFallbackModel: e.fallbackModel,
-            recoveryMessage: e.message,
-          });
-          break;
-        case "tool_progress":
-          sendChunk(event, {
-            eventType: "tool_progress",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            phase: e.phase,
-            progressMessage: e.message,
-            progressFraction:
-              typeof e.progress === "number" ? e.progress : undefined,
-            partialCount: e.partialCount ?? undefined,
-            expectedCount: e.expectedCount ?? undefined,
-            progressTimestamp: e.timestamp,
-          });
-          break;
-        case "tool_call":
-          sendChunk(event, {
-            eventType: "tool_call",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            toolArguments: e.toolArguments,
-          });
-          break;
-        case "tool_result":
-          sendChunk(event, {
-            eventType: "tool_result",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            toolResult: e.toolResult,
-            replacesPermissionPromptForToolId:
-              e.replacesPermissionPromptForToolId,
-          });
-          break;
-        case "plan_blocked_tool":
-          sendChunk(event, {
-            eventType: "plan_blocked_tool" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            planBlockedToolName: e.planBlockedToolName,
-            planBlockedReason: e.planBlockedReason,
-          } as ChatV2StreamChunk);
-          break;
-        case "ask_user_question":
-          sendChunk(event, {
-            eventType: "ask_user_question" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            question: e.question,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_submitted":
-          sendChunk(event, {
-            eventType: "plan_submitted" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_state":
-          sendChunk(event, {
-            eventType: "plan_state" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            planState: e.planState,
-            autoEntered: e.autoEntered,
-          } as ChatV2StreamChunk);
-          break;
-        case "usage_update":
-          sendChunk(event, {
-            eventType: "usage_update",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            model: e.model,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "complete":
-          sendComplete(event, {
-            eventType: "complete",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-            images: e.images,
-            model: e.model,
-            finishReason: e.finishReason,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "cancelled":
-          sendComplete(event, {
-            eventType: "cancelled",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-          });
-          break;
-        case "error":
-          sendComplete(event, {
-            eventType: "error",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            errorMessage: e.errorMessage,
-            errorCode: e.errorCode,
-          });
-          break;
-      }
-    },
-  };
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => sendChunk(event, chunk),
+    sendComplete: (chunk) => sendComplete(event, chunk),
+  });
 }
 
 // -------------------------------------------------------------------------
 // Stream handler (thin — delegates to engine)
 // -------------------------------------------------------------------------
 
-function validateStreamRequest(
+/** Stream request validation shared with the workspace coordinator. */
+export function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
   const hasFiles =
     Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
-  // Generated-image references count as message content: the engine supplies
-  // a neutral instruction when the text is blank.
-  const hasReferences =
-    Array.isArray(req.generatedImageReferences) &&
-    req.generatedImageReferences.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    if (!hasFiles && !hasReferences) {
+    if (!hasFiles) {
       return "Message must be a non-empty string";
     }
   }
@@ -690,7 +462,8 @@ function classifyAttachment(
   return null;
 }
 
-function normalizeChatV2UploadedFiles(
+/** Attachment normalization shared with the workspace coordinator. */
+export function normalizeChatV2UploadedFiles(
   input: unknown
 ): ChatV2UploadedAttachment[] {
   if (!Array.isArray(input)) return [];
@@ -806,47 +579,9 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
   // Normalize uploaded files
   const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
-  const uploadedImageCount = uploadedFiles.filter(
-    (file) => file.kind === "image"
-  ).length;
-
-  // Validate opaque generated-image references (never trust the renderer).
-  const normalizedReferences = normalizeGeneratedImageReferences(
-    req.generatedImageReferences,
-    CHAT_IMAGE_LIMITS.maxImagesPerRequest
-  );
-  if (!normalizedReferences.ok) {
-    sendComplete(event, {
-      eventType: "error",
-      conversationId: "",
-      errorMessage: normalizedReferences.reason,
-      errorCode: normalizedReferences.errorCode,
-    });
-    return;
-  }
-
-  // Combined image cap: uploaded image attachments + referenced generated
-  // images share one per-request budget.
-  if (
-    uploadedImageCount + normalizedReferences.references.length >
-    CHAT_IMAGE_LIMITS.maxImagesPerRequest
-  ) {
-    sendComplete(event, {
-      eventType: "error",
-      conversationId: "",
-      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
-      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
-    });
-    return;
-  }
-
   const processedReq = {
     ...req,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
-    generatedImageReferences:
-      normalizedReferences.references.length > 0
-        ? normalizedReferences.references
-        : undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });
@@ -1024,7 +759,7 @@ async function handleClearConversation(
       const planModule = new AIChatPlanModule();
       await planModule.clearConversationPlanState(conversationId);
     } catch (err) {
-      log.error("[ai-chat-v2] clearConversationPlanState failed:", err);
+      console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
     return ok({ deleted });
   } catch (err) {
@@ -1092,20 +827,15 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
-  // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
-  // the engine. Rejects malformed shapes and bounds free-text length.
-  const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
-    parsed.answers
-  );
-  if (!answersResult.success) {
-    return denied("answers payload is invalid");
+  if (!Array.isArray(parsed.answers)) {
+    return denied("answers must be an array");
   }
 
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: answersResult.data,
+    answers: parsed.answers,
   });
   return ok(result);
 }
@@ -1362,7 +1092,7 @@ function parseObjectPayload(data: unknown): Record<string, unknown> {
   return {};
 }
 
-function serializeHistoryTimestamp(timestamp: unknown): string {
+export function serializeHistoryTimestamp(timestamp: unknown): string {
   if (timestamp instanceof Date) {
     return timestamp.toISOString();
   }
@@ -1379,7 +1109,7 @@ function serializeHistoryTimestamp(timestamp: unknown): string {
   return new Date(0).toISOString();
 }
 
-function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
+export function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
@@ -1440,88 +1170,47 @@ async function handleReadPasteCache(
 }
 
 export function registerAiChatV2IpcHandlers(): void {
-  registerValidatedHandler(
+  ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleResumeToolAfterPermission(JSON.stringify(input ?? "{}")))
+    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
   );
-  registerValidatedHandler(AI_CHAT_V2_MODELS, noInputSchema, async () =>
-    unwrap(handleModels())
+  ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
+  ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
+    handleConversations(data as string)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_CONVERSATIONS,
-    unknownInputSchema,
-    async (input) => unwrap(handleConversations(JSON.stringify(input ?? {})))
+  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
+    handleHistory(_e as IpcEventLike, data)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_HISTORY,
-    unknownInputSchema,
-    async (input, event) =>
-      unwrap(handleHistory(event as IpcEventLike, JSON.stringify(input ?? {})))
+  ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
+    handleClearConversation(_e as IpcEventLike, data as string)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_CLEAR_CONVERSATION,
-    unknownInputSchema,
-    async (input, event) =>
-      unwrap(
-        handleClearConversation(
-          event as IpcEventLike,
-          JSON.stringify(input ?? {})
-        )
-      )
+  ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
+  ipcMain.handle(AI_CHAT_V2_PLAN_STATE, async (_e, data: unknown) =>
+    handlePlanState((data as string) ?? "")
   );
-  registerValidatedHandler(AI_CHAT_V2_CLEAR_ALL, noInputSchema, async () =>
-    unwrap(handleClearAll())
+  ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
+    handleAnswerQuestion((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_PLAN_STATE,
-    unknownInputSchema,
-    async (input) => unwrap(handlePlanState(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
+    handleApprovePlan((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_ANSWER_QUESTION,
-    unknownInputSchema,
-    async (input) => unwrap(handleAnswerQuestion(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
+    handleRejectPlan((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_APPROVE_PLAN,
-    unknownInputSchema,
-    async (input) => unwrap(handleApprovePlan(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
+    handleRequestPlanChanges((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_REJECT_PLAN,
-    unknownInputSchema,
-    async (input) => unwrap(handleRejectPlan(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
+    handlePlanVersions((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_REQUEST_PLAN_CHANGES,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleRequestPlanChanges(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
+    handleCompactConversation((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_PLAN_VERSIONS,
-    unknownInputSchema,
-    async (input) => unwrap(handlePlanVersions(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleGetToolApprovalMode((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_COMPACT_CONVERSATION,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleCompactConversation(JSON.stringify(input ?? "{}")))
-  );
-  registerValidatedHandler(
-    AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleGetToolApprovalMode(JSON.stringify(input ?? "{}")))
-  );
-  registerValidatedHandler(
-    AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleSetToolApprovalMode(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleSetToolApprovalMode((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
     handleReadPasteCache(data)
@@ -1531,7 +1220,7 @@ export function registerAiChatV2IpcHandlers(): void {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
-      log.error("[ai-chat-v2] unhandled stream error:", err);
+      console.error("[ai-chat-v2] unhandled stream error:", err);
       void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {

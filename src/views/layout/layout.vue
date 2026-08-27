@@ -5,7 +5,9 @@ class="layout-shell"
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
         chatDockOpen: v2ChatPanelOpen,
+        [`shell-mode-${appShell.mode}`]: innerShell.shellEnabled.value,
     }"
+        :data-shell-mode="innerShell.shellEnabled.value ? appShell.mode : undefined"
 :style="{ '--ai-chat-dock-width': chatPanelWidth + 'px' }">
         <v-navigation-drawer
 class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
@@ -83,8 +85,8 @@ target="_blank" href="https://docs.aifetchly.com"
                 </v-menu>
             </v-list>
         </v-navigation-drawer>
-        <main class="app_main">
-            <header class="header">
+        <main ref="mainElement" class="app_main">
+            <header v-if="!innerShell.shellEnabled.value" class="header">
                 <Breadcrumbs v-if="!mainStore.isMobile" />
                 <div v-if="!mainStore.isMobile" class="mt-3 ml-9 gamepad" @click="changeRail">
                     <v-icon v-if="navState.rail" icon="mdi-sort-variant-lock-open" />
@@ -117,7 +119,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" data-testid="ai-chat-toggle" @click="toggleChat">
+                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
                 </div>
@@ -126,7 +128,10 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </header>
             <div class="app_main__body">
-                <div class="router">
+                <div v-if="innerShell.shellEnabled.value" class="router">
+                    <AppCenterRouteHost />
+                </div>
+                <div v-else class="router">
                     <AiArtifactWorkspace
                         v-if="activeArtifact"
                         :artifact="activeArtifact"
@@ -138,6 +143,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <RouterView v-else />
                 </div>
                 <div
+                    v-if="!workspaceRedesignEnabled"
                     class="ai-chat-dock"
                     :class="{ 'dock-open': v2ChatPanelOpen }"
                 >
@@ -156,6 +162,8 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </div>
         </main>
+        <AppNoticeHost v-if="innerShell.shellEnabled.value" />
+        <AppConfirmHost v-if="innerShell.shellEnabled.value" />
 
           <!-- Multiple Messages Display -->
           <div class="messages-container">
@@ -198,6 +206,10 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
             class="chat-resize-handle"
             @mousedown="startResize"
           ></div>
+          <AiChatBox
+            :visible="chatPanelOpen"
+            @close="toggleChatPanel"
+          />
         </div>
 
         <!-- Backdrop overlay -->
@@ -221,8 +233,15 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
-
+import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
+import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
+import { useInnerPageShellFlag } from '@/views/composables/useInnerPageShellFlag';
+import { useAppShellStore } from '@/views/store/appShell';
+import { useResponsiveShell } from '@/views/composables/useResponsiveShell';
+import AppCenterRouteHost from '@/views/components/appShell/AppCenterRouteHost.vue';
+import AppNoticeHost from '@/views/components/appShell/AppNoticeHost.vue';
+import AppConfirmHost from '@/views/components/appShell/AppConfirmHost.vue';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
@@ -275,12 +294,25 @@ const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
+/** Workspace redesign rollout flag (PRD §33): hides the dock when enabled. */
+const workspaceRedesignEnabled = ref(false);
+/**
+ * Inner-page convergence shell flag (design §26.2): ON replaces the old fixed
+ * global header with route-owned headers and hosts routes through the center
+ * route host + shared inspector. OFF keeps this layout byte-identical.
+ */
+const innerShell = useInnerPageShellFlag();
+const appShell = useAppShellStore();
+const mainElement = ref<HTMLElement | null>(null);
+useResponsiveShell(() => mainElement.value);
 // AI artifact workspace — layout-owned temporary preview state. When set,
 // it replaces the route view; closing restores the prior route.
 const activeArtifact = ref<AIArtifactRecord | null>(null);
 const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
-const chatPanelWidth = ref(600);
+const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
+const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
+const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
 const pendingOpenConversationRequest = ref<AiOpenConversationRequest | null>(null);
@@ -437,9 +469,21 @@ const toggleV2ChatPanel = () => {
     }
 }
 
-/** Unified chat toggle: always opens V2 (v1 retired R6.2). */
+/**
+ * Unified chat toggle. When the workspace redesign flag is on (PRD §33), the
+ * chat experience lives on the /aiworkspace route and the legacy dock stays
+ * unmounted; otherwise the dock behaves exactly as before.
+ */
 const toggleChat = () => {
-    toggleV2ChatPanel();
+    if (workspaceRedesignEnabled.value) {
+        void router.push('/aiworkspace');
+        return;
+    }
+    if (aiChatV2Enabled.value) {
+        toggleV2ChatPanel();
+    } else {
+        toggleChatPanel();
+    }
 };
 
 const openAiChatFromDashboard = (event: Event): void => {
@@ -447,12 +491,23 @@ const openAiChatFromDashboard = (event: Event): void => {
     const text = detail?.prompt?.trim();
     if (!text) return;
 
-    pendingAiPromptRequest.value = {
-        id: ++aiPromptRequestId,
-        text,
-    };
-    v2ChatPanelOpen.value = true;
-    chatPanelOpen.value = false;
+    if (workspaceRedesignEnabled.value) {
+        void router.push({ path: '/aiworkspace', query: { prompt: text } });
+        return;
+    }
+
+    if (aiChatV2Enabled.value) {
+        pendingAiPromptRequest.value = {
+            id: ++aiPromptRequestId,
+            text,
+        };
+        v2ChatPanelOpen.value = true;
+        chatPanelOpen.value = false;
+        return;
+    }
+
+    chatPanelOpen.value = true;
+    v2ChatPanelOpen.value = false;
 }
 
 const handleOpenFromNotify = (raw: unknown): void => {
@@ -465,15 +520,32 @@ const handleOpenFromNotify = (raw: unknown): void => {
             ? payload.conversationId.trim()
             : "";
 
-    // v2 is the sole chat (v1 retired R6.2) — always route to the v2 panel.
-    v2ChatPanelOpen.value = true;
-    chatPanelOpen.value = false;
-    if (conversationId.length > 0) {
-        pendingOpenConversationRequest.value = {
-            id: ++openConversationRequestId,
-            conversationId,
-        };
+    // When the workspace redesign is enabled, route notification clicks
+    // to /aiworkspace (with optional conversation selection) instead of
+    // opening the legacy dock.
+    if (workspaceRedesignEnabled.value) {
+        if (conversationId) {
+            void router.push({ path: '/aiworkspace', query: { conv: conversationId } });
+        } else {
+            void router.push('/aiworkspace');
+        }
+        return;
     }
+
+    if (aiChatV2Enabled.value) {
+        v2ChatPanelOpen.value = true;
+        chatPanelOpen.value = false;
+        if (conversationId.length > 0) {
+            pendingOpenConversationRequest.value = {
+                id: ++openConversationRequestId,
+                conversationId,
+            };
+        }
+        return;
+    }
+
+    chatPanelOpen.value = true;
+    v2ChatPanelOpen.value = false;
 };
 
 const startResize = (e: MouseEvent) => {
@@ -607,6 +679,14 @@ const initializeSavedLanguage = async (): Promise<void> => {
 }
 
 onMounted(async () => {
+    // Rollout flag (PRD §33): read once per Layout mount; the workspace's
+    // mode toggle re-navigates, so a fresh mount picks up any change.
+    try {
+        workspaceRedesignEnabled.value = await isWorkspaceRedesignEnabled();
+    } catch {
+        workspaceRedesignEnabled.value = false;
+    }
+
     await initializeSavedLanguage()
 
     initializeLanguageDetection(async (selectedLanguage): Promise<void> => {

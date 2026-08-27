@@ -393,6 +393,31 @@ export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
 export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
   "ai-chat-v2:voice-model-cancel-download";
 
+// ==================== AI Chat Workspace Redesign Channels ====================
+// Redesigned three-region chat workspace (docs/prd/ai-chat-workspace-ui-redesign-*.md).
+// Invoke channels are request/response; event channels are main→renderer.
+export const AI_CHAT_WORKSPACE_BOOTSTRAP = "ai-chat-workspace:bootstrap";
+export const AI_CHAT_WORKSPACE_SELECT = "ai-chat-workspace:select";
+export const AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL =
+  "ai-chat-workspace:unsubscribe-detail";
+export const AI_CHAT_WORKSPACE_START_RUN = "ai-chat-workspace:start-run";
+export const AI_CHAT_WORKSPACE_CANCEL_RUN = "ai-chat-workspace:cancel-run";
+export const AI_CHAT_WORKSPACE_HISTORY_PAGE = "ai-chat-workspace:history-page";
+export const AI_CHAT_WORKSPACE_MARK_READ = "ai-chat-workspace:mark-read";
+export const AI_CHAT_WORKSPACE_RENAME = "ai-chat-workspace:rename";
+export const AI_CHAT_WORKSPACE_DELETE = "ai-chat-workspace:delete";
+export const AI_CHAT_WORKSPACE_DUPLICATE = "ai-chat-workspace:duplicate";
+export const AI_CHAT_WORKSPACE_EXPORT = "ai-chat-workspace:export";
+export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
+/** Main→Renderer: redacted sidebar projection updates (no content bodies). */
+export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
+  "ai-chat-workspace:summary-event";
+/** Main→Renderer: selected-conversation detailed run events. */
+export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
+/** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
+export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
+export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
+
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
 export const AI_PROVIDER_SETTINGS_SAVE = "ai-provider:settings:save";

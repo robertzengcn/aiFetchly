@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="yellowpages-editor"
+    title-key="route.create_yellow_pages_task"
+    content-width="form"
+  >
     <!-- Header -->
     <v-row class="mb-4">
       <v-col cols="12">
@@ -722,10 +726,11 @@
       icon="mdi-check-circle"
       :timeout="5000"
     />
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'

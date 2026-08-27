@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto pa-4" rounded>
+  <AppPageShell
+    page-id="reply-audit-detail"
+    title-key="route.ai_auto_reply_detail"
+    content-width="wide"
+  >
+    <v-sheet class="mx-auto pa-4" rounded>
     <div class="d-flex align-center mb-4">
       <v-btn color="error" variant="text" @click="router.go(-1)">
         <v-icon start>mdi-arrow-left</v-icon>{{ t("common.return") }}
@@ -60,10 +65,12 @@
         <pre class="text-body-2">{{ audit.sentBodyPreview || "—" }}</pre>
       </v-card>
     </div>
-  </v-sheet>
+    </v-sheet>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";

@@ -41,6 +41,22 @@ export interface AiNavigationRouteManifestEntry {
 export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[] =
   [
     {
+      routeName: "AI_Chat_Workspace",
+      path: "/aiworkspace",
+      titleKey: "route.ai_chat_workspace",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "chat workspace",
+        "ai workspace",
+        "workspace chat",
+        "chat home",
+        "full chat",
+      ],
+      aiDescription:
+        "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
+    },
+    {
       routeName: "CommunityPluginsList",
       path: "/community-plugins/list",
       titleKey: "route.community_plugins",

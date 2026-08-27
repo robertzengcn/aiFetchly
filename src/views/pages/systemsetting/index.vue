@@ -1,10 +1,10 @@
 <template>
-  <v-container fluid>
+  <AppPageShell page-id="settings-general" title-key="route.system_setting" content-width="form">
+    <!-- Category navigation stays in-page (IPR-032): tree + detail columns. -->
     <v-row>
       <!-- Left Column: Tree Navigation -->
       <v-col cols="3">
         <v-card>
-          <v-card-title>{{ t('system_settings.title') }}</v-card-title>
           <v-card-text>
             <v-treeview
               :items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
@@ -219,7 +219,7 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
 
     <!-- Diagnostics section (always visible, independent of selected group) -->
     <DiagnosticsSection />
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
@@ -236,6 +236,7 @@ const { t, locale } = useI18n();
 const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
 import DiagnosticsSection from "@/views/components/settings/DiagnosticsSection.vue"
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue"
 
 type TreeNodeId = `group:${number}` | `setting:${number}`;
 
@@ -502,8 +503,8 @@ onMounted(() => {
 <style scoped>
 /* Adjust styling as desired */
 .highlighted-item {
-  background-color: rgba(255, 193, 7, 0.15); /* Using warning color with opacity */
-  border-left: 3px solid #ffc107; /* Warning color border */
+  background-color: var(--app-warning-soft);
+  border-left: 3px solid var(--app-warning);
   font-weight: bold;
 }
 </style>
