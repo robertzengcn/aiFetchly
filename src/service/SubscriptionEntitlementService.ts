@@ -289,7 +289,9 @@ export class SubscriptionEntitlementService {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(
-        `[entitlement] reconcile fail trigger=${trigger} reason=network (cache kept): ${msg}`
+        `[entitlement] reconcile fail trigger=${trigger} reason=network (cache kept) plans=${
+          previous.planNames.join(",") || "(none)"
+        } aiEnabled=${previous.aiEnabled}: ${msg}`
       );
       this.touchCooldowns(trigger);
       return {
@@ -345,7 +347,9 @@ export class SubscriptionEntitlementService {
     log.info(
       `[entitlement] reconcile ok trigger=${trigger} changed=${changed} aiEnabled=${
         next.aiEnabled
-      } plans=${next.planNames.join(",") || "(none)"}`
+      } previousPlans=${previous.planNames.join(",") || "(none)"} plans=${
+        next.planNames.join(",") || "(none)"
+      }`
     );
 
     if (changed) {
