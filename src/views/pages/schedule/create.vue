@@ -32,6 +32,7 @@
               :loading="loading"
               @submit="handleSubmit"
               @cancel="goBack"
+              @error="handleFormError"
             />
           </v-card-text>
         </v-card>
@@ -111,6 +112,10 @@ const handleSubmit = async (data: ScheduleCreateRequest | ScheduleUpdateRequest)
   } finally {
     loading.value = false
   }
+}
+
+const handleFormError = (message: string): void => {
+  showAlert(t('common.error'), message, 'error')
 }
 
 const goBack = () => {

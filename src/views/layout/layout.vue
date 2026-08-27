@@ -238,7 +238,8 @@ import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 import { getIpcTransport } from '@/views/utils/ipcTransport'
-import { AI_CHAT_V2_OPEN_FROM_NOTIFY } from '@/config/channellist'
+import { AI_CHAT_V2_OPEN_FROM_NOTIFY, USER_OPEN_PRICING_PLAN } from '@/config/channellist'
+import { useEntitlement } from '@/views/utils/subscriptionEntitlement'
 
 
 // import {ref, watchEffect} from "vue";
@@ -274,6 +275,10 @@ const userEmail=ref('')
 const userPlan=ref('')
 const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
+// Local-cache AI-enabled baseline. Seeded by applyPlans() from the local
+// GetloginUserInfo() read on mount, so useEntitlement can tell a real
+// free→paid transition from a no-op refresh of an already-paid user.
+const aiEnabledBaseline=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
@@ -332,16 +337,8 @@ const accountPlanIcon = computed(() => {
 const showUpgradePlan = computed(() => {
     return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
 });
-const pricingPlanUrl = computed(() => {
-    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
-    return baseUrl ? `${baseUrl}/pricing-plan` : '';
-});
 const normalizePlanName = (planName: string): string => {
     return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
-};
-const normalizeLoginBaseUrl = (raw: unknown): string => {
-    if (typeof raw !== 'string') return '';
-    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
 };
 const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
     const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
@@ -357,6 +354,20 @@ const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
     const planName = normalizePlanName(plan.planName || '');
     const planId = (plan.planId || '').toUpperCase();
     return planName.includes('community') || planName.includes('free') || planId === 'FREE';
+};
+/** Apply a plan set to the header chrome (label, Plus flag, Upgrade button). */
+const applyPlans = (plans: Array<UserPlanType>): void => {
+    if (plans && plans.length > 0) {
+        const displayPlans = getDisplayPlans(plans);
+        currentPlans.value = displayPlans;
+        isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan);
+        userPlan.value = displayPlans.map(plan => plan.planName).join(', ');
+        // AI-enabled = any active plan that is not free/community. Mirrors
+        // UserController.plansEnableAi for the renderer's local baseline.
+        const activePlans = displayPlans.filter(plan => (plan.status || '').toLowerCase() === 'active');
+        aiEnabledBaseline.value = activePlans.length > 0
+            && activePlans.some(plan => !isFreeSubscriptionPlan(plan));
+    }
 };
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -394,12 +405,14 @@ const gotoSystemsetting=()=>{
 const gotodashborad=()=>{
     router.push('/dashboard/home')
 }
-const openPricingPlan = (): void => {
-    if (!pricingPlanUrl.value) {
+const openPricingPlan = async (): Promise<void> => {
+    // Route through the main process so it records pricingOpenedAt and starts
+    // the retry loop that recovers a missed WebSocket notify (PRD FR-3).
+    // The handler validates VITE_LOGIN_URL and opens the URL via shell.openExternal.
+    const res = await getIpcTransport().invoke(USER_OPEN_PRICING_PLAN)
+    if (!res || !res.status) {
         showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
-        return
     }
-    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -614,6 +627,21 @@ const showWarningMessage = (content: string) => addMessage('warning', content);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showInfoMessage = (content: string) => addMessage('info', content);
 
+// FR-7.1: subscribe to entitlement broadcasts at top-level setup (not inside
+// onMounted) so onUnmounted registers in the active component instance and
+// the IPC listener is cleaned up on unmount. The baseline is read from
+// aiEnabledBaseline, which applyPlans() seeds from the local cache.
+useEntitlement({
+    readBaselineAiEnabled: () => aiEnabledBaseline.value,
+    onPlansChanged: (plans) => applyPlans(plans),
+    onUpgrade: () => {
+        showSuccessMessage(t('subscriptionEntitlement.unlocked') || 'Your subscription is active. Hosted AI features are unlocked.')
+    },
+    onDowngrade: () => {
+        showInfoMessage(t('subscriptionEntitlement.cancelled') || 'Your subscription has changed. Some AI features may be unavailable.')
+    },
+})
+
 const initializeSavedLanguage = async (): Promise<void> => {
     try {
         const systemLanguage = await getLanguagePreference()
@@ -643,10 +671,7 @@ onMounted(async () => {
         userName.value = res.name
         userEmail.value = res.email
         if (res.plans && res.plans.length > 0) {
-            const displayPlans = getDisplayPlans(res.plans)
-            currentPlans.value = displayPlans
-            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
-            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+            applyPlans(res.plans)
         }
     } catch (error) {
         console.error('Failed to load login user info:', error)

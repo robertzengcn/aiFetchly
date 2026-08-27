@@ -769,6 +769,7 @@ import AIContentReportButton from '@/views/components/aiContentReport/AIContentR
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue'
 import { buildKeywordSetDescriptor } from '@/views/components/aiContentReport/reportableOutput'
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo'
+import { useEntitlement } from '@/views/utils/subscriptionEntitlement'
 
 // Router
 const router = useRouter()
@@ -1612,17 +1613,31 @@ onMounted(async () => {
   loadPlatforms()
 
   // When creating a new task, default AI support to on if user has AI enabled
+  let localAiEnabled = false
   if (isCreateMode.value) {
     try {
       // windowInvoke returns result.data, i.e. the UserInfoType object directly
       const userInfo = (await windowInvoke(QUERY_USER_INFO)) as UserInfoType | undefined
-      if (userInfo?.aiEnabled === true) {
+      localAiEnabled = userInfo?.aiEnabled === true
+      if (localAiEnabled) {
         taskForm.aiSupportEnabled = true
       }
     } catch {
       // Ignore: leave aiSupportEnabled as false
     }
   }
+  // FR-7.1: keep the AI-support default in sync with entitlement broadcasts
+  // so chrome unlocks without a remount when the user pays while this page
+  // is open (create mode only; edit/detail keep their persisted value).
+  useEntitlement({
+    readBaselineAiEnabled: () => localAiEnabled,
+    onPlansChanged: (_plans, enabled) => {
+      localAiEnabled = enabled
+      if (isCreateMode.value && enabled) {
+        taskForm.aiSupportEnabled = true
+      }
+    },
+  })
 
   // If in edit mode or detail mode, load task details
   if ((isEditMode.value || isDetailMode.value) && taskId.value) {

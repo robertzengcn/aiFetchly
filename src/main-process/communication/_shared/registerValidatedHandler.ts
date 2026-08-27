@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import type { ZodType, ZodTypeDef } from "zod";
 import { log } from "@/modules/Logger";
-import { isAiEnabled } from "@/service/AiFeatureGate";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { formatZodValidationError } from "@/utils/zodErrors";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -63,7 +63,12 @@ export function registerAiValidatedHandler<TInput, TOutput>(
     //    is off OR when the Token store is unreachable (DB not initialized,
     //    encrypted store corrupted). A broken feature gate must never
     //    silently enable paid features.
-    if (!isAiEnabled()) {
+    //    FR-6: if the gate is currently closed, run one lazy reconcile first so
+    //    a user who just paid (notify/cache hasn't caught up) is unlocked. The
+    //    reconcile is cooldown-gated (30s) so mashing Chat can't stampede the
+    //    API. GET failures keep the cache, so a Community user is never
+    //    falsely unlocked.
+    if (!(await ensureHostedAiEnabled())) {
       log.warn(`[${channel}] blocked: AI feature is not enabled`);
       return {
         status: false,

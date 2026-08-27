@@ -684,6 +684,12 @@ export default {
     upgrade_plan: "Actualizar",
     pricing_url_missing: "La URL de la página de precios no está configurada",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Tu suscripción está activa. Las funciones de IA alojadas están desbloqueadas.",
+    cancelled:
+      "Tu suscripción ha cambiado. Es posible que algunas funciones de IA no estén disponibles.",
+  },
   extramodule: {
     extramoduleName: "Nombre del módulo extra",
     extramoduleDescription: "Descripción del módulo extra",
@@ -1858,6 +1864,8 @@ export default {
     ai_message_task_create: "Crear Tarea de Mensaje IA",
     ai_message_task_edit: "Editar Tarea de Mensaje IA",
     ai_message_task_name: "Nombre de la Tarea",
+    ai_message_task_name_hint:
+      "Ingrese un nombre para esta tarea de mensaje IA",
     ai_message_task_description: "Descripción",
     ai_message_task_message: "Mensaje IA",
     ai_message_task_message_hint:

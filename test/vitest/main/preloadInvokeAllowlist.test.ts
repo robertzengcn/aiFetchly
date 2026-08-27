@@ -37,4 +37,20 @@ describe("preload invoke allowlist", () => {
     // assertion checks for the identifier token.
     expect(preloadInvokeWhitelistSource()).toContain("RAG_IMPORT_WEBSITE");
   });
+
+  it("allows the entitlement reconciliation invoke channels (FR-1/FR-3)", () => {
+    const src = preloadInvokeWhitelistSource();
+    expect(src).toContain("USER_REFRESH_ENTITLEMENT");
+    expect(src).toContain("USER_OPEN_PRICING_PLAN");
+  });
+
+  it("allows USER_INFO_UPDATED on the receive allowlist (FR-7 broadcast)", () => {
+    // USER_INFO_UPDATED is a main->renderer push channel, allowlisted in the
+    // `receive` method body (and removeAllListeners), not `invoke`.
+    const marker = "receive: (channel, func) =>";
+    const idx = PRELOAD_SRC.indexOf(marker);
+    expect(idx).toBeGreaterThan(-1);
+    const receiveSrc = PRELOAD_SRC.slice(idx, PRELOAD_SRC.indexOf("invoke:"));
+    expect(receiveSrc).toContain("USER_INFO_UPDATED");
+  });
 });

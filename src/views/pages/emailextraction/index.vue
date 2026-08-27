@@ -132,6 +132,7 @@ import {EMAILEXTRACTIONMESSAGE, QUERY_USER_INFO} from "@/config/channellist"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 import { UserInfoType } from "@/entityTypes/userType"
 import { windowInvoke } from "@/views/utils/apirequest"
+import { useEntitlement } from "@/views/utils/subscriptionEntitlement"
 
 const { t } = useI18n({ useScope: 'global' });
 const router = useRouter();
@@ -280,9 +281,11 @@ const loadTaskData = async () => {
 onMounted(async () => {
   initialize();
   // Check AI enabled status
+  let localAiEnabled = false;
   try {
     const userInfo = await windowInvoke(QUERY_USER_INFO) as UserInfoType | undefined;
-    if (userInfo?.aiEnabled) {
+    localAiEnabled = userInfo?.aiEnabled === true;
+    if (localAiEnabled) {
       aiOptionVisible.value = true;
       // Default AI Enrichment to ON for new tasks when AI is enabled
       if (!isEditMode.value) {
@@ -298,6 +301,18 @@ onMounted(async () => {
     aiOptionVisible.value = false;
     aiSupportEnabled.value = false;
   }
+  // FR-7.1: keep the AI toggle in sync with entitlement broadcasts so chrome
+  // unlocks without a remount when the user pays while this page is open.
+  useEntitlement({
+    readBaselineAiEnabled: () => localAiEnabled,
+    onPlansChanged: (_plans, enabled) => {
+      localAiEnabled = enabled;
+      aiOptionVisible.value = enabled;
+      if (!isEditMode.value) {
+        aiSupportEnabled.value = enabled;
+      }
+    },
+  })
   if (isEditMode.value) {
     loadTaskData();
   } else {

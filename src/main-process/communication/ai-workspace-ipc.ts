@@ -1,6 +1,5 @@
 import { ipcMain, BrowserWindow } from "electron";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_WORKSPACE_SET,
@@ -21,10 +20,6 @@ function denied<T>(msg: string): CommonMessage<T> {
   return { status: false, msg, data: undefined };
 }
 
-function isAIEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
-}
-
 function safeParse<T = unknown>(data: unknown): T | null {
   if (typeof data !== "string" || data.length === 0) return null;
   try {
@@ -43,10 +38,11 @@ export function _resetAIWorkspaceSingletonsForTesting(): void {
 }
 
 export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
+  void _win; // window reference kept by caller; handler does not use it.
   ipcMain.handle(
     AI_WORKSPACE_SET,
     async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
@@ -78,7 +74,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   ipcMain.handle(
     AI_WORKSPACE_GET,
     async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
@@ -100,7 +96,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   ipcMain.handle(
     AI_WORKSPACE_APPROVE,
     async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
@@ -126,7 +122,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   ipcMain.handle(
     AI_WORKSPACE_REVOKE,
     async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
@@ -152,7 +148,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   ipcMain.handle(
     AI_WORKSPACE_LIST,
     async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
@@ -176,7 +172,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
   ipcMain.handle(
     DIALOG_PICK_FOLDER,
     async (): Promise<CommonMessage<string | null>> => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {

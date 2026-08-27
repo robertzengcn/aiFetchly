@@ -1,5 +1,5 @@
 import { ipcMain } from "electron";
-import { spawn, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import { platform } from "os";
 import { readFileSync } from "fs";
 import {
@@ -20,7 +20,6 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
-  CommonMessage,
   ChatMessage,
   ChatHistoryResponse,
   ChatStreamChunk,
@@ -64,8 +63,7 @@ import {
 // import { USERID } from '@/config/usersetting';
 import { v4 as uuidv4 } from "uuid";
 import * as crypto from "crypto";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import {
   DocumentService,
   StagedAttachmentReference,
@@ -798,10 +796,10 @@ export function registerAiChatIpcHandlers(): void {
   // Stream chat message
   ipcMain.on(AI_CHAT_STREAM, async (event, data): Promise<void> => {
     try {
-      // Check AI enable first
-      const tokenService = new Token();
-      const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
+      // Check AI enable first. Lazy-reconcile once when the gate is off so a
+      // user who just paid (notify/cache hasn't caught up) is unlocked without
+      // a remount (PRD FR-6.2 / FR-6.1).
+      if (!(await ensureHostedAiEnabled())) {
         const errorChunk: ChatStreamChunk = {
           content: "",
           isComplete: true,

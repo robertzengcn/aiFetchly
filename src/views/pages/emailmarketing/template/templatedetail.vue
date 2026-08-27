@@ -295,6 +295,7 @@ import AIContentReportButton from "@/views/components/aiContentReport/AIContentR
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import { buildEmailTemplateDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
+import { useEntitlement } from "@/views/utils/subscriptionEntitlement"
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
@@ -650,6 +651,14 @@ onMounted(async () => {
     console.error('Failed to check AI enabled status:', e);
     aiEnabled.value = false;
   }
+  // FR-7.1: keep aiEnabled in sync with entitlement broadcasts so chrome
+  // unlocks without a remount when the user pays while this page is open.
+  useEntitlement({
+    readBaselineAiEnabled: () => aiEnabled.value,
+    onPlansChanged: (_plans, enabled) => {
+      aiEnabled.value = enabled;
+    },
+  });
 });
 onBeforeUnmount(() => {
   document.removeEventListener("focusin", handleFocus);

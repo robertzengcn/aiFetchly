@@ -147,6 +147,24 @@ vi.mock("@/modules/tokenRefresh", () => ({
   },
 }));
 
+// completeDesktopLogin now routes the user-info fetch through the entitlement
+// service (FR-2.2). Mock it so this wiring test stays isolated from the real
+// reconcile logic (which is covered by subscriptionEntitlementService.test.ts).
+vi.mock("@/service/SubscriptionEntitlementService", () => ({
+  SubscriptionEntitlementService: {
+    getInstance: () => ({
+      reconcile: vi.fn().mockResolvedValue({
+        ok: true,
+        changed: false,
+        skipped: false,
+        trigger: "login",
+        snapshot: { plans: [], aiEnabled: false, planNames: [] },
+        previous: { plans: [], aiEnabled: false, planNames: [] },
+      }),
+    }),
+  },
+}));
+
 vi.mock("@/modules/WebSocketClient", () => ({
   WebSocketClient: { resetInstance: vi.fn() },
 }));

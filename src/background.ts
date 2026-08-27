@@ -30,8 +30,17 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
-import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  buildAppContentSecurityPolicy,
+  shouldApplyAppContentSecurityPolicy,
+} from "@/service/AppContentSecurityPolicy";
+import { registerDevelopmentProtocolHandler } from "@/main-process/registerDevelopmentProtocolHandler";
+import {
+  isAppPermissionCheckAllowed,
+  isAppPermissionRequestAllowed,
+} from "@/service/AppSessionPermissions";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
@@ -483,17 +492,30 @@ function initialize() {
         path.resolve(process.argv[1])
       );
       console.log("path:", path.resolve(process.argv[1]));
-      ProtocolRegistry.register(
+      void registerDevelopmentProtocolHandler({
         protocolScheme,
-        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-        {
-          override: true,
-          appName: appName,
-          terminal: true,
-        }
-      )
-        .then(() => console.log("Successfully registered"))
-        .catch((e) => console.error(e));
+        command: `"${process.execPath}" "${path.resolve(
+          process.argv[1]
+        )}" "$_URL_"`,
+        appName,
+        protocolRegistry: ProtocolRegistry,
+      })
+        .then((result) => {
+          if (result.status === "skipped-external") {
+            log.warn(
+              `Skipping ${protocolScheme}:// registration; already handled by ${result.defaultApp}`
+            );
+            return;
+          }
+          log.info(
+            result.status === "refreshed"
+              ? `Refreshed development protocol handler for ${protocolScheme}://`
+              : `Registered development protocol handler for ${protocolScheme}://`
+          );
+        })
+        .catch((error: unknown) => {
+          log.error("Failed to register development protocol handler:", error);
+        });
       // app.setAsDefaultProtocolClient(protocolScheme);
     }
   }
@@ -1279,8 +1301,33 @@ function initialize() {
         }
       }
 
-      // Initialize WebSocket connection to marketing server
-      // This enables real-time notifications and updates
+      // FR-2.1 / design §7.1: boot order for a logged-in user is
+      //   1. refresh access token (if expired),
+      //   2. reconcile entitlement (needs a valid Bearer),
+      //   3. connect WebSocket (the fast notify path),
+      //   4. start the background auto-refresh timer.
+      // A logged-in user with an expired JWT would otherwise issue the startup
+      // GET with a stale token and fail; the reconcile would keep the stale
+      // Community cache and the socket would be skipped forever.
+      try {
+        await TokenRefreshService.performAutoRefreshCheck();
+      } catch (err) {
+        log.error("[entitlement] startup token refresh check failed:", err);
+      }
+
+      // FR-2.1: Reconcile entitlement from GET /api/user/info at startup.
+      // Runs after the token refresh so the GET has a valid Bearer. If the WS
+      // "connected" welcome arrives shortly after, ws_connect coalesces
+      // within STARTUP_CONNECT_COALESCE_MS (10s). Failures keep the cache.
+      SubscriptionEntitlementService.getInstance()
+        .reconcile("startup")
+        .catch((err) => {
+          log.error("[entitlement] startup reconcile failed:", err);
+        });
+
+      // Initialize WebSocket connection to marketing server.
+      // This enables real-time notifications and updates. Runs after the
+      // token refresh so connect()'s hasValidToken() succeeds.
       if (startupPolicy.connectMarketingWebSocket && win) {
         try {
           await initializeWebSocketConnection(win);
@@ -1347,24 +1394,16 @@ function configureContentSecurityPolicy() {
   // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
   // (video). Other permissions use a minimal allowlist instead of blanket-
   // approving, so unexpected requests (geolocation, midi, etc.) are denied.
-  const ALLOWED_PERMISSIONS = new Set([
-    "clipboard-sanitized",
-    "clipboard-read",
-    "fullscreen",
-    "window-management",
-    "openExternal",
-  ]);
+  // Clipboard copy uses clipboard-sanitized-write; Chromium checks AND
+  // requests it, so both handlers must allow it.
   defaultSession.setPermissionRequestHandler(
     (_wc, permission, callback, details) => {
-      if (permission === "media") {
-        const wantsVideo =
-          (
-            details as { mediaTypes?: string[] } | undefined
-          )?.mediaTypes?.includes("video") ?? false;
-        callback(!wantsVideo);
-        return;
-      }
-      callback(ALLOWED_PERMISSIONS.has(permission));
+      callback(isAppPermissionRequestAllowed(permission, details));
+    }
+  );
+  defaultSession.setPermissionCheckHandler(
+    (_wc, permission, _requestingOrigin, details) => {
+      return isAppPermissionCheckAllowed(permission, details);
     }
   );
 
@@ -1373,6 +1412,10 @@ function configureContentSecurityPolicy() {
   const cspDirectives = buildAppContentSecurityPolicy(isDevelopment);
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (!shouldApplyAppContentSecurityPolicy(details.url)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,

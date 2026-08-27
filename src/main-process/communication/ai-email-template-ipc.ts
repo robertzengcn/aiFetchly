@@ -26,8 +26,7 @@ interface IpcMainExtended {
   ) => void;
 }
 
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { RagSearchModule } from "@/modules/RagSearchModule";
 import { AiChatApi } from "@/api/aiChatApi";
 import {
@@ -125,10 +124,10 @@ export function registerAIEmailTemplateHandlers(): void {
     const [event, requestData] = args as [IpcMainEvent, AIEmailTemplateRequest];
     //console.log("AI Email Template Request Data:", requestData);
     try {
-      // 1. Check AI enable (MANDATORY - first check)
-      const tokenService = new Token();
-      const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      if (!aiEnabled || aiEnabled === "false" || aiEnabled === "0") {
+      // 1. Check AI enable (MANDATORY - first check). Lazy-reconcile once
+      //    when the gate is off so a user who just paid (notify/cache hasn't
+      //    caught up) is unlocked without a remount (PRD FR-6.2 / FR-6.1).
+      if (!(await ensureHostedAiEnabled())) {
         event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
           type: "error",
           status: false,

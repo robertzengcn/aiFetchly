@@ -265,7 +265,7 @@ const modelsLoading = ref(false);
 // Validation
 const rules = {
   required: (value: string): boolean | string =>
-    !!value?.trim() || (t('schedule.ai_message_task_name_hint') || 'This field is required'),
+    !!value?.trim() || (t('schedule.this_field_required') || 'This field is required'),
 };
 
 // Risk helpers

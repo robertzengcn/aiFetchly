@@ -677,6 +677,11 @@ export default {
     upgrade_plan: "Upgrade",
     pricing_url_missing: "Pricing page URL is not configured",
   },
+  subscriptionEntitlement: {
+    unlocked: "Your subscription is active. Hosted AI features are unlocked.",
+    cancelled:
+      "Your subscription has changed. Some AI features may be unavailable.",
+  },
   extramodule: {
     extramoduleName: "Extra Module Name",
     extramoduleDescription: "Extra Module Description",
@@ -1858,6 +1863,7 @@ export default {
     ai_message_task_create: "Create AI Message Task",
     ai_message_task_edit: "Edit AI Message Task",
     ai_message_task_name: "Task Name",
+    ai_message_task_name_hint: "Enter a name for this AI message task",
     ai_message_task_description: "Description",
     ai_message_task_message: "AI Message",
     ai_message_task_message_hint:

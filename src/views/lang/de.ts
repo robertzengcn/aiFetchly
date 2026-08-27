@@ -680,6 +680,12 @@ export default {
     upgrade_plan: "Upgrade",
     pricing_url_missing: "Die URL der Preisseite ist nicht konfiguriert",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Ihr Abonnement ist aktiv. Gehostete KI-Funktionen sind freigeschaltet.",
+    cancelled:
+      "Ihr Abonnement hat sich geändert. Einige KI-Funktionen sind möglicherweise nicht verfügbar.",
+  },
   extramodule: {
     extramoduleName: "Zusatzmodul-Name",
     extramoduleDescription: "Zusatzmodul-Beschreibung",
@@ -1849,6 +1855,8 @@ export default {
     ai_message_task_create: "KI-Nachrichtenaufgabe erstellen",
     ai_message_task_edit: "KI-Nachrichtenaufgabe bearbeiten",
     ai_message_task_name: "Aufgabenname",
+    ai_message_task_name_hint:
+      "Geben Sie einen Namen für diese KI-Nachrichtenaufgabe ein",
     ai_message_task_description: "Beschreibung",
     ai_message_task_message: "KI-Nachricht",
     ai_message_task_message_hint:

@@ -45,7 +45,6 @@ vi.mock("@/modules/SystemSettingGroupModule", () => ({
   }),
 }));
 
-
 vi.mock("@/service/embedding/LocalEmbeddingWorkerClient", () => ({
   LocalEmbeddingWorkerClient: {
     getInstance: vi.fn(() => ({
@@ -143,7 +142,7 @@ function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
     ragSearchModule: ragSearchModule as unknown as RagSearchModule,
     websiteImportService:
       websiteImportService as unknown as WebsiteKnowledgeImportService,
-    isAiEnabled: () => opts.aiEnabled ?? true,
+    isAiEnabled: async () => opts.aiEnabled ?? true,
   };
   return {
     deps,

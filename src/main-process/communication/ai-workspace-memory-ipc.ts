@@ -1,6 +1,5 @@
 import { ipcMain } from "electron";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AIWorkspaceMemoryService } from "@/service/AIWorkspaceMemoryService";
 import { getSharedWorkspaceAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
@@ -36,10 +35,6 @@ function getWorkspaceMemoryService(): AIWorkspaceMemoryService {
     workspaceMemoryService = new AIWorkspaceMemoryService();
   }
   return workspaceMemoryService;
-}
-
-function isAIEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
 /**
@@ -192,7 +187,7 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
   ipcMain.handle(
     AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
     async (_e, data: unknown) => {
-      if (!isAIEnabled()) {
+      if (!(await ensureHostedAiEnabled())) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {

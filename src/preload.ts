@@ -96,6 +96,9 @@ import {
   SYSTEM_SETTING_UPDATE,
   VIDEO_INFORMATION_TRANSLATE,
   QUERY_USER_INFO,
+  USER_REFRESH_ENTITLEMENT,
+  USER_OPEN_PRICING_PLAN,
+  USER_INFO_UPDATED,
   OPENLOGINPAGE,
   NATIVATECOMMAND,
   LOGIN_STATUS,
@@ -590,6 +593,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -706,6 +711,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -800,6 +807,8 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_SETTING_LIST,
       SYSTEM_SETTING_UPDATE,
       QUERY_USER_INFO,
+      USER_REFRESH_ENTITLEMENT,
+      USER_OPEN_PRICING_PLAN,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,
       CHOOSEFILEDIALOG,

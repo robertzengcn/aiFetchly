@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
@@ -183,13 +184,14 @@ function getCompactAgent(): AIChatCompactAgentService {
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       // Compact follows the chat availability resolver so local-provider users
-      // can compact conversations without a hosted subscription.
-      isEnabled: () => canUseChat().ok,
+      // can compact conversations without a hosted subscription. Sync predicate
+      // (compact agent isEnabled cannot await); the lazy reconcile runs at the
+      // streaming entry points via the async canUseChat().
+      isEnabled: () => canUseChatSync().ok,
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
-      getContextWindow: (model) =>
-        compactModelCatalog!.getContextWindow(model),
+      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
@@ -244,12 +246,47 @@ function getChatResolver(): AIProviderResolver {
   return chatResolver;
 }
 
-function canUseChat(): { ok: true } | { ok: false; message: string } {
+/**
+ * Synchronous chat-availability check. Used for the compact-agent `isEnabled`
+ * predicate, which cannot await. Local-provider mode returns early (local
+ * compaction must work without a hosted subscription — PRD §11.4); only the
+ * hosted branch reads USER_AI_ENABLED.
+ */
+function canUseChatSync(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };
   }
   return { ok: false, message: provider.message };
+}
+
+/**
+ * Async chat-availability check with a lazy entitlement reconcile (PRD FR-6.1
+ * / FR-6.2). When the denial is `hosted_subscription_required` (hosted mode +
+ * USER_AI_ENABLED off), runs one `gated_feature` reconcile (30s cooldown) then
+ * re-resolves — so a user who just paid but whose notify/cache hasn't caught
+ * up is unlocked without a remount. Local-provider mode is untouched.
+ *
+ * GET failures keep the cache, so a Community user is never falsely unlocked.
+ */
+async function canUseChat(): Promise<
+  { ok: true } | { ok: false; message: string }
+> {
+  const first = getChatResolver().resolveForChat();
+  if (first.canUse) {
+    return { ok: true };
+  }
+  // Only attempt a lazy reconcile for the hosted-subscription denial. Other
+  // denials (local provider misconfigured) are not entitlement problems.
+  if ("reason" in first && first.reason === "hosted_subscription_required") {
+    await ensureHostedAiEnabled();
+    const second = getChatResolver().resolveForChat();
+    if (second.canUse) {
+      return { ok: true };
+    }
+    return { ok: false, message: second.message };
+  }
+  return { ok: false, message: first.message };
 }
 
 /**
@@ -726,7 +763,7 @@ function normalizeChatV2UploadedFiles(
 //handleStream is the main function that handles the stream request
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // Chat availability gate FIRST, before parsing request data.
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     sendComplete(event, {
       eventType: "error",
@@ -802,7 +839,7 @@ function handleStop(data?: unknown): void {
 async function handleResumeToolAfterPermission(
   data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -853,7 +890,7 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -881,7 +918,7 @@ async function handleHistory(
   _e: IpcEventLike,
   data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -923,7 +960,7 @@ async function handleClearConversation(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -954,7 +991,7 @@ async function handleClearConversation(
 async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -974,7 +1011,7 @@ async function handleClearAll(): Promise<
 async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -994,7 +1031,7 @@ async function handlePlanState(
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1032,7 +1069,7 @@ async function handleAnswerQuestion(
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1068,7 +1105,7 @@ async function handleApprovePlan(
 async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1106,7 +1143,7 @@ async function handleRejectPlan(
 async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1147,7 +1184,7 @@ async function handleRequestPlanChanges(
 async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1167,7 +1204,7 @@ async function handlePlanVersions(
 async function handleCompactConversation(
   data: string
 ): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1225,7 +1262,7 @@ function parseSetApprovalModePayload(
 async function handleGetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1245,7 +1282,7 @@ async function handleGetToolApprovalMode(
 async function handleSetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1325,7 +1362,7 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
 async function handleReadPasteCache(
   data: unknown
 ): Promise<CommonMessage<string | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }

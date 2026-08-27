@@ -25,7 +25,7 @@ import {
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
 } from "@/config/usersetting";
-import { UserController } from "@/controller/UserController";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import { DeviceFingerprintService } from "@/modules/deviceFingerprint";
 import { DeviceApi } from "@/api/deviceApi";
 import { SqliteDb } from "@/config/SqliteDb";
@@ -149,10 +149,17 @@ export async function completeDesktopLogin(
   }
 
   // --- 2. Fetch user info ----------------------------------------------
-  const userController = new UserController();
-  let userInfo: unknown;
+  // FR-2.2: route through the entitlement service so the first layout paint
+  // can receive USER_INFO_UPDATED if it is already mounted. The service calls
+  // UserController.updateUserInfo() internally, compares the snapshot, and
+  // broadcasts on change. On GET failure it keeps the cache and returns
+  // ok:false (we surface that as a login error here).
+  let reconcileOk = false;
   try {
-    userInfo = await userController.updateUserInfo();
+    const result = await SubscriptionEntitlementService.getInstance().reconcile(
+      "login"
+    );
+    reconcileOk = result.ok;
   } catch (userError) {
     const errorMessage =
       userError instanceof Error ? userError.message : String(userError);
@@ -164,7 +171,7 @@ export async function completeDesktopLogin(
     return { ok: false, reason: "user_info", message: errorMessage };
   }
 
-  if (!userInfo) {
+  if (!reconcileOk) {
     log.error("Failed to get user info from remote source");
     dialog.showErrorBox(
       "User Info Error",
@@ -176,6 +183,9 @@ export async function completeDesktopLogin(
       message: "remote source returned no user info",
     };
   }
+  // The cache is now written by the service's internal updateUserInfo() call.
+  // Layout reads it on mount via GetloginUserInfo; an already-mounted layout
+  // receives the USER_INFO_UPDATED broadcast.
 
   // --- 3. Register device (non-blocking) -------------------------------
   try {

@@ -1,7 +1,6 @@
 import { ipcMain } from "electron";
 import { z } from "zod/v4";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import {
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   AI_CHAT_V2_SCHEDULED_LOOP_GET,
@@ -52,11 +51,6 @@ const ERROR_MESSAGES: Readonly<Record<ScheduledLoopErrorCode, string>> = {
 
 function messageForCode(code: ScheduledLoopErrorCode): string {
   return ERROR_MESSAGES[code] ?? code;
-}
-
-/** AI-enablement gate — checked before parsing request data or doing work. */
-function isAiEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
 const createSchema = z.object({
@@ -111,7 +105,7 @@ function handleScheduledLoopError(err: unknown): CommonMessage<unknown> {
 }
 
 async function handleCreate(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied(messageForCode("AI_DISABLED"));
   }
   const decoded = decode(createSchema, data);
@@ -126,7 +120,7 @@ async function handleCreate(data: unknown): Promise<CommonMessage<unknown>> {
 }
 
 async function handleGet(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied(messageForCode("AI_DISABLED"));
   }
   const decoded = decode(conversationSchema, data);
@@ -144,7 +138,7 @@ async function handleControl(
   data: unknown,
   op: "pause" | "resume" | "stop"
 ): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied(messageForCode("AI_DISABLED"));
   }
   const decoded = decode(conversationSchema, data);
@@ -164,7 +158,7 @@ async function handleControl(
 }
 
 async function handleStopRun(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied(messageForCode("AI_DISABLED"));
   }
   const decoded = decode(conversationSchema, data);
