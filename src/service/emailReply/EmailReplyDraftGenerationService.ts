@@ -1,5 +1,4 @@
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
@@ -67,8 +66,9 @@ export class EmailReplyDraftGenerationService {
   private autoAuditModule = new EmailAutoReplyAuditLogModule();
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
-    // 1. AI-enable gate (CLAUDE.md mandate).
-    if (new Token().getValue(USER_AI_ENABLED) !== "true") {
+    // 1. AI-enable gate (CLAUDE.md mandate). Lazy-reconcile once when the
+    //    gate is off so a user who just paid is unlocked without a remount.
+    if (!(await ensureHostedAiEnabled())) {
       return {
         success: false,
         error: "AI email replies are disabled for this user.",

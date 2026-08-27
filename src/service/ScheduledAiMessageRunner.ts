@@ -5,12 +5,11 @@ import {
   type StreamEvent,
   StreamEventType,
   type ToolFunction,
-  type ToolExecutionResult,
 } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
+import { USERSDBPATH } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { SkillRegistry } from "@/config/skillsRegistry";
-import { SkillExecutor } from "@/service/SkillExecutor";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
@@ -113,10 +112,9 @@ export class ScheduledAiMessageRunner {
     taskId: number,
     scheduleId?: number
   ): Promise<ScheduledAiMessageRunResult> {
-    // 1. Check AI enabled
-    const token = new Token();
-    const aiEnabled = token.getValue(USER_AI_ENABLED);
-    if (aiEnabled !== "true") {
+    // 1. Check AI enabled. Lazy-reconcile once when the gate is off so a
+    //    user who just paid is unlocked without a remount (PRD FR-6.2/6.1).
+    if (!(await ensureHostedAiEnabled())) {
       return this.failFast(
         taskId,
         scheduleId,
@@ -194,10 +192,10 @@ export class ScheduledAiMessageRunner {
     const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
       input;
     const startedAt = new Date();
-    const token = new Token();
 
-    // 1. AI gate at execution time.
-    if (token.getValue(USER_AI_ENABLED) !== "true") {
+    // 1. AI gate at execution time. Lazy-reconcile once when the gate is off
+    //    so a user who just paid is unlocked without a remount (FR-6.2/6.1).
+    if (!(await ensureHostedAiEnabled())) {
       return this.finalizeChatRun({
         runId,
         taskId,
@@ -408,7 +406,6 @@ export class ScheduledAiMessageRunner {
     let status: ScheduledAiMessageRunResult["status"] = "failed";
     let assistantMessageId: string | undefined;
     let contentSummary = "";
-    let scheduleTerminal: "failed" | undefined;
     let scheduleSuccess = false;
     let schedulePause = !!pauseSchedule;
     let resultErrorCode = errorCode;
@@ -561,8 +558,6 @@ export class ScheduledAiMessageRunner {
     const startTime = Date.now();
     let assistantMessage = "";
     let toolCallsCount = 0;
-    const continueCalls = 0;
-    const consecutiveToolFailures = 0;
     const blockedToolCalls: BlockedToolCallRecord[] = [];
 
     // Get filtered tool definitions for the AI server
@@ -768,8 +763,11 @@ export class ScheduledAiMessageRunner {
     taskId: number,
     scheduleId: number | undefined,
     errorMessage: string,
-    _errorCode: string
+    errorCode: string
   ): Promise<ScheduledAiMessageRunResult> {
+    console.warn(
+      `[scheduled-ai-message] failFast taskId=${taskId} errorCode=${errorCode}: ${errorMessage}`
+    );
     try {
       const runId = await this.runModule.createRun({
         taskId,

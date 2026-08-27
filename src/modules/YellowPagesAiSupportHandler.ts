@@ -1,7 +1,6 @@
 import type { UtilityProcess } from "electron";
 import { AiChatApi } from "@/api/aiChatApi";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { AiScrapeGuidanceData } from "@/modules/interface/BackgroundProcessMessages";
 import {
   AiSupportRequestMessage,
@@ -137,8 +136,9 @@ export class YellowPagesAiSupportHandler {
       `AI support request received: type=${requestType}, id=${requestId}`
     );
 
-    // Validate AI enable status first
-    const aiEnabled = this.isAiEnabled();
+    // Validate AI enable status first. Lazy-reconcile once when the gate is
+    // off so a user who just paid is unlocked without a remount (FR-6.2/6.1).
+    const aiEnabled = await this.isAiEnabled();
     if (!aiEnabled) {
       this.sendResponse(
         {
@@ -579,13 +579,13 @@ export class YellowPagesAiSupportHandler {
   }
 
   /**
-   * Check if AI is enabled for the current user
+   * Check if AI is enabled for the current user. Lazy-reconciles once when
+   * currently disabled (PRD FR-6.1), then re-reads the flag. GET failures
+   * keep the cache, so a Community user is never falsely unlocked.
    */
-  private isAiEnabled(): boolean {
+  private async isAiEnabled(): Promise<boolean> {
     try {
-      const tokenService = new Token();
-      const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      return aiEnabled === "true";
+      return await ensureHostedAiEnabled();
     } catch (error) {
       this.logError(`Failed to check AI enabled status: ${error}`);
       return false;

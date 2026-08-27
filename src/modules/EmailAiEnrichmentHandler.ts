@@ -5,9 +5,8 @@
  * Validates AI entitlement, calls the remote API, and sends results back.
  */
 
-import { AiChatApi, ContactExtractionResponse } from "@/api/aiChatApi";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { AiChatApi } from "@/api/aiChatApi";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { WriteLog } from "@/modules/lib/function";
 
 export interface EmailAiRequest {
@@ -46,8 +45,9 @@ export class EmailAiEnrichmentHandler {
 
     this.logInfo(`Processing email AI enrichment request: ${requestId}`);
 
-    // Validate AI entitlement
-    if (!this.isAiEnabled()) {
+    // Validate AI entitlement. Lazy-reconcile once when the gate is off so a
+    // user who just paid is unlocked without a remount (PRD FR-6.2 / FR-6.1).
+    if (!(await this.isAiEnabled())) {
       this.logWarn(`AI not enabled for request: ${requestId}`);
       sendResponse({
         type: "EMAIL_AI_ENRICHMENT_RESPONSE",
@@ -104,11 +104,14 @@ export class EmailAiEnrichmentHandler {
     }
   }
 
-  private isAiEnabled(): boolean {
+  /**
+   * Hosted AI entitlement gate. Lazy-reconciles once when currently disabled
+   * (PRD FR-6.1), then re-reads the flag. GET failures keep the cache, so a
+   * Community user is never falsely unlocked.
+   */
+  private async isAiEnabled(): Promise<boolean> {
     try {
-      const tokenService = new Token();
-      const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
-      return aiEnabled === "true";
+      return await ensureHostedAiEnabled();
     } catch (error) {
       this.logError(`Failed to check AI status: ${error}`);
       return false;
