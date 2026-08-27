@@ -5,28 +5,34 @@ import { RouteRecordRaw } from "vue-router";
 
 export const constantRoutes: RouteRecordRaw[] = [
   {
-    // Redesigned three-region AI chat workspace (full-window shell, not the
-    // Layout dock): sidebar + selected conversation + inspector
-    // (docs/prd/ai-chat-workspace-ui-redesign-prd.md §9).
+    // Redesigned AI chat workspace — renders INSIDE Layout so the persistent
+    // shell (sidebar + center + inspector) is shared with inner pages
+    // (FR-001/002, IPR-001/002 unification).
     path: "/aiworkspace",
-    name: "AI_Chat_Workspace",
-    meta: {
-      visible: true,
-      title: "route.ai_chat_workspace",
-      icon: "mdi-chat-processing-outline",
-      aiNavigable: true,
-      aiAliases: [
-        "chat workspace",
-        "ai workspace",
-        "workspace chat",
-        "chat home",
-        "full chat",
-      ],
-      aiDescription:
-        "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
-    },
-    component: () =>
-      import("@/views/components/aiChatWorkspace/AiChatWorkspaceShell.vue"),
+    component: Layout,
+    children: [
+      {
+        path: "",
+        name: "AI_Chat_Workspace",
+        meta: {
+          visible: true,
+          title: "route.ai_chat_workspace",
+          icon: "mdi-chat-processing-outline",
+          aiNavigable: true,
+          aiAliases: [
+            "chat workspace",
+            "ai workspace",
+            "workspace chat",
+            "chat home",
+            "full chat",
+          ],
+          aiDescription:
+            "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
+        },
+        component: () =>
+          import("@/views/components/aiChatWorkspace/AiChatWorkspaceShell.vue"),
+      },
+    ],
   },
   {
     path: "/",

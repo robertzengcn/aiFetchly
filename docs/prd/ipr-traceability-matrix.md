@@ -62,13 +62,21 @@
 | IPR-055 | Inactive Extra Modules excluded | `uiMigrationRegistry.ts` (inactive-modules exclusion) | `uiMigrationCoverage.test.ts` | ✅ |
 | IPR-056 | Statistics not redesigned until retention confirmed | `uiMigrationRegistry.ts` (statistics-pending-decision exclusion) | `uiMigrationCoverage.test.ts` (IPR-056 assertion) | ✅ (product-gated) |
 
-## Product-gated items
+## Honest status summary
 
-| AC | Item | Status | Blocker |
-|----|------|--------|---------|
-| AC 22 | Legacy CSS removal post-stability | Deferred | Two stable releases required (design §30.3); track as debt |
-| AC 23 | Statistics retention decision | Open | Product decision pending; excluded per IPR-056 |
-| AC 24 | No active route on legacy shell | Flag-gated | `innerPageShellV2` defaults off; flip after gates 1-4 pass |
+The traceability matrix above marks each IPR by its implementation evidence.
+The following items are **not complete** despite code existing:
+
+| Item | Status | What remains |
+|------|--------|--------------|
+| IPR-004..050 (real template convergence) | **Partial** | 49 of 50 pages only add an outer AppPageShell wrapper. Only Schedule (4 surfaces) uses convergence primitives (DefinitionList, shared states, inspector). The other 46 are marked `shell` in the registry, not `converged`. |
+| IPR-001/002 (shell unification) | **Partial** | /aiworkspace now renders inside Layout (unified route), but layout.vue does not mount AppWorkspaceShell — it uses the legacy v-layout. The inner-shell flag gates the header off but the shell structure is still legacy. |
+| FR-013/020/021 (goal/agent owner routing) | **Deferred** | Scheduled runs use createOwnerAdapterSink. Goal and agent execution paths do not (no production MakerTurnExecutor binding exists). |
+| AC 22 (legacy CSS removal) | **Deferred** | Two stable releases required (design §30.3) |
+| AC 23 (Statistics retention) | **Open** | Product decision pending |
+| AC 24 (rollout) | **Flag-gated** | innerPageShellV2 + USER_AI_CHAT_WORKSPACE_REDESIGN default off |
+| §34.4 E2E (16 scenarios) | **Partial** | 9 of 16 implemented; 7 need packaged app or live AI |
+| §34.5 Performance (packaged) | **Unverified** | Only algorithm microbenchmarks; no packaged-app p95/heap/soak |
 
 ## Verification suites
 
