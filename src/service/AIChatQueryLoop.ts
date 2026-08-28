@@ -2238,6 +2238,10 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              // Registry-owned abort signal: cancelling the job (user Stop,
+              // shutdown) reaches the actual underlying tool work instead of
+              // only relabelling the registry entry (FR-36, design §17.2).
+              signal: handle.signal,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
