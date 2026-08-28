@@ -8,6 +8,7 @@
 ## Product Requirements
 
 - [PRD: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-prd.md)
+- [Technical Design: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-technical-design.md)
 - [PRD: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-prd.md)
 - [Technical Design: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-technical-design.md)
 - [PRD: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-prd.md)

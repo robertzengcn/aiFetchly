@@ -13,6 +13,7 @@
   - [`Inner-Page UI Convergence PRD`](./inner-page-ui-convergence-prd.md)
   - [`Local sherpa-onnx Voice Chat PRD`](./local-sherpa-onnx-voice-chat-prd.md)
 - **Related technical designs**:
+  - [`AI Chat-First Application Shell and Composer Refinement Technical Design`](./ai-chat-first-application-shell-technical-design.md)
   - [`AI Chat Workspace UI Redesign Technical Design`](./ai-chat-workspace-ui-redesign-technical-design.md)
   - [`Inner-Page UI Convergence Technical Design`](./inner-page-ui-convergence-technical-design.md)
   - [`Local sherpa-onnx Voice Chat Technical Design`](./local-sherpa-onnx-voice-chat-technical-design.md)
