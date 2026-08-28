@@ -531,8 +531,11 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid flag request");
       }
-      const enabled =
-        new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN) === "true";
+      const raw = new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN);
+      // Default-on for dev preview: treat missing value (null/undefined) as
+      // enabled so the merged redesign is visible without manual setup.
+      // Explicit "false" still disables (rollback per design §30.2).
+      const enabled = raw === null || raw === undefined ? true : raw === "true";
       return ok({ enabled });
     } catch (err) {
       return denied(userSafeError(err));

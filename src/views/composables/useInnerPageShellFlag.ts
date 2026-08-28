@@ -12,9 +12,14 @@ const SCHEDULE_FLAG_KEY = "aifetchly.scheduleUiV2";
 
 function readFlag(key: string): boolean {
   try {
-    return localStorage.getItem(key) === "true";
+    const raw = localStorage.getItem(key);
+    // Default-on for dev preview: first run (null) enables the converged shell
+    // so the workspace redesign is visible after the merge. User can still
+    // toggle off (explicit "false") for rollback (design §30.2).
+    if (raw === null) return true;
+    return raw === "true";
   } catch {
-    return false;
+    return true;
   }
 }
 

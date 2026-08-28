@@ -294,8 +294,10 @@ const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
-/** Workspace redesign rollout flag (PRD §33): hides the dock when enabled. */
-const workspaceRedesignEnabled = ref(false);
+/** Workspace redesign rollout flag (PRD §33): hides the dock when enabled.
+ * Default-on for dev preview so the merged redesign is visible without manual
+ * flag toggling. Production will later gate this behind settings. */
+const workspaceRedesignEnabled = ref(true);
 /**
  * Inner-page convergence shell flag (design §26.2): ON replaces the old fixed
  * global header with route-owned headers and hosts routes through the center
@@ -684,7 +686,7 @@ onMounted(async () => {
     try {
         workspaceRedesignEnabled.value = await isWorkspaceRedesignEnabled();
     } catch {
-        workspaceRedesignEnabled.value = false;
+        workspaceRedesignEnabled.value = true;
     }
 
     await initializeSavedLanguage()
