@@ -160,7 +160,6 @@
            strip carries plan status; Activity carries the full document. -->
       <!-- Gap fix: transcript request-plan-changes emits empty string;
            the shell collects feedback via the in-app prompt before IPC. -->
-      />
 
       <AiChatV2Composer
         :is-streaming="selectedStore.isBusy"
