@@ -30,7 +30,7 @@
         type="button"
         class="global-nav-button"
         data-testid="workspace-automations"
-        @click="goTo('/schedule')"
+        @click="goTo('/schedule/list')"
       >
         <v-icon icon="mdi-clock-fast" size="18" aria-hidden="true" />
         <span>{{ t('workspaceChat.automations') || 'Automations' }}</span>
