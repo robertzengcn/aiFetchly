@@ -11,6 +11,7 @@
 - **Parent product contract**: [`AI Chat Workspace UI Redesign PRD`](./ai-chat-workspace-ui-redesign-prd.md)
 - **Parent technical design**: [`AI Chat Workspace UI Redesign Technical Design`](./ai-chat-workspace-ui-redesign-technical-design.md)
 - **Technical design**: [`Inner-Page UI Convergence Technical Design`](./inner-page-ui-convergence-technical-design.md)
+- **Shell refinement**: [`AI Chat-First Application Shell and Composer Refinement PRD`](./ai-chat-first-application-shell-prd.md) — follow-on authority for default-shell routing, chat center composition, and Electron window geometry
 - **Visual reference**: [`AI Chat Workspace Redesign Preview`](../design/ai-chat-workspace-redesign-preview.html)
 
 ## 1. Executive Summary
