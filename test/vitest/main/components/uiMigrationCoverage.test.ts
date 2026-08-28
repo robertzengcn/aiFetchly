@@ -9,18 +9,16 @@ import {
 describe("inner-page convergence registry (PRD §4.1, IPR-054/055/056)", () => {
   const report = validateUiRouteCoverage(constantRoutes);
 
-  it("keeps the redesigned AI workspace route loadable through the active layout", async () => {
+  it("renders the redesigned AI workspace as a full-window shell", async () => {
     const workspaceRoute = constantRoutes.find(
       (route) => route.path === "/aiworkspace"
     );
-    const workspacePage = workspaceRoute?.children?.find(
-      (route) => route.name === "AI_Chat_Workspace"
-    );
 
-    expect(workspaceRoute?.component).toBeDefined();
-    expect(workspacePage?.component).toBeTypeOf("function");
+    expect(workspaceRoute?.name).toBe("AI_Chat_Workspace");
+    expect(workspaceRoute?.children).toBeUndefined();
+    expect(workspaceRoute?.component).toBeTypeOf("function");
 
-    const loadWorkspace = workspacePage?.component as
+    const loadWorkspace = workspaceRoute?.component as
       | (() => Promise<unknown>)
       | undefined;
     await expect(loadWorkspace?.()).resolves.toBeDefined();
