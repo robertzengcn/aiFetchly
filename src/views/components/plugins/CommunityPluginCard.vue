@@ -255,4 +255,17 @@ const slug = computed(() => props.entry.slug);
   background: rgb(var(--v-theme-surface-variant));
   border-color: rgb(var(--v-theme-outline));
 }
+
+/* Touch/narrow layout: interactive footer actions and the Preview wrapper
+   must present at least a 44px hit area (PRD a11y §16.5 / responsive §17.3).
+   The non-interactive Installed/Unavailable status chip is deliberately NOT
+   enlarged — it carries state, not an action. `pointer: coarse` targets
+   touch devices without affecting desktop pointers. */
+@media (pointer: coarse) {
+  .community-plugin-card__footer .v-btn,
+  .community-plugin-card__preview-wrap {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
 </style>

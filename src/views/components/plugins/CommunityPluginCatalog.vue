@@ -491,4 +491,16 @@ onUnmounted((): void => {
   gap: 16px;
   align-items: stretch;
 }
+
+/* Touch/narrow layout: interactive filter chips (tag row, More) and the
+   availability/Refresh controls must present at least a 44px hit area
+   (PRD a11y §16.5 / responsive §17.3). `pointer: coarse` targets touch
+   devices without affecting desktop pointers. */
+@media (pointer: coarse) {
+  .community-plugin-tags .v-chip,
+  .community-plugin-summary .v-btn,
+  .community-plugin-toolbar .v-btn {
+    min-height: 44px;
+  }
+}
 </style>
