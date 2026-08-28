@@ -479,6 +479,20 @@ AiFetchly routes four bounded, text-only background AI workloads (`user_auto_dre
 - **Full compact** is hierarchical (map/reduce chunking via `AIChatPromptBudget`) and capability-gated (`AIChatModelCatalogService.getSmallModelCapability()`); absent metadata means compact goes directly to the normal model (not counted as the one failure fallback).
 - Operations, rollout phases, observability fields, and rollback: `docs/small-model-routing-operations.md`. PRD: `docs/prd/small-model-background-workloads-prd.md`. Technical design: `docs/prd/small-model-background-workloads-technical-design.md`.
 
+### Skill Installer and Prompt-Skill Runtime - Architecture Note
+The natural-language skill installation feature (docs/prd/natural-language-skill-installation-prd.md) adds two subsystems:
+
+- **Typed installer** (`src/modules/SkillInstallationModule.ts`): a session state machine (acquiring -> inspecting -> planning -> awaiting_approval -> ... -> ready) with compare-and-set transitions and an append-only event log. Model-facing tools `skill_install_prepare/approve/status/cancel/update/repair` live in `src/config/skillsRegistry.ts`. Approval requires an opaque renderer-side token (generated at prepare, fetched via the renderer-only `SKILL_INSTALL_APPROVAL_TOKEN` IPC channel) - the model can plan but never self-approve. Secrets travel only through `SKILL_INSTALL_SUBMIT_SECRET`; `rejectSecretShaped` in `src/entityTypes/skillInstallationTypes.ts` blocks credential-shaped values in ordinary tool args.
+- **Prompt-skill runtime** (`src/service/PromptSkill*.ts`): portable `SKILL.md` packages install under `~/.aifetchly/skills` (managed copy default, symlink/junction dev mode) and are invoked through the universal `use_skill` tool - a short tool acknowledgement followed by a hidden instruction message (never long guidance JSON). `PromptSkillInvocationModule` persists invocation state for compaction reattachment. `/skill <name> [task]` is the explicit user entry.
+
+Where new code goes:
+- Installer orchestration/state -> `src/modules/SkillInstallationModule.ts` (Service if it spans modules)
+- Acquisition/staging -> `src/service/SkillSourceAcquisitionService.ts` + utility process `src/childprocess/skill-installation/`
+- Prompt-skill loading/invocation -> `src/service/PromptSkill*.ts`
+- Entities: `SkillInstallation*`, `PromptSkillInvocation` in `src/entity/`, registered in `src/config/dbEntities.ts`
+
+Kill switch: `AIFETCHLY_SKILL_INSTALL_ENABLED` (absent -> disabled, mirroring the small-model routing pattern). Unified filesystem scope: `ConversationFilesystemContextService` is the single resolver for shell+file tools - missing workspace fails closed (`WORKSPACE_NOT_APPROVED`), never falls back to home. Ops runbook: `docs/skill-installation-operations.md`.
+
 ### Security Best Practices
 - Context isolation enabled, Node.js integration disabled in renderer
 - All IPC communication through contextBridge
