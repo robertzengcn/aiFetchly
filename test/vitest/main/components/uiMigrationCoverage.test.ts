@@ -9,6 +9,23 @@ import {
 describe("inner-page convergence registry (PRD §4.1, IPR-054/055/056)", () => {
   const report = validateUiRouteCoverage(constantRoutes);
 
+  it("keeps the redesigned AI workspace route loadable through the active layout", async () => {
+    const workspaceRoute = constantRoutes.find(
+      (route) => route.path === "/aiworkspace"
+    );
+    const workspacePage = workspaceRoute?.children?.find(
+      (route) => route.name === "AI_Chat_Workspace"
+    );
+
+    expect(workspaceRoute?.component).toBeDefined();
+    expect(workspacePage?.component).toBeTypeOf("function");
+
+    const loadWorkspace = workspacePage?.component as
+      | (() => Promise<unknown>)
+      | undefined;
+    await expect(loadWorkspace?.()).resolves.toBeDefined();
+  });
+
   it("classifies every active route with no gaps or overlaps", () => {
     expect(report.issues).toEqual([]);
   });

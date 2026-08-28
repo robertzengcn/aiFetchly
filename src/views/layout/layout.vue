@@ -194,30 +194,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
           :timeout="snaptimeout"
         />
 
-        <!-- AI Chat Panel -->
-        <div
-          class="ai-chat-panel"
-          :class="{ 'panel-open': chatPanelOpen }"
-          :style="chatPanelOpen ? { width: chatPanelWidth + 'px' } : {}"
-        >
-          <!-- Resize handle -->
-          <div
-            v-if="chatPanelOpen"
-            class="chat-resize-handle"
-            @mousedown="startResize"
-          ></div>
-          <AiChatBox
-            :visible="chatPanelOpen"
-            @close="toggleChatPanel"
-          />
-        </div>
-
-        <!-- Backdrop overlay -->
-        <div
-          v-if="chatPanelOpen"
-          class="chat-backdrop"
-          @click="toggleChatPanel"
-        ></div>
     </v-layout>
 </template>
 <script setup lang="ts">
@@ -233,7 +209,6 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import {receiveSystemMessage} from '@/views/api/layout'
 import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
-import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
 import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
 import { useInnerPageShellFlag } from '@/views/composables/useInnerPageShellFlag';
@@ -292,7 +267,6 @@ const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
-const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
 /** Workspace redesign rollout flag (PRD §33): hides the dock when enabled.
  * Default-on for dev preview so the merged redesign is visible without manual
@@ -312,8 +286,6 @@ useResponsiveShell(() => mainElement.value);
 const activeArtifact = ref<AIArtifactRecord | null>(null);
 const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
-const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
-const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
 const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
@@ -457,18 +429,8 @@ const getTranslatedTitle = (title: string): string => {
     return title;
 }
 
-const toggleChatPanel = () => {
-    chatPanelOpen.value = !chatPanelOpen.value;
-    if (chatPanelOpen.value) {
-        v2ChatPanelOpen.value = false;
-    }
-}
-
 const toggleV2ChatPanel = () => {
     v2ChatPanelOpen.value = !v2ChatPanelOpen.value;
-    if (v2ChatPanelOpen.value) {
-        chatPanelOpen.value = false;
-    }
 }
 
 /**
@@ -481,11 +443,7 @@ const toggleChat = () => {
         void router.push('/aiworkspace');
         return;
     }
-    if (aiChatV2Enabled.value) {
-        toggleV2ChatPanel();
-    } else {
-        toggleChatPanel();
-    }
+    toggleV2ChatPanel();
 };
 
 const openAiChatFromDashboard = (event: Event): void => {
@@ -498,18 +456,11 @@ const openAiChatFromDashboard = (event: Event): void => {
         return;
     }
 
-    if (aiChatV2Enabled.value) {
-        pendingAiPromptRequest.value = {
-            id: ++aiPromptRequestId,
-            text,
-        };
-        v2ChatPanelOpen.value = true;
-        chatPanelOpen.value = false;
-        return;
-    }
-
-    chatPanelOpen.value = true;
-    v2ChatPanelOpen.value = false;
+    pendingAiPromptRequest.value = {
+        id: ++aiPromptRequestId,
+        text,
+    };
+    v2ChatPanelOpen.value = true;
 }
 
 const handleOpenFromNotify = (raw: unknown): void => {
@@ -534,20 +485,13 @@ const handleOpenFromNotify = (raw: unknown): void => {
         return;
     }
 
-    if (aiChatV2Enabled.value) {
-        v2ChatPanelOpen.value = true;
-        chatPanelOpen.value = false;
-        if (conversationId.length > 0) {
-            pendingOpenConversationRequest.value = {
-                id: ++openConversationRequestId,
-                conversationId,
-            };
-        }
-        return;
+    v2ChatPanelOpen.value = true;
+    if (conversationId.length > 0) {
+        pendingOpenConversationRequest.value = {
+            id: ++openConversationRequestId,
+            conversationId,
+        };
     }
-
-    chatPanelOpen.value = true;
-    v2ChatPanelOpen.value = false;
 };
 
 const startResize = (e: MouseEvent) => {
@@ -843,23 +787,6 @@ const showDialog=(status:boolean, content:string)=>{
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
-/* AI Chat Panel Styles */
-.ai-chat-panel {
-    position: fixed;
-    top: 0;
-    right: -420px;
-    width: 420px;
-    height: 100vh;
-    background-color: #ffffff;
-    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.1);
-    transition: right 0.3s ease-in-out;
-    z-index: 9998;
-}
-
-.ai-chat-panel.panel-open {
-    right: 0;
-}
-
 .ai-chat-dock {
     position: relative;
     align-self: stretch;
@@ -882,38 +809,7 @@ const showDialog=(status:boolean, content:string)=>{
     width: var(--ai-chat-dock-width);
 }
 
-.chat-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.3);
-    z-index: 9997;
-    animation: fadeIn 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-
-
 @media (max-width: 768px) {
-    .ai-chat-panel {
-        width: 100%;
-        right: -100%;
-    }
-
-    .ai-chat-panel.panel-open {
-        right: 0;
-    }
-
     .ai-chat-dock {
         position: fixed;
         top: 0;
@@ -952,11 +848,6 @@ const showDialog=(status:boolean, content:string)=>{
 </style>
 
 <style>
-:root[theme="dark"] .ai-chat-panel {
-    background-color: #1e1e1e;
-    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-}
-
 :root[theme="dark"] .ai-chat-dock {
     background-color: #1e1e1e;
     border-left-color: rgba(255, 255, 255, 0.12);

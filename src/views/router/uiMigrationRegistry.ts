@@ -101,7 +101,13 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     family: "settings",
     template: "settings",
     state: "shell",
-    routeNames: ["system_setting_plugins", "Plugins", "PluginsManagement"],
+    routeNames: [
+      "system_setting_plugins",
+      "Plugins",
+      "PluginsManagement",
+      "CommunityPlugins",
+      "CommunityPluginsList",
+    ],
     supportingTemplates: ["collection", "detail"],
   },
   {
