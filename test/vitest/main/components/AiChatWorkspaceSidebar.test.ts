@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createI18n } from "vue-i18n";
 import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWorkspaceSidebar.vue";
+import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 
@@ -32,6 +34,8 @@ const i18n = createI18n({
           region: "Chat workspaces",
           loadError: "Failed to load workspaces",
           empty: "No conversations yet",
+          unassigned: "Other chats",
+          needsAttentionCount: "{count} conversations need attention",
         },
       },
     },
@@ -76,5 +80,58 @@ describe("AiChatWorkspaceSidebar global nav", () => {
     const wrapper = mountSidebar();
     await wrapper.get('[data-testid="workspace-plugins"]').trigger("click");
     expect(push).toHaveBeenCalledWith("/plugins/management");
+  });
+});
+
+describe("AiChatWorkspaceSidebar Other chats folder", () => {
+  function unassigned(conversationId: string): WorkspaceConversationSummary {
+    return {
+      conversationId,
+      workspaceKey: null,
+      title: `Chat ${conversationId}`,
+      preview: "Preview",
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      updatedAt: 0,
+    };
+  }
+
+  function mountWithUnassigned() {
+    const store = useChatWorkspaceStore();
+    store.unassigned.push(
+      unassigned("u1"),
+      unassigned("u2")
+    );
+    return mountSidebar();
+  }
+
+  it("defaults to closed, hiding the other chats", () => {
+    const wrapper = mountWithUnassigned();
+    const header = wrapper.get('[data-nav-row="unassigned"]');
+    expect(header.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.findAll('[data-testid="workspace-conversation-u1"]').length).toBe(0);
+    expect(wrapper.text()).not.toContain("Chat u1");
+  });
+
+  it("opens on click and shows the other chats", async () => {
+    const wrapper = mountWithUnassigned();
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    const header = wrapper.get('[data-nav-row="unassigned"]');
+    expect(header.attributes("aria-expanded")).toBe("true");
+    expect(wrapper.text()).toContain("Chat u1");
+    expect(wrapper.text()).toContain("Chat u2");
+  });
+
+  it("collapses again on a second click", async () => {
+    const wrapper = mountWithUnassigned();
+    const header = wrapper.get('[data-nav-row="unassigned"]');
+    await header.trigger("click");
+    await flushPromises();
+    await header.trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")).toBe("false");
+    expect(wrapper.text()).not.toContain("Chat u1");
   });
 });

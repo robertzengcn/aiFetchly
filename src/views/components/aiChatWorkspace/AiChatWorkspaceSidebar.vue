@@ -168,13 +168,38 @@
         class="workspace-group"
         aria-label="Unassigned"
       >
-        <div class="group-header static">
+        <button
+          type="button"
+          class="group-header"
+          role="treeitem"
+          data-nav-row="unassigned"
+          :aria-expanded="!unassignedCollapsed"
+          :aria-label="t('workspaceChat.sidebar.unassigned') || 'Other chats'"
+          @click="unassignedCollapsed = !unassignedCollapsed"
+        >
+          <v-icon
+            :icon="unassignedCollapsed ? 'mdi-chevron-right' : 'mdi-chevron-down'"
+            size="16"
+            aria-hidden="true"
+          />
           <v-icon icon="mdi-folder-outline" size="16" aria-hidden="true" />
           <span class="group-name">
             {{ t('workspaceChat.sidebar.unassigned') || 'Other chats' }}
           </span>
-        </div>
-        <ul class="conversation-list">
+          <span
+            v-if="groupAttentionCount(unassignedAttention) > 0"
+            class="group-attention"
+            :aria-label="
+              t('workspaceChat.sidebar.needsAttentionCount', {
+                count: groupAttentionCount(unassignedAttention),
+              }) ||
+              `${groupAttentionCount(unassignedAttention)} need attention`
+            "
+          >
+            {{ groupAttentionCount(unassignedAttention) }}
+          </span>
+        </button>
+        <ul v-if="!unassignedCollapsed" class="conversation-list">
           <li v-for="conversation in visibleUnassigned" :key="conversation.conversationId">
             <button
               type="button"
@@ -242,7 +267,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
@@ -278,6 +303,14 @@ const searchModel = computed({
 const visibleGroups = computed(() => workspaceStore.visibleWorkspaceGroups);
 const visibleUnassigned = computed(() => workspaceStore.visibleUnassigned);
 const bootstrapError = computed(() => workspaceStore.bootstrapError);
+
+/** Whether the "Other chats" (unassigned) folder is collapsed. Defaults to
+ * collapsed so unassigned chats are hidden until the user expands it. */
+const unassignedCollapsed = ref(true);
+
+const unassignedAttention = computed<{
+  conversations: readonly WorkspaceConversationSummary[];
+}>(() => ({ conversations: visibleUnassigned.value }));
 
 function isSelected(conversation: WorkspaceConversationSummary): boolean {
   return workspaceStore.selectedConversationId === conversation.conversationId;
@@ -354,11 +387,21 @@ function onTreeKeydown(event: KeyboardEvent): void {
     }
     return;
   }
+  if (row.dataset.navRow === "unassigned") {
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      unassignedCollapsed.value = false;
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      unassignedCollapsed.value = true;
+    }
+    return;
+  }
   if (event.key === "ArrowLeft" && row.dataset.navRow === "conversation") {
     event.preventDefault();
-    // Focus the nearest preceding group header.
+    // Focus the nearest preceding group/unassigned header.
     for (let i = index - 1; i >= 0; i -= 1) {
-      if (rows[i].dataset.navRow === "group") {
+      if (rows[i].dataset.navRow === "group" || rows[i].dataset.navRow === "unassigned") {
         rows[i].focus();
         return;
       }
