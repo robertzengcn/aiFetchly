@@ -415,7 +415,9 @@ function onTreeKeydown(event: KeyboardEvent): void {
 .sidebar-tree {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 6px;
+  padding: 14px 6px 4px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(var(--v-border-color, 0, 0, 0), 0.1);
 }
 
 .sidebar-footer {
