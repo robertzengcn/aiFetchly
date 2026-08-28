@@ -656,4 +656,35 @@ describe("CommunityPluginCatalog", () => {
       false
     );
   });
+
+  it("prevents duplicate forced refresh requests while one is in flight", async () => {
+    // PRD §13.4 / tech design §14.3: Vuetify's :loading does not stop the
+    // click handler, so an explicit guard must coalesce a second forced
+    // refresh into the in-flight one (exactly one forced catalog request).
+    api.list.mockResolvedValue([entry("a", "allowed")]);
+    const w = mountCatalog();
+    await flushPromises();
+    api.list.mockClear();
+
+    // Stall the first forced refresh so the second click lands while it is
+    // still in flight.
+    let resolveFirst: (v: PluginCommunityEntry[]) => void = () => undefined;
+    api.list.mockReturnValueOnce(
+      new Promise<PluginCommunityEntry[]>((r) => {
+        resolveFirst = r;
+      })
+    );
+
+    await w.find('[data-testid="community-plugins-refresh"]').trigger("click");
+    await flushPromises();
+    // refreshing is now true; a second forced refresh must be coalesced.
+    await w.find('[data-testid="community-plugins-refresh"]').trigger("click");
+    await flushPromises();
+
+    expect(api.list).toHaveBeenCalledTimes(1);
+    expect(api.list).toHaveBeenLastCalledWith({ forceRefresh: true });
+
+    resolveFirst([entry("a", "allowed")]);
+    await flushPromises();
+  });
 });

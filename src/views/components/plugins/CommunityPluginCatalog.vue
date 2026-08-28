@@ -97,6 +97,12 @@ const showNoMatches = computed<boolean>(
 );
 
 async function reload(force = false): Promise<void> {
+  // Prevent duplicate forced refresh requests (PRD §13.4 / tech design §14.3):
+  // Vuetify's :loading presentation does not stop the click handler, so an
+  // explicit in-flight guard is required. WebSocket-triggered reloads while a
+  // user refresh is already running are coalesced into the active request —
+  // the activeLoadRequest counter still ignores stale presentation updates.
+  if (force && refreshing.value) return;
   const requestId = ++activeLoadRequest;
   if (entries.value.length === 0) loading.value = true;
   else refreshing.value = true;
@@ -245,7 +251,7 @@ onUnmounted((): void => {
         variant="tonal"
         prepend-icon="mdi-refresh"
         :loading="refreshing"
-        :disabled="loading"
+        :disabled="loading || refreshing"
         data-testid="community-plugins-refresh"
         @click="reload(true)"
       >
