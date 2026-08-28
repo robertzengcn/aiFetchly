@@ -52,7 +52,15 @@
       </v-row>
 
       <v-card v-if="audit.generatedSubject" variant="outlined" class="pa-3 mt-4">
-        <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.generated_subject") }}</div>
+        <div class="d-flex align-center justify-space-between">
+          <div class="text-subtitle-2">{{ t("emailAutoReplyAudit.generated_subject") }}</div>
+          <AIContentReportButton
+            v-if="replyReportDescriptor"
+            :descriptor="replyReportDescriptor"
+            :reported="replyReported"
+            @report="replyReportDialog = true"
+          />
+        </div>
         <div>{{ audit.generatedSubject }}</div>
         <div class="text-subtitle-2 mt-2">{{ t("emailAutoReplyAudit.generated_body_preview") }}</div>
         <pre class="text-body-2">{{ audit.generatedBodyPreview || "—" }}</pre>
@@ -83,6 +91,10 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { getAutoReplyAuditLog } from "@/views/api/emailreply";
 import type { AutoReplyAuditDto } from "@/entityTypes/emailReceiveTypes";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildAutoReplyDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 const { t } = useI18n({ inheritLocale: true });
 const route = useRoute();
@@ -90,6 +102,21 @@ const router = useRouter();
 
 const audit = ref<AutoReplyAuditDto | null>(null);
 const loading = ref(true);
+
+// AI Content Report state (PRD §8.2 automatic email reply surface).
+const replyReportDialog = ref(false);
+const replyReported = ref(false);
+const replyReportDescriptor = computed(() => {
+  const a = audit.value;
+  if (!a) return null;
+  const body = [a.generatedSubject, a.generatedBodyPreview]
+    .filter((s): s is string => typeof s === "string" && s.length > 0)
+    .join("\n\n");
+  return buildAutoReplyDescriptor(body, {
+    messageId: String(a.messageId),
+    generatedAt: a.createdAt,
+  });
+});
 
 const statusColor = computed(() => {
   const s = audit.value?.decisionStatus;

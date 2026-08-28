@@ -217,6 +217,12 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
             <div class="text-body-2 streamed-content">
               {{ streamedContent }}
             </div>
+            <AIContentReportButton
+              v-if="!isStreaming && streamedContent"
+              :descriptor="emailTemplateReportDescriptor"
+              :reported="emailTemplateReported"
+              @report="emailTemplateReportDialog = true"
+            />
           </v-card-text>
         </v-card>
 
@@ -282,7 +288,7 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
-import { ref, onMounted, watch,onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, watch,onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { getEmailtemplatebyid, updateEmailtemplate, generateAIEmailTemplate, stopAIEmailTemplateGeneration } from "@/views/api/emailmarketing"
@@ -291,9 +297,25 @@ import { convertVariableInTemplate } from "@/views/utils/emailFun"
 import { QUERY_USER_INFO } from "@/config/channellist"
 import { windowInvoke } from "@/views/utils/apirequest"
 import { UserInfoType } from "@/entityTypes/userType"
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildEmailTemplateDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 // import { VueEditor } from "vue2-editor";
 const { t } = useI18n({ inheritLocale: true });
 const templateId = ref<number>(0);
+
+// AI Content Report state (PRD §8.1, §9.3). Reports the generated version
+// currently displayed, not later user edits. generatedAt is captured when
+// streaming completes so the report carries an RFC3339 timestamp (FR-3.8).
+const emailTemplateReportDialog = ref(false);
+const emailTemplateReported = ref(false);
+const emailTemplateGeneratedAt = ref<string | undefined>(undefined);
+const emailTemplateReportDescriptor = computed(() =>
+  buildEmailTemplateDescriptor(tplTitle.value, streamedContent.value, {
+    generatedAt: emailTemplateGeneratedAt.value,
+  })
+);
 
 
 const $route = useRoute();
@@ -567,6 +589,8 @@ async function generateTemplate() {
       },
       onComplete: (response) => {
         isStreaming.value = false;
+        emailTemplateGeneratedAt.value = new Date().toISOString();
+        emailTemplateReported.value = false;
         if (response.status && response.data) {
           const { title, content, hasInvalidVariables, invalidVariables } = response.data;
           tplTitle.value = title || "";
