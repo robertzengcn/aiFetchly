@@ -44,6 +44,33 @@
         <v-icon icon="mdi-tune-variant" size="18" aria-hidden="true" />
         <span>{{ t('workspaceChat.customize') || 'Customize' }}</span>
       </button>
+      <button
+        type="button"
+        class="global-nav-button"
+        data-testid="workspace-insights"
+        @click="goTo('/insights')"
+      >
+        <v-icon icon="mdi-chart-box-outline" size="18" aria-hidden="true" />
+        <span>{{ t('workspaceChat.insights') || 'Insights' }}</span>
+      </button>
+      <button
+        type="button"
+        class="global-nav-button"
+        data-testid="workspace-knowledge-library"
+        @click="goTo('/knowledge/library')"
+      >
+        <v-icon icon="mdi-book-open-variant" size="18" aria-hidden="true" />
+        <span>{{ t('workspaceChat.knowledgeLibrary') || 'Knowledge Library' }}</span>
+      </button>
+      <button
+        type="button"
+        class="global-nav-button"
+        data-testid="workspace-plugins"
+        @click="goTo('/plugins/management')"
+      >
+        <v-icon icon="mdi-puzzle" size="18" aria-hidden="true" />
+        <span>{{ t('workspaceChat.plugins') || 'Plugins' }}</span>
+      </button>
     </div>
 
     <!-- Zone 2: independently scrollable workspace hierarchy (PRD §10.2) -->

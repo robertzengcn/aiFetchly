@@ -149,6 +149,7 @@ export default {
     email_receive_detail: "受信メール詳細",
     ai_auto_replies: "AI 自動返信",
     ai_auto_reply_detail: "AI 自動返信詳細",
+    ai_chat_workspace: "AI チャットワークスペース",
     knowledge_library: "ナレッジライブラリ",
     ai_provider: "AI プロバイダー",
     mcp_tools: "MCPツール",
@@ -3194,6 +3195,9 @@ export default {
     newChat: "新しいチャット",
     automations: "オートメーション",
     customize: "カスタマイズ",
+    insights: "インサイト",
+    knowledgeLibrary: "ナレッジライブラリ",
+    plugins: "プラグイン",
     backToApp: "アプリに戻る",
     loadOlder: "過去のメッセージを読み込む",
     empty: {

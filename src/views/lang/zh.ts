@@ -139,6 +139,7 @@ export default {
     email_receive_detail: "收件详情",
     ai_auto_replies: "AI 自动回复",
     ai_auto_reply_detail: "AI 自动回复详情",
+    ai_chat_workspace: "AI 聊天工作区",
     knowledge_library: "知识库",
     ai_provider: "AI 提供商",
     mcp_tools: "MCP工具",
@@ -3089,6 +3090,9 @@ export default {
     newChat: "新聊天",
     automations: "自动化任务",
     customize: "自定义",
+    insights: "洞察",
+    knowledgeLibrary: "知识库",
+    plugins: "插件",
     backToApp: "返回应用",
     loadOlder: "加载更早的消息",
     empty: {

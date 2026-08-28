@@ -57,6 +57,13 @@ test.describe("workspace shell (PRD §34.4)", () => {
     await expect(page.getByRole("searchbox")).toBeVisible();
   });
 
+  test("sidebar global nav exposes Insights, Knowledge Library, and Plugins", async () => {
+    await openWorkspace();
+    await expect(page.getByTestId("workspace-insights")).toBeVisible();
+    await expect(page.getByTestId("workspace-knowledge-library")).toBeVisible();
+    await expect(page.getByTestId("workspace-plugins")).toBeVisible();
+  });
+
   test("header shows the conversation title and NO robot/AI Assistant (FR-007/008)", async () => {
     await openWorkspace();
     const header = page.getByTestId("workspace-conversation-header");

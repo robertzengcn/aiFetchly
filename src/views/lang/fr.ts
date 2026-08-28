@@ -149,6 +149,7 @@ export default {
     email_receive_detail: "Détail E-mail Reçu",
     ai_auto_replies: "Réponses Auto IA",
     ai_auto_reply_detail: "Détail Réponse IA",
+    ai_chat_workspace: "Espace de chat IA",
     knowledge_library: "Bibliothèque de connaissances",
     ai_provider: "Fournisseur d'IA",
     mcp_tools: "Outils MCP",
@@ -3242,6 +3243,9 @@ export default {
     newChat: "Nouvelle discussion",
     automations: "Automatisations",
     customize: "Personnaliser",
+    insights: "Informations",
+    knowledgeLibrary: "Bibliothèque de connaissances",
+    plugins: "Extensions",
     backToApp: "Retour à l'application",
     loadOlder: "Charger les messages plus anciens",
     empty: {
