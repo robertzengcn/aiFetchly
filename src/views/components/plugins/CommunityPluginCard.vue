@@ -103,11 +103,18 @@ const slug = computed(() => props.entry.slug);
     </v-card-subtitle>
 
     <v-card-text class="community-plugin-card__body flex-grow-1">
-      <!-- Full description retained as the accessible tooltip via title attr;
-           visible copy is clamped to three lines (tech design §8.4). -->
+      <!-- Visible copy is clamped to three lines (tech design §8.4). The
+           complete description is reachable by keyboard: the region is
+           focusable (tabindex 0) and carries the full text in the
+           accessibility tree via aria-label, so screen readers announce it
+           and keyboard users can focus it (PRD a11y §16.12). -->
       <div
         class="community-plugin-card__description text-body-2"
+        tabindex="0"
+        role="note"
         :title="entry.description"
+        :aria-label="entry.description"
+        :data-testid="`community-plugin-description-${slug}`"
       >
         {{ entry.description }}
       </div>
@@ -160,19 +167,34 @@ const slug = computed(() => props.entry.slug);
         {{ t("communityPlugins.manage") || "Manage" }}
       </v-btn>
 
-      <!-- allowed + ticket: preview-only in Stage 1. The native title attr is
-           an accessible tooltip that keeps the affordance testable without a
-           Vuetify v-tooltip slot (unified plugin page PRD §9.6 / §16.11). -->
-      <v-btn
+      <!-- allowed + ticket: preview-only in Stage 1. A disabled v-btn is not
+           keyboard-focusable, so the explanation cannot live in its title
+           alone. Wrap the disabled button in a focusable span (tabindex 0)
+           whose aria-label carries the Coming-soon explanation, so keyboard
+           users reach it and screen readers announce it (PRD §9.6 / §16.11;
+           tech design §8.3 / §15.4). -->
+      <span
         v-else-if="cta === 'preview'"
-        disabled
-        variant="tonal"
-        prepend-icon="mdi-clock-outline"
-        :title="t('communityPlugins.installFuture') || 'Installable in a future release.'"
-        :data-testid="`community-plugin-preview-${slug}`"
+        tabindex="0"
+        class="community-plugin-card__preview-wrap d-inline-flex align-center"
+        :aria-label="
+          (t('communityPlugins.preview') || 'Preview') +
+          '. ' +
+          (t('communityPlugins.installFuture') ||
+            'Installable in a future release.')
+        "
+        :data-testid="`community-plugin-preview-wrap-${slug}`"
       >
-        {{ t("communityPlugins.preview") || "Preview" }}
-      </v-btn>
+        <v-btn
+          disabled
+          variant="tonal"
+          prepend-icon="mdi-clock-outline"
+          :title="t('communityPlugins.installFuture') || 'Installable in a future release.'"
+          :data-testid="`community-plugin-preview-${slug}`"
+        >
+          {{ t("communityPlugins.preview") || "Preview" }}
+        </v-btn>
+      </span>
 
       <!-- subscription_required -->
       <v-btn

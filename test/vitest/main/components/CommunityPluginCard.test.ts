@@ -108,6 +108,16 @@ describe("CommunityPluginCard", () => {
     expect(preview.exists()).toBe(true);
     // Bare `disabled` attr renders as "" on custom elements — present, not "true".
     expect(preview.attributes("disabled")).toBe("");
+    // The explanation is keyboard-reachable: the disabled button is wrapped in
+    // a focusable span whose aria-label carries the Preview + Coming-soon text
+    // (PRD §16.11 / tech design §15.4 — a disabled button alone is not focusable).
+    const wrap = w.find(
+      '[data-testid="community-plugin-preview-wrap-pdf-tools"]'
+    );
+    expect(wrap.exists()).toBe(true);
+    expect(wrap.attributes("tabindex")).toBe("0");
+    expect(wrap.attributes("aria-label") ?? "").toContain("Preview");
+    expect(wrap.attributes("aria-label") ?? "").toContain("future release");
   });
 
   it("emits upgrade for a subscription-required entry", () => {
@@ -168,6 +178,20 @@ describe("CommunityPluginCard", () => {
     );
     expect(w.text()).toContain("AiFetchly");
     expect(w.text()).toContain("Productivity");
+  });
+
+  it("exposes the complete description to keyboard users (AC-UI-03 / a11y §16.12)", () => {
+    const w = mountCard();
+    const desc = w.find(
+      '[data-testid="community-plugin-description-pdf-tools"]'
+    );
+    expect(desc.exists()).toBe(true);
+    // Focusable so keyboard users can reach it.
+    expect(desc.attributes("tabindex")).toBe("0");
+    // The full text is in the accessibility tree (not only the clamped copy).
+    expect(desc.attributes("aria-label")).toBe(
+      "Extract, transform, and process PDF documents."
+    );
   });
 
   it("uses stable data-testid values independent of translated labels", () => {
