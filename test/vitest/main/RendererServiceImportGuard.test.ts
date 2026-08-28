@@ -229,11 +229,17 @@ describe("RendererServiceImportGuard", () => {
       entries.length,
       "expected at least one src/views value-import of @/service/*"
     ).toBeGreaterThan(0);
+    // AiChatV2 value-imports the pure, Node-free AIChatErrorSentinels module
+    // (QUOTA_EXHAUSTED / AUTH_EXPIRED / IMAGE_EDIT_* sentinels). The mapper
+    // itself pulls @/modules/Logger (node:module.createRequire), so the
+    // renderer must NOT value-import AIChatErrorMapper — importing the
+    // sentinel constants from the dedicated node-free module is the
+    // renderer-safe way to keep that contract alive.
     expect(
       entries.some(
-        (abs) => toPosixRel(abs) === "src/service/AIChatErrorMapper.ts"
+        (abs) => toPosixRel(abs) === "src/service/AIChatErrorSentinels.ts"
       ),
-      "AiChatV2 must keep value-importing AIChatErrorMapper (sentinel contract)"
+      "AiChatV2 must keep value-importing AIChatErrorSentinels (sentinel contract)"
     ).toBe(true);
   });
 
