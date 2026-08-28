@@ -270,6 +270,13 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
       </v-card-actions>
     </v-card>
   </v-dialog>
+<!-- AI Content Report dialog (PRD §8.1 email template editor surface) -->
+  <AIContentReportDialog
+    v-model="emailTemplateReportDialog"
+    :descriptor="emailTemplateReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="emailTemplateReported = true"
+  />
 </AppPageShell>
 </template>
 <script setup lang="ts">

@@ -764,3 +764,8 @@ export const DIAGNOSTICS_GET_STATUS = "diagnostics:get-status";
 export const DIAGNOSTICS_SET_DEBUG = "diagnostics:set-debug";
 export const DIAGNOSTICS_CLEAR_LOCAL = "diagnostics:clear-local";
 export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
+
+// ======== AI Content Reporting ========
+// Safety/support reporting for AI-generated output (Microsoft Store Policy
+// 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
+export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";

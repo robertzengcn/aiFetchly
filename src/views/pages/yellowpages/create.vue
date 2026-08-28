@@ -726,7 +726,14 @@
       icon="mdi-check-circle"
       :timeout="5000"
     />
-  </AppPageShell>
+  <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
+</AppPageShell>
 </template>
 
 <script setup lang="ts">

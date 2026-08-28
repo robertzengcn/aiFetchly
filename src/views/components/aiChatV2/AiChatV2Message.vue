@@ -353,6 +353,13 @@
           </details>
         </span>
       </div>
+      <div v-if="isReportableAssistant" class="v2-message__report">
+        <AIContentReportButton
+          :descriptor="reportDescriptor!"
+          :reported="reported"
+          @report="emit('report', reportDescriptor!)"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -373,6 +380,9 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
@@ -395,6 +405,8 @@ const props = defineProps<{
   workspaceRoot?: string;
   /** Global "Show reasoning" preference — gates whether the panel renders. */
   showReasoning?: boolean;
+  /** True when this output was reported this session (parent-owned). */
+  reported?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -408,6 +420,7 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
   (
     e: "use-generated-image",
     reference: ChatV2GeneratedImageReference
@@ -421,6 +434,28 @@ const { t, te } = useI18n();
 
 const isPlanCard = computed(
   () => props.message.metadata?.planStateView !== undefined
+);
+
+// Report AI output (PRD §8.1). Only completed assistant text/image messages
+// are reportable — not tool calls, tool results, user/system messages,
+// streaming, errors, or EMPTY placeholders (PRD FR-1.2). Requires non-empty
+// text and/or generated images so the action never appears on an empty
+// assistant bubble. The dialog is hosted by the list parent
+// (AiChatV2Messages) so only one instance exists per chat.
+const isReportableAssistant = computed(() => {
+  if (props.message.role !== "assistant") return false;
+  if (props.message.messageType === MessageType.TOOL_CALL) return false;
+  if (props.message.messageType === MessageType.TOOL_RESULT) return false;
+  if (status.value !== "idle") return false;
+  const hasText =
+    typeof props.message.content === "string" && props.message.content.trim().length > 0;
+  const hasImages =
+    Array.isArray(props.message.metadata?.generatedImages) &&
+    (props.message.metadata?.generatedImages as unknown[]).length > 0;
+  return hasText || hasImages;
+});
+const reportDescriptor = computed(() =>
+  isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
 );
 
 const roleLabel = computed(() => {
@@ -1072,6 +1107,11 @@ const pastedChips = computed<PastedChip[]>(() => {
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.04);
   word-break: break-word;
+}
+.v2-message__report {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
 }
 .v2-message--user .v2-message__bubble {
   background: rgba(25, 118, 210, 0.12);

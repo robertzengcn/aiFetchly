@@ -714,7 +714,7 @@ export class PlatformTestingFramework extends BaseModule {
         : `No elements found for ${selectorName}: ${selector}`
 
       // Get additional details for debugging
-      let details: any = { 
+      const details: any = { 
         selector, 
         key: selectorKey, 
         count: elements.length 

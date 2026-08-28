@@ -133,6 +133,13 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
+<!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
 </AppPageShell>
 </template>
 <script setup lang="ts">

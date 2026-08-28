@@ -55,6 +55,7 @@ import { registerSlashCommandHandlers } from "@/main-process/communication/slash
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
+import { registerAIContentReportIpcHandlers } from "@/main-process/communication/ai-content-report-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -132,6 +133,7 @@ export function registerCommunicationIpcHandlers(
     const workspaceWatchManager = initWorkspaceWatchManager(win);
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
+    registerAIContentReportIpcHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

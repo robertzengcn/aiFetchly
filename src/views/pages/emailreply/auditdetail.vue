@@ -66,7 +66,14 @@
       </v-card>
     </div>
     </v-sheet>
-  </AppPageShell>
+  <!-- AI Content Report dialog (PRD §8.2 automatic email reply surface) -->
+  <AIContentReportDialog
+    v-model="replyReportDialog"
+    :descriptor="replyReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="replyReported = true"
+  />
+</AppPageShell>
 </template>
 
 <script setup lang="ts">

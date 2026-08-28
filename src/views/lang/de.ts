@@ -9,9 +9,6 @@
 // German translations
 export default {
   common: {
-    retry: "Wiederholen",
-    back: "Zurück",
-    continue: "Fortfahren",
     more: "Mehr",
     actions: "Aktionen",
     confirmation: "Bestätigung",
@@ -83,7 +80,6 @@ export default {
     replace: "Ersetzen",
   },
   route: {
-    ai_chat_workspace: "KI-Arbeitsbereich",
     dashboard: "Dashboard",
     insights: "Insights",
     home: "Startseite",
@@ -161,6 +157,7 @@ export default {
     ai_memory_management: "KI-Erinnerungen",
     hooks_management: "Hooks-Verwaltung",
     plugins: "Plugins",
+    community_plugins: "Community-Plugins",
     subagents: "Unteragenten",
     google_maps_scraper: "Lokale Unternehmen finden",
     map_scraper: "Lokale Unternehmen finden",
@@ -651,7 +648,6 @@ export default {
     view_raw_data: "Rohdaten anzeigen",
     scraping_information: "Data Alignment Information",
     task_id: "Aufgaben-ID",
-    close: "Schließen",
     result_details: "Ergebnisdetails",
   },
   campaign: {
@@ -1621,8 +1617,6 @@ export default {
     status_installation_failed: "Installation fehlgeschlagen",
   },
   schedule: {
-    empty_title: "Noch keine Zeitpläne",
-    empty_body: "Automatisiere wiederkehrende Aufgaben, indem du deinen ersten Zeitplan erstellst.",
     create_description:
       "Automatisierte Aufgabenplanung mit Cron-Ausdrücken oder Abhängigkeiten einrichten",
     schedule_created_success:
@@ -2264,7 +2258,6 @@ export default {
   aiArtifacts: {
     preview_title: "KI-Artefakt",
     open: "Artefakt öffnen",
-    close: "Artefakt schließen",
     copy_html: "HTML kopieren",
     copy_success: "HTML kopiert.",
     copy_error: "HTML konnte nicht kopiert werden.",
@@ -2633,6 +2626,52 @@ export default {
       document_failed: "Dokumentverarbeitung fehlgeschlagen",
       image_alt: "Angehängtes Bild: {name}",
     },
+    generatedImageRefs: {
+      useAsReference: "Als Referenz verwenden",
+      edit: "Bearbeiten",
+      remove: "Entfernen",
+      clearAll: "Alle entfernen",
+      moveUp: "Nach oben",
+      moveDown: "Nach unten",
+      referenceTrayTitle: "Referenzbilder",
+      limitReached: "Pro Anfrage können bis zu 3 Bilder referenziert werden.",
+      batchOffer:
+        "Es wurden mehr als 3 Bilder ausgewählt. Stattdessen als Stapel unabhängiger Bearbeitungen verarbeiten?",
+      batchConfirmTitle: "Als Stapel verarbeiten?",
+      batchConfirmBody:
+        "Jedes ausgewählte Bild wird unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
+      send: "Senden",
+      progressSummary:
+        "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
+      errors: {
+        generated_image_reference_invalid:
+          "Diese Bildreferenz ist nicht mehr gültig. Wählen Sie das Bild erneut aus.",
+        generated_image_not_owned:
+          "Sie können nur Bilder referenzieren, die in dieser Konversation generiert wurden.",
+        generated_image_missing:
+          "Das Originalbild ist nicht mehr verfügbar. Generieren Sie es neu oder wählen Sie eine andere Referenz.",
+        generated_image_outside_store:
+          "Die Bildquelle liegt außerhalb des vertrauenswürdigen Speicherbereichs und kann nicht verwendet werden.",
+        generated_image_symlink_rejected:
+          "Diese Datei ist kein regulär gespeichertes Bild. Wählen Sie ein anderes generiertes Element.",
+        generated_image_unsupported_type:
+          "Nicht unterstützter Bildtyp. Wählen Sie ein PNG-, JPEG- oder WebP-Bild.",
+        generated_image_too_large:
+          "Dieses Bild überschreitet das Größenlimit. Versuchen Sie weniger oder kleinere Bilder.",
+        generated_image_dimension_limit:
+          "Dieses Bild überschreitet das Abmessungslimit. Skalieren Sie es oder generieren Sie es kleiner neu.",
+        generated_image_reference_limit:
+          "Zu viele referenzierte Bilder für eine Anfrage. Nutzen Sie die Stapelverarbeitung für unabhängige Bearbeitungen.",
+        generated_image_ambiguous:
+          "Mehrere Bilder könnten Ihrer Anfrage entsprechen. Wählen Sie das gewünschte aus.",
+        generated_image_fusion_limit:
+          "Das Kombinieren von Bildern ist auf 3 gleichzeitig begrenzt. Bearbeiten Sie den Rest einzeln oder als Stapel.",
+        generated_image_batch_partial:
+          "Einige Stapelelemente sind fehlgeschlagen. Erfolgreiche bleiben erhalten; fehlgeschlagene können wiederholt werden.",
+        generated_image_batch_cancelled:
+          "Stapel gestoppt. Abgeschlossene Ergebnisse bleiben erhalten; die übrigen Elemente können fortgesetzt werden.",
+      },
+    },
   },
   aifetchlyConfig: {
     title: "AiFetchly-Konfiguration",
@@ -2690,7 +2729,6 @@ export default {
     title: "Hintergrund-Agenten",
     no_tasks: "Noch keine Agentenaufgaben",
     refresh: "Aktualisieren",
-    close: "Schließen",
     cancel: "Abbrechen",
     just_now: "gerade eben",
     status_queued: "Warteschlange",
@@ -2707,6 +2745,9 @@ export default {
     mode_plan: "Plan",
     questions_title: "Klärung erforderlich",
     submit_answers: "Antworten senden",
+    other_option_label: "Andere",
+    other_option_description: "Eigene Antwort eingeben",
+    custom_answer_placeholder: "Antwort eingeben...",
     approve: "Genehmigen",
     reject: "Ablehnen",
     request_changes: "Änderungen anfordern",
@@ -3012,6 +3053,106 @@ export default {
         "Entfernen fehlgeschlagen. Nach Neustart erneut versuchen.",
     },
   },
+  portableMemory: {
+    banner: "Portable Speicher",
+    enable: "Portablen Speicher aktivieren",
+    disabledHint: "Erinnerungen werden privat in AiFetchly gespeichert. Aktiviere den portablen Speicher, um Projektkontext mit anderen Agenten zu teilen.",
+    gitState: "Git",
+    pendingReview: "Ausstehende Prüfung",
+    rejected: "Abgelehnt",
+    conflicted: "Konflikt",
+    rescan: "Neu scannen",
+    enableTitle: "Portablen Speicher aktivieren",
+    loadingPreview: "Vorschau wird geladen…",
+    plannedFiles: "Dateien, die erstellt werden",
+    existingRecords: "Vorhandene Speicherdateien erkannt",
+    identityInvalid: "Die Identitätsdatei des Arbeitsbereichs ist ungültig. Korrigiere oder entferne zuerst .aifetchly/workspace.json.",
+    visibility: "Freigabemodus",
+    visibilityLocal: "Nur lokal",
+    visibilityLocalHint: "Dateien bleiben auf diesem Rechner; in Git meist ignoriert.",
+    visibilityTeam: "Team-freigabefähig",
+    visibilityTeamHint: "Dateien können für Teammitglieder und andere Agenten in Git committet werden.",
+    teamWarning: "Committete Erinnerungen bleiben auch nach späterer Löschung in der Git-Historie. Prüfe Diffs vor dem Commit. Der Secret-Filter reduziert das Risiko, erkennt aber nicht jeden sensiblen Wert.",
+    importPolicy: "Prüfung externer Änderungen",
+    policyReviewNew: "Neue Einträge prüfen",
+    policyAutomatic: "Automatisch importieren",
+    policyReviewAll: "Alles prüfen",
+    exportExisting: "Bestehende Erinnerungen exportieren",
+    exportNone: "Nicht exportieren",
+    exportActive: "Aktive Erinnerungen exportieren",
+    exportAll: "Aktive und archivierte exportieren",
+    bridges: "Agenten-Instruktionsbrücken",
+    bridgesHint: "Optionale verwaltete Blöcke, die Agenten wie Claude Code und Codex anweisen, den Speicherindex zu lesen.",
+    enableConfirm: "Aktivieren",
+    bridgeAction: {
+      create: "wird erstellt",
+      insert: "wird hinzugefügt",
+      replace: "wird aktualisiert",
+      "no-op": "bereits installiert",
+      blocked: "blockiert — manuell lösen",
+    },
+    storageMode: "Speichermodus",
+    storagePrivate: "Privat (nur SQLite)",
+    storagePortableLocal: "Portabel — lokal",
+    storagePortableTeam: "Portabel — Team",
+    regenerateIdentity: "Identität regenerieren",
+    regenerateIdentityWarning: "Das Regenerieren der Arbeitsbereich-Identität erstellt eine neue portable UUID für einen absichtlichen Fork. Record-IDs bleiben unter Scoped-Uniqueness erhalten. Original und Fork koexistieren ohne gemeinsame Mutation.",
+    regenerateGitWarning: "Die aktuelle Identität wird von Git verfolgt. Regenerieren ändert die committete Identität für alle Klone; koordiniere mit deinem Team.",
+    regenerateConfirm: "Regenerieren",
+    sync: {
+      synced: "Synchronisiert",
+      "pending-review": "Ausstehend",
+      rejected: "Abgelehnt",
+      conflicted: "Konflikt",
+      missing: "Fehlend",
+      detached: "Abgehängt",
+      private: "Privat",
+    },
+    reviewTitle: "Externe Änderungen prüfen",
+    loadingReview: "Ausstehende Änderungen werden geladen…",
+    noPending: "Keine ausstehenden Änderungen.",
+    reviewNew: "Neue Einträge",
+    reviewEdits: "Bearbeitungen bekannter Einträge",
+    reviewDeletions: "Gelöschte Dateien",
+    approve: "Genehmigen",
+    reject: "Ablehnen",
+    approveDeletion: "Löschung bestätigen",
+    rejectDeletion: "Eintrag behalten",
+    review: "Prüfen",
+    settings: "Einstellungen",
+    revealFile: "Datei anzeigen",
+    diagnosticsTitle: "Portable-Speicher-Diagnose",
+    loadingDiagnostics: "Diagnose wird geladen…",
+    noDiagnostics: "Keine Diagnosen. Alle portablen Speicherdateien sind gültig.",
+    notRecoverable: "nicht behebbar",
+    conflictTitle: "Konflikt lösen",
+    loadingConflict: "Konflikt wird geladen…",
+    noConflict: "Kein Konflikt gefunden.",
+    conflictWarning: "Die Datei wurde zwischen deinem Lesen und Speichern extern bearbeitet. Wähle eine zu behaltende Version.",
+    aiFetchlyVersion: "AiFetchly-Projektion",
+    fileVersion: "Aktuelle Datei",
+    fileAbsent: "(Datei fehlt)",
+    mergeEditor: "Fusions-Editor",
+    title: "Titel",
+    content: "Inhalt",
+    type: "Typ",
+    status: "Status",
+    confidence: "Konfidenz",
+    actionUseFile: "Dateiversion verwenden",
+    actionUseAiFetchly: "AiFetchly-Version verwenden",
+    actionMerge: "Manuell zusammenführen",
+    resolve: "Lösen",
+    typeProject: "Projekt",
+    typeDecision: "Entscheidung",
+    typeWorkflow: "Workflow",
+    typeConvention: "Konvention",
+    typeReference: "Referenz",
+    typeWarning: "Warnung",
+    statusActive: "Aktiv",
+    statusArchived: "Archiviert",
+    statusContradicted: "Widersprochen",
+  },
+
   workspaceMemory: {
     title: "Workspace-Memory",
     panelTitle: "Workspace-Memory",
@@ -3279,6 +3420,77 @@ export default {
         cancelled: "Abgebrochen",
       },
     },
+  },
+  aiContentReport: {
+    action: "KI-Inhalt melden",
+    actionAriaLabel: "Diesen KI-generierten Inhalt melden",
+    dialogTitle: "KI-Inhalt melden",
+    outputPreview: "KI-Inhalt",
+    imagesLabel: "Bilder",
+    imageAlt: "Generiertes Bild {n}",
+    categoryLabel: "Was ist mit diesem Inhalt falsch?",
+    commentLabel: "Zusätzliche Details (optional)",
+    consent:
+      "Der ausgewählte KI-Inhalt und Ihre Beschreibung werden zur Überprüfung an AiFetchly gesendet. Ihr Prompt, andere Nachrichten, Dateien und das KI-Reasoning werden nicht einbezogen.",
+    privacyPolicy: "Datenschutzrichtlinie",
+    submit: "Meldung senden",
+    cancel: "Abbrechen",
+    tryAgain: "Erneut versuchen",
+    copyReference: "Referenz kopieren",
+    success: "Meldung gesendet. Referenz: {reportId}",
+    reported: "Gemeldet",
+    imageUnavailable:
+      "Dieses Bild konnte nicht angehängt werden. Sie können die Meldung mit Ihrer Beschreibung trotzdem senden.",
+    categories: {
+      hate_or_harassment: "Hass oder Belästigung",
+      sexual_content: "Sexueller Inhalt",
+      violence_or_self_harm: "Gewalt oder Selbstverletzung",
+      child_safety: "Kindersicherheit",
+      illegal_or_dangerous: "Illegal oder gefährlich",
+      privacy_or_personal_data: "Datenschutz oder personenbezogene Daten",
+      misinformation_or_deception: "Fehlinformation oder Täuschung",
+      copyright_or_ownership: "Urheberrecht oder Eigentum",
+      other: "Sonstiges",
+    },
+    errors: {
+      categoryRequired: "Bitte wählen Sie eine Kategorie.",
+      imageRequired: "Wählen Sie mindestens ein Bild zur Meldung aus.",
+      noEvidence:
+        "Fügen Sie eine Beschreibung hinzu, um die Meldung zu senden.",
+      network:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      auth_failed:
+        "Authentifizierung fehlgeschlagen. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      invalid_evidence:
+        "Die Meldungsbeweise sind ungültig. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      payload_too_large:
+        "Die Meldungsnutzlast ist zu groß. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      rate_limited:
+        "Zu viele Meldungen wurden gesendet. Bitte versuchen Sie es später erneut.",
+      service_disabled:
+        "Meldungen sind vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut.",
+      server_error:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      unknown:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+    },
+  },
+  communityPlugins: {
+    title: "Community-Plugins",
+    refresh: "Aktualisieren",
+    install: "Installieren",
+    installed: "Installiert",
+    preview: "Vorschau",
+    upgrade: "Upgrade",
+    signIn: "Anmelden",
+    empty: "Keine Plugins verfügbar",
+    error: "Plugin Hub konnte nicht erreicht werden",
+    retry: "Erneut versuchen",
+    installFuture: "Installierbar in einer zukünftigen Version.",
+    loading: "Plugins werden geladen…",
+    sessionExpired: "Ihre Sitzung ist abgelaufen",
+    signInAgain: "Erneut anmelden",
+    installFailed: "Installation fehlgeschlagen",
   },
   ui: {
     inspector: {
