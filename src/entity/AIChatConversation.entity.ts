@@ -18,53 +18,53 @@ import { Order } from "./order.decorator";
 @Index("idx_aichatconv_last_message", ["lastMessageAt"])
 export class AIChatConversationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** Stable conversation id (same value as ai_chat_messages.conversationId). */
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   /** Stable workspace grouping key (WorkspaceKeyService). Null = unassigned. */
   @Order(2)
   @Column("varchar", { length: 255, nullable: true })
-  workspaceKey: string | null;
+  workspaceKey!: string | null;
 
   /** Explicit user rename or persisted generated title. Null = derive. */
   @Order(3)
   @Column("varchar", { length: 200, nullable: true })
-  title: string | null;
+  title!: string | null;
 
   /** True when `title` came from an explicit user rename (never overwrite). */
   @Order(4)
   @Column("boolean", { nullable: false, default: false })
-  titleIsUserSet: boolean;
+  titleIsUserSet!: boolean;
 
   /** Short normalized excerpt for navigation. No tool bodies or secrets. */
   @Order(5)
   @Column("varchar", { length: 300, nullable: false, default: "" })
-  preview: string;
+  preview!: string;
 
   @Order(6)
   @Column("int", { nullable: false, default: 0 })
-  messageCount: number;
+  messageCount!: number;
 
   @Order(7)
   @Column("datetime", { nullable: true })
-  lastMessageAt: Date | null;
+  lastMessageAt!: Date | null;
 
   /** Timestamp of the newest persisted assistant result (drives unread). */
   @Order(8)
   @Column("datetime", { nullable: true })
-  lastResultAt: Date | null;
+  lastResultAt!: Date | null;
 
   /** Monotonic read marker advanced only after the newest page is displayed. */
   @Order(9)
   @Column("datetime", { nullable: true })
-  lastReadAt: Date | null;
+  lastReadAt!: Date | null;
 
   @Order(10)
   @Column("datetime", { nullable: true })
-  archivedAt: Date | null;
+  archivedAt!: Date | null;
 
 }

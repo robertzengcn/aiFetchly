@@ -57,11 +57,15 @@ function mountSidebar() {
 describe("AiChatWorkspaceSidebar global nav", () => {
   it("renders the Insights, Knowledge Library, and Plugins nav links", () => {
     const wrapper = mountSidebar();
-    expect(wrapper.get('[data-testid="workspace-insights"]').text()).toContain("Insights");
+    expect(wrapper.get('[data-testid="workspace-insights"]').text()).toContain(
+      "Insights"
+    );
     expect(
       wrapper.get('[data-testid="workspace-knowledge-library"]').text()
     ).toContain("Knowledge Library");
-    expect(wrapper.get('[data-testid="workspace-plugins"]').text()).toContain("Plugins");
+    expect(wrapper.get('[data-testid="workspace-plugins"]').text()).toContain(
+      "Plugins"
+    );
   });
 
   it("navigates to /insights when Insights is clicked", async () => {
@@ -72,7 +76,9 @@ describe("AiChatWorkspaceSidebar global nav", () => {
 
   it("navigates to /knowledge/library when Knowledge Library is clicked", async () => {
     const wrapper = mountSidebar();
-    await wrapper.get('[data-testid="workspace-knowledge-library"]').trigger("click");
+    await wrapper
+      .get('[data-testid="workspace-knowledge-library"]')
+      .trigger("click");
     expect(push).toHaveBeenCalledWith("/knowledge/library");
   });
 
@@ -93,16 +99,14 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
       runtimeStatus: "idle",
       attention: "none",
       unread: false,
-      updatedAt: 0,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
     };
   }
 
   function mountWithUnassigned() {
     const store = useChatWorkspaceStore();
-    store.unassigned.push(
-      unassigned("u1"),
-      unassigned("u2")
-    );
+    store.unassigned = [unassigned("u1"), unassigned("u2")];
     return mountSidebar();
   }
 
@@ -110,7 +114,9 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
     const wrapper = mountWithUnassigned();
     const header = wrapper.get('[data-nav-row="unassigned"]');
     expect(header.attributes("aria-expanded")).toBe("false");
-    expect(wrapper.findAll('[data-testid="workspace-conversation-u1"]').length).toBe(0);
+    expect(
+      wrapper.findAll('[data-testid="workspace-conversation-u1"]').length
+    ).toBe(0);
     expect(wrapper.text()).not.toContain("Chat u1");
   });
 
@@ -131,7 +137,9 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
     await flushPromises();
     await header.trigger("click");
     await flushPromises();
-    expect(wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")).toBe("false");
+    expect(
+      wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")
+    ).toBe("false");
     expect(wrapper.text()).not.toContain("Chat u1");
   });
 });

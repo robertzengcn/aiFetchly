@@ -420,7 +420,7 @@ function getSqliteVecExtensionPath(): string | null {
 }
 
 export class SqliteDb {
-  public connection: DataSource;
+  public connection!: DataSource;
   private static instance: SqliteDb | null = null;
   private static currentDbPath: string | null = null;
   /** Guards against concurrent initialize() calls on the same DataSource */

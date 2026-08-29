@@ -561,6 +561,18 @@ export interface OpenAIModel {
   is_free?: boolean;
 }
 
+/**
+ * Server-reported capability metadata for the hosted virtual `small` model
+ * alias (small-model routing PRD). Absent on servers that do not advertise
+ * a small model; malformed payloads are dropped during normalization.
+ */
+export interface OpenAISmallModelCapability {
+  available: boolean;
+  resolved_model?: string;
+  context_size?: number;
+  max_tokens?: number;
+}
+
 /** OpenAI-compatible models list response */
 export interface OpenAIModelsResponse {
   object: string;
@@ -571,6 +583,8 @@ export interface OpenAIModelsResponse {
    * the frontend uses it to seed the model selector on first use.
    */
   default_model?: string;
+  /** Small-model capability metadata, when the server advertises one. */
+  small_model?: OpenAISmallModelCapability;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -622,6 +636,13 @@ export interface OpenAIChatCompletionChunk {
   created: number;
   model: string;
   choices: OpenAIStreamChoice[];
+  /**
+   * Stream-level error payload, present on the terminal chunk when the
+   * server ends the stream with finish_reason="error" (e.g. upstream
+   * context_window_exceeded). Consumers map it separately from transport
+   * failures.
+   */
+  error?: { message: string; type?: string; code?: string };
   /** Present on the final chunk when stream_options.include_usage is true. */
   usage?: OpenAIUsage;
 }
@@ -2023,10 +2044,19 @@ export class AiChatApi {
     // Pass-through when already OpenAI-shaped.
     if (Array.isArray((response as { data?: unknown }).data)) {
       const obj = response as { object?: unknown; data: unknown[] };
-      return {
+      const passthrough: OpenAIModelsResponse = {
         object: typeof obj.object === "string" ? obj.object : "list",
         data: obj.data as OpenAIModel[],
       };
+      const defaultModel = this.getStringField(response, "default_model");
+      if (defaultModel) {
+        passthrough.default_model = defaultModel;
+      }
+      const smallModel = this.extractSmallModelCapability(response);
+      if (smallModel) {
+        passthrough.small_model = smallModel;
+      }
+      return passthrough;
     }
     const modelsRaw = (response as { models?: unknown }).models;
     if (!Array.isArray(modelsRaw)) {
@@ -2062,7 +2092,45 @@ export class AiChatApi {
     if (defaultModel) {
       result.default_model = defaultModel;
     }
+    const smallModel = this.extractSmallModelCapability(response);
+    if (smallModel) {
+      result.small_model = smallModel;
+    }
     return result;
+  }
+
+  /**
+   * Validate the optional `small_model` capability metadata. Malformed
+   * payloads (non-boolean `available`, non-numeric sizes) are dropped
+   * entirely so downstream routing never trusts a half-parsed capability.
+   */
+  private extractSmallModelCapability(
+    response: Record<string, unknown>
+  ): OpenAISmallModelCapability | undefined {
+    const raw = response.small_model;
+    if (!this.isRecord(raw)) return undefined;
+    if (typeof raw.available !== "boolean") return undefined;
+    const capability: OpenAISmallModelCapability = {
+      available: raw.available,
+    };
+    if (typeof raw.resolved_model === "string" && raw.resolved_model) {
+      capability.resolved_model = raw.resolved_model;
+    }
+    if (
+      typeof raw.context_size === "number" &&
+      Number.isFinite(raw.context_size) &&
+      raw.context_size > 0
+    ) {
+      capability.context_size = raw.context_size;
+    }
+    if (
+      typeof raw.max_tokens === "number" &&
+      Number.isFinite(raw.max_tokens) &&
+      raw.max_tokens > 0
+    ) {
+      capability.max_tokens = raw.max_tokens;
+    }
+    return capability;
   }
 
   /**
@@ -2073,7 +2141,8 @@ export class AiChatApi {
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2085,15 +2154,16 @@ export class AiChatApi {
           request
         );
       }
-      return this.openAIChatCompletionHosted(request);
+      return this.openAIChatCompletionHosted(request, signal);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request);
+    return this.openAIChatCompletionHosted(request, signal);
   }
 
   /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
   private async openAIChatCompletionHosted(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2121,7 +2191,7 @@ export class AiChatApi {
       data.user = request.user;
     }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
+    return this._httpClient.postJson("/api/ai/v1/chat/completions", data, signal ? { signal } : {});
   }
 
   /**
@@ -2571,10 +2641,21 @@ export class AiChatApi {
         ? { id: model.name }
         : {}),
     }));
-    return {
+    const result: OpenAIModelsResponse = {
       object: "list",
       data: models,
     };
+    if (this.isRecord(response)) {
+      const defaultModel = this.getStringField(response, "default_model");
+      if (defaultModel) {
+        result.default_model = defaultModel;
+      }
+      const smallModel = this.extractSmallModelCapability(response);
+      if (smallModel) {
+        result.small_model = smallModel;
+      }
+    }
+    return result;
   }
 
   private unwrapLegacyPayload<T>(response: unknown): T {
