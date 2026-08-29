@@ -781,6 +781,113 @@ function getInstalledSkillsDir(): string {
   return skillsDir;
 }
 
+/**
+ * TODO 3 / FR-07: import an EXECUTABLE skill from a staged local DIRECTORY
+ * (the typed installer's acquisition root) instead of a zip. Mirrors
+ * importFromZip's validation + installed_skills copy + registration steps;
+ * the directory is copied bounded (no traversal — copy only known-safe
+ * files like the zip path does via extractAllTo into a fresh dir).
+ */
+async function importFromDirectory(
+  sourceRoot: string
+): Promise<{ success: true; name: string } | { success: false; error: string }> {
+  if (!fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) {
+    return { success: false, error: `Skill directory not found: ${sourceRoot}` };
+  }
+
+  // Read + validate manifest.json from the directory.
+  const manifestPath = path.join(sourceRoot, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    return { success: false, error: "Missing manifest.json in skill directory" };
+  }
+  let rawManifest: unknown;
+  try {
+    rawManifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+  } catch {
+    return { success: false, error: "manifest.json is not valid JSON" };
+  }
+  const validation = validateManifest(rawManifest);
+  if (!validation.valid) {
+    return { success: false, error: validation.error };
+  }
+  const manifest = validation.manifest;
+
+  const pythonError = validatePythonManifestFields(
+    manifest as unknown as Record<string, unknown>
+  );
+  if (pythonError) return { success: false, error: pythonError };
+
+  const entryAbs = path.join(sourceRoot, manifest.entry);
+  if (
+    manifest.entry.includes("..") ||
+    path.isAbsolute(manifest.entry) ||
+    !fs.existsSync(entryAbs)
+  ) {
+    return {
+      success: false,
+      error: `Entry file "${manifest.entry}" not found in skill directory`,
+    };
+  }
+
+  // Copy into userData/installed_skills/<name>/ (fresh dir, same as zip path).
+  const skillDir = path.join(getInstalledSkillsDir(), manifest.name);
+  fs.rmSync(skillDir, { recursive: true, force: true });
+  fs.mkdirSync(skillDir, { recursive: true });
+  copyTreeBounded(sourceRoot, skillDir);
+
+  try {
+    if (manifest.runtime === "python") {
+      await SkillEnvironmentManager.prepare(skillDir, manifest);
+    }
+
+    // Persist + hot-register through the SAME path as zip imports.
+    const module = new SkillManagementModule();
+    // Replace a prior installation of the same name (idempotent re-import).
+    const existing = await module.getSkillByName(manifest.name);
+    if (existing) {
+      await module.uninstallSkill(manifest.name);
+    }
+    await module.installSkill({
+      name: manifest.name,
+      version: manifest.version,
+      source: "user",
+      manifest_json: JSON.stringify(manifest),
+      permissions_json: JSON.stringify(manifest.permissions ?? []),
+      enabled: 1,
+    });
+    registerImportedSkill(manifest, skillDir);
+    return { success: true, name: manifest.name };
+  } catch (error) {
+    fs.rmSync(skillDir, { recursive: true, force: true });
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown import error",
+    };
+  }
+}
+
+/**
+ * Bounded directory copy for directory-based imports: files + directories
+ * only (links skipped), depth-capped, .git excluded. The destination is a
+ * FRESH directory so no pre-existing content can survive.
+ */
+function copyTreeBounded(from: string, to: string, depth = 0): void {
+  if (depth > 20) throw new Error("Skill directory exceeds depth 20.");
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const src = path.join(from, entry.name);
+    const dest = path.join(to, entry.name);
+    const stat = fs.lstatSync(src);
+    if (stat.isSymbolicLink()) continue; // links are never staged
+    if (stat.isDirectory()) {
+      copyTreeBounded(src, dest, depth + 1);
+    } else if (stat.isFile()) {
+      fs.copyFileSync(src, dest);
+    }
+  }
+}
+
 async function importFromZip(zipPath: string): Promise<
   | {
       success: true;
@@ -1519,6 +1626,7 @@ async function loadPersistedSkills(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const SkillImportService = {
+  importFromDirectory,
   importFromZip,
   loadPersistedSkill,
   loadPersistedSkills,

@@ -389,7 +389,173 @@ export class SkillInstallationModule extends BaseModule {
       return this.snapshotFromEntity(awaiting ?? session, plan);
     }
 
+    // TODO 3 / FR-07: plugin and executable packages route to the EXISTING
+    // installation services — the typed installer owns acquisition and
+    // approval, never a parallel plugin/executable runtime.
+    if (selected[0].kind === "plugin") {
+      return this.routeToPluginService(
+        input.sessionId,
+        plan,
+        events,
+        sessions
+      );
+    }
+    if (selected[0].kind === "executable") {
+      return this.routeToExecutableService(
+        input.sessionId,
+        plan,
+        events,
+        sessions
+      );
+    }
+
     return this.runActivation(input.sessionId, plan, selected[0], session);
+  }
+
+  /**
+   * FR-07 plugin routing: hand the acquired staging root to
+   * PluginImportService.installFromLocalRoot (the existing manifest-loading,
+   * DB, and registration pipeline), then mark the session ready. The plugin
+   * service owns its own overwrite semantics.
+   */
+  private async routeToPluginService(
+    sessionId: string,
+    plan: SkillInstallPlan,
+    events: SkillInstallationEventModel,
+    sessions: SkillInstallationSessionModel
+  ): Promise<InstallSnapshot> {
+    await this.transition(sessions, events, sessionId, "activating");
+    try {
+      const { PluginImportService } = await import(
+        "@/service/PluginImportService"
+      );
+      const result = await PluginImportService.installFromLocalRoot(
+        plan.source.acquiredRoot,
+        { overwrite: true }
+      );
+      if (!result.success) {
+        await this.fail(
+          sessions,
+          events,
+          sessionId,
+          "ACTIVATION_VERIFICATION_FAILED",
+          result.errors.map((e) => e.message).join("; ")
+        );
+        return this.errorSnapshot(
+          "failed",
+          "ACTIVATION_VERIFICATION_FAILED",
+          result.errors.map((e) => e.message).join("; "),
+          sessionId
+        );
+      }
+      await this.transition(sessions, events, sessionId, "verifying");
+      await this.transition(sessions, events, sessionId, "ready");
+      await this.appendEvent(
+        events,
+        sessionId,
+        "installation-ready",
+        "verifying",
+        "ready",
+        "plugin routed through PluginImportService"
+      );
+      const ready = await sessions.findBySessionId(sessionId);
+      if (!ready) {
+        return this.errorSnapshot(
+          "failed",
+          "INSTALL_SESSION_REQUIRED",
+          "Session vanished after routing.",
+          sessionId
+        );
+      }
+      return this.snapshotFromEntity(ready, plan);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.fail(
+        sessions,
+        events,
+        sessionId,
+        "ACTIVATION_VERIFICATION_FAILED",
+        message
+      );
+      return this.errorSnapshot(
+        "failed",
+        "ACTIVATION_VERIFICATION_FAILED",
+        message,
+        sessionId
+      );
+    }
+  }
+
+  /**
+   * FR-07 executable routing: SkillImportService.importFromDirectory copies
+   * the staged root into userData/installed_skills, persists metadata, and
+   * hot-registers through the SAME path zip imports use.
+   */
+  private async routeToExecutableService(
+    sessionId: string,
+    plan: SkillInstallPlan,
+    events: SkillInstallationEventModel,
+    sessions: SkillInstallationSessionModel
+  ): Promise<InstallSnapshot> {
+    await this.transition(sessions, events, sessionId, "activating");
+    try {
+      const { SkillImportService } = await import(
+        "@/service/SkillImportService"
+      );
+      const result = await SkillImportService.importFromDirectory(
+        plan.source.acquiredRoot
+      );
+      if (!result.success) {
+        await this.fail(
+          sessions,
+          events,
+          sessionId,
+          "SKILL_FORMAT_INVALID",
+          result.error
+        );
+        return this.errorSnapshot(
+          "failed",
+          "SKILL_FORMAT_INVALID",
+          result.error,
+          sessionId
+        );
+      }
+      await this.transition(sessions, events, sessionId, "verifying");
+      await this.transition(sessions, events, sessionId, "ready");
+      await this.appendEvent(
+        events,
+        sessionId,
+        "installation-ready",
+        "verifying",
+        "ready",
+        `executable '${result.name}' routed through SkillImportService`
+      );
+      const ready = await sessions.findBySessionId(sessionId);
+      if (!ready) {
+        return this.errorSnapshot(
+          "failed",
+          "INSTALL_SESSION_REQUIRED",
+          "Session vanished after routing.",
+          sessionId
+        );
+      }
+      return this.snapshotFromEntity(ready, plan);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.fail(
+        sessions,
+        events,
+        sessionId,
+        "ACTIVATION_VERIFICATION_FAILED",
+        message
+      );
+      return this.errorSnapshot(
+        "failed",
+        "ACTIVATION_VERIFICATION_FAILED",
+        message,
+        sessionId
+      );
+    }
   }
 
   /**
