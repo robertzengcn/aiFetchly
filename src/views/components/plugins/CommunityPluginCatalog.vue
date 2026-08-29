@@ -40,7 +40,7 @@ const emit = defineEmits<{
 
 defineExpose<{
   reload: (force?: boolean) => Promise<void>;
-}>();
+}>({ reload });
 
 const { t } = useI18n();
 

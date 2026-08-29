@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as http from "http";
 import * as https from "https";
 import { GitHubPluginFetcher } from "./GitHubPluginFetcher";
 import { GitPluginFetcher } from "./GitPluginFetcher";
@@ -20,16 +21,31 @@ import {
  *   - git URL (.git / git@ / ssh://) → GitPluginFetcher
  *   - github.com URL → GitHubPluginFetcher
  *
- * Plain HTTP is rejected; HTTPS only.
+ * Plain HTTP is rejected; HTTPS only. The single sanctioned exception is the
+ * Playwright E2E harness: under AIFETCHLY_E2E=1 (set exclusively by the E2E
+ * sanitized launcher, never in production or developer launches) an
+ * http://127.0.0.1|.zip URL from the FakePluginHub loopback server is
+ * accepted so the critical install flow can run with zero external network.
+ * The E2E network guard already denies every non-loopback host in that mode,
+ * so this exception cannot widen the reachable surface.
  *
  * Source of truth: Spec §5.6.
  */
 
 export type UrlClass = "zip" | "git" | "github" | "rejected" | "unknown";
 
+/** E2E-only: loopback http zip URL served by the FakePluginHub fixture. */
+function isE2ELoopbackHttpZipUrl(raw: string): boolean {
+  if (process.env.AIFETCHLY_E2E !== "1") return false;
+  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(raw)) return false;
+  return /\.zip(\?.*)?$/i.test(raw);
+}
+
 export function classifyUrlKind(raw: string): UrlClass {
   if (!raw) return "unknown";
-  if (raw.startsWith("http://")) return "rejected";
+  if (raw.startsWith("http://")) {
+    return isE2ELoopbackHttpZipUrl(raw) ? "zip" : "rejected";
+  }
   if (/^git@/.test(raw) || /^ssh:\/\//.test(raw) || raw.endsWith(".git")) {
     return "git";
   }
@@ -136,7 +152,15 @@ function downloadTo(url: string, dest: string): Promise<boolean> {
       }
     };
     const req = (target: string) => {
-      const r = https.get(target, { timeout: 60_000 }, (res) => {
+      // http is reachable ONLY for the E2E FakePluginHub loopback exception
+      // (see isE2ELoopbackHttpZipUrl); every other target — including https
+      // redirects that downgrade to plain http — keeps using https and fails
+      // exactly as before.
+      const transport =
+        target.startsWith("http://") && isE2ELoopbackHttpZipUrl(target)
+          ? http
+          : https;
+      const r = transport.get(target, { timeout: 60_000 }, (res) => {
         if (
           res.statusCode &&
           res.statusCode >= 300 &&

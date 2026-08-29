@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { classifyUrlKind } from "@/service/pluginSources/UrlPluginFetcher";
 
 describe("classifyUrlKind", () => {
@@ -28,5 +28,57 @@ describe("classifyUrlKind", () => {
   });
   it("returns unknown for empty", () => {
     expect(classifyUrlKind("")).toBe("unknown");
+  });
+});
+
+describe("classifyUrlKind E2E loopback exception", () => {
+  const ENV_KEY = "AIFETCHLY_E2E";
+  const original = process.env[ENV_KEY];
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env[ENV_KEY];
+    } else {
+      process.env[ENV_KEY] = original;
+    }
+  });
+
+  it("accepts a loopback http .zip URL only under AIFETCHLY_E2E=1", () => {
+    process.env[ENV_KEY] = "1";
+    expect(classifyUrlKind("http://127.0.0.1:3999/zips/fixture.zip")).toBe(
+      "zip"
+    );
+    expect(classifyUrlKind("http://localhost:3999/zips/fixture.zip")).toBe(
+      "zip"
+    );
+  });
+
+  it("rejects the same loopback http URL without the E2E flag", () => {
+    delete process.env[ENV_KEY];
+    expect(classifyUrlKind("http://127.0.0.1:3999/zips/fixture.zip")).toBe(
+      "rejected"
+    );
+  });
+
+  it("rejects non-loopback http even under AIFETCHLY_E2E=1", () => {
+    process.env[ENV_KEY] = "1";
+    expect(classifyUrlKind("http://evil.example.com/p.zip")).toBe("rejected");
+  });
+
+  it("rejects loopback http non-zip paths even under AIFETCHLY_E2E=1", () => {
+    process.env[ENV_KEY] = "1";
+    expect(classifyUrlKind("http://127.0.0.1:3999/manifest.json")).toBe(
+      "rejected"
+    );
+  });
+
+  it("rejects spoofed loopback-looking hosts under AIFETCHLY_E2E=1", () => {
+    process.env[ENV_KEY] = "1";
+    expect(
+      classifyUrlKind("http://127.0.0.1.evil.com:3999/zips/fixture.zip")
+    ).toBe("rejected");
+    expect(classifyUrlKind("http://user@127.0.0.1:3999/zips/fixture.zip")).toBe(
+      "rejected"
+    );
   });
 });
