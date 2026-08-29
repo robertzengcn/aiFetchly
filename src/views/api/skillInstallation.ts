@@ -1,6 +1,11 @@
-import { windowInvoke } from "@/views/utils/apirequest";
+import {
+  windowInvoke,
+  windowReceive,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
 import {
   PROMPT_SKILL_INVOKE,
+  SKILL_INSTALL_PROGRESS,
   SKILL_INSTALL_APPROVAL_TOKEN,
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
@@ -117,4 +122,33 @@ export async function invokePromptSkill(input: {
 }): Promise<InvokePromptSkillAck | null> {
   const resp = await windowInvoke(PROMPT_SKILL_INVOKE, input);
   return (resp as InvokePromptSkillAck | null) ?? null;
+}
+
+/** Monotonic per-session progress event (TODO 7, design §23.2). */
+export interface SkillInstallProgressEvent {
+  readonly sessionId: string;
+  readonly seq: number;
+  readonly state: string;
+  readonly step: string;
+  readonly messageKey: string;
+  readonly recoverable: boolean;
+  readonly errorCode?: string;
+}
+
+/**
+ * Subscribe to live installation progress broadcasts. Returns an
+ * unsubscribe function. Events are monotonic per session (seq).
+ */
+export function onSkillInstallProgress(
+  callback: (event: SkillInstallProgressEvent) => void
+): () => void {
+  windowReceive(SKILL_INSTALL_PROGRESS, (data) => {
+    const event = data as SkillInstallProgressEvent;
+    if (event && typeof event.sessionId === "string") {
+      callback(event);
+    }
+  });
+  return () => {
+    windowRemoveAllListeners(SKILL_INSTALL_PROGRESS);
+  };
 }

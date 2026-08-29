@@ -130,13 +130,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import {
   approveSkillInstall,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
+  getSkillInstallStatus,
+  onSkillInstallProgress,
   submitSkillInstallSecret,
 } from "@/views/api/skillInstallation";
 
@@ -153,6 +155,42 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const busy = ref(false);
 const secretValue = ref("");
+// Local override: newer snapshots (progress events, refresh) shadow the
+// prop without rewriting the persisted tool-result message.
+const localSnapshot = ref<InstallSnapshot | null>(null);
+const snapshotView = computed(
+  () => localSnapshot.value ?? props.snapshot
+);
+
+// TODO 7: live progress — refresh the snapshot when a NEWER event for this
+// session arrives on the monotonic SKILL_INSTALL_PROGRESS channel. Stale or
+// duplicate events (renderer retries) are ignored via the seq gate.
+let lastSeq = 0;
+let unsubscribe: (() => void) | null = null;
+onMounted(() => {
+  unsubscribe = onSkillInstallProgress((event) => {
+    if (
+      event.sessionId !== snapshotView.value.sessionId ||
+      event.seq <= lastSeq ||
+      busy.value
+    ) {
+      return;
+    }
+    lastSeq = event.seq;
+    void refreshSnapshot();
+  });
+});
+onUnmounted(() => {
+  unsubscribe?.();
+  unsubscribe = null;
+});
+
+async function refreshSnapshot(): Promise<void> {
+  const snapshot = await getSkillInstallStatus(snapshotView.value.sessionId);
+  if (snapshot) {
+    localSnapshot.value = snapshot;
+  }
+}
 
 const inProgress = computed(() =>
   [
@@ -163,11 +201,11 @@ const inProgress = computed(() =>
     "activating",
     "verifying",
     "installing_dependencies",
-  ].includes(props.snapshot?.state)
+  ].includes(snapshotView.value?.state)
 );
 
 const cardColor = computed(() => {
-  switch (props.snapshot?.state) {
+  switch (snapshotView.value?.state) {
     case "ready":
       return "success";
     case "failed":
@@ -184,7 +222,7 @@ const cardColor = computed(() => {
 });
 
 const cardIcon = computed(() => {
-  switch (props.snapshot?.state) {
+  switch (snapshotView.value?.state) {
     case "ready":
       return "mdi-check-circle";
     case "failed":
@@ -196,14 +234,14 @@ const cardIcon = computed(() => {
 });
 
 const stateLabel = computed(() => {
-  const key = `skillInstall.state.${props.snapshot?.state ?? "requested"}`;
+  const key = `skillInstall.state.${snapshotView.value?.state ?? "requested"}`;
   const label = t(key);
-  return label === key ? props.snapshot?.state ?? "" : label;
+  return label === key ? snapshotView.value?.state ?? "" : label;
 });
 
 /** The environment variable name from the safe summary, when surfaced. */
 const secretVariableName = computed(() => {
-  const match = props.snapshot?.safeSummary?.match(/[A-Z][A-Z0-9_]{4,}/);
+  const match = snapshotView.value?.safeSummary?.match(/[A-Z][A-Z0-9_]{4,}/);
   return match?.[0] ?? "API_KEY";
 });
 
@@ -213,15 +251,15 @@ async function onApprove(approve: boolean): Promise<void> {
     // The opaque token binds approval to this card (review D1): the model
     // can plan but never self-approve.
     const approvalToken = await getSkillInstallApprovalToken(
-      props.snapshot.sessionId
+      snapshotView.value.sessionId
     );
     if (!approvalToken) {
       emit("failed", t("skillInstall.errors.actionFailed"));
       return;
     }
     const snapshot = await approveSkillInstall({
-      sessionId: props.snapshot.sessionId,
-      planRevision: props.snapshot.planRevision ?? "",
+      sessionId: snapshotView.value.sessionId,
+      planRevision: snapshotView.value.planRevision ?? "",
       approve,
       approvalToken,
     });
@@ -239,7 +277,7 @@ async function onSubmitSecret(): Promise<void> {
   busy.value = true;
   try {
     const result = await submitSkillInstallSecret({
-      sessionId: props.snapshot.sessionId,
+      sessionId: snapshotView.value.sessionId,
       environmentVariable: secretVariableName.value,
       value: secretValue.value,
     });
@@ -259,7 +297,7 @@ async function onSubmitSecret(): Promise<void> {
 async function onCancel(): Promise<void> {
   busy.value = true;
   try {
-    const snapshot = await cancelSkillInstall(props.snapshot.sessionId);
+    const snapshot = await cancelSkillInstall(snapshotView.value.sessionId);
     if (snapshot) emit("updated", snapshot);
   } finally {
     busy.value = false;
@@ -267,11 +305,10 @@ async function onCancel(): Promise<void> {
 }
 
 async function onRefresh(): Promise<void> {
-  const { getSkillInstallStatus } = await import(
-    "@/views/api/skillInstallation"
-  );
-  const snapshot = await getSkillInstallStatus(props.snapshot.sessionId);
-  if (snapshot) emit("updated", snapshot);
+  await refreshSnapshot();
+  if (localSnapshot.value) {
+    emit("updated", localSnapshot.value);
+  }
 }
 </script>
 

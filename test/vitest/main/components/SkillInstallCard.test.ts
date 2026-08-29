@@ -16,6 +16,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
   getSkillInstallApprovalToken: vi.fn().mockResolvedValue("test-approval-token"),
+  onSkillInstallProgress: vi.fn(() => () => undefined),
 }));
 
 import {

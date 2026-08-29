@@ -270,6 +270,7 @@ import {
   SKILL_INSTALL_DISABLE,
   SKILL_INSTALL_ENABLE,
   SKILL_INSTALL_UNINSTALL,
+  SKILL_INSTALL_PROGRESS,
   PROMPT_SKILL_INVOKE,
   SKILL_INSTALL_APPROVAL_TOKEN,
   // AI Provider (Local/Custom) Settings Channels
@@ -591,6 +592,8 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // Skill installation progress (main -> renderer, TODO 7)
+      SKILL_INSTALL_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       RAG_IMPORT_WEBSITE_PROGRESS,
       // System Dependency Prompt (main→renderer)
@@ -710,6 +713,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
+      // Skill installation progress (main -> renderer, TODO 7)
+      SKILL_INSTALL_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       RAG_IMPORT_WEBSITE_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,

@@ -213,6 +213,28 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     expect(resumed.installationId).toBe(approved.installationId);
   }, 120_000);
 
+  it("emits monotonic SKILL_INSTALL_PROGRESS events per audited step (TODO 7)", async () => {
+    const module = new SkillInstallationModule();
+    const events: { sessionId: string; seq: number; step: string }[] = [];
+    module.setProgressSinkForTests((e) => {
+      events.push({ sessionId: e.sessionId, seq: e.seq, step: e.step });
+    });
+    const prepared = await module.prepare({
+      conversationId: "conv-progress",
+      source: fixtureRoot,
+    });
+    // prepare emits session-created + inspecting + planning + (awaiting_approval
+    // via transition) — at least 3 events, all monotonic, all this session.
+    expect(events.length).toBeGreaterThanOrEqual(3);
+    expect(events.every((e) => e.sessionId === prepared.sessionId)).toBe(true);
+    const seqs = events.map((e) => e.seq);
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    }
+    expect(events[0].step).toBe("session-created");
+    module.setProgressSinkForTests(null);
+  }, 120_000);
+
   it("a model-originated approve without the token is rejected (D1)", async () => {
     const module = new SkillInstallationModule();
     const prepared = await module.prepare({

@@ -43,6 +43,7 @@ import { SkillActivationService } from "@/service/SkillActivationService";
 import { detectAll } from "@/service/SkillDependencyOrchestrator";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
+import { SKILL_INSTALL_PROGRESS } from "@/config/channellist";
 import type { PromptSkillDefinition } from "@/entityTypes/promptSkillTypes";
 
 /** Feature kill switch — mirrors the small-model routing pattern. */
@@ -70,6 +71,44 @@ const STATE_TO_NEXT_ACTION: Record<
   rollback_required: "retry",
 };
 
+/** Design §23.2 / §15.1 progress event shape (monotonic per session). */
+export interface SkillInstallationProgressEvent {
+  readonly sessionId: string;
+  /** Monotonic per-session sequence (matches the audit event seq). */
+  readonly seq: number;
+  readonly state: string;
+  readonly step: string;
+  readonly messageKey: string;
+  readonly recoverable: boolean;
+  readonly errorCode?: string;
+}
+
+/** Injectable progress sink — the IPC layer broadcasts to all windows. */
+export type SkillInstallationProgressSink = (
+  event: SkillInstallationProgressEvent
+) => void;
+
+/** Default sink: broadcasts to every renderer window. */
+function defaultProgressSink(): SkillInstallationProgressSink {
+  return (event) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+      const electron = require("electron") as {
+        BrowserWindow: {
+          getAllWindows: () => Array<{
+            webContents: { send: (channel: string, data: unknown) => void };
+          }>;
+        };
+      };
+      for (const win of electron.BrowserWindow.getAllWindows()) {
+        win.webContents.send(SKILL_INSTALL_PROGRESS, event);
+      }
+    } catch {
+      /* non-Electron contexts (tests) — events stay in the DB audit log */
+    }
+  };
+}
+
 export interface PrepareRequest {
   readonly conversationId: string;
   readonly source: string;
@@ -82,6 +121,7 @@ export interface PrepareRequest {
 
 export class SkillInstallationModule extends BaseModule {
   private installationModel: SkillInstallationModel | null = null;
+  private progressSink: SkillInstallationProgressSink | null = null;
   private sessionModel: SkillInstallationSessionModel | null = null;
   private eventModel: SkillInstallationEventModel | null = null;
 
@@ -934,6 +974,29 @@ export class SkillInstallationModule extends BaseModule {
       ...(toState !== undefined ? { toState } : {}),
       ...(detail !== undefined ? { detail } : {}),
     } as import("@/entity/SkillInstallationEvent.entity").SkillInstallationEventEntity);
+    // TODO 7 (design §23.2): every audited step also reaches the renderer as
+    // a monotonic progress event on the dedicated SKILL_INSTALL_PROGRESS
+    // channel. Emission failures never affect the installation.
+    try {
+      if (!this.progressSink) this.progressSink = defaultProgressSink();
+      this.progressSink({
+        sessionId,
+        seq,
+        state: toState ?? fromState ?? "unknown",
+        step: eventType,
+        messageKey: `skillInstall.progress.${eventType}`,
+        recoverable: true,
+      });
+    } catch {
+      /* progress broadcast is best-effort */
+    }
+  }
+
+  /** Test seam: capture progress events instead of broadcasting. */
+  setProgressSinkForTests(
+    sink: SkillInstallationProgressSink | null
+  ): void {
+    this.progressSink = sink;
   }
 
   private snapshotFromEntity(
