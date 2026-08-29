@@ -51,6 +51,7 @@ import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
 import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
 import { AgentTaskEntity } from "@/entity/AgentTask.entity";
 import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
@@ -147,6 +148,7 @@ export const DB_ENTITIES = [
   RAGChunkEntity,
   AIChatMessageEntity,
   AIChatAttachmentEntity,
+  AIChatPendingMessageEntity,
   AIArtifactEntity,
   VectorEntity,
   VectorMetadataEntity,

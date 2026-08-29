@@ -31,6 +31,19 @@ export class AIChatAttachmentModule extends BaseModule {
     return await this.attachmentModel.deleteByConversation(conversationId);
   }
 
+  /** Load queued attachment bytes stored under a pending message's
+   * deterministic userMessageId (message-queue design §7.6). */
+  async getByMessageId(messageId: string): Promise<StoredAttachmentFile[]> {
+    await this.ensureConnection();
+    return await this.attachmentModel.getByMessageId(messageId);
+  }
+
+  /** Delete attachment rows for one message (pending-message cleanup). */
+  async deleteByMessageId(messageId: string): Promise<number> {
+    await this.ensureConnection();
+    return await this.attachmentModel.deleteByMessageId(messageId);
+  }
+
   async deleteAll(): Promise<void> {
     await this.ensureConnection();
     await this.attachmentModel.deleteAll();
