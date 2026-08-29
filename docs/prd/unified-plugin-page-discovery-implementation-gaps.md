@@ -2,7 +2,7 @@
 
 ## Document information
 
-- **Status:** Gaps found
+- **Status:** Closed (all gaps addressed 2026-08-29; see unified-plugin-page-discovery-verification.md)
 - **Audit date:** 2026-08-28
 - **Worktree:** `worktree-unified-plugin-page`
 - **Source requirements:**
@@ -25,7 +25,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-01: Prevent duplicate Community Hub refresh requests
 
-- **Status:** Not implemented
+- **Status:** Closed — `487c8148` (in-flight guard + dup-refresh test)
 - **Priority:** High
 - **Requirements:** PRD section 13.4; technical design section 14.3
 - **Current evidence:** `CommunityPluginCatalog.reload()` starts a new request without checking `loading` or `refreshing`. The Refresh button uses `:loading="refreshing"` but is disabled only by `loading`.
@@ -35,7 +35,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-02: Provide keyboard-accessible access to the complete card description
 
-- **Status:** Partial
+- **Status:** Closed — `bbcbf6df` (focusable description + aria-label + tests)
 - **Priority:** High
 - **Requirements:** `AC-UI-03`; PRD accessibility requirement 12; technical design sections 8.4 and 15.4
 - **Current evidence:** The visible description is correctly clamped to three lines, but the full text is exposed only through a native `title` attribute on a non-focusable `<div>`.
@@ -45,7 +45,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-03: Make the Preview explanation keyboard-accessible
 
-- **Status:** Partial
+- **Status:** Closed — `bbcbf6df` (focusable Preview wrapper + aria-label + tests)
 - **Priority:** Medium
 - **Requirements:** PRD sections 9.6 and 16; technical design sections 8.3 and 15.4
 - **Current evidence:** Ticket-based entries render a visible Coming soon status and a disabled Preview button with a native `title` attribute.
@@ -55,7 +55,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-04: Meet the 44px touch-target requirement
 
-- **Status:** Not implemented
+- **Status:** Closed — `639dd0eb` + live-stylesheet E2E check in `98676a7e`
 - **Priority:** Medium
 - **Requirements:** PRD accessibility requirement 5 and responsive section 17.3
 - **Current evidence:** Tag chips use `small`, card tags use `x-small`, availability buttons use `small`, and card action buttons have no touch-layout minimum-size override. The component styles contain no mobile/touch rule that enforces a 44px interactive target.
@@ -67,7 +67,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-05: Implement the critical Plugin Hub E2E flow
 
-- **Status:** Not implemented
+- **Status:** Closed — `98676a7e` (FakePluginHub + E2E-only loopback zip transport + full critical flow)
 - **Priority:** Blocker
 - **Requirements:** `AC-QA-06`; PRD section 22.4; technical design section 18.6
 - **Current evidence:** `test/e2e/specs/unifiedPluginDiscovery.test.ts` contains the required install-to-uninstall scenario only as `test.skip`.
@@ -85,7 +85,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-06: Make the active unified Plugin E2E tests pass under authentication
 
-- **Status:** Verification gap
+- **Status:** Closed — `98676a7e` (authenticated pluginsApp fixture; all 8 spec tests pass)
 - **Priority:** Blocker
 - **Requirements:** `AC-QA-05`, `AC-QA-06`, and the PRD Definition of Done
 - **Current evidence:** A focused run of `yarn build:e2e && yarn playwright test test/e2e/specs/unifiedPluginDiscovery.test.ts` produced three failures and one skipped test. The active tests reached `#/login?redirect=/plugins/management` instead of the authenticated Plugin page.
@@ -95,7 +95,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-07: Test browser back/forward tab restoration
 
-- **Status:** Verification gap
+- **Status:** Closed — `98676a7e` (E2E back/forward restoration test)
 - **Priority:** High
 - **Requirements:** `AC-NAV-03`; PRD sections 8.4 and 22.3; technical design section 18.4
 - **Current evidence:** Component tests verify initial query selection and a Manage-triggered push to `tab=installed`. They do not navigate through multiple tabs and then exercise router back and forward history.
@@ -104,7 +104,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-08: Test Discover state retention across top-level section changes
 
-- **Status:** Verification gap
+- **Status:** Closed — `98676a7e` (E2E state-retention test: search/tag survive, zero duplicate catalog fetches)
 - **Priority:** High
 - **Requirements:** `AC-INSTALL-05`; technical design decisions TD-6 and TD-7; technical design section 18.4
 - **Current evidence:** Catalog tests prove that filters survive catalog refresh. Plugin Manager tests do not set Discover search/tag/availability state, navigate to Installed, and return to Discover.
@@ -113,7 +113,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-09: Test the real router records instead of copied fixtures
 
-- **Status:** Verification gap
+- **Status:** Closed — `98676a7e` (authenticated real-route E2E redirect test is authoritative)
 - **Priority:** Medium
 - **Requirements:** `AC-NAV-04`, `AC-NAV-05`, `AC-QA-05`; technical design section 18.5
 - **Current evidence:** `unifiedPluginNavigation.test.ts` reconstructs the canonical and legacy route definitions inside the test. It does not import the application's actual route records. The real-route E2E redirect test currently fails at the authentication boundary.
@@ -122,7 +122,7 @@ The core Discover, Installed, Sources, and Issues experience is present. Local f
 
 ### UPD-GAP-10: Record responsive and accessibility manual verification
 
-- **Status:** Verification gap
+- **Status:** Closed — responsive sweep E2E + verification record at unified-plugin-page-discovery-verification.md
 - **Priority:** Medium
 - **Requirements:** PRD rollout Phase 5, Definition of Done, and technical completion items 11-12
 - **Current evidence:** The repository contains responsive CSS and component assertions, but no audit artifact records narrow, tablet, and desktop checks or keyboard/screen-reader verification for this feature.
@@ -138,7 +138,7 @@ The following checks passed during the 2026-08-28 audit:
 | `yarn test:components` | 45 test files passed; 285 tests passed |
 | `yarn vue-typecheck` | Passed |
 | `yarn typecheck` | Passed |
-| Focused unified Plugin Playwright spec | Failed: 3 failed, 1 skipped |
+| Focused unified Plugin Playwright spec (post-closure) | 8 passed |
 
 ## Closure order
 

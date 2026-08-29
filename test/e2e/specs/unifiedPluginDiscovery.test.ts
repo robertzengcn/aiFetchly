@@ -231,4 +231,79 @@ test.describe("Unified Plugin discovery", () => {
     });
     expect(hasTouchRule).toBe(true);
   });
+
+  test("responsive sweep: narrow/tablet/desktop widths (UPD-GAP-10)", async ({
+    pluginsApp,
+  }) => {
+    const { mainWindow } = pluginsApp;
+    await mainWindow.goto(`${PLUGINS_URL}?tab=discover`);
+    const card = mainWindow.getByTestId(`community-plugin-card-${INSTALLABLE}`);
+    await expect(card).toBeVisible();
+
+    // Column expectations from PRD §9.3: <600 → 1, 600–899 → 2 (space
+    // permitting), 900–1279 → 3, ≥1280 → 3–4. Cards are never < 290px.
+    for (const [width, expectedCols] of [
+      [375, 1],
+      [768, 2],
+      [1280, 3],
+    ] as const) {
+      await mainWindow.setViewportSize({ width, height: 900 });
+      // Electron window resize is async; wait until the grid has re-laid-out
+      // to a stable width (two consecutive identical reads) so the sweep never
+      // samples a mid-reflow state with stale track sizing.
+      await mainWindow.waitForFunction(
+        () => {
+          const grid = document.querySelector<HTMLDivElement>(
+            ".community-plugin-grid"
+          );
+          if (!grid) return false;
+          const w = Math.round(grid.getBoundingClientRect().width);
+          if ((grid.dataset.lastGridWidth ?? "") === String(w)) return true;
+          grid.dataset.lastGridWidth = String(w);
+          return false;
+        },
+        undefined,
+        { timeout: 5_000, polling: 100 }
+      );
+
+      const layout = await mainWindow.evaluate(() => {
+        const grid = document.querySelector<HTMLDivElement>(
+          ".community-plugin-grid"
+        );
+        const cols = grid
+          ? window.getComputedStyle(grid).gridTemplateColumns.split(" ").length
+          : 0;
+        const gridWidth = grid ? grid.getBoundingClientRect().width : 0;
+        const firstCard = grid?.querySelector<HTMLElement>(
+          "[data-testid^='community-plugin-card-']"
+        );
+        const cardWidth = firstCard
+          ? firstCard.getBoundingClientRect().width
+          : 0;
+        // Horizontal overflow: any element wider than the viewport.
+        const overflow =
+          document.documentElement.scrollWidth > window.innerWidth + 1;
+        // Keyboard reachability of the description affordance.
+        const desc = document.querySelector<HTMLElement>(
+          "[data-testid^='community-plugin-description-']"
+        );
+        return {
+          cols,
+          gridWidth,
+          cardWidth,
+          overflow,
+          descFocusable: desc?.tabIndex === 0,
+        };
+      });
+      expect(layout.overflow).toBe(false);
+      expect(layout.cols).toBe(expectedCols);
+      // PRD §9.3: cards are never narrower than 290px — except where the
+      // available CONTENT width itself is smaller (navigation consumes part of
+      // the viewport), where min(290px, 100%) correctly shrinks to fit.
+      expect(layout.cardWidth).toBeGreaterThanOrEqual(
+        Math.min(290, layout.gridWidth - 1)
+      );
+      expect(layout.descFocusable).toBe(true);
+    }
+  });
 });
