@@ -4,7 +4,11 @@ import type {
   OpenAIChatMessage,
   OpenAITool,
 } from "@/api/aiChatApi";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatSafeBoundary,
+  ChatV2DirectionTransition,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
   AIChatPlanStateView,
@@ -240,10 +244,25 @@ export type AIChatQueryEvent =
   | AIChatQueryAskUserQuestionEvent
   | AIChatQueryPlanSubmittedEvent
   | AIChatQueryPlanStateEvent
+  | AIChatQueryDirectionUpdatedEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
   | AIChatQueryUsageUpdateEvent;
+
+/**
+ * Emitted when a steering batch is applied at a safe boundary. Carries ids
+ * and offsets only — never steering content (the pending-message event and
+ * history already carry the user-visible text).
+ */
+export interface AIChatQueryDirectionUpdatedEvent {
+  type: "direction_updated";
+  conversationId: string;
+  messageId: string;
+  boundary: AIChatSafeBoundary;
+  pendingMessageIds: readonly string[];
+  contentOffset: number;
+}
 
 /**
  * Result returned by AIChatQueryLoop.run().
@@ -274,6 +293,9 @@ export type AIChatQueryLoopResult =
       /** Recovery metadata accumulated during the turn, if any recovery
        * layers were activated. Persisted on the assistant row metadata. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /** Present when steering was applied mid-turn: offsets where the
+       * visible content changed direction (design §11.6). */
+      directionTransitions?: readonly ChatV2DirectionTransition[];
     }
   | {
       type: "cancelled";
@@ -470,7 +492,37 @@ export interface AIChatQueryLoopInput {
   toolCatalog?: ToolCatalog;
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
+  /**
+   * Per-turn steering mailbox. When present the loop checks it at the five
+   * safe boundaries and applies committed instructions between tool calls
+   * (message-queue design §11). The loop never imports a Model or Module —
+   * persistence happens inside the control's `consume()`.
+   */
+  steeringControl?: import("@/service/AIChatTurnControl").AIChatTurnControl;
 }
+
+/**
+ * Narrow terminal classification returned by
+ * `AIChatQueryEngine.submitPersistedUserMessage()` after persistence and
+ * terminal event emission are complete (design §9.5). The queue service
+ * drains/pauses on this — the engine never imports the queue service.
+ */
+export type AIChatTurnTerminalEvent =
+  | {
+      readonly type: "completed" | "cancelled" | "failed";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      readonly type: "paused_for_permission" | "paused_for_plan_question";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      /** An active/pending turn already owns the conversation (§12.3). */
+      readonly type: "conversation_busy";
+      readonly conversationId: string;
+    };
 
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {
