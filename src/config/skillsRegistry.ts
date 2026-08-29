@@ -2382,13 +2382,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { listSkillResources } = await import(
         "@/service/PromptSkillResourceService"
       );
       const outcome = await listSkillResources(
         String(args.runtime_id ?? ""),
-        args.subpath === undefined ? undefined : String(args.subpath)
+        args.subpath === undefined ? undefined : String(args.subpath),
+        context.conversationId
       );
       return outcome;
     },
@@ -2418,13 +2419,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { readSkillResource } = await import(
         "@/service/PromptSkillResourceService"
       );
       const outcome = await readSkillResource(
         String(args.runtime_id ?? ""),
-        String(args.path ?? "")
+        String(args.path ?? ""),
+        context.conversationId
       );
       return outcome;
     },

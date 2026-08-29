@@ -13,6 +13,10 @@
 import * as fs from "fs";
 import * as path from "path";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
+import {
+  assertFilesystemPathAllowed,
+  getDefaultFilesystemContextService,
+} from "@/service/ConversationFilesystemContextService";
 import type { SkillResourceReadResult } from "@/entityTypes/promptSkillTypes";
 import { sha256Hex } from "@/utils/contentHash";
 
@@ -58,9 +62,38 @@ function definitionOrError(runtimeId: string): ToolOutcome | null {
   return null;
 }
 
+/**
+ * TODO 6 / FR-13: capability-gate an operation on the skill root. Builds the
+ * conversation context WITH the read/execute (no-write) skill-root capability
+ * and delegates to assertFilesystemPathAllowed — a write against the skill
+ * root fails with PATH_CAPABILITY_DENIED even though a workspace root may
+ * allow writes elsewhere.
+ */
+async function capabilityCheck(
+  conversationId: string,
+  skillRoot: string,
+  requestedPath: string,
+  operation: "read" | "execute"
+): Promise<string | null> {
+  const resolution =
+    await getDefaultFilesystemContextService().withSkillRoot(
+      conversationId,
+      skillRoot
+    );
+  if (!resolution.ok) return resolution.message;
+  const verdict = assertFilesystemPathAllowed({
+    path: requestedPath,
+    operation,
+    context: resolution.context,
+  });
+  if (verdict.allowed) return null;
+  return verdict.message;
+}
+
 export async function listSkillResources(
   runtimeId: string,
-  subpath?: string
+  subpath?: string,
+  conversationId?: string
 ): Promise<ToolOutcome> {
   const err = definitionOrError(runtimeId);
   if (err) return err;
@@ -69,6 +102,15 @@ export async function listSkillResources(
   const targetRelative = subpath ?? "";
   const resolved = resolveInsideRoot(definition.canonicalRoot, targetRelative);
   if (!resolved.ok) return errorOutcome(resolved.message);
+  if (conversationId) {
+    const denied = await capabilityCheck(
+      conversationId,
+      definition.canonicalRoot,
+      resolved.absolute,
+      "read"
+    );
+    if (denied) return errorOutcome(denied);
+  }
 
   let entries: readonly fs.Dirent[];
   try {
@@ -140,7 +182,8 @@ function safeIsDirWithinRoot(parent: string, name: string): boolean {
 
 export async function readSkillResource(
   runtimeId: string,
-  relativePath: string
+  relativePath: string,
+  conversationId?: string
 ): Promise<ToolOutcome> {
   const err = definitionOrError(runtimeId);
   if (err) return err;
@@ -148,6 +191,15 @@ export async function readSkillResource(
 
   const resolved = resolveInsideRoot(definition.canonicalRoot, relativePath);
   if (!resolved.ok) return errorOutcome(resolved.message);
+  if (conversationId) {
+    const denied = await capabilityCheck(
+      conversationId,
+      definition.canonicalRoot,
+      resolved.absolute,
+      "read"
+    );
+    if (denied) return errorOutcome(denied);
+  }
 
   let stat: fs.Stats;
   try {

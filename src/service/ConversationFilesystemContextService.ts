@@ -204,6 +204,41 @@ export class ConversationFilesystemContextService {
     };
   }
 
+  /**
+   * TODO 6 / FR-13 construction site: extend a resolved conversation context
+   * with a SKILL-ROOT capability — read + list + execute helpers, NEVER
+   * write. Prompt-skill resource tools route their operations through the
+   * capability policy against this context, so an installed skill can be
+   * read and (after separate approval) executed, but never written to by
+   * generic tools (PRD §14.4/§15.3: no parent-directory grant, no blanket
+   * write across ~/.aifetchly/skills).
+   */
+  async withSkillRoot(
+    conversationId: string,
+    skillRoot: string
+  ): Promise<FilesystemContextResolution> {
+    const base = await this.resolve(conversationId);
+    if (!base.ok) return base;
+    const canonical = canonicalize(skillRoot);
+    const skillRootCapability: FilesystemRootCapability = {
+      id: `skill-activation:${canonical}`,
+      kind: "skill-activation",
+      canonicalPath: canonical,
+      // Read/list + execute-after-approval. Write is deliberately absent —
+      // installation/update/uninstall own mutation (§20.5).
+      capabilities: new Set<FilesystemCapability>(["read", "execute"]),
+    };
+    // Workspace root stays first (default cwd unchanged); the skill root is
+    // an ADDITIONAL narrow root, never a replacement.
+    return {
+      ok: true,
+      context: {
+        ...base.context,
+        roots: [...base.context.roots, skillRootCapability],
+      },
+    };
+  }
+
   /** Drop cached state (used when workspace approval changes). */
   invalidate(conversationId: string): void {
     this.cache.delete(conversationId);
