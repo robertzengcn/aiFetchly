@@ -302,7 +302,7 @@
           v-if="showWorkspaceRequired && activeConversationId"
           :conversation-id="activeConversationId"
           @approved="onWorkspaceApproved"
-          @cancel="showWorkspaceRequired = false"
+          @cancel="conversationWorkspace.closeSetup()"
         />
         <!-- Phase 14 (Plan 14-04): inline trust card (D-03). Renders only
              when an approved workspace with .aifetchly instructions is
@@ -913,12 +913,7 @@ import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
-import { getWorkspace } from "@/views/api/workspace";
-import {
-  acquireWorkspaceWatch,
-  releaseWorkspaceWatch,
-  previewWorkspaceAgents,
-} from "@/views/api/workspaceWatch";
+import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import {
   createGoal,
   getActiveGoal,
@@ -946,9 +941,7 @@ import type {
   ChatV2ConversationUpdatedEvent,
   ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
-import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
-import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
@@ -1508,17 +1501,28 @@ async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
-// Workspace tracking
+// Workspace tracking — shared composable (chat-first shell design §9.1).
+// The classic dock and the new chat center surface consume ONE implementation
+// of badge state, memory counting, setup flow, watch lifecycle, and trust
+// card. Read-only aliases keep the template bindings unchanged.
 // ---------------------------------------------------------------------------
-// Active workspace for the current conversation. Null when no conversation is
-// selected or the conversation has no workspace yet. Drives the badge.
-const activeWorkspace = ref<WorkspaceSummary | null>(null);
-// True when the active conversation has no workspace — shows the pick card.
-const showWorkspaceRequired = ref(false);
+const conversationWorkspace = useConversationWorkspace(activeConversationId);
+const activeWorkspace = computed(() => conversationWorkspace.workspace.value);
+const showWorkspaceRequired = computed(
+  () => conversationWorkspace.setupOpen.value
+);
+const workspaceMemoryCount = computed(
+  () => conversationWorkspace.memoryCount.value
+);
+const activeWorkspaceWatchId = computed(
+  () => conversationWorkspace.watchId.value
+);
+const showWorkspaceTrustCard = computed(
+  () => conversationWorkspace.trustCardVisible.value
+);
 
-// Workspace memory panel + count for the active approved workspace.
+// Workspace memory panel dialog (display state local to this surface).
 const showWorkspaceMemory = ref(false);
-const workspaceMemoryCount = ref(0);
 
 function openWorkspaceMemory(): void {
   if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
@@ -1528,26 +1532,22 @@ function openWorkspaceMemory(): void {
   showWorkspaceMemory.value = true;
 }
 
-async function refreshWorkspaceMemoryCount(): Promise<void> {
-  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
-    workspaceMemoryCount.value = 0;
-    return;
-  }
-  try {
-    // One IPC + DB round-trip: fetch up to 200 active memories and use the
-    // returned length as the badge count (capped at 200, which is plenty for
-    // a badge — beyond that the exact number doesn't matter to the user).
-    const resp = await workspaceMemoryApi.list({
-      conversationId: activeConversationId.value,
-      status: "active",
-      limit: 200,
-    });
-    workspaceMemoryCount.value =
-      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
-  } catch {
-    workspaceMemoryCount.value = 0;
-  }
+function refreshWorkspaceMemoryCount(): void {
+  void conversationWorkspace.refreshMemoryCount();
 }
+
+// Re-resolve relative file-op paths once the workspace root resolves (the
+// composable owns workspace refresh; this is the chat-specific side effect).
+watch(activeWorkspace, () => {
+  const conversationId = activeConversationId.value;
+  if (conversationId && messages.value.length > 0) {
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
+  }
+});
 
 function createLocalConversationId(): string {
   const randomId =
@@ -1577,50 +1577,7 @@ function handleWorkspaceSetupRequest(): void {
   // change folders. Re-picking creates a new pending workspace that supersedes
   // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
-  showWorkspaceRequired.value = true;
-}
-
-/**
- * Fetch the workspace (if any) for the given conversation and update the
- * badge/required-card state. Called on mount and whenever the active
- * conversation changes.
- */
-async function refreshWorkspace(conversationId: string | null): Promise<void> {
-  if (!conversationId) {
-    activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
-    void refreshWorkspaceMemoryCount();
-    return;
-  }
-  try {
-    const ws = await getWorkspace(conversationId);
-    activeWorkspace.value = ws
-      ? {
-          id: ws.id,
-          conversationId: ws.conversationId,
-          rootPath: ws.rootPath,
-          label: ws.label,
-          approvalState: ws.approvalState,
-        }
-      : null;
-    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
-  } catch {
-    // non-fatal; treat as no workspace
-    activeWorkspace.value = null;
-  }
-  void refreshWorkspaceMemoryCount();
-  // Re-resolve relative file-op paths once workspace root is known.
-  if (
-    conversationId &&
-    activeConversationId.value === conversationId &&
-    messages.value.length > 0
-  ) {
-    hydrateFileOpsFromMessages(
-      conversationId,
-      messages.value,
-      activeWorkspace.value?.rootPath
-    );
-  }
+  conversationWorkspace.requestSetup();
 }
 
 /**
@@ -1909,24 +1866,18 @@ async function runScheduledLoopControl(
 }
 
 /**
- * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
- * to reflect the newly-created + approved workspace and hides the card.
+ * Handler for the WorkspaceRequiredCard's `approved` event. Adopts the
+ * newly-created + approved workspace through the shared composable.
  */
 function onWorkspaceApproved(
   workspaceId: number,
   rootPath: string
 ): void {
-  activeWorkspace.value = {
-    id: workspaceId,
-    conversationId: activeConversationId.value ?? "",
-    rootPath,
-    label: null,
-    approvalState: "approved",
-  };
-  showWorkspaceRequired.value = false;
+  conversationWorkspace.applyApprovedWorkspace(workspaceId, rootPath);
 }
 
-// Refresh the workspace badge whenever the active conversation changes.
+// Workspace badge refresh on conversation change is owned by the shared
+// useConversationWorkspace composable (design §9.1).
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
@@ -1934,7 +1885,6 @@ watch(activeConversationId, (id, previousId) => {
     // conversation so it can never replay into the newly active one.
     cancelAmbiguityChooser();
   }
-  void refreshWorkspace(id);
   void refreshActiveGoal();
   if (id) {
     void refreshScheduledLoopStatus();
@@ -1966,176 +1916,27 @@ async function refreshSlashCommandCount(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card
+// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card now live
+// in the shared useConversationWorkspace composable (chat-first shell design
+// §9.1); this surface only maps the card's events onto composable calls.
 // ---------------------------------------------------------------------------
-// activeWorkspaceWatchId holds the workspaceId token returned by acquire.
-// Null before acquire resolves, after release, or when no approved workspace
-// exists. Drives BOTH the subscriber filter (compare against event.workspaceId
-// — D-04) and the trust-card mount condition.
-const activeWorkspaceWatchId = ref<string | null>(null);
-// True when the active workspace's preview carried AGENTS.md content (i.e.
-// the workspace contains .aifetchly). Used as the trust-card mount gate so
-// the card does NOT render for approved workspaces without .aifetchly.
-const activeWorkspaceHasAgents = ref(false);
-// Per-session dismissal set. The trust card does not reappear for a
-// workspace the user dismissed this session. Persistence across app
-// restarts is deferred to Phase 17 (AIFetchlyWorkspaceTrust entity) —
-// Plan 14-04 reuses in-session state per the plan's "do NOT create a new
-// persistence layer" rule.
-const dismissedTrustWorkspaces = ref<ReadonlySet<string>>(new Set());
-
-/**
- * Inline trust card mounts when ALL of:
- *   - active workspace is approved (existing approval state),
- *   - acquireWorkspaceWatch returned a watch token (worker is watching),
- *   - previewWorkspaceAgents returned non-empty content (workspace has
- *     AGENTS.md / .aifetchly instructions — TRS-07 preview path),
- *   - the user has not dismissed the card for this workspace this session.
- *
- * The card is rendered INLINE near the existing WorkspaceRequiredCard — NOT
- * a modal/banner (D-03).
- */
-const showWorkspaceTrustCard = computed(() => {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return false;
-  if (!activeWorkspace.value) return false;
-  if (activeWorkspace.value.approvalState !== "approved") return false;
-  if (!activeWorkspaceHasAgents.value) return false;
-  if (dismissedTrustWorkspaces.value.has(wid)) return false;
-  return true;
-});
-
-/**
- * Acquire a workspace watch for the supplied conversation. Idempotent —
- * releasing the previous watch (if any) before acquiring the new one
- * covers the workspace-switch path. Non-fatal on IPC failure: chat still
- * works without live-update; the user can /reload-config to retry.
- *
- * After a successful acquire, probes previewWorkspaceAgents to learn
- * whether the workspace contains .aifetchly content. That probe is the
- * sole source of the hasAgents flag (TRS-07 — the renderer NEVER touches
- * the filesystem).
- */
-async function acquireActiveWorkspaceWatch(
-  conversationId: string
-): Promise<void> {
-  // Release any previous watch first (covers switch).
-  await releaseActiveWorkspaceWatch();
-  // Reset hasAgents — the new workspace's probe repopulates it.
-  activeWorkspaceHasAgents.value = false;
-  try {
-    const result = await acquireWorkspaceWatch({ conversationId });
-    if (!result) {
-      // No approved workspace / resolver miss — fail-closed, no watch.
-      activeWorkspaceWatchId.value = null;
-      return;
-    }
-    activeWorkspaceWatchId.value = result.workspaceId;
-    // Probe for AGENTS.md content via the TRS-07 preview channel.
-    try {
-      const content = await previewWorkspaceAgents(result.workspaceId);
-      activeWorkspaceHasAgents.value = content.length > 0;
-    } catch {
-      // Preview failure is non-fatal — treat as "no agents content" so the
-      // card stays hidden. The user can still chat; the watcher is active.
-      activeWorkspaceHasAgents.value = false;
-    }
-  } catch (err) {
-    // Non-fatal: log and leave watchId null. Chat still works.
-    console.error(
-      "[AiChatV2] acquireWorkspaceWatch failed (non-fatal):",
-      err
-    );
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Release the active workspace watch, if any. Idempotent — safe to call on
- * unmount, on switch, or when no watch is active.
- */
-async function releaseActiveWorkspaceWatch(): Promise<void> {
-  const wid = activeWorkspaceWatchId.value;
-  const convId = activeConversationId.value;
-  if (!wid || !convId) {
-    activeWorkspaceWatchId.value = null;
-    return;
-  }
-  try {
-    await releaseWorkspaceWatch({ conversationId: convId, workspaceId: wid });
-  } catch (err) {
-    // Non-fatal: worst case is a transient consumer leak; main will GC the
-    // consumer when the worker sees no other consumers for this workspace.
-    console.error(
-      "[AiChatV2] releaseWorkspaceWatch failed (non-fatal):",
-      err
-    );
-  } finally {
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Watch the active workspace to drive acquire/release. Fires whenever the
- * resolved active workspace changes (conversation switch, pick-folder flow,
- * approval). The watcher is additive to the existing activeConversationId
- * watcher — that one refreshes the badge; this one manages the watcher
- * lifecycle.
- */
-watch(
-  activeWorkspace,
-  (next, prev) => {
-    // Only re-acquire when something material changed. approvalState flips
-    // from pending→approved after the WorkspaceRequiredCard flow, so we
-    // DO want to fire on that transition.
-    const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
-    const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
-    if (prevKey === nextKey) return;
-    if (!next || next.approvalState !== "approved") {
-      // Not eligible — release any stale watch and bail.
-      void releaseActiveWorkspaceWatch();
-      return;
-    }
-    const convId = activeConversationId.value;
-    if (!convId) return;
-    void acquireActiveWorkspaceWatch(convId);
-  }
-);
 
 /**
  * Trust-card 'trusted' handler. The IPC was already called inside the card
- * (setWorkspaceTrust). Hide the card by adding the workspace to the
- * dismissed set — Phase 14 binary gate reuses the approval state, so trust
- * equals the existing approval (already set by the card's setTrust call).
+ * (setWorkspaceTrust); dismissing hides the card for this session.
  */
 function onWorkspaceTrustAccepted(scope: WorkspaceTrustScope): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (wid) {
-    dismissedTrustWorkspaces.value = new Set([
-      ...dismissedTrustWorkspaces.value,
-      wid,
-    ]);
-  }
-  // The trust-set IPC triggers a manager.rescan → AIFETCHLY_CONFIG_CHANGED
-  // event with the matching workspaceId. The subscriber filter refreshes
-  // the command cache from that event.
+  conversationWorkspace.trustAccepted();
   void scope; // Phase 17 branches on scope for per-capability trust.
 }
 
 /**
  * Trust-card 'dismissed' handler (Keep disabled). Persist the dismissal
  * in-session so the card does not reappear on the next chat open for this
- * workspace. The user keeps chatting with the workspace config untrusted
- * (Phase 14: untrusted means the watcher still runs but applyWorkspaceSnapshot
- * drops instructions/commands at the trust-filter boundary — TRS-01).
+ * workspace. The user keeps chatting with the workspace config untrusted.
  */
 function onWorkspaceTrustDismissed(): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return;
-  dismissedTrustWorkspaces.value = new Set([
-    ...dismissedTrustWorkspaces.value,
-    wid,
-  ]);
+  conversationWorkspace.trustDismissed();
 }
 
 // Conversation search state
@@ -5245,7 +5046,7 @@ onBeforeUnmount(() => {
   // Phase 14 (Plan 14-04): release the active workspace watch so the worker
   // can GC consumers. Non-fatal on failure; main will eventually drop the
   // consumer when no other consumers reference the workspace.
-  void releaseActiveWorkspaceWatch();
+  void conversationWorkspace.dispose();
 });
 </script>
 
