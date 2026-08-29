@@ -5,15 +5,18 @@
  *   - Input validation via zod schemas
  *   - Layered permission analysis (parse → hazards → split → paths → rules)
  *   - Destructive command denylist pre-check (defense-in-depth backstop)
- *   - Workspace-restricted working directory (FilePathGuard)
- *   - Cross-platform shell interpreter selection
- *   - Timeout enforcement with process-tree kill
+ *   - Workspace-restricted working directory (FilePathGuard + capability gate)
+ *   - Cross-platform execution via the platform process providers
+ *     (pwsh → powershell fallback, denylist env scrub, BOM/UTF-16LE decode,
+ *     byte counts, PROCESS_OUTPUT_EMPTY_UNEXPECTED, process-tree kill)
+ *   - Timeout enforcement with optional auto-background
  *   - Output size caps with truncation flags
- *   - Environment variable scrubbing (allowlist)
  *   - Structured error responses (never raw crashes)
+ *
+ * NFR-02 / PRD §16: the CONVERSATION shell path runs on the same tested
+ * providers as the skill installer — no legacy spawn implementation.
  */
 
-import { spawn } from "child_process";
 import { FilePathGuard } from "@/service/FilePathGuard";
 import {
   assertFilesystemPathAllowed,
@@ -24,9 +27,13 @@ import {
   SHELL_MIN_TIMEOUT_MS,
   SHELL_STDOUT_MAX_CHARS,
   SHELL_STDERR_MAX_CHARS,
-  SHELL_ENV_ALLOWLIST,
   SHELL_AUTO_BACKGROUND_DEFAULT,
 } from "@/config/shellToolConfig";
+import {
+  buildChildEnvironment,
+  getPlatformProcessProvider,
+  resolveShellInterpreter,
+} from "@/service/process";
 import { getDefaultBackgroundShellRegistry } from "@/service/BackgroundShellRegistry";
 import { ShellExecutionRequestSchema } from "@/entityTypes/shellTypes";
 import type {
@@ -136,18 +143,14 @@ export async function executeShellCommand(
   const autoBackground =
     request.autoBackground ?? SHELL_AUTO_BACKGROUND_DEFAULT;
 
-  // 5. Select shell interpreter
-  const interpreter = resolveInterpreter(request.shell);
-
-  // 6. Build scrubbed environment
-  const env = scrubEnvironment();
-
-  // 7. Execute with timeout and output caps
+  // 5-7. Execute through the platform process provider: shared interpreter
+  // resolution (pwsh → powershell fallback, typed args, shell:false),
+  // denylist env scrub, byte-counted BOM-aware capture, tree-kill timeout,
+  // and the auto-background hand-off.
   const result = await runShell(
-    interpreter,
+    request.shell,
     request.command,
     cwdResult.path,
-    env,
     timeoutMs,
     startTime,
     autoBackground
@@ -236,215 +239,100 @@ function clampTimeout(timeoutMs: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Interpreter selection
+// Shell execution — platform provider path (NFR-02 / PRD §16)
 // ---------------------------------------------------------------------------
 
-interface InterpreterConfig {
-  readonly command: string;
-  readonly args: string[];
+/**
+ * Char-level cap applied AFTER the provider's byte-level capture, matching
+ * the historical ShellExecutionResult truncation flags.
+ */
+function capChars(text: string, maxChars: number): {
+  text: string;
+  truncated: boolean;
+} {
+  if (text.length <= maxChars) return { text, truncated: false };
+  return { text: text.slice(0, maxChars), truncated: true };
 }
-
-function resolveInterpreter(shell: ShellInterpreter): InterpreterConfig {
-  if (shell === "bash") {
-    return { command: "/bin/bash", args: ["-c"] };
-  }
-  if (shell === "powershell") {
-    return findPowerShell();
-  }
-  if (shell === "cmd") {
-    return { command: "cmd.exe", args: ["/d", "/s", "/c"] };
-  }
-
-  // "auto" — detect platform
-  if (process.platform === "win32") {
-    return findPowerShell();
-  }
-  return { command: "/bin/bash", args: ["-c"] };
-}
-
-function findPowerShell(): InterpreterConfig {
-  // Prefer pwsh (PowerShell Core) over Windows PowerShell
-  if (process.platform === "win32") {
-    return {
-      command: "powershell.exe",
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
-  }
-  return {
-    command: "pwsh",
-    args: ["-NoProfile", "-NonInteractive", "-Command"],
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Environment scrubbing
-// ---------------------------------------------------------------------------
-
-function scrubEnvironment(): NodeJS.ProcessEnv {
-  const scrubbed: NodeJS.ProcessEnv = {};
-  for (const key of SHELL_ENV_ALLOWLIST) {
-    if (process.env[key] !== undefined) {
-      scrubbed[key] = process.env[key];
-    }
-  }
-  return scrubbed;
-}
-
-// ---------------------------------------------------------------------------
-// Shell execution
-// ---------------------------------------------------------------------------
 
 async function runShell(
-  interpreter: InterpreterConfig,
+  shell: ShellInterpreter,
   command: string,
   cwd: string,
-  env: NodeJS.ProcessEnv,
   timeoutMs: number,
   startTime: number,
   autoBackground: boolean
 ): Promise<ShellExecutionResult> {
-  return new Promise<ShellExecutionResult>((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
-    let timedOut = false;
-    // Once the child is handed to the registry, local stdout/stderr
-    // collection must stop to avoid double-buffering.
-    let detained = false;
-
-    const child = spawn(interpreter.command, [...interpreter.args, command], {
-      cwd,
-      env,
-      shell: false,
-      detached: true,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (autoBackground) {
-        // Mark as detained BEFORE calling registry.detain so the data
-        // handlers below no-op from this point forward. The registry
-        // attaches its own listeners to take over collection.
-        detained = true;
-        const shellId = getDefaultBackgroundShellRegistry().detain(child, {
-          command,
-        });
-        resolve({
-          success: true,
-          exit_code: null,
-          stdout,
-          stderr,
-          duration_ms: Date.now() - startTime,
-          stdout_truncated: stdoutTruncated,
-          stderr_truncated: stderrTruncated,
-          timed_out: false, // not a timeout failure — moved to background
-          backgrounded: true,
-          shell_id: shellId,
-          background_message:
-            "Command exceeded the timeout and was moved to the background. " +
-            "Poll with check_shell_status(shell_id) to retrieve full output.",
-        });
-      } else {
-        killProcessTree(child.pid, cwd);
-      }
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (detained || stdoutTruncated) return;
-      const appended = stdout + chunk.toString("utf-8");
-      if (appended.length > SHELL_STDOUT_MAX_CHARS) {
-        stdout = appended.slice(0, SHELL_STDOUT_MAX_CHARS);
-        stdoutTruncated = true;
-      } else {
-        stdout = appended;
-      }
-    });
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (detained || stderrTruncated) return;
-      const appended = stderr + chunk.toString("utf-8");
-      if (appended.length > SHELL_STDERR_MAX_CHARS) {
-        stderr = appended.slice(0, SHELL_STDERR_MAX_CHARS);
-        stderrTruncated = true;
-      } else {
-        stderr = appended;
-      }
-    });
-
-    child.on("error", (err: Error) => {
-      clearTimeout(timer);
-      resolve({
-        success: false,
-        exit_code: null,
-        stdout: "",
-        stderr: err.message,
-        duration_ms: Date.now() - startTime,
-        stdout_truncated: false,
-        stderr_truncated: false,
-        timed_out: false,
-        error: `Failed to spawn process: ${err.message}`,
-      });
-    });
-
-    child.on("close", (code: number | null) => {
-      if (detained) return; // backgrounded — registry takes over; skip dead-code path
-      clearTimeout(timer);
-      const durationMs = Date.now() - startTime;
-
-      // Normalize line endings on Windows
-      if (process.platform === "win32") {
-        stdout = stdout.replace(/\r\n/g, "\n");
-        stderr = stderr.replace(/\r\n/g, "\n");
-      }
-
-      resolve({
-        success: !timedOut && code === 0,
-        exit_code: timedOut ? null : code,
-        stdout,
-        stderr,
-        duration_ms: durationMs,
-        stdout_truncated: stdoutTruncated,
-        stderr_truncated: stderrTruncated,
-        timed_out: timedOut,
-        ...(timedOut
-          ? { error: `Command timed out after ${timeoutMs}ms` }
-          : {}),
-      });
-    });
+  const interpreter = resolveShellInterpreter(shell);
+  const result = await getPlatformProcessProvider().execute({
+    executable: interpreter.executable,
+    args: [...interpreter.args, command],
+    cwd,
+    // Denylist scrub (preserves Windows vars + drops secret-shaped keys) —
+    // the Unix ALLOWLIST is gone from the conversation path by design §7.2.
+    environment: buildChildEnvironment(),
+    timeoutMs,
+    // Generous byte ceiling; the exact char caps are applied below.
+    outputLimitBytes: Math.max(
+      SHELL_STDOUT_MAX_CHARS,
+      SHELL_STDERR_MAX_CHARS
+    ) * 4,
+    ...(autoBackground
+      ? {
+          onTimeoutDetain: (child) =>
+            getDefaultBackgroundShellRegistry().detain(child, { command }),
+        }
+      : {}),
   });
-}
 
-// ---------------------------------------------------------------------------
-// Process-tree kill
-// ---------------------------------------------------------------------------
-
-function killProcessTree(pid: number | undefined, _cwd: string): void {
-  if (pid === undefined) {
-    return;
+  // Auto-background: not a timeout failure — the registry owns the child.
+  if (result.backgrounded) {
+    return {
+      success: true,
+      exit_code: null,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      duration_ms: Date.now() - startTime,
+      stdout_truncated: false,
+      stderr_truncated: false,
+      timed_out: false,
+      backgrounded: true,
+      shell_id: result.backgroundId as string,
+      background_message:
+        "Command exceeded the timeout and was moved to the background. " +
+        "Poll with check_shell_status(shell_id) to retrieve full output.",
+    };
   }
 
-  try {
-    if (process.platform === "win32") {
-      // Windows: use taskkill for process tree termination
-      spawn("taskkill", ["/T", "/F", "/PID", String(pid)], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } else {
-      // POSIX: kill the process group
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // Fallback: kill just the process if group kill fails
-        process.kill(pid, "SIGKILL");
-      }
-    }
-  } catch {
-    // Process may have already exited — ignore kill errors
+  // Spawn failures keep the historical message shape.
+  if (result.diagnosticCode === "PROCESS_SPAWN_FAILED") {
+    return {
+      success: false,
+      exit_code: null,
+      stdout: "",
+      stderr: result.stderr,
+      duration_ms: Date.now() - startTime,
+      stdout_truncated: false,
+      stderr_truncated: false,
+      timed_out: false,
+      error: `Failed to spawn process: ${result.stderr}`,
+    };
   }
+
+  const stdout = capChars(result.stdout, SHELL_STDOUT_MAX_CHARS);
+  const stderr = capChars(result.stderr, SHELL_STDERR_MAX_CHARS);
+  return {
+    success: !result.timedOut && result.exitCode === 0,
+    exit_code: result.timedOut ? null : result.exitCode,
+    stdout: stdout.text,
+    stderr: stderr.text,
+    duration_ms: Date.now() - startTime,
+    stdout_truncated: stdout.truncated,
+    stderr_truncated: stderr.truncated,
+    timed_out: result.timedOut,
+    ...(result.timedOut
+      ? { error: `Command timed out after ${timeoutMs}ms` }
+      : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

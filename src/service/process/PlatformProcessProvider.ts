@@ -33,6 +33,13 @@ export interface ProcessInvocation {
   readonly expectOutput?: boolean;
   /** Identifier used by cancellation registries; optional. */
   readonly cancellationId?: string;
+  /**
+   * Timeout action (chat shell auto-background, PRD §16 / NFR-02): when
+   * set, a timeout hands the child to this callback (the BackgroundShellRegistry
+   * takes over stream collection) and the run resolves with
+   * `backgrounded: true` + `backgroundId` instead of killing the tree.
+   */
+  readonly onTimeoutDetain?: (child: ChildProcess) => string;
 }
 
 export interface ProcessExecutionResult {
@@ -46,6 +53,9 @@ export interface ProcessExecutionResult {
   readonly durationMs: number;
   readonly provider: ProcessProviderKind;
   readonly diagnosticCode?: ProcessDiagnosticCode;
+  /** Auto-background outcome (onTimeoutDetain path) — not a failure. */
+  readonly backgrounded?: boolean;
+  readonly backgroundId?: string;
 }
 
 export type ProcessDiagnosticCode =
@@ -217,6 +227,9 @@ export async function runProcessCapture(
   let streamError: Error | null = null;
   let timedOut = false;
   let settled = false;
+  // Once the child is handed to a background registry, local collection
+  // must stop — the registry attaches its own stream listeners.
+  let detained = false;
 
   return new Promise<ProcessExecutionResult>((resolve) => {
     let child: ChildProcess;
@@ -247,6 +260,33 @@ export async function runProcessCapture(
 
     const timer = setTimeout(() => {
       timedOut = true;
+      if (invocation.onTimeoutDetain) {
+        // Auto-background (chat shell): the registry takes over the child
+        // and its streams; resolve with the partial output captured so far
+        // plus the background id. NOT a timeout failure.
+        detained = true;
+        const backgroundId = invocation.onTimeoutDetain(child);
+        if (settled) return;
+        settled = true;
+        resolve({
+          exitCode: null,
+          signal: null,
+          stdout: normalizeProcessLineEndings(
+            decodeProcessOutput(stdoutCapture.toBuffer())
+          ),
+          stderr: normalizeProcessLineEndings(
+            decodeProcessOutput(stderrCapture.toBuffer())
+          ),
+          stdoutBytes: stdoutCapture.bytes,
+          stderrBytes: stderrCapture.bytes,
+          timedOut: false,
+          durationMs: Date.now() - start,
+          provider: config.kind,
+          backgrounded: true,
+          backgroundId,
+        });
+        return;
+      }
       config.killTree(child);
       finish(child.exitCode, child.signalCode as NodeJS.Signals | null);
     }, invocation.timeoutMs);
@@ -300,9 +340,11 @@ export async function runProcessCapture(
     };
 
     child.stdout?.on("data", (chunk: Buffer) => {
+      if (detained) return;
       stdoutCapture.push(chunk, invocation.outputLimitBytes);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
+      if (detained) return;
       stderrCapture.push(chunk, invocation.outputLimitBytes);
     });
     // Stream errors must not silently discard captured bytes.
