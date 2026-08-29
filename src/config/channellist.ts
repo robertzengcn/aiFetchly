@@ -379,6 +379,8 @@ export const SKILL_INSTALL_UNINSTALL = "skill-install:uninstall";
 export const PROMPT_SKILL_INVOKE = "prompt-skill:invoke";
 /** Renderer-only approval-token channel (review D1) — never a model tool. */
 export const SKILL_INSTALL_APPROVAL_TOKEN = "skill-install:approval-token";
+/** Execute one APPROVED plan command (renderer diagnostics view; TODO 5 / FR-16). */
+export const SKILL_INSTALL_RUN_COMMAND = "skill-install:run-command";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";

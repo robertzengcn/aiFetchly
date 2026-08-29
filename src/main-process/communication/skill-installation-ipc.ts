@@ -24,6 +24,7 @@ import {
   SKILL_INSTALL_ENABLE,
   SKILL_INSTALL_PREPARE,
   SKILL_INSTALL_REPAIR,
+  SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
   SKILL_INSTALL_UNINSTALL,
@@ -352,4 +353,33 @@ export function registerPromptSkillInvokeIpcHandler(): void {
       );
     }
   });
+}
+
+const runCommandSchema = z.object({
+  sessionId: SkillSessionIdSchema,
+  commandId: z.string().min(1).max(100),
+});
+
+// TODO 5 / FR-16: renderer-only execution of one APPROVED plan command.
+// The model never supplies the command — only the persisted template id.
+export function registerSkillInstallRunCommandIpcHandler(): void {
+  ipcMain.handle(
+    SKILL_INSTALL_RUN_COMMAND,
+    async (_event, data: unknown) => {
+      const decoded = decode(runCommandSchema, data);
+      if (!decoded.ok) return denied(decoded.message);
+      try {
+        const outcome = await new SkillInstallationModule().runApprovedCommand(
+          decoded.value.sessionId,
+          decoded.value.commandId
+        );
+        if (!outcome.ok) return denied(outcome.message);
+        return ok(outcome.result);
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "Command execution failed."
+        );
+      }
+    }
+  );
 }

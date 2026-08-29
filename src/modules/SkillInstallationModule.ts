@@ -358,6 +358,13 @@ export class SkillInstallationModule extends BaseModule {
       return this.snapshotFromEntity(cancelled ?? session);
     }
 
+    // The user's card approved this exact revision — record it so
+    // runApprovedCommand's gate (and future audit) can rely on it.
+    if (input.approve) {
+      session.approved = true;
+      await sessions.create(session);
+    }
+
     const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
     const selected =
       input.selectedSkillIds && input.selectedSkillIds.length > 0
@@ -588,6 +595,58 @@ export class SkillInstallationModule extends BaseModule {
   // -------------------------------------------------------------------------
   // status / cancel
   // -------------------------------------------------------------------------
+
+  /**
+   * TODO 5 / FR-16: execute one APPROVED command template from the
+   * session's persisted plan (renderer diagnostics entry point — the model
+   * never supplies the command). Secrets resolve through the credential
+   * service straight into the child env; only env NAMES are audited.
+   */
+  async runApprovedCommand(
+    sessionId: string,
+    commandId: string
+  ): Promise<
+    | { ok: true; result: import("@/service/SkillApprovedCommandRunner").ApprovedCommandRunResult }
+    | { ok: false; message: string }
+  > {
+    const { sessions, events } = await this.getModels();
+    const session = await sessions.findBySessionId(sessionId);
+    if (!session) {
+      return { ok: false, message: "Unknown installation session." };
+    }
+    if (session.approved !== true) {
+      return {
+        ok: false,
+        message: "Commands run only after the plan is approved.",
+      };
+    }
+    const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
+    // Commands run in the session's staging area (acquiredRoot/content).
+    const cwd = path.dirname(plan.source.acquiredRoot);
+    const { SkillApprovedCommandRunner } = await import(
+      "@/service/SkillApprovedCommandRunner"
+    );
+    const runner = new SkillApprovedCommandRunner();
+    const result = await runner.run(
+      plan,
+      commandId,
+      cwd,
+      session.installationId ?? null
+    );
+    await this.appendEvent(
+      events,
+      sessionId,
+      result.ok ? "command-executed" : "command-failed",
+      undefined,
+      undefined,
+      // Audit records names + outcome only — never secret values or raw
+      // output (both may embed credentials).
+      `${commandId}: ok=${result.ok} exit=${result.exitCode ?? "n/a"} ` +
+        `injected=[${result.injectedEnvNames.join(",")}]` +
+        (result.errorCode ? ` code=${result.errorCode}` : "")
+    );
+    return { ok: true, result };
+  }
 
   /**
    * Approval token for the RENDERER approval card only (review D1). Never
