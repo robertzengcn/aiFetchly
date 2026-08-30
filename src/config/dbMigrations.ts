@@ -14,4 +14,10 @@ import type { MigrationInterface } from "typeorm";
  * To add a migration: generate it under src/migrations/, import the class here,
  * and append it to the array. Never edit a shipped migration — add a new one.
  */
-export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [];
+import { Baseline00001788088086796 } from "../migrations/1788088086796-0000-baseline";
+import { SkillInstallation00011788088148864 } from "../migrations/1788088148864-0001-skill-installation";
+
+export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [
+  Baseline00001788088086796,
+  SkillInstallation00011788088148864,
+];
