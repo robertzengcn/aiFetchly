@@ -913,10 +913,12 @@ export class SkillInstallationModule extends BaseModule {
     let secretsDeleted = 0;
     if (input.deleteSecrets !== false) {
       try {
-        const { SkillCredentialService } = await import(
-          "@/service/SkillCredentialService"
+        // SkillCredentialModule (TODO 9): values from the encrypted store
+        // AND binding rows from SQLite.
+        const { SkillCredentialModule } = await import(
+          "@/modules/SkillCredentialModule"
         );
-        secretsDeleted = new SkillCredentialService().delete(
+        secretsDeleted = await new SkillCredentialModule().deleteAll(
           input.installationId
         );
       } catch {

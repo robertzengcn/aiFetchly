@@ -35,7 +35,6 @@ import {
   isSkillInstallerEnabled,
 } from "@/modules/SkillInstallationModule";
 import { SkillSessionIdSchema } from "@/entityTypes/skillInstallationTypes";
-import { SkillCredentialService } from "@/service/SkillCredentialService";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
 function ok<T>(data: T): CommonMessage<T> {
@@ -202,8 +201,13 @@ export function registerSkillInstallationIpcHandlers(): void {
       if (!installationId) {
         return denied("The installation identity is not resolved yet.");
       }
-      const store = new SkillCredentialService();
-      const stored = store.store(
+      // SkillCredentialModule (TODO 9): fail-closed store + opaque binding
+      // row in SQLite, per design §14.1/§20.3.
+      const { SkillCredentialModule } = await import(
+        "@/modules/SkillCredentialModule"
+      );
+      const credentialModule = new SkillCredentialModule();
+      const stored = await credentialModule.store(
         installationId,
         decoded.value.environmentVariable,
         decoded.value.value
