@@ -678,3 +678,6 @@ export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
 // Safety/support reporting for AI-generated output (Microsoft Store Policy
 // 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
 export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";
+
+/** Capability discovery for content reporting (design §13). NOT AI-gated. */
+export const AI_CONTENT_REPORT_CAPABILITIES = "ai:content:report:capabilities";

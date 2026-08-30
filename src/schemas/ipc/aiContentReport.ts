@@ -413,3 +413,9 @@ export const createAIConversationReportSchema = lazySchema(
 export const createAnyAIContentReportSchema = lazySchema(() =>
   z.union([createAIContentReportSchema(), createAIConversationReportV2Schema])
 );
+
+// Capability IPC REQUEST schema (design §13). Validates the renderer→main
+// payload. The RESPONSE is validated separately by the api/ schema (Task 6).
+export const getAIContentReportCapabilitiesSchema = lazySchema(() =>
+  z.strictObject({ schemaVersion: z.literal(1) })
+);
