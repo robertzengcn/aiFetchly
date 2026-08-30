@@ -7,6 +7,13 @@
         <span class="header-title">{{ t('knowledge.ai_assistant') }}</span>
       </div>
       <div class="header-actions">
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
         <v-btn
           icon
           size="small"
@@ -807,6 +814,15 @@ class="message-bubble" :class="{
       :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
       @submitted="onReportSubmitted"
     />
+
+    <!-- Whole-conversation report dialog (design §11.2) -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
@@ -824,7 +840,12 @@ import FileOperationBadge from './FileOperationBadge.vue';
 import type { FileOperationRecord } from '@/entityTypes/fileOperationTypes';
 import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
+import AIConversationReportButton from '@/views/components/aiContentReport/AIConversationReportButton.vue';
+import AIConversationReportDialog from '@/views/components/aiContentReport/AIConversationReportDialog.vue';
+import { buildLegacyConversationSnapshot } from '@/views/components/aiContentReport/conversationReportSnapshot';
+import { getAIContentReportCapabilities } from '@/views/api/aiContentReport';
 import type { ReportableOutputDescriptor } from '@/views/components/aiContentReport/reportableOutput';
+import type { AIContentReportCapabilities } from '@/entityTypes/aiContentReportTypes';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
 // Stream state enum for type safety
@@ -903,6 +924,42 @@ const reportDialogOpen = ref(false);
 const activeReportDescriptor = ref<ReportableOutputDescriptor | null>(null);
 const reportedMessageIds = ref<Set<string>>(new Set());
 
+// Conversation-report (whole-conversation) orchestration (design §11.2).
+// Shares reportedMessageIds with the single-output flow above. NOT AI-gated:
+// the capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
+// Fail-closed: a network error leaves reportCapabilities null, which the
+// computed treats as disabled.
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<
+  ReturnType<typeof buildLegacyConversationSnapshot> | null
+>(null);
+const reportCapabilities = ref<AIContentReportCapabilities | null>(null);
+const reportCapabilitiesLoading = ref(false);
+const conversationReportEnabled = computed(
+  () => reportCapabilities.value?.conversationReporting.enabled === true
+);
+const conversationReportDisabledReason = computed(() =>
+  conversationReportEnabled.value
+    ? ''
+    : t('aiConversationReport.unavailable') ||
+      'Conversation reporting is currently unavailable.'
+);
+
+/**
+ * Derive the active streaming assistant message id so the snapshot excludes
+ * the still-streaming placeholder (eligibility rule, design §7.2). While a
+ * stream is active, the last assistant message is the in-flight placeholder.
+ */
+const activeStreamingAssistantId = computed<string | undefined>(() => {
+  if (!isLoading.value) return undefined;
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') {
+      return messages.value[i].id;
+    }
+  }
+  return undefined;
+});
+
 function buildLegacyChatDescriptor(message: ChatMessage): ReportableOutputDescriptor {
   return {
     surface: 'legacy_chat',
@@ -929,6 +986,29 @@ function onReportSubmitted(): void {
   if (id) {
     reportedMessageIds.value = new Set(reportedMessageIds.value).add(id);
   }
+}
+
+// --- Whole-conversation report handlers (design §11.2) ---------------------
+// The snapshot is captured at open time from the visible messages so a
+// streaming response is frozen; the active streaming placeholder is excluded.
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildLegacyConversationSnapshot({
+    conversationId: conversationId.value ?? '',
+    messages: visibleMessages.value,
+    streamingAssistantMessageId: activeStreamingAssistantId.value,
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  reportedMessageIds.value = new Set([
+    ...reportedMessageIds.value,
+    ...payload.selectedMessageIds,
+  ]);
+  conversationReportDialogOpen.value = false;
 }
 const isUploadingFiles = ref(false);
 const isLoadingHistory = ref(false);
@@ -1295,6 +1375,21 @@ onMounted(async () => {
     next.set(convId, [...current, record]);
     fileOps.value = next;
   });
+
+  // Conversation-report capability fetch (design §11.2). NOT AI-gated: the
+  // capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
+  // Fail-closed: a network error leaves reportCapabilities null, which the
+  // computed treats as disabled.
+  reportCapabilitiesLoading.value = true;
+  void (async () => {
+    try {
+      reportCapabilities.value = await getAIContentReportCapabilities();
+    } catch {
+      reportCapabilities.value = null;
+    } finally {
+      reportCapabilitiesLoading.value = false;
+    }
+  })();
 });
 
 // Clean up file operation subscription
