@@ -150,7 +150,7 @@
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
       auto-grow
-      rows="1"
+      rows="2"
       max-rows="6"
       hide-details
       density="comfortable"
@@ -279,10 +279,29 @@
       >
         <v-icon size="small">mdi-paperclip</v-icon>
       </v-btn>
-      <div v-if="$slots.prepend" class="v2-composer__prepend">
-        <slot name="prepend" />
+      <!-- Lower toolbar (chat-first shell design §10.3): the semantic
+           `controls` slot (mode/model/tool approval) wins; when it is absent
+           the legacy `prepend` slot renders instead so a flag rollback never
+           loses controls. -->
+      <div
+        v-if="$slots.controls || $slots.prepend"
+        class="v2-composer__prepend"
+        data-testid="v2-composer-controls"
+      >
+        <slot name="controls">
+          <slot name="prepend" />
+        </slot>
       </div>
       <div class="v2-composer__actions">
+        <!-- Spoken-response and other trailing actions (design §10.1) render
+             before stop-speaking/send so Send stays the last control. -->
+        <div
+          v-if="$slots['toolbar-actions']"
+          class="v2-composer__toolbar-actions"
+          data-testid="v2-composer-toolbar-actions"
+        >
+          <slot name="toolbar-actions" />
+        </div>
         <v-btn
           v-if="voiceSpeaking"
           icon
@@ -1375,5 +1394,10 @@ watch(
   display: flex;
   align-items: center;
   margin-left: auto;
+}
+.v2-composer__toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 </style>
