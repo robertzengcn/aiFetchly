@@ -149,6 +149,12 @@
         >
           <v-icon size="small">mdi-plus-circle</v-icon>
         </v-btn>
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          @open="onOpenConversationReport"
+        />
         <v-btn
           icon
           size="small"
@@ -176,6 +182,7 @@
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
+        :reported-message-ids="reportedMessageIds"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -183,6 +190,7 @@
         @request-plan-changes="handleRequestPlanChanges"
         @open-artifact="(id: string) => emit('open-artifact', id)"
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @report="onSingleReportRequest"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -665,6 +673,20 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
+    <AIContentReportDialog
+      v-if="singleReportDialogOpen && activeSingleDescriptor"
+      v-model="singleReportDialogOpen"
+      :descriptor="activeSingleDescriptor"
+      @submitted="onSingleReportSubmitted"
+    />
+    <!-- Multi-select conversation report dialog (design §10.3). NOT AI-gated. -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
@@ -854,6 +876,13 @@ import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
 } from "@/service/AIChatErrorMapper";
+import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
+import { buildChatV2ConversationSnapshot } from "@/views/components/aiContentReport/conversationReportSnapshot";
+import { getAIContentReportCapabilities } from "@/views/api/aiContentReport";
+import type { AIContentReportCapabilities } from "@/entityTypes/aiContentReportTypes";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -905,6 +934,28 @@ const lastHandledOpenConversationRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
+// Conversation report (v2) orchestration — lifted from AiChatV2Messages
+// (design §11.1). The single-output dialog and the conversation dialog share
+// this mount point; the per-message button now emits `report` upward.
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<
+  ReturnType<typeof buildChatV2ConversationSnapshot> | null
+>(null);
+const reportedMessageIds = ref<Set<string>>(new Set());
+const reportCapabilities = ref<AIContentReportCapabilities | null>(null);
+const reportCapabilitiesLoading = ref(false);
+const singleReportDialogOpen = ref(false);
+const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
+
+const conversationReportEnabled = computed(
+  () => reportCapabilities.value?.conversationReporting.enabled === true
+);
+const conversationReportDisabledReason = computed(() =>
+  conversationReportEnabled.value
+    ? ""
+    : t("aiConversationReport.unavailable") ||
+      "Conversation reporting is currently unavailable."
+);
 const isStreaming = ref(false);
 const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
@@ -4790,7 +4841,60 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
+  // Conversation-report capability fetch (design §11.1). NOT AI-gated: the
+  // capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
+  // Fail-closed: a network error leaves reportCapabilities null, which the
+  // computed treats as disabled.
+  reportCapabilitiesLoading.value = true;
+  void (async () => {
+    try {
+      reportCapabilities.value = await getAIContentReportCapabilities();
+    } catch {
+      reportCapabilities.value = null;
+    } finally {
+      reportCapabilitiesLoading.value = false;
+    }
+  })();
 });
+
+// --- Conversation + single-output report orchestration (design §11.1) -----
+// `streamStatus` is a computed<Status> (line ~2550); `visibleMessages` is a
+// computed<ChatV2MessageView[]> (line ~2210). The snapshot is captured at open
+// time from the current visible messages so a streaming response is frozen.
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildChatV2ConversationSnapshot({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  reportedMessageIds.value = new Set([
+    ...reportedMessageIds.value,
+    ...payload.selectedMessageIds,
+  ]);
+  conversationReportDialogOpen.value = false;
+}
+
+function onSingleReportRequest(
+  descriptor: ReportableOutputDescriptor
+): void {
+  activeSingleDescriptor.value = descriptor;
+  singleReportDialogOpen.value = true;
+}
+
+function onSingleReportSubmitted(): void {
+  const id = activeSingleDescriptor.value?.context.messageId;
+  if (id) {
+    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+  }
+}
 
 onBeforeUnmount(() => {
   speechController.stop();
