@@ -173,7 +173,7 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "submitted", reportId: string): void;
 }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 // Focus management (PRD §11.3): focus the title on open, restore to the
 // originating Report button on close.
@@ -404,7 +404,7 @@ async function onSubmit(): Promise<void> {
       generatedAt: props.descriptor.context.generatedAt,
       appVersion: "unknown", // filled by main-process service
       platform: "win32", // filled by main-process service
-      locale: useI18n().locale.value || "en-US",
+      locale: locale.value || "en-US",
     },
   };
 
