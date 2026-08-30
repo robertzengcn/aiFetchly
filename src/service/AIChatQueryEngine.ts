@@ -1190,6 +1190,18 @@ export class AIChatQueryEngine {
   }
 
   /**
+   * Drop an uncommitted steering reservation (the DB claim failed). No-op
+   * when the turn already closed.
+   */
+  cancelSteeringReservation(
+    conversationId: string,
+    reservation: AIChatSteeringReservation
+  ): void {
+    const entry = this.activeTurns.get(conversationId);
+    entry?.control?.cancelReservation(reservation.reservationId);
+  }
+
+  /**
    * Phase 3 of steering acceptance: commit the DB-claimed instruction into
    * the turn's mailbox. Returns false when the turn closed first — the
    * caller must restore the row to queued.
