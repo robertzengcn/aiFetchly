@@ -22,8 +22,9 @@ import {
  *   - github.com URL → GitHubPluginFetcher
  *
  * Plain HTTP is rejected; HTTPS only. The single sanctioned exception is the
- * Playwright E2E harness: under AIFETCHLY_E2E=1 (set exclusively by the E2E
- * sanitized launcher, never in production or developer launches) an
+ * Playwright E2E harness: under the launcher-only E2E gate (AIFETCHLY_E2E=1
+ * AND the AIFETCHLY_E2E_ROOT sentinel, both set exclusively by the sanitized
+ * E2E launcher, never in production or developer launches) an
  * http://127.0.0.1|.zip URL from the FakePluginHub loopback server is
  * accepted so the critical install flow can run with zero external network.
  * The E2E network guard already denies every non-loopback host in that mode,
@@ -34,9 +35,16 @@ import {
 
 export type UrlClass = "zip" | "git" | "github" | "rejected" | "unknown";
 
-/** E2E-only: loopback http zip URL served by the FakePluginHub fixture. */
+/**
+ * E2E-only: loopback http zip URL served by the FakePluginHub fixture.
+ * Gated on BOTH AIFETCHLY_E2E=1 and the launcher-only AIFETCHLY_E2E_ROOT
+ * sentinel (set exclusively by the sanitized E2E launcher and validated by
+ * the E2E bootstrap) so a packaged or developer launch with a hostile
+ * AIFETCHLY_E2E env var alone can never activate the exception.
+ */
 function isE2ELoopbackHttpZipUrl(raw: string): boolean {
   if (process.env.AIFETCHLY_E2E !== "1") return false;
+  if (!process.env.AIFETCHLY_E2E_ROOT) return false;
   if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(raw)) return false;
   return /\.zip(\?.*)?$/i.test(raw);
 }
