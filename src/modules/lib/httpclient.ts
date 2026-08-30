@@ -34,6 +34,23 @@ export function isRefreshTokenInvalidError(error: unknown): boolean {
   );
 }
 
+/**
+ * Error thrown when an HTTP response has a non-2xx status (design §15.5).
+ * Preserves the numeric status that `new Error(res.statusText)` discarded, so
+ * callers (e.g. `AIContentReportService.extractStatus`, the error mapper) can
+ * map 400/413/422/429/500/503 to structured error codes without string-sniffing.
+ */
+export class HttpResponseError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  constructor(status: number, statusText: string) {
+    super(statusText || `HTTP ${status}`);
+    this.name = "HttpResponseError";
+    this.status = status;
+    this.statusText = statusText;
+  }
+}
+
 // export type RemoteResp = {
 //   status: boolean,
 //   msg: string,
@@ -236,7 +253,7 @@ export class HttpClient {
       }
     }
 
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) throw new HttpResponseError(res.status, res.statusText);
 
     //   if (options.parseResponse !== false && res.status !== 204)
     //     return res.json();
