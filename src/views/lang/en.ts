@@ -3133,4 +3133,48 @@ export default {
         "The report could not be submitted. Your details have been kept so you can try again.",
     },
   },
+  aiConversationReport: {
+    action: "Report conversation",
+    actionAriaLabel: "Report this conversation for review",
+    unavailable: "Conversation reporting is currently unavailable.",
+    noEligibleOutputs:
+      "There are no reportable AI outputs in this conversation yet.",
+    dialogTitle: "Report conversation",
+    selectionInstruction: "Select the AI outputs to report.",
+    selectionCount: "{n} selected",
+    selectAll: "Select all",
+    includeRelatedUserContext:
+      "Include my related message that prompted the AI output",
+    userMessageWillBeSent:
+      "If you continue, your selected related message will be sent to AiFetchly along with the AI outputs.",
+    attachmentOmitted:
+      "An attachment in your message was omitted; only the message text is included.",
+    consentDefault:
+      "Only the selected AI outputs and your description will be sent. Your other messages, files, and AI reasoning are not included.",
+    consentWithUserContext:
+      "You have chosen to include your related message. It will be sent with the AI outputs you selected.",
+    truncationWarning:
+      "Long outputs were trimmed to fit the report size limit.",
+    continueAndSubmit: "Submit report",
+    conversationChanged:
+      "The conversation changed while the report was open. Please reopen it.",
+    categoryLabel: "What is wrong with this conversation?",
+    commentLabel: "Additional details (optional)",
+    itemTypes: {
+      text: "Text",
+      image: "Image",
+      mixed: "Text and images",
+      plan: "Plan",
+      artifact: "Artifact",
+    },
+    errors: {
+      selectionRequired: "Select at least one AI output to report.",
+      selectionLimit: "You can select at most 10 AI outputs.",
+      imageLimit: "A report can include at most 3 images.",
+      relatedMessageUnavailable:
+        "No related message is available for the selected output.",
+      unsupportedSchema:
+        "This report type is not supported. Please update the app.",
+    },
+  },
 };

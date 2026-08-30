@@ -68,7 +68,11 @@ const REQUIRED_CATEGORIES = [
 function readPath(obj: unknown, path: string[]): unknown {
   let cur: unknown = obj;
   for (const seg of path) {
-    if (cur && typeof cur === "object" && seg in (cur as Record<string, unknown>)) {
+    if (
+      cur &&
+      typeof cur === "object" &&
+      seg in (cur as Record<string, unknown>)
+    ) {
       cur = (cur as Record<string, unknown>)[seg];
     } else {
       return undefined;
@@ -82,21 +86,30 @@ describe("AI content report i18n parity", () => {
     describe(`lang ${langCode}`, () => {
       it("has the aiContentReport top-level block", () => {
         const block = readPath(langObj, ["aiContentReport"]);
-        expect(block, `${langCode} missing aiContentReport block`).toBeDefined();
+        expect(
+          block,
+          `${langCode} missing aiContentReport block`
+        ).toBeDefined();
         expect(typeof block).toBe("object");
       });
 
       for (const key of REQUIRED_TOP_KEYS) {
         it(`has aiContentReport.${key}`, () => {
           const val = readPath(langObj, ["aiContentReport", key]);
-          expect(val, `${langCode} missing aiContentReport.${key}`).toBeDefined();
+          expect(
+            val,
+            `${langCode} missing aiContentReport.${key}`
+          ).toBeDefined();
         });
       }
 
       for (const code of REQUIRED_ERROR_CODES) {
         it(`has aiContentReport.errors.${code}`, () => {
           const val = readPath(langObj, ["aiContentReport", "errors", code]);
-          expect(val, `${langCode} missing aiContentReport.errors.${code}`).toBeDefined();
+          expect(
+            val,
+            `${langCode} missing aiContentReport.errors.${code}`
+          ).toBeDefined();
           expect(typeof val).toBe("string");
           expect((val as string).length).toBeGreaterThan(0);
         });
@@ -105,11 +118,99 @@ describe("AI content report i18n parity", () => {
       for (const cat of REQUIRED_CATEGORIES) {
         it(`has aiContentReport.categories.${cat}`, () => {
           const val = readPath(langObj, ["aiContentReport", "categories", cat]);
-          expect(val, `${langCode} missing aiContentReport.categories.${cat}`).toBeDefined();
+          expect(
+            val,
+            `${langCode} missing aiContentReport.categories.${cat}`
+          ).toBeDefined();
           expect(typeof val).toBe("string");
           expect((val as string).length).toBeGreaterThan(0);
         });
       }
     });
+  }
+});
+
+const REQUIRED_CONV_REPORT_TOP_KEYS = [
+  "action",
+  "actionAriaLabel",
+  "unavailable",
+  "noEligibleOutputs",
+  "dialogTitle",
+  "selectionInstruction",
+  "selectionCount",
+  "selectAll",
+  "includeRelatedUserContext",
+  "userMessageWillBeSent",
+  "attachmentOmitted",
+  "consentDefault",
+  "consentWithUserContext",
+  "truncationWarning",
+  "continueAndSubmit",
+  "conversationChanged",
+  "categoryLabel",
+  "commentLabel",
+  "itemTypes",
+  "errors",
+] as const;
+
+const REQUIRED_CONV_REPORT_ITEM_TYPES = [
+  "text",
+  "image",
+  "mixed",
+  "plan",
+  "artifact",
+] as const;
+
+const REQUIRED_CONV_REPORT_ERRORS = [
+  "selectionRequired",
+  "selectionLimit",
+  "imageLimit",
+  "relatedMessageUnavailable",
+  "unsupportedSchema",
+] as const;
+
+describe("aiConversationReport i18n parity", () => {
+  for (const [langCode, langObj] of Object.entries(LANGS)) {
+    it(`has the aiConversationReport top-level block (${langCode})`, () => {
+      const block = readPath(langObj, ["aiConversationReport"]);
+      expect(
+        block,
+        `${langCode} missing aiConversationReport block`
+      ).toBeDefined();
+    });
+
+    for (const key of REQUIRED_CONV_REPORT_TOP_KEYS) {
+      it(`has aiConversationReport.${key} (${langCode})`, () => {
+        const val = readPath(langObj, ["aiConversationReport", key]);
+        expect(
+          val,
+          `${langCode} missing aiConversationReport.${key}`
+        ).toBeDefined();
+      });
+    }
+
+    for (const itemType of REQUIRED_CONV_REPORT_ITEM_TYPES) {
+      it(`has aiConversationReport.itemTypes.${itemType} (${langCode})`, () => {
+        const val = readPath(langObj, [
+          "aiConversationReport",
+          "itemTypes",
+          itemType,
+        ]);
+        expect(
+          val,
+          `${langCode} missing aiConversationReport.itemTypes.${itemType}`
+        ).toBeDefined();
+      });
+    }
+
+    for (const code of REQUIRED_CONV_REPORT_ERRORS) {
+      it(`has aiConversationReport.errors.${code} (${langCode})`, () => {
+        const val = readPath(langObj, ["aiConversationReport", "errors", code]);
+        expect(
+          val,
+          `${langCode} missing aiConversationReport.errors.${code}`
+        ).toBeDefined();
+      });
+    }
   }
 });

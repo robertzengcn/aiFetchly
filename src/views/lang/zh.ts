@@ -3001,4 +3001,41 @@ export default {
       unknown: "无法提交举报。您的填写内容已保留，可重试。",
     },
   },
+  aiConversationReport: {
+    action: "举报对话",
+    actionAriaLabel: "举报此对话以供审核",
+    unavailable: "对话举报功能当前不可用。",
+    noEligibleOutputs: "此对话中暂无可举报的 AI 输出。",
+    dialogTitle: "举报对话",
+    selectionInstruction: "选择要举报的 AI 输出。",
+    selectionCount: "已选择 {n} 项",
+    selectAll: "全选",
+    includeRelatedUserContext: "包含我触发该 AI 输出的相关消息",
+    userMessageWillBeSent:
+      "继续后，您选择的相关消息将与 AI 输出一并发送给 AiFetchly。",
+    attachmentOmitted: "您消息中的附件已被省略；仅包含消息文本。",
+    consentDefault:
+      "仅发送您选择的 AI 输出和说明。您的其他消息、文件及 AI 推理过程不会包含在内。",
+    consentWithUserContext:
+      "您已选择包含相关消息。该消息将与您选择的 AI 输出一并发送。",
+    truncationWarning: "过长的输出已裁剪以符合报告大小限制。",
+    continueAndSubmit: "提交举报",
+    conversationChanged: "报告打开期间对话已更改。请重新打开。",
+    categoryLabel: "此对话有什么问题？",
+    commentLabel: "补充说明（可选）",
+    itemTypes: {
+      text: "文本",
+      image: "图片",
+      mixed: "文本和图片",
+      plan: "计划",
+      artifact: "产物",
+    },
+    errors: {
+      selectionRequired: "请至少选择一个要举报的 AI 输出。",
+      selectionLimit: "最多可选择 10 个 AI 输出。",
+      imageLimit: "每份报告最多包含 3 张图片。",
+      relatedMessageUnavailable: "所选输出没有可用的相关消息。",
+      unsupportedSchema: "不支持此举报类型。请更新应用。",
+    },
+  },
 };

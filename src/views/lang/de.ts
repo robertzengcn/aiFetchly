@@ -3165,4 +3165,50 @@ export default {
         "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
     },
   },
+  aiConversationReport: {
+    action: "Konversation melden",
+    actionAriaLabel: "Diese Konversation zur Überprüfung melden",
+    unavailable:
+      "Die Funktion zur Konversationsmeldung ist derzeit nicht verfügbar.",
+    noEligibleOutputs:
+      "In dieser Konversation gibt es noch keine meldbaren KI-Ausgaben.",
+    dialogTitle: "Konversation melden",
+    selectionInstruction: "Wählen Sie die zu meldenden KI-Ausgaben aus.",
+    selectionCount: "{n} ausgewählt",
+    selectAll: "Alle auswählen",
+    includeRelatedUserContext:
+      "Meine verwandte Nachricht einbeziehen, die die KI-Ausgabe ausgelöst hat",
+    userMessageWillBeSent:
+      "Wenn Sie fortfahren, wird Ihre ausgewählte verwandte Nachricht zusammen mit den KI-Ausgaben an AiFetchly gesendet.",
+    attachmentOmitted:
+      "Ein Anhang in Ihrer Nachricht wurde weggelassen; nur der Nachrichtentext ist enthalten.",
+    consentDefault:
+      "Es werden nur die ausgewählten KI-Ausgaben und Ihre Beschreibung gesendet. Ihre anderen Nachrichten, Dateien und die KI-Begründung werden nicht einbezogen.",
+    consentWithUserContext:
+      "Sie haben sich entschieden, Ihre verwandte Nachricht einzubeziehen. Sie wird zusammen mit den von Ihnen ausgewählten KI-Ausgaben gesendet.",
+    truncationWarning:
+      "Zu lange Ausgaben wurden gekürzt, um das Größenlimit des Berichts einzuhalten.",
+    continueAndSubmit: "Bericht senden",
+    conversationChanged:
+      "Die Konversation hat sich geändert, während der Bericht geöffnet war. Bitte öffnen Sie ihn erneut.",
+    categoryLabel: "Was ist mit dieser Konversation nicht in Ordnung?",
+    commentLabel: "Zusätzliche Details (optional)",
+    itemTypes: {
+      text: "Text",
+      image: "Bild",
+      mixed: "Text und Bilder",
+      plan: "Plan",
+      artifact: "Artefakt",
+    },
+    errors: {
+      selectionRequired:
+        "Wählen Sie mindestens eine KI-Ausgabe zum Melden aus.",
+      selectionLimit: "Sie können höchstens 10 KI-Ausgaben auswählen.",
+      imageLimit: "Ein Bericht kann höchstens 3 Bilder enthalten.",
+      relatedMessageUnavailable:
+        "Für die ausgewählte Ausgabe ist keine verwandte Nachricht verfügbar.",
+      unsupportedSchema:
+        "Dieser Berichtstyp wird nicht unterstützt. Bitte aktualisieren Sie die App.",
+    },
+  },
 };

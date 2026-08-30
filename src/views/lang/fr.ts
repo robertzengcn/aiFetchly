@@ -3153,4 +3153,49 @@ export default {
         "Le signalement n'a pas pu être envoyé. Vos informations ont été conservées pour que vous puissiez réessayer.",
     },
   },
+  aiConversationReport: {
+    action: "Signaler la conversation",
+    actionAriaLabel: "Signaler cette conversation pour révision",
+    unavailable:
+      "La fonction de signalement de conversation est actuellement indisponible.",
+    noEligibleOutputs:
+      "Il n'y a pas encore de sorties d'IA signalables dans cette conversation.",
+    dialogTitle: "Signaler la conversation",
+    selectionInstruction: "Sélectionnez les sorties d'IA à signaler.",
+    selectionCount: "{n} sélectionné(s)",
+    selectAll: "Tout sélectionner",
+    includeRelatedUserContext:
+      "Inclure mon message associé à l'origine de la sortie d'IA",
+    userMessageWillBeSent:
+      "Si vous continuez, votre message associé sélectionné sera envoyé à AiFetchly avec les sorties d'IA.",
+    attachmentOmitted:
+      "Une pièce jointe de votre message a été omise ; seul le texte du message est inclus.",
+    consentDefault:
+      "Seules les sorties d'IA sélectionnées et votre description seront envoyées. Vos autres messages, fichiers et le raisonnement de l'IA ne sont pas inclus.",
+    consentWithUserContext:
+      "Vous avez choisi d'inclure votre message associé. Il sera envoyé avec les sorties d'IA que vous avez sélectionnées.",
+    truncationWarning:
+      "Les sorties trop longues ont été tronquées pour respecter la limite de taille du signalement.",
+    continueAndSubmit: "Envoyer le signalement",
+    conversationChanged:
+      "La conversation a changé pendant que le signalement était ouvert. Veuillez le rouvrir.",
+    categoryLabel: "Quel est le problème avec cette conversation ?",
+    commentLabel: "Détails supplémentaires (facultatif)",
+    itemTypes: {
+      text: "Texte",
+      image: "Image",
+      mixed: "Texte et images",
+      plan: "Plan",
+      artifact: "Artefact",
+    },
+    errors: {
+      selectionRequired: "Sélectionnez au moins une sortie d'IA à signaler.",
+      selectionLimit: "Vous pouvez sélectionner au maximum 10 sorties d'IA.",
+      imageLimit: "Un signalement peut contenir au maximum 3 images.",
+      relatedMessageUnavailable:
+        "Aucun message associé n'est disponible pour la sortie sélectionnée.",
+      unsupportedSchema:
+        "Ce type de signalement n'est pas pris en charge. Veuillez mettre à jour l'application.",
+    },
+  },
 };
