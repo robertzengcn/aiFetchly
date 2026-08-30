@@ -2971,6 +2971,8 @@ export default {
     installFailed: "安装失败",
   },
   skillInstall: {
+planCredentials: "需要凭据",
+diagnostics: "诊断信息",
   title: "技能安装",
   reviewHint: "在执行前审查安装计划（来源、依赖、凭据、位置）。",
   approve: "批准",

@@ -29,6 +29,7 @@ import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
 import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
 import type {
   InstallSnapshot,
+  SafePlanView,
   SkillInstallPlan,
   SkillInstallationState,
   SkillInstallNextAction,
@@ -1238,8 +1239,34 @@ export class SkillInstallationModule extends BaseModule {
       planRevision:
         session.planRevision !== "none" ? session.planRevision : null,
       safeSummary: this.buildSafeSummary(session, plan),
+      // TODO 8 / design §22.1: structured fields for the card's review +
+      // diagnostics sections (source, revision, skills, deps, secrets, mode).
+      ...(plan ? { safePlan: this.buildSafePlanView(plan) } : {}),
       recoverable: !["failed"].includes(session.state),
       ...(session.failureCode ? { errorCode: session.failureCode } : {}),
+    };
+  }
+
+  /** Structured, non-secret plan view for the renderer card. */
+  private buildSafePlanView(plan: SkillInstallPlan): SafePlanView {
+    return {
+      source: plan.source.canonicalUri,
+      revision: plan.source.resolvedRevision.slice(0, 12),
+      skills: plan.discoveredSkills.map((skill) => ({
+        name: skill.name,
+        kind: skill.kind,
+        description: skill.description,
+      })),
+      dependencies: plan.dependencies.map((d) => ({
+        name: d.name,
+        status: d.currentStatus,
+        ...(d.installMethod !== undefined
+          ? { installMethod: d.installMethod }
+          : {}),
+      })),
+      credentials: plan.credentials.map((c) => c.environmentVariable),
+      mode: plan.activation.mode,
+      warnings: plan.warnings.map((w) => w.message),
     };
   }
 

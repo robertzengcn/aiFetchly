@@ -3094,6 +3094,8 @@ export default {
     installFailed: "Install failed",
   },
   skillInstall: {
+planCredentials: "Credentials required",
+diagnostics: "Diagnostics",
   title: "Skill installation",
   reviewHint: "Review the plan (source, dependencies, credentials, location) before it runs.",
   approve: "Approve",

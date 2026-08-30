@@ -273,6 +273,27 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     }
   }, 60_000);
 
+  it("snapshots carry a structured non-secret safePlan (TODO 8 / §22.1)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-safeplan",
+      source: fixtureRoot,
+    });
+    expect(prepared.safePlan).toBeDefined();
+    if (!prepared.safePlan) return;
+    expect(prepared.safePlan.source).toContain("video-use-fixture");
+    expect(prepared.safePlan.revision).toHaveLength(12);
+    expect(prepared.safePlan.skills[0]?.name).toBe("video-use");
+    expect(prepared.safePlan.mode).toBe("managed-copy");
+    // Dependencies present (ffmpeg from install.md) with a status.
+    expect(prepared.safePlan.dependencies.length).toBeGreaterThan(0);
+    // NO instruction content or secret VALUES in the structured view —
+    // credential NAMES are the intended card content (§22.1).
+    const serialized = JSON.stringify(prepared.safePlan);
+    expect(serialized).not.toContain("Never delete user footage");
+    expect(serialized).not.toContain("sk-");
+  }, 120_000);
+
   it("emits monotonic SKILL_INSTALL_PROGRESS events per audited step (TODO 7)", async () => {
     const module = new SkillInstallationModule();
     const events: { sessionId: string; seq: number; step: string }[] = [];

@@ -183,6 +183,25 @@ export interface SkillInstallPlan {
 // Snapshot (design §8.2) — the tool/IPC response envelope
 // ---------------------------------------------------------------------------
 
+/** Structured, renderer-facing plan view (design §22.1 / TODO 8). */
+export interface SafePlanView {
+  readonly source: string;
+  readonly revision: string;
+  readonly skills: readonly {
+    readonly name: string;
+    readonly kind: string;
+    readonly description: string;
+  }[];
+  readonly dependencies: readonly {
+    readonly name: string;
+    readonly status: string;
+    readonly installMethod?: string;
+  }[];
+  readonly credentials: readonly string[];
+  readonly mode: string;
+  readonly warnings: readonly string[];
+}
+
 export interface InstallSnapshot {
   readonly sessionId: SkillInstallationSessionId;
   readonly installationId: SkillInstallationId | null;
@@ -190,6 +209,8 @@ export interface InstallSnapshot {
   readonly nextAction: SkillInstallNextAction;
   readonly planRevision: string | null;
   readonly safeSummary: string;
+  /** Structured fields when a plan is loaded (awaiting_approval onward). */
+  readonly safePlan?: SafePlanView;
   readonly recoverable: boolean;
   readonly errorCode?: string;
 }

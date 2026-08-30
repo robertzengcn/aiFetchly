@@ -3062,6 +3062,8 @@ export default {
     installFailed: "インストールに失敗しました",
   },
   skillInstall: {
+planCredentials: "必要な認証情報",
+diagnostics: "診断情報",
   title: "スキルのインストール",
   reviewHint: "実行前にプラン（ソース、依存関係、認証情報、場所）を確認してください。",
   approve: "承認",

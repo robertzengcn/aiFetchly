@@ -3125,6 +3125,8 @@ export default {
     installFailed: "Error al instalar",
   },
   skillInstall: {
+planCredentials: "Credenciales requeridas",
+diagnostics: "Diagnóstico",
   title: "Instalación de habilidad",
   reviewHint: "Revisa el plan (origen, dependencias, credenciales, ubicación) antes de ejecutarlo.",
   approve: "Aprobar",

@@ -3109,6 +3109,8 @@ export default {
     installFailed: "Échec de l'installation",
   },
   skillInstall: {
+planCredentials: "Identifiants requis",
+diagnostics: "Diagnostic",
   title: "Installation de compétence",
   reviewHint: "Vérifiez le plan (source, dépendances, identifiants, emplacement) avant de l'exécuter.",
   approve: "Approuver",

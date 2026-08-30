@@ -3122,6 +3122,8 @@ export default {
     installFailed: "Installation fehlgeschlagen",
   },
   skillInstall: {
+planCredentials: "Erforderliche Zugangsdaten",
+diagnostics: "Diagnose",
   title: "Fähigkeitsinstallation",
   reviewHint: "Prüfen Sie den Plan (Quelle, Abhängigkeiten, Zugangsdaten, Speicherort), bevor er ausgeführt wird.",
   approve: "Genehmigen",

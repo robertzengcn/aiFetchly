@@ -191,6 +191,76 @@ describe("SkillInstallCard", () => {
     expect(cancelSkillInstall).toHaveBeenCalledWith("sess-1");
   });
 
+  it("renders structured plan fields when the snapshot carries safePlan (TODO 8)", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [
+            {
+              name: "video-use",
+              kind: "prompt",
+              description: "Edit and produce videos",
+            },
+          ],
+          dependencies: [
+            { name: "ffmpeg", status: "satisfied" },
+            { name: "ffprobe", status: "missing" },
+          ],
+          credentials: ["ELEVENLABS_API_KEY"],
+          mode: "managed-copy",
+          warnings: [],
+        },
+      })
+    );
+    expect(wrapper.find('[data-testid="skill-install-plan"]').exists()).toBe(
+      true
+    );
+    const skillRows = wrapper.findAll('[data-testid="skill-install-plan-skill"]');
+    expect(skillRows).toHaveLength(1);
+    expect(skillRows[0].text()).toContain("video-use");
+    expect(skillRows[0].text()).toContain("prompt");
+    const deps = wrapper.find('[data-testid="skill-install-plan-deps"]');
+    expect(deps.text()).toContain("ffmpeg: satisfied");
+    expect(deps.text()).toContain("ffprobe: missing");
+    const creds = wrapper.find('[data-testid="skill-install-plan-creds"]');
+    expect(creds.text()).toContain("ELEVENLABS_API_KEY");
+    // Source + revision + mode chip present.
+    const plan = wrapper.find('[data-testid="skill-install-plan"]');
+    expect(plan.text()).toContain("https://github.com/a/video-use");
+    expect(plan.text()).toContain("abc123def456");
+    expect(plan.text()).toContain("managed-copy");
+  });
+
+  it("renders an expandable diagnostics view with warnings (TODO 8)", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/b",
+          revision: "rev",
+          skills: [],
+          dependencies: [],
+          credentials: [],
+          mode: "managed-copy",
+          warnings: ["Multiple independent skills were discovered"],
+        },
+      })
+    );
+    const details = wrapper.find('[data-testid="skill-install-diagnostics"]');
+    expect(details.exists()).toBe(true);
+    expect(details.text()).toContain("Multiple independent skills");
+    // Raw safe summary lives inside the diagnostics view.
+    expect(details.text()).toContain("source verified");
+  });
+
+  it("omits the plan section when no safePlan is present", () => {
+    const wrapper = mountCard(makeSnapshot());
+    expect(wrapper.find('[data-testid="skill-install-plan"]').exists()).toBe(
+      false
+    );
+  });
+
   it("approve failure emits failed and clears busy (D2)", async () => {
     vi.mocked(approveSkillInstall).mockResolvedValue(null);
     const wrapper = mountCard(makeSnapshot());

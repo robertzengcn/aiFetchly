@@ -29,6 +29,78 @@
         class="my-2"
       />
 
+      <!-- Structured plan fields (TODO 8 / design §22.1): source, revision,
+           skills, dependencies, credentials, mode, warnings — shown whenever
+           the snapshot carries a safePlan (review state onward). -->
+      <div
+        v-if="safePlan"
+        data-testid="skill-install-plan"
+        class="mt-2 text-body-2"
+      >
+        <div class="d-flex ga-1 flex-wrap align-center">
+          <v-chip size="x-small" label variant="tonal">
+            {{ safePlan.mode }}
+          </v-chip>
+          <span class="text-caption text-medium-emphasis">
+            {{ safePlan.source }} @ {{ safePlan.revision }}
+          </span>
+        </div>
+        <div
+          v-for="skillRow in safePlan.skills"
+          :key="skillRow.name"
+          class="mt-1"
+          data-testid="skill-install-plan-skill"
+        >
+          <strong>{{ skillRow.name }}</strong>
+          <span class="text-caption text-medium-emphasis">
+            ({{ skillRow.kind }})
+          </span>
+          <div class="text-caption">{{ skillRow.description }}</div>
+        </div>
+        <div
+          v-if="safePlan.dependencies.length > 0"
+          class="mt-1 text-caption"
+          data-testid="skill-install-plan-deps"
+        >
+          <span
+            v-for="dep in safePlan.dependencies"
+            :key="dep.name"
+            class="mr-2"
+            :class="dep.status === 'satisfied' ? 'text-success' : 'text-warning'"
+          >
+            {{ dep.name }}: {{ dep.status }}
+          </span>
+        </div>
+        <div
+          v-if="safePlan.credentials.length > 0"
+          class="mt-1 text-caption"
+          data-testid="skill-install-plan-creds"
+        >
+          {{ t("skillInstall.planCredentials") }}:
+          {{ safePlan.credentials.join(", ") }}
+        </div>
+      </div>
+
+      <!-- Expandable diagnostics (TODO 8): raw safe summary + warnings. -->
+      <details
+        v-if="snapshotView?.safeSummary || safePlan?.warnings?.length"
+        class="mt-1"
+        data-testid="skill-install-diagnostics"
+      >
+        <summary class="text-caption text-medium-emphasis">
+          {{ t("skillInstall.diagnostics") }}
+        </summary>
+        <div
+          v-if="safePlan?.warnings?.length"
+          class="text-caption text-warning mt-1"
+        >
+          <div v-for="(warning, i) in safePlan.warnings" :key="i">
+            {{ warning }}
+          </div>
+        </div>
+        <pre class="text-caption mt-1">{{ snapshotView?.safeSummary }}</pre>
+      </details>
+
       <!-- Plan review (awaiting_approval) -->
       <div
         v-if="snapshot?.state === 'awaiting_approval'"
@@ -238,6 +310,9 @@ const stateLabel = computed(() => {
   const label = t(key);
   return label === key ? snapshotView.value?.state ?? "" : label;
 });
+
+/** Structured plan fields when the snapshot carries a safePlan (TODO 8). */
+const safePlan = computed(() => snapshotView.value?.safePlan ?? null);
 
 /** The environment variable name from the safe summary, when surfaced. */
 const secretVariableName = computed(() => {
