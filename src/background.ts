@@ -478,13 +478,13 @@ function initialize() {
         app.setAsDefaultProtocolClient(protocolScheme);
       }
     } else {
-      console.log("protocolScheme:", protocolScheme);
-      console.log("process.execPath:", process.execPath);
-      console.log(
-        "path.resolve(process.argv[1]):",
-        path.resolve(process.argv[1])
-      );
-      console.log("path:", path.resolve(process.argv[1]));
+      log.info("[dev] protocolScheme:", protocolScheme);
+      log.info("[dev] process.execPath:", process.execPath);
+      log.info("[dev] entry:", path.resolve(process.argv[1]));
+      // Dev-only protocol registration. On macOS Sequoia+ the App
+      // Management TCC protection blocks protocol-registry from rewriting
+      // another app bundle's Info.plist (EPERM), so treat failure as
+      // non-fatal: deep-link routing in dev does not depend on it.
       ProtocolRegistry.register(
         protocolScheme,
         `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
@@ -494,8 +494,20 @@ function initialize() {
           terminal: true,
         }
       )
-        .then(() => console.log("Successfully registered"))
-        .catch((e) => console.error(e));
+        .then(() => log.info("[dev] protocol registered successfully"))
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (
+            msg.includes("App Management Permissions") ||
+            msg.includes("EPERM")
+          ) {
+            log.warn(
+              "[dev] protocol registration skipped (macOS App Management permission required). Deep links in dev are unaffected."
+            );
+          } else {
+            log.error("[dev] protocol registration failed:", msg);
+          }
+        });
       // app.setAsDefaultProtocolClient(protocolScheme);
     }
   }
