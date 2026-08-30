@@ -41,7 +41,7 @@ const props = withDefaults(
     /** Icon-only variant for compact headers. */
     compact?: boolean;
   }>(),
-  { loading: false, compact: false }
+  { loading: false, compact: false, disabledReason: "" }
 );
 
 const emit = defineEmits<{
