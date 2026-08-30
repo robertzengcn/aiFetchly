@@ -1660,6 +1660,7 @@ export default {
     bulk_email: "Bulk Email",
     google_maps: "Google Maps",
     yandex_maps: "Yandex Maps",
+    ai_message: "Tâche de message IA",
     ai_message_task: "Tâche de message IA",
     ai_message_task_create: "Créer une tâche de message IA",
     ai_message_task_edit: "Modifier la tâche de message IA",

@@ -303,11 +303,7 @@ const statusOptions = computed(() => [
 ])
 
 const taskTypeOptions = computed(() => [
-  { title: t('schedule.search_task'), value: TaskType.SEARCH },
-  { title: t('schedule.email_extract'), value: TaskType.EMAIL_EXTRACT },
-  { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
-  { title: t('schedule.google_maps'), value: TaskType.GOOGLE_MAPS },
-  { title: t('schedule.yandex_maps'), value: TaskType.YANDEX_MAPS },
+  { title: t('schedule.ai_message'), value: TaskType.AI_MESSAGE },
 ])
 
 const triggerTypeOptions = computed(() => [
