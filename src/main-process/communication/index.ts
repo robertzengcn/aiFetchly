@@ -27,6 +27,7 @@ import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -81,6 +82,10 @@ export function registerCommunicationIpcHandlers(
     // Register the window so scheduled-loop turn completions can broadcast a
     // narrow conversation-update refresh hint to the renderer (FR-11).
     AIChatConversationUpdateBroadcaster.getInstance().register(win);
+    // Interactive stream chunks + pending-message lifecycle broadcasts
+    // (message-queue design §14.2) — queue-dispatched turns start in the
+    // main process and must reach every live window.
+    AIChatV2EventBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
     registerYellowPagesIpcHandlers();

@@ -15,6 +15,15 @@ export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
 export const USER_AI_AUTO_PLAN = "user_ai_auto_plan";
 /**
+ * Message-queue kill switches (PRD §18). Queue on = ordinary sends route
+ * through durable pending rows; steering requires queue. Disabled queue
+ * still lists/resumes/removes existing rows so nothing is orphaned.
+ * Values "true"/"false"; default-on.
+ */
+export const AI_CHAT_MESSAGE_QUEUE_ENABLED = "ai_chat_message_queue_enabled";
+export const AI_CHAT_MESSAGE_STEERING_ENABLED =
+  "ai_chat_message_steering_enabled";
+/**
  * Desktop float notice when the main AI agent finishes a turn or a plan is
  * ready for approval. Stored in system_setting (AI Preferences toggle).
  * Default-on; values "1"/"0" from the settings UI.

@@ -321,7 +321,8 @@ export type ChatV2StreamEventType =
   | "goal_state"
   | "goal_iteration"
   | "goal_evidence"
-  | "goal_verification";
+  | "goal_verification"
+  | "direction_updated";
 
 export interface ChatV2StreamChunk {
   eventType: ChatV2StreamEventType;
@@ -386,6 +387,10 @@ export interface ChatV2StreamChunk {
   goalIteration?: ChatV2GoalIterationEvent;
   goalEvidence?: ChatV2GoalEvidenceEvent;
   goalVerification?: ChatV2GoalVerificationEvent;
+  // direction_updated: ids/offset only — never steering content (§11.5).
+  directionBoundary?: AIChatSafeBoundary;
+  directionPendingMessageIds?: string[];
+  directionContentOffset?: number;
 }
 
 /**
