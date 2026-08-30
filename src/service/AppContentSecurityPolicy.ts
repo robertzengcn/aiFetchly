@@ -41,6 +41,14 @@ export function buildAppContentSecurityPolicy(isDevelopment: boolean): string {
     isDevelopment
       ? "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*"
       : "script-src 'self'",
+    // Vite's dev server serves `new Worker(new URL(...))` imports as in-memory
+    // blob: workers during HMR. Without an explicit worker-src, workers fall
+    // back to script-src, which has no blob: scheme, so the blob worker is
+    // blocked. Mirror the dev script-src affordances here and add blob:.
+    // Production ships no blob workers, so worker-src stays strict 'self'.
+    isDevelopment
+      ? "worker-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:* blob:"
+      : "worker-src 'self'",
     ...commonDirectives,
   ].join("; ");
 }
