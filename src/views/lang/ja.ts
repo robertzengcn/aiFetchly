@@ -3198,7 +3198,6 @@ export default {
     insights: "インサイト",
     knowledgeLibrary: "ナレッジライブラリ",
     plugins: "プラグイン",
-    backToApp: "アプリに戻る",
     loadOlder: "過去のメッセージを読み込む",
     empty: {
       title: "何でも質問するか、左の会話を選択してください。",

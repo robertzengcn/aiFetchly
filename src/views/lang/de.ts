@@ -3259,7 +3259,6 @@ export default {
     insights: "Einblicke",
     knowledgeLibrary: "Wissensbibliothek",
     plugins: "Plugins",
-    backToApp: "Zurück zur App",
     loadOlder: "Ältere Nachrichten laden",
     empty: {
       title: "Stelle eine Frage oder wähle links eine Unterhaltung.",

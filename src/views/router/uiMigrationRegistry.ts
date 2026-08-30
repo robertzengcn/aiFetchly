@@ -51,6 +51,14 @@ export const SCHEDULE_FAMILY = "scheduling";
  * - `converged` — full template migration complete.
  */
 export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
+  // --- Chat center (chat-first shell design §8) ----------------------------
+  {
+    surfaceId: "chat-center",
+    family: "chat",
+    template: "landing",
+    state: "converged",
+    routeNames: ["AI_Chat_Workspace"],
+  },
   // --- Insights and discovery (1) ------------------------------------------
   {
     surfaceId: "insights-home",
@@ -438,7 +446,6 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
 
 /** Explicitly out-of-scope routes with their PRD treatments (§4.2). */
 export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
-  { routeName: "AI_Chat_Workspace", reason: "parent-prd" },
   { routeName: "Dashboard", reason: "layout-parent" },
   { routeName: "home", reason: "parent-prd" },
   { routeName: "Insights", reason: "layout-parent" },
@@ -465,7 +472,7 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
 ];
 
 /** Total in-scope surface count (PRD acceptance criterion 3). */
-export const IN_SCOPE_SURFACE_COUNT = 50;
+export const IN_SCOPE_SURFACE_COUNT = 51;
 
 /** Look up the registry entry owning a route name. */
 export function findSurfaceByRouteName(

@@ -6,10 +6,14 @@ import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWor
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
 
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+const { push, route } = vi.hoisted(() => ({
+  push: vi.fn(),
+  route: { path: "/" },
+}));
 
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
+  useRoute: () => route,
 }));
 
 const i18n = createI18n({
@@ -24,7 +28,6 @@ const i18n = createI18n({
         insights: "Insights",
         knowledgeLibrary: "Knowledge Library",
         plugins: "Plugins",
-        backToApp: "Back to app",
         mode: {
           classic: "Use classic chat",
           makeDefault: "Make this my default chat",
@@ -44,6 +47,7 @@ const i18n = createI18n({
 
 beforeEach(() => {
   push.mockClear();
+  route.path = "/";
   setActivePinia(createPinia());
 });
 
@@ -141,5 +145,38 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
       wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")
     ).toBe("false");
     expect(wrapper.text()).not.toContain("Chat u1");
+  });
+});
+
+describe("AiChatWorkspaceSidebar persistent-shell nav (chat-first shell §7.4)", () => {
+  it("does not render a Back to app action", () => {
+    const wrapper = mountSidebar();
+    expect(wrapper.find('[data-testid="workspace-back-to-app"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).not.toContain("Back to app");
+  });
+
+  it("marks the active global route with aria-current=page", () => {
+    // Inactive first: no item is marked.
+    const wrapper = mountSidebar();
+    expect(
+      wrapper.get('[data-testid="workspace-insights"]').attributes("aria-current")
+    ).toBeUndefined();
+
+    // The mock route is a plain object (not reactive), so assert across a
+    // fresh mount with the route already on the Insights page.
+    route.path = "/insights";
+    const onInsights = mountSidebar();
+    expect(
+      onInsights.get('[data-testid="workspace-insights"]').attributes("aria-current")
+    ).toBe("page");
+    expect(
+      onInsights.get('[data-testid="workspace-insights"]').classes()
+    ).toContain("active");
+    // Other global items stay unmarked.
+    expect(
+      onInsights.get('[data-testid="workspace-plugins"]').attributes("aria-current")
+    ).toBeUndefined();
   });
 });

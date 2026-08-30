@@ -3093,7 +3093,6 @@ export default {
     insights: "洞察",
     knowledgeLibrary: "知识库",
     plugins: "插件",
-    backToApp: "返回应用",
     loadOlder: "加载更早的消息",
     empty: {
       title: "随便问点什么，或在左侧选择一个会话。",

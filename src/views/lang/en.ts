@@ -3231,7 +3231,6 @@ export default {
     insights: "Insights",
     knowledgeLibrary: "Knowledge Library",
     plugins: "Plugins",
-    backToApp: "Back to app",
     loadOlder: "Load older messages",
     empty: {
       title: "Ask anything, or pick a conversation on the left.",

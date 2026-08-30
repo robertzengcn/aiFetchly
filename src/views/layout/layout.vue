@@ -212,6 +212,7 @@ import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
 import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
 import { useInnerPageShellFlag } from '@/views/composables/useInnerPageShellFlag';
+import { authenticatedFeatureRoutes } from '@/views/router/authenticatedFeatureRoutes';
 import { useAppShellStore } from '@/views/store/appShell';
 import { useResponsiveShell } from '@/views/composables/useResponsiveShell';
 import AppCenterRouteHost from '@/views/components/appShell/AppCenterRouteHost.vue';
@@ -299,7 +300,10 @@ const navState = reactive({
     menuVisible: true,
     rail: !mainStore.isMobile,
     isMini: !mainStore.isMobile,
-    routes: router.options.routes,
+    // Chat-first shell: the authenticated groups now live under ONE route
+    // parent, so the legacy drawer reads the exported group records instead
+    // of the top-level router options (which would render an empty nav).
+    routes: authenticatedFeatureRoutes,
 });
 const visibleRouteChildren = (route: RouteRecordRaw): RouteRecordRaw[] => {
     return (route.children ?? []).filter((row) => Boolean(row.meta?.visible));

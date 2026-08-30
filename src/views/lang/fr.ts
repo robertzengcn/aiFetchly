@@ -3246,7 +3246,6 @@ export default {
     insights: "Informations",
     knowledgeLibrary: "Bibliothèque de connaissances",
     plugins: "Extensions",
-    backToApp: "Retour à l'application",
     loadOlder: "Charger les messages plus anciens",
     empty: {
       title: "Posez une question ou choisissez une conversation à gauche.",

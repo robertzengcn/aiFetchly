@@ -9,9 +9,12 @@ import {
 describe("inner-page convergence registry (PRD §4.1, IPR-054/055/056)", () => {
   const report = validateUiRouteCoverage(constantRoutes);
 
-  it("renders the redesigned AI workspace as a full-window shell", async () => {
-    const workspaceRoute = constantRoutes.find(
-      (route) => route.path === "/aiworkspace"
+  it("renders the chat center as a shell child, not a standalone shell", async () => {
+    const authenticatedRoot = constantRoutes.find(
+      (route) => route.path === "/"
+    );
+    const workspaceRoute = authenticatedRoot?.children?.find(
+      (route) => route.path === "aiworkspace"
     );
 
     expect(workspaceRoute?.name).toBe("AI_Chat_Workspace");
@@ -28,16 +31,14 @@ describe("inner-page convergence registry (PRD §4.1, IPR-054/055/056)", () => {
     expect(report.issues).toEqual([]);
   });
 
-  it("covers exactly the 50 in-scope customer-facing surfaces", () => {
+  it("covers exactly the 51 in-scope customer-facing surfaces", () => {
     expect(report.inScopeSurfaceCount).toBe(IN_SCOPE_SURFACE_COUNT);
-    expect(IN_SCOPE_SURFACE_COUNT).toBe(50);
+    expect(IN_SCOPE_SURFACE_COUNT).toBe(51);
   });
 
   it("never uses menu visibility as scope evidence (IPR-054)", () => {
     // Hidden-but-customer-reachable routes must still be surfaces.
-    const surfaced = new Set(
-      report.surfaces.flatMap((s) => s.routeNames)
-    );
+    const surfaced = new Set(report.surfaces.flatMap((s) => s.routeNames));
     for (const hidden of [
       "Email_Marketing_Template_Create",
       "CreateSocialAccount",

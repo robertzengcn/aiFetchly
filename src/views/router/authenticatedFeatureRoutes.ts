@@ -1,0 +1,1127 @@
+import type { RouteRecordRaw } from "vue-router";
+import RouteGroupOutlet from "@/views/layout/RouteGroupOutlet.vue";
+
+/**
+ * Authenticated feature route groups (chat-first shell design §6.2).
+ *
+ * Every group renders through RouteGroupOutlet — a bare nested RouterView —
+ * so intermediate records never mount a second global drawer, header, notice
+ * host, or inspector host. The array is pure data so the router and the
+ * legacy layout's navigation read ONE source without import cycles.
+ */
+export const authenticatedFeatureRoutes: RouteRecordRaw[] = [
+  {
+    path: "/dashboard",
+    name: "Dashboard",
+    meta: {
+      visible: false,
+      title: "route.dashboard",
+      icon: "mdi-view-dashboard",
+    },
+    component: RouteGroupOutlet,
+    children: [
+      {
+        path: "home",
+        name: "home",
+        meta: {
+          title: "route.home",
+          icon: "mdi-home",
+          keepAlive: false,
+          visible: true,
+        },
+        component: () => import("@/views/dashboard/home.vue"),
+        children: [],
+      },
+    ],
+  },
+{
+  path: "/insights",
+  name: "Insights",
+  meta: {
+    visible: true,
+    title: "route.insights",
+    icon: "mdi-compass-outline",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "",
+      name: "InsightsHome",
+      meta: {
+        title: "route.insights",
+        icon: "mdi-compass-outline",
+        keepAlive: false,
+        visible: true,
+      },
+      component: () => import("@/views/pages/insights/index.vue"),
+      children: [],
+    },
+  ],
+},
+{
+  path: "/statistic",
+  name: "Statistic",
+  meta: {
+    visible: false,
+    title: "route.statistic",
+    icon: "mdi-chart-box-outline",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "",
+      name: "statistic_page",
+      meta: {
+        title: "route.statistic",
+        icon: "mdi-chart-box-outline",
+        keepAlive: false,
+        visible: true,
+      },
+      component: () => import("@/views/pages/statistic/index.vue"),
+      children: [],
+    },
+  ],
+},
+{
+  path: "/systemsetting",
+  name: "system_setting",
+  redirect: "/systemsetting/index",
+  meta: {
+    visible: false,
+    title: "route.system_setting",
+    icon: "mdi-cog",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "index",
+      name: "system_setting_index",
+      meta: {
+        title: "route.system_setting",
+        icon: "mdi-cog-outline",
+        keepAlive: false,
+        visible: true,
+      },
+      component: () => import("@/views/pages/systemsetting/index.vue"),
+      children: [],
+    },
+    {
+      path: "mcp",
+      name: "system_setting_mcp",
+      meta: {
+        title: "route.mcp_tools",
+        icon: "mdi-toolbox",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/mcp.vue"),
+      children: [],
+    },
+    {
+      path: "ai-provider",
+      name: "system_setting_ai_provider",
+      meta: {
+        title: "route.ai_provider",
+        icon: "mdi-robot-outline",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/ai_provider.vue"),
+      children: [],
+    },
+    {
+      path: "skills",
+      name: "system_setting_skills",
+      meta: {
+        title: "route.skills_management",
+        icon: "mdi-view-dashboard",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/skills.vue"),
+      children: [],
+    },
+    {
+      path: "hooks",
+      name: "system_setting_hooks",
+      meta: {
+        title: "route.hooks_management",
+        icon: "mdi-hook",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/Hooks.vue"),
+      children: [],
+    },
+    {
+      path: "plugins",
+      name: "system_setting_plugins",
+      meta: {
+        title: "route.plugins",
+        icon: "mdi-puzzle",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/plugins.vue"),
+      children: [],
+    },
+    {
+      path: "ai-memory",
+      name: "system_setting_ai_memory",
+      meta: {
+        title: "route.ai_memory_management",
+        icon: "mdi-brain",
+        keepAlive: false,
+        visible: false,
+      },
+      component: () => import("@/views/pages/systemsetting/aiMemory.vue"),
+      children: [],
+    },
+    {
+      path: "subagents",
+      name: "system_setting_subagents",
+      meta: {
+        title: "route.subagents",
+        icon: "mdi-robot-outline",
+        keepAlive: false,
+        visible: false,
+        aiNavigable: true,
+        aiAliases: ["subagents", "agents", "agent management"],
+        aiDescription:
+          "Manage built-in, plugin-installed, and manual subagents",
+      },
+      component: () => import("@/views/pages/systemsetting/subagents.vue"),
+      children: [],
+    },
+    {
+      path: "about",
+      name: "system_setting_about",
+      meta: {
+        title: "about.title",
+        icon: "mdi-information-outline",
+        keepAlive: false,
+        visible: false,
+        aiNavigable: true,
+        aiAliases: ["about", "app version", "check for updates"],
+        aiDescription: "View the app version and check for updates",
+      },
+      component: () => import("@/views/pages/systemsetting/about.vue"),
+      children: [],
+    },
+  ],
+},
+
+{
+  path: "/campaign",
+  name: "campaign",
+  meta: {
+    visible: false,
+    title: "route.campaign",
+    icon: "mdi-bullhorn",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "edit/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-edit" */ "@/views/pages/campaign/campaign.vue"
+        ),
+      name: "EditCampaign",
+      meta: {
+        title: "route.edit_campaign",
+        noCache: true,
+        activeMenu: "/campaign/list",
+        // hidden: true
+      },
+    },
+    {
+      path: "list",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/campaign/campaign.vue"
+        ),
+      name: "CampaignList",
+      meta: {
+        visible: true,
+        title: "route.campaign_list",
+        icon: "mdi-format-list-bulleted",
+        aiNavigable: true,
+        aiAliases: ["campaign list", "campaigns", "marketing campaign"],
+        aiDescription: "View and manage marketing campaigns",
+      },
+    },
+  ],
+},
+{
+  path: "/socialtask",
+  name: "socialtask",
+  meta: {
+    // visible: true,
+    title: "route.social_task",
+    icon: "mdi-account-group",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "edit/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-edit" */ "@/views/pages/socialtask/socialtaskdetail.vue"
+        ),
+      name: "EditSocialtask",
+      meta: {
+        title: "route.edit_social_task",
+        noCache: true,
+        activeMenu: "/socialtask/edit",
+        // hidden: true
+      },
+    },
+    {
+      path: "create/:campaignId(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "socialtaskdetail" */ "@/views/pages/socialtask/socialtaskdetail.vue"
+        ),
+      name: "CreateSocialtask",
+      meta: {
+        title: "route.create_social_task",
+        noCache: true,
+        activeMenu: "/socialtask/create",
+        //   hidden: true
+      },
+    },
+    {
+      path: "list/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialtask/socialtask.vue"
+        ),
+      name: "SocialtaskList",
+      meta: {
+        title: "route.social_task_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "run/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialtask/socialtaskrun.vue"
+        ),
+      name: "Runtask",
+      meta: {
+        title: "route.run_task",
+        icon: "mdi-play-circle",
+      },
+    },
+    {
+      path: "taskrunlist/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialtask/socialtaskrunlist.vue"
+        ),
+      name: "Task-run-list",
+      meta: {
+        title: "route.task_run_list",
+        icon: "mdi-playlist-play",
+      },
+    },
+    {
+      path: "taskresultlist/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialtask/socialtaskresultlist.vue"
+        ),
+      name: "Task-result-list",
+      meta: {
+        title: "route.task_result_list",
+        icon: "mdi-chart-line",
+      },
+    },
+  ],
+},
+// {
+//   path: '/extramodules',
+//   name: 'Modules',
+//   meta: {
+//     visible: true,
+//     title: 'Modules',
+//     icon: 'mdi-paw-off'
+//   },
+//   component: RouteGroupOutlet,
+//   children: [
+//     {
+//       path: 'list',
+//       component: () => import(/* webpackChunkName: "staff-list" */ '@/views/pages/extramodules/extramoduleslist.vue'),
+//       name: 'Moduleslist',
+//       meta: {
+//         visible: true,
+//         title: 'Modules List',
+//         icon: 'list'
+//       }
+//     }
+//   ]
+// },
+{
+  path: "/search",
+  name: "Search",
+  meta: {
+    visible: false,
+    title: "route.search",
+    icon: "mdi-magnify",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "form",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/search/index.vue"
+        ),
+      name: "Searchform",
+      meta: {
+        visible: true,
+        title: "route.search_scraper",
+        icon: "mdi-web",
+      },
+    },
+    {
+      path: "tasklist",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/search/resultlist.vue"
+        ),
+      name: "Searchtasklist",
+      meta: {
+        visible: true,
+        title: "route.search_task_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "taskdetail/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/search/detaillist.vue"
+        ),
+      name: "Searchtaskdetail",
+      meta: {
+        visible: false,
+        title: "route.search_task_detail",
+        icon: "mdi-file-document-outline",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/search/index.vue"
+        ),
+      name: "EditSearchTask",
+      meta: {
+        visible: false,
+        title: "route.edit_search_task",
+        icon: "mdi-pencil",
+      },
+    },
+  ],
+},
+{
+  path: "/emailextraction",
+  name: "Email_Extraction",
+  meta: {
+    visible: false,
+    title: "route.email_extraction",
+    icon: "mdi-email-search",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "form",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailextraction/index.vue"
+        ),
+      name: "Email_Extraction_Form",
+      meta: {
+        visible: true,
+        title: "route.email_extraction_form",
+        icon: "mdi-form-select",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailextraction/index.vue"
+        ),
+      name: "Email_Extraction_Edit",
+      meta: {
+        visible: false,
+        title: "route.email_extraction_edit",
+        icon: "mdi-pencil",
+      },
+    },
+    {
+      path: "tasklist",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailextraction/resultlist.vue"
+        ),
+      name: "Email_Extraction_list",
+      meta: {
+        visible: true,
+        title: "route.email_extraction_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "taskdetail/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailextraction/detaillist.vue"
+        ),
+      name: "Email_Extraction_Task_Detail",
+      meta: {
+        visible: false,
+        title: "route.email_extraction_detail",
+        icon: "mdi-file-document-outline",
+      },
+    },
+  ],
+},
+{
+  path: "/yellowpages",
+  name: "Yellow_Pages",
+  meta: {
+    visible: false,
+    title: "route.yellow_pages",
+    icon: "mdi-database-search",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "list",
+      component: () => import("@/views/pages/yellowpages/list.vue"),
+      name: "YellowPagesList",
+      meta: {
+        visible: true,
+        title: "route.yellow_pages_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "create",
+      component: () => import("@/views/pages/yellowpages/create.vue"),
+      name: "CreateYellowPagesTask",
+      meta: {
+        visible: false,
+        title: "route.create_yellow_pages_task",
+        icon: "mdi-plus",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () => import("@/views/pages/yellowpages/create.vue"),
+      name: "EditYellowPagesTask",
+      meta: {
+        visible: false,
+        title: "route.edit_yellow_pages_task",
+        icon: "mdi-pencil",
+      },
+    },
+    {
+      path: "detail/:id(\\d+)",
+      component: () => import("@/views/pages/yellowpages/create.vue"),
+      name: "YellowPagesTaskDetail",
+      meta: {
+        visible: false,
+        title: "route.yellow_pages_task_detail",
+        icon: "mdi-file-document-outline",
+      },
+    },
+    {
+      path: "results/:id(\\d+)",
+      component: () => import("@/views/pages/yellowpages/results.vue"),
+      name: "YellowPagesResults",
+      meta: {
+        visible: false,
+        title: "route.yellow_pages_results",
+        icon: "mdi-chart-bar",
+      },
+    },
+  ],
+},
+{
+  path: "/map-scraper",
+  name: "Map_Scraper",
+  meta: {
+    visible: false,
+    title: "route.map_scraper",
+    icon: "mdi-map-marker-multiple",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "",
+      component: () => import("@/views/pages/map-scraper/index.vue"),
+      name: "MapScraper",
+      props: { initialProvider: "google" },
+      meta: {
+        visible: true,
+        title: "route.map_scraper",
+        icon: "mdi-map-marker-multiple",
+      },
+    },
+    {
+      path: "google",
+      component: () => import("@/views/pages/map-scraper/index.vue"),
+      name: "GoogleMapsScraper",
+      props: { initialProvider: "google" },
+      meta: {
+        visible: false,
+        title: "route.google_maps_scraper",
+        icon: "mdi-map-marker-radius",
+      },
+    },
+    {
+      path: "yandex",
+      component: () => import("@/views/pages/map-scraper/index.vue"),
+      name: "YandexMapsScraper",
+      props: { initialProvider: "yandex" },
+      meta: {
+        visible: false,
+        title: "route.yandex_maps_scraper",
+        icon: "mdi-map-search-outline",
+      },
+    },
+  ],
+},
+{
+  path: "/emailmarketing",
+  name: "Email_Marketing",
+  meta: {
+    visible: false,
+    title: "route.email_marketing",
+    icon: "mdi-email-multiple",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "",
+      component: () =>
+        import(
+          /* webpackChunkName: "email-marketing" */ "@/views/pages/emailmarketing/index.vue"
+        ),
+      name: "Email_Marketing_Index",
+      meta: {
+        visible: false,
+        title: "route.email_marketing",
+        icon: "mdi-email-multiple",
+      },
+    },
+    {
+      path: "buckemailtask/list/",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailsendtask/list.vue"
+        ),
+      name: "BUCK_Email_TASK_LIST",
+      meta: {
+        visible: true,
+        title: "route.bulk_email_task_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "buckemailtask/list/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailSendTaskLog/list.vue"
+        ),
+      name: "BUCK_Email_TASK_LOG_LIST",
+      meta: {
+        visible: false,
+        title: "route.email_send_log",
+        icon: "mdi-file-document-multiple",
+      },
+    },
+    {
+      path: "form",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailmarketing/buckemailform.vue"
+        ),
+      name: "Email_BUCK_SEND",
+      meta: {
+        visible: false,
+        title: "route.sending_bulk_emails",
+        icon: "mdi-email-send",
+      },
+    },
+    {
+      path: "template/list/",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailmarketing/template/templatelist.vue"
+        ),
+      name: "Email_Marketing_Template_List",
+      meta: {
+        visible: true,
+        title: "route.email_template",
+        icon: "mdi-file-document-edit",
+      },
+    },
+    {
+      path: "template/detail/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailmarketing/template/templatedetail.vue"
+        ),
+      name: "Email_Marketing_Template_Detail",
+      meta: {
+        visible: false,
+        title: "route.email_template_detail",
+        icon: "mdi-file-document-outline",
+      },
+    },
+    {
+      path: "template/create",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailmarketing/template/templatedetail.vue"
+        ),
+      name: "Email_Marketing_Template_Create",
+      meta: {
+        visible: false,
+        title: "route.create_email_template",
+        icon: "mdi-plus",
+      },
+    },
+    {
+      path: "emailfilter/list",
+      name: "Email_Marketing_Filter_LIST",
+      meta: {
+        visible: true,
+        title: "route.email_filter",
+        icon: "mdi-filter",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailfilter/list.vue"
+        ),
+    },
+    {
+      path: "emailfilter/create",
+      name: "Email_Marketing_Filter_Create",
+      meta: {
+        visible: false,
+        title: "route.email_filter_create",
+        icon: "mdi-plus",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailfilter/filterdetail.vue"
+        ),
+    },
+    {
+      path: "emailfilter/detail/:id(\\d+)",
+      name: "Email_Marketing_Filter_Detail",
+      meta: {
+        visible: false,
+        title: "route.email_filter_edit",
+        icon: "mdi-pencil",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailfilter/filterdetail.vue"
+        ),
+    },
+    {
+      path: "emailservice/list",
+      name: "Email_Marketing_Service_LIST",
+      meta: {
+        visible: true,
+        title: "route.email_service",
+        icon: "mdi-email-sync",
+        aiNavigable: true,
+        aiAliases: [
+          "email service",
+          "email edit",
+          "email settings",
+          "mailbox settings",
+          "smtp settings",
+          "sending mailbox",
+        ],
+        aiDescription:
+          "Manage email sending service accounts, sending mailbox settings, and SMTP configuration",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/list.vue"
+        ),
+    },
+    {
+      path: "emailservice/create",
+      name: "Email_Marketing_Service_Create",
+      meta: {
+        visible: false,
+        title: "route.email_service_create",
+        icon: "mdi-plus",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
+        ),
+    },
+    {
+      path: "emailservice/detail/:id(\\d+)",
+      name: "Email_Marketing_Service_Detail",
+      meta: {
+        visible: false,
+        title: "route.email_service_edit",
+        icon: "mdi-pencil",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
+        ),
+    },
+    {
+      path: "emailreceive/list",
+      name: "Email_Receive_List",
+      meta: {
+        visible: true,
+        title: "route.email_receive",
+        icon: "mdi-inbox-arrow-down",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/list.vue"
+        ),
+    },
+    {
+      path: "emailreceive/detail/:id(\\d+)",
+      name: "Email_Receive_Detail",
+      meta: {
+        visible: false,
+        title: "route.email_receive_detail",
+        icon: "mdi-email-open",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/detail.vue"
+        ),
+    },
+    {
+      path: "emailreply/audit/list",
+      name: "AI_Auto_Reply_Audit_List",
+      meta: {
+        visible: true,
+        title: "route.ai_auto_replies",
+        icon: "mdi-robot-outline",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditlist.vue"
+        ),
+    },
+    {
+      path: "emailreply/audit/detail/:id(\\d+)",
+      name: "AI_Auto_Reply_Audit_Detail",
+      meta: {
+        visible: false,
+        title: "route.ai_auto_reply_detail",
+        icon: "mdi-robot-outline",
+      },
+      component: () =>
+        import(
+          /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditdetail.vue"
+        ),
+    },
+  ],
+},
+{
+  path: "/proxy",
+  name: "Proxy",
+  meta: {
+    visible: false,
+    title: "route.proxy",
+    icon: "mdi-shield-outline",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "list",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/proxy/proxy.vue"
+        ),
+      name: "Proxylist",
+      meta: {
+        visible: true,
+        title: "route.proxy_list",
+        icon: "mdi-format-list-bulleted",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () => import("@/views/pages/proxy/proxydetail.vue"),
+      name: "editProxy",
+      meta: {
+        visible: false,
+        title: "route.edit_proxy",
+        icon: "mdi-pencil",
+      },
+    },
+    {
+      path: "add",
+      component: () => import("@/views/pages/proxy/proxydetail.vue"),
+      name: "AddProxy",
+      meta: {
+        visible: false,
+        title: "route.add_proxy",
+        icon: "mdi-plus",
+      },
+    },
+    {
+      path: "parse",
+      component: () => import("@/views/pages/proxy/proxyparse.vue"),
+      name: "BatchUploadProxy",
+      meta: {
+        visible: true,
+        title: "route.parse_proxy",
+        icon: "mdi-upload-multiple",
+      },
+    },
+  ],
+},
+{
+  path: "/knowledge",
+  name: "Knowledge_Library",
+  meta: {
+    visible: true,
+    title: "route.knowledge_library",
+    icon: "mdi-book-open-variant",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "library",
+      component: () => import("@/views/pages/knowledge/KnowledgeLibrary.vue"),
+      name: "KnowledgeLibrary",
+      meta: {
+        visible: true,
+        title: "route.knowledge_library",
+        icon: "mdi-book-open-variant",
+      },
+    },
+  ],
+},
+{
+  path: "/skills",
+  name: "Skills",
+  meta: {
+    visible: false,
+    title: "route.skills",
+    icon: "mdi-lightning-bolt",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "management",
+      component: () => import("@/views/pages/systemsetting/skills.vue"),
+      name: "SkillsManagement",
+      meta: {
+        visible: false,
+        title: "route.skills_management",
+        icon: "mdi-lightning-bolt",
+      },
+    },
+  ],
+},
+{
+  path: "/plugins",
+  name: "Plugins",
+  meta: {
+    visible: true,
+    title: "route.plugins",
+    icon: "mdi-puzzle",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "management",
+      component: () => import("@/views/pages/systemsetting/plugins.vue"),
+      name: "PluginsManagement",
+      meta: {
+        visible: true,
+        title: "route.plugins",
+        icon: "mdi-puzzle",
+      },
+    },
+  ],
+},
+{
+  path: "/community-plugins",
+  name: "CommunityPlugins",
+  redirect: "/community-plugins/list",
+  meta: {
+    visible: true,
+    title: "route.community_plugins",
+    icon: "mdi-storefront-outline",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "list",
+      component: () => import("@/views/pages/communityPlugins/index.vue"),
+      name: "CommunityPluginsList",
+      meta: {
+        visible: true,
+        title: "route.community_plugins",
+        icon: "mdi-storefront-outline",
+        aiNavigable: true,
+        aiAliases: [
+          "community plugins",
+          "plugin store",
+          "plugin hub",
+          "community plugin page",
+          "browse plugins",
+          "plugin marketplace page",
+        ],
+        aiDescription:
+          "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+      },
+    },
+  ],
+},
+{
+  path: "/socialaccount",
+  name: "Socialaccount",
+  redirect: "/socialaccount/list",
+  meta: {
+    visible: true,
+    title: "route.tool_account",
+    icon: "mdi-account-multiple",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "list",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
+        ),
+      name: "SocialAccount",
+      meta: {
+        visible: false,
+        title: "route.tool_account_list",
+        icon: "mdi-account-details",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+        ),
+      name: "editSocialAccount",
+      meta: {
+        visible: false,
+        title: "route.edit_tool_account",
+        icon: "mdi-account-edit",
+      },
+    },
+    {
+      path: "add",
+      component: () =>
+        import(
+          /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccountdetail.vue"
+        ),
+      name: "CreateSocialAccount",
+      meta: {
+        visible: false,
+        title: "route.add_tool_account",
+        icon: "mdi-account-plus",
+      },
+    },
+  ],
+},
+{
+  path: "/schedule",
+  name: "schedule",
+  meta: {
+    visible: true,
+    title: "route.schedule",
+    icon: "mdi-clock-outline",
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "list",
+      component: () => import("@/views/pages/schedule/list.vue"),
+      name: "ScheduleList",
+      meta: {
+        visible: true,
+        title: "route.schedule_list",
+        icon: "mdi-calendar-clock",
+      },
+    },
+    {
+      path: "create",
+      component: () => import("@/views/pages/schedule/create.vue"),
+      name: "CreateSchedule",
+      meta: {
+        visible: false,
+        title: "route.create_schedule",
+        icon: "mdi-plus",
+      },
+    },
+    {
+      path: "edit/:id(\\d+)",
+      component: () => import("@/views/pages/schedule/edit.vue"),
+      name: "EditSchedule",
+      meta: {
+        visible: false,
+        title: "route.edit_schedule",
+        icon: "mdi-pencil",
+      },
+    },
+    {
+      path: "detail/:id(\\d+)",
+      component: () => import("@/views/pages/schedule/detail.vue"),
+      name: "ScheduleDetail",
+      meta: {
+        visible: false,
+        title: "route.schedule_detail",
+        icon: "mdi-file-document-outline",
+      },
+    },
+  ],
+},
+{
+  path: "/404",
+  name: "404",
+  meta: {
+    keepAlive: false,
+    title: "route.not_found",
+    icon: "mdi-alert-circle-outline",
+    visible: false,
+  },
+  component: RouteGroupOutlet,
+  children: [
+    {
+      path: "",
+      name: "d404",
+      meta: {
+        title: "route.not_found",
+        visible: false,
+      },
+      component: () => import("@/views/feedback/no.vue"),
+      children: [],
+    },
+  ],
+}
+];

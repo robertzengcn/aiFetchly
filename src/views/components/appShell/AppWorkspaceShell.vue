@@ -17,7 +17,7 @@
       <slot name="navigation" />
     </aside>
 
-    <main class="app-shell-center">
+    <main class="app-shell-center" data-testid="app-center-route">
       <slot />
     </main>
 

@@ -29,7 +29,9 @@
       <button
         type="button"
         class="global-nav-button"
+        :class="{ active: isRouteActive('/schedule/list') }"
         data-testid="workspace-automations"
+        :aria-current="isRouteActive('/schedule/list') ? 'page' : undefined"
         @click="goTo('/schedule/list')"
       >
         <v-icon icon="mdi-clock-fast" size="18" aria-hidden="true" />
@@ -38,7 +40,9 @@
       <button
         type="button"
         class="global-nav-button"
+        :class="{ active: isRouteActive('/systemsetting/mcp') }"
         data-testid="workspace-customize"
+        :aria-current="isRouteActive('/systemsetting/mcp') ? 'page' : undefined"
         @click="goTo('/systemsetting/mcp')"
       >
         <v-icon icon="mdi-tune-variant" size="18" aria-hidden="true" />
@@ -47,7 +51,9 @@
       <button
         type="button"
         class="global-nav-button"
+        :class="{ active: isRouteActive('/insights') }"
         data-testid="workspace-insights"
+        :aria-current="isRouteActive('/insights') ? 'page' : undefined"
         @click="goTo('/insights')"
       >
         <v-icon icon="mdi-chart-box-outline" size="18" aria-hidden="true" />
@@ -56,7 +62,9 @@
       <button
         type="button"
         class="global-nav-button"
+        :class="{ active: isRouteActive('/knowledge/library') }"
         data-testid="workspace-knowledge-library"
+        :aria-current="isRouteActive('/knowledge/library') ? 'page' : undefined"
         @click="goTo('/knowledge/library')"
       >
         <v-icon icon="mdi-book-open-variant" size="18" aria-hidden="true" />
@@ -65,7 +73,9 @@
       <button
         type="button"
         class="global-nav-button"
+        :class="{ active: isRouteActive('/plugins/management') }"
         data-testid="workspace-plugins"
+        :aria-current="isRouteActive('/plugins/management') ? 'page' : undefined"
         @click="goTo('/plugins/management')"
       >
         <v-icon icon="mdi-puzzle" size="18" aria-hidden="true" />
@@ -253,15 +263,6 @@
             : (t('workspaceChat.mode.makeDefault') || 'Make this my default chat')
         }}</span>
       </button>
-      <button
-        type="button"
-        class="global-nav-button"
-        data-testid="workspace-back-to-app"
-        @click="goTo('/dashboard/home')"
-      >
-        <v-icon icon="mdi-apps" size="18" aria-hidden="true" />
-        <span>{{ t('workspaceChat.backToApp') || 'Back to app' }}</span>
-      </button>
     </div>
   </aside>
 </template>
@@ -269,7 +270,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
@@ -288,6 +289,7 @@ const emit = defineEmits<{
 }>();
 
 const { t, te } = useI18n();
+const route = useRoute();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
 
@@ -346,6 +348,16 @@ function groupAttentionCount(group: {
 
 function goTo(path: string): void {
   void router.push(path);
+}
+
+/**
+ * Active global-route state (design §7.4): the current center route gets an
+ * accessible aria-current="page" plus the selected visual. Conversation
+ * selection stays a separate concept and never mirrors this state.
+ */
+function isRouteActive(path: string): boolean {
+  const current = route.path;
+  return current === path || current.startsWith(`${path}/`);
 }
 
 /**
@@ -447,6 +459,12 @@ function onTreeKeydown(event: KeyboardEvent): void {
 
 .global-nav-button:hover {
   background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.global-nav-button.active {
+  background: rgba(var(--v-theme-primary), 0.16);
+  color: rgb(var(--v-theme-primary));
+  font-weight: 600;
 }
 
 .global-nav-button.primary-action {
