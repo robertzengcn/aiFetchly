@@ -83,7 +83,11 @@ export interface AiChatVoiceState {
   readonly missingInputModel: Readonly<ComputedRef<boolean>>;
   readonly runtimeUnavailable: Readonly<ComputedRef<boolean>>;
   readonly chatReady: Readonly<ComputedRef<boolean>>;
-  readonly runtimeInstallDialog: Readonly<Ref<boolean>>;
+  /**
+   * Local runtime-install dialog visibility. Consumer-writable: the dialog
+   * v-model closes itself on cancel (design §11.4), not only via flows.
+   */
+  readonly runtimeInstallDialog: Ref<boolean>;
   readonly runtimeInstalling: Readonly<Ref<boolean>>;
   readonly runtimeInstallError: Readonly<Ref<string | null>>;
   readonly runtimeInstallSizeText: Readonly<ComputedRef<string>>;

@@ -242,7 +242,20 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   // Inspector + expansion persistence
   // -----------------------------------------------------------------------
   function toggleInspector(): void {
-    inspectorPrefs.value = { ...inspectorPrefs.value, open: !inspectorPrefs.value.open };
+    inspectorPrefs.value = {
+      ...inspectorPrefs.value,
+      open: !inspectorPrefs.value.open,
+    };
+    persistInspector();
+  }
+
+  /**
+   * Explicit open-state setter used by the app-inspector bridge: route-owned
+   * closure (AppCenterRouteHost → onRouteChanged) must clear the chat
+   * preference without toggling (chat-first shell design §12.3).
+   */
+  function setInspectorOpen(open: boolean): void {
+    inspectorPrefs.value = { ...inspectorPrefs.value, open };
     persistInspector();
   }
 
@@ -270,7 +283,10 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
 
   function persistInspector(): void {
     try {
-      localStorage.setItem(INSPECTOR_PREFS_KEY, JSON.stringify(inspectorPrefs.value));
+      localStorage.setItem(
+        INSPECTOR_PREFS_KEY,
+        JSON.stringify(inspectorPrefs.value)
+      );
     } catch {
       // Storage unavailable — session-only fallback.
     }
@@ -365,6 +381,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     inspectorWidth: computed(() => inspectorPrefs.value.width),
     toggleInspector,
     openInspector,
+    setInspectorOpen,
     setInspectorTab,
     setInspectorWidth,
     teardown,

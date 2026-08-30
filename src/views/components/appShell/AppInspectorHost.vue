@@ -16,6 +16,7 @@ import { useAppInspectorStore } from "@/views/store/appInspector";
 import type { AppInspectorKind } from "@/views/types/uiConvergenceTypes";
 import { useAppShellStore } from "@/views/store/appShell";
 import ScheduleInspector from "@/views/components/appShell/inspectors/ScheduleInspector.vue";
+import ChatInspectorAdapter from "@/views/components/appShell/inspectors/ChatInspectorAdapter.vue";
 
 /**
  * Kind → component allowlist. Adding a domain inspector requires extending
@@ -23,6 +24,7 @@ import ScheduleInspector from "@/views/components/appShell/inspectors/ScheduleIn
  */
 const INSPECTOR_REGISTRY: Partial<Record<AppInspectorKind, Component>> = {
   schedule: ScheduleInspector,
+  chat: ChatInspectorAdapter,
 };
 
 const inspector = useAppInspectorStore();
