@@ -62,7 +62,6 @@ import {
   shouldShowUncleanShutdownPrompt,
 } from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
-import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
@@ -478,37 +477,38 @@ function initialize() {
         app.setAsDefaultProtocolClient(protocolScheme);
       }
     } else {
+      // Dev-only best-effort protocol registration. We previously used the
+      // `protocol-registry` npm package here, but on macOS Sequoia+ its
+      // deRegister step rewrites another app bundle's Info.plist, which the
+      // App Management TCC protection blocks (EPERM). It also bundled its own
+      // platform templates into the build output that nothing read. We now use
+      // Electron's native API (same as the packaged path above), which is a
+      // best-effort hint in dev — the auth flow's primary loopback-callback
+      // path does not depend on the scheme being registered. Failures are
+      // non-fatal and only logged.
+      const devEntry = path.resolve(process.argv[1]);
       log.info("[dev] protocolScheme:", protocolScheme);
       log.info("[dev] process.execPath:", process.execPath);
-      log.info("[dev] entry:", path.resolve(process.argv[1]));
-      // Dev-only protocol registration. On macOS Sequoia+ the App
-      // Management TCC protection blocks protocol-registry from rewriting
-      // another app bundle's Info.plist (EPERM), so treat failure as
-      // non-fatal: deep-link routing in dev does not depend on it.
-      ProtocolRegistry.register(
-        protocolScheme,
-        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-        {
-          override: true,
-          appName: appName,
-          terminal: true,
+      log.info("[dev] entry:", devEntry);
+      try {
+        const registered = app.setAsDefaultProtocolClient(
+          protocolScheme,
+          process.execPath,
+          [devEntry]
+        );
+        if (registered) {
+          log.info("[dev] protocol registered successfully");
+        } else {
+          log.warn(
+            "[dev] protocol registration returned false; deep links may not route to this dev process"
+          );
         }
-      )
-        .then(() => log.info("[dev] protocol registered successfully"))
-        .catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (
-            msg.includes("App Management Permissions") ||
-            msg.includes("EPERM")
-          ) {
-            log.warn(
-              "[dev] protocol registration skipped (macOS App Management permission required). Deep links in dev are unaffected."
-            );
-          } else {
-            log.error("[dev] protocol registration failed:", msg);
-          }
-        });
-      // app.setAsDefaultProtocolClient(protocolScheme);
+      } catch (e: unknown) {
+        log.warn(
+          "[dev] protocol registration failed (non-fatal):",
+          e instanceof Error ? e.message : String(e)
+        );
+      }
     }
   }
   if (startupPolicy.acquireSingleInstanceLock) {
