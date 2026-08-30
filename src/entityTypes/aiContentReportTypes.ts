@@ -22,7 +22,8 @@ export const AI_CONTENT_REPORT_CATEGORIES = [
   "copyright_or_ownership",
   "other",
 ] as const;
-export type AIContentReportCategory = (typeof AI_CONTENT_REPORT_CATEGORIES)[number];
+export type AIContentReportCategory =
+  (typeof AI_CONTENT_REPORT_CATEGORIES)[number];
 
 /** The kind of AI output being reported (PRD §12.1). */
 export const AI_CONTENT_TYPES = [
@@ -124,4 +125,80 @@ export class AIContentReportError extends Error {
     this.name = "AIContentReportError";
     this.code = code;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation reporting (schema version 2) — design §6.
+// These EXTEND the version-1 types; nothing above this line changes.
+// ---------------------------------------------------------------------------
+
+export const AI_CONVERSATION_REPORT_SCOPES = [
+  "selected_ai_outputs",
+  "selected_ai_outputs_with_related_user_context",
+] as const;
+
+export type AIConversationReportScope =
+  (typeof AI_CONVERSATION_REPORT_SCOPES)[number];
+
+export const AI_CONVERSATION_REPORT_SURFACES = [
+  "chat_v2",
+  "legacy_chat",
+  "knowledge_chat",
+] as const;
+
+export type AIConversationReportSurface =
+  (typeof AI_CONVERSATION_REPORT_SURFACES)[number];
+
+export interface AIConversationReportItem {
+  itemId: string;
+  messageId: string;
+  sequence: number;
+  role: "assistant" | "user";
+  contentType: AIContentType;
+  text?: string;
+  textTruncated?: boolean;
+  imagePreviews?: AIContentReportImagePreview[];
+  evidenceUnavailable?: boolean;
+  generatedAt?: string;
+  model?: string;
+  consentSource?: "related_user_context_toggle";
+}
+
+export interface AIConversationReportContext {
+  conversationId: string;
+  selectedAIItemCount: number;
+  includedUserItemCount: number;
+  aggregateTextTruncated?: boolean;
+  appVersion: string;
+  platform: "win32" | "darwin" | "linux";
+  locale: string;
+  installId?: string;
+}
+
+export interface CreateAIConversationReportRequest {
+  schemaVersion: 2;
+  clientReportId: string;
+  surface: AIConversationReportSurface;
+  reportScope: AIConversationReportScope;
+  category: AIContentReportCategory;
+  comment?: string;
+  items: AIConversationReportItem[];
+  context: AIConversationReportContext;
+}
+
+export type CreateAnyAIContentReportRequest =
+  | CreateAIContentReportRequest
+  | CreateAIConversationReportRequest;
+
+export interface AIContentReportCapabilities {
+  acceptedSchemaVersions: readonly number[];
+  conversationReporting: {
+    enabled: boolean;
+    maxAIItems: number;
+    maxUserItems: number;
+    maxTotalItems: number;
+    maxItemTextChars: number;
+    maxAggregateTextChars: number;
+    maxImages: number;
+  };
 }
