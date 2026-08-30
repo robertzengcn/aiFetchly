@@ -1,8 +1,20 @@
 # Natural-Language Skill Installation — Outstanding Task TODO
 
-Status: 2026-08-28 — Coverage audit of `worktree-natural-language-skill-installation`
-against PRD `docs/prd/natural-language-skill-installation-prd.md` v1.1 and tech design
-`docs/prd/natural-language-skill-installation-technical-design.md` v1.1.
+> **STATUS 2026-08-30: ALL 9 TODO items COMPLETE** (commits 754e89aa..b8e1ac3f
+> plus the migration commit). Summary:
+>
+> 1. ✅ Windows shell providers wired into the chat `run_shell_command` path (754e89aa)
+> 2. ✅ DB baseline + feature migration (0000-baseline + 0001-skill-installation, gate armed)
+> 3. ✅ Plugin/executable packages route to PluginInstallService / SkillImportService.importFromDirectory (FR-07)
+> 4. ✅ Dependency detection catalog-backed via the shipped SystemDependencyCatalog (FR-14)
+> 5. ✅ Approved-command execution with fail-closed secret injection (SkillApprovedCommandRunner, FR-16)
+> 6. ✅ Skill-root read/execute (no-write) capability construction site: withSkillRoot (FR-13)
+> 7. ✅ Monotonic SKILL_INSTALL_PROGRESS events broadcast to the renderer
+> 8. ✅ Install card structured safePlan fields + expandable diagnostics
+> 9. ✅ Credential persistence aligned: SkillCredentialBindingEntity + SkillCredentialModule (two-store model)
+>
+> Remaining deferred items (below) unchanged — they need a real Windows runner,
+> a FakeOpenAI tool-call scenario, or are upstream fixes.
 
 The implementing plan (`docs/plans/2026-08-24-natural-language-skill-installation.md`)
 marks Phases A–G done. The tasks below are the items that are **still incomplete**
