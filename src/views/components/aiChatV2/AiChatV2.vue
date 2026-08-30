@@ -87,24 +87,13 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
-        <v-btn
-          icon
-          size="small"
-          variant="text"
+        <AiChatVoiceOutputToggle
+          :enabled="spokenResponseEnabled"
+          :saving="voiceSettingsSaving"
           class="v2-shell__speech-toggle"
-          data-testid="spoken-response-toggle"
-          :color="spokenResponseEnabled ? 'primary' : undefined"
-          :loading="voiceSettingsSaving"
-          :disabled="voiceSettingsSaving"
-          :title="spokenResponseToggleTitle"
-          :aria-label="spokenResponseToggleTitle"
-          :aria-pressed="spokenResponseEnabled"
-          @click="toggleSpokenResponse"
-        >
-          <v-icon size="small">
-            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
-          </v-icon>
-        </v-btn>
+          @toggle="toggleSpokenResponse"
+          @open-settings="openAIProviderSettings"
+        />
         <v-btn
           v-if="showCompactConversationButton"
           icon
@@ -617,89 +606,15 @@
       }}
     </v-snackbar>
 
-    <v-dialog
+    <AiChatVoiceRuntimeInstallDialog
       v-model="voiceRuntimeInstallDialog"
-      max-width="520"
-      persistent
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-microphone-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.voice.runtime_install_title") ||
-              "Install local voice runtime?"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t("aiChatV2.voice.runtime_install_message") ||
-              "Voice input needs the local voice runtime and Whisper Base voice model. Download and install them now?"
-            }}
-          </p>
-          <div
-            v-if="voiceRuntimeInstallSizeText"
-            class="text-caption text-medium-emphasis mb-3"
-          >
-            {{ voiceRuntimeInstallSizeText }}
-          </div>
-          <v-alert
-            v-if="voiceRuntimeInstallError"
-            type="error"
-            variant="tonal"
-            density="comfortable"
-            class="mb-3"
-          >
-            {{ voiceRuntimeInstallError }}
-          </v-alert>
-          <div v-if="voiceRuntimeInstalling" class="mt-3">
-            <div class="d-flex align-center mb-2">
-              <v-progress-circular
-                indeterminate
-                size="18"
-                width="2"
-                color="primary"
-                class="mr-2"
-              />
-              <span class="text-body-2">
-                {{ voiceRuntimeInstallProgressText }}
-              </span>
-            </div>
-            <v-progress-linear
-              v-if="voiceRuntimeInstallPercent !== undefined"
-              :model-value="voiceRuntimeInstallPercent"
-              color="primary"
-              height="6"
-              rounded
-            />
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            :disabled="voiceRuntimeInstalling"
-            @click="voiceRuntimeInstallDialog = false"
-          >
-            {{ t("common.cancel") || "Cancel" }}
-          </v-btn>
-          <v-btn
-            color="primary"
-            variant="flat"
-            :loading="voiceRuntimeInstalling"
-            :disabled="voiceRuntimeInstalling"
-            @click="confirmInstallVoiceRuntime"
-          >
-            {{
-              t("aiChatV2.voice.runtime_install_confirm") ||
-              "Download and install"
-            }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :installing="voiceRuntimeInstalling"
+      :error="voiceRuntimeInstallError"
+      :size-text="voiceRuntimeInstallSizeText"
+      :progress-text="voiceRuntimeInstallProgressText"
+      :percent="voiceRuntimeInstallPercent"
+      @confirm="confirmInstallVoiceRuntime"
+    />
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -855,36 +770,8 @@ import {
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
 } from "@/views/api/aiChatV2";
-import {
-  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-  cancelVoiceJob,
-  downloadVoiceModel,
-  getVoiceSettings,
-  getVoiceStatus,
-  notifyVoiceModelsChanged,
-  onVoiceModelDownloadProgress,
-  setVoiceSettings,
-} from "@/views/api/aiChatV2Voice";
-import {
-  getLocalAiRuntimeStatus,
-  installLocalAiRuntime,
-  onLocalAiRuntimeProgress,
-  prepareLocalAiRuntimeInstall,
-} from "@/views/api/localAiRuntime";
-import type {
-  AiChatVoiceRuntimeStatus,
-  AiChatVoiceSettingsView,
-  AiChatVoiceTtsMode,
-  VoiceModelDownloadProgress,
-} from "@/entityTypes/aiChatVoiceTypes";
-import type {
-  LocalAiRuntimeDownloadProgress,
-  LocalAiRuntimeInstallOffer,
-  LocalAiRuntimeStatus,
-} from "@/entityTypes/localAiRuntimeTypes";
-import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
-import { SpeechResponseController } from "./voice/SpeechResponseController";
+import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
+import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -913,6 +800,8 @@ import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
+import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
+import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import {
   createGoal,
@@ -2954,7 +2843,7 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Release only the active-view fields — do NOT clear stream listeners. Each
   // conversation owns its own listener now; a backgrounded streaming turn must
   // keep its listener so its chunks keep updating conversationRuntime[conv]
@@ -2983,7 +2872,7 @@ const detachActiveStreamView = (): void => {
 };
 
 const onStop = (): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Cancel in-flight STT/TTS worker work so the shared worker stops
   // synthesizing for a response the user has abandoned (TODO P0-5).
   void cancelVoiceJob();
@@ -3673,19 +3562,12 @@ const onSend = async (
   streamError.value = null;
 
   attachmentError.value = null;
-  voicePlaybackError.value = null;
   // Record whether this user message originated from voice input so the
   // `after_voice_input` TTS policy speaks only the reply to a voice send
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
-  // pass no `fromVoice`, which correctly clears the flag.
-  speechController.updateOptions({
-    latestInputWasVoice: options?.fromVoice === true,
-  });
-  // Start a fresh spoken-response session for every assistant turn. The
-  // controller is intentionally stopped by "Stop", conversation switching, and
-  // voice recording; without re-arming here, later replies can be silently
-  // ignored even when spoken responses are enabled.
-  speechController.start();
+  // pass no `fromVoice`, which correctly clears the flag. The composable
+  // clears any stale playback error when arming the new session.
+  beginAssistantResponse(options?.fromVoice === true);
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
@@ -4143,7 +4025,7 @@ const onSend = async (
             // user isn't looking at — every sibling active-view mutation below
             // is already gated by isCurrentStreamView().
             if (isCurrentStreamView()) {
-              speechController.pushDelta(chunk.contentDelta);
+              pushAssistantDelta(chunk.contentDelta);
             }
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
@@ -4345,9 +4227,9 @@ const onSend = async (
           // speech synth while the user is viewing a different conversation.
           if (isCurrentStreamView()) {
             if (!speechReceivedTextDelta) {
-              speechController.pushDelta(complete.fullContent);
+              pushAssistantDelta(complete.fullContent);
             }
-            speechController.flush();
+            completeAssistantResponse();
           }
         }
         const generatedImages =
@@ -4558,372 +4440,48 @@ watch(
   }
 );
 
-const voiceSpeaking = ref(false);
-const voicePlaybackError = ref<string | null>(null);
-const speechController = new SpeechResponseController(
-  {
-    ttsMode: "disabled",
-    latestInputWasVoice: false,
-  },
-  undefined,
-  undefined,
-  (error) => {
-    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
-    voicePlaybackError.value =
-      error.message.trim().length > 0
-        ? `${fallback} ${error.message}`
-        : fallback;
-  }
-);
-speechController.start();
-const voiceInputEnabled = ref(false);
-// Bridge the controller's imperative speaking state into Vue reactivity so the
-// composer can show a stop-speaking control (TODO P1-2).
-const unsubscribeSpeaking = speechController.subscribe((speaking) => {
-  voiceSpeaking.value = speaking;
+// ---------------------------------------------------------------------------
+// Voice orchestration — shared composable (chat-first shell design §11.1).
+// The classic dock and the chat center surface consume ONE implementation of
+// settings loading, availability detection, installs, and spoken-response
+// playback. Destructured aliases preserve the composer's prop bindings.
+// ---------------------------------------------------------------------------
+const {
+  inputEnabled: voiceInputEnabled,
+  autoSend: voiceAutoSend,
+  maxRecordingMs: voiceMaxRecordingMs,
+  spokenResponseEnabled,
+  speaking: voiceSpeaking,
+  settingsSaving: voiceSettingsSaving,
+  modelInstalling: voiceModelInstalling,
+  modelInstallError: voiceModelInstallError,
+  ttsInstallPrompt: voiceTtsInstallPrompt,
+  playbackError: voicePlaybackError,
+  missingInputModel: voiceMissingModel,
+  runtimeUnavailable: voiceRuntimeUnavailable,
+  chatReady: voiceChatReady,
+  runtimeInstallDialog: voiceRuntimeInstallDialog,
+  runtimeInstalling: voiceRuntimeInstalling,
+  runtimeInstallError: voiceRuntimeInstallError,
+  runtimeInstallSizeText: voiceRuntimeInstallSizeText,
+  runtimeInstallProgressText: voiceRuntimeInstallProgressText,
+  runtimeInstallPercent: voiceRuntimeInstallPercent,
+  loadSettings: loadVoiceSettings,
+  toggleSpokenResponse,
+  installRequiredModel: handleInstallVoiceModel,
+  installTtsModel: handleInstallTtsModel,
+  installRequiredRuntime: handleInstallVoiceRuntime,
+  confirmRuntimeInstall: confirmInstallVoiceRuntime,
+  stopSpeaking: onStopSpeaking,
+  onRecordingStart: onVoiceRecordingStart,
+  beginAssistantResponse,
+  pushAssistantDelta,
+  completeAssistantResponse,
+  stopSpeechPlayback,
+  dispose: disposeAiChatVoice,
+} = useAiChatVoice({
+  chatReady: () => availableModels.value.length > 0,
 });
-const voiceAutoSend = ref(false);
-const voiceMaxRecordingMs = ref<number>(60_000);
-const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
-const voiceLocalRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
-const VOICE_SHERPA_RUNTIME_ID = "voice-sherpa" as const;
-const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
-const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
-const voiceSettingsSaving = ref(false);
-const voiceModelInstalling = ref(false);
-const voiceModelInstallError = ref<string | null>(null);
-/**
- * True when the user tried to enable spoken responses (TTS) but the speech
- * model isn't installed. Drives an inline install affordance so we never
- * persist a TTS enablement that would silently fail on every reply. Mirrors
- * the STT model-missing notice in AiChatV2Composer.
- */
-const voiceTtsInstallPrompt = ref(false);
-const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
-const voiceRuntimeInstallDialog = ref(false);
-const voiceRuntimeInstalling = ref(false);
-const voiceRuntimeInstallError = ref<string | null>(null);
-const voiceRuntimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
-const voiceRuntimeInstallProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
-const voiceRuntimeModelProgress = ref<VoiceModelDownloadProgress | null>(null);
-let unsubscribeVoiceRuntimeProgress: (() => void) | null = null;
-let unsubscribeVoiceModelProgress: (() => void) | null = null;
-const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
-const spokenResponseToggleTitle = computed(() =>
-  spokenResponseEnabled.value
-    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
-    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
-);
-const voiceMissingModel = computed(
-  () =>
-    voiceInputEnabled.value &&
-    (voiceStatus.value?.sttState === "missing_model" ||
-      voiceStatus.value?.sttState === "unavailable"),
-);
-const voiceRuntimeUnavailable = computed(() => {
-  if (!voiceInputEnabled.value) return false;
-  // PRD §10.4: prompt for the downloadable voice-sherpa runtime when absent,
-  // even if a legacy bundled sherpa addon still satisfies sttState.
-  if (!isLocalAiRuntimeUsable(voiceLocalRuntimeStatus.value?.state)) {
-    return true;
-  }
-  return voiceStatus.value?.sttState === "unavailable";
-});
-/**
- * Whether the chat can accept a voice auto-send right now. The renderer has no
- * synchronous AI-entitlement flag, so model availability is the proxy: if no
- * model is selectable the main process would reject the send, so we keep the
- * transcript in the draft instead (PRD §7.13 / TODO P1-5).
- */
-const voiceChatReady = computed(() => availableModels.value.length > 0);
-const voiceRuntimeInstallPercent = computed<number | undefined>(() => {
-  if (voiceRuntimeModelProgress.value?.pct !== undefined) {
-    return voiceRuntimeModelProgress.value.pct;
-  }
-  return voiceRuntimeInstallProgress.value?.percent;
-});
-const voiceRuntimeInstallProgressText = computed(() => {
-  const modelProgress = voiceRuntimeModelProgress.value;
-  if (modelProgress) {
-    if (modelProgress.phase === "downloading") {
-      return (
-        t("aiChatV2.voice.runtime_install_downloading_model", {
-          pct: modelProgress.pct ?? 0,
-        }) || `Downloading Whisper Base... ${modelProgress.pct ?? 0}%`
-      );
-    }
-    if (modelProgress.phase === "verifying") {
-      return (
-        t("aiChatV2.voice.runtime_install_verifying_model") ||
-        "Verifying Whisper Base..."
-      );
-    }
-    if (modelProgress.phase === "extracting") {
-      return (
-        t("aiChatV2.voice.runtime_install_extracting_model") ||
-        "Installing Whisper Base..."
-      );
-    }
-  }
-
-  const runtimeProgress = voiceRuntimeInstallProgress.value;
-  if (!runtimeProgress) {
-    return (
-      t("aiChatV2.voice.runtime_install_preparing") ||
-      "Preparing download..."
-    );
-  }
-  const phaseKey = `localAiRuntime.${runtimeProgress.phase}`;
-  const phaseText = t(phaseKey) || runtimeProgress.phase;
-  if (runtimeProgress.percent !== undefined) {
-    return `${phaseText} ${runtimeProgress.percent}%`;
-  }
-  return phaseText;
-});
-const voiceRuntimeInstallSizeText = computed(() => {
-  const offer = voiceRuntimeInstallOffer.value;
-  if (!offer) return "";
-  return (
-    t("aiChatV2.voice.runtime_install_size", {
-      runtimeSize: formatBytes(offer.archiveSizeBytes),
-      modelSize: "198MB",
-    }) ||
-    `Runtime download: ${formatBytes(offer.archiveSizeBytes)}. Whisper Base model: ~198MB.`
-  );
-});
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
-  voiceSettings.value = settings;
-  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
-  voiceAutoSend.value = settings.autoSendTranscript;
-  voiceMaxRecordingMs.value = settings.maxRecordingMs;
-  voiceTtsMode.value = settings.ttsMode;
-  // Push the full TTS option set into the speech controller so spoken
-  // responses use the saved language/voice/speed (TODO P0-3). "auto"
-  // language defers detection to the worker; an unset voice id is omitted.
-  speechController.updateOptions({
-    ttsMode: settings.ttsMode,
-    ...(settings.ttsLanguage !== "auto"
-      ? { language: settings.ttsLanguage }
-      : {}),
-    ...(settings.ttsVoiceId !== undefined
-      ? { voiceId: settings.ttsVoiceId }
-      : {}),
-    speed: settings.ttsSpeed,
-  });
-}
-
-async function loadVoiceSettings(): Promise<void> {
-  try {
-    const [settings, status, localRuntimeStatus] = await Promise.all([
-      getVoiceSettings(),
-      getVoiceStatus(),
-      getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID).catch(() => null),
-    ]);
-    applyVoiceSettings(settings);
-    voiceStatus.value = status;
-    voiceLocalRuntimeStatus.value = localRuntimeStatus;
-    if (
-      status.sttState !== "missing_model" &&
-      status.sttState !== "unavailable"
-    ) {
-      voiceModelInstallError.value = null;
-    }
-  } catch {
-    voiceInputEnabled.value = false;
-    voiceAutoSend.value = false;
-    voiceMaxRecordingMs.value = 60_000;
-    voiceSettings.value = null;
-    voiceTtsMode.value = "disabled";
-    speechController.updateOptions({ ttsMode: "disabled" });
-    voiceStatus.value = null;
-    voiceLocalRuntimeStatus.value = null;
-  }
-}
-
-async function toggleSpokenResponse(): Promise<void> {
-  if (voiceSettingsSaving.value) return;
-  voiceSettingsSaving.value = true;
-  voiceModelInstallError.value = null;
-  voicePlaybackError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const enabling = current.ttsMode === "disabled";
-    if (enabling) {
-      // Verify the TTS runtime + model are installed before persisting an
-      // enablement that would otherwise silently fail synthesis on every
-      // assistant reply. Mirrors the voice-input (STT) prerequisite check in
-      // AiChatV2Composer.onMicClick.
-      const status = await getVoiceStatus();
-      voiceStatus.value = status;
-      if (status.ttsState === "unavailable") {
-        // Shared sherpa-onnx runtime missing -> offer the runtime installer
-        // (it fixes both STT and TTS). Do not persist ttsMode yet.
-        handleInstallVoiceRuntime();
-        return;
-      }
-      if (status.ttsState === "missing_model") {
-        // TTS model missing -> surface an install affordance in the chat.
-        // Do not persist ttsMode until the model is installed.
-        voiceTtsInstallPrompt.value = true;
-        return;
-      }
-    }
-    const nextTtsMode: AiChatVoiceTtsMode = enabling
-      ? "all_assistant_messages"
-      : "disabled";
-    const saved = await setVoiceSettings({
-      ...current,
-      ttsMode: nextTtsMode,
-    });
-    applyVoiceSettings(saved);
-  } catch (err) {
-    voiceModelInstallError.value =
-      err instanceof Error ? err.message : String(err);
-  } finally {
-    voiceSettingsSaving.value = false;
-  }
-}
-
-async function handleInstallVoiceModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  try {
-    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-/**
- * Download the configured TTS (speech response) model. Triggered when the user
- * tries to enable spoken responses before a TTS model is installed. Mirrors
- * `handleInstallVoiceModel` but targets `ttsModelId` instead of the STT model.
- */
-async function handleInstallTtsModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const ttsModelId =
-      voiceSettings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
-    await downloadVoiceModel(ttsModelId);
-    notifyVoiceModelsChanged();
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.tts_model_install_failed") || "Speech model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-async function handleInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstallError.value = null;
-  voiceRuntimeInstallOffer.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  voiceRuntimeInstallDialog.value = true;
-  try {
-    voiceRuntimeInstallOffer.value =
-      await prepareLocalAiRuntimeInstall("voice-sherpa");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_prepare_failed") ||
-        "Could not prepare the voice runtime download."
-      } ${msg}`;
-  }
-}
-
-async function confirmInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstalling.value = true;
-  voiceModelInstalling.value = true;
-  voiceRuntimeInstallError.value = null;
-  voiceModelInstallError.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  try {
-    const offer = await prepareLocalAiRuntimeInstall("voice-sherpa");
-    voiceRuntimeInstallOffer.value = offer;
-    await installLocalAiRuntime({
-      operationId: offer.operationId,
-      runtimeId: offer.runtimeId,
-      expectedRuntimeVersion: offer.runtimeVersion,
-      consentToken: offer.consentToken,
-    });
-
-    await downloadVoiceModel(DEFAULT_VOICE_STT_MODEL_ID);
-    notifyVoiceModelsChanged();
-
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const saved = await setVoiceSettings({
-      ...current,
-      inputMode: "push_to_talk",
-      sttModelId: DEFAULT_VOICE_STT_MODEL_ID,
-    });
-    applyVoiceSettings(saved);
-    await loadVoiceSettings();
-    voiceRuntimeInstallDialog.value = false;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_failed") ||
-        "Voice runtime installation failed."
-      } ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceRuntimeInstalling.value = false;
-    voiceModelInstalling.value = false;
-    voiceRuntimeInstallProgress.value = null;
-    voiceRuntimeModelProgress.value = null;
-  }
-}
-
-function handleVoiceSettingsChanged(): void {
-  void loadVoiceSettings();
-}
-
-/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
-function onVoiceRecordingStart(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
-
-/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
-function onStopSpeaking(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
 
 onMounted(() => {
   void loadConversations();
@@ -4935,34 +4493,9 @@ onMounted(() => {
     handleProviderSettingsChanged
   );
   window.addEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  // Model install/remove changes installed status without altering settings;
-  // reload voice status so the mic button reflects availability live.
-  window.addEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.addEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
-    if (progress.runtimeId !== VOICE_SHERPA_RUNTIME_ID) return;
-    voiceRuntimeInstallProgress.value = progress;
-    if (progress.phase === "done") {
-      void getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID)
-        .then((status) => {
-          voiceLocalRuntimeStatus.value = status;
-        })
-        .catch(() => undefined);
-    }
-  });
-  unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
-    if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;
-    voiceRuntimeModelProgress.value = progress;
-  });
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -5007,8 +4540,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  speechController.stop();
-  unsubscribeSpeaking();
+  disposeAiChatVoice();
   stopRuntimeStatusPoll();
   detachActiveStreamView();
   window.removeEventListener(
@@ -5016,21 +4548,9 @@ onBeforeUnmount(() => {
     handleProviderSettingsChanged
   );
   window.removeEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress?.();
-  unsubscribeVoiceRuntimeProgress = null;
-  unsubscribeVoiceModelProgress?.();
-  unsubscribeVoiceModelProgress = null;
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
