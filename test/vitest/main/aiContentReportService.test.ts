@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock Electron so the real electron binary is never loaded. The service
 // imports `app` for app-version resolution, but tests inject a custom
@@ -15,6 +15,7 @@ import {
   AIContentReportError,
   type CreateAIContentReportRequest,
   type CreateAIContentReportResponse,
+  type CreateAIConversationReportRequest,
 } from "@/entityTypes/aiContentReportTypes";
 import type { CommonApiresp } from "@/entityTypes/commonType";
 import { log } from "@/modules/Logger";
@@ -62,7 +63,7 @@ describe("AIContentReportService", () => {
   it("submits a valid report and returns the backend reportId", async () => {
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.2.3",
       installId: () => "install-id-xyz",
     });
@@ -75,7 +76,7 @@ describe("AIContentReportService", () => {
   it("overwrites renderer placeholder appVersion/platform and fills installId in submitReport", async () => {
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "9.9.9",
       installId: () => "stable-install-id",
     });
@@ -101,7 +102,7 @@ describe("AIContentReportService", () => {
   it("truncates long text in submitReport so the Zod 32000 cap is not tripped", async () => {
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -114,7 +115,7 @@ describe("AIContentReportService", () => {
 
   it("fills appVersion, platform, and installId in assembleContext", () => {
     const service = new AIContentReportService({
-      httpClient: { postJson: vi.fn() },
+      httpClient: { postJson: vi.fn(), get: vi.fn() },
       appVersion: () => "9.9.9",
       installId: () => "stable-install-id",
     });
@@ -138,7 +139,7 @@ describe("AIContentReportService", () => {
         makeResponse({ duplicate: true, reportId: "air_original" })
       );
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -151,7 +152,7 @@ describe("AIContentReportService", () => {
     const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
     const postJson = vi.fn().mockRejectedValue(err);
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -167,7 +168,7 @@ describe("AIContentReportService", () => {
       .fn()
       .mockRejectedValue(new TypeError("Failed to fetch"));
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -186,7 +187,7 @@ describe("AIContentReportService", () => {
       data: null,
     } satisfies CommonApiresp<null>);
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -199,7 +200,7 @@ describe("AIContentReportService", () => {
     const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -222,7 +223,7 @@ describe("AIContentReportService", () => {
     const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -259,7 +260,7 @@ describe("AIContentReportService", () => {
     const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
     const postJson = vi.fn().mockRejectedValue(err);
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -289,7 +290,7 @@ describe("AIContentReportService", () => {
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce(makeResponse());
     const service = new AIContentReportService({
-      httpClient: { postJson },
+      httpClient: { postJson, get: vi.fn() },
       appVersion: () => "1.0.0",
       installId: () => "id",
     });
@@ -307,14 +308,14 @@ describe("AIContentReportService", () => {
   describe("normalizeText", () => {
     it("returns text unchanged when under the limit", () => {
       const service = new AIContentReportService({
-        httpClient: { postJson: vi.fn() },
+        httpClient: { postJson: vi.fn(), get: vi.fn() },
       });
       expect(service.normalizeText("short")).toEqual({ text: "short" });
     });
 
     it("truncates preserving head and tail, and sets textTruncated", () => {
       const service = new AIContentReportService({
-        httpClient: { postJson: vi.fn() },
+        httpClient: { postJson: vi.fn(), get: vi.fn() },
       });
       const long = "a".repeat(32001);
       const result = service.normalizeText(long);
@@ -326,9 +327,372 @@ describe("AIContentReportService", () => {
 
     it("returns empty for undefined input", () => {
       const service = new AIContentReportService({
-        httpClient: { postJson: vi.fn() },
+        httpClient: { postJson: vi.fn(), get: vi.fn() },
       });
       expect(service.normalizeText(undefined)).toEqual({});
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conversation reporting (schema version 2) — design §15.
+//
+// The capability cache lives at module scope, so these tests re-import the
+// service module to get a fresh cache per test.
+// ---------------------------------------------------------------------------
+
+function makeStubClient(): {
+  postJson: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+} {
+  return { postJson: vi.fn(), get: vi.fn() };
+}
+
+function makeCapabilitiesEnvelope(enabled = true): Record<string, unknown> {
+  return {
+    status: true,
+    code: 0,
+    msg: "ok",
+    data: {
+      acceptedSchemaVersions: [1, 2],
+      conversationReporting: {
+        enabled,
+        maxAIItems: 10,
+        maxUserItems: 10,
+        maxTotalItems: 20,
+        maxItemTextChars: 8000,
+        maxAggregateTextChars: 32000,
+        maxImages: 3,
+      },
+    },
+  };
+}
+
+describe("AIContentReportService.getCapabilities", () => {
+  beforeEach(() => {
+    // The cache is module-level; re-importing resets it between tests.
+    vi.resetModules();
+  });
+
+  it("returns enabled v2 capabilities from the backend", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    expect(caps.conversationReporting.enabled).toBe(true);
+    expect(caps.acceptedSchemaVersions).toEqual([1, 2]);
+  });
+
+  it("calls the capabilities endpoint via GET", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
+    const service = new AIContentReportService({ httpClient: client });
+    await service.getCapabilities();
+    expect(client.get).toHaveBeenCalledWith(
+      "/api/ai/content-reports/capabilities"
+    );
+  });
+
+  it("fail-closes to enabled:false on network error", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockRejectedValueOnce(new Error("network down"));
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    expect(caps.conversationReporting.enabled).toBe(false);
+    expect(caps.acceptedSchemaVersions).toEqual([1]);
+  });
+
+  it("fail-closes to enabled:false on invalid response shape", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce({ garbage: true });
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    expect(caps.conversationReporting.enabled).toBe(false);
+    expect(caps.acceptedSchemaVersions).toEqual([1]);
+  });
+
+  it("fail-closes when the backend envelope reports status:false", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce({
+      status: false,
+      code: 1,
+      msg: "nope",
+      data: null,
+    });
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    expect(caps.conversationReporting.enabled).toBe(false);
+  });
+
+  it("does not cache a failed fetch (retries the next call)", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce(makeCapabilitiesEnvelope());
+    const service = new AIContentReportService({ httpClient: client });
+    await service.getCapabilities();
+    const caps = await service.getCapabilities();
+    expect(client.get).toHaveBeenCalledTimes(2);
+    expect(caps.conversationReporting.enabled).toBe(true);
+  });
+
+  it("caches capabilities for the TTL window (no second HTTP call)", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
+    const service = new AIContentReportService({ httpClient: client });
+    await service.getCapabilities();
+    await service.getCapabilities();
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the cache across service instances", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
+    const a = new AIContentReportService({ httpClient: client });
+    const b = new AIContentReportService({ httpClient: client });
+    await a.getCapabilities();
+    await b.getCapabilities();
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AIContentReportService.submitReport v2 dispatch", () => {
+  function makeV2Request(
+    overrides: Partial<CreateAIConversationReportRequest> = {}
+  ): CreateAIConversationReportRequest {
+    return {
+      schemaVersion: 2,
+      clientReportId: "c2",
+      surface: "chat_v2",
+      reportScope: "selected_ai_outputs",
+      category: "other",
+      items: [
+        {
+          itemId: "i1",
+          messageId: "m1",
+          sequence: 0,
+          role: "assistant",
+          contentType: "text",
+          text: "assistant output",
+        },
+      ],
+      context: {
+        conversationId: "conv-2",
+        selectedAIItemCount: 1,
+        includedUserItemCount: 0,
+        appVersion: "unknown",
+        platform: "win32",
+        locale: "en-US",
+      },
+      ...overrides,
+    };
+  }
+
+  it("dispatches a v2 request, assembles v2 context, and re-normalizes items", async () => {
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ reportId: "r2" }));
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    const result = await service.submitReport(
+      makeV2Request({
+        items: [
+          {
+            itemId: "i1",
+            messageId: "m1",
+            sequence: 0,
+            role: "assistant",
+            contentType: "text",
+            text: "x".repeat(9000),
+          },
+        ],
+      })
+    );
+    expect(result.reportId).toBe("r2");
+    const sent = postJson.mock.calls[0][1] as CreateAIConversationReportRequest;
+    expect(sent.context.appVersion).toBe("9.9.9");
+    expect(sent.context.installId).toBe("install-xyz");
+    expect(sent.context.selectedAIItemCount).toBe(1);
+    expect(sent.items[0].text?.length).toBeLessThanOrEqual(8000);
+    expect(sent.items[0].textTruncated).toBe(true);
+  });
+
+  it("does not modify the caller's request object", async () => {
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ reportId: "r2" }));
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    const request = makeV2Request();
+    const beforeText = request.items[0].text;
+    const beforeAppVersion = request.context.appVersion;
+    await service.submitReport(request);
+    expect(request.items[0].text).toBe(beforeText);
+    expect(request.context.appVersion).toBe(beforeAppVersion);
+    expect(request.context.installId).toBeUndefined();
+  });
+
+  it("keeps untruncated item text untouched and leaves non-text items alone", async () => {
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ reportId: "r2" }));
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    const request = makeV2Request({
+      items: [
+        {
+          itemId: "i1",
+          messageId: "m1",
+          sequence: 0,
+          role: "assistant",
+          contentType: "text",
+          text: "short output",
+        },
+        {
+          itemId: "i2",
+          messageId: "m2",
+          sequence: 1,
+          role: "assistant",
+          contentType: "image",
+          evidenceUnavailable: true,
+        },
+      ],
+      context: {
+        conversationId: "conv-2",
+        selectedAIItemCount: 2,
+        includedUserItemCount: 0,
+        appVersion: "unknown",
+        platform: "win32",
+        locale: "en-US",
+      },
+    });
+    await service.submitReport(request);
+    const sent = postJson.mock.calls[0][1] as CreateAIConversationReportRequest;
+    expect(sent.items[0].text).toBe("short output");
+    expect(sent.items[0].textTruncated).toBeUndefined();
+    expect(sent.items[1].textTruncated).toBeUndefined();
+    expect(sent.items[1].evidenceUnavailable).toBe(true);
+  });
+
+  it("maps v2 failures to a safe error code without logging item text", async () => {
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const err = Object.assign(new Error("Too Many Requests"), { status: 429 });
+    const postJson = vi.fn().mockRejectedValue(err);
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    await expect(
+      service.submitReport(
+        makeV2Request({
+          items: [
+            {
+              itemId: "i1",
+              messageId: "m1",
+              sequence: 0,
+              role: "assistant",
+              contentType: "text",
+              text: "secret v2 output",
+            },
+          ],
+        })
+      )
+    ).rejects.toMatchObject({ code: "rate_limited" });
+    const logged = JSON.stringify(infoSpy.mock.calls);
+    expect(logged).not.toContain("secret v2 output");
+    expect(logged).toContain("schemaVersion");
+    infoSpy.mockRestore();
+  });
+
+  it("emits a metadata-only submitted analytics event for v2", async () => {
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ reportId: "r2" }));
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    await service.submitReport(makeV2Request());
+    const submitted = infoSpy.mock.calls.find(
+      (c) =>
+        String(c[0]).includes("[analytics]") &&
+        String(c[0]).includes("ai_content_report_submitted")
+    );
+    expect(submitted).toBeDefined();
+    const logged = JSON.stringify(submitted);
+    expect(logged).toContain("surface");
+    expect(logged).toContain("category");
+    expect(logged).not.toContain("assistant output");
+    expect(logged).not.toContain("conv-2");
+    infoSpy.mockRestore();
+  });
+
+  it("treats a duplicate v2 response as success with the original reportId", async () => {
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(
+        makeResponse({ duplicate: true, reportId: "air_original" })
+      );
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "9.9.9",
+      installId: () => "install-xyz",
+    });
+    const result = await service.submitReport(makeV2Request());
+    expect(result.duplicate).toBe(true);
+    expect(result.reportId).toBe("air_original");
+  });
+
+  it("still accepts v1 requests unchanged (backward compatible)", async () => {
+    const postJson = vi
+      .fn()
+      .mockResolvedValue(makeResponse({ reportId: "r1" }));
+    const service = new AIContentReportService({
+      httpClient: { postJson, get: vi.fn() },
+      appVersion: () => "1.0.0",
+      installId: () => "install-xyz",
+    });
+    const result = await service.submitReport(makeValidRequest());
+    expect(result.reportId).toBe("r1");
+    const sent = postJson.mock.calls[0][1] as CreateAIContentReportRequest;
+    expect(sent.schemaVersion).toBe(1);
+    expect(sent.context.appVersion).toBe("1.0.0");
+    expect(sent.context.installId).toBe("install-xyz");
   });
 });

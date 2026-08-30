@@ -5,10 +5,15 @@ import { getOrCreateInstallId } from "@/modules/diagnostics/DiagnosticIdentity";
 import { mapReportError } from "@/service/AIContentReportErrorMapper";
 import {
   AIContentReportError,
+  type AIContentReportCapabilities,
   type AIContentReportContext,
   type CreateAIContentReportRequest,
   type CreateAIContentReportResponse,
+  type CreateAIConversationReportRequest,
+  type CreateAnyAIContentReportRequest,
 } from "@/entityTypes/aiContentReportTypes";
+import { aiContentReportCapabilitiesResponseSchema } from "@/schemas/api/aiContentReport";
+import { normalizeConversationTexts } from "@/views/components/aiContentReport/conversationReportText";
 import type { CommonApiresp } from "@/entityTypes/commonType";
 
 /**
@@ -30,7 +35,33 @@ import type { CommonApiresp } from "@/entityTypes/commonType";
  */
 
 const REPORT_ENDPOINT = "/api/ai/content-reports";
+const CAPABILITIES_ENDPOINT = "/api/ai/content-reports/capabilities";
 const MAX_TEXT_CHARS = 32000;
+const CAPABILITY_TTL_MS = 5 * 60 * 1000; // 5 minutes (design §15.2)
+
+/** Fail-closed default: conversation reporting stays hidden unless the backend
+ * explicitly advertises it (design §15.2). */
+const FAIL_CLOSED_CAPABILITIES: AIContentReportCapabilities = {
+  acceptedSchemaVersions: [1],
+  conversationReporting: {
+    enabled: false,
+    maxAIItems: 10,
+    maxUserItems: 10,
+    maxTotalItems: 20,
+    maxItemTextChars: 8000,
+    maxAggregateTextChars: 32000,
+    maxImages: 3,
+  },
+};
+
+interface CapabilityCacheEntry {
+  value: AIContentReportCapabilities;
+  expiresAt: number;
+}
+
+// Module-level: each IPC call constructs a new service instance, so the cache
+// must live at module scope to be shared across calls (design §15.2).
+let capabilityCache: CapabilityCacheEntry | null = null;
 
 /** Inject for testability; defaults to the real Electron app. */
 export interface AppVersionProvider {
@@ -48,7 +79,7 @@ function defaultAppVersion(): string {
 
 export interface AIContentReportServiceOptions {
   /** Override the HTTP client (tests inject a stub). */
-  httpClient?: Pick<HttpClient, "postJson">;
+  httpClient?: Pick<HttpClient, "postJson" | "get">;
   /** Override the app-version source (tests inject a stub). */
   appVersion?: AppVersionProvider;
   /** Override the stable install id (tests inject a stub). */
@@ -56,7 +87,7 @@ export interface AIContentReportServiceOptions {
 }
 
 export class AIContentReportService {
-  private readonly httpClient: Pick<HttpClient, "postJson">;
+  private readonly httpClient: Pick<HttpClient, "postJson" | "get">;
   private readonly appVersion: AppVersionProvider;
   private readonly installId: () => string;
 
@@ -123,9 +154,56 @@ export class AIContentReportService {
   }
 
   /**
-   * Submit the report to the backend. Throws `AIContentReportError` (with a
-   * safe code) on any failure; the IPC handler wraps it and the dialog maps
-   * the code to a localized message.
+   * Fetch conversation-reporting capabilities with a 5-minute main-process
+   * cache (design §15.2). Fail-closed to `enabled: false` on network error,
+   * schema rejection, or a `status:false` envelope — so the v2 UI never
+   * appears when the backend cannot accept conversation reports.
+   *
+   * NOT AI-gated: uses the plain authenticated `HttpClient` and never touches
+   * `USER_AI_ENABLED` (PRD FR-4.4). Failed fetches are NOT cached, so a
+   * transient outage heals on the next call.
+   */
+  async getCapabilities(): Promise<AIContentReportCapabilities> {
+    if (capabilityCache && capabilityCache.expiresAt > Date.now()) {
+      return capabilityCache.value;
+    }
+    try {
+      const raw = await this.httpClient.get<unknown>(CAPABILITIES_ENDPOINT);
+      const parsed = aiContentReportCapabilitiesResponseSchema().safeParse(raw);
+      if (!parsed.success || parsed.data.status !== true) {
+        log.warn("[ai-content-report] capability response rejected");
+        return FAIL_CLOSED_CAPABILITIES;
+      }
+      const value = parsed.data.data;
+      capabilityCache = {
+        value,
+        expiresAt: Date.now() + CAPABILITY_TTL_MS,
+      };
+      return value;
+    } catch (err) {
+      log.warn("[ai-content-report] capability fetch failed", {
+        code: mapReportError(err),
+      });
+      return FAIL_CLOSED_CAPABILITIES;
+    }
+  }
+
+  /**
+   * Dispatch on schemaVersion. v1 → single-output path; v2 → conversation
+   * path. Both share HTTP, error mapping, and metadata-only logging.
+   */
+  async submitReport(
+    request: CreateAnyAIContentReportRequest
+  ): Promise<CreateAIContentReportResponse> {
+    return request.schemaVersion === 2
+      ? this.submitVersion2(request)
+      : this.submitVersion1(request);
+  }
+
+  /**
+   * Submit a version-1 (single-output) report. Throws `AIContentReportError`
+   * (with a safe code) on any failure; the IPC handler wraps it and the
+   * dialog maps the code to a localized message.
    *
    * Server-side normalization (authoritative, PRD FR-3.1/3.2):
    *  - text is truncated to 32000 chars preserving head+tail
@@ -133,7 +211,7 @@ export class AIContentReportService {
    *    sources (the renderer cannot know these reliably)
    * The renderer's placeholder values are overwritten here.
    */
-  async submitReport(
+  private async submitVersion1(
     request: CreateAIContentReportRequest
   ): Promise<CreateAIContentReportResponse> {
     const startedAt = Date.now();
@@ -218,6 +296,136 @@ export class AIContentReportService {
     });
 
     return data;
+  }
+
+  /**
+   * Submit a version-2 (conversation) report. Defense in depth: re-normalize
+   * item texts with the same pure utility the renderer used, then assemble
+   * the v2 context from main-process sources. The renderer's placeholder
+   * values are overwritten here (design §8, §15).
+   *
+   * Logging is metadata-only: `clientReportId`, `reportId`, surface,
+   * category, HTTP status, duration. Never item text, comments, image bytes,
+   * conversation content, or identifiers.
+   */
+  private async submitVersion2(
+    request: CreateAIConversationReportRequest
+  ): Promise<CreateAIContentReportResponse> {
+    const startedAt = Date.now();
+    const { clientReportId, surface, category } = request;
+
+    const normalizedItems = this.normalizeConversationItems(request.items);
+    const normalizedContext = this.assembleVersion2Context(request.context);
+    const normalizedRequest: CreateAIConversationReportRequest = {
+      ...request,
+      items: normalizedItems,
+      context: normalizedContext,
+    };
+
+    let raw: CommonApiresp<CreateAIContentReportResponse> | undefined;
+    let httpStatus: number | undefined;
+    try {
+      raw = await this.httpClient.postJson<
+        CommonApiresp<CreateAIContentReportResponse>
+      >(REPORT_ENDPOINT, normalizedRequest);
+    } catch (err) {
+      const code = mapReportError(err);
+      httpStatus = extractStatus(err);
+      log.info("[ai-content-report] submit failed", {
+        clientReportId,
+        surface,
+        category,
+        httpStatus,
+        durationMs: Date.now() - startedAt,
+        code,
+        schemaVersion: 2,
+      });
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
+      throw new AIContentReportError(code, code);
+    }
+
+    const data = raw?.data;
+    if (!raw?.status || !data || !data.reportId) {
+      const code = mapReportError({ status: httpStatus });
+      log.info("[ai-content-report] submit rejected by server", {
+        clientReportId,
+        surface,
+        category,
+        httpStatus,
+        durationMs: Date.now() - startedAt,
+        code,
+        schemaVersion: 2,
+      });
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
+      throw new AIContentReportError(code, code);
+    }
+
+    log.info("[ai-content-report] submitted", {
+      clientReportId,
+      reportId: data.reportId,
+      surface,
+      category,
+      httpStatus,
+      durationMs: Date.now() - startedAt,
+      schemaVersion: 2,
+    });
+    this.emitAnalyticsEvent("ai_content_report_submitted", {
+      surface,
+      category,
+      appVersion: normalizedContext.appVersion,
+      durationBucket: durationBucket(Date.now() - startedAt),
+    });
+    return data;
+  }
+
+  /**
+   * Re-normalize v2 item texts (defense in depth — the renderer already
+   * normalized, but the service is the last boundary before HTTP). Image-only
+   * and `evidenceUnavailable` items have no text and pass through unchanged.
+   */
+  private normalizeConversationItems(
+    items: CreateAIConversationReportRequest["items"]
+  ): CreateAIConversationReportRequest["items"] {
+    const inputs = items.map((item) => ({
+      itemId: item.itemId,
+      text: item.text ?? "",
+    }));
+    const normalized = normalizeConversationTexts(inputs);
+    const byId = new Map(normalized.texts.map((text) => [text.itemId, text]));
+    return items.map((item) => {
+      if (!item.text) return item;
+      const text = byId.get(item.itemId);
+      if (!text) return item;
+      return {
+        ...item,
+        text: text.text,
+        textTruncated: text.truncated || undefined,
+      };
+    });
+  }
+
+  /**
+   * Assemble the v2 context: overwrite appVersion/platform/installId from
+   * main-process sources; preserve the renderer-supplied conversationId,
+   * counts, aggregateTextTruncated, and locale.
+   */
+  private assembleVersion2Context(
+    partial: CreateAIConversationReportRequest["context"]
+  ): CreateAIConversationReportRequest["context"] {
+    return {
+      ...partial,
+      appVersion: this.appVersion(),
+      platform: process.platform as "win32" | "darwin" | "linux",
+      installId: this.installId(),
+    };
   }
 
   /**
