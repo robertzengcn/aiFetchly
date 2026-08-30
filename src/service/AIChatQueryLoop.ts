@@ -26,6 +26,8 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
+import type { ChatV2DirectionTransition } from "@/entityTypes/aiChatV2Types";
+import type { AIChatSteeringBatch } from "@/service/AIChatTurnControl";
 import {
   OpenAIStreamAccumulator,
   type ParsedToolCallResult,
@@ -100,6 +102,35 @@ import { log } from "@/modules/Logger";
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
+ * Synthetic result for every tool call skipped because user steering
+ * superseded the model's decision (FR-21/22). No tool arguments or hidden
+ * policy data are included.
+ */
+const SKIPPED_BY_STEERING_TOOL_RESULT = {
+  success: false,
+  skipped: true,
+  reason: "superseded_by_user_steering",
+} as const;
+
+/**
+ * Wrapper marking a steering instruction in model context. User-originated
+ * guidance stays BELOW system, workspace, policy, and permission
+ * instructions (PRD §13.1) — it is never sent as a system message.
+ */
+const STEERING_MODEL_PREFIX =
+  "[User steering update received while this response was running]";
+
+/** Controlled failure when no model round remains to apply steering (§11.5). */
+export class AIChatSteeringRoundLimitError extends Error {
+  constructor() {
+    super(
+      "STEERING_ROUND_LIMIT: no model round remains to apply the steering message. It stays available as a normal next message."
+    );
+    this.name = "AIChatSteeringRoundLimitError";
+  }
+}
+
+/**
  * Polling interval for async tool jobs. The loop sleeps this long between
  * ToolJobRegistry.getStatus() calls. Must be >= the registry's
  * pollMinIntervalMs (5s) to avoid rate_limited snapshots.
@@ -152,6 +183,13 @@ const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
  */
 interface RoundContentTracker {
   delivered: boolean;
+  /**
+   * Set once any steering batch has been accepted/applied for this turn.
+   * A pristine-transcript retry after steering would omit or duplicate the
+   * steering instruction, so the retry wrapper must stop retrying once this
+   * is true (design §11.7).
+   */
+  steeringObserved?: boolean;
 }
 
 /**
@@ -790,6 +828,7 @@ export class AIChatQueryLoop {
         !input.abortController.signal.aborted &&
         input.isActiveTurn() &&
         !tracker.delivered &&
+        !tracker.steeringObserved &&
         isContentLevelTransientError(result.error);
 
       if (!canRetry) {
@@ -888,6 +927,14 @@ export class AIChatQueryLoop {
       // any other generated image.
       const collectedToolImages: OpenAIChatImage[] = [];
 
+      // Steering state (message-queue design §11): the mailbox is drained
+      // only at safe boundaries; skipped tool calls get synthetic results;
+      // direction transitions record where the visible content changed.
+      const steeringControl = input.steeringControl;
+      const directionTransitions: ChatV2DirectionTransition[] = [];
+      let visibleContent = "";
+      let steeringApplied = false;
+
       for (
         let round = input.startRound;
         round < CHAT_V2_MAX_TOOL_ROUNDS;
@@ -896,6 +943,24 @@ export class AIChatQueryLoop {
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);
+
+        // Safe boundary 1 — before_model (design §11.1): the request for
+        // this round has not started yet, so committed steering joins the
+        // transcript without consuming an extra round.
+        if (steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("before_model");
+          if (batch) {
+            this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+          }
+        }
 
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
@@ -1027,6 +1092,9 @@ export class AIChatQueryLoop {
         );
 
         finalAccumulator = accumulator;
+        // Accumulate every round's delivered text once so steering offsets
+        // and the final persisted content stay in visible order (§11.6).
+        visibleContent += accumulator.state.fullContent ?? "";
 
         // Surface token usage from THIS round so (a) the UI can render a
         // live context-usage indicator and (b) the persisting event sink can
@@ -1229,6 +1297,36 @@ export class AIChatQueryLoop {
           throw new Error(detail);
         }
 
+        // Safe boundary 2 — after_model (design §11.1): the response is
+        // complete and steering is available, so NONE of its tool calls may
+        // start. Each call receives one protocol-valid synthetic result.
+        if (willContinue && steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("after_model");
+          if (batch) {
+            this.assertSteeringRoundBudget(round);
+            messages.push(
+              buildAssistantToolCallMessage(
+                parsedCalls,
+                textualParsedCalls.length > 0
+                  ? ""
+                  : accumulator.state.fullContent
+              )
+            );
+            this.emitSkippedToolResults(input, messages, parsedCalls);
+            this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+            tracker.delivered = true;
+            continue;
+          }
+        }
+
         if (!willContinue) {
           if (isTextToolCallMarker(accumulator.state.fullContent)) {
             if (
@@ -1277,6 +1375,25 @@ export class AIChatQueryLoop {
                   )
                 : undefined,
             };
+          }
+
+          // Safe boundary 5 — before_complete (design §11.1): steering
+          // preempts the terminal answer and forces one more model round.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_complete");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              continue;
+            }
           }
 
           // Detect truncated/empty responses: the server closed the stream
@@ -1415,6 +1532,27 @@ export class AIChatQueryLoop {
           if (!call.ok || !call.id || !call.name) {
             continue;
           }
+
+          // Safe boundary 3 — before_tool (design §11.1): this call has not
+          // started. Steering skips it and every other unstarted call.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.emitSkippedToolResults(input, messages, parsedCalls);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
+
           const callId = call.id;
           const callName = call.name;
 
@@ -1906,6 +2044,26 @@ export class AIChatQueryLoop {
           log.info(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
+
+          // Safe boundary 4 — after_tool (design §11.1): this call's result
+          // is in the transcript; remaining unstarted calls are skipped.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("after_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.emitSkippedToolResults(input, messages, parsedCalls);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
         }
       }
 
@@ -1950,6 +2108,13 @@ export class AIChatQueryLoop {
       // the recovered content from earlier in the turn.
       if (recoveryState.recoveredContentPrefix) {
         fullContent = recoveryState.recoveredContentPrefix + fullContent;
+      }
+      // Steering turns persist the FULL visible content across rounds in
+      // delivery order (§11.6) — the final round alone would drop the
+      // pre-steering text the user already saw.
+      if (steeringApplied) {
+        fullContent =
+          (recoveryState.recoveredContentPrefix || "") + visibleContent;
       }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
@@ -2017,6 +2182,7 @@ export class AIChatQueryLoop {
             )
           : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
+        ...(steeringApplied ? { directionTransitions } : {}),
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -2111,6 +2277,104 @@ export class AIChatQueryLoop {
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Steering boundary helpers (message-queue design §11)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Applying steering requires another model round (§11.5). When the round
+   * budget is exhausted the turn fails cleanly with STEERING_ROUND_LIMIT;
+   * the pending items stay `steering` and are paused by terminal handling,
+   * so the user can resume them as a normal next message.
+   */
+  private assertSteeringRoundBudget(round: number): void {
+    if (round + 1 >= CHAT_V2_MAX_TOOL_ROUNDS) {
+      throw new AIChatSteeringRoundLimitError();
+    }
+  }
+
+  /**
+   * Append one protocol-valid synthetic tool result for every parsed call
+   * that does not already have a `tool` message (FR-22). Ids mirror
+   * buildAssistantToolCallMessage (including its `call_${index}` fallback)
+   * so every assistant tool_call_id receives exactly one result.
+   */
+  private emitSkippedToolResults(
+    input: AIChatQueryLoopInput,
+    messages: OpenAIChatMessage[],
+    parsedCalls: readonly ParsedToolCallResult[]
+  ): void {
+    const resulted = new Set<string>();
+    for (const message of messages) {
+      if (message.role === "tool" && message.tool_call_id) {
+        resulted.add(message.tool_call_id);
+      }
+    }
+    const skippedContent = serializeToolResultContent({
+      ...SKIPPED_BY_STEERING_TOOL_RESULT,
+    });
+    for (const call of parsedCalls) {
+      const id =
+        call.id ??
+        `call_${parsedCalls.indexOf(call)}`;
+      if (resulted.has(id)) continue;
+      if (!call.name && !call.id) continue;
+      input.eventSink.emit({
+        type: "tool_result",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        toolCallId: id,
+        toolName: call.name ?? "unknown_tool",
+        fullContent: skippedContent,
+        toolResult: { ...SKIPPED_BY_STEERING_TOOL_RESULT },
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: id,
+        content: skippedContent,
+      });
+      resulted.add(id);
+    }
+  }
+
+  /**
+   * Append the persisted steering instructions as consecutive user messages
+   * (wrapped, below system/policy authority — §10.4), emit one
+   * direction_updated event carrying ids/offset only, and record the
+   * transition for the final assistant row (§11.5).
+   */
+  private applySteeringToTranscript(
+    input: AIChatQueryLoopInput,
+    messages: OpenAIChatMessage[],
+    batch: AIChatSteeringBatch,
+    contentOffset: number,
+    transitions: ChatV2DirectionTransition[]
+  ): void {
+    for (const instruction of batch.instructions) {
+      messages.push({
+        role: "user",
+        content: `${STEERING_MODEL_PREFIX}\n${instruction.modelContent}`,
+      });
+    }
+    input.eventSink.emit({
+      type: "direction_updated",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      contentOffset,
+    });
+    transitions.push({
+      contentOffset,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      occurredAt: new Date().toISOString(),
+    });
+    log.info(
+      `[ai-chat-v2] steering applied boundary=${batch.boundary} count=${batch.instructions.length} offset=${contentOffset}`
+    );
   }
 
   private async handlePlanToolAskUserQuestion(
