@@ -120,6 +120,19 @@ describe("AIChatPendingMessageModule.createPendingMessage", () => {
     ).rejects.toMatchObject({ code: "CONTENT_TOO_LONG" });
   });
 
+  it("rejects pasted content over the 256k secondary cap (design §8.3)", async () => {
+    const module = makeModule();
+    await expect(
+      module.createPendingMessage({
+        clientRequestId: "cr-paste",
+        request: {
+          message: "see paste",
+          pastedContents: { paste1: "x".repeat(256_001) },
+        } as never,
+      })
+    ).rejects.toMatchObject({ code: "CONTENT_TOO_LONG" });
+  });
+
   it("enforces the 20-message queue cap", async () => {
     const module = makeModule();
     for (let i = 0; i < 20; i += 1) {

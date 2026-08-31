@@ -27,6 +27,12 @@ import crypto from "crypto";
 /** Queue resource limits (PRD §13.4 recommended starting values). */
 export const AI_CHAT_PENDING_MAX_PER_CONVERSATION = 20;
 export const AI_CHAT_PENDING_CONTENT_MAX_CHARS = 32_000;
+/**
+ * Secondary cap on pasted-text content persisted alongside a queued
+ * message (design §8.3). The IPC schema's expanded-total cap (100k) is
+ * stricter at the boundary; this is the durable defense-in-depth check.
+ */
+export const AI_CHAT_PENDING_PASTED_CONTENT_MAX_CHARS = 256_000;
 
 /** Stored turn options — the only request fields the drain may replay. */
 interface AIChatPendingRequestOptions {
@@ -137,6 +143,15 @@ export class AIChatPendingMessageModule extends BaseModule {
       throw new AIChatPendingMessageModuleError(
         "CONTENT_TOO_LONG",
         `Message exceeds the ${AI_CHAT_PENDING_CONTENT_MAX_CHARS} character limit.`
+      );
+    }
+    const pastedTotal = Object.values(
+      input.request.pastedContents ?? {}
+    ).reduce((sum, value) => sum + value.length, 0);
+    if (pastedTotal > AI_CHAT_PENDING_PASTED_CONTENT_MAX_CHARS) {
+      throw new AIChatPendingMessageModuleError(
+        "CONTENT_TOO_LONG",
+        `Pasted content exceeds the ${AI_CHAT_PENDING_PASTED_CONTENT_MAX_CHARS} character limit.`
       );
     }
 
