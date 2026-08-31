@@ -13,7 +13,6 @@
 // derive the project root from `import.meta.url` so the aliases resolve the same
 // directory regardless of how the config is loaded.
 
-import alias from "@rollup/plugin-alias";
 import * as path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -108,7 +107,7 @@ export function emptyModulesPlugin() {
 export function fixInteropNamespacePlugin() {
   return {
     name: "fix-interop-namespace",
-    renderChunk(code, chunk, options) {
+    renderChunk(code) {
       let fixedCode = code;
 
       fixedCode = fixedCode.replace(
@@ -125,6 +124,17 @@ export function fixInteropNamespacePlugin() {
       return { code: fixedCode, map: null };
     },
   };
+}
+
+// Copy a file only when the source exists. Worktree/CI environments may have a
+// sparse node_modules (e.g. no protocol-registry), and an unguarded
+// copyFileSync at buildStart aborts the whole vitest run before tests execute.
+function copyIfExists(src, dest) {
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, dest);
+  } else {
+    console.warn(`Skipping copy: ${src} not found`);
+  }
 }
 
 // Custom platform-aware copy plugin. Copies icons, sqlite-vec native extension,
@@ -241,49 +251,49 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
           ],
         ];
         for (const [src, dest] of linuxFiles) {
-          if (fs.existsSync(src)) {
-            fs.copyFileSync(src, dest);
-          } else {
-            console.warn(`Skipping copy: ${src} not found`);
-          }
+          copyIfExists(src, dest);
         }
       } else if (process.platform === "darwin") {
         console.log("Copying macOS templates...");
-        fs.copyFileSync(
+        // Guarded copies: worktree/CI environments may have a sparse
+        // node_modules without protocol-registry, and an unguarded
+        // copyFileSync at buildStart aborts the whole vitest run before
+        // any test executes. Mirrors the Linux branch's existsSync guard.
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/templates/script.ejs",
           path.join(outDir, "templates/script.ejs")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/templates/app.ejs",
           path.join(outDir, "templates/app.ejs")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/templates/url-app.ejs",
           path.join(outDir, "templates/url-app.ejs")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/defaultAppExist.sh",
           path.join(outDir, "defaultAppExist.sh")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/index.js",
           path.join(outDir, "index.js")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/macos/plistMutator.js",
           path.join(outDir, "plistMutator.js")
         );
       } else if (process.platform === "win32") {
         console.log("Copying Windows templates...");
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/windows/templates/app-script.ejs",
           path.join(outDir, "templates/app-script.ejs")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/windows/index.js",
           path.join(outDir, "index.js")
         );
-        fs.copyFileSync(
+        copyIfExists(
           "node_modules/protocol-registry/src/windows/registry.js",
           path.join(outDir, "registry.js")
         );
