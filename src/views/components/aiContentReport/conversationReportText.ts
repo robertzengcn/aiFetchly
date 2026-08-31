@@ -30,7 +30,10 @@ interface ItemInput {
 }
 
 /** Head-marker-tail clamp for a single item to a target max length. */
-function clampWithMarker(text: string, max: number): { text: string; truncated: boolean } {
+function clampWithMarker(
+  text: string,
+  max: number
+): { text: string; truncated: boolean } {
   if (text.length <= max) return { text, truncated: false };
   const tailLen = 28;
   const headLen = Math.max(0, max - TRUNCATION_MARKER.length - tailLen);
@@ -108,4 +111,24 @@ export function normalizeConversationTexts(
     texts,
     aggregateTruncated: true,
   };
+}
+
+/**
+ * Pure, synchronous truncation pre-check for the dialog's warn-before-submit
+ * gate (PRD FR-4.4, §10.4, Journey 11.1 step 7). Delegates to
+ * {@link normalizeConversationTexts} so the warning fires exactly when the
+ * real submission would truncate — never a false positive or a miss.
+ *
+ * Returns true when ANY selected text item would be clamped per-item OR the
+ * aggregate would exceed the 32,000-char budget.
+ */
+export function wouldTruncateConversationTexts(
+  inputs: readonly ItemInput[]
+): boolean {
+  if (inputs.length === 0) return false;
+  const normalized = normalizeConversationTexts(inputs);
+  return (
+    normalized.aggregateTruncated ||
+    normalized.texts.some((text) => text.truncated)
+  );
 }

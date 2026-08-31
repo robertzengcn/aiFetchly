@@ -3,6 +3,7 @@ import {
   MAX_CONVERSATION_AGGREGATE_TEXT,
   MAX_CONVERSATION_ITEM_TEXT,
   normalizeConversationTexts,
+  wouldTruncateConversationTexts,
 } from "@/views/components/aiContentReport/conversationReportText";
 
 describe("normalizeConversationTexts", () => {
@@ -19,7 +20,9 @@ describe("normalizeConversationTexts", () => {
   it("clamps a single item over 8000 chars", () => {
     const huge = "x".repeat(9000);
     const out = normalizeConversationTexts([{ itemId: "a", text: huge }]);
-    expect(out.texts[0].text!.length).toBeLessThanOrEqual(MAX_CONVERSATION_ITEM_TEXT);
+    expect(out.texts[0].text!.length).toBeLessThanOrEqual(
+      MAX_CONVERSATION_ITEM_TEXT
+    );
     expect(out.texts[0].truncated).toBe(true);
     // head + marker + tail preserved
     expect(out.texts[0].text!.startsWith("x")).toBe(true);
@@ -53,7 +56,11 @@ describe("normalizeConversationTexts", () => {
       { itemId: "second", text: "b" },
       { itemId: "third", text: "c" },
     ]);
-    expect(out.texts.map((t) => t.itemId)).toEqual(["first", "second", "third"]);
+    expect(out.texts.map((t) => t.itemId)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
   });
 
   it("is deterministic for identical input", () => {
@@ -61,5 +68,48 @@ describe("normalizeConversationTexts", () => {
     const a = normalizeConversationTexts(inputs);
     const b = normalizeConversationTexts(inputs);
     expect(a).toEqual(b);
+  });
+});
+
+describe("wouldTruncateConversationTexts", () => {
+  it("returns false when every item fits within both limits", () => {
+    const out = wouldTruncateConversationTexts([
+      { itemId: "a", text: "hello" },
+      { itemId: "b", text: "world" },
+    ]);
+    expect(out).toBe(false);
+  });
+
+  it("returns true when a single item exceeds the per-item limit", () => {
+    const out = wouldTruncateConversationTexts([
+      { itemId: "a", text: "x".repeat(9000) },
+    ]);
+    expect(out).toBe(true);
+  });
+
+  it("returns true when the aggregate exceeds the aggregate limit even if each item fits", () => {
+    // 20 items × 3000 chars = 60000 > 32000 aggregate, each < 8000.
+    const inputs = Array.from({ length: 20 }, (_, i) => ({
+      itemId: `i${i}`,
+      text: "y".repeat(3000),
+    }));
+    expect(wouldTruncateConversationTexts(inputs)).toBe(true);
+  });
+
+  it("matches the truncation flags produced by normalizeConversationTexts", () => {
+    const inputs = [
+      { itemId: "a", text: "x".repeat(9000) },
+      { itemId: "b", text: "short" },
+    ];
+    const normalized = normalizeConversationTexts(inputs);
+    const detected = wouldTruncateConversationTexts(inputs);
+    const anyTruncated =
+      normalized.aggregateTruncated ||
+      normalized.texts.some((text) => text.truncated);
+    expect(detected).toBe(anyTruncated);
+  });
+
+  it("returns false for an empty selection", () => {
+    expect(wouldTruncateConversationTexts([])).toBe(false);
   });
 });

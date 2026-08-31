@@ -53,6 +53,15 @@
           <v-icon size="small" start>mdi-shield-lock-outline</v-icon>
           <span>{{ consentText }}</span>
         </div>
+        <div
+          v-if="truncationWarningVisible"
+          class="report-truncation-warning"
+          aria-live="polite"
+          data-testid="truncation-warning"
+        >
+          <v-icon size="small" start color="warning">mdi-alert-outline</v-icon>
+          <span>{{ truncationWarningText }}</span>
+        </div>
         <div v-if="localError" class="report-error" aria-live="polite" data-testid="conversation-report-error">
           {{ localError }}
         </div>
@@ -102,6 +111,7 @@ import {
   buildCreateAIConversationReportRequest,
   AIConversationReportLocalError,
 } from "./conversationReportRequest";
+import { wouldTruncateConversationTexts } from "./conversationReportText";
 import { createAIContentReport } from "@/views/api/aiContentReport";
 import type { ConversationReportSnapshot } from "./conversationReportSnapshot";
 import {
@@ -134,6 +144,18 @@ const resultMessage = ref("");
 const resultIsError = ref(false);
 const clientReportId = ref("");
 const categoryError = ref("");
+// FR-4.4 / §10.4 / Journey 11.1 step 7: warn-then-confirm gate. When the
+// current selection would be truncated, the first submit click surfaces the
+// truncationWarning and waits for a second confirm click before transmitting.
+// Any selection / context change resets the gate so the warning never goes
+// stale against a different selection.
+const truncationConfirmed = ref(false);
+const truncationWarningVisible = ref(false);
+const truncationWarningText = computed(
+  () =>
+    t("aiConversationReport.truncationWarning") ||
+    "Long outputs were trimmed to fit the report size limit."
+);
 
 const titleText = computed(() => t("aiConversationReport.dialogTitle") || "Report conversation");
 const submitText = computed(() => t("aiConversationReport.continueAndSubmit") || "Submit report");
@@ -178,10 +200,19 @@ function toggleItem(itemId: string): void {
   else next.add(itemId);
   selectedItemIds.value = next;
   localError.value = "";
+  // The selection changed, so any prior truncation confirmation is stale.
+  resetTruncationGate();
 }
 
 function onToggleRelated(): void {
   includeRelatedUserContext.value = !includeRelatedUserContext.value;
+  // The context set changed, so the prior confirmation no longer applies.
+  resetTruncationGate();
+}
+
+function resetTruncationGate(): void {
+  truncationConfirmed.value = false;
+  truncationWarningVisible.value = false;
 }
 
 function onToggle(v: boolean): void {
@@ -206,6 +237,7 @@ watch(
       resultMessage.value = "";
       resultIsError.value = false;
       categoryError.value = "";
+      resetTruncationGate();
       nextTick(() => titleRef.value?.$el?.focus?.());
     } else {
       const target = lastFocusedEl ?? props.activatorEl ?? null;
@@ -250,6 +282,44 @@ async function onSubmit(): Promise<void> {
     return;
   }
 
+  // FR-4.4 / §10.4 / Journey 11.1 step 7: if the current selection would be
+  // truncated, show the truncation warning and require a second confirm click
+  // before transmitting. Non-truncated reports skip this gate and submit in
+  // one step. The detector is pure + synchronous and mirrors the exact
+  // normalization the request builder applies, so the warning is never a
+  // false positive or a miss.
+  if (!truncationConfirmed.value) {
+    const selectedCandidates = props.snapshot.candidates.filter((c) =>
+      selectedItemIds.value.has(c.itemId)
+    );
+    const textInputs = selectedCandidates.map((c) => ({
+      itemId: c.itemId,
+      text: c.text ?? "",
+    }));
+    // Related-user messages opted in are part of the submitted text budget;
+    // include them so the warning reflects the real aggregate.
+    if (includeRelatedUserContext.value) {
+      for (const c of selectedCandidates) {
+        if (c.relatedUser) {
+          textInputs.push({
+            itemId: c.relatedUser.itemId,
+            text: c.relatedUser.text,
+          });
+        }
+      }
+    }
+    if (wouldTruncateConversationTexts(textInputs)) {
+      if (truncationWarningVisible.value) {
+        // Second click while the warning is showing = explicit confirm.
+        truncationConfirmed.value = true;
+      } else {
+        // First detection: surface the warning and wait for confirmation.
+        truncationWarningVisible.value = true;
+        return;
+      }
+    }
+  }
+
   let request;
   try {
     request = await buildCreateAIConversationReportRequest({
@@ -281,6 +351,9 @@ async function onSubmit(): Promise<void> {
       "{reportId}",
       response.reportId
     );
+    // The submission consumed the confirmation; clear the gate so a follow-up
+    // report on the same selection re-warns.
+    resetTruncationGate();
     emit("submitted", { reportId: response.reportId, selectedMessageIds });
   } catch (err) {
     resultIsError.value = true;
@@ -318,6 +391,16 @@ async function onSubmit(): Promise<void> {
   color: rgb(var(--v-theme-error));
   font-size: 12px;
   margin-top: 6px;
+}
+.report-truncation-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-warning, 255, 152, 0), 0.08);
 }
 .report-result {
   padding: 8px 0;

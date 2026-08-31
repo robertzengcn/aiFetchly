@@ -23,6 +23,11 @@ vi.mock("@/views/components/aiContentReport/conversationReportRequest", () => ({
     }
   },
 }));
+const wouldTruncateMock = vi.fn();
+vi.mock("@/views/components/aiContentReport/conversationReportText", () => ({
+  wouldTruncateConversationTexts: (...args: unknown[]) =>
+    wouldTruncateMock(...args),
+}));
 
 const i18n = createI18n({
   legacy: false,
@@ -158,6 +163,9 @@ describe("AIConversationReportDialog", () => {
   beforeEach(() => {
     createMock.mockReset();
     buildMock.mockReset();
+    wouldTruncateMock.mockReset();
+    // Default: no truncation (most tests use short text).
+    wouldTruncateMock.mockReturnValue(false);
   });
 
   it("renders the item list and the related-user opt-in toggle", () => {
@@ -247,5 +255,76 @@ describe("AIConversationReportDialog", () => {
       .find('[data-testid="include-related-user-context"] input')
       .trigger("change");
     expect(w.find(".report-notice").text()).toContain("Only AI outputs");
+  });
+
+  describe("truncation warning gate (FR-4.4, §10.4)", () => {
+    it("submits in one step when no truncation would occur", async () => {
+      buildMock.mockResolvedValueOnce(buildRequest());
+      createMock.mockResolvedValueOnce({
+        reportId: "r1",
+        status: "submitted",
+        receivedAt: "t",
+        duplicate: false,
+      });
+      wouldTruncateMock.mockReturnValue(false);
+      const w = mountDialog();
+      setCategory(w, "other");
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      // Submitted immediately — no warning step.
+      expect(buildMock).toHaveBeenCalled();
+      expect(createMock).toHaveBeenCalled();
+    });
+
+    it("shows truncation warning and requires a second click when truncation detected", async () => {
+      buildMock.mockResolvedValueOnce(buildRequest());
+      createMock.mockResolvedValueOnce({
+        reportId: "r2",
+        status: "submitted",
+        receivedAt: "t",
+        duplicate: false,
+      });
+      wouldTruncateMock.mockReturnValue(true);
+      const w = mountDialog();
+      setCategory(w, "other");
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      // First click: shows the warning, does NOT submit.
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      expect(buildMock).not.toHaveBeenCalled();
+      expect(w.find('[data-testid="truncation-warning"]').exists()).toBe(true);
+      expect(w.find('[data-testid="truncation-warning"]').text()).toContain(
+        "Trimmed"
+      );
+      // Second click: confirms and submits.
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      expect(buildMock).toHaveBeenCalled();
+      expect(createMock).toHaveBeenCalled();
+    });
+
+    it("resets the warning gate when the user changes selection", async () => {
+      wouldTruncateMock.mockReturnValue(true);
+      const w = mountDialog();
+      setCategory(w, "other");
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      // First click shows warning.
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      expect(w.find('[data-testid="truncation-warning"]').exists()).toBe(true);
+      // Toggling the checkbox resets the gate.
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      await flushPromises();
+      expect(w.find('[data-testid="truncation-warning"]').exists()).toBe(false);
+    });
   });
 });
