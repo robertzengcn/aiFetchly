@@ -95,6 +95,14 @@
                         <v-icon size="small" class="mr-1">mdi-robot</v-icon>
                         {{ $t('yellowPages.ai_query_keywords') }}
                       </v-btn>
+                      <AIContentReportButton
+                        v-if="lastGeneratedKeywords.length > 0"
+                        :descriptor="keywordReportDescriptor"
+                        :reported="keywordReported"
+                        size="small"
+                        class="mt-1 ml-1"
+                        @report="keywordReportDialog = true"
+                      />
                     </template>
                   </v-textarea>
                   <!-- <div class="d-flex flex-wrap mt-2">
@@ -723,6 +731,14 @@
       :timeout="5000"
     />
   </v-container>
+
+  <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
 </template>
 
 <script setup lang="ts">
@@ -749,6 +765,10 @@ import { generateRelatedKeywords } from '@/views/api/search'
 import { windowInvoke } from '@/views/utils/apirequest'
 import { QUERY_USER_INFO } from '@/config/channellist'
 import type { UserInfoType } from '@/entityTypes/userType'
+import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue'
+import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue'
+import { buildKeywordSetDescriptor } from '@/views/components/aiContentReport/reportableOutput'
+import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo'
 
 // Router
 const router = useRouter()
@@ -791,6 +811,15 @@ const taskForm = reactive({
 const creating = ref(false)
 const loading = ref(false)
 const aiKeywordsLoading = ref(false)
+// AI Content Report state (PRD §8.2 keyword generation).
+const lastGeneratedKeywords = ref<string[]>([])
+const keywordReportDialog = ref(false)
+const keywordReported = ref(false)
+const keywordReportDescriptor = computed(() =>
+  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
+    generatedAt: new Date().toISOString(),
+  })
+)
 const useProxy = ref(false)
 const scheduleTask = ref(false)
 const keywordsInput = ref('')
@@ -902,6 +931,9 @@ async function handleAiQueryKeywords() {
     }
     const generated = await generateRelatedKeywords(seedKeywords, 15, 'seo')
     const newKeywords = generated && generated.length > 0 ? generated : []
+    // Capture the AI-generated set for the report action (PRD §8.2).
+    lastGeneratedKeywords.value = newKeywords
+    keywordReported.value = false
     const existing = raw ? raw.split(/[\n,]/).map((k) => k.trim()).filter(Boolean) : []
     const combined = [...new Set([...existing, ...newKeywords])]
     keywordsInput.value = combined.join(', ')

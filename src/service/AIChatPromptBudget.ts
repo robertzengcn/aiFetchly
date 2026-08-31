@@ -388,7 +388,7 @@ export function reduceAutoDreamPacket(
   };
   // Step 1: drop ALL tool summaries (oldest first — order preserved).
   let messages = [...packet.messages];
-  let toolCalls: typeof packet.toolCalls = undefined;
+  const toolCalls: typeof packet.toolCalls = undefined;
   if (
     estimatePacketWith(identity, messages, undefined, estimator) <= usableTokens
   ) {

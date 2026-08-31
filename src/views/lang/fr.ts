@@ -3254,6 +3254,60 @@ export default {
     cooldown_active:
       "Vérifié récemment. Attendez une minute avant de réessayer.",
   },
+  aiContentReport: {
+    action: "Signaler le contenu IA",
+    actionAriaLabel: "Signaler ce contenu généré par IA",
+    dialogTitle: "Signaler le contenu IA",
+    outputPreview: "Contenu IA",
+    imagesLabel: "Images",
+    imageAlt: "Image générée {n}",
+    categoryLabel: "Quel est le problème avec ce contenu ?",
+    commentLabel: "Détails supplémentaires (facultatif)",
+    consent:
+      "Le contenu IA sélectionné et votre description seront envoyés à AiFetchly pour examen. Votre prompt, les autres messages, les fichiers et le raisonnement de l'IA ne seront pas inclus.",
+    privacyPolicy: "Politique de confidentialité",
+    submit: "Envoyer le signalement",
+    cancel: "Annuler",
+    tryAgain: "Réessayer",
+    copyReference: "Copier la référence",
+    success: "Signalement envoyé. Référence : {reportId}",
+    reported: "Signalé",
+    imageUnavailable:
+      "Cette image n'a pas pu être jointe. Vous pouvez tout de même envoyer le signalement avec votre description.",
+    categories: {
+      hate_or_harassment: "Haine ou harcèlement",
+      sexual_content: "Contenu sexuel",
+      violence_or_self_harm: "Violence ou automutilation",
+      child_safety: "Sécurité des enfants",
+      illegal_or_dangerous: "Illégal ou dangereux",
+      privacy_or_personal_data: "Confidentialité ou données personnelles",
+      misinformation_or_deception: "Désinformation ou tromperie",
+      copyright_or_ownership: "Droits d'auteur ou propriété",
+      other: "Autre",
+    },
+    errors: {
+      categoryRequired: "Veuillez choisir une catégorie.",
+      imageRequired: "Sélectionnez au moins une image à signaler.",
+      noEvidence:
+        "Ajoutez une description pour pouvoir envoyer le signalement.",
+      network:
+        "Le signalement n'a pas pu être envoyé. Vos informations ont été conservées pour que vous puissiez réessayer.",
+      auth_failed:
+        "Échec de l'authentification. Vos informations ont été conservées pour que vous puissiez réessayer.",
+      invalid_evidence:
+        "Les preuves du signalement sont invalides. Vos informations ont été conservées pour que vous puissiez réessayer.",
+      payload_too_large:
+        "La charge utile du signalement est trop volumineuse. Vos informations ont été conservées pour que vous puissiez réessayer.",
+      rate_limited:
+        "Trop de signalements ont été envoyés. Veuillez réessayer plus tard.",
+      service_disabled:
+        "Les signalements sont temporairement indisponibles. Veuillez réessayer plus tard.",
+      server_error:
+        "Le signalement n'a pas pu être envoyé. Vos informations ont été conservées pour que vous puissiez réessayer.",
+      unknown:
+        "Le signalement n'a pas pu être envoyé. Vos informations ont été conservées pour que vous puissiez réessayer.",
+    },
+  },
   communityPlugins: {
     title: "Extensions de la communauté",
     refresh: "Actualiser",

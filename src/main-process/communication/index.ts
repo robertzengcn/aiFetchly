@@ -60,6 +60,7 @@ import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWat
 import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
 import { ensurePortableMemoryDefault } from "@/service/PortableWorkspaceMemoryBootstrap";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
+import { registerAIContentReportIpcHandlers } from "@/main-process/communication/ai-content-report-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -153,6 +154,7 @@ export function registerCommunicationIpcHandlers(
     });
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
+    registerAIContentReportIpcHandlers();
     AsyncMsg();
   } catch (e) {
     log.info("registerCommunicationIpcHandlers error:");

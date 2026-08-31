@@ -3267,6 +3267,60 @@ export default {
     cooldown_active:
       "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
   },
+  aiContentReport: {
+    action: "KI-Inhalt melden",
+    actionAriaLabel: "Diesen KI-generierten Inhalt melden",
+    dialogTitle: "KI-Inhalt melden",
+    outputPreview: "KI-Inhalt",
+    imagesLabel: "Bilder",
+    imageAlt: "Generiertes Bild {n}",
+    categoryLabel: "Was ist mit diesem Inhalt falsch?",
+    commentLabel: "Zusätzliche Details (optional)",
+    consent:
+      "Der ausgewählte KI-Inhalt und Ihre Beschreibung werden zur Überprüfung an AiFetchly gesendet. Ihr Prompt, andere Nachrichten, Dateien und das KI-Reasoning werden nicht einbezogen.",
+    privacyPolicy: "Datenschutzrichtlinie",
+    submit: "Meldung senden",
+    cancel: "Abbrechen",
+    tryAgain: "Erneut versuchen",
+    copyReference: "Referenz kopieren",
+    success: "Meldung gesendet. Referenz: {reportId}",
+    reported: "Gemeldet",
+    imageUnavailable:
+      "Dieses Bild konnte nicht angehängt werden. Sie können die Meldung mit Ihrer Beschreibung trotzdem senden.",
+    categories: {
+      hate_or_harassment: "Hass oder Belästigung",
+      sexual_content: "Sexueller Inhalt",
+      violence_or_self_harm: "Gewalt oder Selbstverletzung",
+      child_safety: "Kindersicherheit",
+      illegal_or_dangerous: "Illegal oder gefährlich",
+      privacy_or_personal_data: "Datenschutz oder personenbezogene Daten",
+      misinformation_or_deception: "Fehlinformation oder Täuschung",
+      copyright_or_ownership: "Urheberrecht oder Eigentum",
+      other: "Sonstiges",
+    },
+    errors: {
+      categoryRequired: "Bitte wählen Sie eine Kategorie.",
+      imageRequired: "Wählen Sie mindestens ein Bild zur Meldung aus.",
+      noEvidence:
+        "Fügen Sie eine Beschreibung hinzu, um die Meldung zu senden.",
+      network:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      auth_failed:
+        "Authentifizierung fehlgeschlagen. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      invalid_evidence:
+        "Die Meldungsbeweise sind ungültig. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      payload_too_large:
+        "Die Meldungsnutzlast ist zu groß. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      rate_limited:
+        "Zu viele Meldungen wurden gesendet. Bitte versuchen Sie es später erneut.",
+      service_disabled:
+        "Meldungen sind vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut.",
+      server_error:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+      unknown:
+        "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+    },
+  },
   communityPlugins: {
     title: "Community-Plugins",
     refresh: "Aktualisieren",

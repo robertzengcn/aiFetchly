@@ -8,15 +8,22 @@
         :label="t('search.input_keywords_hint')"
         :placeholder="t('search.market_insight_placeholder')"
       ></v-textarea>
-      <v-btn 
-        color="primary" 
-        class="mt-2 mb-3" 
-        @click="onGenerateKeywords" 
+      <v-btn
+        color="primary"
+        class="mt-2 mb-3"
+        @click="onGenerateKeywords"
         :loading="generatingKeywords"
         :disabled="!keywords || keywords.trim().length === 0"
       >
         {{ t('search.generate_related_keywords') }}
       </v-btn>
+      <AIContentReportButton
+        v-if="lastGeneratedKeywords && lastGeneratedKeywords.length > 0"
+        :descriptor="keywordReportDescriptor"
+        :reported="keywordReported"
+        class="mt-2 mb-3 ml-2"
+        @report="keywordReportDialog = true"
+      />
       <v-select
 v-model="enginer" :items="searchplatform" :label="t('search.search_enginer_name')" required
         :readonly="loading" :rules="[rules.required]" class="mt-3" item-title="name" item-value="key"></v-select>
@@ -128,6 +135,14 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
+
+  <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
 </template>
 <script setup lang="ts">
 import { useRoute, useRouter } from "vue-router";
@@ -138,13 +153,17 @@ type SearchOption = {
   name: string;
   index: number;
 };
-import { ref, onMounted, watch } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 //import router from '@/views/router';
 import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
 import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly, generateRelatedKeywords } from "@/views/api/search"
 import { getSocialaccountinfo } from "@/views/api/socialaccount"
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildKeywordSetDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
 import { SEARCHEVENT } from "@/config/channellist"
@@ -180,6 +199,16 @@ const enginer = ref<string>();
 const yandexTipShown = ref(false); // Track if tip has been shown to avoid repeated alerts
 const googleAccountTipShown = ref(false); // Track if Google account tip has been shown
 const keywords = ref();
+// AI Content Report state (PRD §8.2 keyword generation). Captures the last
+// AI-generated set so the report action appears only after generation.
+const lastGeneratedKeywords = ref<string[]>([]);
+const keywordReportDialog = ref(false);
+const keywordReported = ref(false);
+const keywordReportDescriptor = computed(() =>
+  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
+    generatedAt: new Date().toISOString(),
+  })
+);
 const searchplatform = ref<Array<SearchOption>>([]);
 const showinbrwoser = ref(0);
 const page_number = ref(1);
@@ -652,10 +681,13 @@ async function onGenerateKeywords() {
     const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
 
     if (generatedKeywords && generatedKeywords.length > 0) {
+      // Capture the AI-generated set for the report action (PRD §8.2).
+      lastGeneratedKeywords.value = generatedKeywords;
+      keywordReported.value = false;
       // Combine original keywords with generated ones, remove duplicates
       const allKeywords = [...currentKeywords, ...generatedKeywords];
       const uniqueKeywords = Array.from(new Set(allKeywords));
-      
+
       // Update the textarea with all keywords
       keywords.value = uniqueKeywords.join('\n');
       

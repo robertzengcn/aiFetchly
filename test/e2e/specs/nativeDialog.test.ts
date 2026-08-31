@@ -36,7 +36,7 @@ async function pickFolder(
   });
 }
 
-test("native open-dialog cancellation is deterministic (T-11)", async ({}, testInfo) => {
+test("native open-dialog cancellation is deterministic (T-11)", async (testInfo) => {
   test.setTimeout(120_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
