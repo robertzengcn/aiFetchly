@@ -7,15 +7,15 @@ import {
 } from "@playwright/test";
 
 /**
- * Workspace-redesign E2E (PRD §34.4 subset runnable against local assets).
+ * Persistent chat-first shell E2E (chat-first shell design §25.6, PRD §26.4).
  *
- * Prerequisite: vite build assets for the main bundle — run `yarn package`
- * (or `AIFETCHLY_E2E_PREBUILT=1` after `yarn build` + main bundle build).
- * Launch: `yarn e2e:workspace`.
+ * Prerequisite: vite build artifacts — run `yarn build:e2e` first
+ * (`yarn test:e2e` does this). Launch the single spec with:
+ *   xvfb-run -a npx playwright test test/e2e/workspace-shell.spec.ts
  *
- * AI-provider-dependent scenarios (§34.4 flows 1–3, 6–8, 11, 13–16) need a
- * live provider backend; they are implemented behind the
- * `AIFETCHLY_E2E_LIVE_AI=1` guard and skip otherwise.
+ * The E2E bootstrap forces AIFETCHLY_E2E=1: window geometry is deterministic
+ * (centered 1280x800), persisted window state is ignored, and no state is
+ * written back — so assertions never inherit a developer's saved bounds.
  */
 
 const APP_ENTRY = ".";
@@ -43,189 +43,151 @@ test.afterAll(async () => {
 
 async function openWorkspace(): Promise<void> {
   await page.goto("#/aiworkspace");
-  await expect(page.getByTestId("workspace-shell")).toBeVisible({
+  await expect(page.getByTestId("chat-center-surface")).toBeVisible({
     timeout: 20_000,
   });
 }
 
-test.describe("workspace shell (PRD §34.4)", () => {
-  test("renders the three regions with a workspace-aware sidebar", async () => {
+test.describe("persistent shell startup (design §14, §25.6)", () => {
+  test("opens at deterministic normal bounds and is NOT maximized", async () => {
     await openWorkspace();
-    // Sidebar, center, and the new-chat affordance (FR-001).
+    const geometry = await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      const bounds = win.getNormalBounds();
+      return { bounds, maximized: win.isMaximized() };
+    });
+    expect(geometry.maximized).toBe(false);
+    expect(geometry.bounds.width).toBe(1280);
+    expect(geometry.bounds.height).toBe(800);
+  });
+
+  test("lands in the chat center inside the persistent shell", async () => {
+    await openWorkspace();
+    await expect(page.getByTestId("app-center-route")).toBeVisible();
     await expect(page.getByTestId("workspace-new-chat")).toBeVisible();
     await expect(page.getByTestId("workspace-tree")).toBeVisible();
-    await expect(page.getByRole("searchbox")).toBeVisible();
   });
 
-  test("sidebar global nav exposes Insights, Knowledge Library, and Plugins", async () => {
+  test("does not render a Back to app action (FR-SHELL-012)", async () => {
     await openWorkspace();
-    await expect(page.getByTestId("workspace-insights")).toBeVisible();
-    await expect(page.getByTestId("workspace-knowledge-library")).toBeVisible();
-    await expect(page.getByTestId("workspace-plugins")).toBeVisible();
-  });
-
-  test("header shows the conversation title and NO robot/AI Assistant (FR-007/008)", async () => {
-    await openWorkspace();
-    const header = page.getByTestId("workspace-conversation-header");
-    await expect(header).toBeVisible();
-    await expect(page.getByTestId("workspace-header-title")).toContainText(
-      /new chat|./i
-    );
-    const text = (await header.textContent()) ?? "";
-    expect(text).not.toContain("AI Assistant");
-    // No robot icon: the header actions hold only inspector toggle + overflow.
-    await expect(page.getByTestId("workspace-inspector-toggle")).toBeVisible();
-    await expect(page.getByTestId("workspace-header-overflow")).toBeVisible();
-  });
-
-  test("overflow contains exactly the conversation actions (FR-010/011)", async () => {
-    await openWorkspace();
-    await page.getByTestId("workspace-header-overflow").click();
-    for (const action of [
-      "workspace-overflow-rename",
-      "workspace-overflow-export",
-      "workspace-overflow-duplicate",
-      "workspace-overflow-compact",
-      "workspace-overflow-clear",
-      "workspace-overflow-delete",
-    ]) {
-      await expect(page.getByTestId(action)).toBeVisible();
-    }
-    // Global management (MCP, settings) must NOT appear here (FR-011).
-    const menu = await page.getByRole("menu").textContent();
-    expect(menu?.toLowerCase()).not.toContain("mcp");
-    expect(menu?.toLowerCase()).not.toContain("settings");
-  });
-
-  test("new chat creates a conversation and shows the composer (§22.1)", async () => {
-    await openWorkspace();
-    await page.getByTestId("workspace-new-chat").click();
-    // After onNewChat, a conversation is selected (not null), so the
-    // empty state is replaced by the composer + transcript area.
-    // Assert the composer is visible rather than the empty state.
-    await expect(page.locator("#ai-chat-composer")).toBeVisible({
-      timeout: 10_000,
-    });
-  });
-
-  test("inspector tabs expose Artifacts, Activity, and Context (FR-004)", async () => {
-    await openWorkspace();
-    await page.getByTestId("workspace-inspector-toggle").click();
-    for (const tab of [
-      "workspace-inspector-tab-artifacts",
-      "workspace-inspector-tab-activity",
-      "workspace-inspector-tab-context",
-    ]) {
-      await expect(page.getByTestId(tab)).toBeVisible();
-    }
-    await page.getByTestId("workspace-inspector-tab-context").click();
-    await expect(page.getByTestId("workspace-context-panel")).toBeVisible();
-    await page.getByTestId("workspace-inspector-tab-activity").click();
-    await expect(page.getByTestId("workspace-activity-panel")).toBeVisible();
-  });
-
-  test("mode toggle offers the §33 rollback path", async () => {
-    await openWorkspace();
-    const toggle = page.locator('[data-testid^="workspace-mode-"]').first();
-    await expect(toggle).toBeVisible();
-  });
-
-  test("narrow viewport renders the sidebar as a separate surface (FR-006)", async () => {
-    await openWorkspace();
-    await page.setViewportSize({ width: 700, height: 800 });
-    await expect(page.getByTestId("workspace-sidebar-toggle")).toBeVisible();
-    await page.getByTestId("workspace-sidebar-toggle").click();
-    await expect(page.getByTestId("workspace-tree")).toBeVisible();
-    // Backdrop closes the drawer and returns to the conversation.
-    await page.getByTestId("workspace-sidebar-backdrop").click();
-    await expect(page.getByTestId("workspace-tree")).toBeHidden();
+    expect(
+      await page.getByTestId("workspace-back-to-app").count()
+    ).toBe(0);
+    await expect(page.getByText("Back to app")).toHaveCount(0);
   });
 });
 
-test.describe("live-AI flows (§34.4 scenarios 1/4/5)", () => {
+test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
+  test("renders a two-row textarea with selectors below it", async () => {
+    await openWorkspace();
+    await page.getByTestId("workspace-new-chat").click();
+    const textarea = page.locator("#ai-chat-composer textarea");
+    await expect(textarea).toBeVisible({ timeout: 10_000 });
+    expect(await textarea.getAttribute("rows")).toBe("2");
+    // Mode/model/approval render after the textarea in DOM order.
+    const order = await page.evaluate(() => {
+      const input = document.querySelector("#ai-chat-composer textarea");
+      const controls = document.querySelector(
+        '[data-testid="v2-composer-controls"]'
+      );
+      if (!input || !controls) return "missing";
+      return input.compareDocumentPosition(controls) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+        ? "after"
+        : "before";
+    });
+    expect(order).toBe("after");
+  });
+});
+
+test.describe("persistent shell navigation (FR-SHELL-002/003/008)", () => {
+  test("keeps one shell DOM identity across center-route changes", async () => {
+    await openWorkspace();
+    // Tag the live center element so identity survives route swaps.
+    await page.evaluate(() => {
+      const center = document.querySelector(
+        '[data-testid="app-center-route"]'
+      ) as HTMLElement | null;
+      if (center) center.dataset.shellIdentityProbe = "alive";
+    });
+
+    for (const [label, testid] of [
+      ["Insights", "workspace-insights"],
+      ["Knowledge Library", "workspace-knowledge-library"],
+      ["Plugins", "workspace-plugins"],
+    ] as const) {
+      await page.getByTestId(testid).click();
+      // The SAME center element is still mounted (no shell remount).
+      await expect(
+        page.locator('[data-shell-identity-probe="alive"]')
+      ).toBeVisible();
+      // The sidebar persists and the active route is accessibly marked.
+      await expect(page.getByTestId("workspace-tree")).toBeVisible();
+      await expect(
+        page.getByTestId(testid).getAttribute("aria-current")
+      ).resolves.toBe("page");
+      expect(label.length).toBeGreaterThan(0);
+    }
+
+    // Returning to chat keeps the shell and shows the composer surface again.
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(
+      page.locator('[data-shell-identity-probe="alive"]')
+    ).toBeVisible();
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible();
+  });
+
+  test("marks the active global route with aria-current (FR-SHELL-008)", async () => {
+    await openWorkspace();
+    const insights = page.getByTestId("workspace-insights");
+    await expect(insights.getAttribute("aria-current")).resolves.toBeNull();
+    await insights.click();
+    await expect(insights.getAttribute("aria-current")).resolves.toBe(
+      "page"
+    );
+    // Another item is not marked.
+    await expect(
+      page.getByTestId("workspace-plugins").getAttribute("aria-current")
+    ).resolves.toBeNull();
+  });
+});
+
+test.describe("conversation actions from an inner page (FR-SHELL-010/011)", () => {
+  test("new chat from Plugins returns the center to chat", async () => {
+    await openWorkspace();
+    await page.getByTestId("workspace-plugins").click();
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible();
+  });
+});
+
+test.describe("narrow responsive shell (PRD §16.3)", () => {
+  test("navigation becomes an opt-in drawer with a visible opener", async () => {
+    await openWorkspace();
+    await page.setViewportSize({ width: 700, height: 800 });
+    const toggle = page.getByTestId("app-shell-nav-toggle");
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+    await expect(page.getByTestId("workspace-tree")).toBeVisible();
+    // Backdrop closes the drawer.
+    await page.getByTestId("app-shell-nav-backdrop").click();
+    await expect(page.getByTestId("workspace-tree")).toBeHidden();
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+});
+
+test.describe("live-AI flows (§25.6 scenario 10)", () => {
   test.skip(
     !LIVE_AI,
     "requires AIFETCHLY_E2E_LIVE_AI=1 with a provider backend"
   );
 
-  test("switching conversations keeps the previous run alive (scenario 1)", async () => {
-    await openWorkspace();
-    // Send in chat A, create + switch to chat B before completion.
-    await page.getByTestId("workspace-new-chat").click();
-    // Composer testid contract: ai-chat-composer input.
-    await page
-      .locator("#ai-chat-composer textarea")
-      .fill("Long-running question");
-    await page.locator("#ai-chat-composer textarea").press("Enter");
-    await page.getByTestId("workspace-new-chat").click();
-    // The first conversation still shows a running indicator in the tree.
-    await expect(
-      page.locator('[data-testid^="workspace-conversation-"]').first()
-    ).toBeVisible();
-  });
-
-  test("renderer reload restores the workspace without cancelling runs (scenario 6)", async () => {
+  test("renderer reload restores the shell without cancelling runs", async () => {
     await openWorkspace();
     await page.reload();
-    await expect(page.getByTestId("workspace-shell")).toBeVisible({
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible({
       timeout: 20_000,
     });
     await expect(page.getByTestId("workspace-tree")).toBeVisible();
-  });
-});
-
-test.describe("deterministic provider-independent scenarios (§34.4)", () => {
-  test("background unread completion clears on select (AC 5)", async () => {
-    await openWorkspace();
-    // With no live AI, verify the sidebar shows conversations and the
-    // unread indicator structure exists (data-testid convention).
-    const tree = page.getByTestId("workspace-tree");
-    await expect(tree).toBeVisible();
-  });
-
-  test("bounded queueing visible as Queued state (AC 3)", async () => {
-    await openWorkspace();
-    // The scheduler capacity is 3; without live AI we verify the
-    // sidebar structure can display queued status (testid convention).
-    const sidebar = page.getByTestId("workspace-shell");
-    await expect(sidebar).toBeVisible();
-  });
-
-  test("permission resume after decision (AC 6)", async () => {
-    await openWorkspace();
-    // Verify the inspector Activity tab exists (where permission
-    // decisions render). The actual permission flow needs live AI.
-    await page.getByTestId("workspace-inspector-toggle").click();
-    await page.getByTestId("workspace-inspector-tab-activity").click();
-    await expect(page.getByTestId("workspace-activity-panel")).toBeVisible();
-  });
-
-  test("selected vs inactive artifact auto-open (AC 12-13)", async () => {
-    await openWorkspace();
-    await page.getByTestId("workspace-inspector-toggle").click();
-    await page.getByTestId("workspace-inspector-tab-artifacts").click();
-    await expect(page.getByTestId("workspace-artifacts-panel")).toBeVisible();
-  });
-
-  test("restart reconciliation (AC 16)", async () => {
-    await openWorkspace();
-    // Verify the sidebar loads (bootstrap triggers reconciliation).
-    await expect(page.getByTestId("workspace-tree")).toBeVisible();
-  });
-
-  test("scheduled-loop pause/resume/stop controls (FR-013)", async () => {
-    await openWorkspace();
-    await page.getByTestId("workspace-inspector-toggle").click();
-    await page.getByTestId("workspace-inspector-tab-activity").click();
-    // The Activity panel renders goal/loop sections when data exists.
-    await expect(page.getByTestId("workspace-activity-panel")).toBeVisible();
-  });
-
-  test("keyboard-only end-to-end use (FR-038)", async () => {
-    await openWorkspace();
-    // Tab to the sidebar and verify tree role exists.
-    await page.keyboard.press("Tab");
-    const tree = page.getByRole("tree");
-    await expect(tree).toBeVisible({ timeout: 10_000 });
   });
 });

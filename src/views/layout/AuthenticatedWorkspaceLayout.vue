@@ -16,6 +16,18 @@
         @toggle-mode="onToggleMode"
       />
     </template>
+    <!-- Narrow mode needs a visible menu action (PRD §16.3): the sidebar
+         becomes an opt-in drawer owned by the shell. -->
+    <button
+      v-if="shell.mode === 'narrow'"
+      type="button"
+      class="layout-nav-toggle"
+      data-testid="app-shell-nav-toggle"
+      :aria-label="t('workspaceChat.sidebar.region') || 'Chat workspaces'"
+      @click="shell.toggleNavigation()"
+    >
+      <v-icon icon="mdi-menu" size="20" aria-hidden="true" />
+    </button>
     <AppCenterRouteHost />
   </AppWorkspaceShell>
 </template>
@@ -23,9 +35,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, provide, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
 import AppCenterRouteHost from "@/views/components/appShell/AppCenterRouteHost.vue";
 import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWorkspaceSidebar.vue";
+import { useAppShellStore } from "@/views/store/appShell";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import {
@@ -39,6 +53,8 @@ import {
 
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
+const shell = useAppShellStore();
 const chatWorkspace = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
 
@@ -101,3 +117,28 @@ onUnmounted(() => {
   chatWorkspace.teardown();
 });
 </script>
+
+<style scoped>
+/* Narrow drawer opener — positioned against the shell root, which is the
+   positioning context in narrow mode (AppWorkspaceShell). */
+.layout-nav-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 45;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: var(--app-shell, rgba(255, 255, 255, 0.9));
+  color: var(--app-text, inherit);
+  cursor: pointer;
+}
+
+.layout-nav-toggle:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+}
+</style>
