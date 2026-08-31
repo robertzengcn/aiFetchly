@@ -226,4 +226,26 @@ describe("AIConversationReportDialog", () => {
     expect(w.emitted("update:modelValue")![0]).toEqual([false]);
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("shows the default consent copy when the context toggle is off", () => {
+    const w = mountDialog();
+    // The .report-notice span carries the consent transmission notice.
+    expect(w.find(".report-notice").text()).toContain("Only AI outputs");
+  });
+
+  it("swaps consent copy to the with-user-context line when the toggle is on", async () => {
+    const w = mountDialog();
+    expect(w.find(".report-notice").text()).toContain("Only AI outputs");
+    await w
+      .find('[data-testid="include-related-user-context"] input')
+      .trigger("change");
+    expect(w.find(".report-notice").text()).toContain(
+      "With my related message"
+    );
+    // Toggling back restores the default copy (FR-3.5).
+    await w
+      .find('[data-testid="include-related-user-context"] input')
+      .trigger("change");
+    expect(w.find(".report-notice").text()).toContain("Only AI outputs");
+  });
 });

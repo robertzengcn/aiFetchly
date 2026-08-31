@@ -145,11 +145,22 @@ const includeRelatedUserLabel = computed(
 const userMessageWillBeSent = computed(
   () => t("aiConversationReport.userMessageWillBeSent") || "Your related message will be sent with the report."
 );
-const consentText = computed(
-  () =>
+// FR-3.5 / §10.3: the transmission notice must disclose the specific
+// implications of sending user messages. The default copy covers AI outputs
+// only; enabling the related-user toggle swaps to the with-user-context line
+// so the user always knows exactly what leaves the device before submit.
+const consentText = computed(() => {
+  if (includeRelatedUserContext.value) {
+    return (
+      t("aiConversationReport.consentWithUserContext") ||
+      "You have chosen to include your related message. It will be sent with the AI outputs you selected."
+    );
+  }
+  return (
     t("aiConversationReport.consentDefault") ||
     "Only the selected AI outputs and your description will be sent. Your other messages, files, and AI reasoning are not included."
-);
+  );
+});
 
 const canIncludeRelatedUser = computed(() => props.snapshot.candidates.some((c) => c.relatedUser));
 
