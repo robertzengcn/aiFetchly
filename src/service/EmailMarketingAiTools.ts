@@ -5,7 +5,6 @@ import {
   Buckemailstruct,
   BulkEmailPreviewResult,
   BulkEmailStartResult,
-  mapBuckemailTaskStartInputToEntity,
 } from "@/entityTypes/emailmarketingType";
 import { EmailFilterModule } from "@/modules/EmailFilterModule";
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
@@ -550,14 +549,16 @@ export async function startBulkEmailSendTask(
           ? recipients.recipients
           : undefined,
     });
-    const entity = mapBuckemailTaskStartInputToEntity(taskInput);
-    const taskId = await module.startBuckEmailTask(entity, {
-      waitForExit: true,
-    });
+    // Persist SMTP/template/filter relations and return as soon as the
+    // worker is forked. Waiting for SMTP (waitForExit: true) left the AI
+    // tool card stuck on "running" when the worker never posted
+    // sendEmailEnd (empty template list + crypto.randomInt(0)).
+    const taskId = await module.startBuckEmailCampaign(taskInput);
 
     return {
       success: true,
       task_id: taskId,
+      status: "started",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
       template_ids: input.template_ids,

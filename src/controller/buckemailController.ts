@@ -1,7 +1,4 @@
-import {
-  BuckemailTaskStartInput,
-  mapBuckemailTaskStartInputToEntity,
-} from "@/entityTypes/emailmarketingType";
+import { BuckemailTaskStartInput } from "@/entityTypes/emailmarketingType";
 import { EmailMarketingTemplateApi } from "@/api/emailMarketingTemplateApi";
 
 import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
@@ -89,10 +86,7 @@ export class BuckemailController {
   public async startBuckEmailTask(
     param: BuckemailTaskStartInput
   ): Promise<number> {
-    const taskId = await this.buckEmailTaskMoudule.startBuckEmailTask(
-      mapBuckemailTaskStartInputToEntity(param)
-    );
-    return taskId;
+    return await this.buckEmailTaskMoudule.startBuckEmailCampaign(param);
   }
   //get buck email send log by task id
   public async getBuckEmailSendLog(

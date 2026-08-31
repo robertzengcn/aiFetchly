@@ -1585,7 +1585,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Requires confirmation. Provide service_ids from list_email_services plus either " +
       "template_ids or email_subject and email_html_content. Provide exactly one of " +
       "emails (direct recipients) or email_search_task_id. For different content per " +
-      "recipient, call once per address with that email in emails.",
+      "recipient, call once per address with that email in emails. " +
+      "Returns immediately with task_id once sending has started in the background; " +
+      "do not wait on this call for SMTP delivery. Check the email send log for results.",
     parameters: {
       type: "object",
       properties: {
@@ -1654,6 +1656,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: true,
     permissionCategory: "automation",
     source: "built-in",
+    timeoutClass: "fast",
     execute: async (args) => {
       const result = await startBulkEmailSendTask(args);
       return {

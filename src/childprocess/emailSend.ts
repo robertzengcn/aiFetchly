@@ -23,7 +23,7 @@ export class EmailSend {
       title: string,
       content: string
     ) => void | undefined | null
-  ): Promise<any> {
+  ): Promise<void> {
     const totalfilter: string[] = [];
     if (param.Emailfilterlist && param.Emailfilterlist.length > 0) {
       param.Emailfilterlist.forEach((item) => {
@@ -174,8 +174,13 @@ export class EmailSend {
       // });
     });
   }
-  // Function to get a random item from an array
-  private getRandomItem<Type>(array: Array<Type>): Type {
+  // Function to get a random item from an array.
+  // Empty lists must return undefined: crypto.randomInt(0) throws, which
+  // prevented sendEmailEnd from being posted and left AI send tools running.
+  private getRandomItem<Type>(array: Array<Type>): Type | undefined {
+    if (!array || array.length === 0) {
+      return undefined;
+    }
     const randomIndex = randomInt(array.length);
     return array[randomIndex];
   }

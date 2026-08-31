@@ -307,6 +307,21 @@ export class BuckEmailTaskModule extends BaseModule {
     return await this.buckEmailsend(taskId, options);
   }
 
+  /**
+   * Start a campaign from the full struct so SMTP services, templates, and
+   * filters are persisted as task relations. The entity-only path used by
+   * {@link startBuckEmailTask} drops those lists, leaving the worker with
+   * no senders. waitForExit defaults to false so AI chat / UI return as
+   * soon as the worker is forked instead of blocking until SMTP finishes.
+   */
+  public async startBuckEmailCampaign(
+    param: Buckemailstruct,
+    options?: { waitForExit?: boolean }
+  ): Promise<number> {
+    const taskId = await this.createBuckEmailTask(param);
+    return await this.buckEmailsend(taskId, options);
+  }
+
   //create buck email task from entity (direct DB entity)
   private async createBuckEmailTaskFromEntity(
     param: BuckemailTaskEntity
