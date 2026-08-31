@@ -197,7 +197,9 @@ describe("AiChatV2Composer generated-image reference tray", () => {
       isStreaming: true,
       selectedGeneratedImages: [ref("assistant-1", 0)],
     });
-    expect(wrapper.find('[data-testid="ai-chat-send"]').exists()).toBe(false);
+    // Message-queue PRD §7.1: Send stays available while streaming (messages
+    // queue); Stop is the separate adjacent action.
+    expect(wrapper.find('[data-testid="ai-chat-send"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="ai-chat-stop"]').exists()).toBe(true);
   });
 

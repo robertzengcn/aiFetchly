@@ -2311,6 +2311,28 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "Queued",
+      steering: "Steering…",
+      applied: "Applied",
+      dispatching: "Sending…",
+      sent: "Sent",
+      paused: "Queue paused",
+      cancelled: "Removed",
+      failed: "Couldn't send",
+      steer: "Steer",
+      steer_aria: "Steer active response with this message",
+      remove: "Remove",
+      send_next: "Send next",
+      resume: "Resume queue",
+      direction_updated: "Direction updated",
+      recovered_after_restart: "Recovered after restart",
+      attachments_not_steerable: "Messages with attachments will send after the current response.",
+      limit_reached: "Queue limit reached. Remove a message before sending again.",
+      steer_failed: "Couldn't steer this message.",
+      queue_disabled: "The message queue is currently disabled.",
+    },
     artifactExport: {
       permissionTitle: "Export generated artifacts",
       permissionDescription:

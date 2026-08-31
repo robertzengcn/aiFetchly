@@ -169,7 +169,22 @@
       </template>
       <template v-else>
         <div v-if="message.content" class="v2-message__content">
-          {{ message.content }}
+          <template v-if="directionSegments.length > 1">
+            <template
+              v-for="(segment, index) in directionSegments"
+              :key="`dir-seg-${index}`"
+            >
+              <span v-if="index > 0" class="v2-message__direction-marker">
+                <v-icon size="x-small" class="mr-1"
+                  >mdi-directions-fork</v-icon
+                >{{
+                  t("aiChatV2.queue.direction_updated") || "Direction updated"
+                }}
+              </span>
+              <span>{{ segment }}</span>
+            </template>
+          </template>
+          <template v-else>{{ message.content }}</template>
         </div>
         <details
           v-if="hasReasoning"
@@ -682,6 +697,31 @@ const executionPending = computed(
 const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
+/**
+ * Direction marker segments (FR-29/30): the persisted assistant row carries
+ * metadata.directionTransitions[].contentOffset — split the visible content
+ * there and insert a localized marker. Presentation-only: the marker text
+ * never enters model context.
+ */
+const directionSegments = computed<string[]>(() => {
+  const content = props.message.content ?? "";
+  const transitions = props.message.metadata?.directionTransitions;
+  if (!transitions || transitions.length === 0) return [content];
+  const offsets = [...transitions]
+    .map((transition) => transition.contentOffset)
+    .filter((offset) => offset > 0 && offset < content.length)
+    .sort((a, b) => a - b);
+  if (offsets.length === 0) return [content];
+  const segments: string[] = [];
+  let previous = 0;
+  for (const offset of offsets) {
+    segments.push(content.slice(previous, offset));
+    previous = offset;
+  }
+  segments.push(content.slice(previous));
+  return segments;
+});
+
 const hasReasoning = computed(
   () =>
     props.message.role === "assistant" &&

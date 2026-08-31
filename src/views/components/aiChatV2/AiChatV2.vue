@@ -176,6 +176,11 @@
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
+        :pending-messages="activePendingMessages"
+        :runtime-status="authoritativeRuntimeStatus"
+        @steer-pending="onSteerPending"
+        @cancel-pending="onCancelPending"
+        @resume-pending="onResumePending"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -811,6 +816,9 @@ import { useRouter } from "vue-router";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageEvent,
+  AIChatPendingMessageView,
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
@@ -840,7 +848,12 @@ import {
   clearChatV2Conversation,
   getChatV2Conversations,
   getChatV2History,
-  streamChatV2Message,
+  awaitChatV2Turn,
+  createChatV2PendingMessage,
+  steerChatV2PendingMessage,
+  cancelChatV2PendingMessage,
+  resumeChatV2PendingQueue,
+  subscribeChatV2PendingEvents,
   stopChatV2Stream,
   getChatV2PlanState,
   compactChatV2Conversation,
@@ -1087,6 +1100,8 @@ interface ConversationRuntimeState {
   streamError: string | null;
   retryInfo: RetryInfo | null;
   recoveryInfo: RecoveryInfo | null;
+  /** Non-terminal queued messages (message-queue PRD §7.2). */
+  pendingMessages: AIChatPendingMessageView[];
 }
 
 const conversationRuntime = ref<Map<string, ConversationRuntimeState>>(
@@ -1101,6 +1116,132 @@ const createIdleRuntimeState = (): ConversationRuntimeState => ({
   streamError: null,
   retryInfo: null,
   recoveryInfo: null,
+  pendingMessages: [],
+});
+
+// -------------------------------------------------------------------------
+// Pending-message queue state (message-queue PRD)
+// -------------------------------------------------------------------------
+
+/** Parked turn renderers for messages that dispatch later (queued case). */
+interface ParkedQueuedTurn {
+  readonly conversationId: string;
+  readonly pendingMessageId: string;
+  readonly activate: (assistantMessageId: string) => void;
+}
+const parkedQueuedTurns = new Map<string, ParkedQueuedTurn>();
+let unsubscribePendingEvents: (() => void) | null = null;
+
+const upsertPendingMessage = (view: AIChatPendingMessageView): void => {
+  const current =
+    getConversationRuntimeState(view.conversationId).pendingMessages ?? [];
+  const exists = current.some(
+    (entry) => entry.pendingMessageId === view.pendingMessageId
+  );
+  const next = exists
+    ? current.map((entry) =>
+        entry.pendingMessageId === view.pendingMessageId ? view : entry
+      )
+    : [...current, view];
+  patchConversationRuntimeState(view.conversationId, {
+    pendingMessages: next,
+  });
+};
+
+const removePendingMessage = (
+  conversationId: string,
+  pendingMessageId: string
+): void => {
+  const current =
+    getConversationRuntimeState(conversationId).pendingMessages ?? [];
+  patchConversationRuntimeState(conversationId, {
+    pendingMessages: current.filter(
+      (entry) => entry.pendingMessageId !== pendingMessageId
+    ),
+  });
+};
+
+/** Park a queued message's turn renderer until its dispatch starts. */
+const parkQueuedPendingTurn = (
+  view: AIChatPendingMessageView,
+  activate: (assistantMessageId: string) => void
+): void => {
+  upsertPendingMessage(view);
+  parkedQueuedTurns.set(view.pendingMessageId, {
+    conversationId: view.conversationId,
+    pendingMessageId: view.pendingMessageId,
+    activate,
+  });
+};
+
+/**
+ * Pending lifecycle events are refreshable hints: upsert the view, activate
+ * parked turn renderers on dispatch, and drop bubbles once delivered.
+ */
+const handlePendingEvent = (event: AIChatPendingMessageEvent): void => {
+  if (event.pendingMessage) {
+    upsertPendingMessage(event.pendingMessage);
+  }
+  const parked = parkedQueuedTurns.get(event.pendingMessageId);
+  if (parked && event.status === "dispatching") {
+    const assistantId =
+      event.pendingMessage?.activeAssistantMessageId ?? undefined;
+    if (assistantId) {
+      parked.activate(assistantId);
+      parkedQueuedTurns.delete(event.pendingMessageId);
+    }
+  }
+  if (
+    event.status === "sent" ||
+    event.status === "cancelled" ||
+    event.status === "applied"
+  ) {
+    removePendingMessage(event.conversationId, event.pendingMessageId);
+    parkedQueuedTurns.delete(event.pendingMessageId);
+  }
+};
+
+const onSteerPending = async (pendingMessageId: string): Promise<void> => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  try {
+    const view = await steerChatV2PendingMessage(
+      conversationId,
+      pendingMessageId
+    );
+    if (view) {
+      upsertPendingMessage(view);
+    }
+  } catch (err) {
+    streamError.value =
+      err instanceof Error
+        ? err.message
+        : t("aiChatV2.queue.steer_failed") || "Couldn't steer this message.";
+  }
+};
+
+const onCancelPending = async (pendingMessageId: string): Promise<void> => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  try {
+    await cancelChatV2PendingMessage(conversationId, pendingMessageId);
+  } catch (err) {
+    console.error("[ai-chat-v2] cancel pending failed:", err);
+  }
+};
+
+const onResumePending = async (conversationId: string): Promise<void> => {
+  try {
+    await resumeChatV2PendingQueue(conversationId);
+  } catch (err) {
+    console.error("[ai-chat-v2] resume queue failed:", err);
+  }
+};
+
+const activePendingMessages = computed<AIChatPendingMessageView[]>(() => {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return [];
+  return getConversationRuntimeState(conversationId).pendingMessages ?? [];
 });
 
 const getConversationRuntimeState = (
@@ -3015,6 +3156,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     const persistedMessages = (resp?.messages ?? []).map(
       ensureArtifactMetadata
     );
+    // Seed pending bubbles from the durable queue (FR-43).
+    patchConversationRuntimeState(conversationId, {
+      pendingMessages: resp?.pendingMessages ?? [],
+    });
     const runtime = conversationRuntime.value.get(conversationId);
     messages.value =
       runtime?.isStreaming && runtime.messages.length > 0
@@ -3851,17 +3996,14 @@ const onSend = async (
   // dialog only — no interactive stream) works while another conversation
   // is still running.
   const loopCmd = parseAiLoopCommand(text);
-  const loopBypassesStreamGuard =
-    loopCmd.type === "scheduled_loop" ||
-    loopCmd.type === "scheduled_loop_control" ||
-    loopCmd.type === "invalid_loop";
 
-  // Block only when the *active* conversation is already streaming. A
-  // background conversation may still be running after New Chat / switch;
-  // allowing send here is required so the composer-cleared draft is not
-  // silently dropped. Background turns are NOT aborted — they keep streaming
-  // on the main process and update their own conversationRuntime entry.
-  if (!loopBypassesStreamGuard && chatIsRunning.value) {
+  // Message-queue PRD §7.1: ORDINARY messages submitted while the active
+  // conversation streams are queued durably — the composer stays usable.
+  // Command-like inputs (slash/goal/loop) keep their dedicated paths and
+  // stay blocked while streaming, exactly as before.
+  const isCommandLike =
+    loopCmd.type !== "none" || text.trim().startsWith("/");
+  if (isCommandLike && chatIsRunning.value) {
     return;
   }
   // The composer owns the draft and clears it only after this handler accepts
@@ -4145,6 +4287,15 @@ const onSend = async (
     }
   };
 
+  // Queue turn renderer guard: while a message is QUEUED behind a running
+  // turn, its renderer must ignore the other turn's chunks. PARKED turns
+  // activate only on their own dispatch (assistant id from the pending
+  // event). Immediate dispatches (conversation was idle) adopt the first
+  // chunk they see — the engine always emits start first. Captured BEFORE
+  // this send's own optimistic isStreaming patch.
+  const turnParked = chatIsRunning.value;
+  let turnAssistantId: string | null = null;
+  let turnActive = false;
   patchConversationRuntimeState(streamConversationId, {
     isStreaming: true,
     activeAssistantMessageId: assistantId,
@@ -4187,9 +4338,34 @@ const onSend = async (
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
     }
-    await streamChatV2Message(
-      streamRequest,
+    // Queue path (design §9.2/§14.3): attach the turn renderer FIRST, then
+    // create the durable pending row; the main process dispatches it.
+    const queuedTurn = awaitChatV2Turn(
+      streamConversationId,
       (chunk: ChatV2StreamChunk) => {
+        if (!turnActive) {
+          if (turnParked) {
+            // Queued behind a running turn: bind strictly to THIS turn's
+            // dispatch (assistant id arrives via the pending event).
+            if (
+              chunk.eventType === "start" &&
+              chunk.messageId &&
+              chunk.messageId === turnAssistantId
+            ) {
+              turnActive = true;
+            } else {
+              return;
+            }
+          } else if (chunk.eventType === "start" && chunk.messageId) {
+            if (turnAssistantId && chunk.messageId !== turnAssistantId) {
+              return;
+            }
+            turnAssistantId = chunk.messageId;
+            turnActive = true;
+          } else {
+            turnActive = true;
+          }
+        }
         if (!isCurrentStreamChunk(chunk)) return;
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
@@ -4496,6 +4672,12 @@ const onSend = async (
         }
       },
       (complete: ChatV2StreamChunk) => {
+        if (!turnActive) {
+          // Complete-only turns (no streamed chunks) still belong to this
+          // send when it was an immediate dispatch.
+          if (turnParked) return;
+          turnActive = true;
+        }
         if (!isCurrentStreamChunk(complete)) return;
         // The turn was accepted end-to-end: drop this conversation's
         // generated-image selection. Error paths intentionally keep it so the
@@ -4620,6 +4802,10 @@ const onSend = async (
         void loadConversations();
       },
       (error: Error) => {
+        if (!turnActive) {
+          if (turnParked) return;
+          turnActive = true;
+        }
         const displayMessage = displayStreamErrorMessage(error);
         patchConversationRuntimeState(streamConversationId, {
           isStreaming: false,
@@ -4632,6 +4818,48 @@ const onSend = async (
         showAssistantError(displayMessage);
       }
     );
+    const clientRequestId = `cr-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+    let receipt: AIChatPendingCreateResult | null = null;
+    try {
+      receipt = await createChatV2PendingMessage(
+        clientRequestId,
+        streamRequest
+      );
+    } catch (err) {
+      queuedTurn.detach();
+      throw err;
+    }
+    if (!receipt) {
+      queuedTurn.detach();
+      throw new Error(
+        t("aiChatV2.queue.limit_reached") ||
+          "The message could not be queued. Please try again."
+      );
+    }
+    if (receipt.disposition === "dispatch_scheduled") {
+      await queuedTurn.promise;
+      return;
+    }
+    // Queued behind a running turn (or a held queue): park the renderer.
+    // The pending bubble replaces the optimistic user bubble; the runtime
+    // flags we optimistically set are rolled back (the running turn owns
+    // the streaming state).
+    parkQueuedPendingTurn(receipt.pendingMessage, (assistantId: string) => {
+      turnAssistantId = assistantId;
+    });
+    streamMessageListController.set(
+      streamMessageListController.get().filter(
+        (m) => m.id !== tempUser.id && m.id !== assistant.id
+      )
+    );
+    patchConversationRuntimeState(streamConversationId, {
+      isStreaming: false,
+      activeAssistantMessageId: null,
+      receivedFirstResponse: false,
+      streamError: null,
+    });
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
     const runtimeError = getConversationRuntimeState(streamConversationId)
@@ -5125,6 +5353,9 @@ function onStopSpeaking(): void {
 }
 
 onMounted(() => {
+  // Pending lifecycle events drive queued-bubble state and activate parked
+  // turn renderers when the queue dispatches (message-queue PRD §7).
+  unsubscribePendingEvents = subscribeChatV2PendingEvents(handlePendingEvent);
   void loadConversations();
   void loadVoiceSettings();
   void loadModelContextWindows();
@@ -5206,6 +5437,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  unsubscribePendingEvents?.();
+  unsubscribePendingEvents = null;
   speechController.stop();
   unsubscribeSpeaking();
   stopRuntimeStatusPoll();

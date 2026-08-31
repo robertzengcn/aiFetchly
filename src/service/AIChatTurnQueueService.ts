@@ -448,7 +448,16 @@ export class AIChatTurnQueueService {
     const row = claim.row;
     const claimToken = row.claimToken ?? "";
 
-    this.emitEvent(this.viewFromRow(row), "dispatching");
+    // Deterministic assistant id lets the renderer bind its parked turn
+    // renderer to THIS dispatch via the pending event (design §14.3).
+    const assistantMessageId = `assistant-pending-${row.pendingMessageId}`;
+    this.emitEvent(
+      {
+        ...this.viewFromRow(row),
+        activeAssistantMessageId: assistantMessageId,
+      },
+      "dispatching"
+    );
 
     const lease = this.deps.tryAcquireLease({ conversationId });
     if (!lease) {
@@ -493,6 +502,7 @@ export class AIChatTurnQueueService {
           request: turnInputs.request,
           savedUser,
           modelContent: row.modelContent,
+          assistantMessageId,
           ...(turnInputs.contentParts
             ? { contentParts: turnInputs.contentParts }
             : {}),

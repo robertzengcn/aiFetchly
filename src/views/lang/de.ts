@@ -2310,6 +2310,28 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "In Warteschlange",
+      steering: "Lenkung…",
+      applied: "Angewendet",
+      dispatching: "Wird gesendet…",
+      sent: "Gesendet",
+      paused: "Warteschlange pausiert",
+      cancelled: "Entfernt",
+      failed: "Senden fehlgeschlagen",
+      steer: "Lenken",
+      steer_aria: "Aktive Antwort mit dieser Nachricht lenken",
+      remove: "Entfernen",
+      send_next: "Nächste senden",
+      resume: "Warteschlange fortsetzen",
+      direction_updated: "Richtung aktualisiert",
+      recovered_after_restart: "Nach Neustart wiederhergestellt",
+      attachments_not_steerable: "Nachrichten mit Anhängen werden nach der aktuellen Antwort gesendet.",
+      limit_reached: "Warteschlangenlimit erreicht. Entferne eine Nachricht, bevor du erneut sendest.",
+      steer_failed: "Diese Nachricht konnte nicht gelenkt werden.",
+      queue_disabled: "Die Nachrichten-Warteschlange ist deaktiviert.",
+    },
     artifactExport: {
       permissionTitle: "Generierte Artefakte exportieren",
       permissionDescription:
