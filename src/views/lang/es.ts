@@ -3125,6 +3125,8 @@ export default {
     installFailed: "Error al instalar",
   },
   skillInstall: {
+  planCommands: "Comandos que se ejecutarán",
+        highRiskHint: "Los comandos de alto riesgo se muestran para revisión pero nunca se ejecutan automáticamente: debes ejecutarlos tú mismo.",
 planCredentials: "Credenciales requeridas",
 diagnostics: "Diagnóstico",
   title: "Instalación de habilidad",

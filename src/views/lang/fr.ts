@@ -3109,6 +3109,8 @@ export default {
     installFailed: "Échec de l'installation",
   },
   skillInstall: {
+  planCommands: "Commandes qui seront exécutées",
+        highRiskHint: "Les commandes à haut risque sont affichées pour examen mais jamais exécutées automatiquement — vous devez les exécuter vous-même.",
 planCredentials: "Identifiants requis",
 diagnostics: "Diagnostic",
   title: "Installation de compétence",

@@ -362,6 +362,9 @@ export function registerPromptSkillInvokeIpcHandler(): void {
 const runCommandSchema = z.object({
   sessionId: SkillSessionIdSchema,
   commandId: z.string().min(1).max(100),
+  /** Same opaque token the approval card used (review D3: run execution is
+   *  authorized at the same strength as approve, not by a bare boolean). */
+  approvalToken: z.string().min(16).max(128),
 });
 
 // TODO 5 / FR-16: renderer-only execution of one APPROVED plan command.
@@ -373,7 +376,13 @@ export function registerSkillInstallRunCommandIpcHandler(): void {
       const decoded = decode(runCommandSchema, data);
       if (!decoded.ok) return denied(decoded.message);
       try {
-        const outcome = await new SkillInstallationModule().runApprovedCommand(
+        const module = new SkillInstallationModule();
+        // Token binding (review D3): identical to the approve gate.
+        const token = await module.getApprovalToken(decoded.value.sessionId);
+        if (token === null || token !== decoded.value.approvalToken) {
+          return denied("Invalid approval token for this session.");
+        }
+        const outcome = await module.runApprovedCommand(
           decoded.value.sessionId,
           decoded.value.commandId
         );

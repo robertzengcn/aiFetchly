@@ -401,6 +401,65 @@ describe("WindowsProcessProvider live matrix (PRD §16.4)", () => {
   }, 60_000);
 });
 
+describe("buildChildEnvironment secret coverage (review D2)", () => {
+  it("drops credential keys that do not end in KEY/TOKEN/SECRET/PASSWORD", () => {
+    const env = buildChildEnvironment({
+      PATH: "/usr/bin",
+      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE",
+      GITHUB_PAT: "ghp_example",
+      STRIPE_ACCOUNT_ID: "acct_example",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.GITHUB_PAT).toBeUndefined();
+    expect(env.STRIPE_ACCOUNT_ID).toBeUndefined();
+  });
+
+  it("drops connection strings that embed credentials", () => {
+    const env = buildChildEnvironment({
+      DATABASE_URL: "postgres://user:pass@host/db",
+      REDIS_URL: "redis://:secret@host:6379",
+      SENTRY_DSN: "https://key@sentry.io/1",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.REDIS_URL).toBeUndefined();
+    expect(env.SENTRY_DSN).toBeUndefined();
+  });
+
+  it("drops app-internal AIFETCHLY_/VITE_/ELECTRON_ configuration", () => {
+    const env = buildChildEnvironment({
+      AIFETCHLY_SKILL_INSTALL_ENABLED: "true",
+      VITE_LOGIN_URL: "http://localhost",
+      ELECTRON_RUN_AS_NODE: "1",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(env.AIFETCHLY_SKILL_INSTALL_ENABLED).toBeUndefined();
+    expect(env.VITE_LOGIN_URL).toBeUndefined();
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("still preserves required Windows variables", () => {
+    const env = buildChildEnvironment({
+      PATH: "/usr/bin",
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      PATHEXT: ".COM;.EXE",
+      USERPROFILE: "C:\\Users\\u",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(env.SystemRoot).toBe("C:\\Windows");
+    expect(env.ComSpec).toBeDefined();
+    expect(env.PATHEXT).toBeDefined();
+    expect(env.USERPROFILE).toBeDefined();
+  });
+
+  it("explicit overrides remain the approved injection channel", () => {
+    const env = buildChildEnvironment(
+      { PATH: "/usr/bin" } as unknown as NodeJS.ProcessEnv,
+      { MY_TOOL_TOKEN: "injected" }
+    );
+    expect(env.MY_TOOL_TOKEN).toBe("injected");
+  });
+});
+
 describe("getPlatformProcessProvider", () => {
   it("returns the provider for the current platform", () => {
     const p = getPlatformProcessProvider();

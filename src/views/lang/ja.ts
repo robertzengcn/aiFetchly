@@ -3062,6 +3062,8 @@ export default {
     installFailed: "インストールに失敗しました",
   },
   skillInstall: {
+  planCommands: "実行されるコマンド",
+        highRiskHint: "高リスクのコマンドは確認用に表示されるだけで自動実行されません。ご自身で実行してください。",
 planCredentials: "必要な認証情報",
 diagnostics: "診断情報",
   title: "スキルのインストール",

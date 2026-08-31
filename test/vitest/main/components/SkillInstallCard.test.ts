@@ -210,6 +210,15 @@ describe("SkillInstallCard", () => {
           ],
           credentials: ["ELEVENLABS_API_KEY"],
           mode: "managed-copy",
+          commands: [
+            {
+              id: "cmd:abc",
+              executable: "pip",
+              args: ["install", "-r", "requirements.txt"],
+              riskLevel: "low",
+              rationale: "Proposed by repository instructions",
+            },
+          ],
           warnings: [],
         },
       })
@@ -233,6 +242,48 @@ describe("SkillInstallCard", () => {
     expect(plan.text()).toContain("managed-copy");
   });
 
+  it("shows the commands that will execute on the approval card (review D1)", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [],
+          dependencies: [],
+          credentials: [],
+          mode: "managed-copy",
+          commands: [
+            {
+              id: "cmd:pip",
+              executable: "pip",
+              args: ["install", "-r", "requirements.txt"],
+              riskLevel: "low",
+              rationale: "Proposed by repository instructions",
+            },
+            {
+              id: "cmd:sudo",
+              executable: "sudo",
+              args: ["apt", "install", "ffmpeg"],
+              riskLevel: "high",
+              rationale: "Privilege escalation detected",
+            },
+          ],
+          warnings: [],
+        },
+      })
+    );
+    const section = wrapper.find('[data-testid="skill-install-commands"]');
+    expect(section.exists()).toBe(true);
+    const rows = wrapper.findAll('[data-testid="skill-install-command-row"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("pip install -r requirements.txt");
+    expect(rows[0].text()).toContain("low");
+    expect(rows[1].text()).toContain("sudo apt install ffmpeg");
+    expect(rows[1].text()).toContain("high");
+    // The never-run-automatically hint accompanies the list.
+    expect(section.text()).toContain("never run automatically");
+  });
+
   it("renders an expandable diagnostics view with warnings (TODO 8)", () => {
     const wrapper = mountCard(
       makeSnapshot({
@@ -243,6 +294,7 @@ describe("SkillInstallCard", () => {
           dependencies: [],
           credentials: [],
           mode: "managed-copy",
+          commands: [],
           warnings: ["Multiple independent skills were discovered"],
         },
       })

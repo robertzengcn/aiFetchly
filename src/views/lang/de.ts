@@ -3122,6 +3122,8 @@ export default {
     installFailed: "Installation fehlgeschlagen",
   },
   skillInstall: {
+  planCommands: "Befehle, die ausgeführt werden",
+        highRiskHint: "Risikoreiche Befehle werden zur Prüfung angezeigt, aber nie automatisch ausgeführt — Sie müssen sie selbst ausführen.",
 planCredentials: "Erforderliche Zugangsdaten",
 diagnostics: "Diagnose",
   title: "Fähigkeitsinstallation",

@@ -101,6 +101,39 @@
         <pre class="text-caption mt-1">{{ snapshotView?.safeSummary }}</pre>
       </details>
 
+      <!-- Commands that will execute (review D1): shown on the approval
+           card so approving is informed consent for repository-controlled
+           execution. Never rendered outside the review state. -->
+      <div
+        v-if="snapshotView?.state === 'awaiting_approval' && safePlan?.commands?.length"
+        data-testid="skill-install-commands"
+        class="mt-2"
+      >
+        <div class="text-caption text-medium-emphasis mb-1">
+          {{ t("skillInstall.planCommands") }}
+        </div>
+        <div
+          v-for="cmd in safePlan.commands"
+          :key="cmd.id"
+          class="text-caption mb-1"
+          :class="cmd.riskLevel === 'high' ? 'text-warning' : ''"
+          data-testid="skill-install-command-row"
+        >
+          <code>{{ cmd.executable }} {{ cmd.args.join(" ") }}</code>
+          <v-chip
+            size="x-small"
+            :color="cmd.riskLevel === 'high' ? 'warning' : 'default'"
+            variant="tonal"
+            class="ml-1"
+          >
+            {{ cmd.riskLevel }}
+          </v-chip>
+        </div>
+        <div class="text-caption text-warning mb-1">
+          {{ t("skillInstall.highRiskHint") }}
+        </div>
+      </div>
+
       <!-- Plan review (awaiting_approval) -->
       <div
         v-if="snapshot?.state === 'awaiting_approval'"

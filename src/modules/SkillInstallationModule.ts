@@ -698,6 +698,12 @@ export class SkillInstallationModule extends BaseModule {
       await this.transition(sessions, events, sessionId, "cancelled");
       new SkillSourceAcquisitionService().removeSession(sessionId);
     }
+    // Review D3: cancellation revokes command-execution authorization.
+    const cancelledRow = await sessions.findBySessionId(sessionId);
+    if (cancelledRow && cancelledRow.approved) {
+      cancelledRow.approved = false;
+      await sessions.create(cancelledRow);
+    }
     const cancelled = await sessions.findBySessionId(sessionId);
     return this.snapshotFromEntity(cancelled ?? session);
   }
@@ -1173,6 +1179,8 @@ export class SkillInstallationModule extends BaseModule {
     const current = await sessions.findBySessionId(sessionId);
     if (!current) return;
     current.state = "failed";
+    // Review D3: a failed session may never execute approved commands.
+    current.approved = false;
     current.failureCode = code;
     current.failureDetail = message.replace(/https?:\/\/[^\s]+/g, "[source]");
     await sessions.create(current);
@@ -1269,6 +1277,13 @@ export class SkillInstallationModule extends BaseModule {
       })),
       credentials: plan.credentials.map((c) => c.environmentVariable),
       mode: plan.activation.mode,
+      commands: plan.commands.map((c) => ({
+        id: c.id,
+        executable: c.executable,
+        args: c.args,
+        riskLevel: c.riskLevel,
+        rationale: c.rationale,
+      })),
       warnings: plan.warnings.map((w) => w.message),
     };
   }

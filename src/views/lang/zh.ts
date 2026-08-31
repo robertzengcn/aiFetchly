@@ -2971,6 +2971,8 @@ export default {
     installFailed: "安装失败",
   },
   skillInstall: {
+  planCommands: "将执行的命令",
+        highRiskHint: "高危命令仅作展示，不会自动执行——需要你手动运行。",
 planCredentials: "需要凭据",
 diagnostics: "诊断信息",
   title: "技能安装",

@@ -131,7 +131,40 @@ export const SENSITIVE_ENV_KEYS: ReadonlySet<string> = new Set([
  * unless the caller explicitly injects it via `overrides`.
  */
 const SENSITIVE_ENV_KEY_RE =
-  /(API_?KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIAL|PRIVATE_?KEY|AUTH)$/i;
+  /(API_?KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIAL|PRIVATE_?KEY|AUTH|_PAT$|_ID$|_KEY_ID$|ACCESS_KEY)$/i;
+
+/**
+ * App-internal prefixes (review D2): configuration and build-time values
+ * must never reach a model-run child process.
+ */
+const APP_INTERNAL_ENV_PREFIXES: readonly string[] = [
+  "AIFETCHLY_",
+  "VITE_",
+  "ELECTRON_",
+];
+
+/** Connection-string keys whose VALUES commonly embed credentials. */
+const CREDENTIAL_URL_KEYS: ReadonlySet<string> = new Set([
+  "DATABASE_URL",
+  "REDIS_URL",
+  "REDIS_TLS_URL",
+  "MONGO_URL",
+  "MONGODB_URI",
+  "AMQP_URL",
+  "RABBITMQ_URL",
+  "POSTGRES_URL",
+  "MYSQL_URL",
+  "SENTRY_DSN",
+]);
+
+function isSecretShapedEnvKey(key: string): boolean {
+  if (SENSITIVE_ENV_KEY_RE.test(key)) return true;
+  const upper = key.toUpperCase();
+  if (CREDENTIAL_URL_KEYS.has(upper)) return true;
+  return APP_INTERNAL_ENV_PREFIXES.some((prefix) =>
+    upper.startsWith(prefix)
+  );
+}
 
 /**
  * Environment baseline shared by every provider: start from the application
@@ -148,7 +181,7 @@ export function buildChildEnvironment(
     if (value === undefined) continue;
     const upper = key.toUpperCase();
     if (SENSITIVE_ENV_KEYS.has(upper)) continue;
-    if (SENSITIVE_ENV_KEY_RE.test(key)) continue;
+    if (isSecretShapedEnvKey(key)) continue;
     env[key] = value;
   }
   if (overrides) {

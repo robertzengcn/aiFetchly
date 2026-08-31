@@ -199,6 +199,15 @@ export interface SafePlanView {
   }[];
   readonly credentials: readonly string[];
   readonly mode: string;
+  /** Approved command templates (review D1: informed consent requires the
+   *  card to show exactly what will execute). Args + riskLevel, no envs. */
+  readonly commands: readonly {
+    readonly id: string;
+    readonly executable: string;
+    readonly args: readonly string[];
+    readonly riskLevel: string;
+    readonly rationale: string;
+  }[];
   readonly warnings: readonly string[];
 }
 

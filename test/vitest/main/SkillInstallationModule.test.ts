@@ -292,6 +292,9 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     const serialized = JSON.stringify(prepared.safePlan);
     expect(serialized).not.toContain("Never delete user footage");
     expect(serialized).not.toContain("sk-");
+    // Commands ARE shown (review D1: informed consent) — executable + args +
+    // riskLevel, never environmentNames or secret values.
+    expect(Array.isArray(prepared.safePlan.commands)).toBe(true);
   }, 120_000);
 
   it("emits monotonic SKILL_INSTALL_PROGRESS events per audited step (TODO 7)", async () => {
@@ -447,6 +450,32 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       fs.rmSync(empty, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("cancelling an approved session revokes command authorization (review D3)", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-cancel-d3",
+      source: fixtureRoot,
+    });
+    const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+    await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: token,
+    });
+    // Approved session can reach runApprovedCommand's gate.
+    const before = await module.cancel(prepared.sessionId);
+    expect(["cancelled", "rollback_required"]).toContain(before.state);
+    // After cancel, runApprovedCommand must refuse (approved cleared).
+    const run = await module.runApprovedCommand(
+      prepared.sessionId,
+      "cmd:anything"
+    );
+    expect(run.ok).toBe(false);
+    if (run.ok) return;
+    expect(run.message).toContain("approved");
+  }, 120_000);
 
   it("rejects traversal-shaped session ids at the schema boundary (S1)", async () => {
     const { SkillInstallPrepareArgsSchema } = await import(

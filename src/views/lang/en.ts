@@ -3094,6 +3094,8 @@ export default {
     installFailed: "Install failed",
   },
   skillInstall: {
+  planCommands: "Commands that will run",
+        highRiskHint: "High-risk commands are shown for review but never run automatically — you must run them yourself.",
 planCredentials: "Credentials required",
 diagnostics: "Diagnostics",
   title: "Skill installation",
