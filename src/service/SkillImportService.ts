@@ -829,24 +829,27 @@ async function importFromDirectory(
     };
   }
 
+  // Replace a prior installation of the same name BEFORE copying —
+  // uninstallSkill deletes the installed_skills/<name> DIRECTORY, so doing
+  // it after the copy would destroy the fresh files (review fix).
+  const module = new SkillManagementModule();
+  const existing = await module.getSkillByName(manifest.name);
+  if (existing) {
+    await module.uninstallSkill(manifest.name);
+  }
+
   // Copy into userData/installed_skills/<name>/ (fresh dir, same as zip path).
   const skillDir = path.join(getInstalledSkillsDir(), manifest.name);
   fs.rmSync(skillDir, { recursive: true, force: true });
   fs.mkdirSync(skillDir, { recursive: true });
-  copyTreeBounded(sourceRoot, skillDir);
-
   try {
+    copyTreeBounded(sourceRoot, skillDir);
+
     if (manifest.runtime === "python") {
       await SkillEnvironmentManager.prepare(skillDir, manifest);
     }
 
     // Persist + hot-register through the SAME path as zip imports.
-    const module = new SkillManagementModule();
-    // Replace a prior installation of the same name (idempotent re-import).
-    const existing = await module.getSkillByName(manifest.name);
-    if (existing) {
-      await module.uninstallSkill(manifest.name);
-    }
     await module.installSkill({
       name: manifest.name,
       version: manifest.version,

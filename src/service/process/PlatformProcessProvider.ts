@@ -264,9 +264,19 @@ export async function runProcessCapture(
         // Auto-background (chat shell): the registry takes over the child
         // and its streams; resolve with the partial output captured so far
         // plus the background id. NOT a timeout failure.
-        detained = true;
-        const backgroundId = invocation.onTimeoutDetain(child);
         if (settled) return;
+        detained = true;
+        let backgroundId: string;
+        try {
+          backgroundId = invocation.onTimeoutDetain(child);
+        } catch (detainError) {
+          // A throwing registry must never orphan the run: fall back to a
+          // normal timeout kill so execute() always resolves.
+          void detainError;
+          config.killTree(child);
+          finish(child.exitCode, child.signalCode as NodeJS.Signals | null);
+          return;
+        }
         settled = true;
         resolve({
           exitCode: null,

@@ -50,7 +50,25 @@ const STDERR_PREVIEW_CHARS = 2_000;
 
 /** Patterns that mark a template as never-runnable by this runner. */
 const HIGH_RISK_RE =
-  /\bsudo\b|\bsu\b|\bchmod\b|\bchown\b|\brm\s+-rf?\b|`|\$\(/i;
+  /\bsudo\b|\bsu\b|\bchmod\b|\bchown\b|\brm\s+-rf?\b|`|\$\(|\bcurl\b[^|;]*\|\s*(ba)?sh\b|\bwget\b[^|;]*\|\s*(ba)?sh\b/i;
+
+/**
+ * Executable allowlist: the same package-manager/tool prefixes the planner's
+ * isShellish accepts. A repository can never introduce a new executable
+ * through args, and absolute/relative paths are refused outright.
+ */
+const RUNNABLE_EXECUTABLES: ReadonlySet<string> = new Set([
+  "pip", "pip3", "python", "python3", "node", "npm", "npx", "yarn", "uv",
+  "brew", "apt", "apt-get", "winget", "choco", "git", "ffmpeg", "ffprobe",
+  "curl", "wget",
+]);
+
+/** Environment names that may never be overridden by a declared credential. */
+const BLOCKED_ENV_NAMES: ReadonlySet<string> = new Set([
+  "PATH", "PATHEXT", "NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD",
+  "LD_LIBRARY_PATH", "DYLD_PRELOAD", "DYLD_LIBRARY_PATH", "SHELL", "IFS",
+  "SYSTEMROOT", "COMSPEC",
+]);
 
 export class SkillApprovedCommandRunner {
   constructor(
@@ -82,7 +100,16 @@ export class SkillApprovedCommandRunner {
         message: `Command '${commandId}' is not in the approved plan.`,
       };
     }
-    if (HIGH_RISK_RE.test(template.executable)) {
+    // Three-layer refusal (review finding): the planner's riskLevel over
+    // the FULL command line, this layer's pattern scan over executable +
+    // args joined (single-| pipe-to-shell included), and an executable
+    // allowlist so a repository can never introduce a new binary.
+    const fullLine = `${template.executable} ${template.args.join(" ")}`;
+    if (
+      template.riskLevel === "high" ||
+      HIGH_RISK_RE.test(fullLine) ||
+      !RUNNABLE_EXECUTABLES.has(template.executable)
+    ) {
       return {
         ok: false,
         commandId,
@@ -93,9 +120,30 @@ export class SkillApprovedCommandRunner {
         injectedEnvNames: [],
         errorCode: "COMMAND_HIGH_RISK",
         message:
-          `'${template.executable}' is high-risk (privilege escalation or ` +
-          `substitution) and must be run manually by the user, never by ` +
-          `AiFetchly.`,
+          template.riskLevel === "high"
+            ? `'${template.executable}' was marked high-risk in the approved ` +
+              `plan and must be run manually by the user, never by AiFetchly.`
+            : `'${template.executable}' is not a runnable package-manager ` +
+              `executable, or the command line matches a high-risk pattern ` +
+              `(privilege escalation, substitution, or pipe-to-shell).`,
+      };
+    }
+    const blockedName = template.environmentNames.find((name) =>
+      BLOCKED_ENV_NAMES.has(name.toUpperCase())
+    );
+    if (blockedName) {
+      return {
+        ok: false,
+        commandId,
+        exitCode: null,
+        stdoutPreview: "",
+        stderrPreview: "",
+        timedOut: false,
+        injectedEnvNames: [],
+        errorCode: "COMMAND_HIGH_RISK",
+        message:
+          `Declared environment name '${blockedName}' may not be overridden ` +
+          `by a credential.`,
       };
     }
 
@@ -150,13 +198,28 @@ export class SkillApprovedCommandRunner {
       outputLimitBytes: 256 * 1024,
     });
 
+    // Preview redaction (review finding): a command that echoes its
+    // environment would otherwise place the injected credential VALUE into
+    // the renderer result. Replace every injected value with a placeholder.
+    const redact = (text: string): string => {
+      let out = text;
+      for (const value of Object.values(secretEnv)) {
+        if (value.length > 0) {
+          out = out.split(value).join("[REDACTED]");
+        }
+      }
+      return out;
+    };
+    const stdoutPreview = redact(result.stdout).slice(0, STDOUT_PREVIEW_CHARS);
+    const stderrPreview = redact(result.stderr).slice(0, STDERR_PREVIEW_CHARS);
+
     if (result.timedOut) {
       return {
         ok: false,
         commandId,
         exitCode: null,
-        stdoutPreview: result.stdout.slice(0, STDOUT_PREVIEW_CHARS),
-        stderrPreview: result.stderr.slice(0, STDERR_PREVIEW_CHARS),
+        stdoutPreview,
+        stderrPreview,
         timedOut: true,
         injectedEnvNames: injected,
         errorCode: "COMMAND_TIMED_OUT",
@@ -168,8 +231,8 @@ export class SkillApprovedCommandRunner {
         ok: false,
         commandId,
         exitCode: result.exitCode,
-        stdoutPreview: result.stdout.slice(0, STDOUT_PREVIEW_CHARS),
-        stderrPreview: result.stderr.slice(0, STDERR_PREVIEW_CHARS),
+        stdoutPreview,
+        stderrPreview,
         timedOut: false,
         injectedEnvNames: injected,
         errorCode: "COMMAND_FAILED",
@@ -180,8 +243,8 @@ export class SkillApprovedCommandRunner {
       ok: true,
       commandId,
       exitCode: 0,
-      stdoutPreview: result.stdout.slice(0, STDOUT_PREVIEW_CHARS),
-      stderrPreview: result.stderr.slice(0, STDERR_PREVIEW_CHARS),
+      stdoutPreview,
+      stderrPreview,
       timedOut: false,
       injectedEnvNames: injected,
     };

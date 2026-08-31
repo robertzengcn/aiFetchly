@@ -29,6 +29,10 @@ export class SkillInstallation00011788088148864
     await queryRunner.query(`CREATE TABLE IF NOT EXISTS "skill_installation_events" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "sessionId" varchar(64) NOT NULL, "seq" integer NOT NULL, "eventType" varchar(60) NOT NULL, "fromState" varchar(30) NOT NULL, "toState" varchar(30) NOT NULL, "detail" text, "createdAt" datetime DEFAULT (CURRENT_TIMESTAMP), "updatedAt" datetime DEFAULT (CURRENT_TIMESTAMP))`);
     await queryRunner.query(`CREATE INDEX IF NOT EXISTS "idx_skill_inst_evt_session" ON "skill_installation_events" ("sessionId", "seq") `);
     await queryRunner.query(`CREATE TABLE IF NOT EXISTS "skill_credential_bindings" ("id" integer PRIMARY KEY AUTOINCREMENT NOT NULL, "installationId" varchar(64) NOT NULL, "environmentVariable" varchar(100) NOT NULL, "bindingRef" varchar(200) NOT NULL, "status" varchar(20) NOT NULL DEFAULT ('configured'), "storedAt" datetime NOT NULL, "createdAt" datetime DEFAULT (CURRENT_TIMESTAMP), "updatedAt" datetime DEFAULT (CURRENT_TIMESTAMP))`);
+    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "uq_prompt_skill_inv_identity" ON "prompt_skill_invocations" ("conversationId", "agentScope", "runtimeId", "contentHash")`);
+    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "uq_skill_inst_identity" ON "skill_installations" ("sourceUri", "sourceRevision", "sourceSubdirectory", "scope", "workspaceId", "activationMode")`);
+    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "uq_skill_inst_sess_id" ON "skill_installation_sessions" ("sessionId")`);
+    await queryRunner.query(`CREATE UNIQUE INDEX IF NOT EXISTS "uq_skill_cred_binding" ON "skill_credential_bindings" ("installationId", "environmentVariable")`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

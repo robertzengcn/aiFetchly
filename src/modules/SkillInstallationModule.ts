@@ -622,8 +622,9 @@ export class SkillInstallationModule extends BaseModule {
       };
     }
     const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
-    // Commands run in the session's staging area (acquiredRoot/content).
-    const cwd = path.dirname(plan.source.acquiredRoot);
+    // Commands run in the session's staged content root — the package the
+    // plan was built from (review fix: previously the parent source/ dir).
+    const cwd = plan.source.acquiredRoot;
     const { SkillApprovedCommandRunner } = await import(
       "@/service/SkillApprovedCommandRunner"
     );
