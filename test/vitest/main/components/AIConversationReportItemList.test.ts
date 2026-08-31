@@ -12,9 +12,11 @@ const i18n = createI18n({
       aiConversationReport: {
         selectionInstruction: "Select",
         selectionCount: "{n} selected",
+        selectionCountOfMax: "{n} of {max} selected",
         relatedUserLabel: "Your message — will be sent",
         attachmentOmitted: "An attachment in your message was omitted",
         relatedMessageUnavailable: "No related message is available",
+        imageLabel: "Include image in report",
         itemTypes: {
           text: "Text",
           image: "Image",
@@ -58,6 +60,7 @@ function mountList(props: {
   selectedItemIds: Set<string>;
   selectedImageIds?: Set<string>;
   includeRelatedUserContext?: boolean;
+  maxSelected?: number;
 }) {
   return mount(AIConversationReportItemList, {
     props: {
@@ -284,6 +287,80 @@ describe("AIConversationReportItemList", () => {
         includeRelatedUserContext: true,
       });
       expect(w.find('[data-testid^="related-user-"]').exists()).toBe(false);
+    });
+  });
+
+  describe("selection limit enforcement (PRD §10.2)", () => {
+    it("disables unselected checkboxes when the limit is reached", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "one" },
+          { messageId: "a2", text: "two" },
+        ]),
+        selectedItemIds: new Set(["ai-a1"]),
+        maxSelected: 1,
+      });
+      // a1 is selected, a2 is unselected and disabled.
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a1"] input')
+            .element as HTMLInputElement
+        ).disabled
+      ).toBe(false);
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a2"] input')
+            .element as HTMLInputElement
+        ).disabled
+      ).toBe(true);
+    });
+
+    it("does not disable checkboxes when below the limit", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "one" },
+          { messageId: "a2", text: "two" },
+        ]),
+        selectedItemIds: new Set(["ai-a1"]),
+        maxSelected: 2,
+      });
+      // a1 selected, a2 unselected, both enabled.
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a1"] input')
+            .element as HTMLInputElement
+        ).disabled
+      ).toBe(false);
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a2"] input')
+            .element as HTMLInputElement
+        ).disabled
+      ).toBe(false);
+    });
+
+    it("shows 'X of max selected' when at the limit", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "one" },
+          { messageId: "a2", text: "two" },
+        ]),
+        selectedItemIds: new Set(["ai-a1"]),
+        maxSelected: 1,
+      });
+      expect(w.text()).toContain("1 of 1 selected");
+    });
+
+    it("shows simple count when below the limit", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "one" },
+          { messageId: "a2", text: "two" },
+        ]),
+        selectedItemIds: new Set(["ai-a1"]),
+        maxSelected: 10,
+      });
+      expect(w.text()).toContain("1 selected");
     });
   });
 });

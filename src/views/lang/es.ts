@@ -3177,6 +3177,7 @@ export default {
     dialogTitle: "Reportar conversación",
     selectionInstruction: "Selecciona los resultados de IA a reportar.",
     selectionCount: "{n} seleccionados",
+    selectionCountOfMax: "{n} de {max} seleccionados",
     selectAll: "Seleccionar todo",
     includeRelatedUserContext:
       "Incluir mi mensaje relacionado que originó el resultado de IA",

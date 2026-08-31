@@ -3175,6 +3175,7 @@ export default {
     dialogTitle: "Konversation melden",
     selectionInstruction: "Wählen Sie die zu meldenden KI-Ausgaben aus.",
     selectionCount: "{n} ausgewählt",
+    selectionCountOfMax: "{n} von {max} ausgewählt",
     selectAll: "Alle auswählen",
     includeRelatedUserContext:
       "Meine verwandte Nachricht einbeziehen, die die KI-Ausgabe ausgelöst hat",

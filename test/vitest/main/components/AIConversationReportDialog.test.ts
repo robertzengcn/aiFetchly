@@ -44,6 +44,20 @@ const i18n = createI18n({
         consentWithUserContext: "With my related message",
         truncationWarning: "Trimmed",
         conversationChanged: "Conversation changed",
+        selectionInstruction: "Select",
+        selectionCount: "{n} selected",
+        selectionCountOfMax: "{n} of {max} selected",
+        selectAll: "Select all",
+        imageLabel: "Include image in report",
+        relatedUserLabel: "Your message — will be sent",
+        attachmentOmitted: "An attachment in your message was omitted",
+        itemTypes: {
+          text: "Text",
+          image: "Image",
+          mixed: "Mixed",
+          plan: "Plan",
+          artifact: "Artifact",
+        },
         errors: {
           selectionRequired: "Select one",
           selectionLimit: "Too many",
@@ -80,33 +94,48 @@ const VTextarea = defineComponent({
   template: `<div />`,
 });
 
-function makeSnapshot(): ConversationReportSnapshot {
+function makeSnapshot(
+  candidates?: Partial<ConversationReportSnapshot["candidates"][number]>[]
+): ConversationReportSnapshot {
+  const baseCandidates = [
+    {
+      itemId: "ai-a1",
+      messageId: "a1",
+      sourceIndex: 1,
+      role: "assistant" as const,
+      contentType: "text" as const,
+      text: "AI answer",
+      images: [],
+      evidenceUnavailable: false,
+      relatedUser: {
+        itemId: "user-u1",
+        messageId: "u1",
+        sourceIndex: 0,
+        role: "user" as const,
+        contentType: "text" as const,
+        text: "user q",
+        omittedAttachmentContent: false,
+      },
+    },
+  ];
+  const list = candidates
+    ? candidates.map((c, i) => ({
+        itemId: `ai-${c.messageId ?? "m" + i}`,
+        messageId: c.messageId ?? "m" + i,
+        sourceIndex: i,
+        role: "assistant" as const,
+        contentType: c.contentType ?? "text",
+        text: c.text,
+        images: c.images ?? [],
+        evidenceUnavailable: false,
+      }))
+    : baseCandidates;
   return {
     snapshotId: "snap-1",
     conversationId: "conv-1",
     surface: "chat_v2",
     createdAt: "2026-01-01T00:00:00.000Z",
-    candidates: [
-      {
-        itemId: "ai-a1",
-        messageId: "a1",
-        sourceIndex: 1,
-        role: "assistant",
-        contentType: "text",
-        text: "AI answer",
-        images: [],
-        evidenceUnavailable: false,
-        relatedUser: {
-          itemId: "user-u1",
-          messageId: "u1",
-          sourceIndex: 0,
-          role: "user",
-          contentType: "text",
-          text: "user q",
-          omittedAttachmentContent: false,
-        },
-      },
-    ],
+    candidates: list,
   };
 }
 
@@ -325,6 +354,71 @@ describe("AIConversationReportDialog", () => {
       await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
       await flushPromises();
       expect(w.find('[data-testid="truncation-warning"]').exists()).toBe(false);
+    });
+  });
+
+  describe("select-all control (PRD §10.2)", () => {
+    it("shows select-all when eligible list has 10 or fewer items", () => {
+      const w = mountDialog();
+      // Default snapshot has 1 candidate, so select-all should appear.
+      expect(
+        w.find('[data-testid="conversation-report-select-all"]').exists()
+      ).toBe(true);
+    });
+
+    it("hides select-all when eligible list has more than 10 items", () => {
+      const manyCandidates = Array.from({ length: 11 }, (_, i) => ({
+        messageId: `m${i}`,
+        text: `item ${i}`,
+        contentType: "text" as const,
+      }));
+      const w = mountDialog({
+        snapshot: makeSnapshot(manyCandidates),
+      });
+      expect(
+        w.find('[data-testid="conversation-report-select-all"]').exists()
+      ).toBe(false);
+    });
+
+    it("toggles between all-selected and none-selected", async () => {
+      const w = mountDialog({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "one" },
+          { messageId: "a2", text: "two" },
+        ]),
+      });
+      // Click select-all → selects all.
+      await w
+        .find('[data-testid="conversation-report-select-all"] input')
+        .trigger("change");
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a1"] input')
+            .element as HTMLInputElement
+        ).checked
+      ).toBe(true);
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a2"] input')
+            .element as HTMLInputElement
+        ).checked
+      ).toBe(true);
+      // Click select-all again → deselects all.
+      await w
+        .find('[data-testid="conversation-report-select-all"] input')
+        .trigger("change");
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a1"] input')
+            .element as HTMLInputElement
+        ).checked
+      ).toBe(false);
+      expect(
+        (
+          w.find('[data-testid="report-item-ai-a2"] input')
+            .element as HTMLInputElement
+        ).checked
+      ).toBe(false);
     });
   });
 });

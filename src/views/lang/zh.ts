@@ -3009,6 +3009,7 @@ export default {
     dialogTitle: "举报对话",
     selectionInstruction: "选择要举报的 AI 输出。",
     selectionCount: "已选择 {n} 项",
+    selectionCountOfMax: "已选择 {n}/{max} 项",
     selectAll: "全选",
     includeRelatedUserContext: "包含我触发该 AI 输出的相关消息",
     userMessageWillBeSent:

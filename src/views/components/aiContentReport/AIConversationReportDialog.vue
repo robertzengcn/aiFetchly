@@ -15,9 +15,29 @@
           :selected-item-ids="selectedItemIds"
           :include-related-user-context="includeRelatedUserContext"
           :selected-image-ids="selectedImageIds"
+          :max-selected="maxAIItems"
           @toggle="toggleItem"
           @toggle-image="toggleImage"
         />
+
+        <!--
+          PRD §10.2: Select-all control appears only when the eligible list
+          contains 10 or fewer items (no point in a select-all that exceeds the
+          limit). Clicking it toggles between all-selected and none-selected.
+        -->
+        <label
+          v-if="eligibleCount <= maxAIItems"
+          class="conversation-report__select-all"
+          data-testid="conversation-report-select-all"
+        >
+          <input
+            type="checkbox"
+            :checked="isAllSelected"
+            :indeterminate.prop="isPartialSelection"
+            @change="onSelectAll"
+          />
+          <span>{{ selectAllLabel }}</span>
+        </label>
 
         <label
           v-if="canIncludeRelatedUser"
@@ -193,6 +213,18 @@ const consentText = computed(() => {
 
 const canIncludeRelatedUser = computed(() => props.snapshot.candidates.some((c) => c.relatedUser));
 
+// PRD §10.2: selection limit + select-all helpers. The max AI item count
+// matches the request builder's constant (MAX_AI_ITEMS = 10).
+const maxAIItems = 10;
+const eligibleCount = computed(() => props.snapshot.candidates.length);
+const isAllSelected = computed(
+  () => selectedItemIds.value.size === eligibleCount.value && eligibleCount.value > 0
+);
+const isPartialSelection = computed(
+  () => selectedItemIds.value.size > 0 && selectedItemIds.value.size < eligibleCount.value
+);
+const selectAllLabel = computed(() => t("aiConversationReport.selectAll") || "Select all");
+
 const categoryItems = computed(() =>
   AI_CONTENT_REPORT_CATEGORIES.map((value) => ({
     value,
@@ -222,6 +254,20 @@ function toggleImage(imageSourceId: string): void {
   if (next.has(imageSourceId)) next.delete(imageSourceId);
   else next.add(imageSourceId);
   selectedImageIds.value = next;
+}
+
+// PRD §10.2: select-all control toggles between all-selected and none-selected.
+function onSelectAll(): void {
+  if (isAllSelected.value) {
+    // Deselect all.
+    selectedItemIds.value = new Set();
+  } else {
+    // Select all eligible items (already capped at ≤10 by the v-if guard).
+    const allIds = props.snapshot.candidates.map((c) => c.itemId);
+    selectedItemIds.value = new Set(allIds);
+  }
+  localError.value = "";
+  resetTruncationGate();
 }
 
 function resetTruncationGate(): void {
@@ -392,6 +438,13 @@ async function onSubmit(): Promise<void> {
   align-items: center;
   gap: 8px;
   margin-top: 10px;
+  font-size: 13px;
+}
+.conversation-report__select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
   font-size: 13px;
 }
 .conversation-report__warn {

@@ -3142,6 +3142,7 @@ export default {
     dialogTitle: "Report conversation",
     selectionInstruction: "Select the AI outputs to report.",
     selectionCount: "{n} selected",
+    selectionCountOfMax: "{n} of {max} selected",
     selectAll: "Select all",
     includeRelatedUserContext:
       "Include my related message that prompted the AI output",

@@ -3163,6 +3163,7 @@ export default {
     dialogTitle: "Signaler la conversation",
     selectionInstruction: "Sélectionnez les sorties d'IA à signaler.",
     selectionCount: "{n} sélectionné(s)",
+    selectionCountOfMax: "{n} sur {max} sélectionné(s)",
     selectAll: "Tout sélectionner",
     includeRelatedUserContext:
       "Inclure mon message associé à l'origine de la sortie d'IA",

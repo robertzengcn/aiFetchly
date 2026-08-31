@@ -37,6 +37,7 @@
             <input
               type="checkbox"
               :checked="selectedItemIds.has(c.itemId)"
+              :disabled="limitReached && !selectedItemIds.has(c.itemId)"
               :aria-label="rowLabel(c)"
               @change="onToggle(c.itemId)"
             />
@@ -92,6 +93,10 @@ const props = defineProps<{
   includeRelatedUserContext?: boolean;
   /** Image sourceIds selected for submission (FR-2.5, §10.2). */
   selectedImageIds?: ReadonlySet<string>;
+  /** PRD §10.2: maximum number of selectable AI items (10). When set, disables
+   * checkboxes for unselected items once the limit is reached and shows
+   * "X of maximum" in the summary. */
+  maxSelected?: number;
 }>();
 const emit = defineEmits<{
   (e: "toggle", itemId: string): void;
@@ -102,13 +107,23 @@ const { t } = useI18n();
 const instructionLabel = computed(
   () => t("aiConversationReport.selectionInstruction") || "Select the AI outputs to report"
 );
-// vue-i18n v9 interpolates the named token `{n}` itself; pass the value
-// through so the rendered label is e.g. "2 selected". Falls back to a plain
-// string when the locale (or key) is absent entirely.
+// PRD §10.2: when a maxSelected limit is set and the selection reaches it,
+// the summary shows "X of maximum selected" so the user knows why further
+// checkboxes are disabled. Otherwise it shows "{n} selected".
 const countLabel = computed(() => {
   const n = props.selectedItemIds.size;
+  const max = props.maxSelected;
+  if (max && n >= max) {
+    return t("aiConversationReport.selectionCountOfMax", { n, max }) || `${n} of ${max} selected`;
+  }
   return t("aiConversationReport.selectionCount", { n }) || `${n} selected`;
 });
+// PRD §10.2: when at the selection limit, unselected item checkboxes are
+// disabled so the user cannot exceed the cap. The limit is only enforced
+// when maxSelected is provided.
+const limitReached = computed(
+  () => props.maxSelected !== undefined && props.selectedItemIds.size >= props.maxSelected
+);
 const relatedUserLabel = computed(
   () =>
     t("aiConversationReport.relatedUserLabel") || "Your message — will be sent"

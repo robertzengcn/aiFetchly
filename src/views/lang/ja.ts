@@ -3110,6 +3110,7 @@ export default {
     dialogTitle: "会話を報告",
     selectionInstruction: "報告する AI 出力を選択してください。",
     selectionCount: "{n} 件選択中",
+    selectionCountOfMax: "{max} 件中 {n} 件選択中",
     selectAll: "すべて選択",
     includeRelatedUserContext: "AI 出力の元になった関連メッセージを含める",
     userMessageWillBeSent:
