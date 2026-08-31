@@ -190,12 +190,27 @@ export const net = {
   },
 };
 
+export interface MockDisplay {
+  id: number;
+  scaleFactor: number;
+  workArea: Rectangle;
+}
+
+const PRIMARY_DISPLAY: MockDisplay = {
+  id: 1,
+  scaleFactor: 1,
+  workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+};
+
 export const screen = {
-  getDisplayMatching(_rect: Rectangle): { workArea: Rectangle } {
-    return { workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
+  getDisplayMatching(_rect: Rectangle): MockDisplay {
+    return PRIMARY_DISPLAY;
   },
-  getPrimaryDisplay(): { workArea: Rectangle } {
-    return { workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
+  getPrimaryDisplay(): MockDisplay {
+    return PRIMARY_DISPLAY;
+  },
+  getAllDisplays(): MockDisplay[] {
+    return [PRIMARY_DISPLAY];
   },
 };
 
@@ -296,6 +311,14 @@ export class BrowserWindow {
   }
 
   isDestroyed(): boolean {
+    return false;
+  }
+
+  getNormalBounds(): Rectangle {
+    return { x: 0, y: 0, width: 1280, height: 800 };
+  }
+
+  isMaximized(): boolean {
     return false;
   }
 

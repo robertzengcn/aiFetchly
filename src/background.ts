@@ -9,6 +9,7 @@ import {
   shell,
   protocol,
   net,
+  screen,
 } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
@@ -100,6 +101,7 @@ import {
 } from "@/utils/loadHtmlFileWithUrlFallback";
 import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
 import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
+import { MainWindowStateService } from "@/main-process/window/MainWindowStateService";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -685,13 +687,25 @@ function initialize() {
 
   async function createWindowBody(): Promise<void> {
     rendererHtmlLoaded = false;
+    // Window geometry (chat-first shell design §14.6): resolve validated
+    // saved bounds or centered defaults BEFORE construction. The window is
+    // never maximized implicitly — only an explicit saved user choice is
+    // restored, and then before show() to avoid a visible resize flash.
+    const windowState = new MainWindowStateService({
+      screen,
+      e2e: process.env.AIFETCHLY_E2E === "1",
+    });
+    const initialState = windowState.resolveInitialState();
+    const initialBounds = initialState.normalBounds;
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
       autoHideMenuBar: process.platform !== "darwin",
       icon: path.join(__dirname, "/icon.png"),
-      width: 800,
-      height: 600,
+      x: initialBounds.x,
+      y: initialBounds.y,
+      width: initialBounds.width,
+      height: initialBounds.height,
       show: false,
       webPreferences: {
         // Use pluginOptions.nodeIntegration, leave this alone
@@ -707,9 +721,14 @@ function initialize() {
       },
     });
 
-    win.maximize();
+    if (initialState.maximized) {
+      // Restore ONLY the user's explicit maximized preference (FR-WIN-007),
+      // before the first show so no resize flash is visible.
+      win.maximize();
+    }
     win.show();
     setMainWindow(win);
+    windowState.attach(win);
 
     if (win) {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
@@ -731,10 +750,16 @@ function initialize() {
         trustedOrigins: navGuardTrustedOrigins,
         trustedProtocols: ["aifetchly:"],
       });
-      // `as any` matches the file's pattern — the electron tsconfig mock (aliased
-      // in tsconfig.paths) does not type the EventEmitter `.on`. See WS-7 R7.2.
-      (win as any).webContents.on("will-navigate", onWillNavigate);
-      (win as any).webContents.on("will-redirect", onWillNavigate);
+      // The electron typing mock models webContents.on with a generic
+      // listener signature; cast to a minimal typed surface instead of any.
+      const webContentsOn = win.webContents as unknown as {
+        on(event: string, listener: (...args: unknown[]) => void): void;
+      };
+      const listener = onWillNavigate as unknown as (
+        ...args: unknown[]
+      ) => void;
+      webContentsOn.on("will-navigate", listener);
+      webContentsOn.on("will-redirect", listener);
 
       console.log(
         "Window exist, prepare to register communication ipc handlers"
@@ -1108,16 +1133,16 @@ function initialize() {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  (app as any).on(
-    "open-url",
-    (event: { preventDefault: () => void }, url: string) => {
-      event.preventDefault();
-      // Log only that a deep link arrived — never the URL itself, which now
-      // carries the authorization code.
-      log.info("[open-url] received deep link");
-      handleDeepLink(url);
-    }
-  );
+  const onOpenUrl = (event: {
+    preventDefault: () => void;
+  }, url: string): void => {
+    event.preventDefault();
+    // Log only that a deep link arrived — never the URL itself, which now
+    // carries the authorization code.
+    log.info("[open-url] received deep link");
+    handleDeepLink(url);
+  };
+  app.on("open-url", onOpenUrl as unknown as (...args: unknown[]) => void);
   // app.on('second-instance', (event, argv) => {
   //   console.log("second-instance call")
   //   const url = argv.find(arg => arg.startsWith(`${protocolScheme}://`));
@@ -1141,7 +1166,9 @@ function initialize() {
     configureContentSecurityPolicy();
 
     // Install Electron app-level crash handlers (render-process-gone, etc.).
-    __crashReporter.installAppHandlers(app as any);
+    __crashReporter.installAppHandlers(
+      app as unknown as import("@/modules/diagnostics/CrashReporterService").ElectronAppLike
+    );
 
     // Start Electron's native crashReporter to capture minidumps for the main
     // and render processes. Dumps stay local (no upload) and are routed to
@@ -1446,7 +1473,10 @@ function makeSingleInstance(): void {
   } else {
     // console.log('gotThelock:', gotThelock)
 
-    (app as any).on("second-instance", (event: unknown, argv: string[]) => {
+    const onSecondInstance = (
+      event: unknown,
+      argv: string[]
+    ): void => {
       try {
         if (onSecondInstanceActivate) {
           onSecondInstanceActivate();
@@ -1498,7 +1528,8 @@ function makeSingleInstance(): void {
       } else {
         log.warn("[second-instance] no deep link URL found in argv");
       }
-    });
+      };
+    app.on("second-instance", onSecondInstance as unknown as (...args: unknown[]) => void);
   }
 }
 
