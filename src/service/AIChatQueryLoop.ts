@@ -75,6 +75,7 @@ import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
@@ -2315,6 +2316,7 @@ export class AIChatQueryLoop {
     const skippedContent = serializeToolResultContent({
       ...SKIPPED_BY_STEERING_TOOL_RESULT,
     });
+    let skippedCount = 0;
     for (const call of parsedCalls) {
       const id =
         call.id ??
@@ -2336,6 +2338,13 @@ export class AIChatQueryLoop {
         content: skippedContent,
       });
       resulted.add(id);
+      skippedCount += 1;
+    }
+    if (skippedCount > 0) {
+      aiChatQueueCounters.increment(
+        "ai_chat_steering_skipped_tools_total",
+        skippedCount
+      );
     }
   }
 

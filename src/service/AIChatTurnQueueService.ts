@@ -18,6 +18,7 @@ import {
   type AIChatPendingModuleErrorCode,
 } from "@/modules/AIChatPendingMessageModule";
 import { log } from "@/modules/Logger";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 
 /**
  * Main-process queue orchestration (message-queue technical design §9).
@@ -119,12 +120,25 @@ export function createSteeringPromoter(
         `Steering row ${instruction.pendingMessageId} lost its claim before persistence.`
       );
     }
+    const transactionStartedAt = Date.now();
     await pendingModule.promoteSteeringToUserMessage({
       pendingMessageId: instruction.pendingMessageId,
       claimToken: row.claimToken,
       boundary,
       targetAssistantMessageId: instruction.targetAssistantMessageId,
     });
+    aiChatQueueCounters.observeTiming(
+      "pending_db_transaction_ms",
+      Date.now() - transactionStartedAt
+    );
+    aiChatQueueCounters.increment("ai_chat_steering_applied_total");
+    const clickStartedAt = Date.parse(instruction.createdAt);
+    if (!Number.isNaN(clickStartedAt)) {
+      aiChatQueueCounters.observeTiming(
+        "steer_click_to_boundary_ms",
+        Date.now() - clickStartedAt
+      );
+    }
   };
 }
 
@@ -181,6 +195,7 @@ export class AIChatTurnQueueService {
       ...(queueHeld ? { createAsPaused: true } : {}),
     });
 
+    aiChatQueueCounters.increment("ai_chat_pending_created_total");
     const view = await this.deps.pendingModule.getView(
       created.pendingMessageId,
       runtimeStatus
@@ -222,10 +237,15 @@ export class AIChatTurnQueueService {
         "AI features are not enabled on this plan."
       );
     }
+    aiChatQueueCounters.increment("ai_chat_steering_requested_total");
     const runtimeStatus = this.deps.engine.getConversationRuntimeStatus(
       input.conversationId
     );
     if (runtimeStatus !== "running") {
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_steering_rejected_total",
+        "turn_not_running"
+      );
       throw new AIChatTurnQueueError(
         "TURN_NOT_STEERABLE",
         "The conversation has no running response to steer."
@@ -299,6 +319,10 @@ export class AIChatTurnQueueService {
       instruction
     );
     if (!committed) {
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_steering_rejected_total",
+        "turn_finished_first"
+      );
       await this.deps.pendingModule
         .getModel()
         .restoreSteeringToQueued(
@@ -363,7 +387,14 @@ export class AIChatTurnQueueService {
 
   /** Startup reconciliation (design §16.1) — never auto-runs work. */
   async recoverOnStartup(): Promise<void> {
+    const recoveryModel = this.deps.pendingModule.getModel();
+    const before = await recoveryModel.listNonTerminalAll();
+    const beforeByStatus = new Set(before.map((row) => row.status));
     await this.deps.pendingModule.recoverOnStartup();
+    // Labeled recovery totals per PRE-recovery state (design §19.2).
+    for (const state of beforeByStatus) {
+      aiChatQueueCounters.incrementLabeled("ai_chat_queue_recovered_total", state);
+    }
     const model = this.deps.pendingModule.getModel();
     const rows = await model.listNonTerminalAll();
     const byConversation = new Set(rows.map((row) => row.conversationId));
@@ -459,6 +490,11 @@ export class AIChatTurnQueueService {
       "dispatching"
     );
 
+    const drainStartedAt = Date.now();
+    const enqueueStartedAt = row.createdAt
+      ? new Date(row.createdAt).getTime()
+      : NaN;
+
     const lease = this.deps.tryAcquireLease({ conversationId });
     if (!lease) {
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
@@ -471,11 +507,24 @@ export class AIChatTurnQueueService {
     try {
       let savedUser;
       try {
+        const transactionStartedAt = Date.now();
         savedUser = await this.deps.pendingModule.promoteDispatchToUserMessage({
           pendingMessageId: row.pendingMessageId,
           claimToken,
         });
+        aiChatQueueCounters.observeTiming(
+          "pending_db_transaction_ms",
+          Date.now() - transactionStartedAt
+        );
+        aiChatQueueCounters.increment("ai_chat_pending_dispatched_total");
+        if (!Number.isNaN(enqueueStartedAt)) {
+          aiChatQueueCounters.observeTiming(
+            "enqueue_to_dispatch_ms",
+            Date.now() - enqueueStartedAt
+          );
+        }
       } catch (err) {
+        aiChatQueueCounters.increment("ai_chat_pending_failed_total");
         // Pre-turn failure: recoverable — pause, keep visible (FR-14).
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken, {
           code: "DISPATCH_PROMOTE_FAILED",
@@ -512,6 +561,7 @@ export class AIChatTurnQueueService {
           `[ai-chat-queue] dispatch turn failed conv=${conversationId}:`,
           err
         );
+        aiChatQueueCounters.increment("ai_chat_pending_failed_total");
         terminal = {
           type: "failed",
           conversationId,
@@ -526,6 +576,10 @@ export class AIChatTurnQueueService {
         if (done) {
           this.emitEvent(done, "sent");
         }
+        aiChatQueueCounters.observeTiming(
+          "drain_duration_ms",
+          Date.now() - drainStartedAt
+        );
         // FR-10/11: schedule exactly one next drain.
         this.scheduleDrain(conversationId);
         return;
@@ -570,6 +624,10 @@ export class AIChatTurnQueueService {
       reasonCode
     );
     if (pausedQueued + pausedSteering > 0) {
+      aiChatQueueCounters.increment(
+        "ai_chat_pending_paused_total",
+        pausedQueued + pausedSteering
+      );
       const views = await this.deps.pendingModule.listViews(conversationId);
       for (const view of views) {
         if (view.status === "paused") {
