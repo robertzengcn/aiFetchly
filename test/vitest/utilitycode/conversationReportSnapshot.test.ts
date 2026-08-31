@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildChatV2ConversationSnapshot } from "@/views/components/aiContentReport/conversationReportSnapshot";
+import {
+  buildChatV2ConversationSnapshot,
+  hasEligibleChatV2Candidate,
+  hasEligibleLegacyCandidate,
+  hasEligibleKnowledgeCandidate,
+} from "@/views/components/aiContentReport/conversationReportSnapshot";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 
@@ -215,5 +220,148 @@ describe("buildChatV2ConversationSnapshot", () => {
     expect(snap.candidates.length).toBe(250);
     // Linear pass: 500 messages should normalize in well under 200ms.
     expect(ms).toBeLessThan(500);
+  });
+});
+
+describe("hasEligibleChatV2Candidate", () => {
+  it("returns true when a completed assistant with text exists", () => {
+    expect(
+      hasEligibleChatV2Candidate({
+        conversationId: "conv-1",
+        messages: [makeUser("u1", "hi"), makeAssistant("a1", "answer")],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      })
+    ).toBe(true);
+  });
+
+  it("returns false when only user messages exist", () => {
+    expect(
+      hasEligibleChatV2Candidate({
+        conversationId: "conv-1",
+        messages: [makeUser("u1", "hi")],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      })
+    ).toBe(false);
+  });
+
+  it("returns false when the only assistant is the active streaming placeholder", () => {
+    expect(
+      hasEligibleChatV2Candidate({
+        conversationId: "conv-1",
+        messages: [makeAssistant("streaming", "in flight")],
+        activeAssistantMessageId: "streaming",
+        streamStatus: "streaming",
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for empty conversation", () => {
+    expect(
+      hasEligibleChatV2Candidate({
+        conversationId: "conv-1",
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      })
+    ).toBe(false);
+  });
+
+  it("returns true when the eligible assistant carries only a generated image", () => {
+    expect(
+      hasEligibleChatV2Candidate({
+        conversationId: "conv-1",
+        messages: [
+          makeAssistant("a1", "", {
+            content: "",
+            metadata: {
+              source: "chat-v2",
+              generatedImages: [
+                {
+                  type: "image",
+                  b64_json: "iVBORw0KGgo=",
+                  mime_type: "image/png",
+                },
+              ] as unknown,
+            } as unknown as ChatV2MessageView["metadata"],
+          }),
+        ],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      })
+    ).toBe(true);
+  });
+});
+
+describe("hasEligibleLegacyCandidate", () => {
+  const makeLegacy = (
+    id: string,
+    content: string,
+    role: "user" | "assistant" = "assistant"
+  ) => ({
+    id,
+    conversationId: "conv-1",
+    role,
+    content,
+    timestamp: new Date(),
+    messageType: MessageType.MESSAGE,
+  });
+
+  it("returns true when a non-streaming assistant with text exists", () => {
+    expect(
+      hasEligibleLegacyCandidate({
+        conversationId: "conv-1",
+        messages: [makeLegacy("a1", "answer")],
+      })
+    ).toBe(true);
+  });
+
+  it("returns false when the only assistant is the streaming placeholder", () => {
+    expect(
+      hasEligibleLegacyCandidate({
+        conversationId: "conv-1",
+        messages: [makeLegacy("streaming", "in flight")],
+        streamingAssistantMessageId: "streaming",
+      })
+    ).toBe(false);
+  });
+
+  it("returns false for empty messages", () => {
+    expect(
+      hasEligibleLegacyCandidate({
+        conversationId: "conv-1",
+        messages: [],
+      })
+    ).toBe(false);
+  });
+});
+
+describe("hasEligibleKnowledgeCandidate", () => {
+  const makeKnowledge = (
+    id: string,
+    content: string,
+    type: "user" | "ai" = "ai"
+  ) => ({
+    id,
+    type,
+    content,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  });
+
+  it("returns true when an ai message with text exists", () => {
+    expect(hasEligibleKnowledgeCandidate([makeKnowledge("a1", "answer")])).toBe(
+      true
+    );
+  });
+
+  it("returns false when only user messages exist", () => {
+    expect(
+      hasEligibleKnowledgeCandidate([makeKnowledge("u1", "q", "user")])
+    ).toBe(false);
+  });
+
+  it("returns false for empty messages", () => {
+    expect(hasEligibleKnowledgeCandidate([])).toBe(false);
   });
 });

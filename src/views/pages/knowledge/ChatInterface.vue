@@ -270,7 +270,10 @@ import AIContentReportButton from '@/views/components/aiContentReport/AIContentR
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
 import AIConversationReportButton from '@/views/components/aiContentReport/AIConversationReportButton.vue';
 import AIConversationReportDialog from '@/views/components/aiContentReport/AIConversationReportDialog.vue';
-import { buildKnowledgeConversationSnapshot } from '@/views/components/aiContentReport/conversationReportSnapshot';
+import {
+  buildKnowledgeConversationSnapshot,
+  hasEligibleKnowledgeCandidate,
+} from '@/views/components/aiContentReport/conversationReportSnapshot';
 import { getAIContentReportCapabilities } from '@/views/api/aiContentReport';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
@@ -318,14 +321,6 @@ export default defineComponent({
     // server-side conversation id here (knowledge chat is local-only), so one
     // is minted per session and kept in a ref (design §11.3).
     const knowledgeConversationId = ref(generateMessageId());
-    const conversationReportEnabled = computed(
-      () => reportCapabilities.value?.conversationReporting?.enabled === true
-    );
-    const conversationReportDisabledReason = computed(() =>
-      conversationReportEnabled.value
-        ? ''
-        : 'Conversation reporting is currently unavailable.'
-    );
 
     /**
      * Adapter that maps the untyped component-local message objects to the
@@ -343,6 +338,30 @@ export default defineComponent({
         timestamp: msg.timestamp instanceof Date ? msg.timestamp.toISOString() : (msg.timestamp ?? ''),
       }))
     );
+
+    // FR-1.3, §9.1: the header button is enabled only when the capability
+    // envelope enables v2 reporting AND at least one visible message is an
+    // eligible reportable AI output. With zero eligible outputs the button is
+    // disabled and announces the noEligibleOutputs reason so the action is
+    // stable-but-clear rather than opening an empty dialog.
+    const hasReportableConversationOutput = computed(() =>
+      hasEligibleKnowledgeCandidate(knowledgeReportMessages.value)
+    );
+    const conversationReportEnabled = computed(
+      () =>
+        reportCapabilities.value?.conversationReporting?.enabled === true &&
+        hasReportableConversationOutput.value
+    );
+    const conversationReportDisabledReason = computed(() => {
+      if (reportCapabilities.value?.conversationReporting?.enabled !== true) {
+        return 'Conversation reporting is currently unavailable.';
+      }
+      if (!hasReportableConversationOutput.value) {
+        return 'There are no reportable AI outputs in this conversation yet.';
+      }
+      return '';
+    });
+
 
     /**
      * @param {{ content: string, timestamp?: Date }} message

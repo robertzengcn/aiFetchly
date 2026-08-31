@@ -879,7 +879,10 @@ import {
 import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
-import { buildChatV2ConversationSnapshot } from "@/views/components/aiContentReport/conversationReportSnapshot";
+import {
+  buildChatV2ConversationSnapshot,
+  hasEligibleChatV2Candidate,
+} from "@/views/components/aiContentReport/conversationReportSnapshot";
 import { getAIContentReportCapabilities } from "@/views/api/aiContentReport";
 import type { AIContentReportCapabilities } from "@/entityTypes/aiContentReportTypes";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -947,15 +950,6 @@ const reportCapabilitiesLoading = ref(false);
 const singleReportDialogOpen = ref(false);
 const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
 
-const conversationReportEnabled = computed(
-  () => reportCapabilities.value?.conversationReporting.enabled === true
-);
-const conversationReportDisabledReason = computed(() =>
-  conversationReportEnabled.value
-    ? ""
-    : t("aiConversationReport.unavailable") ||
-      "Conversation reporting is currently unavailable."
-);
 const isStreaming = ref(false);
 const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
@@ -2604,6 +2598,40 @@ const streamStatus = computed<Status>(() => {
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
   return "idle";
+});
+
+// FR-1.3, §9.1: the header button is enabled only when the capability
+// envelope enables v2 reporting AND at least one visible message is an
+// eligible reportable AI output. With zero eligible outputs the button is
+// disabled and announces the noEligibleOutputs reason so the action is
+// stable-but-clear rather than opening an empty dialog.
+const hasReportableConversationOutput = computed(() =>
+  hasEligibleChatV2Candidate({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  })
+);
+const conversationReportEnabled = computed(
+  () =>
+    reportCapabilities.value?.conversationReporting.enabled === true &&
+    hasReportableConversationOutput.value
+);
+const conversationReportDisabledReason = computed(() => {
+  if (reportCapabilities.value?.conversationReporting.enabled !== true) {
+    return (
+      t("aiConversationReport.unavailable") ||
+      "Conversation reporting is currently unavailable."
+    );
+  }
+  if (!hasReportableConversationOutput.value) {
+    return (
+      t("aiConversationReport.noEligibleOutputs") ||
+      "There are no reportable AI outputs in this conversation yet."
+    );
+  }
+  return "";
 });
 
 const truncateText = (text: string | undefined, max: number): string => {

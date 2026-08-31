@@ -75,8 +75,23 @@ describe("AIConversationReportButton", () => {
       disabledReason: "Reporting unavailable",
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .title
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).title
     ).toContain("Reporting unavailable");
+  });
+
+  // FR-1.3, §9.1: when there are zero reportable AI outputs the surface
+  // disables the button (enabled=false) and passes the noEligibleOutputs
+  // copy as the disabled reason — the button must surface it as the title.
+  it("surfaces the no-eligible-outputs reason as the title when enabled=false with that reason", () => {
+    const reason =
+      "There are no reportable AI outputs in this conversation yet.";
+    const w = mountButton({ enabled: false, disabledReason: reason });
+    const el = w.find('[data-testid="report-conversation"]')
+      .element as HTMLButtonElement;
+    expect(el.disabled).toBe(true);
+    expect(el.title).toContain(reason);
   });
 });

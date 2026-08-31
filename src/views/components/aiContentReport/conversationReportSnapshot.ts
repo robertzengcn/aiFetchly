@@ -333,6 +333,87 @@ export function buildKnowledgeConversationSnapshot(input: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Lightweight eligibility predicates (design §7.1, FR-1.3, §9.1).
+//
+// The header "Report conversation" button must be disabled when the
+// conversation has zero reportable AI outputs, even when the capability
+// envelope enables v2 reporting. Building a full immutable snapshot on every
+// reactive tick just to count candidates is wasteful and would allocate
+// frozen arrays + snapshot IDs. These predicates mirror the eligibility rules
+// inside each builder and return a cheap boolean so the surface can drive the
+// button's enabled state without freezing a snapshot.
+//
+// Keep these in lock-step with the builder loops above — if a builder's
+// eligibility changes, update the matching predicate too.
+// ---------------------------------------------------------------------------
+
+/**
+ * True when at least one visible Chat V2 message is an eligible report
+ * candidate: assistant role, reportable message type, not the active
+ * streaming placeholder, with non-empty text or safe generated images.
+ */
+export function hasEligibleChatV2Candidate(input: {
+  conversationId: string;
+  messages: readonly ChatV2MessageView[];
+  activeAssistantMessageId: string | null;
+  streamStatus: "idle" | "streaming" | "cancelled" | "error";
+}): boolean {
+  for (let i = 0; i < input.messages.length; i++) {
+    const m = input.messages[i];
+    if (m.conversationId !== input.conversationId) continue;
+    if (m.role !== "assistant") continue;
+    if (
+      m.messageType === MessageType.TOOL_CALL ||
+      m.messageType === MessageType.TOOL_RESULT
+    )
+      continue;
+    const isActiveStreaming =
+      input.activeAssistantMessageId === m.id &&
+      input.streamStatus === "streaming";
+    if (isActiveStreaming) continue;
+    const hasText = typeof m.content === "string" && m.content.length > 0;
+    const hasImages = extractChatV2Images(m).length > 0;
+    if (hasText || hasImages) return true;
+  }
+  return false;
+}
+
+/**
+ * True when at least one visible legacy chat message is an eligible report
+ * candidate: assistant role, non-empty visible text, not the active streaming
+ * placeholder.
+ */
+export function hasEligibleLegacyCandidate(input: {
+  conversationId: string;
+  messages: readonly ChatMessage[];
+  streamingAssistantMessageId?: string;
+}): boolean {
+  for (let i = 0; i < input.messages.length; i++) {
+    const m = input.messages[i];
+    if (m.conversationId && m.conversationId !== input.conversationId) continue;
+    if (m.role !== "assistant") continue;
+    if (input.streamingAssistantMessageId === m.id) continue;
+    if (typeof m.content === "string" && m.content.length > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * True when at least one visible knowledge-chat message is an eligible report
+ * candidate: type "ai" with non-empty visible content.
+ */
+export function hasEligibleKnowledgeCandidate(
+  messages: readonly KnowledgeChatMessage[]
+): boolean {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.type !== "ai") continue;
+    if (typeof m.content === "string" && m.content.length > 0) return true;
+  }
+  return false;
+}
+
 function generateSnapshotId(): string {
   if (
     typeof crypto !== "undefined" &&
