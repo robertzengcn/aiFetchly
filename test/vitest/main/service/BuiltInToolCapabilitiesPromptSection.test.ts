@@ -28,6 +28,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "process_artifact_batch",
       "list_email_inboxes",
       "fetch_unread_emails",
+      "list_email_services",
+      "start_email_send_task",
       "create_email_reply_draft",
       "send_email_reply",
       "list_schedules",
@@ -72,5 +74,17 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     // Reply tools are deferred-by-default (no intent regex) — the table must
     // call this out so the model loads them via search rather than failing.
     expect(s.toLowerCase()).toContain("not auto-promoted");
+  });
+
+  it("routes new marketing/outbound mail to start_email_send_task, not send_email_reply", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    expect(s).toContain("start_email_send_task");
+    expect(s).toContain("list_email_services");
+    expect(s.toLowerCase()).toContain("outbound");
+    expect(s.toLowerCase()).toContain("marketing");
+    // The model previously treated an empty IMAP inbox list as "cannot send".
+    expect(s.toLowerCase()).toContain("empty inbox");
+    expect(s).toContain("send_email_reply");
+    expect(s.toLowerCase()).toContain("not inbox replies");
   });
 });

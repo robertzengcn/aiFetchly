@@ -72,13 +72,16 @@ import {
 // Internal state
 // ---------------------------------------------------------------------------
 
+/** HMR-safe global slot for the skill registry. */
+type AifetchlyGlobal = typeof globalThis & {
+  __aifetchlySkillRegistry?: Map<string, SkillDefinition>;
+};
+
 /** Map of skill name → full definition. Stored in globalThis to survive HMR. */
+const aifetchlyGlobal = globalThis as AifetchlyGlobal;
 const registry: Map<string, SkillDefinition> =
-  ((globalThis as any).__aifetchlySkillRegistry as Map<
-    string,
-    SkillDefinition
-  >) ?? new Map();
-(globalThis as any).__aifetchlySkillRegistry = registry;
+  aifetchlyGlobal.__aifetchlySkillRegistry ?? new Map();
+aifetchlyGlobal.__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
@@ -1457,7 +1460,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_email_services",
     description:
-      "List configured email sending services without exposing passwords.",
+      "List configured SMTP email sending services (outbound senders) without exposing passwords. " +
+      "Use these service IDs with start_email_send_task. This is NOT the inbox list — " +
+      "list_email_inboxes is IMAP receive-only and may be empty even when senders exist.",
     parameters: {
       type: "object",
       properties: {
@@ -1575,7 +1580,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "start_email_send_task",
     description:
-      "Create and start an email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
+      "Send NEW outbound marketing emails to external contacts/customers. " +
+      "This is the tool for new mail, not inbox replies (do NOT use send_email_reply). " +
+      "Requires confirmation. Provide service_ids from list_email_services plus either " +
+      "template_ids or email_subject and email_html_content. Provide exactly one of " +
+      "emails (direct recipients) or email_search_task_id. For different content per " +
+      "recipient, call once per address with that email in emails.",
     parameters: {
       type: "object",
       properties: {
@@ -1655,8 +1665,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_email_inboxes",
     description:
-      "List email services that have inbound receive enabled. Returns inbox name, " +
-      "address, host, folder, sync status, and last sync error. Never exposes passwords or tokens.",
+      "List email services that have inbound IMAP receive enabled. Returns inbox name, " +
+      "address, host, folder, sync status, and last sync error. This is NOT for sending: " +
+      "an empty result does not mean sending is unavailable — use list_email_services + " +
+      "start_email_send_task for outbound mail. Never exposes passwords or tokens.",
     parameters: {
       type: "object",
       properties: {
@@ -1853,9 +1865,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "send_email_reply",
     description:
-      "Send a persisted reply draft as an email. Requires user confirmation because it sends " +
-      "email. Verifies the draft and outbound service, preserves reply threading headers " +
-      "(In-Reply-To, References), updates draft/message state, and writes a send audit record.",
+      "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
+      "Requires user confirmation. Do NOT use this to send new marketing/outbound emails " +
+      "to external contacts — use start_email_send_task instead. Verifies the draft and " +
+      "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
     parameters: {
       type: "object",
       properties: {

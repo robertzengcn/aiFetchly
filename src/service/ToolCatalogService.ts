@@ -136,6 +136,31 @@ const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
       "workspace output",
     ],
   ],
+  [
+    "start_email_send_task",
+    [
+      "send email",
+      "send emails",
+      "marketing email",
+      "outbound email",
+      "bulk email",
+      "email campaign",
+      "newsletter",
+      "send to customers",
+      "send to contacts",
+      "outreach",
+    ],
+  ],
+  [
+    "list_email_services",
+    [
+      "smtp",
+      "email sender",
+      "sending service",
+      "outbound email",
+      "email service",
+    ],
+  ],
 ]);
 
 export class ToolCatalogService {
