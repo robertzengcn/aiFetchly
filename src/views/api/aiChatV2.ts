@@ -253,6 +253,8 @@ interface BuiltTurnListeners extends ChatV2StreamListeners {
   readonly completionPromise: Promise<void>;
   /** Detach only this listener pair (multi-await safe). */
   detachSelf: () => void;
+  /** Reject the completion promise (send-failure path). */
+  failSelf: (error: Error) => void;
 }
 
 /** Shared listener/promise machinery for streamChatV2Message + awaitChatV2Turn. */
@@ -383,6 +385,7 @@ function buildTurnListeners(input: {
     detachedResolve: () => resolveCompletion(),
     detachSelf: () =>
       detachOneConversationStreamListener(conversationKey, self, false),
+    failSelf: (error: Error) => rejectCompletion(error),
   });
   return self;
 }
@@ -431,6 +434,7 @@ export async function streamChatV2Message(
         ? err
         : new Error("Failed to start AI chat stream");
     onError(error);
+    listeners.failSelf(error);
   }
 }
 
