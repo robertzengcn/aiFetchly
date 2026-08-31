@@ -3183,6 +3183,7 @@ export default {
     relatedUserLabel: "Ihre Nachricht — wird gesendet",
     attachmentOmitted:
       "Ein Anhang in Ihrer Nachricht wurde weggelassen; nur der Nachrichtentext ist enthalten.",
+    imageLabel: "Bild in den Bericht aufnehmen",
     consentDefault:
       "Es werden nur die ausgewählten KI-Ausgaben und Ihre Beschreibung gesendet. Ihre anderen Nachrichten, Dateien und die KI-Begründung werden nicht einbezogen.",
     consentWithUserContext:

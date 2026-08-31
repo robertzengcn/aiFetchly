@@ -3171,6 +3171,7 @@ export default {
     relatedUserLabel: "Votre message — sera envoyé",
     attachmentOmitted:
       "Une pièce jointe de votre message a été omise ; seul le texte du message est inclus.",
+    imageLabel: "Inclure l'image dans le rapport",
     consentDefault:
       "Seules les sorties d'IA sélectionnées et votre description seront envoyées. Vos autres messages, fichiers et le raisonnement de l'IA ne sont pas inclus.",
     consentWithUserContext:

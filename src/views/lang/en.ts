@@ -3150,6 +3150,7 @@ export default {
     relatedUserLabel: "Your message — will be sent",
     attachmentOmitted:
       "An attachment in your message was omitted; only the message text is included.",
+    imageLabel: "Include image in report",
     consentDefault:
       "Only the selected AI outputs and your description will be sent. Your other messages, files, and AI reasoning are not included.",
     consentWithUserContext:

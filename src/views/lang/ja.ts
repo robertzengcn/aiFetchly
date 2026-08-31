@@ -3117,6 +3117,7 @@ export default {
     relatedUserLabel: "あなたのメッセージ——送信されます",
     attachmentOmitted:
       "メッセージ内の添付ファイルは省略されました。メッセージのテキストのみが含まれます。",
+    imageLabel: "画像を報告に含める",
     consentDefault:
       "選択した AI 出力とあなたの説明のみが送信されます。他のメッセージ、ファイル、AI の推論は含まれません。",
     consentWithUserContext:

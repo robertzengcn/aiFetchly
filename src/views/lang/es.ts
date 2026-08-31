@@ -3185,6 +3185,7 @@ export default {
     relatedUserLabel: "Tu mensaje — se enviará",
     attachmentOmitted:
       "Se omitió un archivo adjunto de tu mensaje; solo se incluye el texto del mensaje.",
+    imageLabel: "Incluir imagen en el informe",
     consentDefault:
       "Solo se enviarán los resultados de IA seleccionados y tu descripción. Tus otros mensajes, archivos y el razonamiento de la IA no se incluyen.",
     consentWithUserContext:

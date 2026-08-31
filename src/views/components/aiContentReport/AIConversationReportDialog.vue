@@ -14,7 +14,9 @@
           :snapshot="snapshot"
           :selected-item-ids="selectedItemIds"
           :include-related-user-context="includeRelatedUserContext"
+          :selected-image-ids="selectedImageIds"
           @toggle="toggleItem"
+          @toggle-image="toggleImage"
         />
 
         <label
@@ -135,6 +137,10 @@ const titleRef = ref<{ $el?: HTMLElement } | null>(null);
 let lastFocusedEl: HTMLElement | null = null;
 
 const selectedItemIds = ref<Set<string>>(new Set());
+// FR-2.5 / §10.2: image selection state. Images default to selected when the
+// dialog opens so a single-image report is one click; the request builder
+// clamps to ≤3 total images via the encoder.
+const selectedImageIds = ref<Set<string>>(new Set());
 const includeRelatedUserContext = ref(false);
 const category = ref<AIContentReportCategory | null>(null);
 const comment = ref("");
@@ -210,6 +216,14 @@ function onToggleRelated(): void {
   resetTruncationGate();
 }
 
+// FR-2.5 / §10.2: toggle an individual generated image for inclusion.
+function toggleImage(imageSourceId: string): void {
+  const next = new Set(selectedImageIds.value);
+  if (next.has(imageSourceId)) next.delete(imageSourceId);
+  else next.add(imageSourceId);
+  selectedImageIds.value = next;
+}
+
 function resetTruncationGate(): void {
   truncationConfirmed.value = false;
   truncationWarningVisible.value = false;
@@ -230,6 +244,12 @@ watch(
       lastFocusedEl = (document.activeElement as HTMLElement | null) ?? props.activatorEl ?? null;
       clientReportId.value = generateClientReportId();
       selectedItemIds.value = new Set();
+      // FR-2.5 / §10.2: default-select all generated images so a single-image
+      // report is one click. The request builder caps at ≤3 total.
+      const allImageIds = props.snapshot.candidates.flatMap((c) =>
+        c.images.map((img) => img.sourceId)
+      );
+      selectedImageIds.value = new Set(allImageIds);
       includeRelatedUserContext.value = false;
       category.value = null;
       comment.value = "";
@@ -325,7 +345,7 @@ async function onSubmit(): Promise<void> {
     request = await buildCreateAIConversationReportRequest({
       snapshot: props.snapshot,
       selectedAIItemIds: selectedItemIds.value,
-      selectedImageIds: new Set<string>(),
+      selectedImageIds: selectedImageIds.value,
       includeRelatedUserContext: includeRelatedUserContext.value,
       category: category.value,
       comment: comment.value,

@@ -56,10 +56,15 @@ function makeSnapshot(
 function mountList(props: {
   snapshot: ConversationReportSnapshot;
   selectedItemIds: Set<string>;
+  selectedImageIds?: Set<string>;
   includeRelatedUserContext?: boolean;
 }) {
   return mount(AIConversationReportItemList, {
-    props: { includeRelatedUserContext: false, ...props },
+    props: {
+      includeRelatedUserContext: false,
+      selectedImageIds: new Set<string>(),
+      ...props,
+    },
     global: { plugins: [i18n] },
   });
 }
@@ -122,6 +127,79 @@ describe("AIConversationReportItemList", () => {
           .element as HTMLInputElement
       ).checked
     ).toBe(true);
+  });
+
+  describe("generated-image selection (FR-2.5, §10.2)", () => {
+    function makeImage(sourceId: string) {
+      return { sourceId, dataBase64: "AAAA", mimeType: "image/png" };
+    }
+
+    it("renders a per-image checkbox for candidates that carry images", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer with picture",
+            contentType: "mixed",
+            images: [makeImage("a1-img-0")],
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+      });
+      expect(w.find('[data-testid="report-image-a1-img-0"]').exists()).toBe(
+        true
+      );
+    });
+
+    it("does not render image checkboxes for text-only candidates", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "no image", contentType: "text" },
+        ]),
+        selectedItemIds: new Set<string>(),
+      });
+      expect(w.find('[data-testid^="report-image-"]').exists()).toBe(false);
+    });
+
+    it("default-selects each image (single image selected by default)", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            contentType: "image",
+            images: [makeImage("a1-img-0")],
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        // A single selected image is the default per §9.2 / FR-2.5.
+        selectedImageIds: new Set(["a1-img-0"]),
+      });
+      expect(
+        (
+          w.find('[data-testid="report-image-a1-img-0"] input')
+            .element as HTMLInputElement
+        ).checked
+      ).toBe(true);
+    });
+
+    it("emits toggleImage with the image sourceId when an image checkbox changes", async () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            contentType: "image",
+            images: [makeImage("a1-img-0"), makeImage("a1-img-1")],
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        selectedImageIds: new Set(["a1-img-0", "a1-img-1"]),
+      });
+      await w
+        .find('[data-testid="report-image-a1-img-1"] input')
+        .trigger("change");
+      expect(w.emitted("toggleImage")).toBeTruthy();
+      expect(w.emitted("toggleImage")![0]).toEqual(["a1-img-1"]);
+    });
   });
 
   describe("related-user context preview", () => {

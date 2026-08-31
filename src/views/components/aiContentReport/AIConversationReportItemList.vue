@@ -43,6 +43,30 @@
             <span class="conversation-report-items__type">{{ typeLabel(c.contentType) }}</span>
             <span class="conversation-report-items__text">{{ preview(c.text) }}</span>
           </label>
+          <!--
+            FR-2.5 / §10.2: per-image checkboxes for candidates that carry
+            generated images. Images default to selected so a single-image
+            report is one click; the dialog clamps the submission to ≤3 images
+            total via the encoder + request builder. Each checkbox owns its own
+            sourceId so toggling one image never silently changes another.
+          -->
+          <ul
+            v-if="c.images.length > 0"
+            class="conversation-report-items__images"
+            :data-testid="`report-images-${c.itemId}`"
+          >
+            <li v-for="img in c.images" :key="img.sourceId" :data-testid="`report-image-${img.sourceId}`">
+              <label class="conversation-report-items__image">
+                <input
+                  type="checkbox"
+                  :checked="isImageSelected(img.sourceId)"
+                  :aria-label="imageLabel"
+                  @change="onToggleImage(img.sourceId)"
+                />
+                <span class="conversation-report-items__image-label">{{ imageLabel }}</span>
+              </label>
+            </li>
+          </ul>
         </li>
       </template>
     </ul>
@@ -66,9 +90,12 @@ const props = defineProps<{
   selectedItemIds: ReadonlySet<string>;
   /** When true, related user messages are previewed before upload (FR-3.3). */
   includeRelatedUserContext?: boolean;
+  /** Image sourceIds selected for submission (FR-2.5, §10.2). */
+  selectedImageIds?: ReadonlySet<string>;
 }>();
 const emit = defineEmits<{
   (e: "toggle", itemId: string): void;
+  (e: "toggleImage", imageSourceId: string): void;
 }>();
 const { t } = useI18n();
 
@@ -91,6 +118,11 @@ const attachmentOmittedLabel = computed(
     t("aiConversationReport.attachmentOmitted") ||
     "An attachment in your message was omitted; only the message text is included."
 );
+// FR-2.5 / §10.2: the per-image checkbox label announces the action of
+// including a generated image in the report.
+const imageLabel = computed(
+  () => t("aiConversationReport.imageLabel") || "Include image in report"
+);
 function typeLabel(ct: AIContentType): string {
   return t(`aiConversationReport.itemTypes.${ct}`) || ct;
 }
@@ -103,6 +135,15 @@ function rowLabel(c: ConversationReportSnapshot["candidates"][number]): string {
 }
 function onToggle(itemId: string): void {
   emit("toggle", itemId);
+}
+// FR-2.5 / §10.2: image selection helpers. The parent dialog owns the
+// selectedImageIds set; the list is pure presentational and merely reflects
+// the current state and bubbles toggle events upward.
+function isImageSelected(sourceId: string): boolean {
+  return props.selectedImageIds?.has(sourceId) ?? false;
+}
+function onToggleImage(imageSourceId: string): void {
+  emit("toggleImage", imageSourceId);
 }
 </script>
 
@@ -162,5 +203,23 @@ function onToggle(itemId: string): void {
   font-size: 11px;
   opacity: 0.7;
   font-style: italic;
+}
+/* FR-2.5 / §10.2: nested image checkboxes sit inside the AI-item row, indented
+ * to visually group them under their parent item. */
+.conversation-report-items__images {
+  list-style: none;
+  padding: 0 0 0 28px;
+  margin: 0;
+}
+.conversation-report-items__image {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.conversation-report-items__image-label {
+  opacity: 0.85;
 }
 </style>
