@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { defineComponent } from "vue";
+import { defineComponent, ref, watch } from "vue";
 
 const capsMock = vi.fn();
 const createMock = vi.fn();
@@ -86,8 +86,10 @@ describe("AiChatV2 conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(true);
   });
 
@@ -112,8 +114,10 @@ describe("AiChatV2 conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(false);
   });
 
@@ -141,5 +145,65 @@ describe("AiChatV2 conversation-report orchestration", () => {
     expect(
       w.find('[data-testid="ai-conversation-report-dialog"]').exists()
     ).toBe(true);
+  });
+
+  // Journey 11.5, §19, TODO-8: switching the active conversation while the
+  // report dialog is open must close it without submitting, so a stale frozen
+  // snapshot is never sent for a conversation the user left. The three surfaces
+  // wire an identical watcher on their conversation id; this minimal harness
+  // replicates that wiring and asserts the contract.
+  it("closes the dialog and clears the snapshot when the active conversation changes while open", async () => {
+    const activeConversationId = ref<string | null>("conv-1");
+    const conversationReportDialogOpen = ref(false);
+    const conversationReportSnapshot = ref<ReturnType<
+      typeof makeSnapshot
+    > | null>(null);
+    const Harness = defineComponent({
+      setup() {
+        watch(activeConversationId, () => {
+          if (!conversationReportDialogOpen.value) return;
+          conversationReportDialogOpen.value = false;
+          conversationReportSnapshot.value = null;
+        });
+        return {
+          activeConversationId,
+          conversationReportDialogOpen,
+          conversationReportSnapshot,
+        };
+      },
+      template: `<div />`,
+    });
+    const w = mount(Harness, { global: { plugins: [i18n] } });
+    // Open the dialog and freeze a snapshot (as onOpenConversationReport does).
+    conversationReportSnapshot.value = makeSnapshot();
+    conversationReportDialogOpen.value = true;
+    await w.vm.$nextTick();
+    expect(conversationReportDialogOpen.value).toBe(true);
+    expect(conversationReportSnapshot.value).not.toBeNull();
+    // Switch conversation — the watcher must close + clear.
+    activeConversationId.value = "conv-2";
+    await w.vm.$nextTick();
+    expect(conversationReportDialogOpen.value).toBe(false);
+    expect(conversationReportSnapshot.value).toBeNull();
+  });
+
+  it("does not reactivate or reopen the dialog when the conversation changes while closed", async () => {
+    const activeConversationId = ref<string | null>("conv-1");
+    const conversationReportDialogOpen = ref(false);
+    const Harness = defineComponent({
+      setup() {
+        watch(activeConversationId, () => {
+          if (!conversationReportDialogOpen.value) return;
+          conversationReportDialogOpen.value = false;
+        });
+        return { activeConversationId, conversationReportDialogOpen };
+      },
+      template: `<div />`,
+    });
+    const w = mount(Harness, { global: { plugins: [i18n] } });
+    // Closed the whole time — switching must not flip it open.
+    activeConversationId.value = "conv-2";
+    await w.vm.$nextTick();
+    expect(conversationReportDialogOpen.value).toBe(false);
   });
 });

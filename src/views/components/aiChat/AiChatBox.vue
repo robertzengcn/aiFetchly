@@ -1285,6 +1285,16 @@ const conversationReportDisabledReason = computed(() => {
   return '';
 });
 
+// Journey 11.5, §19: if the active conversation changes while the report
+// dialog is open, the frozen snapshot would describe a conversation the user
+// is no longer viewing. Close the dialog without submitting so a later open
+// rebuilds a fresh snapshot against the new conversation.
+watch(conversationId, () => {
+  if (!conversationReportDialogOpen.value) return;
+  conversationReportDialogOpen.value = false;
+  conversationReportSnapshot.value = null;
+});
+
 // Computed properties for plan state optimization
 const planProgress = computed(() => {
   if (!currentPlan.value || currentPlan.value.steps.length === 0) {

@@ -362,6 +362,16 @@ export default defineComponent({
       return '';
     });
 
+    // Journey 11.5, §19: if the knowledge conversation identity changes
+    // while the report dialog is open (e.g. after Clear regenerates it — see
+    // TODO-14), the frozen snapshot would describe the prior session. Close
+    // the dialog without submitting so a later open rebuilds a fresh snapshot.
+    watch(knowledgeConversationId, () => {
+      if (!conversationReportDialogOpen.value) return;
+      conversationReportDialogOpen.value = false;
+      conversationReportSnapshot.value = null;
+    });
+
 
     /**
      * @param {{ content: string, timestamp?: Date }} message
