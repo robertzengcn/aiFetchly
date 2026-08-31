@@ -3168,6 +3168,7 @@ export default {
       "Inclure mon message associé à l'origine de la sortie d'IA",
     userMessageWillBeSent:
       "Si vous continuez, votre message associé sélectionné sera envoyé à AiFetchly avec les sorties d'IA.",
+    relatedUserLabel: "Votre message — sera envoyé",
     attachmentOmitted:
       "Une pièce jointe de votre message a été omise ; seul le texte du message est inclus.",
     consentDefault:

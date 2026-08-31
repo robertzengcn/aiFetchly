@@ -3147,6 +3147,7 @@ export default {
       "Include my related message that prompted the AI output",
     userMessageWillBeSent:
       "If you continue, your selected related message will be sent to AiFetchly along with the AI outputs.",
+    relatedUserLabel: "Your message — will be sent",
     attachmentOmitted:
       "An attachment in your message was omitted; only the message text is included.",
     consentDefault:

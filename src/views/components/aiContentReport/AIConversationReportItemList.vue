@@ -4,22 +4,47 @@
       {{ countLabel }}
     </div>
     <ul class="conversation-report-items__list">
-      <li
-        v-for="c in snapshot.candidates"
-        :key="c.itemId"
-        :data-testid="`report-item-${c.itemId}`"
-      >
-        <label class="conversation-report-items__row">
-          <input
-            type="checkbox"
-            :checked="selectedItemIds.has(c.itemId)"
-            :aria-label="rowLabel(c)"
-            @change="onToggle(c.itemId)"
-          />
-          <span class="conversation-report-items__type">{{ typeLabel(c.contentType) }}</span>
-          <span class="conversation-report-items__text">{{ preview(c.text) }}</span>
-        </label>
-      </li>
+      <template v-for="c in snapshot.candidates" :key="c.itemId">
+        <!--
+          FR-3.3 / Journey 11.2 / §10.3: when the user opts into including
+          related user context, the related user message MUST be previewed
+          here before upload — never uploaded sight-unseen. The row is
+          styled distinctly and labeled "Your message — will be sent" so
+          there is no ambiguity about what leaves the device. Read-only,
+          escaped preview only; never v-html (§14.5).
+        -->
+        <li
+          v-if="includeRelatedUserContext && c.relatedUser"
+          class="conversation-report-items__related"
+          :data-testid="`related-user-${c.relatedUser.messageId}`"
+          aria-live="polite"
+        >
+          <span class="conversation-report-items__related-label">
+            {{ relatedUserLabel }}
+          </span>
+          <span class="conversation-report-items__related-text">
+            {{ preview(c.relatedUser.text) }}
+          </span>
+          <span
+            v-if="c.relatedUser.omittedAttachmentContent"
+            class="conversation-report-items__omitted"
+          >
+            {{ attachmentOmittedLabel }}
+          </span>
+        </li>
+        <li :data-testid="`report-item-${c.itemId}`">
+          <label class="conversation-report-items__row">
+            <input
+              type="checkbox"
+              :checked="selectedItemIds.has(c.itemId)"
+              :aria-label="rowLabel(c)"
+              @change="onToggle(c.itemId)"
+            />
+            <span class="conversation-report-items__type">{{ typeLabel(c.contentType) }}</span>
+            <span class="conversation-report-items__text">{{ preview(c.text) }}</span>
+          </label>
+        </li>
+      </template>
     </ul>
   </div>
 </template>
@@ -39,6 +64,8 @@ import type { AIContentType } from "@/entityTypes/aiContentReportTypes";
 const props = defineProps<{
   snapshot: ConversationReportSnapshot;
   selectedItemIds: ReadonlySet<string>;
+  /** When true, related user messages are previewed before upload (FR-3.3). */
+  includeRelatedUserContext?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "toggle", itemId: string): void;
@@ -55,6 +82,15 @@ const countLabel = computed(() => {
   const n = props.selectedItemIds.size;
   return t("aiConversationReport.selectionCount", { n }) || `${n} selected`;
 });
+const relatedUserLabel = computed(
+  () =>
+    t("aiConversationReport.relatedUserLabel") || "Your message — will be sent"
+);
+const attachmentOmittedLabel = computed(
+  () =>
+    t("aiConversationReport.attachmentOmitted") ||
+    "An attachment in your message was omitted; only the message text is included."
+);
 function typeLabel(ct: AIContentType): string {
   return t(`aiConversationReport.itemTypes.${ct}`) || ct;
 }
@@ -99,5 +135,32 @@ function onToggle(itemId: string): void {
   font-size: 12px;
   opacity: 0.8;
   margin-bottom: 6px;
+}
+/* Related-user preview rows are visually distinct from AI-output rows so the
+ * user can tell at a glance that their own message will be sent (FR-3.3). */
+.conversation-report-items__related {
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-left: 3px solid rgb(var(--v-theme-primary));
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.conversation-report-items__related-label {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.conversation-report-items__related-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conversation-report-items__omitted {
+  font-size: 11px;
+  opacity: 0.7;
+  font-style: italic;
 }
 </style>

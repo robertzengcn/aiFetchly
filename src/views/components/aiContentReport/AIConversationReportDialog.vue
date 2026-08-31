@@ -13,6 +13,7 @@
         <AIConversationReportItemList
           :snapshot="snapshot"
           :selected-item-ids="selectedItemIds"
+          :include-related-user-context="includeRelatedUserContext"
           @toggle="toggleItem"
         />
 

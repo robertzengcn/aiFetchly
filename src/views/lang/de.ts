@@ -3180,6 +3180,7 @@ export default {
       "Meine verwandte Nachricht einbeziehen, die die KI-Ausgabe ausgelöst hat",
     userMessageWillBeSent:
       "Wenn Sie fortfahren, wird Ihre ausgewählte verwandte Nachricht zusammen mit den KI-Ausgaben an AiFetchly gesendet.",
+    relatedUserLabel: "Ihre Nachricht — wird gesendet",
     attachmentOmitted:
       "Ein Anhang in Ihrer Nachricht wurde weggelassen; nur der Nachrichtentext ist enthalten.",
     consentDefault:

@@ -12,6 +12,9 @@ const i18n = createI18n({
       aiConversationReport: {
         selectionInstruction: "Select",
         selectionCount: "{n} selected",
+        relatedUserLabel: "Your message — will be sent",
+        attachmentOmitted: "An attachment in your message was omitted",
+        relatedMessageUnavailable: "No related message is available",
         itemTypes: {
           text: "Text",
           image: "Image",
@@ -45,6 +48,7 @@ function makeSnapshot(
       evidenceUnavailable: c.evidenceUnavailable ?? false,
       generatedAt: c.generatedAt,
       model: c.model,
+      relatedUser: c.relatedUser,
     })),
   };
 }
@@ -52,11 +56,29 @@ function makeSnapshot(
 function mountList(props: {
   snapshot: ConversationReportSnapshot;
   selectedItemIds: Set<string>;
+  includeRelatedUserContext?: boolean;
 }) {
   return mount(AIConversationReportItemList, {
-    props,
+    props: { includeRelatedUserContext: false, ...props },
     global: { plugins: [i18n] },
   });
+}
+
+function makeRelatedUser(
+  overrides: Partial<
+    NonNullable<ConversationReportSnapshot["candidates"][number]["relatedUser"]>
+  > = {}
+) {
+  return {
+    itemId: "user-u1",
+    messageId: "u1",
+    sourceIndex: 0,
+    role: "user" as const,
+    contentType: "text" as const,
+    text: "user question",
+    omittedAttachmentContent: false,
+    ...overrides,
+  };
 }
 
 describe("AIConversationReportItemList", () => {
@@ -100,5 +122,90 @@ describe("AIConversationReportItemList", () => {
           .element as HTMLInputElement
       ).checked
     ).toBe(true);
+  });
+
+  describe("related-user context preview", () => {
+    it("does not show related-user rows when the toggle is off", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer",
+            relatedUser: makeRelatedUser(),
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        includeRelatedUserContext: false,
+      });
+      expect(w.find('[data-testid^="related-user-"]').exists()).toBe(false);
+    });
+
+    it("shows the related user message with a 'will be sent' label when the toggle is on", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer",
+            relatedUser: makeRelatedUser({ text: "why is the sky blue" }),
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        includeRelatedUserContext: true,
+      });
+      const row = w.find('[data-testid="related-user-u1"]');
+      expect(row.exists()).toBe(true);
+      // Distinct label announces the message will be sent (FR-3.3, §10.3).
+      expect(row.text()).toContain("Your message — will be sent");
+      expect(row.text()).toContain("why is the sky blue");
+    });
+
+    it("shows the attachment-omission notice when the related user had an attachment", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer",
+            relatedUser: makeRelatedUser({
+              omittedAttachmentContent: true,
+              text: "see attached",
+            }),
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        includeRelatedUserContext: true,
+      });
+      const row = w.find('[data-testid="related-user-u1"]');
+      expect(row.text()).toContain("An attachment in your message was omitted");
+    });
+
+    it("does not show the omission notice when there was no attachment", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer",
+            relatedUser: makeRelatedUser({
+              omittedAttachmentContent: false,
+            }),
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+        includeRelatedUserContext: true,
+      });
+      expect(w.find('[data-testid="related-user-u1"]').text()).not.toContain(
+        "omitted"
+      );
+    });
+
+    it("renders nothing for a candidate that has no related user even when the toggle is on", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "answer", relatedUser: undefined },
+        ]),
+        selectedItemIds: new Set<string>(),
+        includeRelatedUserContext: true,
+      });
+      expect(w.find('[data-testid^="related-user-"]').exists()).toBe(false);
+    });
   });
 });

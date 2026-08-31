@@ -3114,6 +3114,7 @@ export default {
     includeRelatedUserContext: "AI 出力の元になった関連メッセージを含める",
     userMessageWillBeSent:
       "続行すると、選択した関連メッセージが AI 出力とともに AiFetchly に送信されます。",
+    relatedUserLabel: "あなたのメッセージ——送信されます",
     attachmentOmitted:
       "メッセージ内の添付ファイルは省略されました。メッセージのテキストのみが含まれます。",
     consentDefault:

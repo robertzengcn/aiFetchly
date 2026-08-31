@@ -3182,6 +3182,7 @@ export default {
       "Incluir mi mensaje relacionado que originó el resultado de IA",
     userMessageWillBeSent:
       "Si continúas, tu mensaje relacionado seleccionado se enviará a AiFetchly junto con los resultados de IA.",
+    relatedUserLabel: "Tu mensaje — se enviará",
     attachmentOmitted:
       "Se omitió un archivo adjunto de tu mensaje; solo se incluye el texto del mensaje.",
     consentDefault:
