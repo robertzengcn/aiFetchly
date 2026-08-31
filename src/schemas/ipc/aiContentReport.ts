@@ -148,6 +148,25 @@ const MAX_V2_AI_ITEMS = 10;
 const MAX_V2_USER_ITEMS = 10;
 const MAX_V2_TOTAL_IMAGES = 3;
 
+/**
+ * Desktop hard maximums for conversation-report limits (design §15.2).
+ *
+ * The backend advertises per-account limits in the capability envelope, but a
+ * server must never be able to lift the desktop v2 caps — otherwise an
+ * over-advertised backend (e.g. `maxAIItems: 200`) would bypass the schema's
+ * `.max()` bounds and produce oversized reports. `AIContentReportService`
+ * clamps every server limit to `Math.min(server, desktopMax)` so the renderer
+ * always budgets against the smaller of the two.
+ */
+export const DESKTOP_CONVERSATION_REPORT_LIMITS = {
+  maxAIItems: MAX_V2_AI_ITEMS,
+  maxUserItems: MAX_V2_USER_ITEMS,
+  maxTotalItems: MAX_V2_ITEMS,
+  maxItemTextChars: MAX_V2_ITEM_TEXT,
+  maxAggregateTextChars: MAX_V2_AGGREGATE_TEXT,
+  maxImages: MAX_V2_TOTAL_IMAGES,
+} as const;
+
 const conversationSurfaceSchema = z.enum(AI_CONVERSATION_REPORT_SURFACES);
 const conversationScopeSchema = z.enum(AI_CONVERSATION_REPORT_SCOPES);
 

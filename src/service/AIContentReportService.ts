@@ -13,6 +13,7 @@ import {
   type CreateAnyAIContentReportRequest,
 } from "@/entityTypes/aiContentReportTypes";
 import { aiContentReportCapabilitiesResponseSchema } from "@/schemas/api/aiContentReport";
+import { DESKTOP_CONVERSATION_REPORT_LIMITS } from "@/schemas/ipc/aiContentReport";
 import { normalizeConversationTexts } from "@/views/components/aiContentReport/conversationReportText";
 import type { CommonApiresp } from "@/entityTypes/commonType";
 
@@ -57,6 +58,55 @@ const FAIL_CLOSED_CAPABILITIES: AIContentReportCapabilities = {
 interface CapabilityCacheEntry {
   value: AIContentReportCapabilities;
   expiresAt: number;
+}
+
+/**
+ * Clamp server-advertised conversation-report limits to the desktop hard
+ * maximums (design §15.2).
+ *
+ * The backend may advertise per-account limits (e.g. a trial tier with
+ * `maxAIItems: 5`), but it must never be able to LIFT the desktop v2 caps —
+ * otherwise an over-advertised or compromised backend (e.g. `maxAIItems: 200`)
+ * would bypass the IPC schema's `.max()` bounds and produce oversized reports
+ * the renderer budgets against. Each numeric limit becomes
+ * `Math.min(server, desktopMax)`; `enabled` and `acceptedSchemaVersions`
+ * pass through unchanged. The cache stores the clamped value so the renderer
+ * always reads the safe bound.
+ */
+function clampConversationLimits(
+  caps: AIContentReportCapabilities
+): AIContentReportCapabilities {
+  const cr = caps.conversationReporting;
+  return {
+    ...caps,
+    conversationReporting: {
+      enabled: cr.enabled,
+      maxAIItems: Math.min(
+        cr.maxAIItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxAIItems
+      ),
+      maxUserItems: Math.min(
+        cr.maxUserItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxUserItems
+      ),
+      maxTotalItems: Math.min(
+        cr.maxTotalItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxTotalItems
+      ),
+      maxItemTextChars: Math.min(
+        cr.maxItemTextChars,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxItemTextChars
+      ),
+      maxAggregateTextChars: Math.min(
+        cr.maxAggregateTextChars,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxAggregateTextChars
+      ),
+      maxImages: Math.min(
+        cr.maxImages,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxImages
+      ),
+    },
+  };
 }
 
 // Module-level: each IPC call constructs a new service instance, so the cache
@@ -174,7 +224,9 @@ export class AIContentReportService {
         log.warn("[ai-content-report] capability response rejected");
         return FAIL_CLOSED_CAPABILITIES;
       }
-      const value = parsed.data.data;
+      // Clamp server limits to desktop hard maximums (design §15.2) so an
+      // over-advertised backend can never lift the v2 schema caps.
+      const value = clampConversationLimits(parsed.data.data);
       capabilityCache = {
         value,
         expiresAt: Date.now() + CAPABILITY_TTL_MS,

@@ -478,6 +478,108 @@ describe("AIContentReportService.getCapabilities", () => {
     await b.getCapabilities();
     expect(client.get).toHaveBeenCalledTimes(1);
   });
+
+  // Design §15.2, TODO-12: an over-advertised backend must never lift the
+  // desktop v2 caps. Each numeric limit is clamped to Math.min(server, desktop).
+  it("clamps over-advertised server limits to desktop hard maximums", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce({
+      status: true,
+      code: 0,
+      msg: "ok",
+      data: {
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 200,
+          maxUserItems: 200,
+          maxTotalItems: 500,
+          maxItemTextChars: 100_000,
+          maxAggregateTextChars: 500_000,
+          maxImages: 50,
+        },
+      },
+    });
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    const cr = caps.conversationReporting;
+    expect(cr.maxAIItems).toBe(10);
+    expect(cr.maxUserItems).toBe(10);
+    expect(cr.maxTotalItems).toBe(20);
+    expect(cr.maxItemTextChars).toBe(8000);
+    expect(cr.maxAggregateTextChars).toBe(32000);
+    expect(cr.maxImages).toBe(3);
+  });
+
+  // A backend advertising SMALLER limits (e.g. a trial tier) must be honored —
+  // the clamp uses Math.min, so the smaller server value wins.
+  it("preserves server limits that are below the desktop maximums", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce({
+      status: true,
+      code: 0,
+      msg: "ok",
+      data: {
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 5,
+          maxUserItems: 3,
+          maxTotalItems: 8,
+          maxItemTextChars: 4000,
+          maxAggregateTextChars: 16000,
+          maxImages: 1,
+        },
+      },
+    });
+    const service = new AIContentReportService({ httpClient: client });
+    const caps = await service.getCapabilities();
+    const cr = caps.conversationReporting;
+    expect(cr.maxAIItems).toBe(5);
+    expect(cr.maxUserItems).toBe(3);
+    expect(cr.maxTotalItems).toBe(8);
+    expect(cr.maxItemTextChars).toBe(4000);
+    expect(cr.maxAggregateTextChars).toBe(16000);
+    expect(cr.maxImages).toBe(1);
+  });
+
+  // The clamped value is what gets cached — a second read within the TTL must
+  // return the safe limits, not the raw server limits.
+  it("caches the clamped (not raw) limits", async () => {
+    const { AIContentReportService } = await import(
+      "@/service/AIContentReportService"
+    );
+    const client = makeStubClient();
+    client.get.mockResolvedValueOnce({
+      status: true,
+      code: 0,
+      msg: "ok",
+      data: {
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 200,
+          maxUserItems: 200,
+          maxTotalItems: 500,
+          maxItemTextChars: 100_000,
+          maxAggregateTextChars: 500_000,
+          maxImages: 50,
+        },
+      },
+    });
+    const service = new AIContentReportService({ httpClient: client });
+    await service.getCapabilities();
+    const caps = await service.getCapabilities();
+    expect(caps.conversationReporting.maxAIItems).toBe(10);
+    expect(caps.conversationReporting.maxImages).toBe(3);
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AIContentReportService.submitReport v2 dispatch", () => {
