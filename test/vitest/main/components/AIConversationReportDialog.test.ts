@@ -66,6 +66,10 @@ const i18n = createI18n({
           unsupportedSchema: "Unsupported",
         },
       },
+      aiContentReport: {
+        success: "Report submitted. Reference: {reportId}",
+        copyReference: "Copy reference",
+      },
     },
   },
 });
@@ -418,6 +422,69 @@ describe("AIConversationReportDialog", () => {
           w.find('[data-testid="report-item-ai-a2"] input')
             .element as HTMLInputElement
         ).checked
+      ).toBe(false);
+    });
+  });
+
+  describe("report reference + copy (FR-5.5, Journey 11.1 step 8)", () => {
+    it("shows the report reference and a Copy-reference button after submit, and stays open", async () => {
+      buildMock.mockResolvedValueOnce(buildRequest());
+      createMock.mockResolvedValueOnce({
+        reportId: "air_abc123",
+        status: "submitted",
+        receivedAt: "t",
+        duplicate: false,
+      });
+      const w = mountDialog();
+      setCategory(w, "other");
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      // Reference is visible in the success region.
+      expect(w.text()).toContain("air_abc123");
+      // Copy-reference control is present.
+      const copyBtn = w.find(
+        '[data-testid="conversation-report-copy-reference"]'
+      );
+      expect(copyBtn.exists()).toBe(true);
+      // Dialog stays open — parent must NOT see a close request on success.
+      expect(w.emitted("update:modelValue")).toBeFalsy();
+      // But the submitted payload did fire.
+      expect(w.emitted("submitted")).toBeTruthy();
+    });
+
+    it("copies the report reference to the clipboard when clicked", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      buildMock.mockResolvedValueOnce(buildRequest());
+      createMock.mockResolvedValueOnce({
+        reportId: "air_xyz789",
+        status: "submitted",
+        receivedAt: "t",
+        duplicate: false,
+      });
+      const w = mountDialog();
+      setCategory(w, "other");
+      await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+      await w
+        .find('[data-testid="conversation-report-submit"]')
+        .trigger("click");
+      await flushPromises();
+      await w
+        .find('[data-testid="conversation-report-copy-reference"]')
+        .trigger("click");
+      expect(writeText).toHaveBeenCalledWith("air_xyz789");
+    });
+
+    it("does not show the copy button before a successful submission", () => {
+      const w = mountDialog();
+      expect(
+        w.find('[data-testid="conversation-report-copy-reference"]').exists()
       ).toBe(false);
     });
   });

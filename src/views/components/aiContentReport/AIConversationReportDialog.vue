@@ -92,6 +92,21 @@
             {{ resultIsError ? "mdi-alert-circle" : "mdi-check-circle" }}
           </v-icon>
           <span>{{ resultMessage }}</span>
+          <!--
+            FR-5.5 / Journey 11.1 step 8: surface the returned reference with a
+            copy control so the user can quote it in follow-ups. The dialog
+            stays open after success until the user dismisses it — the parent
+            only records reported message ids on `submitted`, it never closes.
+          -->
+          <v-btn
+            v-if="!resultIsError && reportId"
+            variant="text"
+            size="small"
+            data-testid="conversation-report-copy-reference"
+            @click="copyReference"
+          >
+            {{ copyReferenceText }}
+          </v-btn>
         </div>
       </v-card-text>
 
@@ -170,6 +185,9 @@ const resultMessage = ref("");
 const resultIsError = ref(false);
 const clientReportId = ref("");
 const categoryError = ref("");
+// FR-5.5: the server-assigned reference returned on success, surfaced with a
+// Copy button so the user can quote it in support follow-ups.
+const reportId = ref<string | null>(null);
 // FR-4.4 / §10.4 / Journey 11.1 step 7: warn-then-confirm gate. When the
 // current selection would be truncated, the first submit click surfaces the
 // truncationWarning and waits for a second confirm click before transmitting.
@@ -224,6 +242,9 @@ const isPartialSelection = computed(
   () => selectedItemIds.value.size > 0 && selectedItemIds.value.size < eligibleCount.value
 );
 const selectAllLabel = computed(() => t("aiConversationReport.selectAll") || "Select all");
+const copyReferenceText = computed(
+  () => t("aiContentReport.copyReference") || "Copy reference"
+);
 
 const categoryItems = computed(() =>
   AI_CONTENT_REPORT_CATEGORIES.map((value) => ({
@@ -303,6 +324,7 @@ watch(
       resultMessage.value = "";
       resultIsError.value = false;
       categoryError.value = "";
+      reportId.value = null;
       resetTruncationGate();
       nextTick(() => titleRef.value?.$el?.focus?.());
     } else {
@@ -413,21 +435,39 @@ async function onSubmit(): Promise<void> {
   try {
     const response = await createAIContentReport(request);
     const selectedMessageIds = request.items.map((i) => i.messageId);
-    resultMessage.value = (t("aiContentReport.success") || "Report submitted. Reference: {reportId}").replace(
-      "{reportId}",
-      response.reportId
-    );
+    reportId.value = response.reportId;
+    // vue-i18n interpolates `{reportId}` when given the named param — a plain
+    // t() call would render an empty reference in every locale.
+    resultMessage.value =
+      t("aiContentReport.success", { reportId: response.reportId }) ||
+      `Report submitted. Reference: ${response.reportId}`;
     // The submission consumed the confirmation; clear the gate so a follow-up
     // report on the same selection re-warns.
     resetTruncationGate();
+    // FR-5.5 / Journey 11.1 step 8: the dialog STAYS OPEN so the user can see
+    // and copy the reference. The parent only records reported message ids —
+    // it never closes the dialog on `submitted`.
     emit("submitted", { reportId: response.reportId, selectedMessageIds });
   } catch (err) {
     resultIsError.value = true;
+    reportId.value = null;
     const code = err instanceof Error ? err.message : "unknown";
     resultMessage.value =
       t(`aiContentReport.errors.${code}`) || t("aiContentReport.errors.unknown") || "The report could not be submitted.";
   } finally {
     submitting.value = false;
+  }
+}
+
+// FR-5.5: copy the returned reference to the clipboard. Clipboard may be
+// unavailable (permissions, non-secure context); failure is non-fatal and the
+// reference remains visible in the success message for manual copy.
+function copyReference(): void {
+  if (!reportId.value) return;
+  try {
+    void navigator.clipboard?.writeText(reportId.value);
+  } catch {
+    // Clipboard unavailable; ignore — the reference is still visible.
   }
 }
 </script>

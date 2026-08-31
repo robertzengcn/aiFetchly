@@ -4879,7 +4879,8 @@ function onConversationReportSubmitted(payload: {
     ...reportedMessageIds.value,
     ...payload.selectedMessageIds,
   ]);
-  conversationReportDialogOpen.value = false;
+  // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
+  // and copy the report reference; the dialog itself owns closing on dismiss.
 }
 
 function onSingleReportRequest(
