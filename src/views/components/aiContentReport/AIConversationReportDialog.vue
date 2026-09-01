@@ -149,6 +149,10 @@ import {
   AIConversationReportLocalError,
 } from "./conversationReportRequest";
 import { wouldTruncateConversationTexts } from "./conversationReportText";
+import {
+  bucketEligibleCount,
+  emitConversationReportAnalytics,
+} from "./conversationReportAnalytics";
 import { createAIContentReport } from "@/views/api/aiContentReport";
 import type { ConversationReportSnapshot } from "./conversationReportSnapshot";
 import {
@@ -267,6 +271,14 @@ function onToggleRelated(): void {
   includeRelatedUserContext.value = !includeRelatedUserContext.value;
   // The context set changed, so the prior confirmation no longer applies.
   resetTruncationGate();
+  // §19.1 / TODO-13: the report scope changed (user toggled related-user
+  // context). Emit allowlisted metadata only — surface + eligible-count
+  // bucket + the new user-context boolean. No content or ids leak.
+  emitConversationReportAnalytics("ai_conversation_report_scope_changed", {
+    surface: props.snapshot.surface,
+    eligibleCountBucket: bucketEligibleCount(props.snapshot.candidates.length),
+    userContextEnabled: includeRelatedUserContext.value,
+  });
 }
 
 // FR-2.5 / §10.2: toggle an individual generated image for inclusion.
@@ -326,6 +338,15 @@ watch(
       categoryError.value = "";
       reportId.value = null;
       resetTruncationGate();
+      // §19.1 / TODO-13: fire the open event with allowlisted metadata only.
+      // surface + eligible-count bucket + user-context boolean. No content,
+      // ids, or report output ever enter the payload. The emitter is a no-op
+      // until an approved renderer analytics sink lands (design §19.1).
+      emitConversationReportAnalytics("ai_conversation_report_opened", {
+        surface: props.snapshot.surface,
+        eligibleCountBucket: bucketEligibleCount(props.snapshot.candidates.length),
+        userContextEnabled: includeRelatedUserContext.value,
+      });
       nextTick(() => titleRef.value?.$el?.focus?.());
     } else {
       const target = lastFocusedEl ?? props.activatorEl ?? null;

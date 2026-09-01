@@ -28,6 +28,28 @@ vi.mock("@/views/components/aiContentReport/conversationReportText", () => ({
   wouldTruncateConversationTexts: (...args: unknown[]) =>
     wouldTruncateMock(...args),
 }));
+// §19.1 / TODO-13: spy on the renderer analytics emitter so tests can assert
+// the dialog fires allowlisted open/scope events — and ONLY allowlisted ones.
+const analyticsMock = vi.fn();
+vi.mock(
+  "@/views/components/aiContentReport/conversationReportAnalytics",
+  () => ({
+    bucketEligibleCount: (n: number) =>
+      n <= 0
+        ? "0"
+        : n === 1
+        ? "1"
+        : n <= 3
+        ? "2-3"
+        : n <= 6
+        ? "4-6"
+        : n <= 10
+        ? "7-10"
+        : "10+",
+    emitConversationReportAnalytics: (...args: unknown[]) =>
+      analyticsMock(...args),
+  })
+);
 
 const i18n = createI18n({
   legacy: false,
@@ -197,6 +219,7 @@ describe("AIConversationReportDialog", () => {
     createMock.mockReset();
     buildMock.mockReset();
     wouldTruncateMock.mockReset();
+    analyticsMock.mockReset();
     // Default: no truncation (most tests use short text).
     wouldTruncateMock.mockReturnValue(false);
   });
@@ -486,6 +509,81 @@ describe("AIConversationReportDialog", () => {
       expect(
         w.find('[data-testid="conversation-report-copy-reference"]').exists()
       ).toBe(false);
+    });
+  });
+
+  // §19.1 / TODO-13: the dialog fires allowlisted renderer analytics events.
+  // Open fires ai_conversation_report_opened; toggling the related-user opt-in
+  // fires ai_conversation_report_scope_changed. Each payload must contain ONLY
+  // surface, eligible-count bucket, and user-context boolean — no content,
+  // ids, or report output. This is the no-leak property (design §19.1).
+  describe("renderer analytics (§19.1, TODO-13)", () => {
+    // The open watcher fires on the closed→open transition (not initial
+    // mount with modelValue:true, since Vue watchers are not immediate). So
+    // we mount closed, then drive the open transition via setProps.
+    function mountClosed() {
+      return mountDialog({ modelValue: false });
+    }
+    async function openDialog(
+      w: ReturnType<typeof mountDialog>
+    ): Promise<void> {
+      await w.setProps({ modelValue: true });
+      await flushPromises();
+    }
+
+    it("fires ai_conversation_report_opened when the dialog opens with allowlisted properties", async () => {
+      const w = mountClosed();
+      await openDialog(w);
+      expect(analyticsMock).toHaveBeenCalledTimes(1);
+      const [eventName, payload] = analyticsMock.mock.calls[0];
+      expect(eventName).toBe("ai_conversation_report_opened");
+      // Only the three allowlisted keys are present.
+      expect(Object.keys(payload).sort()).toEqual(
+        ["eligibleCountBucket", "surface", "userContextEnabled"].sort()
+      );
+      expect(payload.surface).toBe("chat_v2");
+      // One candidate → "1" bucket.
+      expect(payload.eligibleCountBucket).toBe("1");
+      // Fresh opt-in is off on open.
+      expect(payload.userContextEnabled).toBe(false);
+    });
+
+    it("fires ai_conversation_report_scope_changed when the related-user opt-in toggles", async () => {
+      const w = mountClosed();
+      await openDialog(w);
+      // One open event so far.
+      expect(analyticsMock).toHaveBeenCalledTimes(1);
+      await w
+        .find('[data-testid="include-related-user-context"] input')
+        .trigger("change");
+      expect(analyticsMock).toHaveBeenCalledTimes(2);
+      const [eventName, payload] = analyticsMock.mock.calls[1];
+      expect(eventName).toBe("ai_conversation_report_scope_changed");
+      expect(Object.keys(payload).sort()).toEqual(
+        ["eligibleCountBucket", "surface", "userContextEnabled"].sort()
+      );
+      // The scope event reflects the NEW opt-in state (now on).
+      expect(payload.userContextEnabled).toBe(true);
+    });
+
+    it("never leaks report text, message ids, or conversation id into any payload", async () => {
+      const w = mountClosed();
+      await openDialog(w);
+      // Toggle scope once to exercise both event types.
+      await w
+        .find('[data-testid="include-related-user-context"] input')
+        .trigger("change");
+      for (const call of analyticsMock.mock.calls) {
+        const payload = call[1] as Record<string, unknown>;
+        const serialized = JSON.stringify(payload);
+        // Content and identifiers that must never appear in analytics.
+        expect(serialized).not.toContain("AI answer"); // report text
+        expect(serialized).not.toContain("user q"); // related-user text
+        expect(serialized).not.toContain("a1"); // message id
+        expect(serialized).not.toContain("u1"); // related-user message id
+        expect(serialized).not.toContain("conv-1"); // conversation id
+        expect(serialized).not.toContain("snap-1"); // snapshot id
+      }
     });
   });
 });
