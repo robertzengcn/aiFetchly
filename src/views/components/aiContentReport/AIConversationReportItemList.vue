@@ -43,6 +43,20 @@
             />
             <span class="conversation-report-items__type">{{ typeLabel(c.contentType) }}</span>
             <span class="conversation-report-items__text">{{ preview(c.text) }}</span>
+            <!--
+              FR-2.2 / §10.1: each row shows when the AI output was generated so
+              the user can identify it by time as well as content. The snapshot
+              carries an RFC3339 generatedAt; rendered as a locale-aware string.
+              Read-only, escaped — never v-html (§14.5).
+            -->
+            <span
+              v-if="c.generatedAt"
+              class="conversation-report-items__timestamp"
+              :data-testid="`report-item-timestamp-${c.itemId}`"
+              :title="generatedAtLabel"
+            >
+              {{ formatTimestamp(c.generatedAt) }}
+            </span>
           </label>
           <!--
             FR-2.5 / §10.2: per-image checkboxes for candidates that carry
@@ -138,6 +152,10 @@ const attachmentOmittedLabel = computed(
 const imageLabel = computed(
   () => t("aiConversationReport.imageLabel") || "Include image in report"
 );
+// FR-2.2 / §10.1: accessible label for the per-row generated-at timestamp.
+const generatedAtLabel = computed(
+  () => t("aiConversationReport.generatedAtLabel") || "Generated at"
+);
 function typeLabel(ct: AIContentType): string {
   return t(`aiConversationReport.itemTypes.${ct}`) || ct;
 }
@@ -145,8 +163,21 @@ function preview(text?: string): string {
   if (!text) return "";
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
 }
+// FR-2.2 / §10.1: render the RFC3339 generatedAt as a locale-aware string so
+// the user can identify an output by time. Invalid/falsy input yields "".
+function formatTimestamp(iso?: string): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return "";
+  }
+}
 function rowLabel(c: ConversationReportSnapshot["candidates"][number]): string {
-  return `${typeLabel(c.contentType)} — ${preview(c.text)}`;
+  const parts = [typeLabel(c.contentType), preview(c.text)];
+  const ts = formatTimestamp(c.generatedAt);
+  if (ts) parts.push(ts);
+  return parts.join(" — ");
 }
 function onToggle(itemId: string): void {
   emit("toggle", itemId);
@@ -181,6 +212,13 @@ function onToggleImage(imageSourceId: string): void {
   font-size: 11px;
   opacity: 0.7;
   min-width: 52px;
+}
+/* FR-2.2 / §10.1: timestamp sits with the content type as small meta text. */
+.conversation-report-items__timestamp {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-left: auto;
+  white-space: nowrap;
 }
 .conversation-report-items__text {
   font-size: 13px;

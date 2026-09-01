@@ -3119,6 +3119,7 @@ export default {
     attachmentOmitted:
       "メッセージ内の添付ファイルは省略されました。メッセージのテキストのみが含まれます。",
     imageLabel: "画像を報告に含める",
+    generatedAtLabel: "生成日時",
     consentDefault:
       "選択した AI 出力とあなたの説明のみが送信されます。他のメッセージ、ファイル、AI の推論は含まれません。",
     consentWithUserContext:

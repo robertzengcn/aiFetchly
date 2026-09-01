@@ -3017,6 +3017,7 @@ export default {
     relatedUserLabel: "您的消息——将被发送",
     attachmentOmitted: "您消息中的附件已被省略；仅包含消息文本。",
     imageLabel: "将图片包含在报告中",
+    generatedAtLabel: "生成时间",
     consentDefault:
       "仅发送您选择的 AI 输出和说明。您的其他消息、文件及 AI 推理过程不会包含在内。",
     consentWithUserContext:

@@ -363,4 +363,38 @@ describe("AIConversationReportItemList", () => {
       expect(w.text()).toContain("1 selected");
     });
   });
+
+  // FR-2.2 / §10.1, TODO-10: each row shows the generated-at timestamp so the
+  // user can identify an output by time. The snapshot carries an RFC3339
+  // generatedAt; the list renders it locale-aware and hides it when absent.
+  describe("timestamps (FR-2.2, §10.1)", () => {
+    it("renders a timestamp element when the candidate has a generatedAt", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          {
+            messageId: "a1",
+            text: "answer",
+            generatedAt: "2026-01-01T12:34:56.000Z",
+          },
+        ]),
+        selectedItemIds: new Set<string>(),
+      });
+      const ts = w.find('[data-testid="report-item-timestamp-ai-a1"]');
+      expect(ts.exists()).toBe(true);
+      // Locale-aware rendering of the RFC3339 timestamp is non-empty.
+      expect(ts.text().length).toBeGreaterThan(0);
+    });
+
+    it("omits the timestamp element when the candidate has no generatedAt", () => {
+      const w = mountList({
+        snapshot: makeSnapshot([
+          { messageId: "a1", text: "answer", generatedAt: undefined },
+        ]),
+        selectedItemIds: new Set<string>(),
+      });
+      expect(
+        w.find('[data-testid="report-item-timestamp-ai-a1"]').exists()
+      ).toBe(false);
+    });
+  });
 });

@@ -3185,6 +3185,7 @@ export default {
     attachmentOmitted:
       "Ein Anhang in Ihrer Nachricht wurde weggelassen; nur der Nachrichtentext ist enthalten.",
     imageLabel: "Bild in den Bericht aufnehmen",
+    generatedAtLabel: "Erstellt am",
     consentDefault:
       "Es werden nur die ausgewählten KI-Ausgaben und Ihre Beschreibung gesendet. Ihre anderen Nachrichten, Dateien und die KI-Begründung werden nicht einbezogen.",
     consentWithUserContext:
