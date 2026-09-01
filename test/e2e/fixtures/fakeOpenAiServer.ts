@@ -46,6 +46,17 @@ export interface FakeOpenAiController {
   setScenario(name: FakeAiScenarioName): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
+  /**
+   * Configure MULTIPLE tool calls in one response (queue/steering E2E):
+   * the app's loop executes them sequentially, so steering committed while
+   * the stream is still open lands at the after_model boundary and skips
+   * every unstarted call. `delayMs` delays before the first tool-call delta
+   * so the test can click Steer mid-stream.
+   */
+  setToolCalls(
+    calls: ReadonlyArray<{ name: string; arguments: string }>,
+    delayMs?: number
+  ): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
   reset(): Promise<void>;
   stop(): Promise<void>;
@@ -109,6 +120,11 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  /** Optional multi-call variant (queue/steering E2E). */
+  let toolCallsConfig: {
+    calls: ReadonlyArray<{ name: string; arguments: string }>;
+    delayMs: number;
+  } | null = null;
   const requestLog: RedactedRequest[] = [];
 
   /** True when a chat request carries a tool-result message (the continuation
@@ -152,6 +168,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         requestLog.length = 0;
         scenario = "stream-text";
         toolCallConfig = null;
+        toolCallsConfig = null;
         res.writeHead(204);
         res.end();
         return;
@@ -161,14 +178,27 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           const parsed = JSON.parse(body) as {
             name?: string;
             arguments?: string;
+            calls?: ReadonlyArray<{ name: string; arguments?: string }>;
+            delayMs?: number;
           };
-          if (parsed.name) {
+          if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
+            toolCallsConfig = {
+              calls: parsed.calls.map((call) => ({
+                name: call.name,
+                arguments: call.arguments ?? "{}",
+              })),
+              delayMs: parsed.delayMs ?? 0,
+            };
+            toolCallConfig = null;
+          } else if (parsed.name) {
             toolCallConfig = {
               name: parsed.name,
               arguments: parsed.arguments ?? "{}",
             };
+            toolCallsConfig = null;
           } else {
             toolCallConfig = null;
+            toolCallsConfig = null;
           }
         } catch {
           /* ignore */
@@ -224,6 +254,22 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       let plan;
       if (isContinuation) {
         plan = resolveScenario("tool-success-followup");
+      } else if (toolCallsConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            ...toolCallsConfig.calls.map((call, index) => ({
+              delayMs: index === 0 ? toolCallsConfig.delayMs : 0,
+              payload: toolCallChunk({
+                index,
+                id: `call_e2e_multi_${index}`,
+                name: call.name,
+                arguments: call.arguments,
+              }),
+            })),
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
       } else if (toolCallConfig) {
         plan = {
           kind: "sse" as const,
@@ -339,6 +385,16 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async setToolCalls(
+      calls: ReadonlyArray<{ name: string; arguments: string }>,
+      delayMs = 0
+    ): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls, delayMs }),
       });
     },
     async getRequests(): Promise<readonly RedactedRequest[]> {

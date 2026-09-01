@@ -154,7 +154,7 @@
       max-rows="6"
       hide-details
       density="comfortable"
-      :disabled="isStreaming || isProcessing"
+      :disabled="isProcessing"
       data-testid="ai-chat-composer"
       :aria-label="t('aiChatV2.input_placeholder') || 'Send a message'"
       @keydown="onKeydown"

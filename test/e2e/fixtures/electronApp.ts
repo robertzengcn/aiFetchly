@@ -116,6 +116,13 @@ function buildSanitizedEnv(
 
   // Explicit E2E contract.
   allowed[E2E_ENV.ENABLED] = "1";
+  // The local-AI-runtime catalog check would otherwise poll github.com in the
+  // main process mid-test (the network guard records any non-loopback fetch).
+  // Point it at the fake AI server's origin so the periodic check stays
+  // loopback-only; a 404 catalog is a benign, handled result.
+  allowed["AIFETCHLY_RUNTIME_CATALOG_URL"] = fakeAiBaseUrl
+    ? `${fakeAiBaseUrl.replace(/\/v1$/, "")}/__e2e/runtime-catalog`
+    : "http://127.0.0.1:1/local-ai-runtimes.json";
   allowed[E2E_ENV.ROOT] = testRoot.rootPath;
   allowed[E2E_ENV.STATE_FILE] = testRoot.stateFilePath;
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
