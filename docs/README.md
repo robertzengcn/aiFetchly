@@ -2,6 +2,8 @@
 
 ## Product Requirements
 
+- [PRD: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-prd.md)
+- [Technical Design: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-technical-design.md)
 - [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)
 - [PRD: AI Email Receive and Auto-Reply](./prd/ai-email-receive-auto-reply-prd.md)
 - [PRD: Thread-Aware AI Email Reply Reliability](./prd/ai-email-thread-aware-reply-reliability-prd.md)

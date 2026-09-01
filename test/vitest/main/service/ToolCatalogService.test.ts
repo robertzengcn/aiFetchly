@@ -485,6 +485,50 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(r.exposedToolNames).not.toContain("mcp_1_secret");
   });
 
+  it("exposes outbound send tools for marketing-email intent and keeps reply/inbox deferred", () => {
+    const svc = new ToolCatalogService();
+    const sendCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage:
+        "Write a marketing email introducing our new product and send it to above customer",
+    };
+    const liveTools = [
+      tool("list_email_services"),
+      tool("list_email_templates"),
+      tool("start_email_send_task"),
+      tool("list_email_inboxes"),
+      tool("send_email_reply"),
+      tool("create_email_reply_draft"),
+      tool("mcp_1_secret"),
+    ];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: sendCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("start_email_send_task")?.loadPolicy).toBe(
+      "contextual"
+    );
+    expect(r.exposedToolNames).toContain("start_email_send_task");
+    expect(r.exposedToolNames).toContain("list_email_services");
+    expect(r.exposedToolNames).toContain("list_email_templates");
+    expect(r.exposedToolNames).not.toContain("list_email_inboxes");
+    expect(r.exposedToolNames).not.toContain("send_email_reply");
+    expect(r.exposedToolNames).not.toContain("create_email_reply_draft");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
   it("promotes a discovered deferred tool", () => {
     const { svc, catalog } = buildWith([tool("mcp_1_secret")]);
     const r = svc.filterForRound({

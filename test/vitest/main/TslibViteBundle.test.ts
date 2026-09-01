@@ -8,6 +8,11 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixtureEntryPath = path.join(testDir, "fixtures", "tslibViteEntry.mjs");
 const tslibCjsPath = path.resolve(process.cwd(), "node_modules/tslib/tslib.js");
 const viteMainConfigPath = path.resolve(process.cwd(), "vite.main.config.mjs");
+// The resolve aliases and externals list were extracted into a shared module
+// so the Playwright E2E main build can reuse them (design §6.4). The tslib
+// CJS alias and pdf-lib external now live there; vite.main.config.mjs only
+// wires them in via imports.
+const viteMainSharedPath = path.resolve(process.cwd(), "vite.main.shared.mjs");
 
 /**
  * Regression for packaged ScheduleManager crash:
@@ -19,16 +24,23 @@ const viteMainConfigPath = path.resolve(process.cwd(), "vite.main.config.mjs");
  * `.default` undefined (seen via pdf-lib → nested tslib in the
  * ScheduleManager chunk).
  *
- * vite.main.config.mjs aliases `tslib` → node_modules/tslib/tslib.js and
+ * The main bundle aliases `tslib` → node_modules/tslib/tslib.js and
  * externalizes pdf-lib. This test bundles the same import path with that
  * alias and executes the output so a packaging regression fails CI.
  */
 describe("tslib Vite bundle __extends regression", () => {
-  it("keeps the tslib CJS alias and pdf-lib external in vite.main.config", () => {
+  it("keeps the tslib CJS alias and pdf-lib external in the shared main config", () => {
+    // Check the shared module (authoritative home of the alias/external)
+    // and the config file that wires it in, so removing the alias from
+    // either location fails CI.
+    const sharedSource = fs.readFileSync(viteMainSharedPath, "utf-8");
     const configSource = fs.readFileSync(viteMainConfigPath, "utf-8");
-    expect(configSource).toContain("node_modules/tslib/tslib.js");
-    expect(configSource).toMatch(/["']tslib["']\s*:/);
-    expect(configSource).toMatch(/["']pdf-lib["']/);
+    const combined = `${sharedSource}\n${configSource}`;
+    expect(combined).toContain("node_modules/tslib/tslib.js");
+    // Accept both quoted ("tslib":) and unquoted (tslib:) object keys; the
+    // shared module uses the unquoted form `tslib: path.resolve(...)`.
+    expect(combined).toMatch(/["']?tslib["']?\s*:/);
+    expect(combined).toMatch(/["']pdf-lib["']/);
     expect(fs.existsSync(tslibCjsPath)).toBe(true);
   });
 

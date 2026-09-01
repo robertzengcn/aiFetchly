@@ -5,7 +5,6 @@ import {
   Buckemailstruct,
   BulkEmailPreviewResult,
   BulkEmailStartResult,
-  mapBuckemailTaskStartInputToEntity,
 } from "@/entityTypes/emailmarketingType";
 import { EmailFilterModule } from "@/modules/EmailFilterModule";
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
@@ -118,55 +117,6 @@ async function getSearchTaskRecipients(
   return { emails, module };
 }
 
-interface ParsedBulkEmailTaskInput {
-  email_search_task_id?: number;
-  emails?: EmailMarketingDirectEmailInput[];
-  template_ids: number[];
-  filter_ids: number[];
-  service_ids: number[];
-  not_duplicate: boolean;
-  email_subject?: string;
-  email_html_content?: string;
-  uses_templates: boolean;
-  uses_inline_content: boolean;
-}
-
-function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
-  const parsed = bulkEmailTaskInputSchema.parse(args);
-  const hasSearchTask = parsed.email_search_task_id !== undefined;
-  const hasDirectEmails =
-    parsed.emails !== undefined && parsed.emails.length > 0;
-
-  if (hasSearchTask === hasDirectEmails) {
-    throw new Error("Provide exactly one of email_search_task_id or emails");
-  }
-
-  const templateIds = parsed.template_ids ?? [];
-  const subject = parsed.email_subject?.trim();
-  const html = parsed.email_html_content?.trim();
-  const usesTemplates = templateIds.length > 0;
-  const usesInlineContent = Boolean(subject && html);
-
-  if (!usesTemplates && !usesInlineContent) {
-    throw new Error(
-      "Provide either template_ids or email_subject and email_html_content"
-    );
-  }
-
-  return {
-    email_search_task_id: parsed.email_search_task_id,
-    emails: parsed.emails,
-    template_ids: templateIds,
-    filter_ids: parsed.filter_ids ?? [],
-    service_ids: parsed.service_ids,
-    not_duplicate: parsed.not_duplicate,
-    email_subject: usesInlineContent ? subject : undefined,
-    email_html_content: usesInlineContent ? html : undefined,
-    uses_templates: usesTemplates,
-    uses_inline_content: usesInlineContent,
-  };
-}
-
 export async function resolveBulkRecipients(input: {
   email_search_task_id?: number;
   emails?: EmailMarketingDirectEmailInput[];
@@ -218,37 +168,6 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
     address: email.address,
     source: email.source ?? DIRECT_EMAIL_SOURCE,
   };
-}
-
-function toEmailItemFromSearchResult(
-  item: string | { address: string; source?: string; title?: string }
-): EmailItem {
-  if (typeof item === "string") {
-    return { title: item, address: item, source: DIRECT_EMAIL_SOURCE };
-  }
-  const title =
-    "title" in item && typeof item.title === "string"
-      ? item.title
-      : item.address;
-  return {
-    title,
-    address: item.address,
-    source: item.source ?? DIRECT_EMAIL_SOURCE,
-  };
-}
-
-function isEmailServiceEntity(item: unknown): item is {
-  id: number;
-  name: string;
-  from: string;
-  host: string;
-  port: string;
-  ssl: number;
-  status: number;
-} {
-  return (
-    typeof item === "object" && item !== null && "id" in item && "name" in item
-  );
 }
 
 function sanitizeEmailService(service: {
@@ -550,14 +469,16 @@ export async function startBulkEmailSendTask(
           ? recipients.recipients
           : undefined,
     });
-    const entity = mapBuckemailTaskStartInputToEntity(taskInput);
-    const taskId = await module.startBuckEmailTask(entity, {
-      waitForExit: true,
-    });
+    // Persist SMTP/template/filter relations and return as soon as the
+    // worker is forked. Waiting for SMTP (waitForExit: true) left the AI
+    // tool card stuck on "running" when the worker never posted
+    // sendEmailEnd (empty template list + crypto.randomInt(0)).
+    const taskId = await module.startBuckEmailCampaign(taskInput);
 
     return {
       success: true,
       task_id: taskId,
+      status: "started",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
       template_ids: input.template_ids,
