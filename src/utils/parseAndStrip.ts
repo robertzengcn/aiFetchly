@@ -1,4 +1,23 @@
-import type { ZodType } from 'zod'
+/**
+ * Minimal structural schema interface satisfied by BOTH zod v3 (`zod`) and
+ * zod v4 (`zod/v4`) schemas. The project standard for new code is `zod/v4`,
+ * while many existing entity schemas still use v3; typing against the narrow
+ * `parse`/`safeParse` surface lets this helper accept either without forcing
+ * a migration of every caller.
+ */
+export interface StrippableSchema<T> {
+  parse(payload: unknown): T;
+  safeParse(payload: unknown): StripParseResult<T>;
+}
+
+export type StripParseResult<T> =
+  | { success: true; data: T }
+  | {
+      success: false;
+      error: {
+        issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>;
+      };
+    };
 
 /**
  * 在边界处过滤 unknown 字段 + 校验类型。
@@ -17,8 +36,11 @@ import type { ZodType } from 'zod'
  * @param schema zod schema（推荐用 z.object，不要 z.strictObject）
  * @returns 校验 + 剥离后的对象
  */
-export function parseAndStrip<T>(payload: unknown, schema: ZodType<T>): T {
-  return schema.parse(payload)
+export function parseAndStrip<T>(
+  payload: unknown,
+  schema: StrippableSchema<T>
+): T {
+  return schema.parse(payload);
 }
 
 /**
@@ -28,14 +50,16 @@ export function parseAndStrip<T>(payload: unknown, schema: ZodType<T>): T {
  */
 export function safeParseAndStrip<T>(
   payload: unknown,
-  schema: ZodType<T>,
+  schema: StrippableSchema<T>
 ): { success: true; data: T } | { success: false; error: string } {
-  const r = schema.safeParse(payload)
+  const r = schema.safeParse(payload);
   if (r.success) {
-    return { success: true, data: r.data }
+    return { success: true, data: r.data };
   }
   return {
     success: false,
-    error: r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-  }
+    error: r.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; "),
+  };
 }
