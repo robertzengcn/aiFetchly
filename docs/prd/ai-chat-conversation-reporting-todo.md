@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Backend (schema v2 / non-AI-gated IPC / service / fail-closed capabilities) implemented and tested. Nine functional gaps below remain unbuilt. |
+| Status | Backend (schema v2 / non-AI-gated IPC / service / fail-closed capabilities) implemented and tested. TODOs 1–8, 10–14 complete; TODO-9 (E2E §20.4 run-through) deferred — see its note. |
 | Created | 2026-08-31 |
 | Source PRD | `docs/prd/ai-chat-conversation-reporting-prd.md` |
 | Technical design | `docs/prd/ai-chat-conversation-reporting-technical-design.md` |
@@ -86,6 +86,21 @@ Priority:
 ### TODO-9 — E2E coverage is smoke-only (PRD §20.4)
 
 - **Priority:** P1
+- **Status:** Deferred (2026-09-01). The fail-closed smoke spec remains and
+  passes; the full §20.4 run-through is deferred.
+- **Why deferred:** A submit-to-completion E2E flow requires the FakeOpenAI
+  loopback server (or a sibling fake) to serve the content-report
+  `capabilities` and `create` endpoints. The content-report service uses the
+  authenticated `HttpClient`, whose base is `VITE_LOGIN_URL + "/apis"` — and
+  the E2E env explicitly strips `*LOGIN_URL*` (`test/e2e/fixtures/electronApp.ts`
+  env-sanitization regex), routing the login base at `localhost:3000`, which
+  nothing serves, so capabilities fail-close to `enabled:false`. Routing the
+  report path through loopback needs new fake-server routes + an E2E env
+  contract change, and the Playwright Electron suite requires `xvfb`/Linux and
+  cannot be run or verified on the macOS dev machine. The privacy-critical
+  surface (snapshot immutability, bounded-payload encoder, fail-closed gate,
+  selection/idempotency) is already covered by the Vitest component + utility
+  suites that DO run locally; only the end-to-end Playwright layer is missing.
 - **Why incomplete:** `test/e2e/specs/conversationReport.spec.ts` only asserts the button is visible and disabled under the fail-closed network guard. PRD §20.4 specifies a full run-through: open from header on Chat V2, select two items, enable context, submit against a stub backend verifying the bounded payload, retry page keeps dialog state, `clientReportId` idempotency, keyboard-only flow, and locale smoke.
 - **Where:** `test/e2e/specs/conversationReport.spec.ts`; a stub response for `AI_CONTENT_REPORT_CREATE`.
 - **Done when:** The §20.4 steps above exist as automated Playwright specs and pass; the fail-closed spec remains.
