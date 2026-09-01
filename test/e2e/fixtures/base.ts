@@ -10,10 +10,7 @@
  */
 
 import { test as base, expect } from "@playwright/test";
-import {
-  createTemporaryRoot,
-  writeStateManifest,
-} from "./temporaryState";
+import { createTemporaryRoot, writeStateManifest } from "./temporaryState";
 import { launchAiFetchly, type LaunchedApp } from "./electronApp";
 import { closeApp } from "../support/processCleanup";
 import {
@@ -28,10 +25,12 @@ export interface E2EFixtures {
   fakeAi: FakeOpenAiController;
   aiApp: LaunchedApp;
   disabledApp: LaunchedApp;
+  /** Authenticated launch with AI disabled — for shell/UI-only specs. */
+  shellApp: LaunchedApp;
 }
 
 export const e2eTest = base.extend<E2EFixtures>({
-  testRoot: async ({}, use, testInfo) => {
+  testRoot: async (_, use, testInfo) => {
     const root = createTemporaryRoot({
       testId: testInfo.titlePath.join(" "),
       workerIndex: testInfo.workerIndex,
@@ -49,8 +48,24 @@ export const e2eTest = base.extend<E2EFixtures>({
     await closeApp(app);
   },
 
+  // Authenticated + AI-disabled: the full authenticated shell renders, but
+  // any AI request would be rejected before transport. The provider URL
+  // points at a never-listening loopback port so accidental transport use is
+  // observable rather than silently external.
+  shellApp: async ({ testRoot }, use) => {
+    writeStateManifest(testRoot, {
+      authState: "authenticated",
+      aiState: "hosted-disabled",
+      fakeAiBaseUrl: "http://127.0.0.1:9",
+      workspacePath: testRoot.workspacePath,
+    });
+    const app = await launchAiFetchly({ testRoot });
+    await use(app);
+    await closeApp(app);
+  },
+
   // Worker-scoped: start the fake AI server once per worker, share across tests.
-  fakeAi: async ({}, use) => {
+  fakeAi: async (_, use) => {
     const fakeAi = await startFakeOpenAiServer();
     await use(fakeAi);
     await fakeAi.stop();
