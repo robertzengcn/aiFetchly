@@ -19,6 +19,12 @@ describe("executeToolWithTimeout policy integration", () => {
     expect(resolveTimeoutMs(cls)).to.equal(30_000);
   });
 
+  it("uses the fast ceiling for start_email_send_task without registry metadata", () => {
+    const cls = inferTimeoutClassByName("start_email_send_task");
+    expect(cls).to.equal("fast");
+    expect(resolveTimeoutMs(cls)).to.equal(30_000);
+  });
+
   it("uses network ceiling for analyze_website", () => {
     const cls = inferTimeoutClassByName("analyze_website");
     expect(resolveTimeoutMs(cls)).to.equal(90_000);

@@ -317,7 +317,31 @@ export class BuckEmailTaskModule extends BaseModule {
     options?: { waitForExit?: boolean }
   ): Promise<number> {
     const taskId = await this.createBuckEmailTask(param);
-    return await this.buckEmailsend(taskId, options);
+    const sendPromise = this.buckEmailsend(taskId, options);
+
+    if (options?.waitForExit === true) {
+      return await sendPromise;
+    }
+
+    void sendPromise.catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `Failed to start background email task ${taskId}: ${message}`
+      );
+      try {
+        await this.updateTaskStatus(taskId, TaskStatus.Error);
+      } catch (statusError: unknown) {
+        const statusMessage =
+          statusError instanceof Error
+            ? statusError.message
+            : String(statusError);
+        console.error(
+          `Failed to mark email task ${taskId} as errored: ${statusMessage}`
+        );
+      }
+    });
+
+    return taskId;
   }
 
   //create buck email task from entity (direct DB entity)
