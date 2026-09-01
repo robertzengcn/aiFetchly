@@ -9,6 +9,7 @@
 - **Feature area**: AI Chat and Email Marketing
 - **Primary release modes**: Explicit send-now and review-before-send
 - **Related documents**:
+  - `docs/prd/ai-outbound-email-intent-aware-delivery-technical-design.md`
   - `docs/prd/ai-email-thread-aware-reply-reliability-prd.md`
   - `docs/prd/ai-email-thread-aware-reply-reliability-technical-design.md`
   - `docs/prd/ai-email-receive-auto-reply-prd.md`
@@ -1321,4 +1322,3 @@ The following decisions are fixed for this PRD:
   authoritative policy, duplicate prevention, and audit records.
 - Review-first approval binds to exact content. Direct-send authorization binds
   the user's instruction scope and the final validated envelope set.
-
