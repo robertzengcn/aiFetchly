@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { defineComponent } from "vue";
+import { defineComponent, ref, watch } from "vue";
 
 const capsMock = vi.fn();
 const createMock = vi.fn();
@@ -95,8 +95,10 @@ describe("Knowledge conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(true);
   });
 
@@ -121,8 +123,10 @@ describe("Knowledge conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(false);
   });
 
@@ -158,5 +162,77 @@ describe("Knowledge conversation-report orchestration", () => {
     expect(
       w.find('[data-testid="ai-conversation-report-dialog"]').exists()
     ).toBe(true);
+  });
+
+  // Design §11.3, TODO-14: Clear must regenerate the knowledge conversation id
+  // so a report is never attributed across cleared sessions. The surface's
+  // clearChat assigns a fresh generateMessageId() to knowledgeConversationId;
+  // this harness replicates that wiring and asserts the id actually changes.
+  it("regenerates the knowledge conversation id on Clear", async () => {
+    const generateMessageId = vi.fn(
+      () => `id-${Math.random().toString(36).slice(2)}`
+    );
+    const knowledgeConversationId = ref(generateMessageId());
+    const messages = ref([{ type: "ai", content: "x" }]);
+    const clearChat = () => {
+      messages.value = [];
+      knowledgeConversationId.value = generateMessageId();
+    };
+    const Harness = defineComponent({
+      setup() {
+        return { knowledgeConversationId, messages, clearChat };
+      },
+      template: `<div />`,
+    });
+    const w = mount(Harness, { global: { plugins: [i18n] } });
+    const before = w.vm.knowledgeConversationId;
+    expect(messages.value).toHaveLength(1);
+    w.vm.clearChat();
+    await w.vm.$nextTick();
+    // Messages cleared.
+    expect(w.vm.messages).toHaveLength(0);
+    // Conversation id regenerated — never the prior session's id.
+    expect(w.vm.knowledgeConversationId).not.toBe(before);
+    expect(generateMessageId).toHaveBeenCalledTimes(2);
+  });
+
+  // TODO-8 + TODO-14 together: clearing while the report dialog is open must
+  // close it (the regenerated id trips the conversation-changed watcher).
+  it("closes an open report dialog when Clear regenerates the conversation id", async () => {
+    const generateMessageId = vi.fn(
+      () => `id-${Math.random().toString(36).slice(2)}`
+    );
+    const knowledgeConversationId = ref(generateMessageId());
+    const conversationReportDialogOpen = ref(true);
+    const conversationReportSnapshot = ref<ConversationReportSnapshot | null>(
+      makeSnapshot()
+    );
+    const clearChat = () => {
+      knowledgeConversationId.value = generateMessageId();
+    };
+    const Harness = defineComponent({
+      setup() {
+        // Replicate the surface's conversation-changed watcher (TODO-8).
+        watch(knowledgeConversationId, () => {
+          if (!conversationReportDialogOpen.value) return;
+          conversationReportDialogOpen.value = false;
+          conversationReportSnapshot.value = null;
+        });
+        return {
+          knowledgeConversationId,
+          conversationReportDialogOpen,
+          conversationReportSnapshot,
+          clearChat,
+        };
+      },
+      template: `<div />`,
+    });
+    const w = mount(Harness, { global: { plugins: [i18n] } });
+    expect(conversationReportDialogOpen.value).toBe(true);
+    expect(conversationReportSnapshot.value).not.toBeNull();
+    w.vm.clearChat();
+    await w.vm.$nextTick();
+    expect(conversationReportDialogOpen.value).toBe(false);
+    expect(conversationReportSnapshot.value).toBeNull();
   });
 });

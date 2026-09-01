@@ -567,6 +567,11 @@ export default defineComponent({
     const clearChat = () => {
       if (confirm('Are you sure you want to clear the chat history?')) {
         messages.value = [];
+        // Design §11.3, TODO-14: mint a fresh conversation id after Clear so a
+        // report is never attributed across cleared sessions. This also trips
+        // the conversation-changed watcher (TODO-8) to close any open report
+        // dialog whose frozen snapshot belongs to the prior session.
+        knowledgeConversationId.value = generateMessageId();
       }
     };
 
