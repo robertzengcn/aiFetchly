@@ -3197,6 +3197,7 @@ export default {
     listTruncated:
       "Mostrando los primeros {shown} de {total} resultados. Desplázate por la conversación para reportar otro.",
     continueAndSubmit: "Enviar informe",
+    cancel: "Cancelar",
     conversationChanged:
       "La conversación cambió mientras el informe estaba abierto. Vuelve a abrirlo.",
     categoryLabel: "¿Qué problema tiene esta conversación?",

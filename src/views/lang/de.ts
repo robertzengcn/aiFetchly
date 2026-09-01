@@ -3195,6 +3195,7 @@ export default {
     listTruncated:
       "Die ersten {shown} von {total} Ausgaben werden angezeigt. Scrollen Sie in der Konversation, um eine andere zu melden.",
     continueAndSubmit: "Bericht senden",
+    cancel: "Abbrechen",
     conversationChanged:
       "Die Konversation hat sich geändert, während der Bericht geöffnet war. Bitte öffnen Sie ihn erneut.",
     categoryLabel: "Was ist mit dieser Konversation nicht in Ordnung?",

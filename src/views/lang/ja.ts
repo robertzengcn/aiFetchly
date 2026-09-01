@@ -3129,6 +3129,7 @@ export default {
     listTruncated:
       "最初の {shown} 件（全 {total} 件）を表示しています。他の出力を報告するには会話をスクロールしてください。",
     continueAndSubmit: "報告を送信",
+    cancel: "キャンセル",
     conversationChanged:
       "報告が開かれている間に会話が変更されました。もう一度開いてください。",
     categoryLabel: "この会話のどこに問題がありますか？",

@@ -3183,6 +3183,7 @@ export default {
     listTruncated:
       "Affichage des {shown} premières sorties sur {total}. Faites défiler la conversation pour en signaler une autre.",
     continueAndSubmit: "Envoyer le signalement",
+    cancel: "Annuler",
     conversationChanged:
       "La conversation a changé pendant que le signalement était ouvert. Veuillez le rouvrir.",
     categoryLabel: "Quel est le problème avec cette conversation ?",

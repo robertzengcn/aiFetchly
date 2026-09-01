@@ -3162,6 +3162,7 @@ export default {
     listTruncated:
       "Showing the first {shown} of {total} outputs. Scroll the conversation to report a different one.",
     continueAndSubmit: "Submit report",
+    cancel: "Cancel",
     conversationChanged:
       "The conversation changed while the report was open. Please reopen it.",
     categoryLabel: "What is wrong with this conversation?",
