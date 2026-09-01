@@ -2777,6 +2777,16 @@ export default {
       "出力スキーマが有効な JSON ではありません。",
   },
   plugins: {
+    tabs: {
+      discover: "発見",
+      installed: "インストール済み",
+      sources: "ソース",
+      issues: "問題",
+    },
+    sources: {
+      browse: "ソースを閲覧",
+      manage: "ソースを管理",
+    },
     title: "プラグイン",
     import_button: "プラグインをインポート",
     install_button: "インストール",
@@ -3432,6 +3442,26 @@ export default {
     sessionExpired: "セッションの有効期限が切れました",
     signInAgain: "再サインイン",
     installFailed: "インストールに失敗しました",
+    searchLabel: "プラグインを検索",
+    searchPlaceholder: "名前、説明、作成者、タグで検索",
+    allTags: "すべて",
+    moreTags: "その他",
+    filterLabel: "利用可否",
+    filterAll: "すべて",
+    filterAvailable: "利用可能",
+    filterInstalled: "インストール済み",
+    resultCount: "{count} 件のプラグイン",
+    noMatchesTitle: "「{query}」に一致するプラグインはありません",
+    noMatchesDescription:
+      "別のキーワードで検索するか、フィルターを解除してください。",
+    clearFilters: "フィルターを解除",
+    manage: "管理",
+    moreTagCount: "あと {count} 件のタグ",
+    statusInstalled: "インストール済み",
+    statusUpgradeRequired: "アップグレードが必要",
+    statusSignInRequired: "サインインが必要",
+    statusComingSoon: "近日公開",
+    statusUnavailable: "利用不可",
   },
   ui: {
     inspector: {

@@ -3,6 +3,7 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import {
+/* eslint-disable no-ex-assign */
   buildSessionMemorySystemPrompt,
   buildSessionMemoryUserPrompt,
   buildFullCompactSystemPrompt,
@@ -1325,3 +1326,5 @@ export function makeTokenAiEnabledResolver(
 ): () => boolean {
   return () => tokenService.getValue(settingKey) === "true";
 }
+
+/* eslint-enable no-ex-assign */

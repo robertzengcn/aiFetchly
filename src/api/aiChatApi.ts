@@ -571,6 +571,31 @@ export interface OpenAIModelsResponse {
    * the frontend uses it to seed the model selector on first use.
    */
   default_model?: string;
+  /**
+   * Hosted AiFetchly small-model route capability, when reported by the
+   * server's `/api/ai/v1/models` endpoint. The `small`/`haiku` alias is a
+   * virtual route resolved server-side to the best healthy small setting;
+   * this metadata lets AiFetchly budget lightweight background workloads
+   * against the resolved model's real context window before sending.
+   * Absent on older servers and on local/custom providers.
+   */
+  small_model?: OpenAISmallModelCapability;
+}
+
+/**
+ * Capability metadata for the hosted virtual `small` model route. All fields
+ * are optional except `available`; malformed values are ignored by
+ * `normalizeModelsResponse` rather than rejecting the whole model list.
+ */
+export interface OpenAISmallModelCapability {
+  /** Whether a small model is configured and healthy in the current environment. */
+  readonly available: boolean;
+  /** The real model id that the `small` alias currently resolves to. */
+  readonly resolved_model?: string;
+  /** Usable input-plus-output context window for the resolved model. */
+  readonly context_size?: number;
+  /** Maximum supported output tokens for the resolved model. */
+  readonly max_tokens?: number;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -624,6 +649,12 @@ export interface OpenAIChatCompletionChunk {
   choices: OpenAIStreamChoice[];
   /** Present on the final chunk when stream_options.include_usage is true. */
   usage?: OpenAIUsage;
+  /** Present when the server signals a stream-level error (finish_reason="error"). */
+  error?: {
+    message: string;
+    type?: string;
+    code?: string;
+  };
 }
 
 // ==================== Rerank API Types ====================

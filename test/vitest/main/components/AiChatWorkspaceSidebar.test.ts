@@ -93,16 +93,14 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
       runtimeStatus: "idle",
       attention: "none",
       unread: false,
-      updatedAt: 0,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
     };
   }
 
   function mountWithUnassigned() {
     const store = useChatWorkspaceStore();
-    store.unassigned.push(
-      unassigned("u1"),
-      unassigned("u2")
-    );
+    store.unassigned = [unassigned("u1"), unassigned("u2")];
     return mountSidebar();
   }
 

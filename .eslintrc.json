@@ -37,8 +37,17 @@
       "warn",
       {
         "selector": "Literal[raw=/#[0-9a-fA-F]{3,8}/]",
-        "message": "Avoid hex color literals in converged directories; use var(--app-*) tokens instead (design §7.4)"
+        "message": "Avoid hex color literals in converged directories; use var(--app-*) tokens instead (design \u00a77.4)"
       }
-    ]
+    ],
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+    "@typescript-eslint/no-explicit-any": "warn"
   }
 }

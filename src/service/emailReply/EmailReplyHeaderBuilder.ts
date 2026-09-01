@@ -55,6 +55,7 @@ export function normalizeReplySubject(subject: string): string {
 /** Validate a header value for SMTP: reject control chars / overlong values. */
 export function isValidHeaderValue(value: string): boolean {
   if (!value) return false;
+  // eslint-disable-next-line no-control-regex -- intentional: control-char detection is the purpose
   if (/[\x00-\x1f\x7f]/.test(value)) return false;
   return value.length <= 998;
 }
@@ -75,8 +76,11 @@ export function buildOutboundHeaders(input: {
   thread: ReplyThreadHeaders;
 } {
   const recipient = input.recipientAddress.trim();
+  // eslint-disable-next-line no-control-regex -- intentional: control-char detection is the purpose
   if (!recipient || /[\x00-\x1f\x7f]/.test(recipient)) {
-    throw new Error("Reply cannot be sent: recipient address is missing or invalid");
+    throw new Error(
+      "Reply cannot be sent: recipient address is missing or invalid"
+    );
   }
 
   const rawThread = buildReplyThreadHeaders({

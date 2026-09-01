@@ -12,6 +12,7 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { getSharedLightweightCompletionService } from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
@@ -25,9 +26,7 @@ import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
-import type {
-  AIChatQueryEventSink,
-} from "@/service/AIChatQueryEvents";
+import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -180,15 +179,23 @@ function getCompactAgent(): AIChatCompactAgentService {
       compactModelCatalog = new AIChatModelCatalogService();
     }
     compactAgent = new AIChatCompactAgentService(tokenService, {
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      // Route session-memory and full-compact workloads through the shared
+      // lightweight completion service so the hosted provider (when the kill
+      // switch is enabled) sends model: "small" (tech-design §5.2).
+      completeLightweight: (input) =>
+        getSharedLightweightCompletionService().complete(input),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
+      // Capability gate for full compact: absent metadata means the small
+      // route is not eligible and compact goes to the normal model
+      // (tech-design §16.1).
+      getSmallModelCapability: () =>
+        compactModelCatalog!.getSmallModelCapability(),
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
-      getContextWindow: (model) =>
-        compactModelCatalog!.getContextWindow(model),
+      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
@@ -1109,7 +1116,9 @@ export function serializeHistoryTimestamp(timestamp: unknown): string {
   return new Date(0).toISOString();
 }
 
-export function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
+export function parseMetadata(
+  raw?: string | null
+): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
