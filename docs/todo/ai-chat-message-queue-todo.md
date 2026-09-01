@@ -4,7 +4,7 @@ Source PRDs/design:
 - `docs/ai-chat-message-queue-prd.md`
 - `docs/ai-chat-message-queue-technical-design.md`
 
-Audit date: 2026-08-31
+Audit date: 2026-08-31 (updated 2026-09-02)
 Branch: `worktree-ai-chat-message-queue`
 
 ## Current Status
@@ -20,11 +20,16 @@ The remaining work below covers the items in the PRD §15/§17.5 and technical d
 
 ## TODO
 
-### 1. Electron E2E coverage for queue / steering critical flows — NOT DONE
+### 1. Electron E2E coverage for queue / steering critical flows — SPECS WRITTEN, RUN BLOCKED (2026-09-02)
 
 **Severity: High**
 
-- [ ] No queue/steering E2E specs exist in `test/e2e/specs/` (confirmed by search: zero matches for `queue|steer|pending`).
+- [x] `test/e2e/specs/aiChatQueueSteering.test.ts` implements all 8 §21.6 scenarios; the fake OpenAI server gained a multi-tool-call config with pre-emit delay; the E2E env pins the runtime-catalog URL to loopback (network guard). Two real product fixes fell out: the composer textarea is no longer disabled while streaming (PRD §7.1).
+- [ ] **Running the specs is blocked**: fresh launches now auto-redirect to the redesigned `#/aiworkspace` default landing (dev commit `57944b87`), whose chat surface has its own send path predating this feature — the legacy dock surface the specs (and this feature's renderer integration) target is only reachable before the redirect, and sends on the workspace surface do not reach the provider. Follow-ups:
+  1. Route the workspace chat surface's send path through the pending-message queue (it currently bypasses `AiChatV2.vue`'s queue integration), or expose a deterministic way for E2E to select the legacy surface (e.g. a state-manifest landing-route override).
+  2. Then re-run `yarn test:e2e` and debug the 8 specs against a stable surface.
+
+Original audit note: no specs existed in `test/e2e/specs/` (zero matches for `queue|steer|pending`).
 - [ ] The technical design §21.6 defines 8 explicit scenarios that must run under `yarn test:e2e` (design §21.7 lists `yarn test:e2e` as a hard verification gate; §22 Phase 1/2 use the "between-tools E2E" as an exit gate; PRD §17.5 requires equivalent coverage):
   1. Queue B behind delayed A and verify automatic B dispatch after A completes.
   2. Steer between tool A and tool B; verify B never executes and receives a synthetic result.
@@ -39,7 +44,9 @@ The remaining work below covers the items in the PRD §15/§17.5 and technical d
 
 ---
 
-### 2. Observability counters — NOT DONE
+### 2. Observability counters — DONE (2026-09-02)
+
+- [x] `src/service/AIChatQueueCounters.ts` implements all nine §19.2 keys (including labeled `steering_rejected{reason}` and `queue_recovered{state}`) plus §19.3 timing aggregates (enqueue→dispatch, steer-click→boundary, drain duration, pending DB transaction). Wired into the queue service, the steering promoter, and the loop's skipped-tool emitter; 5 unit tests. No message content is ever recorded.
 
 **Severity: Low**
 
@@ -60,7 +67,9 @@ The remaining work below covers the items in the PRD §15/§17.5 and technical d
 
 ---
 
-### 3. Pasted-content 256k character cap — NOT DONE
+### 3. Pasted-content 256k character cap — DONE (2026-09-02)
+
+- [x] `AI_CHAT_PENDING_PASTED_CONTENT_MAX_CHARS = 256_000` enforced in `AIChatPendingMessageModule.createPendingMessage` (defense-in-depth behind the stricter 100k IPC schema cap); test added (commit `5f1ff27f`).
 
 **Severity: Low**
 
