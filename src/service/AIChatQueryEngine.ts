@@ -80,6 +80,9 @@ import type {
   ToolCatalogModeDecision,
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
+import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -572,6 +575,8 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let messages: OpenAIChatMessage[];
     let textApprovedPlanState: AIChatPlanStateView | null = null;
+    let intentDecisionId: number | null = null;
+    let sourceUserMessageId: string | undefined;
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -724,6 +729,45 @@ export class AIChatQueryEngine {
           conversationId,
           savedUser.messageId
         );
+      }
+
+      // Resolve and persist the outbound-email delivery intent for this turn
+      // from TRUSTED user-authored text only (technical design §9): raw user
+      // message, never tool args / retrieved content / assistant statements.
+      // Idempotent across stream retries via the (conversationId, sourceUserMessageId)
+      // unique index. Failures resolve to draft_only and never break chat.
+      sourceUserMessageId = savedUser.messageId;
+      try {
+        const existing = await new OutboundEmailIntentModule().findBySource(
+          conversationId,
+          savedUser.messageId
+        );
+        if (existing) {
+          intentDecisionId = existing.id;
+        } else {
+          const userAuthoredText = request.message || "";
+          const decision = OutboundEmailIntentResolver.resolve({
+            conversationId,
+            sourceUserMessageId: savedUser.messageId,
+            userAuthoredText,
+            previousAssistantMessageId: null,
+            previousAssistantText: null,
+          });
+          const persisted = await new OutboundEmailIntentModule().create({
+            conversationId,
+            sourceUserMessageId: savedUser.messageId,
+            mode: decision.mode,
+            reasonCode: decision.reasonCode,
+            confidence: decision.confidence,
+            evidenceJson: JSON.stringify(decision.evidence),
+            sourceTextHash: decision.sourceTextHash,
+            resolverVersion: decision.resolverVersion,
+          } as OutboundEmailIntentEntity);
+          intentDecisionId = persisted.id;
+        }
+      } catch (err) {
+        console.error("[outbound-email-intent] resolve failed:", err);
+        intentDecisionId = null;
       }
 
       // Load history and build transcript.
@@ -931,6 +975,8 @@ export class AIChatQueryEngine {
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
+      sourceUserMessageId,
+      intentDecisionId,
     };
 
     try {
@@ -1445,7 +1491,9 @@ export class AIChatQueryEngine {
           // near the model's window: it actually shrinks the next assembled
           // prompt. Fall back to the advisory session-memory update otherwise.
           // Optional call guards test fakes that only stub one method.
-          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+          Promise.resolve(
+            compactAgent.enqueueAutoCompact?.(compactInput) ?? false
+          )
             .then((compacted) =>
               compacted
                 ? undefined

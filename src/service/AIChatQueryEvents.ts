@@ -467,6 +467,18 @@ export interface AIChatQueryLoopInput {
   toolCatalog?: ToolCatalog;
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
+  /**
+   * Trusted current-turn user message id, supplied by the main process (never
+   * by tool arguments). Threads into OutboundEmailIntentResolver so the intent
+   * decision is bound to the exact user message that requested the work.
+   */
+  sourceUserMessageId?: string;
+  /**
+   * Persisted outbound-email intent decision id for this turn. Null when the
+   * turn did not resolve an outbound-email intent (e.g. not marketing-related)
+   * or the resolver failed. Supplied by the main process, not tool arguments.
+   */
+  intentDecisionId?: number | null;
 }
 
 /** Request payload for resumeToolAfterPermission. */
