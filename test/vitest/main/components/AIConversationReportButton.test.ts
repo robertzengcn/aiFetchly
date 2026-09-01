@@ -52,6 +52,17 @@ describe("AIConversationReportButton", () => {
     expect(btn.text()).toContain("Report conversation");
   });
 
+  it("renders icon-only (no action text) in compact mode", () => {
+    const w = mountButton({ compact: true });
+    const btn = w.find('[data-testid="report-conversation"]');
+    expect(btn.exists()).toBe(true);
+    expect(btn.text()).not.toContain("Report conversation");
+    // Accessible name is preserved via aria-label even without visible text.
+    expect((btn.element as HTMLButtonElement).getAttribute("aria-label")).toBe(
+      "Report this conversation"
+    );
+  });
+
   it("emits open when clicked and enabled", async () => {
     const w = mountButton({ enabled: true });
     await w.find('[data-testid="report-conversation"]').trigger("click");

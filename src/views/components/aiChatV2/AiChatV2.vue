@@ -153,6 +153,7 @@
           :enabled="conversationReportEnabled"
           :loading="reportCapabilitiesLoading"
           :disabled-reason="conversationReportDisabledReason"
+          compact
           @open="onOpenConversationReport"
         />
         <v-btn

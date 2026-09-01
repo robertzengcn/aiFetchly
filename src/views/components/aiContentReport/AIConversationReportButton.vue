@@ -3,14 +3,15 @@
     data-testid="report-conversation"
     variant="text"
     size="small"
+    :icon="compact"
     :disabled="!enabled"
     :aria-label="ariaLabel"
     :title="enabled ? ariaLabel : (disabledReason || ariaLabel)"
     class="ai-conversation-report-btn"
     @click="onClick"
   >
-    <v-icon size="small" start>mdi-flag-outline</v-icon>
-    {{ compact ? "" : actionLabel }}
+    <v-icon size="small" :start="!compact">mdi-flag-outline</v-icon>
+    <template v-if="!compact">{{ actionLabel }}</template>
   </v-btn>
 </template>
 
@@ -67,6 +68,10 @@ function onClick(): void {
 <style scoped>
 .ai-conversation-report-btn {
   text-transform: none;
+}
+/* Compact (icon-only) variant matches the surrounding header icon buttons;
+   the text variant keeps a 44px touch target. */
+.ai-conversation-report-btn:not(.v-btn--icon) {
   min-width: 44px;
   min-height: 44px;
 }
