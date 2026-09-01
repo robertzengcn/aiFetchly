@@ -470,6 +470,14 @@ export interface AIChatQueryLoopInput {
   toolCatalog?: ToolCatalog;
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
+  /**
+   * Generated/edited image descriptors already produced by a tool that
+   * executed OUTSIDE this loop run — used by the engine's permission-resume
+   * path, which re-executes the approved tool directly. The loop folds them
+   * into the turn's result.images (alongside any images harvested from tools
+   * executed inside this run) so the engine persists + renders them.
+   */
+  seededToolImages?: readonly OpenAIChatImage[];
 }
 
 /** Request payload for resumeToolAfterPermission. */

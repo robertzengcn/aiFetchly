@@ -50,6 +50,7 @@ import {
   isContextWindowExceededError,
   imageEditErrorCode,
 } from "@/service/AIChatErrorMapper";
+import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -1468,6 +1469,11 @@ export class AIChatQueryEngine {
         toolCatalog: resumeCatalogContext.toolCatalog,
         toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
         toolCatalogState: matchedByToolId.toolCatalogState,
+        // The approved tool executed OUTSIDE the loop (direct SkillExecutor
+        // call above), so its generated-image outputs would otherwise never
+        // be folded into the turn's result.images. Seed them here — the loop
+        // merges them with anything its own rounds produce (FR-4).
+        seededToolImages: extractToolResultImages(toolResult),
       };
 
       void this.loop

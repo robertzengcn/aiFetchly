@@ -884,8 +884,11 @@ export class AIChatQueryLoop {
       // FR-4: images contributed by tool results this turn (e.g. a
       // run_subagent batch worker's edited outputs). Folded into the
       // completed result.images so the engine persists + renders them like
-      // any other generated image.
-      const collectedToolImages: OpenAIChatImage[] = [];
+      // any other generated image. seededToolImages carries images from a
+      // tool the engine executed outside this run (permission-resume path).
+      const collectedToolImages: OpenAIChatImage[] = [
+        ...(input.seededToolImages ?? []),
+      ];
 
       for (
         let round = input.startRound;

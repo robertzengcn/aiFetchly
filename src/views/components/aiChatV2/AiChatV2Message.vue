@@ -21,6 +21,17 @@
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
           <strong>{{ t("aiChatV2.tool_call_title") || "Tool Call" }}</strong>
+          <button
+            v-if="batchStopAvailable"
+            type="button"
+            class="v2-message__batch-stop"
+            :aria-label="
+              t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+            "
+            @click="emit('stop-batch')"
+          >
+            {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+          </button>
         </div>
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
@@ -89,7 +100,6 @@
               :aria-label="
                 t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
               "
-              :disabled="disabled"
               @click="emit('stop-batch')"
             >
               {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
@@ -988,18 +998,24 @@ function retryableReferenceFromInput(
   return { messageId: refRecord.messageId, imageIndex: refRecord.imageIndex };
 }
 
-const isBatchToolResult = computed(
+/** True for the batch tool_call card (async execution in flight, carries
+ *  live toolProgress) OR a pending batch tool_result. */
+const isBatchToolCard = computed(
   () =>
-    props.message.messageType === MessageType.TOOL_RESULT &&
+    (props.message.messageType === MessageType.TOOL_CALL ||
+      props.message.messageType === MessageType.TOOL_RESULT) &&
     String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
 );
 
-/** Stop renders while the batch tool is still executing (no result yet). */
+/** Stop renders while the batch tool is still executing: either a tool_call
+ *  card with live progress (the async-job phase), or a tool_result card that
+ *  is still pending. NOTE: the card-level `disabled` prop mirrors isStreaming
+ *  — exactly the state in which Stop must stay clickable — so it is
+ *  deliberately NOT part of this condition. */
 const batchStopAvailable = computed(
   () =>
-    isBatchToolResult.value &&
-    executionPending.value &&
-    !disabled.value
+    isBatchToolCard.value &&
+    (executionPending.value || toolProgress.value !== null)
 );
 
 /** Retry renders only on a settled batch with retryable generated refs and a
