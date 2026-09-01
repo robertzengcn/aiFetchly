@@ -826,6 +826,74 @@ describe("AIChatQueryEngine", () => {
       // The metadata-only role:tool message is present too.
       expect(serialized).toContain('"role":"tool"');
     });
+
+    it("seeds the resumed loop with the approved tool's outputImages (batch harvest)", async () => {
+      let capturedSeed: readonly unknown[] | undefined;
+      const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
+        capturedSeed = input.seededToolImages;
+        return {
+          type: "completed" as const,
+          conversationId: "v2-test",
+          assistantMessageId: "a-1",
+          fullContent: "",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult;
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+
+      (
+        engine as unknown as {
+          pendingPermissions: Map<string, unknown>;
+        }
+      ).pendingPermissions.set("v2-test", {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        conversationMessages: [
+          { role: "user", content: "warm them all" },
+        ] as OpenAIChatMessage[],
+        abortController: new AbortController(),
+        request: { message: "warm them all" },
+        openAITools: [],
+        nextRound: 1,
+        toolCallId: "call-batch",
+        toolName: "process_artifact_batch",
+        toolArguments: { instruction: "warm" },
+        planContext: undefined,
+        eventSink: { emit: vi.fn() },
+        toolCatalogState: undefined,
+      });
+
+      // The async batch tool resolves as a bare SkillExecutionResult whose
+      // payload carries slimmed outputImages (the shape pollAsyncJobToCompletion
+      // wraps under a second `result` envelope in the in-loop path).
+      vi.mocked(SkillExecutor.execute).mockResolvedValue({
+        success: true,
+        result: {
+          status: "partial",
+          outputImages: [
+            {
+              url: "aifetchly-generated-image://local/u/agent-v2-x/agent-assistant-agt-1/image-1.png",
+              file_name: "image-1.png",
+              mime_type: "image/png",
+              delivery: "local_file",
+            },
+          ],
+        },
+      } as never);
+
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "call-batch",
+        conversationId: "v2-test",
+      });
+      expect(result.ok).toBe(true);
+
+      // Without seeding, images produced by the directly-executed approved
+      // tool would never reach the resumed turn's result.images (and so never
+      // persist or render) — the live-E2E regression this guards against.
+      expect(capturedSeed?.length).toBe(1);
+      const seeded = capturedSeed?.[0] as { url?: string };
+      expect(seeded?.url).toContain("agent-v2-x");
+    });
   });
 });
 

@@ -1,4 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The async-tool path re-checks USER_AI_ENABLED via Token, which touches
+// ElectronStoreService (unavailable under vitest). Mock it enabled like
+// AIChatQueryLoopAsyncPoll.test.ts does.
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({
+    getValue: vi.fn().mockReturnValue("true"),
+  })),
+}));
+
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
 import type {
@@ -423,5 +433,119 @@ describe("AIChatQueryLoop image-artifact handoff", () => {
           JSON.stringify(event).includes("process_artifact_batch")
       )
     ).toBe(true);
+  });
+});
+
+describe("AIChatQueryLoop async batch output-image harvest", () => {
+  beforeEach(() => {
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests({ log: () => undefined });
+  });
+
+  /**
+   * Reproduces the live-E2E finding: process_artifact_batch runs as an ASYNC
+   * tool; its SkillExecutionResult is wrapped by pollAsyncJobToCompletion
+   * under a second `result` envelope. The batch's slimmed outputImages must
+   * still be harvested into the turn's result.images so the engine persists
+   * and renders them.
+   */
+  it("harvests outputImages from the async batch tool result envelope", async () => {
+    const slimmedOutput = {
+      url: "aifetchly-generated-image://local/u/agent-v2-x/agent-assistant-agt-1/image-1.png",
+      file_name: "image-1.png",
+      mime_type: "image/png",
+      delivery: "local_file",
+    };
+    const batchSkillResult = {
+      success: true as const,
+      result: {
+        status: "partial",
+        processor: "image_edit",
+        requestedCount: 2,
+        completedCount: 1,
+        failedCount: 1,
+        cancelledCount: 0,
+        concurrency: 3,
+        instruction: "warm",
+        items: [],
+        outputImages: [slimmedOutput],
+      },
+    };
+
+    const toolCall = makeToolCallChunk(
+      "call-batch-1",
+      "process_artifact_batch",
+      '{"instruction":"warm","generatedImageReferences":[{"messageId":"m1","imageIndex":0}]}'
+    );
+    const finalChunk = makeChunk("Done", "stop");
+    let callCount = 0;
+    const fakeStream = vi.fn(
+      async (
+        _request: OpenAIChatCompletionRequest,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        if (callCount === 0) {
+          callCount += 1;
+          onChunk(toolCall);
+          return;
+        }
+        onChunk(finalChunk);
+      }
+    );
+    const fakeExecute = vi.fn(async () => batchSkillResult as never);
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: fakeExecute,
+      getSkillDefinition: vi.fn().mockReturnValue({
+        timeoutClass: "async" as const,
+      }),
+    });
+    const events: unknown[] = [];
+    const abort = new AbortController();
+    vi.useFakeTimers();
+    try {
+      const pending = loop.run({
+        conversationId: "v2-conv-harvest",
+        assistantMessageId: "assistant-harvest",
+        messages: [
+          {
+            role: "user",
+            content: "warm them",
+          } as OpenAIChatMessage,
+        ],
+        request: {
+          message: "warm them",
+          conversationId: "v2-conv-harvest",
+          model: "test-model",
+          mode: "chat" as const,
+        } as never,
+        openAITools: [],
+        abortController: abort,
+        eventSink: { emit: (e: unknown) => events.push(e) },
+        startRound: 0,
+        isActiveTurn: () => true,
+        skillRegistry: {
+          getSkill: (name: string) =>
+            name === "process_artifact_batch"
+              ? ({ timeoutClass: "async" as const } as never)
+              : null,
+        },
+      });
+      // Advance past the async poll interval so the registry job's terminal
+      // status is observed and the follow-up round runs.
+      const result = await Promise.race([
+        pending,
+        vi
+          .advanceTimersByTimeAsync(30_000)
+          .then(() => pending as Promise<never>),
+      ]);
+
+      expect(result.type).toBe("completed");
+      if (result.type !== "completed") return;
+      expect(result.images?.length).toBe(1);
+      expect(result.images?.[0]?.url).toContain("agent-v2-x");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

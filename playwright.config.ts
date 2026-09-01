@@ -40,5 +40,9 @@ export default defineConfig({
     url: "http://127.0.0.1:5173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    // Poll instead of inotify: the worktree's file count can exceed the host's
+    // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
+    // startup. Polling is heavier but never hits the watcher cap.
+    env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
   },
 });

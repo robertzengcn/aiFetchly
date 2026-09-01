@@ -611,6 +611,63 @@ describe("AiChatV2Message artifact batch progress", () => {
     expect(wrapper.emitted("stop-batch")?.length).toBe(1);
   });
 
+  it("renders Stop on the batch TOOL_CALL card while live progress streams", async () => {
+    // The async batch job runs between the tool_call card and its result; the
+    // tool_call card carries live toolProgress and must expose Stop there.
+    const wrapper = mountWith({
+      id: "msg-tool-batch-call",
+      conversationId: "c1",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.TOOL_CALL,
+      metadata: {
+        source: "chat-v2",
+        toolCallId: "call-batch-call",
+        toolName: "process_artifact_batch",
+        toolArguments: { instruction: "warm" },
+        toolProgress: {
+          phase: "running",
+          message: "processing completed=1",
+          progress: 0.25,
+          partialCount: 1,
+          expectedCount: 4,
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as ChatV2MessageView);
+    await flushPromises();
+
+    const stop = wrapper.find(".v2-message__batch-stop");
+    expect(stop.exists()).toBe(true);
+    expect(stop.text()).toContain("Stop batch");
+    // The card-level disabled prop mirrors isStreaming — exactly the state in
+    // which Stop must stay clickable — so the button must NOT be disabled.
+    expect((stop.element as HTMLButtonElement).disabled).toBe(false);
+
+    await stop.trigger("click");
+    expect(wrapper.emitted("stop-batch")?.length).toBe(1);
+  });
+
+  it("hides Stop on a batch tool_call card without live progress", async () => {
+    const wrapper = mountWith({
+      id: "msg-tool-batch-call-idle",
+      conversationId: "c1",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.TOOL_CALL,
+      metadata: {
+        source: "chat-v2",
+        toolCallId: "call-batch-call-idle",
+        toolName: "process_artifact_batch",
+        toolArguments: { instruction: "warm" },
+      },
+    } as unknown as ChatV2MessageView);
+    await flushPromises();
+    expect(wrapper.find(".v2-message__batch-stop").exists()).toBe(false);
+  });
+
   it("hides Stop once the batch result settles and on non-batch tool cards", async () => {
     const settledWrapper = mountWith(
       makeBatchResultMessage(makeRetryableBatchToolResult())

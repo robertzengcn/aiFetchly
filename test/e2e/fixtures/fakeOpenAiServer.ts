@@ -23,6 +23,9 @@ import {
   MODELS_RESPONSE,
   toolCallChunk,
   toolCallFinishChunk,
+  textChunk,
+  imagesChunk,
+  stopChunk,
   type FakeAiScenarioName,
 } from "../scenarios/openAiProtocol";
 import { resolveScenario } from "../scenarios/aiChatScenarios";
@@ -52,6 +55,10 @@ export interface ScriptedToolCall {
   /** When set, respond with this scenario instead of emitting a tool call
    * (used to script isolated batch-worker requests that must return images). */
   readonly scenario?: FakeAiScenarioName;
+  /** When set alongside `scenario: "stream-generated-image"`, override the
+   * base64 PNG payload served by that scenario (so each worker request can
+   * return a distinct image). Ignored for other scenarios. */
+  readonly imageB64?: string;
 }
 
 export interface FakeOpenAiController {
@@ -240,6 +247,7 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
               name: c.name,
               arguments: c.arguments ?? "{}",
               ...(c.scenario ? { scenario: c.scenario } : {}),
+              ...(c.imageB64 ? { imageB64: c.imageB64 } : {}),
             }));
         } catch {
           /* ignore */
@@ -296,7 +304,37 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       let plan;
       if (scripted && scripted.scenario) {
         toolCallQueue = toolCallQueue.slice(1);
-        plan = resolveScenario(scripted.scenario);
+        // An image override on a stream-generated-image* scenario lets each
+        // queued worker request serve a DISTINCT generated image without a
+        // new scenario name per payload. The "-delayed" variant holds the
+        // image frame behind a 4s barrier so a spec can stop mid-flight.
+        const isImageScenario =
+          (scripted.scenario === "stream-generated-image" ||
+            scripted.scenario === "stream-generated-image-delayed") &&
+          typeof scripted.imageB64 === "string";
+        if (isImageScenario) {
+          const imageDelay =
+            scripted.scenario === "stream-generated-image-delayed" ? 4_000 : 0;
+          plan = {
+            kind: "sse" as const,
+            frames: [
+              { delayMs: 0, payload: textChunk("Here is your image.") },
+              {
+                delayMs: imageDelay,
+                payload: imagesChunk([
+                  {
+                    type: "image",
+                    b64_json: scripted.imageB64,
+                    mime_type: "image/png",
+                  },
+                ]),
+              },
+              { delayMs: 0, payload: stopChunk() },
+            ],
+          };
+        } else {
+          plan = resolveScenario(scripted.scenario);
+        }
       } else if (scripted && scripted.name) {
         toolCallQueue = toolCallQueue.slice(1);
         // Unique id per scripted call: the app's transcript already carries
