@@ -17,6 +17,8 @@ const i18n = createI18n({
         attachmentOmitted: "An attachment in your message was omitted",
         relatedMessageUnavailable: "No related message is available",
         imageLabel: "Include image in report",
+        generatedAtLabel: "Generated at",
+        listTruncated: "Showing the first {shown} of {total} outputs.",
         itemTypes: {
           text: "Text",
           image: "Image",
@@ -395,6 +397,58 @@ describe("AIConversationReportItemList", () => {
       expect(
         w.find('[data-testid="report-item-timestamp-ai-a1"]').exists()
       ).toBe(false);
+    });
+  });
+
+  // FR-2.9 / §10.1 / TODO-11: the eligible list is windowed so very long
+  // conversations do not render every row. Only the first MAX_RENDERED_ROWS
+  // candidates enter the DOM; a notice announces how many were elided. Items
+  // beyond the window may remain selected (selection state is owned by the
+  // dialog and keyed by itemId — only the DOM representation is capped).
+  describe("list windowing (FR-2.9, §10.1, TODO-11)", () => {
+    function makeMany(n: number) {
+      return Array.from({ length: n }, (_, i) => ({
+        messageId: `a${i}`,
+        text: `output ${i}`,
+        contentType: "text" as const,
+      }));
+    }
+
+    it("renders all rows and no truncation notice below the cap", () => {
+      const w = mountList({
+        snapshot: makeSnapshot(makeMany(5)),
+        selectedItemIds: new Set<string>(),
+      });
+      expect(w.findAll('[data-testid^="report-item-ai-"]')).toHaveLength(5);
+      expect(
+        w.find('[data-testid="report-item-list-truncated"]').exists()
+      ).toBe(false);
+    });
+
+    it("windows the list to the cap and shows the truncation notice beyond it", () => {
+      // Cap is 50; supply 60 candidates and assert only 50 rows render.
+      const w = mountList({
+        snapshot: makeSnapshot(makeMany(60)),
+        selectedItemIds: new Set<string>(),
+      });
+      expect(w.findAll('[data-testid^="report-item-ai-"]')).toHaveLength(50);
+      const notice = w.find('[data-testid="report-item-list-truncated"]');
+      expect(notice.exists()).toBe(true);
+      // Notice names the shown/total counts so the user knows what was hidden.
+      expect(notice.text()).toContain("50");
+      expect(notice.text()).toContain("60");
+    });
+
+    it("keeps a beyond-window item selected even though its row is not rendered", () => {
+      // Item 55 is beyond the 50-row window; it is still in selectedItemIds.
+      const w = mountList({
+        snapshot: makeSnapshot(makeMany(60)),
+        selectedItemIds: new Set(["ai-a55"]),
+      });
+      // The row for a55 is NOT in the DOM (windowed out).
+      expect(w.find('[data-testid="report-item-ai-a55"]').exists()).toBe(false);
+      // But the selection summary still counts it (dialog owns selection state).
+      expect(w.text()).toContain("1 selected");
     });
   });
 });

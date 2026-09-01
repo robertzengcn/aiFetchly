@@ -3180,6 +3180,8 @@ export default {
       "Vous avez choisi d'inclure votre message associé. Il sera envoyé avec les sorties d'IA que vous avez sélectionnées.",
     truncationWarning:
       "Les sorties trop longues ont été tronquées pour respecter la limite de taille du signalement.",
+    listTruncated:
+      "Affichage des {shown} premières sorties sur {total}. Faites défiler la conversation pour en signaler une autre.",
     continueAndSubmit: "Envoyer le signalement",
     conversationChanged:
       "La conversation a changé pendant que le signalement était ouvert. Veuillez le rouvrir.",

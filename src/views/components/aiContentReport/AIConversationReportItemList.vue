@@ -4,7 +4,7 @@
       {{ countLabel }}
     </div>
     <ul class="conversation-report-items__list">
-      <template v-for="c in snapshot.candidates" :key="c.itemId">
+      <template v-for="c in renderedCandidates" :key="c.itemId">
         <!--
           FR-3.3 / Journey 11.2 / §10.3: when the user opts into including
           related user context, the related user message MUST be previewed
@@ -85,6 +85,23 @@
         </li>
       </template>
     </ul>
+    <!--
+      FR-2.9 / §10.1 / TODO-11: when the eligible list exceeds the render cap,
+      only the first N rows are windowed into the DOM. A notice tells the user
+      how many were hidden and how to surface a different output (scroll the
+      conversation and reopen). This is the documented tradeoff the PRD permits
+      in lieu of a full virtual-list primitive: candidates are already capped
+      by the desktop hard maximums (TODO-12, maxAIItems=10), so the cap only
+      bites on legacy/knowledge surfaces with very long histories.
+    -->
+    <p
+      v-if="hasTruncatedRows"
+      class="conversation-report-items__list-truncated"
+      data-testid="report-item-list-truncated"
+      role="status"
+    >
+      {{ listTruncatedLabel }}
+    </p>
   </div>
 </template>
 
@@ -131,6 +148,28 @@ const countLabel = computed(() => {
     return t("aiConversationReport.selectionCountOfMax", { n, max }) || `${n} of ${max} selected`;
   }
   return t("aiConversationReport.selectionCount", { n }) || `${n} selected`;
+});
+// FR-2.9 / §10.1 / TODO-11: window the eligible list so very long
+// conversations do not render every row into the 280px scroll container.
+// Candidates are already capped by the desktop hard maximums (TODO-12:
+// maxAIItems=10) on Chat V2, but legacy/knowledge surfaces can carry more.
+// The cap renders the first N rows and announces how many were elided.
+// Selected items beyond the window stay selected (selection state is owned by
+// the dialog, keyed by itemId) — only the DOM representation is capped.
+const MAX_RENDERED_ROWS = 50;
+const renderedCandidates = computed(() =>
+  props.snapshot.candidates.slice(0, MAX_RENDERED_ROWS)
+);
+const hasTruncatedRows = computed(
+  () => props.snapshot.candidates.length > MAX_RENDERED_ROWS
+);
+const listTruncatedLabel = computed(() => {
+  const shown = Math.min(props.snapshot.candidates.length, MAX_RENDERED_ROWS);
+  const total = props.snapshot.candidates.length;
+  return (
+    t("aiConversationReport.listTruncated", { shown, total }) ||
+    `Showing the first ${shown} of ${total} outputs.`
+  );
 });
 // PRD §10.2: when at the selection limit, unselected item checkboxes are
 // disabled so the user cannot exceed the cap. The limit is only enforced
@@ -229,6 +268,13 @@ function onToggleImage(imageSourceId: string): void {
   font-size: 12px;
   opacity: 0.8;
   margin-bottom: 6px;
+}
+/* FR-2.9 / §10.1 / TODO-11: notice shown when the eligible list is windowed. */
+.conversation-report-items__list-truncated {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 6px 0 0;
+  font-style: italic;
 }
 /* Related-user preview rows are visually distinct from AI-output rows so the
  * user can tell at a glance that their own message will be sent (FR-3.3). */

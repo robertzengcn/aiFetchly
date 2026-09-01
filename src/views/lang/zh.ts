@@ -3023,6 +3023,8 @@ export default {
     consentWithUserContext:
       "您已选择包含相关消息。该消息将与您选择的 AI 输出一并发送。",
     truncationWarning: "过长的输出已裁剪以符合报告大小限制。",
+    listTruncated:
+      "显示前 {shown} 条，共 {total} 条输出。请在对话中滚动以举报其他输出。",
     continueAndSubmit: "提交举报",
     conversationChanged: "报告打开期间对话已更改。请重新打开。",
     categoryLabel: "此对话有什么问题？",

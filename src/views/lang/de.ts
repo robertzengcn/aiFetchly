@@ -3192,6 +3192,8 @@ export default {
       "Sie haben sich entschieden, Ihre verwandte Nachricht einzubeziehen. Sie wird zusammen mit den von Ihnen ausgewählten KI-Ausgaben gesendet.",
     truncationWarning:
       "Zu lange Ausgaben wurden gekürzt, um das Größenlimit des Berichts einzuhalten.",
+    listTruncated:
+      "Die ersten {shown} von {total} Ausgaben werden angezeigt. Scrollen Sie in der Konversation, um eine andere zu melden.",
     continueAndSubmit: "Bericht senden",
     conversationChanged:
       "Die Konversation hat sich geändert, während der Bericht geöffnet war. Bitte öffnen Sie ihn erneut.",

@@ -3194,6 +3194,8 @@ export default {
       "Has elegido incluir tu mensaje relacionado. Se enviará junto con los resultados de IA que seleccionaste.",
     truncationWarning:
       "Los resultados extensos se recortaron para ajustarse al límite de tamaño del informe.",
+    listTruncated:
+      "Mostrando los primeros {shown} de {total} resultados. Desplázate por la conversación para reportar otro.",
     continueAndSubmit: "Enviar informe",
     conversationChanged:
       "La conversación cambió mientras el informe estaba abierto. Vuelve a abrirlo.",

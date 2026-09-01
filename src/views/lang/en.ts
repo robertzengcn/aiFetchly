@@ -3159,6 +3159,8 @@ export default {
       "You have chosen to include your related message. It will be sent with the AI outputs you selected.",
     truncationWarning:
       "Long outputs were trimmed to fit the report size limit.",
+    listTruncated:
+      "Showing the first {shown} of {total} outputs. Scroll the conversation to report a different one.",
     continueAndSubmit: "Submit report",
     conversationChanged:
       "The conversation changed while the report was open. Please reopen it.",

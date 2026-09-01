@@ -3126,6 +3126,8 @@ export default {
       "関連メッセージを含めることを選択しました。選択した AI 出力とともに送信されます。",
     truncationWarning:
       "長すぎる出力は報告サイズの上限に合わせて切り詰められました。",
+    listTruncated:
+      "最初の {shown} 件（全 {total} 件）を表示しています。他の出力を報告するには会話をスクロールしてください。",
     continueAndSubmit: "報告を送信",
     conversationChanged:
       "報告が開かれている間に会話が変更されました。もう一度開いてください。",

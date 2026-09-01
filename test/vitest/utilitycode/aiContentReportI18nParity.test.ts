@@ -146,6 +146,7 @@ const REQUIRED_CONV_REPORT_TOP_KEYS = [
   "attachmentOmitted",
   "imageLabel",
   "generatedAtLabel",
+  "listTruncated",
   "consentDefault",
   "consentWithUserContext",
   "truncationWarning",
