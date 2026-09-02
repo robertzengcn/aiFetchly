@@ -210,6 +210,14 @@ continue locally without keeping one remote LLM stream open for the entire job.
     environment.
 14. Ship platform-by-platform behind feature flags, beginning with one
     controlled pilot platform before broad social-platform enablement.
+15. Provide a user system setting for the built-in managed browser, enabled by
+    default, while retaining an application-controlled release flag for
+    emergency rollout control.
+16. Reuse an account-isolated persistent resource cache to improve repeat page
+    load time without making a persistent Chrome profile the source of login
+    state.
+17. Let users inspect and clear one account's cache or all managed-browser
+    caches without deleting encrypted account cookies.
 
 ## 5. Non-Goals
 
@@ -241,6 +249,11 @@ continue locally without keeping one remote LLM stream open for the entire job.
 14. Do not introduce a new browser-session database entity in the first release;
     operational sessions remain in memory and durable authentication continues
     through the existing account-cookie record.
+15. Do not share HTTP cache entries between Tool Accounts, platforms, external
+    Chrome profiles, or incompatible Chrome cache versions.
+16. Do not make **Clear browser cache** delete cookies, local storage,
+    IndexedDB, service workers, downloads, account records, or saved login
+    sessions.
 
 ## 6. Target Users
 
@@ -300,6 +313,13 @@ worker lifecycle, and action failure without exposing authentication secrets.
 14. As a user who configured a CAPTCHA provider and explicitly authorized its
     use for an eligible domain, I can let AiFetchly attempt that provider for a
     non-login challenge; otherwise the task safely requests manual handoff.
+15. As a user, I can disable the built-in browser in System Settings; the LLM
+    then explains that it is disabled and does not start a worker or decrypt
+    cookies.
+16. As a user, repeat visits load faster from my account's isolated managed
+    browser cache, which is enabled by default.
+17. As a user, I can see approximate cache size and clear the selected account's
+    cache or all managed-browser caches while preserving saved login sessions.
 
 ## 8. Product Experience
 
@@ -527,6 +547,116 @@ Stopping must:
 If cookie capture fails, the existing encrypted snapshot must remain unchanged.
 Failure to save refreshed cookies must not keep Chrome alive indefinitely.
 
+### 8.9 System settings and cache controls
+
+System Settings must include a **Managed Browser** group with:
+
+| Setting                               | Default         | User effect                                                                                        |
+| ------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------- |
+| **Use built-in managed browser**      | On              | Permits new AI-controlled managed-browser sessions when the release flag and other gates also pass |
+| **Use managed browser cache**         | On              | Reuses account-isolated eligible resource responses between sessions                               |
+| **Maximum managed-browser cache**     | 500 MB globally | Bounds total local disk use; accepted range is 100-2048 MB                                         |
+| **Clear cache when AiFetchly closes** | Off             | Removes managed-browser resource caches during bounded app shutdown                                |
+
+The effective browser enablement is:
+
+```text
+application release flag
+AND user managed-browser setting
+AND USER_AI_ENABLED for AI-controlled entry points
+AND supported platform/account
+AND compatible browser dependency
+```
+
+The user preference defaults to enabled. A release flag may suspend new
+sessions without overwriting the preference. A missing browser dependency is
+reported as a diagnostic and must not silently turn the preference off.
+
+Disabling the built-in browser blocks new sessions and removes or deactivates
+its LLM tool family. If a session is active, the UI asks whether to stop it now
+or let it finish; changing a toggle must not abruptly close a browser during
+login or a consequential action.
+
+The settings page must show approximate current cache size, last successful
+clear time, **Clear selected account cache**, and **Clear all managed-browser
+caches**. Clearing requires a scope-and-size confirmation. It must state that
+saved login cookies are preserved and that the next page load may be slower.
+
+When the selected account has an active session, the choices are **Stop and
+clear now**, **Clear when this browser closes**, or **Cancel**. AiFetchly must
+not delete cache files while Chrome has them open. The LLM may request a clear
+for its current account through a dedicated confirmed capability, but it never
+receives or supplies a filesystem path.
+
+All labels, confirmations, progress, errors, and completion notices must exist
+in all six supported languages.
+
+**FR-SETTING-001**: The user setting `managed-browser-enabled` defaults to
+`"1"`/enabled and is read from the main-process settings Module before worker
+startup or cookie decryption.
+
+**FR-SETTING-002**: `MANAGED_BROWSER_ENABLED` remains a separate release flag;
+effective enablement requires both controls and neither may be overridden by
+renderer or LLM arguments.
+
+**FR-SETTING-003**: Disabling the preference blocks new starts and returns a
+localized `managed_browser_disabled` chat/tool result with a route to settings.
+
+**FR-SETTING-004**: Disabling while active requires an explicit stop/finish
+choice and never silently terminates user handoff or an in-flight consequential
+action.
+
+**FR-CACHE-001**: `managed-browser-cache-enabled` defaults to enabled and may be
+changed independently from the global browser setting.
+
+**FR-CACHE-002**: Persistent resource cache is isolated by opaque account scope
+and compatible Chrome cache version; no cache directory is shared by accounts
+or concurrently opened by multiple sessions.
+
+**FR-CACHE-003**: Durable cookies remain exclusively in
+`AccountSessionService`; a cache directory is never an authentication source.
+
+**FR-CACHE-004**: Clear selected/all cache operations are validated main-process
+capabilities with explicit scope, confirmation, progress, cancellation before
+deletion begins, and a safe terminal result.
+
+**FR-CACHE-005**: Renderer and LLM inputs may specify an account ID or approved
+scope but never a path. The main process derives and validates every cache path.
+
+**FR-CACHE-006**: Clear cache preserves encrypted cookies, account records,
+local login partitions, downloads, and unrelated application caches.
+
+**FR-CACHE-007**: Active cache clearing is deferred until the owning Chrome
+process closes, or explicitly stops/restarts that managed session first.
+
+**FR-CACHE-008**: The cache has a 500 MB default global limit, a 200 MB default
+per-account target, a 30-day inactive retention target, and least-recently-used
+inactive-account eviction.
+
+**FR-CACHE-009**: Cache size, eviction, and deletion run off the Electron main
+event loop in a dedicated maintenance utility process under
+`src/childprocess/managed-browser-cache/`.
+
+**FR-CACHE-010**: Clearing is idempotent: repeated requests for an already empty
+scope succeed with zero deleted bytes and cannot escape the managed cache root.
+
+**FR-CACHE-011**: Clear completion returns only scope, approximate deleted byte
+count, retained-cookie status, and safe reason codes; it never lists cached URLs
+or private response data.
+
+**FR-CACHE-012**: Cache content, cache paths, opaque account-scope identifiers,
+and cached URLs are excluded from logs, analytics, AI context, and support
+exports by default.
+
+**FR-CACHE-013**: Removing a Tool Account must queue its inactive managed cache
+for deletion after the account/session transaction succeeds; failure to delete
+cache must not restore or corrupt the removed account.
+
+**FR-CACHE-014**: Clear-on-exit must prevent queued cache namespaces from being
+reused after shutdown begins. If the shutdown deadline expires before physical
+deletion completes, the next startup resumes the deletion queue before those
+namespaces can be opened.
+
 ## 9. Browser Session and Cookie Requirements
 
 ### 9.1 Account selection and lease
@@ -615,24 +745,47 @@ A later persistent-profile design requires a separate security review covering
 storage encryption, operating-system key integration, profile locking, cleanup,
 backup behavior, account deletion, portability, and incident response.
 
+The managed resource cache in §9.6 is not a persistent profile and must not
+retain cookies or other authentication stores.
+
+### 9.6 Managed resource cache
+
+P0 uses a unique disposable Chrome profile for each browser session and a
+separate persistent disk-cache directory for eligible HTTP resources. The
+temporary profile is deleted after shutdown; the resource cache may survive and
+is reused only for the same opaque account scope and compatible Chrome version.
+
+Because authenticated responses can still contain private information even
+when marked cacheable, the cache is treated as sensitive local application
+data. AiFetchly must respect server cache-control behavior, never deliberately
+cache `no-store` responses, use restrictive filesystem permissions, and clear
+the cache when an account is removed or the user requests all browser data.
+
+Implementation must prove with the packaged Chrome versions that cookies,
+local storage, IndexedDB, service workers, history, autofill, permissions, and
+credential state remain in the disposable profile rather than the persistent
+resource-cache directory. Failure of that containment test disables persistent
+cache for the affected platform/OS/browser combination.
+
 ## 10. LLM Browser Tool Requirements
 
 ### 10.1 Tool family
 
 The first release must register these built-in tools:
 
-| Tool                           | Purpose                                                   | Default risk      |
-| ------------------------------ | --------------------------------------------------------- | ----------------- |
-| `browser_start_session`        | Start or bind to a managed browser for a selected account | automation        |
-| `browser_get_state`            | Get safe session status and current sanitized URL         | automation-read   |
-| `browser_observe`              | Capture the page's semantic interactive state             | automation-read   |
-| `browser_navigate`             | Navigate to an approved URL                               | automation-write  |
-| `browser_run_actions`          | Execute a bounded structured action program               | action-dependent  |
-| `browser_evaluate_script`      | Execute reviewed JavaScript in the page context           | privileged-script |
-| `browser_screenshot`           | Capture the visible page for the current conversation     | automation-read   |
-| `browser_request_handoff`      | Pause and ask the user to take control                    | automation-read   |
-| `browser_resume_after_handoff` | Resume after explicit user action                         | automation-write  |
-| `browser_stop_session`         | Stop and close the current browser                        | automation-write  |
+| Tool                           | Purpose                                                               | Default risk      |
+| ------------------------------ | --------------------------------------------------------------------- | ----------------- |
+| `browser_start_session`        | Start or bind to a managed browser for a selected account             | automation        |
+| `browser_get_state`            | Get safe session status and current sanitized URL                     | automation-read   |
+| `browser_observe`              | Capture the page's semantic interactive state                         | automation-read   |
+| `browser_navigate`             | Navigate to an approved URL                                           | automation-write  |
+| `browser_run_actions`          | Execute a bounded structured action program                           | action-dependent  |
+| `browser_evaluate_script`      | Execute reviewed JavaScript in the page context                       | privileged-script |
+| `browser_screenshot`           | Capture the visible page for the current conversation                 | automation-read   |
+| `browser_request_handoff`      | Pause and ask the user to take control                                | automation-read   |
+| `browser_resume_after_handoff` | Resume after explicit user action                                     | automation-write  |
+| `browser_clear_cache`          | Clear the current account's managed resource cache after confirmation | local-data-delete |
+| `browser_stop_session`         | Stop and close the current browser                                    | automation-write  |
 
 The exact public names may be refined in technical design, but the capabilities
 and risk separation are required.
@@ -824,6 +977,7 @@ post do not have the same impact.
 | Privileged script          | Any page-context script                                                           | Script preview and task/origin-scoped approval                                            |
 | Authentication             | Password, MFA, login/security CAPTCHA, passkey, account recovery                  | Mandatory user handoff                                                                    |
 | Eligible non-login CAPTCHA | Authorized non-sensitive challenge outside login/security flow                    | Main-process provider policy; one attempt; manual handoff fallback                        |
+| Local data deletion        | Clear selected/all managed-browser resource cache                                 | Explicit scope/size confirmation; preserve saved login unless separately selected         |
 
 ### 11.2 Approval invariants
 
@@ -1274,6 +1428,12 @@ Do not use stealth success or platform enforcement avoidance as a product metric
   with heartbeat supervision and verified cleanup.
 - **FR-P0-016**: Detect CAPTCHA and robot-verification states, apply the
   main-process resolution policy, and always support manual handoff.
+- **FR-P0-017**: Add the built-in-browser and persistent-cache system settings,
+  both enabled by default, with release-flag precedence.
+- **FR-P0-018**: Reuse an account-isolated resource cache while keeping the
+  authentication profile disposable.
+- **FR-P0-019**: Support confirmed selected-account and all-cache clearing that
+  preserves saved login sessions.
 
 ### P1: Advanced automation
 
@@ -1330,6 +1490,10 @@ Do not use stealth success or platform enforcement avoidance as a product metric
    handoff; missed-heartbeat cleanup is idempotent.
 9. CAPTCHA provider failure cannot create an infinite submission or polling
    loop.
+10. Cache cleanup failure cannot block browser startup, shutdown, or the main
+    process; it returns a safe retryable result.
+11. An active cache directory is never deleted while its owning Chrome process
+    is running.
 
 ### 19.3 Performance
 
@@ -1344,6 +1508,10 @@ Do not use stealth success or platform enforcement avoidance as a product metric
    IPC.
 5. Browser concurrency defaults to one until resource measurements justify an
    increase.
+6. A warm repeat fixture load should demonstrate a measurable improvement over
+   a cold load before persistent cache is enabled for a platform/OS combination.
+7. Cache size scanning, eviction, and deletion must not block the Electron main
+   event loop for more than one normal event-loop turn.
 
 ### 19.4 Privacy
 
@@ -1354,6 +1522,10 @@ Do not use stealth success or platform enforcement avoidance as a product metric
    remote AI model.
 4. Private messages, comments, account names, and form content must be bounded
    and redacted in diagnostics.
+5. Persistent browser cache is treated as sensitive local data and is isolated
+   per opaque account scope with restrictive permissions.
+6. Clearing cache reports only size/count status and never cached URLs,
+   response bodies, headers, or filenames.
 
 ### 19.5 Maintainability
 
@@ -1398,6 +1570,11 @@ Main process
   CaptchaProviderService
     - request-scoped provider token use
     - cancellation, timeout, and safe result
+  ManagedBrowserSettingsModule
+    - effective enablement and validated user preferences
+  ManagedBrowserCacheModule
+    - opaque account scope and trusted path derivation
+    - active-session coordination and safe clear API
              |
              | validated process messages, ephemeral cookies
              v
@@ -1411,6 +1588,9 @@ src/childprocess/managed-browser/
     - PlatformBrowserAdapter
     - ChallengeDetector (detection only; no provider credential)
     - cancellation and cleanup
+src/childprocess/managed-browser-cache/
+  ManagedBrowserCacheMaintenanceWorker
+    - bounded size scan, eviction, and validated deletion only
              |
              v
        Headed Chrome
@@ -1475,14 +1655,18 @@ project.
 
 ### Phase 1: Authenticated visible browser pilot
 
-1. Add account lease and worker lifecycle.
-2. Transfer cookies through private validated IPC.
-3. Apply cookies before navigation.
-4. Add platform verification, same-context manual login, and chat notices.
-5. Capture and persist refreshed cookies through the main process.
-6. Add observe, screenshot, stop, and status UI.
-7. Add utility-process heartbeat, disconnect handling, verified process-tree
-   cleanup, and application-shutdown integration.
+1. Add default-enabled browser and cache settings with the release-flag gate.
+2. Add account lease and worker lifecycle.
+3. Transfer cookies through private validated IPC.
+4. Apply cookies before navigation.
+5. Add platform verification, same-context manual login, and chat notices.
+6. Capture and persist refreshed cookies through the main process.
+7. Add disposable profile plus account-isolated resource-cache directories.
+8. Add selected/all cache inspection, confirmation, clear, eviction, and safe
+   completion notices.
+9. Add observe, screenshot, stop, and status UI.
+10. Add utility-process heartbeat, disconnect handling, verified process-tree
+    cleanup, and application-shutdown integration.
 
 Exit gate: an authorized pilot account can reuse a valid session, complete a
 manual handoff when required, close cleanly, and reuse refreshed cookies later
@@ -1567,6 +1751,16 @@ Test:
 - challenge IDs enforce one provider submission and one terminal event;
 - heartbeat health, missed-heartbeat threshold, idempotent cleanup, and stale
   PID rejection.
+- effective enablement precedence: release flag, user setting, AI entitlement,
+  dependency, platform, and account;
+- default settings, validated cache-size bounds, and runtime toggle behavior;
+- opaque cache-scope derivation, Chrome-version segregation, canonical path
+  containment, symlink rejection, and active-session locking;
+- cache clear idempotency, account/all scoping, deletion-queue recovery,
+  least-recently-used eviction, retention, and size accounting;
+- account-removal queueing and clear-on-exit restart completion;
+- cache clearing never invokes `AccountSessionService.clearAccountSession()` or
+  removes account-cookie rows.
 
 ### 23.2 Worker integration tests
 
@@ -1591,6 +1785,13 @@ Use a controlled local test server to verify:
   falls back to handoff;
 - heartbeat continues while the user controls the browser;
 - simulated worker hang and Chrome disconnect leave Electron responsive.
+- repeat fixture loading demonstrates cache reuse and cache-disabled cold
+  behavior;
+- temporary profiles contain cookies/storage and are removed, while only
+  validated cache artifacts survive;
+- selected-account clear preserves encrypted cookies and forces the following
+  fixture load cold;
+- an active cache clear is deferred or stops/restarts only after confirmation.
 
 ### 23.3 Main-process tests
 
@@ -1612,6 +1813,12 @@ Place main-process and IPC tests under `test/vitest/main/`. Verify:
   page content or LLM arguments;
 - worker exit, error, missed heartbeat, Chrome disconnect, and app shutdown all
   release the same lease through one cleanup path.
+- disabled browser preference rejects start before cookie decryption or worker
+  creation and returns the settings route;
+- cache IPC accepts scope/account identifiers but rejects all renderer paths;
+- cache operations use `ManagedBrowserCacheModule`, never direct database access
+  or recursive deletion from an IPC handler;
+- cache-maintenance worker messages and result sizes are strictly validated.
 
 ### 23.4 Component tests
 
@@ -1627,6 +1834,10 @@ Every new or modified browser UI component requires tests under
   provider-attempt, manual-fallback, and crash chat notices;
 - **I've finished logging in**, **Continue task**, **Extend time**, and
   **Cancel task** behavior;
+- default-enabled browser/cache toggles, size display, last-clear status, and
+  clear-on-exit control;
+- selected-account/all-cache confirmations and active-session choices;
+- clear success, empty, deferred, cancelled, partial-failure, and retry states;
 - keyboard and accessible-label behavior;
 - six-language translation-key parity;
 - long account names and narrow layouts.
@@ -1651,6 +1862,12 @@ Add Playwright Electron tests under `test/e2e/specs/` for:
     failure/manual-fallback paths without an external network dependency;
 11. crash and hang the worker, verify the main window remains interactive, and
     confirm no lease or verified child process remains.
+12. disable the built-in browser, verify its tools cannot start work, re-enable
+    it, and verify the user preference survives the release flag changing;
+13. warm a fixture cache, verify repeat-load reuse, clear it while preserving
+    login cookies, and verify the next load is cold;
+14. request clear during an active browser and verify stop/defer/cancel choices
+    without unsafe live-directory deletion.
 
 Live third-party platforms must not be required for CI.
 
@@ -1668,6 +1885,10 @@ Verify:
   processes and their verified Chrome descendants;
 - provider tokens and challenge payload canaries do not appear in packaged logs
   or environment diagnostics.
+- cache roots remain within the application-managed cache directory on every
+  packaged OS and reject symlinks/path traversal;
+- browser-version changes select a new compatible cache namespace and old
+  namespaces become eviction candidates.
 
 ## 24. Acceptance Criteria
 
@@ -1711,6 +1932,21 @@ The P0/P1 release is accepted only when all of the following pass:
 20. Configuring a 2Captcha token alone cannot authorize use; domain policy,
     disclosure consent, supported challenge type, and non-sensitive context are
     also required.
+21. **Use built-in managed browser** and **Use managed browser cache** default
+    to enabled for new settings rows, while the release flag can still block
+    starts without rewriting either preference.
+22. Disabling the built-in browser prevents worker creation and cookie
+    decryption; an active session receives an explicit stop-or-finish choice.
+23. Two Tool Accounts never reuse the same persistent cache scope, and a Chrome
+    major/cache-format change cannot silently reuse an incompatible namespace.
+24. Clearing selected or all managed-browser caches preserves encrypted cookies
+    and unrelated application data, rejects caller-provided paths, and reports
+    safe deleted-size status.
+25. Repeat-load, cache-disabled, eviction, active-session, crash, symlink, and
+    packaged-path tests pass on every supported operating system.
+26. Removing an account or enabling clear-on-exit prevents its queued cache
+    namespace from being reused, even when physical deletion resumes after an
+    interrupted shutdown.
 
 The P1 script release is accepted only when:
 
@@ -1749,6 +1985,13 @@ Within the pilot cohort and authorized test accounts:
 - 100% of simulated publish/delete/send actions request the required approval;
 - browser Stop begins immediately and closes within five seconds in at least
   95% of normal test runs.
+- zero cross-account cache hits occur in isolation fixtures;
+- 100% of cache-clear fixtures preserve the saved cookie snapshot unless the
+  user separately chose **Clear login session** or **Clear all browser data**;
+- warm repeat-load fixtures show a documented improvement before persistent
+  cache is enabled for that platform/browser/OS combination;
+- automatic eviction keeps managed-browser cache within the configured global
+  bound after its next maintenance pass.
 
 Metrics are diagnostic, not a license to automate around platform protections.
 
@@ -1798,6 +2041,26 @@ resume, refreshed cookie capture, persistence-status reporting, and a separately
 reviewed future persistent-profile option rather than silently duplicating
 complete browser profiles now.
 
+### Risk: persistent cache exposes authenticated response data
+
+**Mitigation**: treat cache as sensitive local data, isolate by opaque account
+scope and Chrome version, respect server cache directives, use restrictive
+permissions, exclude cache details from logs/exports, offer clear controls, and
+disable persistence when containment tests fail.
+
+### Risk: cache clear removes unrelated or authentication data
+
+**Mitigation**: derive paths only in the main process, validate canonical paths
+under a dedicated root, reject symlinks and renderer paths, separate cache from
+cookies/profiles/downloads, coordinate active sessions, and test planted files
+outside the root remain untouched.
+
+### Risk: cache maintenance freezes Electron or races Chrome
+
+**Mitigation**: use a dedicated maintenance utility process, never delete an
+active scope, bound scanning and deletion work, atomically move inactive scopes
+to a deletion queue, and make retry/cleanup idempotent.
+
 ### Risk: CAPTCHA provider violates expectations or leaks private data
 
 **Mitigation**: login/security challenges are never outsourced; third-party
@@ -1838,6 +2101,10 @@ product, security, legal, or platform-owner sign-off:
    on which screenshots remain prohibited.
 7. Confirm the supported Windows, macOS, and Linux packaging matrix for the
    worker heartbeat, process-identity, and descendant-cleanup gates.
+8. Confirm whether users may raise the cache maximum above the 500 MB default
+   in P0 or whether the UI should initially expose only on/off and clear.
+9. Confirm the cache-performance threshold and privacy test evidence required
+   to enable persistent cache for each pilot platform and operating system.
 
 ## 28. Implementation Companion
 
@@ -1847,6 +2114,9 @@ limits, and file plan are defined in the
 including:
 
 - exact worker schemas, heartbeat, crash isolation, and state machine;
+- default-enabled browser/cache settings and effective gating;
+- disposable authentication profile plus account/version resource cache;
+- safe cache status, limits, eviction, clearing, and maintenance-worker design;
 - same-context manual login and structured AI Chat notices;
 - CAPTCHA decision policy and request-scoped provider boundary;
 - browser executable resolution and fingerprint validation;

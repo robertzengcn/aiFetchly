@@ -33,26 +33,28 @@ scrapers or the existing Electron manual-login flow.
 
 ### 2.1 Resolved PRD decisions
 
-| Topic          | Decision                                                                                                                                                                   |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pilot          | YouTube/Google is the default pilot, subject to an authorized QA account. Its adapter verifies both Google login and YouTube identity.                                     |
-| Browser source | Support a managed, pinned Chrome for Testing build and a validated system Chrome fallback. Never silently download during a browser task.                                  |
-| Runtime        | Headed Chrome controlled through Puppeteer 25.x from a dedicated utility process.                                                                                          |
-| Profile        | Ephemeral incognito browser context for P0/P1; no shared or persistent `userDataDir`.                                                                                      |
-| Tabs           | One controlled tab in P0. Popups pause for policy handling. Multi-tab control is P1.                                                                                       |
-| User agent     | Native browser user agent by default. An override is exceptional and must match the actual Chrome major version.                                                           |
-| Stealth        | `puppeteer-extra-plugin-stealth` is a reviewed compatibility layer, not a promise of invisibility. Evasions that contradict native values are disabled.                    |
-| Cookies        | Main decrypts; worker applies; worker returns refreshed cookies; main normalizes, filters, encrypts, and persists.                                                         |
-| LLM API        | Small typed tools plus a bounded action-program DSL. Raw Puppeteer, CDP, Node.js, and Electron APIs are not exposed.                                                       |
-| Scripts        | Page-context scripts are privileged, exact-source approved, origin scoped, time bounded, and result sanitized. They are not described as a security sandbox.               |
-| Approval       | Publish/send/delete/security changes and every page script are always-confirm, even in `full_access`.                                                                      |
-| Long work      | Browser sessions are resources; long action programs run as `ToolJobRegistry` jobs with progress and cancellation.                                                         |
-| Screenshots    | Local UI preview is allowed. Sending a screenshot to a remote AI provider requires the existing image disclosure/attachment path and explicit task intent.                 |
-| Proxy          | One proxy configuration is fixed for the lifetime of an authenticated session. Direct fallback is never silent. P0 supports direct and HTTP(S) proxy modes.                |
-| Missing login  | Missing, invalid, or expired cookies enter manual-login handoff in the same headed Chrome context; successful verification persists the refreshed session and resumes.     |
-| Chat notices   | Login, verification, challenge, resume, crash, and terminal transitions are published as localized, deduplicated structured notices in AI Chat.                            |
-| CAPTCHA        | Sensitive/login challenges always use manual handoff. A configured 2Captcha provider is eligible only for explicitly authorized non-login domains and one bounded attempt. |
-| Isolation      | Exactly one disposable Electron utility process owns each browser session and its Chrome tree; the main process supervises it with heartbeat and idempotent cleanup.       |
+| Topic           | Decision                                                                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pilot           | YouTube/Google is the default pilot, subject to an authorized QA account. Its adapter verifies both Google login and YouTube identity.                                          |
+| Browser source  | Support a managed, pinned Chrome for Testing build and a validated system Chrome fallback. Never silently download during a browser task.                                       |
+| Runtime         | Headed Chrome controlled through Puppeteer 25.x from a dedicated utility process.                                                                                               |
+| Browser setting | `managed-browser-enabled` defaults on; effective use also requires the release flag, AI entitlement for AI entry points, platform/account support, and a compatible dependency. |
+| Profile         | One unique temporary `userDataDir` and default context per session; the profile is deleted after shutdown and never reused as durable authentication.                           |
+| Resource cache  | A separate account-isolated, Chrome-versioned disk cache persists by default for speed; it is independently disableable and clearable without deleting cookies.                 |
+| Tabs            | One controlled tab in P0. Popups pause for policy handling. Multi-tab control is P1.                                                                                            |
+| User agent      | Native browser user agent by default. An override is exceptional and must match the actual Chrome major version.                                                                |
+| Stealth         | `puppeteer-extra-plugin-stealth` is a reviewed compatibility layer, not a promise of invisibility. Evasions that contradict native values are disabled.                         |
+| Cookies         | Main decrypts; worker applies; worker returns refreshed cookies; main normalizes, filters, encrypts, and persists.                                                              |
+| LLM API         | Small typed tools plus a bounded action-program DSL. Raw Puppeteer, CDP, Node.js, and Electron APIs are not exposed.                                                            |
+| Scripts         | Page-context scripts are privileged, exact-source approved, origin scoped, time bounded, and result sanitized. They are not described as a security sandbox.                    |
+| Approval        | Publish/send/delete/security changes and every page script are always-confirm, even in `full_access`.                                                                           |
+| Long work       | Browser sessions are resources; long action programs run as `ToolJobRegistry` jobs with progress and cancellation.                                                              |
+| Screenshots     | Local UI preview is allowed. Sending a screenshot to a remote AI provider requires the existing image disclosure/attachment path and explicit task intent.                      |
+| Proxy           | One proxy configuration is fixed for the lifetime of an authenticated session. Direct fallback is never silent. P0 supports direct and HTTP(S) proxy modes.                     |
+| Missing login   | Missing, invalid, or expired cookies enter manual-login handoff in the same headed Chrome context; successful verification persists the refreshed session and resumes.          |
+| Chat notices    | Login, verification, challenge, resume, crash, and terminal transitions are published as localized, deduplicated structured notices in AI Chat.                                 |
+| CAPTCHA         | Sensitive/login challenges always use manual handoff. A configured 2Captcha provider is eligible only for explicitly authorized non-login domains and one bounded attempt.      |
+| Isolation       | Exactly one disposable Electron utility process owns each browser session and its Chrome tree; the main process supervises it with heartbeat and idempotent cleanup.            |
 
 ### 2.2 Hard invariants
 
@@ -81,6 +83,12 @@ scrapers or the existing Electron manual-login flow.
     releases leases.
 12. Puppeteer, browser events, and browser-specific session state never run on
     the Electron main-process event loop.
+13. Renderer and LLM requests never supply cache filesystem paths. Only the
+    main process derives cache roots and opaque account scopes.
+14. Persistent cache directories never contain the durable cookie snapshot,
+    temporary profile, downloads, or another account's cache.
+15. Cache deletion never runs against an active Chrome scope and never invokes
+    account-session deletion.
 
 ## 3. Current Repository Baseline
 
@@ -122,6 +130,10 @@ The implementation should extend these existing components:
 - [`background.ts`](../../src/background.ts) already coordinates bounded worker
   shutdown during `before-quit`. The managed-browser supervisor must join that
   sequence instead of adding an independent quit handler.
+- [`SystemSettingGroupModule`](../../src/modules/SystemSettingGroupModule.ts)
+  and `SystemSettingModule` provide the required Model/Module route for browser
+  and cache preferences. Managed-browser IPC must not access their repositories
+  directly.
 
 The repository currently declares Electron 43.4.1, Puppeteer/Puppeteer Core
 25.8.x, Puppeteer Extra 3.3.6, Stealth 2.11.2, and Zod 3.24.x. Implementation
@@ -147,6 +159,8 @@ Electron main process
   BrowserChatNoticePublisher   safe AI Chat transition events
   CaptchaResolutionPolicy      main-process eligibility decision
   CaptchaProviderService       request-scoped 2Captcha call
+  ManagedBrowserSettingsModule effective browser/cache preferences
+  ManagedBrowserCacheModule    trusted scopes, locks, clear orchestration
   ToolJobRegistry              long action programs
              |
              | private utilityProcess messages
@@ -164,7 +178,9 @@ src/childprocess/managed-browser/
   PlatformBrowserAdapter       login/challenge/action classification
              |
              v
-Headed Chrome, isolated context, one controlled page
+Headed Chrome, isolated temporary profile, one controlled page
+  +-- disposable authentication/profile directory
+  +-- account/version resource-cache directory
 ```
 
 ### 4.1 Trust boundaries
@@ -194,6 +210,8 @@ decrypted cookie handoff        page revision
 encrypted cookie persistence    transient returned cookies
 worker process handle           runtime cancellation signal
 safe audit entries              browser event listeners
+trusted cache root/scope        temporary profile + open cache handle
+cache settings/active locks     bounded cache-use metrics
 ```
 
 ## 5. Proposed File Layout
@@ -215,6 +233,11 @@ src/
     adapters/
       PlatformBrowserAdapter.ts
       YouTubeBrowserAdapter.ts
+  childprocess/managed-browser-cache/
+    index.ts
+    ManagedBrowserCacheMaintenanceWorker.ts
+    CachePathValidator.ts
+    CacheEvictionPlanner.ts
   config/
     managedBrowser.ts
     skillsRegistry.ts                         # register deferred AI tools
@@ -222,6 +245,8 @@ src/
     managedBrowserTypes.ts                    # shared non-secret contracts
   modules/
     ManagedBrowserModule.ts
+    ManagedBrowserSettingsModule.ts
+    ManagedBrowserCacheModule.ts
   schemas/
     aiTools/managedBrowser.ts
     ipc/managedBrowser.ts
@@ -235,6 +260,7 @@ src/
     BrowserChatNoticePublisher.ts
     CaptchaResolutionPolicy.ts
     CaptchaProviderService.ts
+    ManagedBrowserCacheScopeService.ts
   main-process/communication/
     managed-browser-ipc.ts
   views/components/aiChatV2/
@@ -248,11 +274,13 @@ test/
   vitest/main/components/
   e2e/specs/managedBrowser.test.ts
 vite.managedBrowserWorker.config.mjs
+vite.managedBrowserCacheWorker.config.mjs
 ```
 
 `forge.config.js` must register `src/childprocess/managed-browser/index.ts` as a
-separate Vite build entry. Shared files used by both main and worker must remain
-free of DB and renderer imports.
+separate Vite build entry and register the cache-maintenance worker separately.
+Shared files used by main and workers must remain free of DB and renderer
+imports.
 
 ## 6. Shared Domain Types
 
@@ -283,6 +311,7 @@ export type BrowserRiskClass =
   | "reversible_write"
   | "consequential_write"
   | "credential_or_security"
+  | "local_data_delete"
   | "privileged_script";
 
 export interface BrowserExecutableDescriptor {
@@ -319,7 +348,10 @@ export type BrowserChatNoticeType =
   | "challenge_failed"
   | "challenge_manual_action_required"
   | "task_resuming"
-  | "browser_crashed";
+  | "browser_crashed"
+  | "cache_clear_deferred"
+  | "cache_clear_completed"
+  | "cache_clear_failed";
 
 export interface SafeBrowserChatNotice {
   readonly eventId: string;
@@ -329,6 +361,31 @@ export interface SafeBrowserChatNotice {
   readonly severity: "info" | "warning" | "success" | "error";
   readonly requiresUserAction: boolean;
   readonly createdAt: string;
+}
+
+export interface EffectiveManagedBrowserSettings {
+  readonly browserEnabled: boolean;
+  readonly cacheEnabled: boolean;
+  readonly cacheMaxBytes: number;
+  readonly clearCacheOnExit: boolean;
+  readonly disabledReasonCode: string | null;
+}
+
+export interface SafeManagedBrowserCacheStatus {
+  readonly scope: "account" | "all";
+  readonly accountId?: number;
+  readonly approximateBytes: number;
+  readonly lastClearedAt: string | null;
+  readonly active: boolean;
+  readonly pendingClear: boolean;
+}
+
+export interface SafeManagedBrowserCacheClearResult {
+  readonly state: "cleared" | "empty" | "deferred" | "cancelled" | "failed";
+  readonly scope: "account" | "all";
+  readonly approximateDeletedBytes: number;
+  readonly savedLoginSessionPreserved: true;
+  readonly reasonCode: string | null;
 }
 ```
 
@@ -361,27 +418,38 @@ export interface ManagedBrowserModuleApi {
   resumeFromHandoff(sessionId: string): Promise<SafeManagedBrowserStatus>;
   stop(sessionId: string, reason: StopReason): Promise<StopResult>;
   getStatus(sessionId: string): SafeManagedBrowserStatus;
+  getCacheStatus(accountId?: number): Promise<SafeManagedBrowserCacheStatus>;
+  clearCache(
+    input: ClearManagedBrowserCacheInput
+  ): Promise<SafeManagedBrowserCacheClearResult>;
 }
 ```
 
 Start order is fixed:
 
-1. Validate input and resolve the account through `SocialAccountModule`.
-2. Resolve platform manifest and configured proxy reference.
-3. Acquire an account lease.
-4. Resolve a compatible browser executable in the main process.
-5. Start a dedicated worker and wait for `WORKER_READY`.
-6. Call `AccountSessionService.getDecryptedSnapshot(accountId)`.
-7. Revalidate cookie domains against `PlatformSessionManifest`.
-8. Send `START_SESSION` with executable, non-secret policy, proxy, and cookie
-   snapshot.
-9. Zero/release the local cookie array reference after the send completes.
-10. Wait for `SESSION_READY`, `LOGIN_REQUIRED`, `HANDOFF_REQUIRED`, or a typed
+1. Check the application release flag, then read effective user browser/cache
+   preferences through `ManagedBrowserSettingsModule`.
+2. For an AI entry point, check `USER_AI_ENABLED`; reject disabled work before
+   account lookup, cookie decryption, or worker creation.
+3. Validate input and resolve the account through `SocialAccountModule`.
+4. Resolve platform manifest and configured proxy reference.
+5. Acquire an account lease and cache-scope active lock.
+6. Resolve a compatible browser executable in the main process.
+7. Resolve a unique temporary profile and, when enabled and compatible, the
+   trusted account/version cache directory.
+8. Start a dedicated worker and wait for `WORKER_READY`.
+9. Call `AccountSessionService.getDecryptedSnapshot(accountId)`.
+10. Revalidate cookie domains against `PlatformSessionManifest`.
+11. Send `START_SESSION` with executable, non-secret policy, trusted profile and
+    cache configuration, proxy, and cookie
+    snapshot.
+12. Zero/release the local cookie array reference after the send completes.
+13. Wait for `SESSION_READY`, `LOGIN_REQUIRED`, `HANDOFF_REQUIRED`, or a typed
     failure.
-11. For missing/invalid cookies or failed authentication, keep the worker and
+14. For missing/invalid cookies or failed authentication, keep the worker and
     same Chrome context alive, publish `login_required`, and wait locally for
     the user's completion action without holding a remote AI stream open.
-12. Return a safe status without cookie details.
+15. Return a safe status without cookie or cache-path details.
 
 Any failure after lease acquisition enters the same cleanup path.
 
@@ -425,6 +493,36 @@ manual browser management may use separate non-AI channels. The built-in AI
 tool path must perform the same entitlement check inside
 `ManagedBrowserAiToolService`, because tool execution does not necessarily pass
 through renderer IPC.
+
+### 7.4 Browser and cache settings
+
+`ManagedBrowserSettingsModule` uses `SystemSettingModule` for data access and
+normalizes missing/legacy values. Proposed settings under a new
+`managed-browser-group` are:
+
+```text
+managed-browser-enabled = "1"                 # toggle, default true
+managed-browser-cache-enabled = "1"           # toggle, default true
+managed-browser-cache-max-size-mb = "500"     # integer, clamp 100..2048
+managed-browser-cache-clear-on-exit = "0"      # toggle, default false
+```
+
+The module returns `EffectiveManagedBrowserSettings`; IPC and tools never read
+the Model or setting rows directly. The release flag is evaluated separately
+and takes precedence without mutating stored user values.
+
+`browser_start_session` returns `managed_browser_disabled` before cookie access
+or process creation when the effective browser setting is off. Tool-catalog
+loading should omit or mark the browser tools unavailable, but every tool still
+checks at execution time so a previously loaded schema cannot bypass a runtime
+toggle.
+
+Turning the browser setting off while a session is active records the new
+preference immediately but does not kill the session. The UI requests
+`finish_active`, `stop_now`, or `cancel_setting_change`; `stop_now` uses normal
+supervisor cleanup. Cache-setting changes affect new sessions. Turning cache
+off never deletes existing bytes automatically; the user may clear them
+separately.
 
 ## 8. Worker Protocol
 
@@ -471,6 +569,7 @@ interface StartSessionPayload {
   readonly requestId: string;
   readonly executable: BrowserExecutableDescriptor;
   readonly launchPolicy: BrowserLaunchPolicy;
+  readonly storagePolicy: WorkerBrowserStoragePolicy;
   readonly platform: WorkerPlatformDefinition;
   readonly proxy: WorkerProxyConfig | null;
   readonly cookies: readonly NormalizedCookie[];
@@ -913,6 +1012,254 @@ the previous encrypted snapshot unchanged. Cookie objects are discarded after
 acknowledgement. JavaScript cannot guarantee memory zeroization, so the design
 minimizes lifetime and references instead of claiming perfect erasure.
 
+### 13.4 Storage separation
+
+Persistent caching changes the original incognito-context plan. P0 launches one
+Chrome instance per session with a unique temporary `userDataDir` and uses its
+default context. Because one disposable utility process and account lease own
+that Chrome instance, the default context remains account-isolated while
+allowing Chrome's external disk-cache directory to work predictably.
+
+```text
+OS temporary directory
+  aifetchly-managed-browser/<sessionId-random>/profile/
+    cookies, local storage, IndexedDB, service workers, history, permissions
+    -> deleted after worker/Chrome shutdown
+
+Electron application cache directory
+  managed-browser-cache/v1/<opaqueAccountScope>/<cacheNamespace>/http-cache/
+    eligible Chrome HTTP resource cache only
+    -> retained, bounded, versioned, and user-clearable
+```
+
+The managed browser never points Chrome at the Electron partition, the user's
+external Chrome profile, or a persistent per-account profile. Downloads use a
+third separately approved directory and are not part of either cache clear.
+
+`WorkerBrowserStoragePolicy` contains main-derived absolute paths but never
+crosses to renderer or LLM:
+
+```ts
+interface WorkerBrowserStoragePolicy {
+  readonly temporaryProfilePath: string;
+  readonly persistentCache:
+    | { readonly enabled: false; readonly reasonCode: string }
+    | {
+        readonly enabled: true;
+        readonly cachePath: string;
+        readonly scopeToken: string;
+        readonly namespace: string;
+      };
+}
+```
+
+The worker verifies both paths against main-supplied roots before launch. It
+passes the temporary profile as Puppeteer's `userDataDir` and the persistent
+cache through the reviewed Chrome disk-cache launch option. It must not add
+flags that persist credentials, autofill, passwords, or permissions.
+
+### 13.5 Cache root and opaque account scope
+
+`ManagedBrowserCacheScopeService` runs in the main process. It obtains an
+application cache root from an injected Electron cache-path resolver and
+creates only this subtree:
+
+```text
+<app-cache>/aifetchly/managed-browser-cache/v1/
+```
+
+The stable account directory name is an HMAC of
+`managed-browser-cache:v1:<accountId>` using an installation/user secret already
+available to the main process, truncated to a filesystem-safe opaque token. A
+raw account ID, email address, platform username, or account display name never
+appears in the path. If the key is unavailable, persistent cache fails off for
+that session; it does not fall back to a readable identifier.
+
+The cache namespace includes Chrome major version, platform, architecture, and
+an AiFetchly cache-schema version, for example:
+
+```text
+chrome-136-linux-x64-schema-1
+```
+
+An incompatible browser or schema selects a fresh namespace. Old inactive
+namespaces become eviction candidates and are never silently reused.
+
+Path validation occurs in both main and maintenance worker:
+
+1. resolve the configured cache root to a canonical absolute path;
+2. reject an empty, filesystem-root, home, user-data, workspace, or temporary
+   profile root;
+3. accept only generated opaque scope and namespace segments;
+4. reject `..`, separators inside segments, alternate data streams, device
+   paths, and embedded nulls;
+5. inspect every existing path component and reject symbolic links or other
+   link-like redirections;
+6. confirm the final canonical parent remains inside the exact managed root;
+7. never follow a caller-provided glob or recursively delete the root itself.
+
+### 13.6 Cache ownership and locking
+
+`ManagedBrowserCacheModule` holds an in-memory active-scope registry tied to
+the account lease. Exactly one Chrome process may open an account/namespace
+cache path. Maintenance operations receive a snapshot of active scope tokens
+and must skip them.
+
+The worker reports `CACHE_OPENED` only after Chrome launches with the expected
+path and `CACHE_RELEASED` after Chrome exits and file handles are closed. Main
+does not consider a scope inactive merely because a page closed. Worker crash
+cleanup waits for verified Chrome termination before releasing the cache lock.
+
+At startup, stale in-memory locks do not survive. AiFetchly checks its managed
+process registry and directory metadata; it never kills or unlocks a process
+based on a cache path alone.
+
+### 13.7 Cache metadata and limits
+
+Each namespace has a small atomic metadata file containing only:
+
+```ts
+interface ManagedBrowserCacheMetadata {
+  readonly schemaVersion: 1;
+  readonly namespace: string;
+  readonly approximateBytes: number;
+  readonly lastUsedAtEpochMs: number;
+  readonly lastClearedAtEpochMs: number | null;
+  readonly lastChromeMajor: number;
+}
+```
+
+It contains no account ID, URL, hostname, cookie, header, response identifier,
+or filename inventory. Metadata is advisory: the maintenance worker computes a
+bounded size scan when accurate status is required and writes updates
+atomically.
+
+Defaults:
+
+- cache enabled: true;
+- global maximum: 500 MiB, user range 100-2048 MiB;
+- per-account target: 200 MiB;
+- inactive retention target: 30 days;
+- automatic maintenance: app startup after the UI is ready, then at most once
+  per 24 hours;
+- eviction: least-recently-used inactive account/version namespaces first;
+- active scopes: never evicted;
+- maintenance concurrency: one worker and one deletion at a time.
+
+Chrome's own cache-control behavior remains authoritative. AiFetchly does not
+intercept and store response bodies itself, does not override `no-store`, and
+does not create an application-level authenticated-response cache.
+
+### 13.8 Clear-cache orchestration
+
+Renderer/UI schemas accept only:
+
+```ts
+type ClearManagedBrowserCacheInput =
+  | {
+      readonly scope: "account";
+      readonly accountId: number;
+      readonly activeSessionDecision: "stop_and_clear" | "defer" | "cancel";
+      readonly confirmationId: string;
+    }
+  | {
+      readonly scope: "all";
+      readonly activeSessionDecision:
+        | "stop_and_clear"
+        | "skip_active"
+        | "cancel";
+      readonly confirmationId: string;
+    };
+```
+
+The AI tool is narrower: it may request only its current session's account
+scope and requires local-data-deletion confirmation. It cannot request `all`.
+
+Clear flow:
+
+1. Main validates confirmation, scope, account authority, and current settings.
+2. `ManagedBrowserCacheModule` derives the trusted path; it ignores/rejects any
+   unknown input field or path.
+3. If active, follow the explicit decision: normal stop then clear, record a
+   pending clear after close, skip active for all-scope, or cancel.
+4. After Chrome exits, acquire an exclusive maintenance lock.
+5. Revalidate the source directory and atomically rename it inside the managed
+   root to `deleting/<random-operation-id>`.
+6. Recreate an empty account namespace only when needed by a later session.
+7. Send the exact managed root and deletion-queue entry to the dedicated cache
+   maintenance utility process.
+8. The worker independently validates containment and removes only that entry.
+9. Return approximate deleted bytes and `savedLoginSessionPreserved: true`.
+
+Cancellation is accepted until step 5. After the atomic rename, the user-facing
+operation is logically complete and physical deletion continues in the
+maintenance worker. A crash during deletion leaves a recognizable deletion
+queue entry that the next maintenance pass resumes. Repeating clear on an empty
+scope returns `empty` with zero bytes.
+
+`Clear selected account cache`, `Clear all managed-browser caches`,
+`Clear saved login session`, and `Clear all browser data` are distinct commands.
+Only the latter two may call account-session clearing, and they require their
+own stronger confirmation.
+
+When clear-on-exit is enabled, `before-quit` first closes managed Chrome
+sessions, then atomically moves eligible cache namespaces into the deletion
+queue. The maintenance worker deletes until the global shutdown deadline.
+Entries remaining after that deadline stay quarantined and are deleted at the
+next startup before they can be selected for reuse.
+
+Tool Account removal calls `ManagedBrowserCacheModule.queueAccountRemoval()`
+only after the account/session deletion transaction succeeds. Cache deletion is
+best effort and retryable; it cannot roll back, restore, or corrupt the removed
+account. A missing key/scope mapping is handled by bounded orphan-namespace
+retention and later eviction rather than a broad directory delete.
+
+### 13.9 Cache maintenance worker protocol
+
+The cache worker lives under `src/childprocess/managed-browser-cache/`, has no
+database imports, and receives a strict Zod union:
+
+```text
+SCAN_SCOPE
+SCAN_ALL
+DELETE_QUEUED_SCOPE
+PLAN_EVICTION
+CANCEL_BEFORE_DELETE
+SHUTDOWN
+```
+
+Results contain byte/file counts, duration buckets, scope tokens, and safe
+error codes only. They never contain filenames or URLs. Scans have entry,
+depth, byte-counter, wall-time, and message-size limits. The worker refuses to
+delete an active scope list supplied by main and performs its own link and root
+validation.
+
+The main process never performs a large recursive scan or deletion itself. If
+the maintenance worker crashes, browser operation continues with cache
+temporarily unavailable for maintenance; the supervisor returns a retryable
+error and preserves the deletion queue.
+
+### 13.10 Performance and containment release gate
+
+Persistent cache is enabled for a platform/browser/OS tuple only after an
+integration fixture proves:
+
+1. a repeat page load obtains cache hits or a documented load-time/byte
+   improvement;
+2. disabling cache produces the expected cold behavior;
+3. two accounts never share a cached resource;
+4. cookies, local storage, IndexedDB, service workers, history, permissions,
+   autofill, and credential state remain in the temporary profile;
+5. shutdown deletes the temporary profile after Chrome exits;
+6. clearing cache preserves the encrypted cookie snapshot and next login state;
+7. a cache-version change selects a different namespace;
+8. symlink, path traversal, active-lock, crash, and interrupted-deletion tests
+   fail safely.
+
+If containment fails, the effective cache setting becomes disabled with a safe
+compatibility reason for that tuple, while the user's stored preference remains
+unchanged.
+
 ## 14. Observation Model
 
 ### 14.1 Safe observation result
@@ -992,20 +1339,26 @@ An action supplies both `ref` and `pageRevision`. Mismatch returns
 The tools are deferred built-ins in `skillsRegistry.ts` with permission
 category `automation` and explicit runtime risk checks.
 
-| Tool                           | Purpose                                  | Default execution     |
-| ------------------------------ | ---------------------------------------- | --------------------- |
-| `browser_start_session`        | Start/attach to an account-bound session | async startup         |
-| `browser_get_status`           | Read safe status                         | synchronous           |
-| `browser_observe`              | Obtain semantic page state               | browser timeout       |
-| `browser_run_actions`          | Execute a bounded typed program          | async when multi-step |
-| `browser_capture_screenshot`   | Local preview or approved AI attachment  | browser timeout       |
-| `browser_execute_page_script`  | Privileged page-context logic            | always confirm        |
-| `browser_request_handoff`      | Pause AI and give user control           | synchronous control   |
-| `browser_resume_after_handoff` | Re-verify and resume                     | browser timeout       |
-| `browser_stop_session`         | Capture refresh and close                | browser timeout       |
+| Tool                           | Purpose                                  | Default execution             |
+| ------------------------------ | ---------------------------------------- | ----------------------------- |
+| `browser_start_session`        | Start/attach to an account-bound session | async startup                 |
+| `browser_get_status`           | Read safe status                         | synchronous                   |
+| `browser_observe`              | Obtain semantic page state               | browser timeout               |
+| `browser_run_actions`          | Execute a bounded typed program          | async when multi-step         |
+| `browser_capture_screenshot`   | Local preview or approved AI attachment  | browser timeout               |
+| `browser_execute_page_script`  | Privileged page-context logic            | always confirm                |
+| `browser_request_handoff`      | Pause AI and give user control           | synchronous control           |
+| `browser_resume_after_handoff` | Re-verify and resume                     | browser timeout               |
+| `browser_clear_cache`          | Clear current account resource cache     | always confirm/local deletion |
+| `browser_stop_session`         | Capture refresh and close                | browser timeout               |
 
 Every tool requires `session_id` after start. Account IDs cannot be switched
 inside an active session.
+
+`browser_clear_cache` is restricted to the account already bound to the
+session, displays approximate size and saved-login preservation, and cannot
+select `all` or accept a path. Approval expires when session/account/cache
+status changes.
 
 ### 15.1 Action schema
 
@@ -1161,6 +1514,7 @@ not lower risk.
 | Reversible write    | Type a draft, change a filter, open a composer             | Task-level consent; adapter may elevate                                      |
 | Consequential write | Publish, send, reply, follow, like, upload, delete, submit | Always just-in-time confirm                                                  |
 | Credential/security | Password, MFA, account settings, recovery, permissions     | User handoff; automation blocked                                             |
+| Local data delete   | Clear selected-account managed-browser resource cache      | Explicit scope/size confirmation; saved login remains                        |
 | Privileged script   | Every page script                                          | Always exact-source confirm; writes receive additional consequential preview |
 
 `full_access` may suppress prompts only for low-risk actions. It cannot bypass
@@ -1476,10 +1830,14 @@ managed-browser:resume
 managed-browser:stop
 managed-browser:approve
 managed-browser:extend-handoff
+managed-browser:get-effective-settings
+managed-browser:get-cache-status
+managed-browser:clear-cache
 managed-browser:on-status-changed
 managed-browser:on-progress
 managed-browser:on-approval-required
 managed-browser:on-chat-notice
+managed-browser:on-cache-progress
 ```
 
 All request/response/event payloads have strict schemas under
@@ -1504,6 +1862,17 @@ parsing. IPC validates the sender web contents and calls
   **Cancel task** controls when relevant;
 - safe progress and actionable failure messages.
 
+System Settings adds a `ManagedBrowserSettingsPanel` containing the browser and
+cache toggles, validated cache maximum, clear-on-exit toggle, approximate size,
+last-clear time, selected-account/all-cache actions, and active-session choice.
+Cache status is loaded through the narrow managed-browser API, not by exposing
+filesystem paths or generic settings rows.
+
+The clear confirmation shows scope, approximate size, saved-login preservation,
+active-session effect, and expected cold-load impact. The completion notice
+states the approximate bytes removed and repeats that the saved login session
+was preserved.
+
 Approval and handoff are modal only when user action is required. Keyboard
 focus is trapped appropriately, every control has an accessible label, and no
 status relies on color alone.
@@ -1517,6 +1886,7 @@ their tests are committed together.
 ```ts
 export type ManagedBrowserErrorCode =
   | "ai_disabled"
+  | "managed_browser_disabled"
   | "account_not_found"
   | "account_in_use"
   | "session_cookie_missing"
@@ -1546,6 +1916,13 @@ export type ManagedBrowserErrorCode =
   | "cancelled"
   | "stop_timeout"
   | "cookie_refresh_failed"
+  | "cache_disabled"
+  | "cache_incompatible"
+  | "cache_scope_active"
+  | "cache_clear_deferred"
+  | "cache_path_invalid"
+  | "cache_maintenance_failed"
+  | "cache_limit_invalid"
   | "internal_error";
 ```
 
@@ -1567,6 +1944,14 @@ Recovery policy:
 - Stop timeout -> kill worker, release lease, emit cleanup diagnostic.
 - Provider unavailable/timeout/failure -> make no second automatic attempt;
   preserve the page and request manual handoff.
+- Browser preference disabled -> do not touch cookies or workers; return the
+  System Settings route.
+- Cache disabled/incompatible -> start with a disposable profile and no
+  persistent cache; do not alter the stored preference.
+- Active cache scope -> defer, skip, cancel, or stop through the user's explicit
+  choice; never delete live files.
+- Cache maintenance failure -> preserve the deletion queue, release locks, and
+  return a retryable safe status without blocking browser work.
 
 ## 24. Logging, Audit, and Privacy
 
@@ -1582,7 +1967,9 @@ Allowed operational fields:
 - approval decision and source hash;
 - heartbeat health buckets, disconnect cause, and verified cleanup outcome;
 - CAPTCHA decision mode and bounded reason code, without challenge/provider
-  payload.
+  payload;
+- cache enabled/effective reason, operation type, approximate byte bucket,
+  duration bucket, and safe terminal code;
 
 Forbidden fields:
 
@@ -1596,7 +1983,9 @@ Forbidden fields:
 - screenshots/base64;
 - complete script result;
 - full URLs with tokens/query/fragment;
-- decrypted storage payloads.
+- decrypted storage payloads;
+- cache root/path, opaque account scope, cached URLs, response headers/bodies,
+  filenames, and directory listings.
 
 A centralized `ManagedBrowserLogSanitizer` should redact recursively and limit
 depth/string length before calling the repository logger. Tests plant unique
@@ -1624,7 +2013,12 @@ authentication store.
 - heartbeat interval/miss threshold and global shutdown deadline;
 - handoff duration/extension limit;
 - CAPTCHA-provider feature flag, disclosure version, authorized-domain policy,
-  supported non-sensitive challenge types, one-attempt budget, and timeout.
+  supported non-sensitive challenge types, one-attempt budget, and timeout;
+- `managed-browser-enabled` user setting, default true;
+- `managed-browser-cache-enabled`, default true;
+- cache global maximum 500 MiB, accepted range 100-2048 MiB;
+- per-account target, inactive retention, maintenance cadence, cache-schema
+  version, and clear-on-exit preference.
 
 Security limits are code defaults with safe upper bounds. Environment or token
 settings may reduce limits, but cannot raise hard maxima or disable
@@ -1650,6 +2044,10 @@ Create a deterministic local HTTPS fixture used only in tests. It simulates:
   provider success/failure/timeout, and manual fallback;
 - worker heartbeat loss, worker crash, Chrome disconnect, PID reuse, and app
   shutdown;
+- repeat resource loads with cache enabled/disabled, two account scopes,
+  version changes, and authenticated `no-store` responses;
+- cache size/retention pressure, active-scope clear, interrupted deletion, and
+  clear-on-exit;
 - prompt-injection text asking the agent to reveal cookies or ignore policy;
 - large/cyclic/secret-bearing script results.
 
@@ -1671,6 +2069,12 @@ Under `test/vitest/utilitycode/managedBrowser/` test:
   version, provider enable/token state, and single-attempt policy;
 - heartbeat sequencing, three-miss threshold, late-heartbeat rejection, and
   process identity validation;
+- effective browser/cache setting defaults and release-flag precedence;
+- opaque HMAC scope generation and key-unavailable fail-off behavior;
+- cache root/segment/canonical-path validation, symlink and traversal rejection;
+- size scan bounds, eviction ordering, active-scope exclusion, atomic
+  deletion-queue transition, restart recovery, and idempotent empty clear;
+- account-removal queueing and clear-on-exit quarantine before reuse;
 - revision and reference expiry;
 - action limits, branching, repeats, failures, and cancellation;
 - risk classifier invariants;
@@ -1699,6 +2103,14 @@ Under `test/vitest/main/managedBrowser/` verify:
   provider policy cannot be overridden by worker/page/LLM data;
 - every terminal trigger joins the same supervisor cleanup promise;
 - `before-quit` stops managed browsers within its global deadline.
+- disabled browser preference rejects before account-cookie reads and worker
+  creation;
+- cache settings are read/written through Modules and validated independently
+  of renderer values;
+- clear-cache IPC never accepts a path and never calls account-session clearing;
+- active scope decisions coordinate with the supervisor before maintenance;
+- cache worker failure returns a retryable result and leaves deletion state
+  recoverable.
 
 ### 26.4 Worker integration tests
 
@@ -1718,6 +2130,11 @@ Against the fixture and a real compatible local Chrome:
 - manual-login same-context session continuity and refreshed-cookie capture;
 - private challenge response application, post-resolution re-verification, and
   manual fallback using a local fake provider.
+- cache-enabled repeat load, cache-disabled cold load, and cross-account
+  isolation;
+- temporary-profile containment and deletion after graceful/crash cleanup;
+- cache clear preserves login cookies and creates a cold next load;
+- cache-version migration and active-scope exclusion.
 
 Browser integration tests may be tagged and excluded where no display server is
 available; Linux CI should run them under the repository's supported virtual
@@ -1738,6 +2155,9 @@ fingerprint rejection using fixtures. It also covers the complete login/chat
 notice sequence, eligible-provider/manual-fallback paths, and simulated
 worker/Chrome failure while the main window remains interactive. Live social
 platforms and the real 2Captcha network are manual rollout tests only.
+It also covers browser-setting disable/re-enable, cache preference persistence,
+selected/all clear confirmations, active-session choices, preserved login, and
+localized clear completion.
 
 ### 26.6 Packaging tests
 
@@ -1747,6 +2167,10 @@ platforms and the real 2Captcha network are manual rollout tests only.
 - Managed/system Chrome diagnostics work on Windows, macOS, and Linux.
 - No remote-debugging listener is externally reachable.
 - Packaged logs/source maps contain no planted canary secrets.
+- Cache paths resolve only beneath the packaged application's managed cache
+  root on Windows, macOS, and Linux.
+- The cache-maintenance worker bundle exists, validates messages, and resumes
+  deletion-queue cleanup after a simulated interruption.
 
 ## 27. Implementation Plan
 
@@ -1763,16 +2187,20 @@ fingerprint fixtures before external navigation.
 
 ### Phase B: authenticated session runtime
 
-1. Add lease service and worker client.
-2. Add runtime state machine, navigation policy, and cleanup.
-3. Add cookie conversion/application and safe counts.
-4. Add YouTube adapter and handoff.
-5. Add refreshed-cookie private routing and persistence.
-6. Add safe status IPC/UI with six-language translations and component tests.
-7. Add same-context missing/invalid-cookie login, completion verification, and
-   structured chat notices.
-8. Add supervisor heartbeat, Chrome disconnect handling, verified process-tree
-   cleanup, and `before-quit` integration.
+1. Add default-enabled browser/cache system settings and release-flag
+   precedence.
+2. Add lease service and worker client.
+3. Add runtime state machine, navigation policy, and cleanup.
+4. Add cookie conversion/application and safe counts.
+5. Add YouTube adapter and handoff.
+6. Add refreshed-cookie private routing and persistence.
+7. Add disposable profile and account/version cache scope resolution.
+8. Add cache-maintenance worker, clear/eviction orchestration, and settings UI.
+9. Add safe status IPC/UI with six-language translations and component tests.
+10. Add same-context missing/invalid-cookie login, completion verification, and
+    structured chat notices.
+11. Add supervisor heartbeat, Chrome disconnect handling, verified process-tree
+    cleanup, and `before-quit` integration.
 
 Exit: a synthetic fixture and authorized pilot account can reuse, renew, and
 persist a session without secret exposure.
@@ -1823,28 +2251,32 @@ merely because its pages happen to work with generic actions.
 
 ## 28. File-Level Change Matrix
 
-| File/area                                               | Change                                 | Verification                      |
-| ------------------------------------------------------- | -------------------------------------- | --------------------------------- |
-| `src/schemas/worker/managedBrowser.ts`                  | Strict protocol unions                 | Schema fuzz/unit tests            |
-| `src/entityTypes/managedBrowserTypes.ts`                | Shared safe contracts                  | Type check                        |
-| `src/childprocess/managed-browser/*`                    | Browser-only runtime                   | Worker integration tests          |
-| `src/service/ManagedBrowserWorkerClient.ts`             | Lifecycle/correlation/cancel           | Main unit tests                   |
-| `src/service/ManagedBrowserLeaseService.ts`             | Account/global leases                  | Concurrency/crash tests           |
-| `src/service/ManagedBrowserSupervisor.ts`               | Heartbeat, process identity, cleanup   | Hang/crash/shutdown tests         |
-| `src/service/BrowserChatNoticePublisher.ts`             | Safe deduplicated chat transitions     | Notice/persistence tests          |
-| `src/service/CaptchaResolutionPolicy.ts`                | Sensitive/domain/provider eligibility  | Policy matrix tests               |
-| `src/service/CaptchaProviderService.ts`                 | Main-only request-scoped provider call | Fake-provider/secret tests        |
-| `src/modules/ManagedBrowserModule.ts`                   | Orchestration and cookie bridge        | Main tests with injected services |
-| `src/modules/AccountSessionService.ts`                  | Only small adapter additions if needed | Existing + refresh tests          |
-| `src/config/skillsRegistry.ts`                          | Deferred browser tools                 | Tool catalog tests                |
-| `src/service/BuiltInToolCapabilitiesPromptSection.ts`   | Browser capability guidance            | Prompt snapshot tests             |
-| `src/service/ToolTimeoutPolicy.ts`                      | Browser/async classification if needed | Timeout tests                     |
-| `src/main-process/communication/managed-browser-ipc.ts` | Validated IPC and AI gate              | IPC ordering tests                |
-| `src/preload.ts`                                        | Narrow contextBridge API               | Renderer API tests                |
-| `src/views/components/aiChatV2/*`                       | Status/approval/handoff UI             | Component + E2E tests             |
-| `src/config/settinggroupInit.ts` and settings Module    | Provider consent/domain authorization  | Settings/security tests           |
-| `src/views/lang/*.ts`                                   | Six-language strings                   | Key parity test                   |
-| `forge.config.js`, Vite worker config                   | Packaged worker entry                  | Build/package tests               |
+| File/area                                               | Change                                            | Verification                      |
+| ------------------------------------------------------- | ------------------------------------------------- | --------------------------------- |
+| `src/schemas/worker/managedBrowser.ts`                  | Strict protocol unions                            | Schema fuzz/unit tests            |
+| `src/entityTypes/managedBrowserTypes.ts`                | Shared safe contracts                             | Type check                        |
+| `src/childprocess/managed-browser/*`                    | Browser-only runtime                              | Worker integration tests          |
+| `src/service/ManagedBrowserWorkerClient.ts`             | Lifecycle/correlation/cancel                      | Main unit tests                   |
+| `src/service/ManagedBrowserLeaseService.ts`             | Account/global leases                             | Concurrency/crash tests           |
+| `src/service/ManagedBrowserSupervisor.ts`               | Heartbeat, process identity, cleanup              | Hang/crash/shutdown tests         |
+| `src/service/BrowserChatNoticePublisher.ts`             | Safe deduplicated chat transitions                | Notice/persistence tests          |
+| `src/service/CaptchaResolutionPolicy.ts`                | Sensitive/domain/provider eligibility             | Policy matrix tests               |
+| `src/service/CaptchaProviderService.ts`                 | Main-only request-scoped provider call            | Fake-provider/secret tests        |
+| `src/modules/ManagedBrowserSettingsModule.ts`           | Effective browser/cache preferences               | Settings/gating tests             |
+| `src/modules/ManagedBrowserCacheModule.ts`              | Scope locks, status, clear orchestration          | Path/active/clear tests           |
+| `src/service/ManagedBrowserCacheScopeService.ts`        | Opaque scope and trusted path derivation          | Path/security tests               |
+| `src/childprocess/managed-browser-cache/*`              | Bounded scan, eviction, deletion                  | Worker/interrupt tests            |
+| `src/modules/ManagedBrowserModule.ts`                   | Orchestration and cookie bridge                   | Main tests with injected services |
+| `src/modules/AccountSessionService.ts`                  | Only small adapter additions if needed            | Existing + refresh tests          |
+| `src/config/skillsRegistry.ts`                          | Deferred browser tools                            | Tool catalog tests                |
+| `src/service/BuiltInToolCapabilitiesPromptSection.ts`   | Browser capability guidance                       | Prompt snapshot tests             |
+| `src/service/ToolTimeoutPolicy.ts`                      | Browser/async classification if needed            | Timeout tests                     |
+| `src/main-process/communication/managed-browser-ipc.ts` | Validated IPC and AI gate                         | IPC ordering tests                |
+| `src/preload.ts`                                        | Narrow contextBridge API                          | Renderer API tests                |
+| `src/views/components/aiChatV2/*`                       | Status/approval/handoff UI                        | Component + E2E tests             |
+| `src/config/settinggroupInit.ts` and settings Modules   | Browser/cache defaults and provider authorization | Settings/security tests           |
+| `src/views/lang/*.ts`                                   | Six-language strings                              | Key parity test                   |
+| `forge.config.js`, Vite worker config                   | Packaged worker entry                             | Build/package tests               |
 
 Each logical implementation unit follows repository rules: no incomplete
 commits, UI and component tests together, and worker entry/specific code only
@@ -1855,13 +2287,16 @@ under `src/childprocess/`.
 Feature gates are layered:
 
 1. global managed-browser flag;
-2. supported executable/fingerprint gate;
-3. pilot platform allowlist;
-4. account eligibility and session availability;
-5. structured-actions flag;
-6. privileged-script flag;
-7. CAPTCHA-provider global flag;
-8. versioned disclosure consent and domain/platform allowlist.
+2. default-enabled user managed-browser setting;
+3. supported executable/fingerprint gate;
+4. pilot platform allowlist;
+5. account eligibility and session availability;
+6. default-enabled user cache setting plus platform/browser/OS containment
+   compatibility;
+7. structured-actions flag;
+8. privileged-script flag;
+9. CAPTCHA-provider global flag;
+10. versioned disclosure consent and domain/platform allowlist.
 
 Rollout order: internal fixtures, internal authorized account, small opt-in
 pilot, then platform-by-platform expansion. Metrics include ready/handoff rate,
@@ -1870,6 +2305,9 @@ orphan processes, refresh success, fingerprint failures, and secret-canary
 violations. CAPTCHA metrics are limited to decision mode, safe reason code,
 duration bucket, and terminal outcome. Metrics contain no page content,
 challenge payload, provider response, token, or account secret.
+Cache metrics are limited to enabled state, cache-hit/load improvement buckets,
+approximate size buckets, eviction/clear outcome, and compatibility reason. They
+contain no paths, scope tokens, URLs, filenames, headers, or response data.
 
 Rollback disables new starts, allows active sessions to stop, and retains the
 last-known-good browser dependency. Existing Electron login windows and legacy
@@ -1888,6 +2326,13 @@ automation surface is less aligned with the existing Puppeteer ecosystem.
 Rejected for P0/P1 due to lock contention, corruption risk, broad secret
 copying, cross-account leakage, and incompatibility between Electron partition
 storage and Chrome profiles.
+
+### One persistent Chrome profile per account for caching
+
+Rejected for P0/P1 because it would make cache inseparable from cookies, local
+storage, IndexedDB, history, permissions, autofill, and service workers. The
+selected design keeps the session profile disposable and persists only the
+separate Chrome resource-cache directory after containment tests pass.
 
 ### Arbitrary model-generated Puppeteer or Node scripts
 
@@ -1932,3 +2377,10 @@ The first production pilot is complete only when:
 12. All UI text exists in all six supported languages.
 13. The pilot platform has an adapter, authorized manual QA sign-off, rollback
     procedure, and no claim that stealth makes automation undetectable.
+14. The browser and cache user settings default to enabled, release-flag and AI
+    gates take precedence, and disabling rejects before cookies or workers.
+15. Account/version cache isolation, disposable-profile containment, cache
+    limits, eviction, and performance gates pass on every supported platform.
+16. Selected/all cache clear preserves saved login cookies, rejects external
+    paths and live scopes, survives interruption, and never removes files
+    outside the managed cache root.
