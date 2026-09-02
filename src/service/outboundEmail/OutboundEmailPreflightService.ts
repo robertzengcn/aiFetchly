@@ -6,6 +6,8 @@ import type {
   OutboundEmailPreflightFinding,
   OutboundEmailPreflightResult,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OUTBOUND_EMAIL_BATCH_LIMITS } from "@/service/outboundEmail/outboundEmailLimits";
+export { OUTBOUND_EMAIL_BATCH_LIMITS };
 
 /**
  * The minimal view of a draft the preflight needs: identity, recipient, and
@@ -16,7 +18,11 @@ import type {
 export interface PreflightDraftView {
   readonly draft: Pick<
     OutboundEmailDraftEntity,
-    "id" | "batchId" | "recipientAddress" | "currentRevisionId" | "revisionNumber"
+    | "id"
+    | "batchId"
+    | "recipientAddress"
+    | "currentRevisionId"
+    | "revisionNumber"
   >;
   readonly revision: OutboundEmailDraftRevisionEntity | null;
 }
@@ -28,14 +34,6 @@ export interface PreflightEntry {
   /** The hash currently stored on the draft/revision. Null when no revision exists. */
   readonly storedHash: string | null;
 }
-
-/** Implementation safety limits (technical design §10.2). */
-export const OUTBOUND_EMAIL_BATCH_LIMITS = {
-  maxRecipients: 100,
-  maxHtmlBodyChars: 50_000,
-  maxTextBodyChars: 50_000,
-  maxPayloadBytes: 5 * 1024 * 1024,
-} as const;
 
 const POLICY_VERSION = "outbound-policy-v1";
 const VALIDATION_VERSION = "outbound-validation-v1";
@@ -188,9 +186,7 @@ export class OutboundEmailPreflightService {
       findings.push({
         recipientAddress: null,
         code: "batch_limit_exceeded",
-        message: `Serialized worker payload exceeds ${
-          OUTBOUND_EMAIL_BATCH_LIMITS.maxPayloadBytes
-        } bytes.`,
+        message: `Serialized worker payload exceeds ${OUTBOUND_EMAIL_BATCH_LIMITS.maxPayloadBytes} bytes.`,
         severity: "block",
       });
     }
