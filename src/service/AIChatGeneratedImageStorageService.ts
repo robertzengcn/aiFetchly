@@ -96,9 +96,7 @@ export class AIChatGeneratedImageStorageService {
     const targetConversation = sanitizeGeneratedImagePathPart(
       input.targetConversationId
     );
-    const targetMessage = sanitizeGeneratedImagePathPart(
-      input.targetMessageId
-    );
+    const targetMessage = sanitizeGeneratedImagePathPart(input.targetMessageId);
     const directory = path.join(
       getGeneratedImageUserRoot(this.userDataPath, this.currentUserEmail),
       targetConversation,
@@ -153,13 +151,35 @@ export class AIChatGeneratedImageStorageService {
     }
     try {
       await fs.mkdir(target.directory, { recursive: true });
+      // Symlink defense-in-depth (mirrors GeneratedImageReferenceService):
+      // the identity parser confines the path LEXICALLY, but a symlink
+      // planted inside the current user's store would be followed on copy.
+      // Resolve the real source and require it to stay beneath the real
+      // current-user generated-image root before reading a byte.
+      const realUserRoot = await fs.realpath(
+        getGeneratedImageUserRoot(this.userDataPath, this.currentUserEmail)
+      );
+      let realSource: string;
+      try {
+        realSource = await fs.realpath(identity.candidatePath);
+      } catch {
+        // Missing/unreadable source: keep the original descriptor, never
+        // throw (documented contract).
+        return image;
+      }
+      if (
+        realSource !== realUserRoot &&
+        !realSource.startsWith(realUserRoot + path.sep)
+      ) {
+        return image;
+      }
       const extension = path.extname(identity.fileName) || ".png";
       const fileName = `image-${index + 1}${extension}`;
       const filePath = path.join(target.directory, fileName);
       // Copy (not move): the agent-owned original stays intact for its own
       // transcript; overwriting an existing destination keeps repeat calls
       // idempotent.
-      await fs.copyFile(identity.candidatePath, filePath);
+      await fs.copyFile(realSource, filePath);
       return {
         ...image,
         delivery: "local_file",
@@ -253,7 +273,9 @@ export class AIChatGeneratedImageStorageService {
       !responseMimeType.startsWith("image/") &&
       !image.mime_type?.startsWith("image/")
     ) {
-      throw new Error(`Unexpected generated image MIME type: ${responseMimeType}`);
+      throw new Error(
+        `Unexpected generated image MIME type: ${responseMimeType}`
+      );
     }
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);

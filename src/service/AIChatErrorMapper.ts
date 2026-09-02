@@ -226,7 +226,9 @@ export function imageEditErrorCode(err: unknown): ImageEditErrorCode | null {
     /402|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i.test(
       message
     ) ||
-    /401|403|unauthorized|auth(session)? expired|token expired/i.test(message)
+    /401|403|unauthorized|forbidden|auth(session)? expired|token expired|api[- ]?key|invalid key|permission denied/i.test(
+      message
+    )
   ) {
     return null;
   }

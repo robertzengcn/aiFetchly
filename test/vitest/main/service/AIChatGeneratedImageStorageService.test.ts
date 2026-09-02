@@ -375,3 +375,132 @@ describe("AIChatGeneratedImageStorageService.rehomeImages", () => {
     expect(strayFiles).toEqual([]);
   });
 });
+
+describe("AIChatGeneratedImageStorageService.rehomeImages symlink containment", () => {
+  const EMAIL = "user@example.com";
+
+  function makeService(root: string): AIChatGeneratedImageStorageService {
+    return new AIChatGeneratedImageStorageService(
+      vi.fn() as unknown as typeof fetch,
+      root,
+      EMAIL
+    );
+  }
+
+  it("returns the original descriptor when the source is a symlink escaping the user's store", async () => {
+    const root = await makeTempDir();
+    const service = makeService(root);
+
+    // Secret outside the generated-image store entirely.
+    const secretBytes = Buffer.from("outside-store-secret");
+    const secretPath = path.join(root, "secret.png");
+    await fs.writeFile(secretPath, secretBytes);
+
+    // A symlink INSIDE the current user's store pointing at the secret.
+    const agentConv = "agent-v2-sym";
+    const agentMsg = "agent-assistant-sym";
+    const linkDir = path.join(
+      root,
+      "ai-chat-generated-images",
+      EMAIL,
+      agentConv,
+      agentMsg
+    );
+    await fs.mkdir(linkDir, { recursive: true });
+    const linkPath = path.join(linkDir, "image-1.png");
+    await fs.symlink(secretPath, linkPath);
+
+    const descriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: agentConv,
+        messageId: agentMsg,
+        fileName: "image-1.png",
+      }),
+      local_path: linkPath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+
+    const [rehomed] = await service.rehomeImages({
+      images: [descriptor],
+      targetConversationId: "v2-parent",
+      targetMessageId: "assistant-parent",
+    });
+
+    // The escape is refused: descriptor passes through UNREWRITTEN (still the
+    // agent-identity URL) and nothing was copied into the parent directory.
+    expect(rehomed.url).toBe(descriptor.url);
+    const parentDir = path.join(
+      root,
+      "ai-chat-generated-images",
+      EMAIL,
+      "v2-parent",
+      "assistant-parent"
+    );
+    const copied = await collectDirFiles(parentDir);
+    expect(copied).toEqual([]);
+    // The secret was never read into the store's parent directory.
+    expect(rehomed.local_path).toBe(linkPath);
+  });
+
+  it("still rehomes a legitimate regular file after the realpath check", async () => {
+    const root = await makeTempDir();
+    const service = makeService(root);
+    const bytes = Buffer.from([137, 80, 78, 71]);
+    const agentConv = "agent-v2-ok";
+    const agentMsg = "agent-assistant-ok";
+    const oldDir = path.join(
+      root,
+      "ai-chat-generated-images",
+      EMAIL,
+      agentConv,
+      agentMsg
+    );
+    await fs.mkdir(oldDir, { recursive: true });
+    const oldPath = path.join(oldDir, "image-1.png");
+    await fs.writeFile(oldPath, bytes);
+    const descriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: agentConv,
+        messageId: agentMsg,
+        fileName: "image-1.png",
+      }),
+      local_path: oldPath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+
+    const [rehomed] = await service.rehomeImages({
+      images: [descriptor],
+      targetConversationId: "v2-parent2",
+      targetMessageId: "assistant-parent2",
+    });
+    expect(rehomed.url).toContain("v2-parent2");
+    expect(rehomed.local_path).toContain("assistant-parent2");
+    await expect(fs.access(rehomed.local_path as string)).resolves.toBeUndefined();
+  });
+
+  async function collectDirFiles(dir: string): Promise<string[]> {
+    try {
+      const entries = await fs.readdir(dir);
+      const files: string[] = [];
+      for (const entry of entries) {
+        const full = path.join(dir, entry);
+        if ((await fs.stat(full)).isDirectory()) {
+          files.push(...(await collectDirFiles(full)));
+        } else {
+          files.push(full);
+        }
+      }
+      return files;
+    } catch {
+      return [];
+    }
+  }
+});

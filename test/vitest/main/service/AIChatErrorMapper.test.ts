@@ -398,3 +398,29 @@ describe("AIChatErrorMapper - image edit failure codes", () => {
     expect(imageEditErrorCode(null)).toBeNull();
   });
 });
+
+describe("AIChatErrorMapper - image edit auth-phrase guard", () => {
+  it("never classifies API-key / credential failures as image-edit codes", async () => {
+    const { imageEditErrorCode } = await import("@/service/AIChatErrorMapper");
+    // These carry both "provider" and "image" — the loose co-occurrence
+    // heuristic would otherwise claim them; the credential guard must win.
+    expect(
+      imageEditErrorCode(new Error("Invalid API key for image provider"))
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(
+        new Error("openai api-key rejected while editing image")
+      )
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(new Error("403 Forbidden: image edit not permitted"))
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(new Error("permission denied by provider for image"))
+    ).toBeNull();
+    // Real edit failures still classify.
+    expect(
+      imageEditErrorCode(new Error("image generation failed on provider"))
+    ).toBe("image_edit_provider_failed");
+  });
+});
