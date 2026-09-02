@@ -391,6 +391,18 @@ async function onSubmit(): Promise<void> {
     return;
   }
 
+  // Defense-in-depth: guarantee a non-empty clientReportId before transmission.
+  // The id is normally generated in the modelValue open-watcher, but that
+  // watcher is non-immediate and does NOT fire when the dialog is mounted
+  // already-open (the v-if mount-on-demand pattern used by AiChatV2.vue and
+  // AiChatBox.vue). Generating here on first submit closes that gap so the
+  // IPC schema's `clientReportId: z.string().min(1)` can never reject an
+  // empty id. Idempotent — a non-empty value is left untouched, so retries
+  // reuse the same id (PRD §13.2 / FR-4.8 dedup invariant).
+  if (!clientReportId.value) {
+    clientReportId.value = generateClientReportId();
+  }
+
   // FR-4.4 / §10.4 / Journey 11.1 step 7: if the current selection would be
   // truncated, show the truncation warning and require a second confirm click
   // before transmitting. Non-truncated reports skip this gate and submit in

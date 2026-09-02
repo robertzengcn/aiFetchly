@@ -291,6 +291,30 @@ describe("AIConversationReportDialog", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("passes a non-empty clientReportId when mounted already-open (v-if mount-on-demand)", async () => {
+    // Regression: the open-watcher is non-immediate, so mounting with
+    // modelValue:true (the v-if pattern in AiChatV2.vue:686 / AiChatBox.vue:820)
+    // never generates the id. Submit must still send a non-empty clientReportId
+    // or the IPC schema's `z.string().min(1)` rejects with "String must contain
+    // at least 1 character(s)".
+    buildMock.mockResolvedValueOnce(buildRequest());
+    createMock.mockResolvedValueOnce({
+      reportId: "air_v2_id",
+      status: "submitted",
+      receivedAt: "t",
+      duplicate: false,
+    });
+    const w = mountDialog();
+    setCategory(w, "other");
+    await w.find('[data-testid="report-item-ai-a1"] input').trigger("change");
+    await w.find('[data-testid="conversation-report-submit"]').trigger("click");
+    await flushPromises();
+    expect(buildMock).toHaveBeenCalled();
+    const arg = buildMock.mock.calls[0][0];
+    expect(typeof arg.clientReportId).toBe("string");
+    expect(arg.clientReportId.length).toBeGreaterThan(0);
+  });
+
   it("shows the default consent copy when the context toggle is off", () => {
     const w = mountDialog();
     // The .report-notice span carries the consent transmission notice.
