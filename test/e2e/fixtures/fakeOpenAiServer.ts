@@ -21,6 +21,8 @@ import * as http from "http";
 import * as crypto from "crypto";
 import {
   MODELS_RESPONSE,
+  stopChunk,
+  textChunk,
   toolCallChunk,
   toolCallFinishChunk,
   type FakeAiScenarioName,
@@ -46,6 +48,12 @@ export interface FakeOpenAiController {
   setScenario(name: FakeAiScenarioName): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
+  /** Clear the configured tool call (subsequent requests use the scenario). */
+  clearToolCall(): Promise<void>;
+  /** Override the tool-result continuation text (null restores "Done."). */
+  setFollowupText(text: string | null): Promise<void>;
+  /** Override NON-continuation replies when no tool call is configured. */
+  setResponseText(text: string | null): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
   reset(): Promise<void>;
   stop(): Promise<void>;
@@ -109,6 +117,13 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  /** Optional override for the tool-result continuation text (default
+   *  "Done."). Lets a test script the model's post-tool report without a
+   *  new scenario per sentence. */
+  let followupText: string | null = null;
+  /** Optional override for NON-continuation requests when no tool call is
+   *  configured — scripts a text-only model reply for a fresh user turn. */
+  let responseText: string | null = null;
   const requestLog: RedactedRequest[] = [];
 
   /** True when a chat request carries a tool-result message (the continuation
@@ -148,10 +163,34 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         res.end();
         return;
       }
+      if (req.method === "POST" && url === "/__e2e/response-text") {
+        try {
+          const parsed = JSON.parse(body) as { text?: string };
+          responseText = typeof parsed.text === "string" ? parsed.text : null;
+        } catch {
+          /* ignore */
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/followup-text") {
+        try {
+          const parsed = JSON.parse(body) as { text?: string };
+          followupText = typeof parsed.text === "string" ? parsed.text : null;
+        } catch {
+          /* ignore */
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
         toolCallConfig = null;
+        followupText = null;
+        responseText = null;
         res.writeHead(204);
         res.end();
         return;
@@ -223,7 +262,23 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       const isContinuation = hasToolResultMessage(rawBody);
       let plan;
       if (isContinuation) {
-        plan = resolveScenario("tool-success-followup");
+        plan = followupText
+          ? {
+              kind: "sse" as const,
+              frames: [
+                { delayMs: 0, payload: textChunk(followupText) },
+                { delayMs: 0, payload: stopChunk() },
+              ],
+            }
+          : resolveScenario("tool-success-followup");
+      } else if (responseText) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            { delayMs: 0, payload: textChunk(responseText) },
+            { delayMs: 0, payload: stopChunk() },
+          ],
+        };
       } else if (toolCallConfig) {
         plan = {
           kind: "sse" as const,
@@ -334,11 +389,32 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         body: JSON.stringify({ name }),
       });
     },
+    async setFollowupText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/followup-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
     async setToolCall(name: string, argsJson: string): Promise<void> {
       await controlFetch("/__e2e/tool-call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async setResponseText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/response-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
+    async clearToolCall(): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
       });
     },
     async getRequests(): Promise<readonly RedactedRequest[]> {
