@@ -164,13 +164,13 @@ export class BackgroundScheduler extends BaseDb {
       await this.stop();
     }
 
-    // Reset ScheduleManager first (before destroying DB connection)
-    // This allows it to stop cleanly without trying to use a destroyed connection
-    this.scheduleManager = await ScheduleManager.resetInstance();
+    // Drop database-backed scheduler models before replacing their DataSource.
+    await ScheduleManager.destroyInstance();
 
     // Reset SqliteDb instance to use new path
     const newDbInstance = await SqliteDb.resetInstance(latestPath);
     this.sqliteDb = newDbInstance;
+    this.scheduleManager = ScheduleManager.getInstance();
 
     // Reset controller singletons so they re-create modules/models
     // with the new SqliteDb instance on next use

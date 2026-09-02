@@ -471,6 +471,87 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     expect(payload?.fullContent).toBe("local pong");
   });
 
+  it("stops emitting when the requesting renderer has been destroyed", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "late response" } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+    const senderSend = vi.fn(() => {
+      throw new TypeError("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        {
+          sender: {
+            isDestroyed: () => true,
+            send: senderSend,
+          },
+        },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+    expect(senderSend).not.toHaveBeenCalled();
+  });
+
+  it("ignores a renderer destroyed between the liveness check and send", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new TypeError("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        {
+          sender: {
+            isDestroyed: () => false,
+            send: senderSend,
+          },
+        },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("accepts Electron's plain Error variant for a destroyed renderer", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new Error("Object has been destroyed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        { sender: { isDestroyed: () => false, send: senderSend } },
+        JSON.stringify({ message: "hi" })
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not hide unrelated renderer delivery errors", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    const senderSend = vi.fn(() => {
+      throw new Error("IPC transport failed");
+    });
+
+    await expect(
+      mockIpcMain.callHandler(
+        AI_CHAT_V2_STREAM,
+        { sender: { isDestroyed: () => false, send: senderSend } },
+        JSON.stringify({ message: "hi" })
+      )
+    ).rejects.toThrow("IPC transport failed");
+  });
+
   it("allows model listing when hosted AI is disabled but local provider config is valid", async () => {
     mockState.aiEnabled = "false";
     enableLocalAiChat();
