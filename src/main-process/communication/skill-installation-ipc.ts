@@ -34,7 +34,10 @@ import {
   SkillInstallationModule,
   isSkillInstallerEnabled,
 } from "@/modules/SkillInstallationModule";
-import { SkillSessionIdSchema } from "@/entityTypes/skillInstallationTypes";
+import {
+  SkillSessionIdSchema,
+  rejectSecretShaped,
+} from "@/entityTypes/skillInstallationTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
 function ok<T>(data: T): CommonMessage<T> {
@@ -54,7 +57,18 @@ const prepareSchema = z.object({
   ref: z.string().max(200).optional(),
   subdirectory: z.string().max(500).optional(),
   mode: z.enum(["managed-copy", "linked"]).optional(),
-  constraints: z.array(z.string().max(2_000)).max(20).optional(),
+  // FR-31 parity with the model tool schema: constraints run the deep
+  // secret-shape validator — a pasted API key is a schema error here too
+  // (found by the E2E matrix).
+  constraints: z
+    .array(z.string().max(2_000))
+    .max(20)
+    .superRefine((entries, ctx) => {
+      for (const problem of rejectSecretShaped(entries, ["constraints"])) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+      }
+    })
+    .optional(),
 });
 
 const approveSchema = z.object({
