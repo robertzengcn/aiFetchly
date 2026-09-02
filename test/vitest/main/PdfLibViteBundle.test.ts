@@ -7,6 +7,7 @@ import { buildAndRunViteCjsBundle } from "./helpers/viteCjsBundle";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixtureEntryPath = path.join(testDir, "fixtures", "pdfLibViteEntry.mjs");
 const viteMainConfigPath = path.resolve(process.cwd(), "vite.main.config.mjs");
+const viteMainSharedPath = path.resolve(process.cwd(), "vite.main.shared.mjs");
 const forgeConfigPath = path.resolve(process.cwd(), "forge.config.js");
 
 /**
@@ -24,14 +25,20 @@ const forgeConfigPath = path.resolve(process.cwd(), "forge.config.js");
  */
 describe("pdf-lib Vite bundle packaging regression", () => {
   it("keeps pdf-lib external in vite.main and forge EXTERNAL_DEPENDENCIES", () => {
-    const viteMain = fs.readFileSync(viteMainConfigPath, "utf-8");
+    // The externals list was extracted into vite.main.shared.mjs so the
+    // Playwright E2E main build can reuse it (design §6.4). pdf-lib now
+    // lives there; vite.main.config.mjs only wires it in via imports.
+    // Check both files so removing the external from either location fails CI.
+    const sharedSource = fs.readFileSync(viteMainSharedPath, "utf-8");
+    const configSource = fs.readFileSync(viteMainConfigPath, "utf-8");
     const forge = fs.readFileSync(forgeConfigPath, "utf-8");
 
-    expect(viteMain).toMatch(
+    const combined = `${sharedSource}\n${configSource}`;
+    expect(combined).toMatch(
       /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]pdf-lib['"]/
     );
-    expect(viteMain).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
-    expect(viteMain).toContain("node_modules/tslib/tslib.js");
+    expect(configSource).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
+    expect(combined).toContain("node_modules/tslib/tslib.js");
     expect(forge).toMatch(
       /EXTERNAL_DEPENDENCIES\s*=\s*\[[\s\S]*['"]pdf-lib['"]/
     );
