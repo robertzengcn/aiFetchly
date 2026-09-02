@@ -33,22 +33,26 @@ scrapers or the existing Electron manual-login flow.
 
 ### 2.1 Resolved PRD decisions
 
-| Topic          | Decision                                                                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Pilot          | YouTube/Google is the default pilot, subject to an authorized QA account. Its adapter verifies both Google login and YouTube identity.                       |
-| Browser source | Support a managed, pinned Chrome for Testing build and a validated system Chrome fallback. Never silently download during a browser task.                    |
-| Runtime        | Headed Chrome controlled through Puppeteer 25.x from a dedicated utility process.                                                                            |
-| Profile        | Ephemeral incognito browser context for P0/P1; no shared or persistent `userDataDir`.                                                                        |
-| Tabs           | One controlled tab in P0. Popups pause for policy handling. Multi-tab control is P1.                                                                         |
-| User agent     | Native browser user agent by default. An override is exceptional and must match the actual Chrome major version.                                             |
-| Stealth        | `puppeteer-extra-plugin-stealth` is a reviewed compatibility layer, not a promise of invisibility. Evasions that contradict native values are disabled.      |
-| Cookies        | Main decrypts; worker applies; worker returns refreshed cookies; main normalizes, filters, encrypts, and persists.                                           |
-| LLM API        | Small typed tools plus a bounded action-program DSL. Raw Puppeteer, CDP, Node.js, and Electron APIs are not exposed.                                         |
-| Scripts        | Page-context scripts are privileged, exact-source approved, origin scoped, time bounded, and result sanitized. They are not described as a security sandbox. |
-| Approval       | Publish/send/delete/security changes and every page script are always-confirm, even in `full_access`.                                                        |
-| Long work      | Browser sessions are resources; long action programs run as `ToolJobRegistry` jobs with progress and cancellation.                                           |
-| Screenshots    | Local UI preview is allowed. Sending a screenshot to a remote AI provider requires the existing image disclosure/attachment path and explicit task intent.   |
-| Proxy          | One proxy configuration is fixed for the lifetime of an authenticated session. Direct fallback is never silent. P0 supports direct and HTTP(S) proxy modes.  |
+| Topic          | Decision                                                                                                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pilot          | YouTube/Google is the default pilot, subject to an authorized QA account. Its adapter verifies both Google login and YouTube identity.                                     |
+| Browser source | Support a managed, pinned Chrome for Testing build and a validated system Chrome fallback. Never silently download during a browser task.                                  |
+| Runtime        | Headed Chrome controlled through Puppeteer 25.x from a dedicated utility process.                                                                                          |
+| Profile        | Ephemeral incognito browser context for P0/P1; no shared or persistent `userDataDir`.                                                                                      |
+| Tabs           | One controlled tab in P0. Popups pause for policy handling. Multi-tab control is P1.                                                                                       |
+| User agent     | Native browser user agent by default. An override is exceptional and must match the actual Chrome major version.                                                           |
+| Stealth        | `puppeteer-extra-plugin-stealth` is a reviewed compatibility layer, not a promise of invisibility. Evasions that contradict native values are disabled.                    |
+| Cookies        | Main decrypts; worker applies; worker returns refreshed cookies; main normalizes, filters, encrypts, and persists.                                                         |
+| LLM API        | Small typed tools plus a bounded action-program DSL. Raw Puppeteer, CDP, Node.js, and Electron APIs are not exposed.                                                       |
+| Scripts        | Page-context scripts are privileged, exact-source approved, origin scoped, time bounded, and result sanitized. They are not described as a security sandbox.               |
+| Approval       | Publish/send/delete/security changes and every page script are always-confirm, even in `full_access`.                                                                      |
+| Long work      | Browser sessions are resources; long action programs run as `ToolJobRegistry` jobs with progress and cancellation.                                                         |
+| Screenshots    | Local UI preview is allowed. Sending a screenshot to a remote AI provider requires the existing image disclosure/attachment path and explicit task intent.                 |
+| Proxy          | One proxy configuration is fixed for the lifetime of an authenticated session. Direct fallback is never silent. P0 supports direct and HTTP(S) proxy modes.                |
+| Missing login  | Missing, invalid, or expired cookies enter manual-login handoff in the same headed Chrome context; successful verification persists the refreshed session and resumes.     |
+| Chat notices   | Login, verification, challenge, resume, crash, and terminal transitions are published as localized, deduplicated structured notices in AI Chat.                            |
+| CAPTCHA        | Sensitive/login challenges always use manual handoff. A configured 2Captcha provider is eligible only for explicitly authorized non-login domains and one bounded attempt. |
+| Isolation      | Exactly one disposable Electron utility process owns each browser session and its Chrome tree; the main process supervises it with heartbeat and idempotent cleanup.       |
 
 ### 2.2 Hard invariants
 
@@ -65,9 +69,18 @@ scrapers or the existing Electron manual-login flow.
    `--disable-web-security`, `--ignore-certificate-errors`, or a public remote
    debugging endpoint in normal desktop operation.
 8. Page text is untrusted data and cannot alter host permission policy.
-9. CAPTCHA, MFA, passkeys, passwords, account recovery, and platform challenges
-   always enter user handoff.
-10. Stop, crash, timeout, and app shutdown close Chrome and release leases.
+9. Login, MFA, passkey, password, recovery, security, payment, and ambiguous
+   challenges always enter user handoff. An external CAPTCHA provider is
+   possible only after main-process policy authorizes a non-sensitive domain
+   and challenge.
+10. Provider configuration is not provider authorization; token, enabled flag,
+    versioned disclosure consent, domain policy, supported type, and an
+    attempt budget must all pass.
+11. Stop, crash, timeout, missed heartbeat, Chrome disconnect, and app shutdown
+    converge on one cleanup path that closes verified child processes and
+    releases leases.
+12. Puppeteer, browser events, and browser-specific session state never run on
+    the Electron main-process event loop.
 
 ## 3. Current Repository Baseline
 
@@ -102,6 +115,13 @@ The implementation should extend these existing components:
 - [`BrowserManager`](../../src/modules/browserManager.ts) is legacy for this
   path. Its random user-agent and browser installation behaviors must not be
   called by the managed browser.
+- [`settinggroupInit`](../../src/config/settinggroupInit.ts) already declares
+  `2captcha-enabled` and `2captcha-token`. The managed browser may read these
+  only through the main-process settings Module and must add separate domain
+  authorization and disclosure-consent state before provider use.
+- [`background.ts`](../../src/background.ts) already coordinates bounded worker
+  shutdown during `before-quit`. The managed-browser supervisor must join that
+  sequence instead of adding an independent quit handler.
 
 The repository currently declares Electron 43.4.1, Puppeteer/Puppeteer Core
 25.8.x, Puppeteer Extra 3.3.6, Stealth 2.11.2, and Zod 3.24.x. Implementation
@@ -123,6 +143,10 @@ Electron main process
   AccountSessionService        decrypt + encrypted persistence
   BrowserActionRiskClassifier  host-enforced approval class
   ManagedBrowserWorkerClient   utility process lifecycle
+  ManagedBrowserSupervisor     heartbeats, Chrome identity, shutdown
+  BrowserChatNoticePublisher   safe AI Chat transition events
+  CaptchaResolutionPolicy      main-process eligibility decision
+  CaptchaProviderService       request-scoped 2Captcha call
   ToolJobRegistry              long action programs
              |
              | private utilityProcess messages
@@ -187,6 +211,7 @@ src/
     PageScriptExecutor.ts
     NavigationPolicy.ts
     ResultSanitizer.ts
+    ChallengeDetector.ts
     adapters/
       PlatformBrowserAdapter.ts
       YouTubeBrowserAdapter.ts
@@ -206,6 +231,10 @@ src/
     ManagedBrowserLeaseService.ts
     ManagedBrowserAiToolService.ts
     BrowserActionRiskClassifier.ts
+    ManagedBrowserSupervisor.ts
+    BrowserChatNoticePublisher.ts
+    CaptchaResolutionPolicy.ts
+    CaptchaProviderService.ts
   main-process/communication/
     managed-browser-ipc.ts
   views/components/aiChatV2/
@@ -236,9 +265,14 @@ export type ManagedBrowserSessionState =
   | "validating_fingerprint"
   | "applying_session"
   | "verifying_login"
+  | "login_required"
+  | "user_login_in_progress"
+  | "verifying_manual_login"
   | "ready"
   | "running"
   | "awaiting_approval"
+  | "challenge_detected"
+  | "challenge_resolving"
   | "handoff"
   | "stopping"
   | "stopped"
@@ -272,10 +306,36 @@ export interface SafeManagedBrowserStatus {
   readonly handoffReason: string | null;
   readonly lastErrorCode: ManagedBrowserErrorCode | null;
 }
+
+export type BrowserChatNoticeType =
+  | "login_required"
+  | "login_verifying"
+  | "login_verified"
+  | "login_verification_failed"
+  | "session_persistence_failed"
+  | "challenge_detected"
+  | "challenge_provider_started"
+  | "challenge_resolved"
+  | "challenge_failed"
+  | "challenge_manual_action_required"
+  | "task_resuming"
+  | "browser_crashed";
+
+export interface SafeBrowserChatNotice {
+  readonly eventId: string;
+  readonly sessionId: string;
+  readonly type: BrowserChatNoticeType;
+  readonly messageKey: string;
+  readonly severity: "info" | "warning" | "success" | "error";
+  readonly requiresUserAction: boolean;
+  readonly createdAt: string;
+}
 ```
 
 Account display labels are resolved separately for renderer display. They are
-never accepted from the LLM as account authority.
+never accepted from the LLM as account authority. Notice payloads contain no
+free-form page text. `eventId` is derived from session, transition, and a random
+transition nonce; it is not derived from cookies, URLs, or provider data.
 
 ## 7. Main-Process Session Orchestration
 
@@ -316,8 +376,12 @@ Start order is fixed:
 8. Send `START_SESSION` with executable, non-secret policy, proxy, and cookie
    snapshot.
 9. Zero/release the local cookie array reference after the send completes.
-10. Wait for `SESSION_READY`, `HANDOFF_REQUIRED`, or a typed failure.
-11. Return a safe status without cookie details.
+10. Wait for `SESSION_READY`, `LOGIN_REQUIRED`, `HANDOFF_REQUIRED`, or a typed
+    failure.
+11. For missing/invalid cookies or failed authentication, keep the worker and
+    same Chrome context alive, publish `login_required`, and wait locally for
+    the user's completion action without holding a remote AI stream open.
+12. Return a safe status without cookie details.
 
 Any failure after lease acquisition enters the same cleanup path.
 
@@ -348,6 +412,10 @@ Rules:
   `ToolJobRegistry`'s job count.
 - A periodic watchdog may identify stale records, but it must first confirm
   that the associated worker client is not live.
+
+The lease spans manual login and CAPTCHA handoff. It is not released merely
+because AI control is paused. Handoff timeout, cancellation, crash, or stop
+releases it through the supervisor cleanup path.
 
 ### 7.3 AI enable gate
 
@@ -386,7 +454,9 @@ RUN_ACTIONS
 EXECUTE_PAGE_SCRIPT
 BEGIN_HANDOFF
 RESUME_HANDOFF
+VERIFY_MANUAL_LOGIN
 CAPTURE_SCREENSHOT
+APPLY_CHALLENGE_RESPONSE
 CANCEL_REQUEST
 STOP_SESSION
 ```
@@ -414,14 +484,18 @@ Electron partition, conversation transcript, or permission grant.
 
 ```text
 WORKER_READY
+WORKER_HEARTBEAT
 SESSION_STATE_CHANGED
 SESSION_READY
+LOGIN_REQUIRED
 OBSERVATION_RESULT
 ACTION_PROGRESS
 ACTION_RESULT
 SCRIPT_RESULT
 SCREENSHOT_RESULT
 HANDOFF_REQUIRED
+CHALLENGE_DETECTED
+CHALLENGE_RESPONSE_APPLIED
 REFRESHED_COOKIES
 REQUEST_CANCELLED
 SESSION_STOPPED
@@ -431,6 +505,12 @@ WORKER_ERROR
 `REFRESHED_COOKIES` is the only outbound message that may carry cookie values.
 The client routes it directly to a private handler; it is not stored in a
 generic event list and is never forwarded to the renderer.
+
+`CHALLENGE_DETECTED` carries a random challenge ID, origin, sensitivity
+classification evidence codes, supported-type code, and bounded provider input
+descriptor. It carries no cookies, authorization headers, surrounding HTML,
+credentials, or complete private URL. `APPLY_CHALLENGE_RESPONSE` is a private,
+ephemeral main-to-worker message and is never a tool or renderer contract.
 
 ### 8.4 Worker client lifecycle
 
@@ -442,6 +522,7 @@ Unlike `SkillWorkerClient`, each managed-browser session gets its own
 - an `AbortController` per request;
 - last accepted sequence number;
 - startup, graceful-stop, and forced-kill timers;
+- last heartbeat time, worker PID, and validated Chrome process identity;
 - a single cleanup promise so concurrent stop paths are idempotent.
 
 Timing defaults:
@@ -458,9 +539,71 @@ Timing defaults:
 | Page script                     | 5 seconds default, 15 seconds maximum |
 | Graceful stop                   |                             5 seconds |
 | Forced kill after graceful stop |                  2 additional seconds |
+| Worker heartbeat                |                       every 5 seconds |
+| Unresponsive threshold          |        3 missed heartbeats/15 seconds |
+| Manual-login handoff            |     10 minutes, explicitly extendable |
+| Provider resolution attempt     |      120 seconds maximum, one attempt |
 
 On unexpected exit, pending requests reject with `worker_exited`, the module
 releases its lease, and the renderer receives one sanitized failure event.
+
+### 8.5 Supervisor and crash containment
+
+`ManagedBrowserSupervisor` owns all live `ManagedBrowserWorkerClient`
+instances. The worker is disposable: one utility process serves one browser
+session and is never reused for another account. Puppeteer launches Chrome from
+that utility process, so browser automation, DOM processing, page scripts, and
+Chrome event handling cannot block or crash the Electron main-process event
+loop.
+
+The worker reports this bounded identity after Chrome launch:
+
+```ts
+interface ManagedBrowserProcessIdentity {
+  readonly sessionId: string;
+  readonly sessionNonce: string;
+  readonly workerPid: number;
+  readonly browserPid: number;
+  readonly executableSha256: string;
+  readonly executableVersion: string;
+  readonly launchedAtEpochMs: number;
+}
+```
+
+The main compares executable identity with the descriptor it supplied. Process
+identity is held only in memory. PID alone is never enough for orphan cleanup
+because operating systems reuse PIDs.
+
+The worker sends `WORKER_HEARTBEAT` every five seconds from a timer independent
+of page navigation and handoff. It contains only session ID, monotonic sequence,
+runtime state, event-loop lag bucket, and timestamp. Three missed heartbeats
+transition the session to `failed/unresponsive` and invoke cleanup. A delayed
+heartbeat that arrives after cleanup begins cannot revive the session.
+
+All terminal signals call the same memoized `cleanup(sessionId, cause)` promise:
+
+```text
+explicit stop | cancellation | worker error/exit | Chrome disconnected
+protocol violation | missed heartbeat | startup failure | app before-quit
+                               |
+                               v
+reject new commands and mark current effect known/unknown
+cancel ToolJobRegistry work and pending provider request
+request refreshed cookies only when worker/Chrome are healthy and time remains
+send STOP_SESSION and wait up to 5 seconds
+kill utility process after 2 additional seconds
+verify process identity before any descendant/orphan termination
+release account/global leases in finally
+publish exactly one terminal chat/status event
+```
+
+Electron `before-quit` calls `ManagedBrowserSupervisor.shutdownAll()` after
+async tool jobs are signalled and within a single global deadline. It does not
+wait indefinitely for login, provider work, cookie capture, or page scripts.
+
+Automatic restart is prohibited after a crash when the last action was
+consequential or its effect is unknown. A fresh session requires re-observation
+and, where applicable, a new user approval.
 
 ## 9. Runtime State Machine
 
@@ -471,11 +614,17 @@ created
   -> applying_session
   -> verifying_login
        -> ready
-       -> handoff --------------------+
+       -> login_required -> user_login_in_progress
+              -> verifying_manual_login -> ready
+              -> user_login_in_progress (verification failed)
+       -> handoff -----------------------------------+
   ready -> running -> ready           |
   ready/running -> awaiting_approval  |
   awaiting_approval -> running/ready  |
-  handoff -> verifying_login <--------+
+  ready/running -> challenge_detected
+       -> challenge_resolving -> verifying_login/ready
+       -> handoff
+  handoff -> verifying_login <-----------------------+
   any live state -> stopping -> stopped
   any live state -> failed -> stopping -> stopped
 ```
@@ -487,7 +636,8 @@ State guards:
 - Actions are allowed only in `ready` or `running` and when AI control is not
   paused.
 - Scripts are allowed only after main-side approval and in `ready`.
-- During handoff, LLM actions are rejected with `user_has_control`.
+- During login, challenge resolution, or handoff, LLM actions are rejected with
+  `user_has_control` or `challenge_in_progress`.
 - Stop is valid and idempotent in every state.
 - A request with the wrong session ID or a stale sequence is rejected.
 
@@ -611,7 +761,9 @@ protections. The managed path must not:
 - replace `Object.prototype` or broad browser prototypes;
 - randomize UA independently of Chrome;
 - fabricate plugin/language/hardware values that contradict native values;
-- hide or automate CAPTCHA/MFA challenges;
+- hide or automate login/security CAPTCHA or MFA challenges through stealth
+  behavior; the separately authorized provider path in §18.3 is not a stealth
+  evasion;
 - alter TLS behavior or ignore certificate errors.
 
 Every enabled evasion requires a fixture test and an owner. A plugin upgrade is
@@ -708,9 +860,37 @@ text. For YouTube, the adapter may use account/avatar controls and absence of a
 sign-in call-to-action, plus Google login redirect detection. One signal alone
 must not declare authentication if it is ambiguous.
 
-Unauthenticated, challenge, and unknown states enter handoff. The user completes
-login in the visible Chrome window; the worker observes only navigation and
-adapter signals, not credentials.
+An unauthenticated assessment caused by missing, invalid, expired, or rejected
+cookies enters `login_required`; it does not stop the worker. The user completes
+login in the existing visible Chrome context so cookies, local storage,
+IndexedDB, service workers, and device-bound in-memory state created during
+login remain attached to the page the LLM will later operate.
+
+The worker observes only navigation, origin, challenge, and adapter
+authentication signals during login. It does not capture input values or send
+page screenshots. When the user clicks **I've finished logging in**, main sends
+`VERIFY_MANUAL_LOGIN`. The worker increments the page revision, checks final
+origin, runs the adapter assessment, and returns one of:
+
+```ts
+type ManualLoginVerificationResult =
+  | { readonly state: "verified"; readonly evidenceCodes: readonly string[] }
+  | { readonly state: "not_verified"; readonly reasonCode: string }
+  | { readonly state: "challenge"; readonly challengeKind: ChallengeKind }
+  | { readonly state: "wrong_account"; readonly reasonCode: string };
+```
+
+`verified` triggers refreshed-cookie capture and persistence before AI resume.
+If capture or persistence fails, the current browser may remain usable, but the
+chat notice explicitly reports `sessionSaved: false`. `not_verified`,
+`challenge`, and `wrong_account` keep user control. The system never binds an
+ambiguous account silently.
+
+The worker may detect strong login-completion evidence before the click, but it
+only enables/prompts the completion control. Explicit verification still owns
+the state transition. Manual-login handoff expires after ten minutes, with a
+warning and explicit extension option; expiry stops the local session without
+holding a remote model stream.
 
 ### 13.3 Refreshed-cookie persistence
 
@@ -1002,8 +1182,13 @@ stored by default.
 
 ## 18. User Handoff
 
-Handoff is required for login, CAPTCHA, MFA, passwords, passkeys, consent that
-cannot be safely classified, security settings, and ambiguous platform state.
+Handoff is required for login, login/security CAPTCHA, MFA, passwords,
+passkeys, recovery, consent that cannot be safely classified, security
+settings, and ambiguous platform state. A non-login CAPTCHA may first follow
+the provider policy in §18.3; every ineligible or failed provider path returns
+to handoff.
+
+### 18.1 Handoff lifecycle
 
 Flow:
 
@@ -1011,13 +1196,172 @@ Flow:
 2. Main cancels/pause current AI browser request and marks user control.
 3. UI explains that the visible Chrome window is now under user control.
 4. Worker continues lifecycle monitoring but executes no LLM action.
-5. User clicks Resume in Electron.
-6. Main sends `RESUME_HANDOFF`.
+5. User clicks **I've finished logging in**, **Continue task**, or **Resume AI**
+   in Electron, depending on the reason.
+6. Main publishes a user-action receipt and sends
+   `VERIFY_MANUAL_LOGIN` or `RESUME_HANDOFF`.
 7. Worker increments page revision, verifies origin and authentication, captures
    refreshed cookies, creates a new observation, and returns ready or handoff.
 
 The worker never attempts to detect or record typed credentials. Screenshots
 are disabled while a known sensitive field is focused.
+
+### 18.2 Chat notice publisher
+
+`BrowserChatNoticePublisher` converts authoritative main-process transitions
+into safe conversation events. The worker cannot write chat messages directly.
+The publisher uses the existing AI Chat persistence/event pipeline rather than
+accessing the database itself.
+
+```ts
+interface BrowserChatNoticeInput {
+  readonly sessionId: string;
+  readonly conversationId: string;
+  readonly type: BrowserChatNoticeType;
+  readonly transitionNonce: string;
+  readonly messageArgs: Readonly<Record<string, string | number | boolean>>;
+  readonly requiresUserAction: boolean;
+}
+```
+
+Allowed arguments are safe account/platform display labels, cookie counts,
+`sessionSaved`, retryability, and bounded reason codes. URLs are reduced to
+origin. Page text, entered values, OAuth parameters, provider data, cookies,
+and secrets are rejected.
+
+The deduplication key is
+`conversationId/sessionId/type/transitionNonce`. Replayed worker events or
+redirect storms therefore produce one visible notice. The publisher persists a
+safe structured payload so reload reconstructs the same notice without
+rerunning browser work.
+
+Manual-login notice order is deterministic:
+
+```text
+login_required
+user action receipt: "I've finished logging in"
+login_verifying
+login_verified(sessionSaved=true|false) -> task_resuming
+or login_verification_failed -> user_login_in_progress
+```
+
+If the worker or Chrome crashes, the publisher emits exactly one
+`browser_crashed` notice stating that AiFetchly remains open, the saved session
+was not overwritten, and a fresh browser session may be started. It does not
+surface stack traces, PIDs, executable paths, or cookie details.
+
+### 18.3 CAPTCHA resolution architecture
+
+Challenge resolution is split so page detection, policy, provider secrets, and
+browser application do not collapse into one privileged component:
+
+```text
+Worker ChallengeDetector
+  -> CHALLENGE_DETECTED (safe descriptor + challengeId)
+Main CaptchaResolutionPolicy
+  -> manual_handoff | provider | blocked
+Main CaptchaProviderService (provider branch only)
+  -> request-scoped external call using main-held token
+  -> private APPLY_CHALLENGE_RESPONSE
+Worker applies response in current page
+  -> re-check challenge, origin, authentication, page revision
+  -> fresh observation or manual handoff
+```
+
+#### Policy input and decision
+
+```ts
+interface CaptchaResolutionContext {
+  readonly sessionId: string;
+  readonly challengeId: string;
+  readonly origin: string;
+  readonly platformId: number;
+  readonly challengeType: CaptchaChallengeType;
+  readonly flow:
+    | "login"
+    | "security"
+    | "payment"
+    | "content_action"
+    | "read_navigation"
+    | "unknown";
+  readonly currentActionRisk: BrowserRiskClass;
+  readonly providerInputAvailable: boolean;
+}
+
+type CaptchaResolutionDecision =
+  | { readonly mode: "manual_handoff"; readonly reasonCode: string }
+  | {
+      readonly mode: "provider";
+      readonly provider: "2captcha";
+      readonly authorizationId: string;
+      readonly attempt: 1;
+    }
+  | { readonly mode: "blocked"; readonly reasonCode: string };
+```
+
+The deterministic main-process policy checks:
+
+1. flow is not login, security, recovery, MFA, payment, or unknown;
+2. current origin matches a suffix-exact authorized-domain entry;
+3. platform policy explicitly allows the challenge type; social platforms are
+   denied by default;
+4. existing `2captcha-enabled` is on and `2captcha-token` is non-empty;
+5. the user accepted the current external-provider disclosure version;
+6. the authorization is active for this domain and account/workspace scope;
+7. this challenge ID has no previous provider attempt;
+8. required provider input can be produced without cookies, authorization
+   headers, credentials, surrounding private HTML, or an unredacted private
+   URL;
+9. no cancellation or session-state transition is pending.
+
+Page content and LLM arguments cannot set any of these values. Configuration
+is retrieved through `SystemSettingGroupModule` or a dedicated Module, never a
+repository call from IPC.
+
+#### Provider secret and request handling
+
+The existing repository pattern of copying `TWOCAPTCHA_TOKEN` into a worker
+environment must not be used by the managed browser. `CaptchaProviderService`
+runs in the main process, obtains the token only when an authorized request is
+created, invokes a typed provider adapter, and releases the token reference
+after completion. The token never enters renderer IPC, LLM tools/results,
+generic worker environment variables, progress, chat notices, or audit data.
+
+The provider request contains only the minimum method-specific challenge
+descriptor approved during implementation review. It has a stable internal
+request ID, 120-second hard deadline, abort signal, one-attempt budget, bounded
+polling/backoff, and terminal state. Provider balance/errors are mapped to safe
+codes. Raw provider responses and challenge solutions are not persisted.
+
+`APPLY_CHALLENGE_RESPONSE` carries the ephemeral response over private,
+validated main-to-worker IPC. After applying it, the worker does not assume
+success: it waits for the challenge to disappear, validates final origin,
+reassesses authentication, increments `pageRevision`, and returns a fresh
+observation.
+
+Provider failure, timeout, unsupported challenge, changed origin, duplicate
+challenge ID, or unsuccessful application emits a safe notice and enters
+manual handoff. There is no second automatic provider attempt.
+
+If a challenge appeared after a publish/send/delete/upload/follow/purchase or
+another consequential action, mark the action `effect_unknown`. After the
+challenge clears, re-observe and request a fresh approval when necessary; never
+replay the action automatically.
+
+#### Settings additions
+
+Keep the existing enabled/token settings for compatibility and add:
+
+```text
+2captcha-disclosure-version-accepted: string
+2captcha-authorized-domains: encrypted/validated domain-policy collection
+2captcha-allow-non-login-browser-challenges: boolean (default false)
+```
+
+The UI explains the external data recipient, data categories, manual fallback,
+domain scope, and revocation. Removing authorization or disabling the provider
+cancels pending work and prevents new requests. Tokens are displayed masked and
+never returned through normal settings-read IPC.
 
 ## 19. Screenshots and Artifacts
 
@@ -1127,12 +1471,15 @@ managed-browser:list-eligible-accounts
 managed-browser:start
 managed-browser:status
 managed-browser:handoff
+managed-browser:verify-manual-login
 managed-browser:resume
 managed-browser:stop
 managed-browser:approve
+managed-browser:extend-handoff
 managed-browser:on-status-changed
 managed-browser:on-progress
 managed-browser:on-approval-required
+managed-browser:on-chat-notice
 ```
 
 All request/response/event payloads have strict schemas under
@@ -1153,6 +1500,8 @@ parsing. IPC validates the sender web contents and calls
 - current safe origin and page title;
 - AI control indicator;
 - Pause AI, Take over, Resume AI, and Stop controls;
+- **I've finished logging in**, **Continue task**, **Extend time**, and
+  **Cancel task** controls when relevant;
 - safe progress and actionable failure messages.
 
 Approval and handoff are modal only when user action is required. Keyboard
@@ -1178,6 +1527,10 @@ export type ManagedBrowserErrorCode =
   | "navigation_blocked"
   | "authentication_required"
   | "challenge_requires_handoff"
+  | "challenge_provider_not_authorized"
+  | "challenge_provider_unavailable"
+  | "challenge_provider_timeout"
+  | "challenge_resolution_failed"
   | "stale_page_reference"
   | "action_not_allowed"
   | "approval_required"
@@ -1187,6 +1540,8 @@ export type ManagedBrowserErrorCode =
   | "result_too_large"
   | "worker_protocol_violation"
   | "worker_start_timeout"
+  | "worker_unresponsive"
+  | "chrome_disconnected"
   | "worker_exited"
   | "cancelled"
   | "stop_timeout"
@@ -1205,9 +1560,13 @@ Recovery policy:
   dependency diagnostics.
 - Stale ref -> fresh observation, no automatic repeat of consequential action.
 - Worker crash -> release lease; user may start a fresh ephemeral session.
+- Missed heartbeat/Chrome disconnect -> run the same cleanup path as worker
+  exit and report any in-flight action effect as unknown.
 - Refresh failure -> retain old snapshot and tell user login may need renewal
   next time.
 - Stop timeout -> kill worker, release lease, emit cleanup diagnostic.
+- Provider unavailable/timeout/failure -> make no second automatic attempt;
+  preserve the page and request manual handoff.
 
 ## 24. Logging, Audit, and Privacy
 
@@ -1220,12 +1579,16 @@ Allowed operational fields:
 - action type and risk class;
 - origin, with query and fragment removed;
 - counts and bounded reason codes;
-- approval decision and source hash.
+- approval decision and source hash;
+- heartbeat health buckets, disconnect cause, and verified cleanup outcome;
+- CAPTCHA decision mode and bounded reason code, without challenge/provider
+  payload.
 
 Forbidden fields:
 
 - cookie names or values;
 - proxy username/password;
+- CAPTCHA provider token, raw challenge descriptor, raw response, or solution;
 - authorization headers;
 - form input values;
 - password/OTP/passkey data;
@@ -1257,7 +1620,11 @@ authentication store.
 - managed Chrome dependency ID and compatibility tuple;
 - denied launch flags and enabled stealth evasions;
 - screenshot policy;
-- proxy mode allowlist.
+- proxy mode allowlist;
+- heartbeat interval/miss threshold and global shutdown deadline;
+- handoff duration/extension limit;
+- CAPTCHA-provider feature flag, disclosure version, authorized-domain policy,
+  supported non-sensitive challenge types, one-attempt budget, and timeout.
 
 Security limits are code defaults with safe upper bounds. Environment or token
 settings may reduce limits, but cannot raise hard maxima or disable
@@ -1277,6 +1644,12 @@ Create a deterministic local HTTPS fixture used only in tests. It simulates:
 - password, OTP, CAPTCHA, and passkey-like handoff controls;
 - popup, dialog, download, and cross-origin navigation attempts;
 - delayed actions and never-resolving scripts;
+- missing/invalid cookie login, failed and successful manual verification, and
+  session refresh persistence failure;
+- eligible and ineligible CAPTCHA flows, duplicate challenge detection,
+  provider success/failure/timeout, and manual fallback;
+- worker heartbeat loss, worker crash, Chrome disconnect, PID reuse, and app
+  shutdown;
 - prompt-injection text asking the agent to reveal cookies or ignore policy;
 - large/cyclic/secret-bearing script results.
 
@@ -1293,6 +1666,11 @@ Under `test/vitest/utilitycode/managedBrowser/` test:
 - cookie conversion including host-only, prefix, SameSite, expiry, domain, and
   independent rejection cases;
 - lease collision and idempotent release;
+- chat notice state mapping, safe arguments, persistence, and deduplication;
+- CAPTCHA flow sensitivity, suffix-exact domain authorization, disclosure
+  version, provider enable/token state, and single-attempt policy;
+- heartbeat sequencing, three-miss threshold, late-heartbeat rejection, and
+  process identity validation;
 - revision and reference expiry;
 - action limits, branching, repeats, failures, and cancellation;
 - risk classifier invariants;
@@ -1313,7 +1691,14 @@ Under `test/vitest/main/managedBrowser/` verify:
 - crash and timeout release account/global leases;
 - async jobs remain conversation scoped and cancellable;
 - always-confirm actions remain blocked under `full_access`;
-- renderer events contain no secrets.
+- renderer events contain no secrets;
+- missing cookies start handoff instead of failing the worker;
+- **I've finished logging in** publishes verifying/terminal notices and resumes
+  only after adapter verification;
+- settings are read through a Module, provider secrets remain main-only, and
+  provider policy cannot be overridden by worker/page/LLM data;
+- every terminal trigger joins the same supervisor cleanup promise;
+- `before-quit` stops managed browsers within its global deadline.
 
 ### 26.4 Worker integration tests
 
@@ -1328,7 +1713,11 @@ Against the fixture and a real compatible local Chrome:
 - handoff disables actions and resume re-verifies;
 - script execution, rejection, result limits, and page replacement on timeout;
 - proxy routing and direct-fallback prohibition;
-- graceful close, cancel, crash, and orphan cleanup.
+- graceful close, cancel, crash, and orphan cleanup;
+- heartbeat during navigation and user handoff;
+- manual-login same-context session continuity and refreshed-cookie capture;
+- private challenge response application, post-resolution re-verification, and
+  manual fallback using a local fake provider.
 
 Browser integration tests may be tagged and excluded where no display server is
 available; Linux CI should run them under the repository's supported virtual
@@ -1345,8 +1734,10 @@ yarn test:components
 
 Playwright Electron E2E covers start, safe status, structured actions,
 consequential approval, handoff/resume, stop, cookie refresh reuse, and
-fingerprint rejection using fixtures. Live social platforms are manual rollout
-tests only.
+fingerprint rejection using fixtures. It also covers the complete login/chat
+notice sequence, eligible-provider/manual-fallback paths, and simulated
+worker/Chrome failure while the main window remains interactive. Live social
+platforms and the real 2Captcha network are manual rollout tests only.
 
 ### 26.6 Packaging tests
 
@@ -1378,6 +1769,10 @@ fingerprint fixtures before external navigation.
 4. Add YouTube adapter and handoff.
 5. Add refreshed-cookie private routing and persistence.
 6. Add safe status IPC/UI with six-language translations and component tests.
+7. Add same-context missing/invalid-cookie login, completion verification, and
+   structured chat notices.
+8. Add supervisor heartbeat, Chrome disconnect handling, verified process-tree
+   cleanup, and `before-quit` integration.
 
 Exit: a synthetic fixture and authorized pilot account can reuse, renew, and
 persist a session without secret exposure.
@@ -1392,6 +1787,22 @@ persist a session without secret exposure.
 
 Exit: the pilot workflow completes under visible control with required
 approvals and reliable cleanup.
+
+### Phase C.5: policy-gated CAPTCHA provider
+
+1. Add challenge detector output and stable challenge correlation.
+2. Add `CaptchaResolutionPolicy`, domain authorization, and versioned
+   disclosure consent.
+3. Add request-scoped main-process provider service and a fake provider for
+   deterministic tests.
+4. Add private response application, post-resolution re-verification,
+   single-attempt enforcement, safe chat notices, and manual fallback.
+5. Keep all social-platform policies denied until separately reviewed and
+   signed off.
+
+Exit: sensitive/ineligible challenges always hand off, eligible fixture
+challenges complete or fall back without secret leakage, loops, or action
+replay.
 
 ### Phase D: privileged scripts
 
@@ -1419,6 +1830,10 @@ merely because its pages happen to work with generic actions.
 | `src/childprocess/managed-browser/*`                    | Browser-only runtime                   | Worker integration tests          |
 | `src/service/ManagedBrowserWorkerClient.ts`             | Lifecycle/correlation/cancel           | Main unit tests                   |
 | `src/service/ManagedBrowserLeaseService.ts`             | Account/global leases                  | Concurrency/crash tests           |
+| `src/service/ManagedBrowserSupervisor.ts`               | Heartbeat, process identity, cleanup   | Hang/crash/shutdown tests         |
+| `src/service/BrowserChatNoticePublisher.ts`             | Safe deduplicated chat transitions     | Notice/persistence tests          |
+| `src/service/CaptchaResolutionPolicy.ts`                | Sensitive/domain/provider eligibility  | Policy matrix tests               |
+| `src/service/CaptchaProviderService.ts`                 | Main-only request-scoped provider call | Fake-provider/secret tests        |
 | `src/modules/ManagedBrowserModule.ts`                   | Orchestration and cookie bridge        | Main tests with injected services |
 | `src/modules/AccountSessionService.ts`                  | Only small adapter additions if needed | Existing + refresh tests          |
 | `src/config/skillsRegistry.ts`                          | Deferred browser tools                 | Tool catalog tests                |
@@ -1427,6 +1842,7 @@ merely because its pages happen to work with generic actions.
 | `src/main-process/communication/managed-browser-ipc.ts` | Validated IPC and AI gate              | IPC ordering tests                |
 | `src/preload.ts`                                        | Narrow contextBridge API               | Renderer API tests                |
 | `src/views/components/aiChatV2/*`                       | Status/approval/handoff UI             | Component + E2E tests             |
+| `src/config/settinggroupInit.ts` and settings Module    | Provider consent/domain authorization  | Settings/security tests           |
 | `src/views/lang/*.ts`                                   | Six-language strings                   | Key parity test                   |
 | `forge.config.js`, Vite worker config                   | Packaged worker entry                  | Build/package tests               |
 
@@ -1443,13 +1859,17 @@ Feature gates are layered:
 3. pilot platform allowlist;
 4. account eligibility and session availability;
 5. structured-actions flag;
-6. privileged-script flag.
+6. privileged-script flag;
+7. CAPTCHA-provider global flag;
+8. versioned disclosure consent and domain/platform allowlist.
 
 Rollout order: internal fixtures, internal authorized account, small opt-in
 pilot, then platform-by-platform expansion. Metrics include ready/handoff rate,
 authenticated reuse rate, action completion, approvals, cancellation latency,
 orphan processes, refresh success, fingerprint failures, and secret-canary
-violations. Metrics contain no page content or account secret.
+violations. CAPTCHA metrics are limited to decision mode, safe reason code,
+duration bucket, and terminal outcome. Metrics contain no page content,
+challenge payload, provider response, token, or account secret.
 
 Rollback disables new starts, allows active sessions to stop, and retains the
 last-known-good browser dependency. Existing Electron login windows and legacy
@@ -1499,10 +1919,16 @@ The first production pilot is complete only when:
 5. Unsafe launch flags are absent.
 6. Observation and revision-bound actions work against deterministic fixtures.
 7. Consequential actions and scripts cannot bypass approval in `full_access`.
-8. Login/challenge/security flows always hand control to the user.
-9. Stop, cancel, timeout, worker crash, and app shutdown leave no managed Chrome
-   or account lease behind within the documented deadlines.
-10. Main, worker, component, E2E, type, build, and packaging gates pass.
-11. All UI text exists in all six supported languages.
-12. The pilot platform has an adapter, authorized manual QA sign-off, rollback
+8. Missing/invalid-cookie login stays in the same Chrome context, produces the
+   complete chat notice sequence, verifies before resume, and safely reports
+   cookie-persistence failure.
+9. Login/security challenges always hand control to the user. Provider use for
+   an eligible non-login fixture requires every policy gate, is single-attempt,
+   and falls back to handoff.
+10. Stop, cancel, timeout, missed heartbeat, worker/Chrome crash, and app
+    shutdown leave no verified managed Chrome or account lease behind within
+    the documented deadlines while Electron remains responsive.
+11. Main, worker, component, E2E, type, build, and packaging gates pass.
+12. All UI text exists in all six supported languages.
+13. The pilot platform has an adapter, authorized manual QA sign-off, rollback
     procedure, and no claim that stealth makes automation undetectable.
