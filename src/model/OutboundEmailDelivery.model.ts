@@ -92,4 +92,20 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   ): Promise<OutboundEmailDeliveryOutcomeEntity[]> {
     return await this.outcomeRepo.find({ where: { batchId } });
   }
+
+  /**
+   * Update a single outcome's status (used by worker-start failure handling
+   * to flip pending outcomes to failed without inserting duplicates).
+   */
+  async updateOutcomeStatus(
+    id: number,
+    status: OutboundEmailDeliveryOutcomeEntity["status"],
+    patch: Partial<OutboundEmailDeliveryOutcomeEntity> = {},
+    manager?: EntityManager
+  ): Promise<void> {
+    const repo =
+      manager?.getRepository(OutboundEmailDeliveryOutcomeEntity) ??
+      this.outcomeRepo;
+    await repo.update(id, { status, ...patch });
+  }
 }

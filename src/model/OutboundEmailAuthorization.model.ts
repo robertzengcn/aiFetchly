@@ -36,9 +36,7 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
     return await repo.save(repo.create(stripped));
   }
 
-  async read(
-    id: number
-  ): Promise<OutboundEmailAuthorizationEntity | null> {
+  async read(id: number): Promise<OutboundEmailAuthorizationEntity | null> {
     return await this.repository.findOne({ where: { id } });
   }
 
@@ -47,9 +45,13 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
    * `active`, not invalidated, not expired. Returns null when none exists.
    */
   async findActiveByBatch(
-    batchId: number
+    batchId: number,
+    manager?: EntityManager
   ): Promise<OutboundEmailAuthorizationEntity | null> {
-    const authorization = await this.repository.findOne({
+    const repo =
+      manager?.getRepository(OutboundEmailAuthorizationEntity) ??
+      this.repository;
+    const authorization = await repo.findOne({
       where: { batchId, status: "active" },
       order: { id: "DESC" },
     });
@@ -60,11 +62,7 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
   }
 
   /** Mark an authorization consumed (atomic claim). */
-  async consume(
-    id: number,
-    at: Date,
-    manager?: EntityManager
-  ): Promise<void> {
+  async consume(id: number, at: Date, manager?: EntityManager): Promise<void> {
     const repo =
       manager?.getRepository(OutboundEmailAuthorizationEntity) ??
       this.repository;
@@ -89,10 +87,7 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
   }
 
   /** Mark an authorization expired (TTL elapsed). */
-  async expire(
-    id: number,
-    manager?: EntityManager
-  ): Promise<void> {
+  async expire(id: number, manager?: EntityManager): Promise<void> {
     const repo =
       manager?.getRepository(OutboundEmailAuthorizationEntity) ??
       this.repository;

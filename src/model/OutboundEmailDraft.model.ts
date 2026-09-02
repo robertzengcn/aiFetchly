@@ -48,9 +48,7 @@ export class OutboundEmailDraftModel extends BaseDb {
     const conn = this.sqliteDb.connection;
     this.batchRepo = conn.getRepository(OutboundEmailDraftBatchEntity);
     this.draftRepo = conn.getRepository(OutboundEmailDraftEntity);
-    this.revisionRepo = conn.getRepository(
-      OutboundEmailDraftRevisionEntity
-    );
+    this.revisionRepo = conn.getRepository(OutboundEmailDraftRevisionEntity);
   }
 
   // -- Batch -------------------------------------------------------------
@@ -65,24 +63,29 @@ export class OutboundEmailDraftModel extends BaseDb {
     return await this.batchRepo.save(this.batchRepo.create(stripped));
   }
 
-  async readBatch(id: number): Promise<OutboundEmailDraftBatchEntity | null> {
-    return await this.batchRepo.findOne({ where: { id } });
+  async readBatch(
+    id: number,
+    manager?: EntityManager
+  ): Promise<OutboundEmailDraftBatchEntity | null> {
+    const repo =
+      manager?.getRepository(OutboundEmailDraftBatchEntity) ?? this.batchRepo;
+    return await repo.findOne({ where: { id } });
   }
 
   /** Advance the batch's envelope-set hash pointer (post-preflight). */
-  async updateBatchHash(
-    id: number,
-    batchHash: string
-  ): Promise<void> {
+  async updateBatchHash(id: number, batchHash: string): Promise<void> {
     await this.batchRepo.update(id, { batchHash });
   }
 
   async updateBatchStatus(
     id: number,
     status: OutboundEmailDraftBatchEntity["status"],
-    patch: Partial<OutboundEmailDraftBatchEntity> = {}
+    patch: Partial<OutboundEmailDraftBatchEntity> = {},
+    manager?: EntityManager
   ): Promise<void> {
-    await this.batchRepo.update(id, { status, ...patch });
+    const repo =
+      manager?.getRepository(OutboundEmailDraftBatchEntity) ?? this.batchRepo;
+    await repo.update(id, { status, ...patch });
   }
 
   // -- Draft -------------------------------------------------------------
@@ -103,12 +106,26 @@ export class OutboundEmailDraftModel extends BaseDb {
 
   /** All drafts in a batch, ordered for stable per-recipient hashing. */
   async listDraftsByBatch(
-    batchId: number
+    batchId: number,
+    manager?: EntityManager
   ): Promise<OutboundEmailDraftEntity[]> {
-    return await this.draftRepo.find({
+    const repo =
+      manager?.getRepository(OutboundEmailDraftEntity) ?? this.draftRepo;
+    return await repo.find({
       where: { batchId },
       order: { recipientAddress: "ASC", id: "ASC" },
     });
+  }
+
+  /** Update a single draft's status (inside a claim/worker transaction). */
+  async updateDraftStatus(
+    id: number,
+    status: OutboundEmailDraftEntity["status"],
+    manager?: EntityManager
+  ): Promise<void> {
+    const repo =
+      manager?.getRepository(OutboundEmailDraftEntity) ?? this.draftRepo;
+    await repo.update(id, { status });
   }
 
   // -- Revision (append-only) -------------------------------------------
@@ -149,7 +166,9 @@ export class OutboundEmailDraftModel extends BaseDb {
     input: AppendRevisionInput,
     manager?: EntityManager
   ): Promise<OutboundEmailDraftRevisionEntity> {
-    const run = async (m: EntityManager): Promise<OutboundEmailDraftRevisionEntity> => {
+    const run = async (
+      m: EntityManager
+    ): Promise<OutboundEmailDraftRevisionEntity> => {
       const draftRepo = m.getRepository(OutboundEmailDraftEntity);
       const revisionRepo = m.getRepository(OutboundEmailDraftRevisionEntity);
 

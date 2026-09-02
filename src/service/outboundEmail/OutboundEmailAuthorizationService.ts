@@ -6,9 +6,7 @@ import {
   generateApprovalToken,
   hashApprovalToken,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import type {
-  OutboundEmailAuthorizationType,
-} from "@/entityTypes/outboundEmailDeliveryTypes";
+import type { OutboundEmailAuthorizationType } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
  * Trusted authorization for the outbound-email pipeline (technical design §13).
@@ -72,11 +70,8 @@ export class OutboundEmailAuthorizationService {
   private readonly intentModel: OutboundEmailIntentModel;
   private readonly draftModel: OutboundEmailDraftModel;
 
-  constructor(
-    options: OutboundEmailAuthorizationServiceOptions | string = {}
-  ) {
-    const dbpath =
-      typeof options === "string" ? options : options.dbpath ?? "";
+  constructor(options: OutboundEmailAuthorizationServiceOptions | string = {}) {
+    const dbpath = typeof options === "string" ? options : options.dbpath ?? "";
     this.authorizationModel = new OutboundEmailAuthorizationModel(dbpath);
     this.intentModel = new OutboundEmailIntentModel(dbpath);
     this.draftModel = new OutboundEmailDraftModel(dbpath);
@@ -144,6 +139,17 @@ export class OutboundEmailAuthorizationService {
     });
     const created = await this.authorizationModel.create(entity);
 
+    // §8.1 batch lifecycle — a direct-send authorization moves the batch to
+    // `direct_authorized` (the status the claim transaction requires).
+    await this.draftModel.updateBatchStatus(
+      input.batchId,
+      "direct_authorized",
+      {
+        authorizationId: created.id,
+        authorizedAt: new Date(),
+      }
+    );
+
     return {
       success: true,
       authorizationId: created.id,
@@ -190,6 +196,17 @@ export class OutboundEmailAuthorizationService {
     });
     const created = await this.authorizationModel.create(entity);
 
+    // §8.1 batch lifecycle — a review approval moves the batch to
+    // `review_authorized` (the status the claim transaction requires).
+    await this.draftModel.updateBatchStatus(
+      input.batchId,
+      "review_authorized",
+      {
+        authorizationId: created.id,
+        authorizedAt: new Date(),
+      }
+    );
+
     return {
       success: true,
       authorizationId: created.id,
@@ -212,12 +229,17 @@ export class OutboundEmailAuthorizationService {
       return;
     }
     await this.authorizationModel.invalidate(active.id, reason, new Date());
+
+    // §8.1 batch lifecycle — invalidation returns the batch to `draft_ready`
+    // so a fresh authorization can be created after the content stabilizes.
+    await this.draftModel.updateBatchStatus(batchId, "draft_ready", {
+      authorizationId: null,
+      authorizedAt: null,
+    });
   }
 
   /** Read an authorization by id. */
-  async read(
-    id: number
-  ): Promise<OutboundEmailAuthorizationEntity | null> {
+  async read(id: number): Promise<OutboundEmailAuthorizationEntity | null> {
     return await this.authorizationModel.read(id);
   }
 
