@@ -2,21 +2,37 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 // We exercise the real HttpClient._fetchJSON path with a mocked global fetch.
 // Stub the modules HttpClient imports so the class can construct in node.
-vi.mock("@/modules/lib/electronStore", () => ({
+// token.ts imports ElectronStoreService from @/modules/electronstoreservice
+// (not @/modules/lib/electronStore) and reads USERSERVICE from usersetting in
+// its constructor. Mock the real path and export USERSERVICE, or the Token
+// constructor throws an unhandled "[vitest] No USERSERVICE export" rejection
+// (HttpClient.setheaderToken calls `new Token()` asynchronously) that crashes
+// the vitest worker after the test environment is torn down.
+vi.mock("@/modules/electronstoreservice", () => ({
   ElectronStoreService: vi.fn().mockImplementation(() => ({
     get: vi.fn(),
     set: vi.fn(),
     delete: vi.fn(),
-  })),
-}));
-vi.mock("@/config/usersetting", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn(() => "tok"),
+    getValue: vi.fn(),
     setValue: vi.fn(),
+    deleteValue: vi.fn(),
+    hasValue: vi.fn(),
+    getStoreForTests: vi.fn(),
   })),
-  REFRESHTOKEN: "refreshtoken",
-  USER_AI_ENABLED: "true",
 }));
+vi.mock("@/config/usersetting", async (importOriginal) => {
+  // Spread the real constants (TOKENNAME, USERSERVICE, REFRESHTOKEN, …) so the
+  // mocked Token / HttpClient never hit a "No <X> export" rejection when they
+  // read a constant the mock omitted. Only override the Token factory.
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
+  return {
+    ...actual,
+    Token: vi.fn().mockImplementation(() => ({
+      getValue: vi.fn(() => "tok"),
+      setValue: vi.fn(),
+    })),
+  };
+});
 vi.mock("@/modules/lib/webWorkerIdentifier", () => ({
   isWorker: () => false,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
