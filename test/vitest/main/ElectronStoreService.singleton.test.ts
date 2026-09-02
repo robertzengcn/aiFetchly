@@ -101,14 +101,23 @@ describe("ElectronStoreService store singleton cache", () => {
     }
   });
 
-  it("keeps electron-store external in vite.main.config.mjs", () => {
-    const viteMain = fs.readFileSync(
+  it("keeps electron-store external in the shared main config", () => {
+    // The externals list was extracted into vite.main.shared.mjs so the
+    // Playwright E2E main build can reuse it (design §6.4). electron-store
+    // now lives there; vite.main.config.mjs only wires it in via imports.
+    // Check both files so removing the external from either location fails CI.
+    const sharedSource = fs.readFileSync(
+      path.resolve(process.cwd(), "vite.main.shared.mjs"),
+      "utf-8"
+    );
+    const configSource = fs.readFileSync(
       path.resolve(process.cwd(), "vite.main.config.mjs"),
       "utf-8"
     );
-    expect(viteMain).toMatch(
+    const combined = `${sharedSource}\n${configSource}`;
+    expect(combined).toMatch(
       /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]electron-store['"]/
     );
-    expect(viteMain).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
+    expect(configSource).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
   });
 });
