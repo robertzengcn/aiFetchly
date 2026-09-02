@@ -1657,6 +1657,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "automation",
     source: "built-in",
     timeoutClass: "fast",
+    confirmationPolicy: "request_scoped_action",
     execute: async (args) => {
       const result = await startBulkEmailSendTask(args);
       return {
