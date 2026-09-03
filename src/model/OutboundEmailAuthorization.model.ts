@@ -86,6 +86,25 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
     });
   }
 
+  /**
+   * Active authorizations whose TTL has elapsed (§21 rule 1). "Active" rows are
+   * `status = active` and not already invalidated; expiry is decided here by
+   * comparing `expiresAt` against the supplied cutoff so recovery can expire
+   * them in a sweep without loading every row.
+   */
+  async listExpiredActive(
+    cutoff: Date,
+    manager?: EntityManager
+  ): Promise<OutboundEmailAuthorizationEntity[]> {
+    const repo =
+      manager?.getRepository(OutboundEmailAuthorizationEntity) ??
+      this.repository;
+    const active = await repo.find({ where: { status: "active" } });
+    return active.filter(
+      (a) => !a.invalidatedAt && a.expiresAt.getTime() < cutoff.getTime()
+    );
+  }
+
   /** Mark an authorization expired (TTL elapsed). */
   async expire(id: number, manager?: EntityManager): Promise<void> {
     const repo =

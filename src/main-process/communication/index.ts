@@ -57,6 +57,7 @@ import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc
 import { registerAIContentReportIpcHandlers } from "@/main-process/communication/ai-content-report-ipc";
 import { registerOutboundEmailDeliveryIpcHandlers } from "@/main-process/communication/outboundEmailDelivery-ipc";
 import { EmailReplyReliabilityStartup } from "@/service/emailReply/EmailReplyReliabilityStartup";
+import { OutboundEmailReliabilityStartup } from "@/service/outboundEmail/OutboundEmailReliabilityStartup";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -133,6 +134,12 @@ export function registerCommunicationIpcHandlers(
     new EmailReplyReliabilityStartup()
       .start()
       .catch((e) => console.error("[reply-reliability] startup failed:", e));
+    // Best-effort outbound-reliability startup (technical design §21): expire
+    // stale authorizations and conservatively reconcile in-flight send attempts
+    // (failed only with proof, delivery_unknown otherwise). Fire-and-forget.
+    new OutboundEmailReliabilityStartup()
+      .start()
+      .catch((e) => console.error("[outbound-reliability] startup failed:", e));
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);

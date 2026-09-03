@@ -94,6 +94,24 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   /**
+   * Stale in-flight attempts (§21 rules 2–3). "In-flight" = `claimed` or
+   * `sending`; "stale" = `claimedAt` older than `cutoff`. Recovery uses
+   * `workerStartedAt` (null ⇒ worker never started; set ⇒ worker alive at
+   * start but a dead worker is detected elsewhere) to decide failed vs
+   * `delivery_unknown`.
+   */
+  async listStaleInFlight(
+    cutoff: Date
+  ): Promise<OutboundEmailSendAttemptEntity[]> {
+    const inFlight = await this.attemptRepo.find({
+      where: [
+        ...(["claimed", "sending"] as const).map((status) => ({ status })),
+      ],
+    });
+    return inFlight.filter((a) => a.claimedAt.getTime() < cutoff.getTime());
+  }
+
+  /**
    * Update a single outcome's status (used by worker-start failure handling
    * to flip pending outcomes to failed without inserting duplicates).
    */
