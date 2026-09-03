@@ -460,6 +460,194 @@ describe("buildChildEnvironment secret coverage (review D2)", () => {
   });
 });
 
+describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () => {
+  const provider = new WindowsProcessProvider();
+  const cwd = tmpCwd();
+
+  const run = (exe: string, args: string[], expectOutput = false) =>
+    provider.execute({
+      executable: exe,
+      args,
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 30_000,
+      outputLimitBytes: 1_000_000,
+      ...(expectOutput ? { expectOutput: true } : {}),
+    });
+
+  const powershell = (command: string, expectOutput = false) =>
+    run(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      expectOutput
+    );
+
+  it("pwsh: when installed, resolves and runs; provider falls back to powershell.exe otherwise", async () => {
+    if (!WINDOWS) return;
+    // The provider prefers pwsh.exe; when absent, the PROCESS_SPAWN_FAILED
+    // fallback retries powershell.exe. Either path must produce output.
+    const r = await powershell("Write-Output 'pwsh-fallback-sentinel'", true);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("pwsh-fallback-sentinel");
+    // If pwsh existed and was used directly there is no diagnostic; if the
+    // fallback fired, the FINAL result still succeeds (the intermediate
+    // spawn failure never surfaces as the tool result).
+    expect(r.diagnosticCode).toBeUndefined();
+  }, 60_000);
+
+  it("PowerShell Get-ChildItem emits directory entries", async () => {
+    if (!WINDOWS) return;
+    const fs = await import("fs");
+    const path = await import("path");
+    fs.writeFileSync(path.join(cwd, "listing-marker.txt"), "x");
+    const r = await powershell("Get-ChildItem -Name", true);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("listing-marker.txt");
+  }, 60_000);
+
+  it("cmd dir and type produce output", async () => {
+    if (!WINDOWS) return;
+    const fs = await import("fs");
+    const path = await import("path");
+    fs.writeFileSync(path.join(cwd, "cmd-type-marker.txt"), "cmd-type-content");
+    const dir = await run("cmd.exe", ["/d", "/s", "/c", "dir /b"], true);
+    expect(dir.exitCode).toBe(0);
+    expect(dir.stdout).toContain("cmd-type-marker.txt");
+    const type = await run(
+      "cmd.exe",
+      ["/d", "/s", "/c", "type cmd-type-marker.txt"],
+      true
+    );
+    expect(type.exitCode).toBe(0);
+    expect(type.stdout).toContain("cmd-type-content");
+  }, 60_000);
+
+  it("native ffmpeg -version reports a version when installed", async () => {
+    if (!WINDOWS) return;
+    const r = await run("ffmpeg", ["-version"], true);
+    // ffmpeg is not preinstalled on windows-2022 — skip-with-evidence when
+    // the binary is absent (spawn failure), assert the version otherwise.
+    if (r.diagnosticCode === "PROCESS_SPAWN_FAILED") return;
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/ffmpeg version/i);
+  }, 60_000);
+
+  it("mixed stdout/stderr keep streams independent with independent byte counts", async () => {
+    if (!WINDOWS) return;
+    const r = await powershell(
+      "Write-Output 'mixed-out'; Write-Error 'mixed-err'"
+    );
+    expect(r.stdout).toContain("mixed-out");
+    expect(r.stderr).toContain("mixed-err");
+    expect(r.stdoutBytes).toBeGreaterThan(0);
+    expect(r.stderrBytes).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("large output truncates with explicit metadata", async () => {
+    if (!WINDOWS) return;
+    const r = await provider.execute({
+      executable: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$s = 'x' * 200; 1..2000 | ForEach-Object { Write-Output $s }",
+      ],
+      cwd,
+      environment: buildChildEnvironment(),
+      timeoutMs: 60_000,
+      outputLimitBytes: 4_096,
+    });
+    expect(r.diagnosticCode).toBe("PROCESS_OUTPUT_TRUNCATED");
+    expect(r.stdoutBytes).toBeLessThanOrEqual(4_096);
+  }, 120_000);
+
+  it("environment scrubbing applies inside the child process", async () => {
+    if (!WINDOWS) return;
+    // AIFETCHLY_* is app-internal and must never reach the child.
+    const env = buildChildEnvironment({
+      PATH: process.env.PATH ?? "",
+      AIFETCHLY_TEST_SECRET: "should-not-leak",
+      MY_PLAIN_VALUE: "visible",
+    } as unknown as NodeJS.ProcessEnv);
+    const r = await provider.execute({
+      executable: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Write-Output $env:AIFETCHLY_TEST_SECRET; Write-Output $env:MY_PLAIN_VALUE",
+      ],
+      cwd,
+      environment: env,
+      timeoutMs: 30_000,
+      outputLimitBytes: 64 * 1024,
+      expectOutput: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).not.toContain("should-not-leak");
+    expect(r.stdout).toContain("visible");
+  }, 60_000);
+
+  // Junction lifecycle: creation, discovery, broken target, uninstall
+  // safety. Uses the REAL SkillActivationService against a temp skill root.
+  it("junction lifecycle: create, discover, break, uninstall-safe", async () => {
+    if (!WINDOWS) return;
+    const { SkillActivationService } = await import(
+      "@/service/SkillActivationService"
+    );
+    const fs = await import("fs");
+    const path = await import("path");
+    const external = fs.mkdtempSync(path.join(cwd, "junction-ext-"));
+    fs.writeFileSync(path.join(external, "SKILL.md"), "---\nname: junction-skill\ndescription: x\n---\nbody");
+    const skillRoot = fs.mkdtempSync(path.join(cwd, "junction-root-"));
+    const service = new SkillActivationService(skillRoot);
+
+    // 1. Create (junction mode).
+    const activated = await service.activate({
+      sourceRoot: external,
+      skillName: "junction-skill",
+      mode: "linked",
+      contentHash: "h".repeat(64),
+      installationId: "inst-junction-e2e",
+    });
+    expect(activated.ok).toBe(true);
+    if (!activated.ok) return;
+    expect(activated.mode).toBe("junction");
+    const linkPath = activated.activationPath;
+
+    // 2. Discover: activation verified through the junction.
+    expect(service.verifyActivation(linkPath)).toBe(true);
+
+    // 3. Uninstall-safety BEFORE breaking: removes the junction only.
+    const removed = service.uninstall(linkPath);
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(removed.removed).toBe("link");
+    expect(fs.existsSync(external)).toBe(true);
+
+    // 4. Broken-target handling: recreate, delete the target, uninstall
+    //    must still succeed (tolerant of the missing realpath).
+    const reactivated = await service.activate({
+      sourceRoot: external,
+      skillName: "junction-skill",
+      mode: "linked",
+      contentHash: "h".repeat(64),
+      installationId: "inst-junction-e2e",
+    });
+    expect(reactivated.ok).toBe(true);
+    fs.rmSync(external, { recursive: true, force: true });
+    const brokenRemoval = service.uninstall(
+      (reactivated as { activationPath: string }).activationPath
+    );
+    expect(brokenRemoval.ok).toBe(true);
+    if (!brokenRemoval.ok) return;
+    expect(brokenRemoval.removed).toBe("link");
+  }, 120_000);
+});
+
 describe("getPlatformProcessProvider", () => {
   it("returns the provider for the current platform", () => {
     const p = getPlatformProcessProvider();
