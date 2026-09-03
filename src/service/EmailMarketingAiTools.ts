@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { incrementOutboundMetric } from "@/service/outboundEmail/OutboundEmailMetrics";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import {
@@ -217,37 +218,6 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
     address: email.address,
     source: email.source ?? DIRECT_EMAIL_SOURCE,
   };
-}
-
-function toEmailItemFromSearchResult(
-  item: string | { address: string; source?: string; title?: string }
-): EmailItem {
-  if (typeof item === "string") {
-    return { title: item, address: item, source: DIRECT_EMAIL_SOURCE };
-  }
-  const title =
-    "title" in item && typeof item.title === "string"
-      ? item.title
-      : item.address;
-  return {
-    title,
-    address: item.address,
-    source: item.source ?? DIRECT_EMAIL_SOURCE,
-  };
-}
-
-function isEmailServiceEntity(item: unknown): item is {
-  id: number;
-  name: string;
-  from: string;
-  host: string;
-  port: string;
-  ssl: number;
-  status: number;
-} {
-  return (
-    typeof item === "object" && item !== null && "id" in item && "name" in item
-  );
 }
 
 function sanitizeEmailService(service: {
@@ -533,13 +503,21 @@ export async function startBulkEmailSendTask(
   args: unknown
 ): Promise<EmailMarketingAiToolResult<BulkEmailStartResult>> {
   try {
-    const input = bulkEmailTaskInputSchema.parse(args);
-    const recipients = await resolveBulkRecipients(input);
+    const parsed = parseBulkEmailTaskInput(args);
+    const recipients = await resolveBulkRecipients(parsed);
+
+    // §27.2 rule 4 — deprecation telemetry for AI calls using legacy inline
+    // content arguments. New sends should go through the domain gate and the
+    // authorized draft pipeline; inline subject/HTML is the pre-gate shape.
+    incrementOutboundMetric("legacy_inline_content_send", {
+      uses_inline_content: parsed.uses_inline_content,
+    });
+
     const module = new BuckEmailTaskModule();
     await module.ensureConnection();
 
     const taskInput = makeBuckEmailTaskInput({
-      ...input,
+      ...parsed,
       // emailtaskentityId, so we pass undefined here to avoid storing a
       // redundant copy in email_list_json. For direct sends, the EmailList is
       // serialized to email_list_json so prepareData() can load it without a
@@ -561,15 +539,15 @@ export async function startBulkEmailSendTask(
       status: "started",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
-      template_ids: input.template_ids,
-      filter_ids: input.filter_ids,
-      service_ids: input.service_ids,
-      not_duplicate: input.not_duplicate,
-      ...(input.email_subject !== undefined &&
-      input.email_html_content !== undefined
+      template_ids: parsed.template_ids,
+      filter_ids: parsed.filter_ids,
+      service_ids: parsed.service_ids,
+      not_duplicate: parsed.not_duplicate,
+      ...(parsed.email_subject !== undefined &&
+      parsed.email_html_content !== undefined
         ? {
-            email_subject: input.email_subject,
-            email_html_content: input.email_html_content,
+            email_subject: parsed.email_subject,
+            email_html_content: parsed.email_html_content,
           }
         : {}),
     };
