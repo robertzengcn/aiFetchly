@@ -90,6 +90,21 @@
             @open="(id: string) => emit('open-artifact', id)"
             @copy-html="(id: string) => emit('copy-artifact-html', id)"
           />
+          <OutboundEmailBatchCard
+            v-if="outboundBatch"
+            :batch-id="outboundBatch.batchId"
+            :mode="outboundBatch.mode"
+            :recipient-count="outboundBatch.recipientCount"
+            :batch-status="outboundBatch.batchStatus"
+            :reason-code="outboundBatch.reasonCode"
+            :sent-count="outboundBatch.sentCount"
+            @review-requested="reviewOutboundBatchId = $event"
+          />
+          <OutboundEmailReviewDialog
+            v-if="reviewOutboundBatchId !== null"
+            v-model="reviewDialogOpen"
+            :batch-id="reviewOutboundBatchId"
+          />
           <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
             <span>{{ message.metadata.toolName }}</span>
@@ -298,7 +313,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
@@ -312,6 +327,8 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
+import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -530,6 +547,62 @@ function openGeneratedImageFile(image: RenderableGeneratedImage): void {
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
+
+// ---------------------------------------------------------------------------
+// Outbound-email batch summary (§18). When the draft_outbound_email_batch tool
+// succeeds, its returned batch_id surfaces a review card inline in the chat
+// result so the user can review/approve/send or see the direct-send outcome.
+// ---------------------------------------------------------------------------
+interface OutboundBatchCardModel {
+  readonly batchId: number;
+  readonly mode: string;
+  readonly recipientCount: number;
+  readonly batchStatus: string;
+  readonly reasonCode: string;
+  readonly sentCount: number;
+}
+
+const outboundBatch = computed<OutboundBatchCardModel | null>(() => {
+  if (String(props.message.metadata?.toolName || "") !== "draft_outbound_email_batch") {
+    return null;
+  }
+  const batchId = toolResult.value.batchId;
+  if (typeof batchId !== "number") return null;
+  return {
+    batchId,
+    mode:
+      typeof toolResult.value.mode === "string"
+        ? (toolResult.value.mode as string)
+        : "review_first",
+    recipientCount:
+      typeof toolResult.value.draftCount === "number"
+        ? (toolResult.value.draftCount as number)
+        : 0,
+    batchStatus:
+      typeof toolResult.value.batchStatus === "string"
+        ? (toolResult.value.batchStatus as string)
+        : "draft_ready",
+    reasonCode:
+      typeof toolResult.value.reasonCode === "string"
+        ? (toolResult.value.reasonCode as string)
+        : "explicit_review_instruction",
+    sentCount:
+      typeof toolResult.value.sentCount === "number"
+        ? (toolResult.value.sentCount as number)
+        : 0,
+  };
+});
+
+const reviewOutboundBatchId = ref<number | null>(null);
+const reviewDialogOpen = ref<boolean>(true);
+
+// When the review dialog closes, clear the batch id so the card can be
+// re-opened (and so a stale dialog does not linger after the batch changes).
+watch(reviewDialogOpen, (open) => {
+  if (!open) {
+    reviewOutboundBatchId.value = null;
+  }
+});
 
 // Map attach_local_images result codes to localized messages. Codes are stable
 // English identifiers (PRD FR12); the UI shows the localized text.
