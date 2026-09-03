@@ -451,6 +451,14 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle
+  OUTBOUND_EMAIL_BATCH_GET,
+  OUTBOUND_EMAIL_DRAFT_UPDATE,
+  OUTBOUND_EMAIL_BATCH_APPROVE,
+  OUTBOUND_EMAIL_BATCH_SEND,
+  OUTBOUND_EMAIL_BATCH_DISCARD,
+  OUTBOUND_EMAIL_BATCH_STATUS,
+  OUTBOUND_EMAIL_BATCH_PROGRESS,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -595,6 +603,8 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_PROGRESS,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -672,6 +682,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -713,6 +725,8 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_PROGRESS,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -1134,6 +1148,14 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
+      // Plain handlers (not AI-gated): operate on already-authorized state.
+      OUTBOUND_EMAIL_BATCH_GET,
+      OUTBOUND_EMAIL_DRAFT_UPDATE,
+      OUTBOUND_EMAIL_BATCH_APPROVE,
+      OUTBOUND_EMAIL_BATCH_SEND,
+      OUTBOUND_EMAIL_BATCH_DISCARD,
+      OUTBOUND_EMAIL_BATCH_STATUS,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

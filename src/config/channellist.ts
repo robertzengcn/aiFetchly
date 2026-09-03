@@ -678,3 +678,17 @@ export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
 // Safety/support reporting for AI-generated output (Microsoft Store Policy
 // 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
 export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";
+
+// ======== Intent-Aware Outbound Email Delivery (§17) ========
+// Request/response (invoke) channels drive the review/approve/send lifecycle.
+// BATCH_PROGRESS is a main→renderer event channel for live status updates.
+// Draft generation is AI-gated; the review/approve/send/discard/status
+// channels are plain (they operate on already-authorized state and must stay
+// usable for inspection even when AI is disabled).
+export const OUTBOUND_EMAIL_BATCH_GET = "outbound:email:batch:get";
+export const OUTBOUND_EMAIL_DRAFT_UPDATE = "outbound:email:draft:update";
+export const OUTBOUND_EMAIL_BATCH_APPROVE = "outbound:email:batch:approve";
+export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
+export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
+export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
+export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
