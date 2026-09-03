@@ -92,8 +92,18 @@ jobs:
           echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      - name: Install dependencies (skip package scripts)
+        # The @bitdisaster/exe-icon-extractor node-gyp build breaks on the
+        # windows-2022 image (napi argument-list mismatch). None of the
+        # provider tests load it — skip ALL package scripts, then run only
+        # OUR postinstall steps explicitly.
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Run required postinstall steps
+        run: |
+          node scripts/patch-node-abi.js
+          node scripts/patch-remote-rebuild.js
+          node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; provider tests do not require it"
 
       - name: Run Windows process-provider diagnostic matrix (BLOCKING)
         # The vitest globalSetup runs the tsc --noEmit gate first; the
