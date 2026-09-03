@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto px-6" rounded>
+  <AppPageShell
+    page-id="search-form"
+    title-key="route.search_scraper"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto px-6" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea
@@ -8,10 +13,10 @@
         :label="t('search.input_keywords_hint')"
         :placeholder="t('search.market_insight_placeholder')"
       ></v-textarea>
-      <v-btn
-        color="primary"
-        class="mt-2 mb-3"
-        @click="onGenerateKeywords"
+      <v-btn 
+        color="primary" 
+        class="mt-2 mb-3" 
+        @click="onGenerateKeywords" 
         :loading="generatingKeywords"
         :disabled="!keywords || keywords.trim().length === 0"
       >
@@ -21,7 +26,6 @@
         v-if="lastGeneratedKeywords && lastGeneratedKeywords.length > 0"
         :descriptor="keywordReportDescriptor"
         :reported="keywordReported"
-        class="mt-2 mb-3 ml-2"
         @report="keywordReportDialog = true"
       />
       <v-select
@@ -135,16 +139,17 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
-
-  <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+<!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
   <AIContentReportDialog
     v-model="keywordReportDialog"
     :descriptor="keywordReportDescriptor"
     :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
     @submitted="keywordReported = true"
   />
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { useRoute, useRouter } from "vue-router";
 import AccountSelectedTable from "@/views/pages/socialaccount/widgets/AccountSelectedTable.vue";
 
@@ -160,10 +165,6 @@ import { SearhEnginer } from "@/config/searchSetting"
 import { ToArray, CapitalizeFirstLetter } from "@/views/utils/function"
 import { submitScraper, receiveSearchevent, getSearchTaskDetails, updateSearchTask, createSearchTaskOnly, generateRelatedKeywords } from "@/views/api/search"
 import { getSocialaccountinfo } from "@/views/api/socialaccount"
-import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
-import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
-import { buildKeywordSetDescriptor } from "@/views/components/aiContentReport/reportableOutput";
-import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { convertNumberToBoolean } from "@/views/utils/function"
 import { SEARCHEVENT } from "@/config/channellist"
@@ -172,6 +173,10 @@ import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.v
 import { ProxyEntity, ProxyListEntity } from "@/entityTypes/proxyType";
 import { LocalBrowerList } from "@/config/searchSetting"
 import { SocialAccountListData } from '@/entityTypes/socialaccount-type'
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildKeywordSetDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 const { t } = useI18n({ inheritLocale: true });
 const route = useRoute();
@@ -199,6 +204,16 @@ const enginer = ref<string>();
 const yandexTipShown = ref(false); // Track if tip has been shown to avoid repeated alerts
 const googleAccountTipShown = ref(false); // Track if Google account tip has been shown
 const keywords = ref();
+const searchplatform = ref<Array<SearchOption>>([]);
+const showinbrwoser = ref(0);
+const page_number = ref(1);
+const concurrent_quantity = ref(1);
+const proxyValue = ref<Array<ProxyEntity>>([]);
+const proxytableshow = ref(false);
+const accounts = ref<Array<SocialAccountListData>>([])
+const generatingKeywords = ref(false);
+const enableAIRecovery = ref(false);
+
 // AI Content Report state (PRD §8.2 keyword generation). Captures the last
 // AI-generated set so the report action appears only after generation.
 const lastGeneratedKeywords = ref<string[]>([]);
@@ -209,15 +224,6 @@ const keywordReportDescriptor = computed(() =>
     generatedAt: new Date().toISOString(),
   })
 );
-const searchplatform = ref<Array<SearchOption>>([]);
-const showinbrwoser = ref(0);
-const page_number = ref(1);
-const concurrent_quantity = ref(1);
-const proxyValue = ref<Array<ProxyEntity>>([]);
-const proxytableshow = ref(false);
-const accounts = ref<Array<SocialAccountListData>>([])
-const generatingKeywords = ref(false);
-const enableAIRecovery = ref(false);
 const initialize = () => {
   //searchplatform.value = ToArray(SearhEnginer);
   const seArr: string[] = ToArray(SearhEnginer);
@@ -681,13 +687,12 @@ async function onGenerateKeywords() {
     const generatedKeywords = await generateRelatedKeywords(currentKeywords, 15, 'seo');
 
     if (generatedKeywords && generatedKeywords.length > 0) {
-      // Capture the AI-generated set for the report action (PRD §8.2).
       lastGeneratedKeywords.value = generatedKeywords;
       keywordReported.value = false;
       // Combine original keywords with generated ones, remove duplicates
       const allKeywords = [...currentKeywords, ...generatedKeywords];
       const uniqueKeywords = Array.from(new Set(allKeywords));
-
+      
       // Update the textarea with all keywords
       keywords.value = uniqueKeywords.join('\n');
       

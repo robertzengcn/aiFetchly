@@ -1,9 +1,106 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
-import { DB_ENTITIES } from "@/config/dbEntities";
-import { DB_MIGRATIONS } from "@/config/dbMigrations";
-import { log } from "@/modules/Logger";
-// import sqlite3 from "sqlite3";
+import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
+import { SystemSettingEntity } from "@/entity/SystemSetting.entity";
+import { SystemSettingOptionEntity } from "@/entity/SystemSettingOption.entity";
+import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
+import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
+import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
+import { EmailFilterEntity } from "@/entity/EmailFilter.entity";
+import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
+import { EmailTemplateTaskRelationEntity } from "@/entity/EmailTemplateTaskRelation.entity";
+import { EmailFilterTaskRelationEntity } from "@/entity/EmailFilterTaskRelation.entity";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
+// import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
+import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
+import { EmailMarketingTaskEntity } from "@/entity/EmailMarketingTask.entity";
+import { EmailMarketingTaskDetailEntity } from "@/entity/EmailMarketingTaskDetail.entity";
+import { EmailSearchResultEntity } from "@/entity/EmailSearchResult.entity";
+import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.entity";
+import { EmailSearchTaskEntity } from "@/entity/EmailSearchTask.entity";
+import { EmailSearchTaskUrlEntity } from "@/entity/EmailSearchTaskUrl.entity";
+import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
+//import {EmailSearchUrlEntity} from "@/entity/EmailSearchTaskUrl.entity"
+import { ExtraModuleEntity } from "@/entity/ExtraModule.entity";
+import { ProxyCheckEntity } from "@/entity/ProxyCheck.entity";
+import { ProxyEntity } from "@/entity/Proxy.entity";
+import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
+import { SearchResultEntity } from "@/entity/SearchResult.entity";
+import { TaskRunEntity } from "@/entity/TaskRun.entity";
+// import {VideoDownloadTaskKeywordEntity} from "@/entity/VideoDownloadTaskKeyword.entity"
+import { SearchTaskEntity } from "@/entity/SearchTask.entity";
+import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
+import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
+//import {VideoPublishRecordEntity} from "@/entity/VideoPublishRecord.entity"
+import { ScheduleTaskEntity } from "@/entity/ScheduleTask.entity";
+import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
+import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
+import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
+import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
+import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
+import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
+import { YellowPagesPlatformEntity } from "@/entity/YellowPagesPlatform.entity";
+import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
+import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
+import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
+// import { RAGModelEntity } from "@/entity/RAGModel.entity";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
+import { AIChatRunEntity } from "@/entity/AIChatRun.entity";
+import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
+import { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
+import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
+import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
+import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
+import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { WorkspaceEntity } from "@/entity/Workspace.entity";
+import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
+import { HookConfigEntity } from "@/entity/HookConfig.entity";
+import { HookAuditEntryEntity } from "@/entity/HookAuditEntry.entity";
+import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
+import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
+import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatGoalEntity } from "@/entity/AIChatGoal.entity";
+import { AIChatGoalRunEntity } from "@/entity/AIChatGoalRun.entity";
+import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
+import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
+import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
+import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
+import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
+import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
+import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
+import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
+import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
+import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
+import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
+import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
+import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
+import { MCPToolEntity } from "@/entity/MCPTool.entity";
+import { TaskEntity } from "@/entity/Task.entity";
+import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
+import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
+import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
+import { PluginMarketplaceEntity } from "@/entity/PluginMarketplace.entity";
+import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
+import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
+import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
+import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
+import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
+import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import * as fs from "fs";
@@ -180,7 +277,7 @@ function getSqliteVecExtensionPath(): string | null {
       try {
         const resolved = resolveNativeExtensionPathForLoad(buildPath);
         if (resolved) {
-          log.info(
+          console.log(
             `Found sqlite-vec extension in build directory: ${resolved}`
           );
           return resolved;
@@ -209,7 +306,7 @@ function getSqliteVecExtensionPath(): string | null {
         const resolvedPkg =
           resolveNativeExtensionPathForLoad(platformPackagePath);
         if (resolvedPkg) {
-          log.info(
+          console.log(
             `Found sqlite-vec extension at (via require.resolve): ${resolvedPkg}`
           );
           return resolvedPkg;
@@ -217,7 +314,7 @@ function getSqliteVecExtensionPath(): string | null {
       }
     } catch (error) {
       // require.resolve might fail in bundled apps, continue with other methods
-      log.warn(
+      console.warn(
         "Could not resolve sqlite-vec via require.resolve, trying alternative methods"
       );
     }
@@ -309,7 +406,7 @@ function getSqliteVecExtensionPath(): string | null {
           );
           const resolvedDirect = resolveNativeExtensionPathForLoad(directPath);
           if (resolvedDirect) {
-            log.info(`Found sqlite-vec extension at: ${resolvedDirect}`);
+            console.log(`Found sqlite-vec extension at: ${resolvedDirect}`);
             return resolvedDirect;
           }
         }
@@ -318,27 +415,17 @@ function getSqliteVecExtensionPath(): string | null {
       }
     }
 
-    log.warn(
+    console.warn(
       `Could not find sqlite-vec extension file. Tried packages: ${packageNames.join(
         ", "
       )}`
     );
-    log.warn("Tried build paths:", buildExtensionPaths);
-    log.warn("Tried base paths:", uniqueBasePaths);
+    console.warn("Tried build paths:", buildExtensionPaths);
+    console.warn("Tried base paths:", uniqueBasePaths);
     return null;
   } catch (error) {
-    log.error("Error resolving sqlite-vec extension path:", error);
+    console.error("Error resolving sqlite-vec extension path:", error);
     return null;
-  }
-}
-
-/** Reliable production signal: the app is packaged. NODE_ENV is not reliably
- * "production" in packaged Electron, so app.isPackaged is the source of truth. */
-function isPackagedBuild(): boolean {
-  try {
-    return Boolean((app as { isPackaged?: boolean }).isPackaged);
-  } catch {
-    return false;
   }
 }
 
@@ -355,14 +442,120 @@ export class SqliteDb {
       this.connection = new DataSource({
         type: "better-sqlite3",
         database: path.join(filepath, "scraper.db"),
-        entities: DB_ENTITIES,
-        // WS-3 R3.1: dev keeps `synchronize` for schema ergonomics. Packaged
-        // (production) builds stop auto-mutating the schema ONLY once a baseline
-        // migration exists (DB_MIGRATIONS.length > 0), then run migrations on
-        // boot. Until the baseline lands, behavior is unchanged (synchronize on).
-        synchronize: !isPackagedBuild() || DB_MIGRATIONS.length === 0,
-        migrationsRun: isPackagedBuild() && DB_MIGRATIONS.length > 0,
-        migrations: DB_MIGRATIONS,
+        entities: [
+          AccountCookiesEntity,
+          SearchTaskEntity,
+          BuckemailTaskEntity,
+          EmailMarketingSendLogEntity,
+          EmailMarketingTaskDetailEntity,
+          EmailSearchResultEntity,
+          EmailSearchResultDetailEntity,
+          EmailSearchTaskEntity,
+          EmailSearchTaskUrlEntity,
+          EmailSearchTaskProxyEntity,
+          //EmailSearchUrlEntity,
+          ExtraModuleEntity,
+          ProxyCheckEntity,
+          ProxyEntity,
+          SearchKeywordEntity,
+          SearchResultEntity,
+          TaskRunEntity,
+          EmailMarketingTaskEntity,
+          SystemSettingGroupEntity,
+          SystemSettingEntity,
+          SystemSettingOptionEntity,
+          // VideoCaptionEntity,
+          // VideoDescriptionEntity,
+          // VideoDownloadEntity,
+          // VideoDownloadTaskEntity,
+          // VideoDownloadTaskAccountsEntity,
+          // VideoDownloadTaskDetailEntity,
+          // VideoDownloadTaskProxyEntity,
+          // VideoDownloadTaskUrlsEntity,
+          // VideoDownloadTagEntity,
+          // VideoDownloadTaskKeywordEntity,
+          SearchTaskProxyEntity,
+          SearchAccountEntity,
+          // VideoPublishRecordEntity,
+          ScheduleTaskEntity,
+          ScheduleExecutionLogEntity,
+          ScheduleDependencyEntity,
+          SchedulerStatusEntity,
+          EmailTemplateEntity,
+          EmailFilterEntity,
+          EmailFilterDetailEntity,
+          EmailTemplateTaskRelationEntity,
+          EmailFilterTaskRelationEntity,
+          EmailServiceEntity,
+          EmailServiceTaskRelationEntity,
+          SocialAccountEntity,
+          YellowPagesTaskEntity,
+          YellowPagesResultEntity,
+          YellowPagesPlatformEntity,
+          SessionRecordingEntity,
+          RAGDocumentEntity,
+          RAGChunkEntity,
+          // RAGModelEntity,
+          AIChatMessageEntity,
+          AIChatAttachmentEntity,
+          AIChatPendingMessageEntity,
+          AIChatConversationEntity,
+          AIChatRunEntity,
+          AIArtifactEntity,
+          VectorEntity,
+          VectorMetadataEntity,
+          MCPToolEntity,
+          TaskEntity,
+          ContactInfoEntity,
+          InstalledSkillEntity,
+          InstalledPluginEntity,
+          PluginMarketplaceEntity,
+          DependencyInstallAuditEntity,
+          ShellAuditEntity,
+          GoogleMapsSearchRecordEntity,
+          YandexMapsSearchRecordEntity,
+          AiMessageTaskEntity,
+          AiMessageTaskRunEntity,
+          ConversationToolStateEntity,
+          EmailReceivedMessageEntity,
+          EmailReplyDraftEntity,
+          EmailReplyIdentityProfileEntity,
+          EmailAutoReplyRuleEntity,
+          EmailReplyAuditLogEntity,
+          EmailAutoReplyAuditLogEntity,
+          EmailReplyDraftRevisionEntity,
+          EmailReplyApprovalEntity,
+          EmailReplySendAttemptEntity,
+          EmailConversationEntity,
+          EmailReplyKnowledgeScopeEntity,
+          AIChatPlanEntity,
+          AIChatPlanVersionEntity,
+          AIChatPlanQuestionEntity,
+          AIChatPlanApprovalEntity,
+          AIChatGoalEntity,
+          AIChatGoalRunEntity,
+          AIChatGoalEvidenceEntity,
+          AIChatSessionMemoryEntity,
+          AIChatCompactSummaryEntity,
+          AgentDefinitionEntity,
+          AgentTaskEntity,
+          AgentTaskMessageEntity,
+          AgentToolCallEntity,
+          AIUserMemoryEntity,
+          AIMemoryConsolidationRunEntity,
+          AIWorkspaceMemoryEntity,
+          AIWorkspaceMemoryConsolidationRunEntity,
+          AIWorkspaceMemoryScopeEntity,
+          AIWorkspaceMemoryScopePathEntity,
+          AIWorkspaceMemoryPortableStateEntity,
+          AIWorkspaceMemorySyncAuditEntity,
+          WorkspaceEntity,
+          AIFetchlyWorkspaceTrustEntity,
+          HookConfigEntity,
+          HookAuditEntryEntity,
+        ],
+        synchronize: true,
+        migrations: [],
         subscribers: [],
         //logging:  process.env.NODE_ENV !== 'production', /// use this for debugging
         logging: false,
@@ -379,22 +572,22 @@ export class SqliteDb {
           try {
             if (extensionPath) {
               db.loadExtension(extensionPath);
-              log.info(
+              console.log(
                 "sqlite-vec extension loaded successfully from:",
                 extensionPath
               );
             } else {
-              log.warn(
+              console.warn(
                 "sqlite-vec extension not found. Vector operations will not work."
               );
-              log.warn(
+              console.warn(
                 "This is non-fatal - the database will initialize, but vector search will fail."
               );
               // Don't throw - allow database to initialize even if extension fails
               // Vector operations will fail, but other database operations will work
             }
           } catch (error) {
-            log.error("Failed to load sqlite-vec extension:", error);
+            console.error("Failed to load sqlite-vec extension:", error);
             // Don't throw - allow database to initialize even if extension fails
             // This allows the app to start, but vector operations will fail
             // The error will be logged for debugging
@@ -437,10 +630,6 @@ export class SqliteDb {
       return;
     }
 
-    // WS-3 R3.1: snapshot the DB before initialize() can run migrations, so a
-    // bad migration is recoverable. No-op until migrations exist / in dev.
-    SqliteDb.backupDatabaseBeforeMigrate();
-
     if (!SqliteDb.initPromise) {
       const guardedPromise = initializeConnection()
         .then(() => undefined)
@@ -455,59 +644,38 @@ export class SqliteDb {
     await SqliteDb.initPromise;
   }
 
-  /**
-   * WS-3 R3.1 safety: copy scraper.db to a timestamped .premigrate backup before
-   * the connection initializes (which may run pending migrations). Best-effort —
-   * never blocks startup. Only acts in packaged builds with migrations
-   * registered, so it is a no-op today and activates automatically once the
-   * baseline migration lands in DB_MIGRATIONS.
-   */
-  private static backupDatabaseBeforeMigrate(): void {
-    if (
-      DB_MIGRATIONS.length === 0 ||
-      !isPackagedBuild() ||
-      !SqliteDb.currentDbPath
-    ) {
-      return;
-    }
-    try {
-      const dbFile = path.join(SqliteDb.currentDbPath, "scraper.db");
-      if (!fs.existsSync(dbFile)) return;
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const backupPath = path.join(
-        SqliteDb.currentDbPath,
-        `scraper.db.premigrate-${stamp}`
-      );
-      fs.copyFileSync(dbFile, backupPath);
-      log.info(`[SqliteDb] pre-migration backup written: ${backupPath}`);
-    } catch (err) {
-      log.error("[SqliteDb] pre-migration backup failed:", err);
-    }
-  }
-
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
       throw new Error("Cannot create SqliteDb instance with empty filepath");
     }
 
-    // WS-3 R3.4: the DB path is immutable post-init from getInstance's view.
-    // Previously a different path triggered a fire-and-forget swap that raced
-    // with in-flight callers (they could observe a destroyed connection). Path
-    // changes must go through the awaited resetInstance() (used by login /
-    // BackgroundScheduler). On a mismatch, return the authoritative singleton.
-    if (SqliteDb.instance) {
-      if (SqliteDb.currentDbPath !== filepath) {
-        log.warn(
-          `SqliteDb.getInstance called with path "${filepath}" but the active singleton uses "${SqliteDb.currentDbPath}"; returning the existing instance. Use SqliteDb.resetInstance() to change the path.`
-        );
+    // Check if path has changed - if so, reset the instance
+    if (SqliteDb.instance && SqliteDb.currentDbPath !== filepath) {
+      console.log(
+        `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${filepath}, resetting instance...`
+      );
+      // Destroy old connection asynchronously (fire and forget)
+      // The old instance will be replaced immediately with a new one
+      const oldInstance = SqliteDb.instance;
+      if (oldInstance.connection?.isInitialized) {
+        oldInstance.connection.destroy().catch((error) => {
+          console.error(
+            "Failed to destroy old SqliteDb connection during path change:",
+            error
+          );
+        });
       }
-      return SqliteDb.instance;
+      // Create new instance immediately with new path
+      SqliteDb.instance = new SqliteDb(filepath);
+      SqliteDb.currentDbPath = filepath;
+      SqliteDb.initPromise = null;
+    } else if (!SqliteDb.instance) {
+      SqliteDb.instance = new SqliteDb(filepath);
+      SqliteDb.currentDbPath = filepath;
+      // await SqliteDb.instance.checkConnection();
     }
 
-    // First initialization
-    SqliteDb.instance = new SqliteDb(filepath);
-    SqliteDb.currentDbPath = filepath;
     return SqliteDb.instance;
   }
 
@@ -579,7 +747,7 @@ export class SqliteDb {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
       } catch (error) {
-        log.error("Failed to destroy existing SqliteDb connection:", error);
+        console.error("Failed to destroy existing SqliteDb connection:", error);
       }
     }
 
@@ -596,7 +764,7 @@ export class SqliteDb {
         await this.connection.initialize();
       }
     } catch (error) {
-      log.error("Database connection failed:", error);
+      console.error("Database connection failed:", error);
       throw new Error("Failed to initialize database connection");
     }
   }

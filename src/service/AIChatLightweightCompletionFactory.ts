@@ -71,13 +71,13 @@ function buildProductionDeps(): AIChatLightweightCompletionDeps {
       }
       return { kind: "hosted" as const, providerKind: "hosted" as const };
     },
-    completeHosted: async (request, signal) => {
+    completeHosted: async (request) => {
       const api = await getApi();
-      return api.openAIChatCompletion(request, signal);
+      return api.openAIChatCompletion(request);
     },
-    completeLocal: async (request, signal) => {
+    completeLocal: async (request) => {
       const api = await getApi();
-      return api.openAIChatCompletion(request, signal);
+      return api.openAIChatCompletion(request);
     },
     getSmallModelCapability: async () => {
       const { AIChatModelCatalogService: CatalogService } = await import(

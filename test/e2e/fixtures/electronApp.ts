@@ -20,6 +20,12 @@ export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /**
+   * Loopback base URL of the FakePluginHub server. When set, the launch env
+   * carries VITE_PLUGIN_HUB_URL so the main-process community catalog and
+   * install pipeline target the deterministic hub fixture (UPD-GAP-05).
+   */
+  readonly hubBaseUrl?: string;
 }
 
 export interface NetworkViolation {
@@ -48,7 +54,8 @@ export interface LaunchedApp {
  */
 function buildSanitizedEnv(
   testRoot: E2ETestRoot,
-  fakeAiBaseUrl: string | undefined
+  fakeAiBaseUrl: string | undefined,
+  hubBaseUrl: string | undefined
 ): Record<string, string> {
   // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
   // EXACTLY (not as prefixes) so e.g. `CI` does not also pass `CI_REPOSITORY_URL`
@@ -137,6 +144,18 @@ function buildSanitizedEnv(
       /* ignore */
     }
   }
+  if (hubBaseUrl) {
+    // Set explicitly (never inherited from the host env): the main process
+    // resolves the Plugin Hub base from this variable at runtime, and the
+    // E2E bundle does not bake it in at build time. Also allowlist the
+    // origin for the network guard's configured-origins set.
+    allowed["VITE_PLUGIN_HUB_URL"] = hubBaseUrl;
+    try {
+      allowedOrigins.push(new URL(hubBaseUrl).origin);
+    } catch {
+      /* ignore */
+    }
+  }
   allowed[E2E_ENV.ALLOWED_ORIGINS] = allowedOrigins.join(",");
   return allowed;
 }
@@ -155,7 +174,11 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  const env = buildSanitizedEnv(
+    options.testRoot,
+    options.fakeAiBaseUrl,
+    options.hubBaseUrl
+  );
 
   const electronApp = await electronLauncher.launch({
     args: [

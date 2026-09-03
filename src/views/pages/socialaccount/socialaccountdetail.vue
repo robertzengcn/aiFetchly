@@ -1,5 +1,22 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    :page-id="isEdit ? 'socialaccount-edit' : 'socialaccount-create'"
+    :title-key="isEdit ? 'route.edit_tool_account' : 'route.add_tool_account'"
+    content-width="form"
+  >
+    <!-- Objective title + context (IPR-019); the form owns its fields. -->
+    <template #context>
+      <button
+        type="button"
+        class="back-link"
+        data-testid="socialaccount-detail-back"
+        @click="router.go(-1)"
+      >
+        <v-icon icon="mdi-arrow-left" size="14" aria-hidden="true" />
+        {{ t('route.tool_account_list') }}
+      </button>
+    </template>
+    <v-sheet class="mx-auto" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="socialaccountId"
@@ -182,10 +199,12 @@
       </div>
     </v-form>
   </v-sheet>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import {
   getSocialaccountinfo,
   saveSocialAccount,

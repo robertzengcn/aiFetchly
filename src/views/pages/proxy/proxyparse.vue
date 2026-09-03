@@ -1,5 +1,10 @@
 <template>
-  <v-container>
+  <AppPageShell
+    page-id="proxy-import"
+    title-key="route.parse_proxy"
+    content-width="form"
+  >
+    <v-container>
    
 
     <v-row>
@@ -169,10 +174,11 @@
         </v-list-item>
       </v-list>
     </v-dialog>
-  </v-container>
-  
+    </v-container>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import Papa from "papaparse";

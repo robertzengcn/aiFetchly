@@ -25,7 +25,6 @@ import {
   type AIChatRetryProfile,
 } from "@/service/AIChatRetryPolicy";
 import { describeErrorDetail } from "@/service/AIChatErrorMapper";
-import { log } from "@/modules/Logger";
 
 /**
  * Chat request interface
@@ -721,7 +720,7 @@ export interface WebsiteAnalysisResponse {
  * const api = new AiChatApi();
  * const response = await api.sendMessage('Hello, how are you?');
  * if (response.status) {
- *   log.info('AI Response:', response.data.message);
+ *   console.log('AI Response:', response.data.message);
  * }
  * ```
  */
@@ -789,10 +788,6 @@ export interface StreamRecoveryInfo {
   message: string;
 }
 
-/**
- * Maximum number of retry attempts for a streaming connection failure
- * (so up to maxAttempts + 1 total tries including the initial attempt).
- */
 /**
  * Base delay in milliseconds for the first retry. Subsequent delays use
  * exponential backoff: base * 2^attempt (1s, 2s, 4s).
@@ -944,11 +939,11 @@ export class AiChatApi {
     }
     try {
       const safe = this._redactDebugPayload(data);
-      log.info(
+      console.log(
         `[ai-chat-debug] -> ${endpoint}\n` + JSON.stringify(safe, null, 2)
       );
     } catch (err) {
-      log.warn(
+      console.warn(
         `[ai-chat-debug] failed to serialize payload for ${endpoint}`,
         err
       );
@@ -1083,7 +1078,7 @@ export class AiChatApi {
    *     conversationId: 'conv-123'
    *   },
    *   (event) => {
-   *     log.info('Event:', event.event, 'Data:', event.data);
+   *     console.log('Event:', event.event, 'Data:', event.data);
    *   },
    *   { signal: abortController.signal }
    * );
@@ -1129,7 +1124,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent, options?.signal);
+    await this._consumeStreamResponse(response, onEvent);
   }
 
   /**
@@ -1175,13 +1170,12 @@ export class AiChatApi {
   /**
    * Consume an SSE stream response and invoke onEvent for each parsed event.
    * Shared by streamMessage and streamEmailTemplateGeneration.
-   * When the response body's reader is aborted, reader.read() rejects with
-   * AbortError; we exit cleanly and rethrow.
+   * Aborting the signal the stream fetch was created with makes reader.read()
+   * reject with AbortError; this method itself needs no signal reference.
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void,
-    signal?: AbortSignal
+    onEvent: (event: StreamEvent) => void
   ): Promise<void> {
     if (!response.body) {
       throw new Error("Response body is null");
@@ -1194,11 +1188,6 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        // Honor an abort between reads so cancellation is responsive even
-        // when the underlying read hasn't rejected yet.
-        if (signal?.aborted) {
-          break;
-        }
         let result: ReadableStreamReadResult<Uint8Array>;
         try {
           result = await reader.read();
@@ -1307,8 +1296,8 @@ export class AiChatApi {
    * ```typescript
    * const models = await api.getAvailableModels();
    * if (models.status) {
-   *   log.info('Available models:', models.data.models);
-   *   log.info('Default model:', models.data.default_model);
+   *   console.log('Available models:', models.data.models);
+   *   console.log('Default model:', models.data.default_model);
    * }
    * ```
    */
@@ -1328,7 +1317,7 @@ export class AiChatApi {
    * ```typescript
    * const isOnline = await api.testConnection();
    * if (isOnline.status) {
-   *   log.info('AI chat service is available');
+   *   console.log('AI chat service is available');
    * }
    * ```
    */
@@ -1365,9 +1354,9 @@ export class AiChatApi {
    *   }
    * ]);
    * if (response.status && response.data) {
-   *   log.info('Generated keywords:', response.data.keywords);
-   *   log.info('Seed keywords:', response.data.seed_keywords);
-   *   log.info('Total keywords:', response.data.total_keywords);
+   *   console.log('Generated keywords:', response.data.keywords);
+   *   console.log('Seed keywords:', response.data.seed_keywords);
+   *   console.log('Total keywords:', response.data.total_keywords);
    * }
    * ```
    */
@@ -1421,9 +1410,9 @@ export class AiChatApi {
    *   temperature: 0.7
    * });
    * if (response.status && response.data) {
-   *   log.info('Industry:', response.data.industry);
-   *   log.info('Match score:', response.data.match_score);
-   *   log.info('Reasoning:', response.data.reasoning);
+   *   console.log('Industry:', response.data.industry);
+   *   console.log('Match score:', response.data.match_score);
+   *   console.log('Reasoning:', response.data.reasoning);
    * }
    * ```
    */
@@ -1567,7 +1556,12 @@ export class AiChatApi {
             try {
               currentEvent.data = JSON.parse(dataStr);
             } catch (error) {
-              log.error("Error parsing event data:", error, "Data:", dataStr);
+              console.error(
+                "Error parsing event data:",
+                error,
+                "Data:",
+                dataStr
+              );
               try {
                 const jsonStr =
                   dataStr.startsWith("{") && dataStr.includes("'")
@@ -1575,7 +1569,12 @@ export class AiChatApi {
                     : dataStr;
                 currentEvent.data = JSON.parse(jsonStr);
               } catch (err) {
-                log.error("Error parsing event data:", err, "Data:", dataStr);
+                console.error(
+                  "Error parsing event data:",
+                  err,
+                  "Data:",
+                  dataStr
+                );
               }
             }
           }
@@ -1595,7 +1594,7 @@ export class AiChatApi {
           const event: StreamEvent = JSON.parse(jsonStr);
           onEvent(event);
         } catch (error) {
-          log.error("Error parsing final stream event:", error);
+          console.error("Error parsing final stream event:", error);
         }
       }
     } finally {
@@ -1636,9 +1635,9 @@ export class AiChatApi {
    *   'data:image/png;base64,iVBORw0KGgo...'
    * );
    * if (response.status && response.data) {
-   *   log.info('Emails:', response.data.emails);
-   *   log.info('Phones:', response.data.phones);
-   *   log.info('Address:', response.data.address);
+   *   console.log('Emails:', response.data.emails);
+   *   console.log('Phones:', response.data.phones);
+   *   console.log('Address:', response.data.address);
    * }
    * ```
    */
@@ -1942,11 +1941,9 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = (await this.getProviderResolver()).resolveForModelList();
-      if (!resolved.canUse) {
-        throw new Error(resolved.message);
-      }
-      if (resolved.kind === "local") {
+      const resolved = (await this.getProviderResolver()).resolveForChat();
+      // Narrow to the success union first — ChatProviderDenial has no `kind`.
+      if (resolved.canUse && resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).listModels();
       }
       return this.listOpenAIModelsHosted();
@@ -2054,24 +2051,13 @@ export class AiChatApi {
     if (!this.isRecord(response)) {
       return { object: "list", data: [] };
     }
-    // Pass-through when already OpenAI-shaped. Preserve top-level
-    // `default_model` and `small_model` metadata (previously this branch
-    // returned { object, data } only, dropping both).
+    // Pass-through when already OpenAI-shaped.
     if (Array.isArray((response as { data?: unknown }).data)) {
       const obj = response as { object?: unknown; data: unknown[] };
-      const result: OpenAIModelsResponse = {
+      return {
         object: typeof obj.object === "string" ? obj.object : "list",
         data: obj.data as OpenAIModel[],
       };
-      const defaultModel = this.getStringField(response, "default_model");
-      if (defaultModel) {
-        result.default_model = defaultModel;
-      }
-      const smallModel = this.extractSmallModelCapability(response);
-      if (smallModel) {
-        result.small_model = smallModel;
-      }
-      return result;
     }
     const modelsRaw = (response as { models?: unknown }).models;
     if (!Array.isArray(modelsRaw)) {
@@ -2107,57 +2093,7 @@ export class AiChatApi {
     if (defaultModel) {
       result.default_model = defaultModel;
     }
-    const smallModel = this.extractSmallModelCapability(response);
-    if (smallModel) {
-      result.small_model = smallModel;
-    }
     return result;
-  }
-
-  /**
-   * Validate and extract the hosted `small_model` capability metadata from a
-   * `/api/ai/v1/models` response. Malformed optional fields are dropped
-   * silently — the model list must never be rejected because a capability
-   * field had the wrong shape. Returns the capability only when `available`
-   * is a boolean (the one required field); otherwise returns undefined so
-   * callers treat the small route as not-reported.
-   */
-  private extractSmallModelCapability(
-    response: unknown
-  ): OpenAISmallModelCapability | undefined {
-    if (!this.isRecord(response)) return undefined;
-    const raw = (response as { small_model?: unknown }).small_model;
-    if (!this.isRecord(raw)) return undefined;
-    const available = (raw as { available?: unknown }).available;
-    if (typeof available !== "boolean") return undefined;
-    const resolvedModel = this.getStringField(raw, "resolved_model");
-    const contextSize = this.getPositiveNumberField(raw, "context_size");
-    const maxTokens = this.getPositiveNumberField(raw, "max_tokens");
-    // Build immutably — the capability interface fields are readonly.
-    const capability: OpenAISmallModelCapability = {
-      available,
-      ...(resolvedModel ? { resolved_model: resolvedModel } : {}),
-      ...(contextSize !== undefined ? { context_size: contextSize } : {}),
-      ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
-    };
-    return capability;
-  }
-
-  /**
-   * Like {@link getNumberField} but requires a positive (> 0) value and
-   * returns undefined otherwise. Used for capability token fields where a
-   * non-positive or non-numeric value must be ignored, not surfaced.
-   */
-  private getPositiveNumberField(
-    obj: unknown,
-    field: string
-  ): number | undefined {
-    if (!this.isRecord(obj)) return undefined;
-    const value = (obj as Record<string, unknown>)[field];
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-      return undefined;
-    }
-    return value;
   }
 
   /**
@@ -2165,14 +2101,10 @@ export class AiChatApi {
    * POST /v1/chat/completions (stream: false or omitted)
    *
    * @param request - Chat completion request with messages and optional parameters
-   * @param signal - Optional AbortSignal; forwarded to the underlying fetch so an
-   *   in-flight request can be cancelled (lightweight background workloads use
-   *   this so cancellation reaches mid-fetch, not just the decision boundaries).
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
-    request: OpenAIChatCompletionRequest,
-    signal?: AbortSignal
+    request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2181,20 +2113,18 @@ export class AiChatApi {
       }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).complete(
-          request,
-          signal
+          request
         );
       }
-      return this.openAIChatCompletionHosted(request, signal);
+      return this.openAIChatCompletionHosted(request);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request, signal);
+    return this.openAIChatCompletionHosted(request);
   }
 
   /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
   private async openAIChatCompletionHosted(
-    request: OpenAIChatCompletionRequest,
-    signal?: AbortSignal
+    request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2222,11 +2152,7 @@ export class AiChatApi {
       data.user = request.user;
     }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson(
-      "/api/ai/v1/chat/completions",
-      data,
-      signal ? { signal } : {}
-    );
+    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
 
   /**
@@ -2856,22 +2782,6 @@ export class AiChatApi {
       if (usage) {
         chunk.usage = usage;
       }
-      // Capture the top-level error field (present when finish_reason="error")
-      // so downstream code can distinguish context_window_exceeded, payload_too_large,
-      // etc. from generic transient errors.
-      const rawError = payload.error;
-      if (this.isRecord(rawError)) {
-        const errMsg = this.getStringField(rawError, "message");
-        const errType = this.getStringField(rawError, "type");
-        const errCode = this.getStringField(rawError, "code");
-        if (errMsg || errCode) {
-          chunk.error = {
-            message: errMsg ?? "",
-            ...(errType ? { type: errType } : {}),
-            ...(errCode ? { code: errCode } : {}),
-          };
-        }
-      }
       return chunk;
     }
 
@@ -2999,7 +2909,7 @@ export class AiChatApi {
     );
     const data = payload.data;
     const dataType = Array.isArray(data) ? "array" : typeof data;
-    log.error(
+    console.error(
       `[ai-chat-v2] openai-stream server envelope error status=${String(
         status
       )} code=${codeText} msg="${safeMessage}" dataType=${dataType}`
@@ -3082,7 +2992,7 @@ export class AiChatApi {
 
     const emitPayload = (payload: unknown, eventType?: string): void => {
       if (loggedPayloadCount < 8) {
-        log.info(
+        console.log(
           `[ai-chat-v2] openai-stream payload ${
             loggedPayloadCount + 1
           }: ${this.describeOpenAIStreamPayload(payload, eventType)}`
@@ -3102,7 +3012,7 @@ export class AiChatApi {
       }
       const chunk = this.normalizeOpenAIStreamPayload(payload, eventType);
       if (!chunk) {
-        log.warn(
+        console.warn(
           `[ai-chat-v2] openai-stream ignored unrecognized payload: ${this.describeOpenAIStreamPayload(
             payload,
             eventType
@@ -3130,7 +3040,7 @@ export class AiChatApi {
             streamActive = false;
             throw readError;
           }
-          log.error(
+          console.error(
             `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${
               rawBody.length
             }, payloads=${emittedPayloadCount}): ${describeErrorDetail(
@@ -3174,7 +3084,7 @@ export class AiChatApi {
             try {
               payload = JSON.parse(jsonStr);
             } catch (err) {
-              log.warn(
+              console.warn(
                 `[ai-chat-v2] openai-stream failed to parse payload length=${jsonStr.length}:`,
                 err
               );
@@ -3198,7 +3108,7 @@ export class AiChatApi {
         try {
           payload = JSON.parse(jsonStr);
         } catch (err) {
-          log.warn(
+          console.warn(
             `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
             err
           );
@@ -3227,11 +3137,11 @@ export class AiChatApi {
           let payload: unknown;
           try {
             payload = JSON.parse(trimmedBody);
-            log.warn(
+            console.warn(
               `[ai-chat-v2] openai-stream recovered non-SSE JSON body (length=${trimmedBody.length}); treating as single payload.`
             );
           } catch (err) {
-            log.warn(
+            console.warn(
               `[ai-chat-v2] openai-stream body was not valid JSON and emitted no SSE chunks (length=${trimmedBody.length}):`,
               err
             );

@@ -119,10 +119,8 @@ describe("Windows Store packaging", (): void => {
     );
 
     expect(maker).to.not.equal(undefined);
-    expect(
-      squirrel,
-      "Store builds still need Squirrel for master EXE output"
-    ).to.not.equal(undefined);
+    expect(squirrel, "Store builds still need Squirrel for master EXE output")
+      .to.not.equal(undefined);
     expect(maker?.config?.sign).to.equal(false);
     expect(maker?.config?.packageAssets).to.equal(windowsStoreAssetsPath);
     expect(maker?.config?.windowsKitVersion).to.equal("10.0.26100.0");
@@ -145,10 +143,8 @@ describe("Windows Store packaging", (): void => {
       Array.from(requiredWindowsStoreAssets.keys()).sort()
     );
 
-    for (const [
-      assetName,
-      [expectedWidth, expectedHeight],
-    ] of requiredWindowsStoreAssets) {
+    for (const [assetName, [expectedWidth, expectedHeight]] of
+      requiredWindowsStoreAssets) {
       const asset = readFileSync(path.join(windowsStoreAssetsPath, assetName));
       expect(asset.subarray(1, 4).toString("ascii"), assetName).to.equal("PNG");
       expect(asset.readUInt32BE(16), `${assetName} width`).to.equal(
@@ -243,10 +239,8 @@ describe("Windows Store packaging", (): void => {
         candidate.name === "Build EXE for local testing"
     );
 
-    expect(
-      exeStep,
-      "missing workflow step: Build EXE for local testing"
-    ).to.not.equal(undefined);
+    expect(exeStep, "missing workflow step: Build EXE for local testing").to.not
+      .equal(undefined);
     expect(exeStep?.if).to.equal("${{ github.event_name == 'push' }}");
     expect(exeStep?.run).to.include(
       "electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-squirrel"
@@ -266,10 +260,9 @@ describe("Windows Store packaging", (): void => {
       readFileSync(releaseWorkflowPath, "utf8")
     ) as ReleaseWorkflow;
 
-    const assertChecksumPublishJob = (
-      jobName: "publish-github-release" | "draft-release-on-push"
-    ): void => {
-      const steps = workflow.jobs?.[jobName]?.steps ?? [];
+    const assertChecksumPublishJob = (jobName: string): void => {
+      const job = workflow.jobs?.[jobName as keyof typeof workflow.jobs];
+      const steps = (job && "steps" in job ? job.steps : undefined) ?? [];
       const checksumStep = steps.find(
         (candidate: WorkflowStep): boolean =>
           candidate.name === "Generate SHA-256 checksums"
@@ -279,9 +272,10 @@ describe("Windows Store packaging", (): void => {
           candidate.name === "Create draft GitHub Release"
       );
 
-      expect(checksumStep, `missing checksum step on ${jobName}`).to.not.equal(
-        undefined
-      );
+      expect(
+        checksumStep,
+        `missing checksum step on ${jobName}`
+      ).to.not.equal(undefined);
       expect(checksumStep?.run).to.include(
         "scripts/generate-release-checksums.js"
       );

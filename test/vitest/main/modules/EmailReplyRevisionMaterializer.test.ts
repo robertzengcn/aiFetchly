@@ -10,6 +10,7 @@ import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMat
 import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 /**
  * materializeRevision1 is the shared core of the v2 generate and edit wiring.
  * Proving it here (model-level, real SQLite) covers both IPC paths' essential
@@ -165,3 +166,5 @@ describe("materializeRevision1 — v2 generate/edit wiring core", () => {
     expect(consumed?.invalidatedAt).toBeTruthy();
   });
 });
+
+/* eslint-enable @typescript-eslint/no-var-requires */

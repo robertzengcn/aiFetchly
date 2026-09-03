@@ -1,0 +1,63 @@
+// ---------------------------------------------------------------------------
+// Inner-page convergence semantic tokens (design §7.2–§7.3).
+//
+// Color aliases DERIVE from the Vuetify theme (which consumes the typed
+// palettes in src/views/design/tokens.ts) — no literals are repeated here.
+// Converged pages must consume these aliases or Vuetify theme names, never
+// their own palette (IPR-013).
+// ---------------------------------------------------------------------------
+
+:root {
+  --app-canvas: rgb(var(--v-theme-background));
+  --app-shell: rgb(var(--v-theme-surface));
+  --app-surface: rgb(var(--v-theme-surface));
+  --app-surface-variant: rgb(var(--v-theme-surface-variant));
+  --app-text: rgb(var(--v-theme-on-surface));
+  --app-text-soft: rgba(var(--v-theme-on-surface), 0.72);
+  --app-text-muted: rgba(var(--v-theme-on-surface), 0.55);
+  --app-accent: rgb(var(--v-theme-primary));
+  --app-accent-soft: rgba(var(--v-theme-primary), 0.14);
+  --app-success: rgb(var(--v-theme-success));
+  --app-success-soft: rgba(var(--v-theme-success), 0.14);
+  --app-warning: rgb(var(--v-theme-warning));
+  --app-warning-soft: rgba(var(--v-theme-warning), 0.14);
+  --app-danger: rgb(var(--v-theme-error));
+  --app-danger-soft: rgba(var(--v-theme-error), 0.14);
+  --app-border: rgba(var(--v-theme-on-surface), 0.12);
+  --app-border-strong: rgba(var(--v-theme-on-surface), 0.24);
+  --app-focus: var(--app-accent);
+
+  // 4px base spacing scale (PRD §9.3).
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 20px;
+  --app-space-6: 24px;
+  --app-space-8: 32px;
+
+  // Radius scale: controls 7px, panels 11px, major overlays 16px.
+  --app-radius-control: 7px;
+  --app-radius-panel: 11px;
+  --app-radius-overlay: 16px;
+
+  // Functional motion durations only (IPR-050).
+  --app-duration-micro: 100ms;
+  --app-duration-short: 160ms;
+  --app-duration-medium: 240ms;
+
+  // Content width contracts (design §11.3).
+  --app-width-form: 700px;
+  --app-width-reading: 720px;
+  --app-width-wide: 1080px;
+}
+
+// Reduced motion: disable nonessential animation, keep state communication
+// (PRD §22 / IPR-050).
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --app-duration-micro: 0ms;
+    --app-duration-short: 0ms;
+    --app-duration-medium: 0ms;
+  }
+}

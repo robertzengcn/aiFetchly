@@ -1,5 +1,10 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="settings-ai-memory"
+    title-key="aiMemory.title"
+    description-key="aiMemory.description"
+    content-width="wide"
+  >
     <v-card>
       <v-card-title class="d-flex align-center justify-space-between">
         <span>{{ t('aiMemory.title') }}</span>
@@ -172,10 +177,11 @@
     </v-dialog>
 
     <v-snackbar v-model="snack" :timeout="2500">{{ snackMsg }}</v-snackbar>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, computed, watch, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";

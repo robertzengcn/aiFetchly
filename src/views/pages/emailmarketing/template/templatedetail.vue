@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-template-editor"
+    title-key="route.email_template_detail"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-row>
@@ -212,6 +217,12 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
             <div class="text-body-2 streamed-content">
               {{ streamedContent }}
             </div>
+            <AIContentReportButton
+              v-if="!isStreaming && streamedContent"
+              :descriptor="emailTemplateReportDescriptor"
+              :reported="emailTemplateReported"
+              @report="emailTemplateReportDialog = true"
+            />
           </v-card-text>
         </v-card>
 
@@ -233,12 +244,6 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
               {{ t('aiTemplateGeneration.generating') || 'Generating...' }}
             </span>
           </template>
-          <AIContentReportButton
-            v-if="!isStreaming && streamedContent"
-            :descriptor="emailTemplateReportDescriptor"
-            :reported="emailTemplateReported"
-            @report="emailTemplateReportDialog = true"
-          />
         </div>
       </v-card-text>
       <v-divider></v-divider>
@@ -271,16 +276,17 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
       </v-card-actions>
     </v-card>
   </v-dialog>
-
-  <!-- AI Content Report dialog (PRD §8.1 email template editor surface) -->
+<!-- AI Content Report dialog (PRD §8.1 email template editor surface) -->
   <AIContentReportDialog
     v-model="emailTemplateReportDialog"
     :descriptor="emailTemplateReportDescriptor"
     :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
     @submitted="emailTemplateReported = true"
   />
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, computed, onMounted, watch,onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -584,6 +590,7 @@ async function generateTemplate() {
       onComplete: (response) => {
         isStreaming.value = false;
         emailTemplateGeneratedAt.value = new Date().toISOString();
+        emailTemplateReported.value = false;
         if (response.status && response.data) {
           const { title, content, hasInvalidVariables, invalidVariables } = response.data;
           tplTitle.value = title || "";

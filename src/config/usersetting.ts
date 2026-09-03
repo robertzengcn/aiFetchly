@@ -14,6 +14,9 @@ export const USERID = "user_id";
 export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
 export const USER_AI_AUTO_PLAN = "user_ai_auto_plan";
+/** Redesigned chat workspace flag (PRD §33 rollout). Default "false" —
+ * classic dock stays the default until Phase-8 acceptance passes. */
+export const USER_AI_CHAT_WORKSPACE_REDESIGN = "user_ai_chat_workspace_redesign";
 /**
  * Message-queue kill switches (PRD §18). Queue on = ordinary sends route
  * through durable pending rows; steering requires queue. Disabled queue

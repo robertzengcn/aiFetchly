@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-bulk-tasks"
+      title-key="route.bulk_email_task_list"
+      content-width="full"
+    >
        
 <EmailSendTaskLogTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 // import { ref } from 'vue';
 import EmailSendTaskLogTable from '@/views/pages/emailSendTaskLog/widgets/EmailSendTaskLogTable.vue'

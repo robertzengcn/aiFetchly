@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="yellowpages-editor"
+    title-key="route.create_yellow_pages_task"
+    content-width="form"
+  >
     <!-- Header -->
     <v-row class="mb-4">
       <v-col cols="12">
@@ -730,8 +734,6 @@
       icon="mdi-check-circle"
       :timeout="5000"
     />
-  </v-container>
-
   <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
   <AIContentReportDialog
     v-model="keywordReportDialog"
@@ -739,9 +741,11 @@
     :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
     @submitted="keywordReported = true"
   />
+</AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -811,15 +815,6 @@ const taskForm = reactive({
 const creating = ref(false)
 const loading = ref(false)
 const aiKeywordsLoading = ref(false)
-// AI Content Report state (PRD §8.2 keyword generation).
-const lastGeneratedKeywords = ref<string[]>([])
-const keywordReportDialog = ref(false)
-const keywordReported = ref(false)
-const keywordReportDescriptor = computed(() =>
-  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
-    generatedAt: new Date().toISOString(),
-  })
-)
 const useProxy = ref(false)
 const scheduleTask = ref(false)
 const keywordsInput = ref('')
@@ -829,6 +824,16 @@ const useLocalBrowser = ref(false)
 const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
+
+// AI Content Report state (PRD §8.2 keyword generation).
+const lastGeneratedKeywords = ref<string[]>([])
+const keywordReportDialog = ref(false)
+const keywordReported = ref(false)
+const keywordReportDescriptor = computed(() =>
+  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
+    generatedAt: new Date().toISOString(),
+  })
+)
 
 // Scheduling variables
 const scheduleType = ref<'one-time' | 'recurring'>('one-time')
@@ -931,7 +936,6 @@ async function handleAiQueryKeywords() {
     }
     const generated = await generateRelatedKeywords(seedKeywords, 15, 'seo')
     const newKeywords = generated && generated.length > 0 ? generated : []
-    // Capture the AI-generated set for the report action (PRD §8.2).
     lastGeneratedKeywords.value = newKeywords
     keywordReported.value = false
     const existing = raw ? raw.split(/[\n,]/).map((k) => k.trim()).filter(Boolean) : []

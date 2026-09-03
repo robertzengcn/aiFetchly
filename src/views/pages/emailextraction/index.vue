@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-extraction-form"
+    title-key="route.email_extraction_form"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
     <h2 class="text-h4 mb-4">{{ pageTitle }}</h2>
     <v-form ref="form" @submit.prevent="onSubmit">
     
@@ -109,8 +114,10 @@ v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" 
       </v-card>
     </v-dialog>
   </div>
+</AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import { ref, onMounted, computed } from "vue";
 import { useI18n } from "vue-i18n";

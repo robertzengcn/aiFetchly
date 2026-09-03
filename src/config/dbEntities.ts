@@ -105,6 +105,8 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 
+import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
+import { AIChatRunEntity } from "@/entity/AIChatRun.entity";
 export const DB_ENTITIES = [
   AccountCookiesEntity,
   SearchTaskEntity,
@@ -201,4 +203,6 @@ export const DB_ENTITIES = [
   AIFetchlyWorkspaceTrustEntity,
   HookConfigEntity,
   HookAuditEntryEntity,
+  AIChatConversationEntity,
+  AIChatRunEntity,
 ];

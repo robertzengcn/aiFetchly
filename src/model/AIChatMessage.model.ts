@@ -211,6 +211,37 @@ export class AIChatMessageModel extends BaseDb {
   }
 
   /**
+   * Cursor-paged history query for the workspace redesign (design §12.1).
+   *
+   * Queries DESCENDING by (timestamp, id), takes `limit + 1` to detect older
+   * rows, and returns the page reversed to chronological order. The cursor
+   * prevents offset drift when new messages arrive concurrently.
+   */
+  async getConversationPageDescending(
+    conversationId: string,
+    limit: number,
+    before?: { timestamp: Date; messageId: string }
+  ): Promise<{ rows: AIChatMessageEntity[]; hasOlder: boolean }> {
+    const qb = this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId });
+    if (before) {
+      qb.andWhere(
+        "(message.timestamp < :ts OR (message.timestamp = :ts AND message.messageId < :mid))",
+        { ts: before.timestamp, mid: before.messageId }
+      );
+    }
+    const fetched = await qb
+      .orderBy("message.timestamp", "DESC")
+      .addOrderBy("message.messageId", "DESC")
+      .take(limit + 1)
+      .getMany();
+    const hasOlder = fetched.length > limit;
+    const page = hasOlder ? fetched.slice(0, limit) : fetched;
+    return { rows: page.reverse(), hasOlder };
+  }
+
+  /**
    * Search conversations by message content. Returns conversations whose
    * any message contains the query string (case-insensitive LIKE).
    */

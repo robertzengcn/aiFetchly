@@ -62,7 +62,6 @@ import {
   shouldShowUncleanShutdownPrompt,
 } from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
-import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
@@ -478,25 +477,38 @@ function initialize() {
         app.setAsDefaultProtocolClient(protocolScheme);
       }
     } else {
-      console.log("protocolScheme:", protocolScheme);
-      console.log("process.execPath:", process.execPath);
-      console.log(
-        "path.resolve(process.argv[1]):",
-        path.resolve(process.argv[1])
-      );
-      console.log("path:", path.resolve(process.argv[1]));
-      ProtocolRegistry.register(
-        protocolScheme,
-        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-        {
-          override: true,
-          appName: appName,
-          terminal: true,
+      // Dev-only best-effort protocol registration. We previously used the
+      // `protocol-registry` npm package here, but on macOS Sequoia+ its
+      // deRegister step rewrites another app bundle's Info.plist, which the
+      // App Management TCC protection blocks (EPERM). It also bundled its own
+      // platform templates into the build output that nothing read. We now use
+      // Electron's native API (same as the packaged path above), which is a
+      // best-effort hint in dev — the auth flow's primary loopback-callback
+      // path does not depend on the scheme being registered. Failures are
+      // non-fatal and only logged.
+      const devEntry = path.resolve(process.argv[1]);
+      log.info("[dev] protocolScheme:", protocolScheme);
+      log.info("[dev] process.execPath:", process.execPath);
+      log.info("[dev] entry:", devEntry);
+      try {
+        const registered = app.setAsDefaultProtocolClient(
+          protocolScheme,
+          process.execPath,
+          [devEntry]
+        );
+        if (registered) {
+          log.info("[dev] protocol registered successfully");
+        } else {
+          log.warn(
+            "[dev] protocol registration returned false; deep links may not route to this dev process"
+          );
         }
-      )
-        .then(() => console.log("Successfully registered"))
-        .catch((e) => console.error(e));
-      // app.setAsDefaultProtocolClient(protocolScheme);
+      } catch (e: unknown) {
+        log.warn(
+          "[dev] protocol registration failed (non-fatal):",
+          e instanceof Error ? e.message : String(e)
+        );
+      }
     }
   }
   if (startupPolicy.acquireSingleInstanceLock) {

@@ -1,7 +1,6 @@
 // export { default as SyncMsg } from "./sync-msg";
 // export { default as AsyncMsg } from "./async-msg";
 import { registerExtraModulesIpcHandlers } from "@/main-process/communication/extramodule-ipc";
-import { log } from "@/modules/Logger";
 import { registerScheduleIpcHandlers } from "@/main-process/communication/scheduleIpc";
 import { registerYellowPagesIpcHandlers } from "@/main-process/communication/yellowPagesIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
@@ -11,7 +10,6 @@ import { registerSearchIpcHandlers } from "@/main-process/communication/search-i
 import { registeProxyIpcHandlers } from "@/main-process/communication/proxy-ipc";
 import { registerEmailextractionIpcHandlers } from "@/main-process/communication/emailextraction-ipc";
 import { registerEmailMarketingIpcHandlers } from "@/main-process/communication/emailMarketingIpc";
-import { EmailReplyReliabilityStartup } from "@/service/emailReply/EmailReplyReliabilityStartup";
 import { registerBuckEmailIpcHandlers } from "@/main-process/communication/buckEmail-ipc";
 import { registerEmailTemplateIpcHandlers } from "@/main-process/communication/emailTemplate-ipc";
 import { registerSocialAccountIpcHandlers } from "@/main-process/communication/socialaccount-ipc";
@@ -22,7 +20,7 @@ import { registerSessionRecordingIpcHandlers } from "@/main-process/communicatio
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
-import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
+import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
@@ -43,7 +41,6 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
-import { registerCommunityPluginIpcHandlers } from "@/main-process/communication/community-plugin-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
@@ -51,15 +48,12 @@ import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-p
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
-import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
-import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
-import { ensurePortableMemoryDefault } from "@/service/PortableWorkspaceMemoryBootstrap";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 import { registerAIContentReportIpcHandlers } from "@/main-process/communication/ai-content-report-ipc";
 
@@ -73,7 +67,7 @@ export function registerCommunicationIpcHandlers(
 ) {
   const globalState = globalThis as GlobalIpcState;
   if (globalState.__aifetchlyIpcHandlersRegistered) {
-    log.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
+    console.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
     return;
   }
   globalState.__aifetchlyIpcHandlersRegistered = true;
@@ -109,7 +103,7 @@ export function registerCommunicationIpcHandlers(
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
     registerAiChatV2IpcHandlers();
-    registerAiFileOpenIpcHandlers();
+    registerAiChatWorkspaceIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
     registerAiChatScheduledLoopIpcHandlers();
@@ -128,7 +122,6 @@ export function registerCommunicationIpcHandlers(
     registerAgentDefinitionIpcHandlers();
     registerPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
-    registerCommunityPluginIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
     registerLocalAiRuntimeIpcHandlers(() => win);
@@ -136,34 +129,18 @@ export function registerCommunicationIpcHandlers(
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
-    registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
-    // Best-effort reply-reliability startup: lift legacy drafts onto immutable
-    // revisions and sweep stale in-flight send attempts to delivery_unknown.
-    // Fire-and-forget; never blocks app startup.
-    new EmailReplyReliabilityStartup()
-      .start()
-      .catch((e: unknown) =>
-        log.error("[reply-reliability] startup failed:", e)
-      );
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
     const workspaceWatchManager = initWorkspaceWatchManager(win);
-    setApprovedWorkspaceAcquireHook((workspaceRoot) => {
-      void ensurePortableMemoryDefault({ workspaceRoot }).catch(
-        (err: unknown) => {
-          log.warn("[portable-memory] default layout bootstrap failed:", err);
-        }
-      );
-    });
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
     registerAIContentReportIpcHandlers();
     AsyncMsg();
   } catch (e) {
-    log.info("registerCommunicationIpcHandlers error:");
-    log.error(e);
+    console.log("registerCommunicationIpcHandlers error:");
+    console.error(e);
   }
   // Register extra modules IPC handlers
 }

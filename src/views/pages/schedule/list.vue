@@ -1,188 +1,167 @@
 <template>
-  <v-container fluid>
-    <!-- Header with title and actions -->
-    <v-row class="mb-4">
-      <v-col cols="12" md="8">
-        <h2 class="text-h4 font-weight-bold">
-          <v-icon class="mr-2">mdi-clock-outline</v-icon>
-          {{ t('schedule.schedule_management') }}
-        </h2>
-        <p class="text-subtitle-1 text-medium-emphasis">
-          {{ t('schedule.manage_automated_scheduling') }}
-        </p>
-      </v-col>
-      <v-col cols="12" md="4" class="d-flex justify-end align-center">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-plus"
-          @click="createNewSchedule"
-          class="mr-2"
-        >
-          {{ t('schedule.new_schedule') }}
-        </v-btn>
-        <v-btn
-          color="secondary"
-          prepend-icon="mdi-import"
-          @click="importSchedules"
-          class="mr-2"
-        >
-          {{ t('common.import') }}
-        </v-btn>
-        <v-btn
-          color="secondary"
-          prepend-icon="mdi-export"
-          @click="exportSchedules"
-        >
-          {{ t('common.export') }}
-        </v-btn>
-      </v-col>
-    </v-row>
+  <AppPageShell
+    page-id="schedule-list"
+    title-key="schedule.schedule_management"
+    description-key="schedule.manage_automated_scheduling"
+    content-width="full"
+    :busy="loading"
+  >
+    <!-- One primary action; import/export are rare → overflow (IPR-004/006). -->
+    <template #primary-action>
+      <v-btn
+        color="primary"
+        prepend-icon="mdi-plus"
+        data-testid="schedule-new-primary"
+        @click="createNewSchedule"
+      >
+        {{ t('schedule.new_schedule') }}
+      </v-btn>
+    </template>
+    <template #overflow>
+      <v-menu location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <v-btn icon v-bind="menuProps" variant="text" data-testid="schedule-overflow">
+            <v-icon>mdi-dots-horizontal</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" role="menu">
+          <v-list-item
+            role="menuitem"
+            :title="t('common.import')"
+            prepend-icon="mdi-import"
+            data-testid="schedule-overflow-import"
+            @click="importSchedules"
+          />
+          <v-list-item
+            role="menuitem"
+            :title="t('common.export')"
+            prepend-icon="mdi-export"
+            data-testid="schedule-overflow-export"
+            @click="exportSchedules"
+          />
+        </v-list>
+      </v-menu>
+    </template>
 
-    <!-- Scheduler Status Card -->
-    <v-row class="mb-4">
-      <v-col cols="12">
-        <v-card>
-          <v-card-title class="d-flex align-center">
-            <v-icon class="mr-2">mdi-server</v-icon>
-            {{ t('schedule.scheduler_status') }}
-          </v-card-title>
-          <v-card-text>
-            <v-row>
-              <v-col cols="12" md="3">
-                <div class="text-center">
-                  <v-chip
-                    :color="schedulerStatus.isRunning ? 'success' : 'error'"
-                    size="large"
-                    class="mb-2"
-                  >
-                    {{ schedulerStatus.isRunning ? t('schedule.running') : t('schedule.stopped') }}
-                  </v-chip>
-                  <div class="text-caption">{{ t('common.status') }}</div>
-                </div>
-              </v-col>
-              <v-col cols="12" md="3">
-                <div class="text-center">
-                  <div class="text-h6 font-weight-bold">{{ schedulerStatus.activeSchedules }}</div>
-                  <div class="text-caption">{{ t('schedule.active_schedules') }}</div>
-                </div>
-              </v-col>
-              <v-col cols="12" md="3">
-                <div class="text-center">
-                  <div class="text-h6 font-weight-bold">{{ schedulerStatus.totalSchedules }}</div>
-                  <div class="text-caption">{{ t('schedule.total_schedules') }}</div>
-                </div>
-              </v-col>
-              <v-col cols="12" md="3">
-                <div class="text-center">
-                  <v-btn
-                    :color="schedulerStatus.isRunning ? 'error' : 'success'"
-                    size="small"
-                    @click="toggleScheduler"
-                    :loading="schedulerLoading"
-                  >
-                    {{ schedulerStatus.isRunning ? t('schedule.stop') : t('schedule.start') }} {{ t('schedule.scheduler') }}
-                  </v-btn>
-                </div>
-              </v-col>
-            </v-row>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+    <!-- Page-owned summarized status: the scheduler service (IPR-004). -->
+    <template #status>
+      <button
+        type="button"
+        class="scheduler-status-chip"
+        :class="schedulerStatus.isRunning ? 'running' : 'stopped'"
+        :data-testid="`scheduler-status-${schedulerStatus.isRunning ? 'running' : 'stopped'}`"
+        @click="toggleScheduler"
+      >
+        <v-icon
+          :icon="schedulerStatus.isRunning ? 'mdi-loading' : 'mdi-stop-circle-outline'"
+          size="14"
+          :class="{ spinning: schedulerStatus.isRunning }"
+          aria-hidden="true"
+        />
+        {{ schedulerStatus.isRunning ? t('schedule.running') : t('schedule.stopped') }}
+        · {{ schedulerStatus.activeSchedules }}/{{ schedulerStatus.totalSchedules }}
+      </button>
+    </template>
 
-    <!-- Filters and Search -->
-    <v-row class="mb-4">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text>
-            <v-row>
-              <v-col cols="12" md="3">
-                <v-text-field
-                  v-model="searchQuery"
-                  :label="t('schedule.search_schedules')"
-                  prepend-inner-icon="mdi-magnify"
-                  clearable
-                  @update:model-value="handleSearch"
-                />
-              </v-col>
-              <v-col cols="12" md="2">
-                <v-select
-                  v-model="statusFilter"
-                  :items="statusOptions"
-                  :label="t('common.status')"
-                  clearable
-                  @update:model-value="handleFilter"
-                />
-              </v-col>
-              <v-col cols="12" md="2">
-                <v-select
-                  v-model="taskTypeFilter"
-                  :items="taskTypeOptions"
-                  :label="t('schedule.task_type')"
-                  clearable
-                  @update:model-value="handleFilter"
-                />
-              </v-col>
-              <v-col cols="12" md="2">
-                <v-select
-                  v-model="triggerTypeFilter"
-                  :items="triggerTypeOptions"
-                  :label="t('schedule.trigger_type')"
-                  clearable
-                  @update:model-value="handleFilter"
-                />
-              </v-col>
-              <v-col cols="12" md="3" class="d-flex align-center">
-                <v-btn
-                  color="primary"
-                  variant="outlined"
-                  @click="loadSchedules"
-                  :loading="loading"
-                  class="mr-2"
-                >
-                  <v-icon>mdi-refresh</v-icon>
-                </v-btn>
-                <v-btn
-                  color="secondary"
-                  variant="outlined"
-                  @click="clearFilters"
-                >
-                  {{ t('common.clear_filters') }}
-                </v-btn>
-              </v-col>
-            </v-row>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+    <!-- Toolbar: search and filters BELOW the header (IPR-005). -->
+    <template #toolbar>
+      <v-text-field
+        v-model="searchQuery"
+        class="toolbar-search"
+        density="compact"
+        variant="outlined"
+        hide-details
+        :label="t('schedule.search_schedules')"
+        prepend-inner-icon="mdi-magnify"
+        clearable
+        data-testid="schedule-toolbar-search"
+        @update:model-value="handleSearch"
+      />
+      <v-select
+        v-model="statusFilter"
+        class="toolbar-filter"
+        density="compact"
+        variant="outlined"
+        hide-details
+        :items="statusOptions"
+        :label="t('common.status')"
+        clearable
+        @update:model-value="handleFilter"
+      />
+      <v-select
+        v-model="taskTypeFilter"
+        class="toolbar-filter"
+        density="compact"
+        variant="outlined"
+        hide-details
+        :items="taskTypeOptions"
+        :label="t('schedule.task_type')"
+        clearable
+        @update:model-value="handleFilter"
+      />
+      <v-select
+        v-model="triggerTypeFilter"
+        class="toolbar-filter"
+        density="compact"
+        variant="outlined"
+        hide-details
+        :items="triggerTypeOptions"
+        :label="t('schedule.trigger_type')"
+        clearable
+        @update:model-value="handleFilter"
+      />
+      <v-spacer />
+      <v-btn
+        variant="text"
+        icon="mdi-refresh"
+        :loading="loading"
+        :aria-label="t('common.refresh')"
+        data-testid="schedule-toolbar-refresh"
+        @click="loadSchedules"
+      />
+      <v-btn
+        variant="text"
+        data-testid="schedule-toolbar-clear"
+        @click="clearFilters"
+      >
+        {{ t('common.clear_filters') }}
+      </v-btn>
+    </template>
 
-    <!-- Schedule Table -->
-    <v-row>
-      <v-col cols="12">
-        <v-card>
-          <v-card-title class="d-flex justify-space-between align-center">
-            <span>{{ t('schedule.schedules') }} ({{ total }})</span>
-            <v-chip color="info" size="small">
-              {{ t('common.page') }} {{ currentPage + 1 }} {{ t('common.of') }} {{ Math.ceil(total / pageSize) }}
-            </v-chip>
-          </v-card-title>
-          <v-card-text>
-            <ScheduleTable
-              :schedules="schedules"
-              :loading="loading"
-              @edit="editSchedule"
-              @delete="deleteSchedule"
-              @enable="enableSchedule"
-              @disable="disableSchedule"
-              @pause="pauseSchedule"
-              @resume="resumeSchedule"
-              @run-now="runScheduleNow"
-              @view-details="viewScheduleDetails"
-            />
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+    <!-- Shared load states (IPR-043). -->
+    <PageStateView
+      :load-state="pageLoad"
+      :skeleton-rows="6"
+      empty-title-key="schedule.empty_title"
+      empty-body-key="schedule.empty_body"
+      @retry="loadSchedules"
+      @clear-filters="clearFilters"
+      @empty-action="createNewSchedule"
+    >
+      <template #empty-action>{{ t('schedule.new_schedule') }}</template>
+    </PageStateView>
+
+    <!-- Feature table stays domain-owned (design §13.2). -->
+    <section v-if="pageLoad.state === 'ready'" class="schedule-section">
+      <header class="section-header">
+        <h2>{{ t('schedule.schedules') }} ({{ total }})</h2>
+        <span class="section-meta">
+          {{ t('common.page') }} {{ currentPage + 1 }} {{ t('common.of') }} {{ Math.max(1, Math.ceil(total / pageSize)) }}
+        </span>
+      </header>
+      <ScheduleTable
+        :schedules="schedules"
+        :loading="loading"
+        @edit="editSchedule"
+        @delete="deleteSchedule"
+        @enable="enableSchedule"
+        @disable="disableSchedule"
+        @pause="pauseSchedule"
+        @resume="resumeSchedule"
+        @run-now="runScheduleNow"
+        @view-details="viewScheduleDetails"
+      />
+    </section>
 
     <!-- Pagination -->
     <v-row class="mt-4">
@@ -225,7 +204,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
@@ -233,6 +212,11 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import ScheduleTable from './widgets/ScheduleTable.vue'
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue'
+import PageStateView from '@/views/components/pageTemplates/PageStateView.vue'
+import { useAppInspectorStore } from '@/views/store/appInspector'
+import { useAppShellStore } from '@/views/store/appShell'
+import type { PageLoadState } from '@/views/types/uiConvergenceTypes'
 import {
   getScheduleList,
   deleteSchedule as deleteScheduleApi,
@@ -257,6 +241,25 @@ const router = useRouter()
 // Reactive data
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const schedules = ref<any[]>([])
+
+// Convergence state: shared load projection + typed inspector (design §13.5).
+const pageLoad = computed<PageLoadState>(() => {
+  if (loading.value) return { state: 'loading' };
+  if (loadError.value) return { state: 'error', messageKey: 'ui.state.errorBody', recoverable: true };
+  if (schedules.value.length === 0) {
+    const filtered = Boolean(
+      searchQuery.value ||
+      statusFilter.value ||
+      taskTypeFilter.value ||
+      triggerTypeFilter.value
+    );
+    return { state: 'empty', kind: filtered ? 'no-results' : 'first-use' };
+  }
+  return { state: 'ready' };
+});
+const loadError = ref(false);
+const appInspector = useAppInspectorStore();
+const appShell = useAppShellStore();
 const total = ref(0)
 const currentPage = ref(0)
 const pageSize = ref(10)
@@ -318,6 +321,7 @@ const triggerTypeOptions = computed(() => [
 
 // Methods
 const loadSchedules = async () => {
+  loadError.value = false
   try {
     loading.value = true
     const filters = {
@@ -337,6 +341,7 @@ const loadSchedules = async () => {
     schedules.value = response.schedules
     total.value = response.total
   } catch (error) {
+    loadError.value = true
     showAlert(t('common.error'), `${t('schedule.failed_to_load_schedules')}: ${error}`, 'error')
   } finally {
     loading.value = false
@@ -406,7 +411,13 @@ const editSchedule = (id: number) => {
 }
 
 const viewScheduleDetails = (id: number) => {
-  router.push(`/schedule/detail/${id}`)
+  // Inspector preserves list context (IPR-016); the canonical detail route
+  // remains a deep link (design §15.4).
+  appInspector.open(
+    { kind: 'schedule', ownerRoute: '/schedule', scheduleId: id },
+    { focusOriginId: `schedule-row-${id}` }
+  );
+  appShell.setInspectorOpen(true);
 }
 
 const showConfirmDialog = (title: string, message: string, action: () => Promise<void>, itemId: number) => {
