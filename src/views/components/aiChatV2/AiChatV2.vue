@@ -3478,9 +3478,10 @@ const handleApprovePlan = async (): Promise<void> => {
     }
 
     // After approval, kick off a new AI round so the assistant begins
-    // executing the plan. The plan-mode system prompt now reflects the
-    // "approved" status, so high-impact tools are unblocked. This also
-    // drives the typing indicator (isStreaming + !receivedFirstResponse).
+    // executing the plan. applyPlanState above flipped the mode back to
+    // "chat" (approval ends plan mode), so this round runs with the normal
+    // chat system prompt and the full toolset. This also drives the typing
+    // indicator (isStreaming + !receivedFirstResponse).
     const continueText =
       t("aiChatV2Plan.approved_continue_message") ||
       "Plan approved. Please begin executing the plan now.";

@@ -1,0 +1,274 @@
+// test/vitest/main/components/AiChatV2.planModeExit.test.ts
+//
+// Regression test for the "plan mode never exits after approval" bug.
+//
+// The bug: `isPlanStateActive` (planStateUtil.ts) treated every non-terminal
+// status — including "approved" — as plan-active, so `applyPlanState` set
+// `mode = "plan"` and it never returned to "chat" once the user approved.
+//
+// This component test drives the real AiChatV2 template + the real
+// `applyPlanState` transition rule by capturing the stream chunk handler
+// that `onSend` registers with `streamChatV2Message`, then synthesizing the
+// same `plan_submitted` and `plan_state` chunks the main process emits in
+// production. That exercises the actual integration (chunk → applyPlanState
+// → mode ref → AiChatV2ModeSelector modelValue) without reaching into private
+// setup state.
+
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createI18n } from "vue-i18n";
+import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
+import { streamChatV2Message } from "@/views/api/aiChatV2";
+import type {
+  AIChatPlanStateView,
+  ChatV2Mode,
+} from "@/entityTypes/aiChatPlanTypes";
+import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
+
+// Capture the stream chunk handler the component registers during onSend so
+// the test can synthesize plan-mode stream chunks.
+type ChunkHandler = (chunk: ChatV2StreamChunk) => void;
+let capturedChunkHandler: ChunkHandler | null = null;
+
+vi.mock("@/views/api/aiChatV2", () => ({
+  clearChatV2StreamListeners: vi.fn(),
+  clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
+  getChatV2Conversations: vi.fn().mockResolvedValue([]),
+  getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
+  streamChatV2Message: vi
+    .fn()
+    .mockImplementation(async (_req: unknown, handler: ChunkHandler) => {
+      capturedChunkHandler = handler;
+    }),
+  stopChatV2Stream: vi.fn(),
+  getChatV2PlanState: vi.fn().mockResolvedValue(null),
+  compactChatV2Conversation: vi.fn(),
+  answerChatV2Question: vi.fn(),
+  approveChatV2Plan: vi.fn(),
+  rejectChatV2Plan: vi.fn(),
+  requestChatV2PlanChanges: vi.fn(),
+  getOpenAIChatModels: vi.fn().mockResolvedValue({
+    data: [],
+    default_model: undefined,
+  }),
+  getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
+  setChatV2ToolApprovalMode: vi.fn(),
+}));
+
+vi.mock("@/views/api/workspace", () => ({
+  getWorkspace: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("@/views/api/aiChat", () => ({
+  subscribeToFileOperations: vi.fn(),
+  unsubscribeFromFileOperations: vi.fn(),
+}));
+
+vi.mock("@/views/api/slashCommands", () => ({
+  listSlashCommands: vi.fn().mockResolvedValue({
+    status: true,
+    commands: [],
+    diagnostics: [],
+    msg: "",
+  }),
+  dispatchSlashCommand: vi.fn(),
+  reloadAifetchlyConfig: vi.fn(),
+  getAifetchlyConfigStatus: vi.fn(),
+  onAifetchlyConfigChanged: vi.fn().mockReturnValue(() => undefined),
+}));
+
+vi.mock("@/views/api/aiChatGoal", () => ({
+  createGoal: vi.fn().mockResolvedValue(null),
+  getActiveGoal: vi.fn().mockResolvedValue(null),
+  startGoalLoop: vi.fn().mockResolvedValue(null),
+  stopGoalLoop: vi.fn().mockResolvedValue(null),
+}));
+
+const i18n = createI18n({
+  legacy: false,
+  locale: "en",
+  messages: {
+    en: {
+      aiChatV2: {
+        title: "AI Assistant",
+        clear_chat: "Clear chat",
+        compact_conversation: "Compact conversation",
+        conversation_history: "Conversation history",
+        manage_mcp_tools: "Manage MCP Tools",
+        new_conversation: "New conversation",
+      },
+      aiChatV2Plan: {
+        approved_continue_message:
+          "Plan approved. Please begin executing the plan now.",
+      },
+      workspace: {
+        badgeLabel: "Workspace",
+        notSet: "No workspace set",
+      },
+    },
+  },
+});
+
+// Expose the current mode via a data attribute so assertions can read it
+// without reaching into the component instance.
+const ModeSelectorStub = {
+  props: {
+    modelValue: {
+      type: String as unknown as () => ChatV2Mode,
+      default: "chat",
+    },
+    disabled: { type: Boolean, default: false },
+  },
+  emits: ["update:modelValue"],
+  template: `<div data-testid="mode-selector" :data-mode="modelValue ?? 'none'" />`,
+};
+
+function mountChat() {
+  return mount(AiChatV2, {
+    global: {
+      plugins: [i18n],
+      stubs: {
+        AiChatV2Messages: true,
+        AiChatV2QuestionCard: true,
+        AiChatV2PlanApprovalCard: {
+          props: ["planState"],
+          emits: ["approve", "reject"],
+          template: `<div data-testid="plan-approval-card"><button data-testid="approve-plan" @click="$emit('approve')">Approve</button></div>`,
+        },
+        // The mode selector is rendered in the composer's #prepend slot, so
+        // the composer stub must surface that slot or the selector never mounts.
+        AiChatV2Composer: {
+          emits: ["send"],
+          template: `<div><slot name="prepend" /><button data-testid="send" @click="$emit('send', 'plan my campaign', [])">send</button></div>`,
+        },
+        AiChatV2ModeSelector: ModeSelectorStub,
+        AiChatV2ModelSelector: true,
+        AiChatV2PlanStatusBadge: true,
+        AiChatV2ContextBadge: true,
+        FileOperationBadge: true,
+        MCPToolManager: true,
+        AgentTaskListDialog: true,
+        WorkspaceRequiredCard: true,
+        WorkspaceBadge: true,
+        WorkspaceMemoryPanel: true,
+        VBtn: true,
+        VCard: true,
+        VCardText: true,
+        VCardTitle: true,
+        VChip: true,
+        VDialog: true,
+        VDivider: true,
+        VIcon: true,
+        VList: true,
+        VListItem: true,
+        VListItemSubtitle: true,
+        VListItemTitle: true,
+        VProgressCircular: true,
+        VProgressLinear: true,
+        VSnackbar: true,
+        VSpacer: true,
+        VTextField: true,
+        VAlert: true,
+      },
+    },
+  });
+}
+
+function makePlanState(
+  status: AIChatPlanStateView["status"],
+  overrides: Partial<AIChatPlanStateView> = {}
+): AIChatPlanStateView {
+  return {
+    conversationId: "v2-conv-plan",
+    planId: "plan-1",
+    status,
+    title: "Campaign plan",
+    objective: "Create a Facebook campaign",
+    currentVersion: 1,
+    ...overrides,
+  };
+}
+
+const MSG_ID = "assistant-1";
+
+/** Emit a synthesized stream chunk to the captured handler. */
+function emitChunk(chunk: Partial<ChatV2StreamChunk>): void {
+  if (!capturedChunkHandler) {
+    throw new Error(
+      "streamChatV2Message was never called — no handler captured"
+    );
+  }
+  capturedChunkHandler(chunk as ChatV2StreamChunk);
+}
+
+describe("AiChatV2 plan mode exit after approval", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedChunkHandler = null;
+  });
+
+  it("defaults to chat mode on mount (no active plan)", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
+    ).toBe("chat");
+  });
+
+  it("enters plan mode when a plan_submitted chunk arrives, then exits to chat after the plan_state becomes approved", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+
+    // Start a stream so the component registers its chunk handler.
+    await wrapper.find('[data-testid="send"]').trigger("click");
+    await flushPromises();
+    expect(streamChatV2Message).toHaveBeenCalledOnce();
+
+    // Simulate the main process emitting the start + plan_submitted chunks.
+    // Omit conversationId on chunks so isCurrentStreamChunk passes (it accepts
+    // chunks with no conversationId — the guard is `!chunk.conversationId || ...`).
+    emitChunk({ eventType: "start", messageId: MSG_ID });
+    const awaiting = makePlanState("awaiting_approval");
+    emitChunk({ eventType: "plan_submitted", planState: awaiting });
+    await flushPromises();
+
+    // Pre-approval: plan is active → selector shows "plan".
+    expect(
+      wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
+    ).toBe("plan");
+
+    // Simulate the main process emitting a plan_state chunk after approval.
+    const approved: AIChatPlanStateView = {
+      ...awaiting,
+      status: "approved",
+      approvedAt: new Date().toISOString(),
+    };
+    emitChunk({ eventType: "plan_state", planState: approved });
+    await flushPromises();
+
+    // Regression core: after approval the mode must return to "chat".
+    expect(
+      wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
+    ).toBe("chat");
+  });
+
+  it("keeps plan mode when a plan_state chunk reports awaiting_approval", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send"]').trigger("click");
+    await flushPromises();
+    emitChunk({ eventType: "start", messageId: MSG_ID });
+    emitChunk({
+      eventType: "plan_state",
+      planState: makePlanState("awaiting_approval"),
+    });
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
+    ).toBe("plan");
+  });
+});

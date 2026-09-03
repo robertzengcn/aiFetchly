@@ -1,17 +1,24 @@
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 /**
- * Terminal plan statuses — the plan has finished its lifecycle and the
- * conversation should behave as plain chat again. While a plan is in any
- * other status, the conversation is "in plan mode".
+ * Statuses where the plan has left the planning conversation and the chat
+ * should behave as plain chat again: the lifecycle ended (completed /
+ * cancelled / rejected), or the user already approved the plan so execution
+ * runs with the normal chat prompt and full tool access.
  */
-const TERMINAL_PLAN_STATUSES = new Set(["completed", "cancelled", "rejected"]);
+const NON_PLAN_MODE_STATUSES = new Set([
+  "approved",
+  "completed",
+  "cancelled",
+  "rejected",
+]);
 
 /**
  * Returns true when the given plan state represents an active, in-progress
- * plan (draft / awaiting_question / awaiting_approval / approved / executing).
- * Returns false when there is no plan, or the plan has reached a terminal
- * status (completed / cancelled / rejected).
+ * plan (draft / awaiting_question / awaiting_approval / executing).
+ * Returns false when there is no plan, the plan reached a terminal status
+ * (completed / cancelled / rejected), or the plan was approved — approval
+ * hands control back to the user, so execution rounds run in chat mode.
  *
  * Used to decide whether the chat mode selector should reflect "plan". Keeping
  * this as a pure predicate makes the transition rule unit-testable and ensures
@@ -21,5 +28,5 @@ export const isPlanStateActive = (
   state: AIChatPlanStateView | null
 ): boolean => {
   if (!state) return false;
-  return !TERMINAL_PLAN_STATUSES.has(state.status);
+  return !NON_PLAN_MODE_STATUSES.has(state.status);
 };

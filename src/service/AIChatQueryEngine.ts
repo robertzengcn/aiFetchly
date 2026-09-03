@@ -81,9 +81,19 @@ import type {
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
 
+/**
+ * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
+ * plan-mode active while it is being drafted, clarified, awaiting approval,
+ * or (future) executing. Once the user approves the plan, execution runs in
+ * chat mode with the normal system prompt and full tool access — so
+ * "approved" is NOT plan-mode active here either. Keeping both predicates in
+ * sync prevents the renderer and main process from disagreeing about which
+ * prompt/toolset a round uses after approval.
+ */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
   return (
+    plan.status !== "approved" &&
     plan.status !== "completed" &&
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
@@ -1445,7 +1455,9 @@ export class AIChatQueryEngine {
           // near the model's window: it actually shrinks the next assembled
           // prompt. Fall back to the advisory session-memory update otherwise.
           // Optional call guards test fakes that only stub one method.
-          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+          Promise.resolve(
+            compactAgent.enqueueAutoCompact?.(compactInput) ?? false
+          )
             .then((compacted) =>
               compacted
                 ? undefined
