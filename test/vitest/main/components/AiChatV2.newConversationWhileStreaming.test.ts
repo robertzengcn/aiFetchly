@@ -4,8 +4,21 @@ import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
@@ -232,6 +245,7 @@ function mountChat() {
 describe("AiChatV2 new conversation while streaming", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
   });
 
   it("shows a message sent in a new chat while another conversation is still streaming", async () => {

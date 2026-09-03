@@ -9,6 +9,18 @@
         {{ t("aiChatV2.empty_description") || "Ask anything." }}
       </div>
     </div>
+    <!-- Pending (queued) messages: user bubbles in creation order, visually
+         distinct; only delivered rows feed context/tool/token features. -->
+    <AiChatV2PendingMessage
+      v-for="pending in pendingMessages"
+      :key="`pending-${pending.pendingMessageId}`"
+      :view="pending"
+      :runtime-status="runtimeStatus"
+      :steering-enabled="steeringEnabled"
+      @steer="(id: string) => emit('steer-pending', id)"
+      @cancel="(id: string) => emit('cancel-pending', id)"
+      @resume="(conversationId: string) => emit('resume-pending', conversationId)"
+    />
     <AiChatV2Message
       v-for="m in messages"
       :key="m.id"
@@ -79,13 +91,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from "vue";
+import { ref, watch, nextTick, onMounted, withDefaults } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
+  AIChatPendingMessageView,
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
+import AiChatV2PendingMessage from "./AiChatV2PendingMessage.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -93,16 +108,17 @@ import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
-const props = defineProps<{
-  messages: ChatV2MessageView[];
-  activeAssistantMessageId: string | null;
-  streamStatus: Status;
-  errorMessage?: string;
-  showTypingIndicator?: boolean;
-  isStreaming?: boolean;
-  retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
-  /** Active seven-layer recovery status. Null when no recovery is running. */
-  recoveryInfo?: {
+const props = withDefaults(
+    defineProps<{
+    messages: ChatV2MessageView[];
+    activeAssistantMessageId: string | null;
+    streamStatus: Status;
+    errorMessage?: string;
+    showTypingIndicator?: boolean;
+    isStreaming?: boolean;
+    retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+    /** Active seven-layer recovery status. Null when no recovery is running. */
+    recoveryInfo?: {
     layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
     reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
     attempt?: number;
@@ -113,10 +129,18 @@ const props = defineProps<{
     currentModel?: string;
     fallbackModel?: string;
     message?: string;
-  } | null;
-  workspaceRoot?: string;
-  showReasoning?: boolean;
-}>();
+    } | null;
+    workspaceRoot?: string;
+    showReasoning?: boolean;
+    /** Non-terminal queued messages for this conversation (PRD §7.2). */
+    pendingMessages?: AIChatPendingMessageView[];
+    /** Main-process runtime status, drives Steer visibility (PRD §7.3). */
+    runtimeStatus?: ChatV2RuntimeStatus;
+    /** Steering kill switch (presentation only; default on). */
+    steeringEnabled?: boolean;
+  }>(),
+  { steeringEnabled: true }
+);
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
   (e: "deny-permission", message: ChatV2MessageView): void;
@@ -133,6 +157,9 @@ const emit = defineEmits<{
     e: "edit-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (e: "steer-pending", pendingMessageId: string): void;
+  (e: "cancel-pending", pendingMessageId: string): void;
+  (e: "resume-pending", conversationId: string): void;
 }>();
 const { t } = useI18n();
 

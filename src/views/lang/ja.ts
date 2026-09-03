@@ -2273,6 +2273,28 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "待機中",
+      steering: "方向転換中…",
+      applied: "適用済み",
+      dispatching: "送信中…",
+      sent: "送信済み",
+      paused: "キュー一時停止中",
+      cancelled: "削除済み",
+      failed: "送信できませんでした",
+      steer: "方向転換",
+      steer_aria: "このメッセージで現在の応答の方向を変える",
+      remove: "削除",
+      send_next: "次を送信",
+      resume: "キューを再開",
+      direction_updated: "方向を更新しました",
+      recovered_after_restart: "再起動後に復元されました",
+      attachments_not_steerable: "添付ファイル付きメッセージは現在の応答完了後に送信されます。",
+      limit_reached: "キューの上限に達しました。先にメッセージを削除してください。",
+      steer_failed: "このメッセージを方向転換できませんでした。",
+      queue_disabled: "メッセージキューは現在無効です。",
+    },
     artifactExport: {
       permissionTitle: "生成されたアーティファクトをエクスポート",
       permissionDescription:

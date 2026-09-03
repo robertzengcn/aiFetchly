@@ -167,6 +167,18 @@ export function createChatV2StreamSink(
             totalTokens: e.totalTokens,
           });
           break;
+        case "direction_updated":
+          // Steering applied at a safe boundary: ids and offset only —
+          // never steering content (message-queue design §11.5).
+          sinkTarget.sendChunk({
+            eventType: "direction_updated",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            directionBoundary: e.boundary,
+            directionPendingMessageIds: [...e.pendingMessageIds],
+            directionContentOffset: e.contentOffset,
+          } as Parameters<ChatV2StreamSinkTarget["sendChunk"]>[0]);
+          break;
         case "complete":
           sinkTarget.sendComplete({
             eventType: "complete",

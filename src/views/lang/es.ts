@@ -2319,6 +2319,28 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "En cola",
+      steering: "Redirigiendo…",
+      applied: "Aplicado",
+      dispatching: "Enviando…",
+      sent: "Enviado",
+      paused: "Cola en pausa",
+      cancelled: "Eliminado",
+      failed: "No se pudo enviar",
+      steer: "Redirigir",
+      steer_aria: "Redirigir la respuesta activa con este mensaje",
+      remove: "Quitar",
+      send_next: "Enviar el siguiente",
+      resume: "Reanudar cola",
+      direction_updated: "Dirección actualizada",
+      recovered_after_restart: "Recuperado tras reiniciar",
+      attachments_not_steerable: "Los mensajes con adjuntos se enviarán cuando termine la respuesta actual.",
+      limit_reached: "Límite de cola alcanzado. Elimina un mensaje antes de volver a enviar.",
+      steer_failed: "No se pudo redirigir este mensaje.",
+      queue_disabled: "La cola de mensajes está deshabilitada.",
+    },
     artifactExport: {
       permissionTitle: "Exportar artefactos generados",
       permissionDescription:

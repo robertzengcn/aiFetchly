@@ -186,6 +186,11 @@ export interface ChatV2MessageMetadata {
    * Used for the raw `/loop` command and its local confirmation row so the
    * model does not interpret schedule-management text as a new instruction. */
   localOnly?: boolean;
+  /** Present on user rows delivered as steering into an active turn. */
+  steering?: ChatV2SteeringMetadata;
+  /** Present on the final assistant row when steering changed direction
+   * mid-turn; offsets split the visible content for marker rendering. */
+  directionTransitions?: readonly ChatV2DirectionTransition[];
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -286,6 +291,9 @@ export interface ChatV2HistoryResponse {
   messages: ChatV2MessageView[];
   totalMessages: number;
   runtimeStatus: ChatV2RuntimeStatus;
+  /** Non-terminal queued messages so the renderer can rebuild pending
+   * bubbles after a reload/conversation switch (FR-43). */
+  pendingMessages?: AIChatPendingMessageView[];
 }
 
 /** App-level stream chunk sent over IPC to the renderer. */
@@ -313,7 +321,8 @@ export type ChatV2StreamEventType =
   | "goal_state"
   | "goal_iteration"
   | "goal_evidence"
-  | "goal_verification";
+  | "goal_verification"
+  | "direction_updated";
 
 export interface ChatV2StreamChunk {
   eventType: ChatV2StreamEventType;
@@ -378,6 +387,10 @@ export interface ChatV2StreamChunk {
   goalIteration?: ChatV2GoalIterationEvent;
   goalEvidence?: ChatV2GoalEvidenceEvent;
   goalVerification?: ChatV2GoalVerificationEvent;
+  // direction_updated: ids/offset only — never steering content (§11.5).
+  directionBoundary?: AIChatSafeBoundary;
+  directionPendingMessageIds?: string[];
+  directionContentOffset?: number;
 }
 
 /**
@@ -392,5 +405,95 @@ export interface ChatV2AutoCompactedEvent {
   readonly outputTokenEstimate: number;
   /** Model that produced the summary, when known. */
   readonly model?: string;
+  readonly occurredAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pending message queue & steering (message-queue PRD §10 / technical design §7)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a durably queued message. */
+export type AIChatPendingMessageStatus =
+  | "queued"
+  | "steering"
+  | "applied"
+  | "dispatching"
+  | "sent"
+  | "paused"
+  | "cancelled"
+  | "failed";
+
+/** Safe boundaries where the query loop may consume steering instructions. */
+export type AIChatSafeBoundary =
+  | "before_model"
+  | "after_model"
+  | "before_tool"
+  | "after_tool"
+  | "before_complete";
+
+/**
+ * Sanitized, renderer-facing view of one pending message. Never carries
+ * modelContent, request options, claim tokens, or attachment bytes.
+ */
+export interface AIChatPendingMessageView {
+  readonly pendingMessageId: string;
+  readonly conversationId: string;
+  readonly clientRequestId: string;
+  /** Monotonic FIFO sequence — the database primary key. */
+  readonly sequence: number;
+  readonly content: string;
+  readonly status: AIChatPendingMessageStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly attachmentMetadata?: readonly ChatV2AttachmentMetadata[];
+  readonly canSteer: boolean;
+  readonly steeringBoundary?: AIChatSafeBoundary;
+  readonly activeAssistantMessageId?: string;
+  readonly sentMessageId?: string;
+  readonly failureCode?: string;
+  readonly failureMessage?: string;
+  readonly recoveryReason?: string;
+}
+
+/** Result of a pending-message create. */
+export interface AIChatPendingCreateResult {
+  readonly conversationId: string;
+  /** queued | paused | dispatch_scheduled (a drain was scheduled). */
+  readonly disposition: "queued" | "paused" | "dispatch_scheduled";
+  readonly pendingMessage: AIChatPendingMessageView;
+}
+
+/**
+ * Main->renderer lifecycle event for a pending message. A refresh hint —
+ * renderer correctness never depends on receiving every event (history and
+ * pending-list IPC reconstruct current state).
+ */
+export interface AIChatPendingMessageEvent {
+  readonly conversationId: string;
+  readonly pendingMessageId: string;
+  readonly status: AIChatPendingMessageStatus;
+  readonly occurredAt: string;
+  readonly pendingMessage?: AIChatPendingMessageView;
+  readonly reasonCode?: string;
+}
+
+/** Metadata on a delivered user row that was applied as steering. */
+export interface ChatV2SteeringMetadata {
+  readonly pendingMessageId: string;
+  readonly clientRequestId: string;
+  readonly targetAssistantMessageId: string;
+  readonly boundary: AIChatSafeBoundary;
+  readonly appliedAt: string;
+}
+
+/**
+ * Marker for where the visible assistant content changed direction. The
+ * renderer splits the final assistant content at these offsets to insert a
+ * localized "Direction updated" marker; the offsets never enter model context.
+ */
+export interface ChatV2DirectionTransition {
+  readonly contentOffset: number;
+  readonly boundary: AIChatSafeBoundary;
+  readonly pendingMessageIds: readonly string[];
   readonly occurredAt: string;
 }

@@ -1,5 +1,37 @@
 import { ipcMain } from "electron";
+import {
+  AIChatTurnQueueService,
+  AIChatTurnQueueError,
+  createSteeringPromoter,
+} from "@/service/AIChatTurnQueueService";
+import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import {
+  AI_CHAT_MESSAGE_QUEUE_ENABLED,
+  AI_CHAT_MESSAGE_STEERING_ENABLED,
+} from "@/config/usersetting";
+import {
+  aiChatPendingCreateInputSchema,
+  aiChatPendingListInputSchema,
+  aiChatPendingSteerInputSchema,
+  aiChatPendingCancelInputSchema,
+  aiChatPendingResumeInputSchema,
+} from "@/schemas/ipc/aiChatPendingMessage";
+import {
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+} from "@/config/channellist";
+import type { ZodType } from "zod/v4";
+import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
@@ -154,6 +186,13 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   if (queryEngine) {
     queryEngine.stopActiveTurn();
   }
+  if (queueService) {
+    // Rows stay durable in each database; only in-memory drain chains and
+    // event associations are dropped (message-queue design §16.2). The next
+    // database runs its own recovery on first use.
+    queueService = null;
+  }
+  queueServiceRecovered = false;
   queryEngine = null;
   compactAgent = null;
   queryEngineDbPath = null;
@@ -225,10 +264,85 @@ export function getQueryEngine(): AIChatQueryEngine {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+      // Turn mailboxes persist steering via the pending Module (design §10).
+      steeringPromoter: createSteeringPromoter(
+        new AIChatPendingMessageModule()
+      ),
     });
     queryEngineDbPath = dbPath;
   }
   return queryEngine;
+}
+
+// -------------------------------------------------------------------------
+// Pending-message queue service (message-queue design §9)
+// -------------------------------------------------------------------------
+
+let queueService: AIChatTurnQueueService | null = null;
+let queueServiceRecovered = false;
+
+function isQueueFeatureEnabled(): boolean {
+  return new Token().getValue(AI_CHAT_MESSAGE_QUEUE_ENABLED) !== "false";
+}
+
+function isSteeringFeatureEnabled(): boolean {
+  return (
+    isQueueFeatureEnabled() &&
+    new Token().getValue(AI_CHAT_MESSAGE_STEERING_ENABLED) !== "false"
+  );
+}
+
+/**
+ * Broadcaster-backed stream sink for queue-dispatched turns: reuses the
+ * shared createChatV2StreamSink mapping and fans it out to every live
+ * window, since queue turns start in the main process (design §14.2).
+ */
+function createBroadcastEventSink(): AIChatQueryEventSink {
+  const broadcaster = AIChatV2EventBroadcaster.getInstance();
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => broadcaster.emitStreamChunk(chunk),
+    sendComplete: (chunk) => broadcaster.emitStreamComplete(chunk),
+  });
+}
+
+function getQueueService(): AIChatTurnQueueService {
+  if (!queueService) {
+    const pendingModule = new AIChatPendingMessageModule();
+    queueService = new AIChatTurnQueueService({
+      engine: getQueryEngine(),
+      pendingModule,
+      eventSink: {
+        emit: (event) =>
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
+      },
+      streamSinkFactory: () => createBroadcastEventSink(),
+      tryAcquireLease: ({ conversationId }) =>
+        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
+          conversationId,
+          owner: "interactive",
+          ownerId: "pending-queue",
+        }),
+      isAiEnabled: () => canUseChat().ok,
+      isQueueEnabled: isQueueFeatureEnabled,
+      isSteeringEnabled: isSteeringFeatureEnabled,
+    });
+  }
+  return queueService;
+}
+
+/**
+ * Run startup/database-switch recovery exactly once per queue-service
+ * instance (design §16.1). Reconciliation only pauses/deduplicates durable
+ * rows — it never starts provider work.
+ */
+async function ensureQueueRecovered(): Promise<void> {
+  if (queueServiceRecovered) return;
+  queueServiceRecovered = true;
+  try {
+    await getQueueService().recoverOnStartup();
+  } catch (err) {
+    log.error("[ai-chat-v2] pending queue recovery failed:", err);
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -730,12 +844,20 @@ async function handleHistory(
       tokensUsed: r.tokensUsed,
       metadata: parseMetadata(r.metadata),
     }));
+    let pendingMessages: AIChatPendingMessageView[] | undefined;
+    try {
+      pendingMessages = await getQueueService().list(conversationId);
+    } catch (err) {
+      // Pending listing must never break history rendering.
+      log.error("[ai-chat-v2] pending list failed:", err);
+    }
     return ok({
       conversationId,
       messages: views,
       totalMessages: views.length,
       runtimeStatus:
         getQueryEngine().getConversationRuntimeStatus(conversationId),
+      pendingMessages,
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -758,6 +880,13 @@ async function handleClearConversation(
     const conversationId: string = req.conversationId;
     if (!conversationId) {
       return denied("conversationId is required");
+    }
+    // Queue cascade FIRST (FR-44): stop the runtime, delete pending rows
+    // and their staged attachment bytes before the transcript goes away.
+    try {
+      await getQueueService().clearConversation(conversationId);
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearConversation failed:", err);
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
@@ -782,12 +911,97 @@ async function handleClearAll(): Promise<
     return denied(chatAccess.message);
   }
   try {
+    try {
+      await getQueueService().clearAll();
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearAll failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));
   }
+}
+
+// -------------------------------------------------------------------------
+// Pending-message queue handlers (message-queue PRD §12)
+// -------------------------------------------------------------------------
+
+/**
+ * registerValidatedHandler-style wrapper that checks CHAT availability
+ * before parsing — the queue serves the same users the chat stream does
+ * (hosted subscription OR valid local provider), so canUseChat is the
+ * correct gate rather than the hosted-only USER_AI_ENABLED check.
+ */
+function registerChatValidatedHandler<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput>,
+  handler: (input: TInput) => Promise<TOutput>
+): void {
+  ipcMain.handle(channel, async (_event, raw) => {
+    const chatAccess = canUseChat();
+    if (!chatAccess.ok) {
+      return { status: false, msg: chatAccess.message, data: null };
+    }
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((issue) => issue.message).join("; ");
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+    try {
+      const data = await handler(parsed.data);
+      return { status: true, msg: "ok", data };
+    } catch (err) {
+      const msg =
+        err instanceof AIChatTurnQueueError
+          ? `[${err.code}] ${err.message}`
+          : err instanceof Error
+          ? err.message
+          : "Unknown error";
+      log.warn(`[${channel}] handler error: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+  });
+}
+
+async function handlePendingCreate(input: {
+  clientRequestId: string;
+  request: ChatV2StreamRequest;
+}): Promise<AIChatPendingCreateResult> {
+  void ensureQueueRecovered();
+  return await getQueueService().submit(input);
+}
+
+async function handlePendingList(input: {
+  conversationId: string;
+}): Promise<AIChatPendingMessageView[]> {
+  void ensureQueueRecovered();
+  return await getQueueService().list(input.conversationId);
+}
+
+async function handlePendingSteer(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  void ensureQueueRecovered();
+  return await getQueueService().steer(input);
+}
+
+async function handlePendingCancel(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  return await getQueueService().cancel(input);
+}
+
+async function handlePendingResume(input: {
+  conversationId: string;
+}): Promise<{ resumed: number }> {
+  await getQueueService().resumeConversation(input.conversationId);
+  return { resumed: 1 };
 }
 
 // -------------------------------------------------------------------------
@@ -1240,4 +1454,35 @@ export function registerAiChatV2IpcHandlers(): void {
     }
   });
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
+
+  // Pending-message queue (message-queue PRD §12). Handlers call the queue
+  // service only — never a Model or repository.
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CREATE,
+    aiChatPendingCreateInputSchema,
+    handlePendingCreate
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_LIST,
+    aiChatPendingListInputSchema,
+    handlePendingList
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_STEER,
+    aiChatPendingSteerInputSchema,
+    handlePendingSteer
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CANCEL,
+    aiChatPendingCancelInputSchema,
+    handlePendingCancel
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_RESUME,
+    aiChatPendingResumeInputSchema,
+    handlePendingResume
+  );
+  // Startup reconciliation (design §16.1): reconcile durable rows once the
+  // handlers exist; it only pauses/deduplicates — never dispatches.
+  void ensureQueueRecovered();
 }

@@ -342,6 +342,14 @@ export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
 /** Main->renderer: read cached expanded pasted-text bodies for previews. */
 export const AI_CHAT_V2_READ_PASTE_CACHE = "ai-chat-v2:read-paste-cache";
 export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+
+// AI Chat V2 pending-message queue & steering (message-queue PRD §12)
+export const AI_CHAT_V2_PENDING_CREATE = "ai-chat-v2:pending-message-create";
+export const AI_CHAT_V2_PENDING_LIST = "ai-chat-v2:pending-message-list";
+export const AI_CHAT_V2_PENDING_STEER = "ai-chat-v2:pending-message-steer";
+export const AI_CHAT_V2_PENDING_CANCEL = "ai-chat-v2:pending-message-cancel";
+export const AI_CHAT_V2_PENDING_RESUME = "ai-chat-v2:pending-message-resume";
+export const AI_CHAT_V2_PENDING_EVENT = "ai-chat-v2:pending-message-event";
 export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
 export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";

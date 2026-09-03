@@ -2303,6 +2303,28 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "En file d'attente",
+      steering: "Réorientation…",
+      applied: "Appliqué",
+      dispatching: "Envoi…",
+      sent: "Envoyé",
+      paused: "File en pause",
+      cancelled: "Supprimé",
+      failed: "Échec de l'envoi",
+      steer: "Réorienter",
+      steer_aria: "Réorienter la réponse en cours avec ce message",
+      remove: "Supprimer",
+      send_next: "Envoyer le suivant",
+      resume: "Reprendre la file",
+      direction_updated: "Direction mise à jour",
+      recovered_after_restart: "Récupéré après le redémarrage",
+      attachments_not_steerable: "Les messages avec pièces jointes seront envoyés après la réponse en cours.",
+      limit_reached: "Limite de file atteinte. Supprimez un message avant de renvoyer.",
+      steer_failed: "Impossible de réorienter ce message.",
+      queue_disabled: "La file de messages est désactivée.",
+    },
     artifactExport: {
       permissionTitle: "Exporter les artefacts générés",
       permissionDescription:

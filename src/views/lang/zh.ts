@@ -2214,6 +2214,28 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "已排队",
+      steering: "转向中…",
+      applied: "已应用",
+      dispatching: "发送中…",
+      sent: "已发送",
+      paused: "队列已暂停",
+      cancelled: "已移除",
+      failed: "无法发送",
+      steer: "转向",
+      steer_aria: "用此消息调整当前回复方向",
+      remove: "移除",
+      send_next: "发送下一条",
+      resume: "恢复队列",
+      direction_updated: "方向已更新",
+      recovered_after_restart: "重启后已恢复",
+      attachments_not_steerable: "带附件的消息将在当前回复完成后发送。",
+      limit_reached: "队列已达上限，请先移除一条消息。",
+      steer_failed: "无法转向此消息。",
+      queue_disabled: "消息队列当前已禁用。",
+    },
     artifactExport: {
       permissionTitle: "导出生成的工件",
       permissionDescription:
