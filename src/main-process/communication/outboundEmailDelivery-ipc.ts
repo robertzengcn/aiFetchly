@@ -21,6 +21,7 @@ import {
 } from "@/schemas/ipc/outboundEmail";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { OutboundEmailDeliveryService } from "@/service/outboundEmail/OutboundEmailDeliveryService";
+import { OutboundEmailWorkerStarter } from "@/service/outboundEmail/OutboundEmailWorkerStarter";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model";
 import { OutboundEmailPreflightService } from "@/service/outboundEmail/OutboundEmailPreflightService";
@@ -267,9 +268,16 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_SEND,
     outboundEmailBatchSendInputSchema,
     async (input) => {
+      // §15.2 — wire the production worker starter (builds the v2 payload,
+      // decrypts service credentials, forks taskCode.js) unless a caller
+      // injected one (tests). Raw credentials cross to the worker over a
+      // MessagePort, never over renderer IPC (§17.1).
+      const workerStarter =
+        options.workerStarter ??
+        new OutboundEmailWorkerStarter({ dbpath }).toWorkerStarter();
       const delivery = new OutboundEmailDeliveryService({
         dbpath,
-        workerStarter: options.workerStarter,
+        workerStarter,
       });
       const result = await delivery.claim({
         batchId: input.batchId,

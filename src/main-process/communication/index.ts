@@ -149,11 +149,10 @@ export function registerCommunicationIpcHandlers(
     registerAIContentReportIpcHandlers();
     // Intent-Aware Outbound Email Delivery (§17). Plain handlers — not
     // AI-gated (they operate on already-authorized state and must stay usable
-    // for inspection even when AI is disabled). The real worker starter (which
-    // builds the versioned payload + service credentials and forks the utility
-    // process) is wired in Phase 5 alongside the recovery service; the default
-    // placeholder throws worker_start_failed, which the delivery service
-    // records safely.
+    // for inspection even when AI is disabled). BATCH_SEND wires the production
+    // OutboundEmailWorkerStarter (v2 payload + decrypted service credentials +
+    // taskCode.js utility-process fork); a start failure is recorded as
+    // worker_start_failed by the delivery service.
     registerOutboundEmailDeliveryIpcHandlers();
     AsyncMsg();
   } catch (e) {
