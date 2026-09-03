@@ -6,7 +6,10 @@ name: Test Suite
 # dev branches (packaging lives in build.yml on the `test` branch).
 on:
   push:
-    branches: [dev, master, test]
+    # Temporary: the installer branch needs its Windows gate recorded before
+    # merge (final-audit item 3). Remove 'worktree-natural-language-skill-installation'
+    # from this list when the PR merges.
+    branches: [dev, master, test, worktree-natural-language-skill-installation]
   pull_request:
     branches: [dev, master, test]
 
