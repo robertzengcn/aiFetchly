@@ -169,6 +169,8 @@ const errorCodeSchema = z.enum([
   "challenge_resolution_failed",
   "stale_page_reference",
   "action_not_allowed",
+  "user_has_control",
+  "challenge_in_progress",
   "approval_required",
   "approval_expired",
   "script_rejected",

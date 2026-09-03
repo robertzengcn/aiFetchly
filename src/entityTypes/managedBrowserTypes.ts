@@ -70,6 +70,8 @@ export type ManagedBrowserErrorCode =
   | "challenge_resolution_failed"
   | "stale_page_reference"
   | "action_not_allowed"
+  | "user_has_control"
+  | "challenge_in_progress"
   | "approval_required"
   | "approval_expired"
   | "script_rejected"
@@ -363,5 +365,8 @@ export type AuthenticationAssessment =
 export type ManualLoginVerificationResult =
   | { readonly state: "verified"; readonly evidenceCodes: readonly string[] }
   | { readonly state: "not_verified"; readonly reasonCode: string }
-  | { readonly state: "challenge"; readonly challengeKind: BrowserChallengeKind }
+  | {
+      readonly state: "challenge";
+      readonly challengeKind: BrowserChallengeKind;
+    }
   | { readonly state: "wrong_account"; readonly reasonCode: string };
