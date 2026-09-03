@@ -386,10 +386,10 @@ Channels per §17 table. Handlers: AI-enable check first, Zod-validate input, ve
 
 Behavior per §18. Editing creates a new revision and invalidates approval. Send disabled while blocking findings exist. All text via `t()` with English fallback, added to en/zh/es/fr/de/ja.
 
-- [ ] Step 1: failing component tests (render list, edit→invalidate, send disabled on findings, progress display).
-- [ ] Step 2: FAIL → Step 3: implement components + translations → Step 4: `yarn test:components` PASS.
-- [ ] Step 5: E2E for the critical review→approve→send flow.
-- [ ] Step 6: Commit — `feat: add outbound email review UI with full localization`.
+- [x] Step 1: failing component tests (render list, edit→invalidate, send disabled on findings, progress display).
+- [x] Step 2: FAIL → Step 3: implement components + translations → Step 4: `yarn test:components` PASS.
+- [x] Step 5: E2E for the critical review→approve→send flow. — Deferred the full Playwright review→approve→**send** spec to Phase 5 (the production `workerStarter`/SMTP worker is not yet wired; BATCH_SEND returns `worker_start_failed`). Added `AiChatV2Message.outboundBatchCard.test.ts` covering the review-entry integration (card render → Review → dialog with Send disabled until approve) in the meantime.
+- [x] Step 6: Commit — `feat: add outbound email review UI with full localization` (18fccc88, 6c660df2, b4934515).
 
 ---
 
