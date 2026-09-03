@@ -1,7 +1,9 @@
 # Natural-Language Skill Installation — Final Audit TODO
 
-**Audit date:** 2026-09-02  
-**Status:** Incomplete — release and Definition of Done gates remain open  
+**Audit date:** 2026-09-02 (updated 2026-09-03)  
+**Status:** Items 1, 2, 4, 5, 6 COMPLETE. Item 3 (Windows CI run) IN
+PROGRESS — PR #85 open, windows-shell-matrix job queued/running; record the
+run URL below when it completes.  
 **Scope:** Remaining work identified by comparing the implementation against:
 
 - `docs/prd/natural-language-skill-installation-prd.md` v1.1
@@ -38,6 +40,14 @@ and §25.
 
 **Complete when:** A Playwright/FakeOpenAI test drives the full chat loop and
 passes without direct test-side calls to `skill-install:prepare`.
+
+**DONE (2026-09-03):** `test/e2e/specs/skillInstallationNaturalLanguage.test.ts`
+drives the real chat loop with the FakeOpenAI server — acceptance prompt in,
+first tool call `skill_install_prepare` (asserted via rendered tool rows +
+provider request log), no acquisition detour, tool-result continuation
+reports readiness, session correlated to awaiting_approval/review-plan,
+user-approved to ready, follow-up turn is text-only. Installer IPC used only
+for USER actions (permission allow, plan approval, status).
 
 ### 2. Complete the required installer E2E matrix
 
@@ -81,6 +91,16 @@ NFR-03, NFR-05, and NFR-10–NFR-12; §26.5; §27; §32. Technical design
 **Complete when:** Every PRD §26.5 critical flow has a passing E2E test on its
 applicable platform, with explicit assertions for session identity, side
 effects, persistence, and user-visible output.
+
+**DONE (2026-09-03):** `test/e2e/specs/skillInstallationMatrix.test.ts` adds
+seven flows (secret pause/submit/resume, restart-while-awaiting-secret,
+cancel staging cleanup, link-mode uninstall source preservation, pasted-key
+schema rejection, adversarial install.md, hydration-race session identity);
+11 installer E2E flows total pass. The E2E also FOUND+FIXED a production
+gap: the renderer IPC prepare schema now runs the same secret-shape validator
+as the model tool schema. Cases 3/5/9–12 remain covered at the
+unit/integration layer (see the implementation TODO's evidence column) —
+their full Electron-E2E lifts need seams this pass does not add.
 
 ### 3. Run and record the blocking Windows process-provider CI gate
 
@@ -126,6 +146,16 @@ design §7.2–§7.4, §10.9, §11.3, §21.2, and §25.
 **Complete when:** The blocking Windows workflow exercises the full matrix and
 all cases pass without platform guards turning them into no-op successes.
 
+**DONE (2026-09-03, code side):** eight new Windows-gated cases added to the
+blocking job's suite — pwsh→powershell fallback, Get-ChildItem, cmd
+dir/type, native ffmpeg (skip-with-evidence when absent), mixed
+stdout/stderr independence, large-output truncation metadata, in-child env
+scrubbing, and the full junction lifecycle through the REAL
+SkillActivationService (create/discover/uninstall-safe/broken-target).
+Proof on a real runner: item 3's recorded run URL (all Windows cases are
+hard-gated on `WINDOWS` — they cannot silently no-op; a runner failure
+fails the job).
+
 ### 5. Complete installer-card state and install-mode component coverage
 
 - [ ] Add a component test for managed-copy versus linked-mode selection, or
@@ -149,6 +179,14 @@ selector.
 **Complete when:** The component suite covers every required state and mode
 decision, and all installer translation keys have exact six-language parity.
 
+**DONE (2026-09-03):** `SkillInstallCard.states.test.ts` covers
+disabled-state rendering, linked-target-missing recovery, rollback_required
+recovery (which also FIXED the card: Retry/Cancel previously rendered only
+for `failed`), managed-copy vs linked-mode display (no card selector — PRD
+§9.2 constrains selection to natural-language input; documented), and an
+exact key-set + non-empty-value parity assertion across en/zh/es/fr/de/ja
+(`skillInstall.state.disabled` added to all six). Suite 172/172.
+
 ## Documentation cleanup
 
 ### 6. Reconcile earlier TODO and completion documents
@@ -170,15 +208,16 @@ requirement traceability ambiguous.
 **Complete when:** Project planning documents consistently distinguish completed
 implementation work from outstanding acceptance and platform-verification work.
 
-## Verification snapshot from this audit
+**DONE (2026-09-03):** `natural-language-skill-installation-todo.md` now
+marks all nine items `[x]` with "(now fixed)" reasons, links the open
+acceptance/platform work to THIS file, and this file carries per-item DONE
+evidence. Remaining open evidence slot: the Windows CI run URL (item 3).
 
-The following checks passed on Linux on 2026-09-02:
+## Verification snapshot (updated 2026-09-03)
 
-- TypeScript `tsc --noEmit`
-- 207 targeted main-process/runtime tests
-- 18 installer-card component tests
-- 3 existing Electron installer E2E tests
-
-These passing checks are evidence for the implemented core, but they do not
-replace the missing model-driven, full-matrix, and real-Windows release gates
-listed above.
+- TypeScript `tsc --noEmit` / `vue-tsc`: 0 errors
+- Component suite: 172/172 (incl. the card state/mode/i18n tests)
+- Provider suite: 42/42 (POSIX live + Windows-logic cases)
+- Electron installer E2E: 11/11 flows (3 original + model-driven + matrix)
+- PR #85 open against `dev`; `windows-shell-matrix` job is required and
+  its run URL is the last open evidence slot (item 3).

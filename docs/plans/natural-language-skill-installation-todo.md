@@ -1,32 +1,19 @@
 # Natural-Language Skill Installation — Outstanding Task TODO
 
-> **STATUS 2026-08-30: ALL 9 TODO items COMPLETE** (commits 754e89aa..b8e1ac3f
-> plus the migration commit). Summary:
->
-> 1. ✅ Windows shell providers wired into the chat `run_shell_command` path (754e89aa)
-> 2. ✅ DB baseline + feature migration (0000-baseline + 0001-skill-installation, gate armed)
-> 3. ✅ Plugin/executable packages route to PluginInstallService / SkillImportService.importFromDirectory (FR-07)
-> 4. ✅ Dependency detection catalog-backed via the shipped SystemDependencyCatalog (FR-14)
-> 5. ✅ Approved-command execution with fail-closed secret injection (SkillApprovedCommandRunner, FR-16)
-> 6. ✅ Skill-root read/execute (no-write) capability construction site: withSkillRoot (FR-13)
-> 7. ✅ Monotonic SKILL_INSTALL_PROGRESS events broadcast to the renderer
-> 8. ✅ Install card structured safePlan fields + expandable diagnostics
-> 9. ✅ Credential persistence aligned: SkillCredentialBindingEntity + SkillCredentialModule (two-store model)
->
-> Remaining deferred items (below) unchanged — they need a real Windows runner,
-> a FakeOpenAI tool-call scenario, or are upstream fixes.
-
-The implementing plan (`docs/plans/2026-08-24-natural-language-skill-installation.md`)
-marks Phases A–G done. The tasks below are the items that are **still incomplete**
-relative to the PRD/design. Companion narrative: see
-`docs/plans/natural-language-skill-installation-outstanding-tasks.md`.
+**Status: 2026-09-03 — ALL NINE IMPLEMENTATION ITEMS COMPLETE**
+(commits 754e89aa..530205f1, plus the review-pass-2 hardening in
+5705f35/67d5e4ca). Every item below is DONE; each section keeps its
+original references for traceability. The still-open work — real-Windows
+CI execution, full-matrix evidence recording — lives in
+`docs/plans/natural-language-skill-installation-final-audit-todo.md`.
 
 ---
+
 
 ## TODO — Not yet complete, with reasons
 
 ### 1. Wire Windows shell providers into the chat `run_shell_command` path
-- [ ] **Reason:** `src/service/process/` correctly implements §16 (pwsh→powershell→cmd,
+- [x] **Reason (now fixed):** `src/service/process/` correctly implements §16 (pwsh→powershell→cmd,
       `detached:false` on Windows, env scrub, BOM/UTF-16LE decode, byte counts,
       `PROCESS_OUTPUT_EMPTY_UNEXPECTED`, process-tree kill), but it is consumed **only**
       by dependency probes (`SkillDependencyOrchestrator`). The conversation shell tool
@@ -39,7 +26,7 @@ relative to the PRD/design. Companion narrative: see
 - **Blocks:** NFR-02 is not met on the primary conversation shell path.
 
 ### 2. Add DB baseline + feature migration
-- [ ] **Reason:** New entities are registered in `src/config/dbEntities.ts`
+- [x] **Reason (now fixed):** New entities are registered in `src/config/dbEntities.ts`
       (`SkillInstallationEntity`, `SkillInstallationSessionEntity`,
       `SkillInstallationEventEntity`, `PromptSkillInvocationEntity`), but
       `src/config/dbMigrations.ts` still exports `DB_MIGRATIONS = []`. With no migrations,
@@ -49,7 +36,7 @@ relative to the PRD/design. Companion narrative: see
 - **Blocks:** "Persistence ships through a baseline and feature migration."
 
 ### 3. Route plugin / executable packages to existing install services
-- [ ] **Reason:** `SkillPackageInspectionService` classifies repos as `plugin` /
+- [x] **Reason (now fixed):** `SkillPackageInspectionService` classifies repos as `plugin` /
       `executable` / `prompt`, but `SkillInstallationModule` only activates via
       `SkillActivationService.activate` and registers via `registerPromptSkill`
       (`SkillInstallationModule.ts:834-859`). There is **no code path** handing a
@@ -58,7 +45,7 @@ relative to the PRD/design. Companion narrative: see
 - **Ref:** FR-07, PRD §13.3.
 
 ### 4. Make dependencies actually catalog-backed
-- [ ] **Reason:** `SkillDependencyOrchestrator` implements ffmpeg **and** ffprobe
+- [x] **Reason (now fixed):** `SkillDependencyOrchestrator` implements ffmpeg **and** ffprobe
       multi-probe detection/verification (`SkillDependencyOrchestrator.ts:31-48,134-171`),
       but uses a standalone hardcoded `KNOWN_BINARIES` table (`:25-82`) and never imports or
       calls the real `SystemDependencyCatalog` / `SystemDependencyModule` (header comment at
@@ -68,7 +55,7 @@ relative to the PRD/design. Companion narrative: see
 - **Ref:** FR-14, Design §12.
 
 ### 5. Wire secret injection into approved internal commands
-- [ ] **Reason:** `SkillCredentialService.retrieve()` provides the inject-into-approved-child
+- [x] **Reason (now fixed):** `SkillCredentialService.retrieve()` provides the inject-into-approved-child
       API and storage is fail-closed `safeStorage`, but the code documents the consumer gap
       (`SkillCredentialService.ts:124-131`): the approved-command execution path
       (`ApprovedCommandTemplate.environmentNames`) "does not exist yet — repository commands
@@ -78,7 +65,7 @@ relative to the PRD/design. Companion narrative: see
 - **Compounds:** #3 and #4 (nothing actually runs install/helper commands).
 
 ### 6. Add a construction site that grants read/execute skill-root capability (no write)
-- [ ] **Reason:** The capability model (`src/entityTypes/filesystemContextTypes.ts` — roots
+- [x] **Reason (now fixed):** The capability model (`src/entityTypes/filesystemContextTypes.ts` — roots
       `skill-source` / `skill-activation` / `install-staging`) and capability-aware path policy
       (`ConversationFilesystemContextService.ts:281-291`, `PATH_CAPABILITY_DENIED`) exist,
       but no construction site ever creates such a root. Only the full-permission workspace
@@ -87,7 +74,7 @@ relative to the PRD/design. Companion narrative: see
 - **Ref:** FR-13, PRD §6.3/§14.4/§15.3.
 
 ### 7. Emit monotonic `SKILL_INSTALL_PROGRESS` events to the renderer
-- [ ] **Reason:** Per-session audit events with monotonic `seq` are stored in the DB
+- [x] **Reason (now fixed):** Per-session audit events with monotonic `seq` are stored in the DB
       (`SkillInstallationEventModel.append`, `SkillInstallationModule.ts:928`), but
       `SKILL_INSTALL_PROGRESS` is only declared (`src/config/channellist.ts:371`) — there is
       **no `webContents.send(...)`** and no renderer subscription. The UI is driven by the
@@ -95,14 +82,14 @@ relative to the PRD/design. Companion narrative: see
 - **Ref:** Design §15.1, PRD §23.2.
 
 ### 8. Install card: structured fields + expandable diagnostics
-- [ ] **Reason:** `SkillInstallCard.vue` renders state, ready, retry, cancel,
+- [x] **Reason (now fixed):** `SkillInstallCard.vue` renders state, ready, retry, cancel,
       approve/reject, secure secret input, and an aggregated `safeSummary`, but source /
       commit / dependencies / secrets / mode are presented only as a single text string
       (`SkillInstallationModule.ts:958-976`) and there is **no expandable diagnostics view**.
 - **Ref:** Design §22.1.
 
 ### 9. Confirm/resolve credential persistence model deviation
-- [ ] **Reason:** Design §14.1/§20.3 specifies `SkillCredentialBindingEntity` +
+- [x] **Reason (now fixed):** Design §14.1/§20.3 specifies `SkillCredentialBindingEntity` +
       `SkillCredentialModule` (opaque binding IDs in SQLite, encrypted value in a separate
       store). Implemented instead is `SkillCredentialService` storing safeStorage-encrypted
       values in `credentials.json` keyed by `${installationId}:${environmentVariable}`. This is
