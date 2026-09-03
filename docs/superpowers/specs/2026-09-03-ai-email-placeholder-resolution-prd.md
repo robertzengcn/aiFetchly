@@ -1,9 +1,13 @@
 # PRD: Safe AI Email Variable Resolution Before Send
 
-**Date:** 2026-09-03  
-**Status:** Draft  
-**Owner:** AiFetchly AI Chat and Email Marketing  
-**Related area:** AI Chat V2, outbound email tools, email identity profiles, email templates  
+**Date:** 2026-09-03
+
+**Status:** Draft
+
+**Owner:** AiFetchly AI Chat and Email Marketing
+
+**Related area:** AI Chat V2, outbound email tools, email identity profiles, email templates
+
 **Primary tool:** `start_email_send_task`
 
 ## 1. Summary
@@ -556,4 +560,3 @@ Add a critical-flow test in `test/e2e/specs/` that verifies:
 - `src/service/EmailMarketingAiTools.ts`: outbound email preview/start service functions
 - `src/config/skillsRegistry.ts`: `start_email_send_task` definition and AI-facing guidance
 - `src/childprocess/emailSend.ts`: worker-side final rendering and SMTP send flow
-
