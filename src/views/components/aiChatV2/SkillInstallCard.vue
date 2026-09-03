@@ -202,9 +202,10 @@
         </div>
       </div>
 
-      <!-- Recoverable failure -->
+      <!-- Recoverable failure (failed) or post-activation rollback
+           (rollback_required) — both offer recovery guidance. -->
       <div
-        v-if="snapshot?.state === 'failed'"
+        v-if="['failed', 'rollback_required'].includes(snapshot?.state ?? '')"
         class="mt-2 d-flex ga-2"
         data-testid="skill-install-failed"
       >
