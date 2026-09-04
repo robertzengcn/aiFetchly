@@ -224,6 +224,40 @@ export type AuthorizedEmailWorkerEvent =
   | AuthorizedEmailWorkerEventFailed
   | AuthorizedEmailWorkerEventComplete;
 
+// §6.4 — discriminated zod schema for worker→main events. The worker posts
+// these over a MessagePort; the main-process starter validates them at the
+// trust boundary before the bridge correlates/persists them (never trust
+// cross-process input).
+const authorizedEmailWorkerEventCorrelatedBase = {
+  batchId: z.number().int(),
+  sendAttemptId: z.number().int(),
+  draftId: z.number().int(),
+  revisionId: z.number().int(),
+  envelopeHash: z.string().length(64),
+};
+
+export const authorizedEmailWorkerEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("authorized-email-submitted"),
+    ...authorizedEmailWorkerEventCorrelatedBase,
+    providerMessageId: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal("authorized-email-failed"),
+    ...authorizedEmailWorkerEventCorrelatedBase,
+    errorCode: z.string(),
+    retrySafety: z.enum(["safe", "unknown"]),
+  }),
+  z.object({
+    type: z.literal("authorized-email-worker-complete"),
+    batchId: z.number().int(),
+    sendAttemptId: z.number().int(),
+  }),
+]);
+export type AuthorizedEmailWorkerEventSchema = z.infer<
+  typeof authorizedEmailWorkerEventSchema
+>;
+
 // ---------------------------------------------------------------------------
 // §14.2 Tool gate result
 // ---------------------------------------------------------------------------

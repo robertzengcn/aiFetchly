@@ -372,6 +372,42 @@ describe("OutboundEmailWorkerEventBridge", () => {
     expect(correlationFailure).toBeDefined();
   });
 
+  it("audits a correlation failure when the event batchId does not match the outcome batch", async () => {
+    const ctx = await seedAndClaim();
+    const bridge = new OutboundEmailWorkerEventBridge(tmpDir, {
+      onBroadcast: () => undefined,
+    });
+    // Correct attempt/draft/revision/envelopeHash but the WRONG batchId — the
+    // §15.4 five-field correlation must reject it rather than apply it.
+    const submitted: AuthorizedEmailWorkerEventSubmitted = {
+      type: "authorized-email-submitted",
+      batchId: ctx.batchId + 999,
+      sendAttemptId: ctx.attemptId,
+      draftId: ctx.draftId,
+      revisionId: ctx.revisionId,
+      envelopeHash: ctx.envelopeHash,
+      providerMessageId: "<wrong-batch@example.com>",
+    };
+    await bridge.handleEvent(submitted);
+
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+    const outcome = await deliveryModel.findOutcomeByAttemptAndDraft(
+      ctx.attemptId,
+      ctx.draftId
+    );
+    expect(outcome?.status).toBe("pending");
+    expect(outcome?.providerMessageId).toBeNull();
+
+    // The correlation failure is audited under the event's (wrong) batchId —
+    // the bridge records what the event claimed, and rejects applying it.
+    const auditModel = new OutboundEmailAuditLogModel(tmpDir);
+    const logs = await auditModel.listByBatch(ctx.batchId + 999);
+    const correlationFailure = logs.find(
+      (l) => l.eventCode === "worker_event_correlation_failed"
+    );
+    expect(correlationFailure).toBeDefined();
+  });
+
   it("ignores an event for an unknown attempt without throwing", async () => {
     const ctx = await seedAndClaim();
     const bridge = new OutboundEmailWorkerEventBridge(tmpDir, {

@@ -17,6 +17,7 @@ import { parseChildMessage } from "@/utils/childProcessMessage";
 import { incrementOutboundMetric } from "@/service/outboundEmail/OutboundEmailMetrics";
 import type { EmailServiceEntity } from "@/entity/EmailService.entity";
 import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
+import { authorizedEmailWorkerEventSchema } from "@/entityTypes/outboundEmailDeliveryTypes";
 import type {
   AuthorizedEmailWorkerPayloadV2,
   AuthorizedOutboundEnvelope,
@@ -341,7 +342,15 @@ export class OutboundEmailWorkerStarter extends BaseDb {
         // Not a delivery event — ignore silently (legacy email-send messages).
         return;
       }
-      bridge.handleEvent(data).catch((error: unknown) => {
+      // Zod-validate the worker→main event at the trust boundary (never trust
+      // cross-process input). An event that fails validation is dropped and
+      // counted, not forwarded to the bridge (§6.4).
+      const validated = authorizedEmailWorkerEventSchema.safeParse(data);
+      if (!validated.success) {
+        incrementOutboundMetric("worker_event_invalid_payload");
+        return;
+      }
+      bridge.handleEvent(validated.data).catch((error: unknown) => {
         const msg = error instanceof Error ? error.message : String(error);
         console.error(
           `[outbound-starter] bridge.handleEvent failed for attempt ${attemptId} batch ${batchId}: ${msg}`

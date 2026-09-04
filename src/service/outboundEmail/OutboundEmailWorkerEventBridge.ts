@@ -234,6 +234,7 @@ export class OutboundEmailWorkerEventBridge extends BaseDb {
       | AuthorizedEmailWorkerEventFailed
   ): outcome is NonNullable<typeof outcome> {
     if (!outcome) return false;
+    if (outcome.batchId !== event.batchId) return false;
     if (outcome.sendAttemptId !== event.sendAttemptId) return false;
     if (outcome.draftId !== event.draftId) return false;
     if (outcome.revisionId !== event.revisionId) return false;
