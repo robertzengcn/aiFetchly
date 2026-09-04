@@ -94,6 +94,22 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   /**
+   * The single outcome for a (sendAttemptId, draftId) pair — the unique index
+   * guarantees at most one. Used by the worker-event bridge to correlate an
+   * envelope event to the persisted outcome before mutating it (§15.4).
+   */
+  async findOutcomeByAttemptAndDraft(
+    sendAttemptId: number,
+    draftId: number,
+    manager?: EntityManager
+  ): Promise<OutboundEmailDeliveryOutcomeEntity | null> {
+    const repo =
+      manager?.getRepository(OutboundEmailDeliveryOutcomeEntity) ??
+      this.outcomeRepo;
+    return await repo.findOne({ where: { sendAttemptId, draftId } });
+  }
+
+  /**
    * Stale in-flight attempts (§21 rules 2–3). "In-flight" = `claimed` or
    * `sending`; "stale" = `claimedAt` older than `cutoff`. Recovery uses
    * `workerStartedAt` (null ⇒ worker never started; set ⇒ worker alive at
