@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { defineComponent } from "vue";
+import { computed, defineComponent, ref } from "vue";
 
 const capsMock = vi.fn();
 const createMock = vi.fn();
@@ -9,6 +9,11 @@ vi.mock("@/views/api/aiContentReport", () => ({
   getAIContentReportCapabilities: (...a: unknown[]) => capsMock(...a),
   createAIContentReport: (...a: unknown[]) => createMock(...a),
 }));
+
+import {
+  useReportCapabilities,
+  resetReportCapabilitiesForTest,
+} from "@/views/utils/reportCapabilities";
 
 const i18n = createI18n({
   legacy: false,
@@ -73,6 +78,7 @@ describe("AiChatBox conversation-report orchestration", () => {
   beforeEach(() => {
     capsMock.mockReset();
     createMock.mockReset();
+    resetReportCapabilitiesForTest();
   });
 
   it("disables the button when capabilities are disabled (fail-closed)", async () => {
@@ -96,8 +102,10 @@ describe("AiChatBox conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(true);
   });
 
@@ -122,8 +130,10 @@ describe("AiChatBox conversation-report orchestration", () => {
       },
     });
     expect(
-      (w.find('[data-testid="report-conversation"]').element as HTMLButtonElement)
-        .disabled
+      (
+        w.find('[data-testid="report-conversation"]')
+          .element as HTMLButtonElement
+      ).disabled
     ).toBe(false);
   });
 
@@ -157,5 +167,109 @@ describe("AiChatBox conversation-report orchestration", () => {
     expect(
       w.find('[data-testid="ai-conversation-report-dialog"]').exists()
     ).toBe(true);
+  });
+
+  // 2026-09-04 bugfix regression test: the legacy surface previously
+  // fetched capabilities exactly once at mount, so a transient startup
+  // failure left the header button permanently grey — even after the user
+  // loaded a history conversation with eligible content. This harness
+  // replicates AiChatBox's wiring (useReportCapabilities with the
+  // conversationId rearm key driving the button's `enabled` prop) and
+  // asserts the recovery the composable provides.
+  it("re-enables the header button after a failed mount-time fetch once history content appears", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1],
+        conversationReporting: {
+          enabled: false,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+
+      // Chat starts empty, then history with an eligible assistant
+      // message is loaded into the current conversation.
+      const hasEligibleOutput = ref(false);
+      const conversationId = ref("conv-1");
+      const Harness = defineComponent({
+        components: { AIConversationReportButton },
+        setup() {
+          // Same wiring as AiChatBox: composable state (plus the
+          // conversation-id rearm key) gates the button.
+          const { capabilities, loading } = useReportCapabilities({
+            hasEligibleOutput: () => hasEligibleOutput.value,
+            rearmKey: () => conversationId.value,
+          });
+          const conversationReportEnabled = computed(
+            () =>
+              capabilities.value?.conversationReporting.enabled === true &&
+              hasEligibleOutput.value
+          );
+          return { conversationReportEnabled, loading };
+        },
+        template: `
+          <AIConversationReportButton
+            :enabled="conversationReportEnabled"
+            :loading="loading"
+            compact
+          />
+        `,
+      });
+      const w = mount(Harness, {
+        global: { plugins: [i18n], stubs: { VBtn, VIcon } },
+      });
+
+      // Initial fetch settles fail-closed.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(capsMock).toHaveBeenCalledTimes(1));
+
+      // History loaded: eligible content exists but capabilities are
+      // still fail-closed → button grey.
+      hasEligibleOutput.value = true;
+      await w.vm.$nextTick();
+      expect(
+        (
+          w.find('[data-testid="report-conversation"]')
+            .element as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+
+      // The composable's backoff fires (first delay: 2s) and the retry
+      // resolves enabled:true → button recovers.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await vi.waitFor(() =>
+        expect(capsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+      );
+      await vi.waitFor(() => {
+        expect(
+          (
+            w.find('[data-testid="report-conversation"]')
+              .element as HTMLButtonElement
+          ).disabled
+        ).toBe(false);
+      });
+      // The chain stops once enabled — no runaway refetching.
+      expect(capsMock).toHaveBeenCalledTimes(2);
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

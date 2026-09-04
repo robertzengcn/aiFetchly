@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { defineComponent, ref, watch } from "vue";
+import { computed, defineComponent, ref, watch } from "vue";
 
 const capsMock = vi.fn();
 const createMock = vi.fn();
@@ -9,6 +9,11 @@ vi.mock("@/views/api/aiContentReport", () => ({
   getAIContentReportCapabilities: (...a: unknown[]) => capsMock(...a),
   createAIContentReport: (...a: unknown[]) => createMock(...a),
 }));
+
+import {
+  useReportCapabilities,
+  resetReportCapabilitiesForTest,
+} from "@/views/utils/reportCapabilities";
 
 const i18n = createI18n({
   legacy: false,
@@ -72,6 +77,7 @@ describe("Knowledge conversation-report orchestration", () => {
   beforeEach(() => {
     capsMock.mockReset();
     createMock.mockReset();
+    resetReportCapabilitiesForTest();
   });
 
   it("disables the button when capabilities are disabled (fail-closed)", async () => {
@@ -234,5 +240,109 @@ describe("Knowledge conversation-report orchestration", () => {
     await w.vm.$nextTick();
     expect(conversationReportDialogOpen.value).toBe(false);
     expect(conversationReportSnapshot.value).toBeNull();
+  });
+
+  // 2026-09-04 bugfix regression test: the knowledge surface previously
+  // fetched capabilities exactly once at mount, so a transient startup
+  // failure left the header button permanently grey — even after eligible
+  // chat content was restored from localStorage. This harness replicates
+  // ChatInterface's wiring (useReportCapabilities with the
+  // knowledgeConversationId rearm key driving the button's `enabled`
+  // prop) and asserts the recovery the composable provides.
+  it("re-enables the header button after a failed mount-time fetch once history content appears", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1],
+        conversationReporting: {
+          enabled: false,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+
+      // Chat starts empty, then history (with an eligible ai message) is
+      // restored into the current knowledge conversation.
+      const hasEligibleOutput = ref(false);
+      const knowledgeConversationId = ref("knowledge-conv-1");
+      const Harness = defineComponent({
+        components: { AIConversationReportButton },
+        setup() {
+          // Same wiring as ChatInterface: composable state (plus the
+          // conversation-id rearm key) gates the button.
+          const { capabilities, loading } = useReportCapabilities({
+            hasEligibleOutput: () => hasEligibleOutput.value,
+            rearmKey: () => knowledgeConversationId.value,
+          });
+          const conversationReportEnabled = computed(
+            () =>
+              capabilities.value?.conversationReporting?.enabled === true &&
+              hasEligibleOutput.value
+          );
+          return { conversationReportEnabled, loading };
+        },
+        template: `
+          <AIConversationReportButton
+            :enabled="conversationReportEnabled"
+            :loading="loading"
+            compact
+          />
+        `,
+      });
+      const w = mount(Harness, {
+        global: { plugins: [i18n], stubs: { VBtn, VIcon } },
+      });
+
+      // Initial fetch settles fail-closed.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(capsMock).toHaveBeenCalledTimes(1));
+
+      // History restored: eligible content exists but capabilities are
+      // still fail-closed → button grey.
+      hasEligibleOutput.value = true;
+      await w.vm.$nextTick();
+      expect(
+        (
+          w.find('[data-testid="report-conversation"]')
+            .element as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+
+      // The composable's backoff fires (first delay: 2s) and the retry
+      // resolves enabled:true → button recovers.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await vi.waitFor(() =>
+        expect(capsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+      );
+      await vi.waitFor(() => {
+        expect(
+          (
+            w.find('[data-testid="report-conversation"]')
+              .element as HTMLButtonElement
+          ).disabled
+        ).toBe(false);
+      });
+      // The chain stops once enabled — no runaway refetching.
+      expect(capsMock).toHaveBeenCalledTimes(2);
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

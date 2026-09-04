@@ -2611,17 +2611,14 @@ const hasReportableConversationOutput = computed(() =>
     streamStatus: streamStatus.value,
   })
 );
-// Capability state with bounded lazy retry (2026-09-04 fix): the previous
-// one-shot mount-time fetch left the button permanently grey when that
-// single request failed (backend 502 / network blip) — loading a history
-// conversation with eligible content never re-asked the capabilities
-// endpoint. The composable retries (capped backoff) once eligible output
-// exists but capabilities have not resolved enabled:true, and cleans up on
-// component unmount. NOT AI-gated (PRD FR-4.4); still fail-closed: the
-// button only enables on a fetched enabled:true envelope.
+// Capability state with retry — see the useReportCapabilities docstring
+// (src/views/utils/reportCapabilities.ts) for the bug history. The rearm
+// key makes every conversation switch restart the retry chain, including
+// switches between two conversations that both hold eligible output.
 const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
   useReportCapabilities({
     hasEligibleOutput: () => hasReportableConversationOutput.value,
+    rearmKey: () => activeConversationId.value,
   });
 const conversationReportEnabled = computed(
   () =>
@@ -4912,12 +4909,6 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
-  // Conversation-report capabilities are now owned by the
-  // useReportCapabilities composable (see its declaration above the
-  // conversationReportEnabled computed), which fetches at scope creation
-  // and applies a bounded retry once eligible output exists — replacing
-  // the previous one-shot fetch here that permanently greyed the button
-  // when it failed at mount.
 });
 
 // --- Conversation + single-output report orchestration (design §11.1) -----
