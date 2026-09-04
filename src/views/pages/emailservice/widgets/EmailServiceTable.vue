@@ -10,6 +10,16 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createService()">
                 {{ CapitalizeFirstLetter(t('emailservice.create_service')) }}
             </v-btn>
+
+            <v-btn
+                v-if="!isSelectedtable"
+                class="btn ml-3" variant="flat" prepend-icon="mdi-export" color="secondary"
+                :loading="exporting"
+                data-testid="email-service-export-btn"
+                @click="handleExport"
+            >
+                {{ t('common.export') }}
+            </v-btn>
         </div>
 
     </div>
@@ -31,12 +41,18 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
 :dialog="showDeleteModal" @confirm-delete="handleDelete"
         @confirm-close="showDeleteModal = false"></delete-dialog>
 
+    <notice-snackbar
+        v-model="exportNotice.show"
+        :message="exportNotice.message"
+        :type="exportNotice.type"
+    />
+
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { EmailServiceListdata } from "@/entityTypes/emailmarketingType"
-import { getEmailServiceList, deleteEmailService } from '@/views/api/emailservice'
+import { getEmailServiceList, deleteEmailService, exportEmailServices } from '@/views/api/emailservice'
 import { ref, computed,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import { CapitalizeFirstLetter } from "@/views/utils/function"
@@ -44,6 +60,7 @@ import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { useRouter } from 'vue-router';
 import { Header } from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
+import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 const { t } = useI18n({ inheritLocale: true });
 const selected = ref<Array<EmailServiceListdata>>([]);
 const router = useRouter();
@@ -173,6 +190,44 @@ function createService() {
     router.push({
         name: 'Email_Marketing_Service_Create'
     });
+}
+
+const exporting = ref(false);
+const exportNotice = ref<{
+    show: boolean;
+    type: 'success' | 'error' | 'info';
+    message: string;
+}>({
+    show: false,
+    type: 'info',
+    message: '',
+});
+
+async function handleExport() {
+    if (exporting.value) return;
+    exporting.value = true;
+    try {
+        const filePath = await exportEmailServices('csv');
+        exportNotice.value = {
+            show: true,
+            type: 'success',
+            message: filePath
+                ? `${t('common.export_success')}: ${filePath}`
+                : t('common.export_success'),
+        };
+    } catch (error) {
+        const cancelled = error instanceof Error && /cancel/i.test(error.message);
+        exportNotice.value = {
+            show: true,
+            type: 'error',
+            message: cancelled
+                ? t('common.export_cancelled')
+                : `${t('common.export_failed')}: ${error instanceof Error ? error.message : String(error)}`,
+        };
+        console.error('Email service export failed:', error);
+    } finally {
+        exporting.value = false;
+    }
 }
 
 const emit = defineEmits(['change'])
