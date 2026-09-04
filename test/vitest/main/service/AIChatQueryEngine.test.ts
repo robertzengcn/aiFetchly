@@ -1,10 +1,7 @@
 // test/vitest/main/service/AIChatQueryEngine.test.ts
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
-import type {
-  AIChatQueryLoop,
-  AIChatQueryLoopDeps,
-} from "@/service/AIChatQueryLoop";
+import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { OpenAIChatImage, OpenAIChatMessage } from "@/api/aiChatApi";
 import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
@@ -206,7 +203,7 @@ describe("AIChatQueryEngine", () => {
         });
 
       const engine = createEngineWithFakeLoop(fakeRun);
-      const { sink, events } = makeEventCollector();
+      const { events } = makeEventCollector();
 
       await engine.submitMessage({
         request: { message: "hello" },
@@ -605,6 +602,90 @@ describe("AIChatQueryEngine", () => {
       expect(fakeRun).toHaveBeenCalledOnce();
       const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
       expect(loopInput.planContext?.planState.status).toBe("approved");
+    });
+
+    it("does not advertise EnterPlanMode while an approved plan executes in chat mode", async () => {
+      // Regression: after approval the plan lifecycle has ended for planning
+      // purposes (isActivePlanState → false), so execution rounds run in chat
+      // mode — but the engine still advertised ENTER_PLAN_MODE_TOOL because
+      // autoPlanEnabled only checked `!isPlanMode`. The model could then call
+      // a tool that handleEnterPlanMode is guaranteed to reject with
+      // "Plan is already approved; cannot re-enter Plan Mode." wasting a round
+      // and confusing the model mid-execution.
+      const approvedPlan: AIChatPlanStateView = {
+        planId: "plan-1",
+        conversationId: "v2-test-conv",
+        status: "approved",
+        title: "Campaign plan",
+        objective: "Create campaign files",
+        currentVersion: 2,
+        approvedAt: new Date().toISOString(),
+      };
+      mockGetPlanState.mockResolvedValue(approvedPlan);
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      // Chat mode — the post-approval execution round the renderer kicks off
+      // via onSend("Plan approved. Please begin executing the plan now.").
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      const toolNames = loopInput.openAITools.map(
+        (t) => t.function.name as string
+      );
+      expect(toolNames).not.toContain("EnterPlanMode");
+      // The approved-plan context must still be absent (plain chat round)…
+      expect(loopInput.planContext).toBeUndefined();
+      // …and autoPlan stays off so the loop would reject any stray call.
+      expect(loopInput.autoPlan).toBeUndefined();
+    });
+
+    it("advertises EnterPlanMode in plain chat mode with no approved plan", async () => {
+      // Companion guard: ordinary chat (no plan at all) must still advertise
+      // EnterPlanMode when auto-plan is enabled, so the fix above does not
+      // overcorrect and kill model-initiated plan entry entirely.
+      mockGetPlanState.mockResolvedValue(null);
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "hello",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      const toolNames = loopInput.openAITools.map(
+        (t) => t.function.name as string
+      );
+      expect(toolNames).toContain("EnterPlanMode");
+      expect(loopInput.autoPlan).toBeDefined();
     });
   });
 

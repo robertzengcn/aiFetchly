@@ -807,9 +807,15 @@ export class AIChatQueryEngine {
     // Resolve auto-plan config. Only active in plain chat mode (not when the
     // conversation is already in plan mode), only when AI is enabled, and only
     // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    // An approved plan also blocks auto-entry: its execution rounds run in
+    // chat mode (isActivePlanState is false), but EnterPlanMode would be
+    // guaranteed to fail there — ensurePlanForConversation resolves the
+    // approved plan and handleEnterPlanMode rejects re-entry — so advertising
+    // the tool mid-execution only invites a doomed call.
     const tokenService = new Token();
     const autoPlanEnabled =
       !isPlanMode &&
+      planState?.status !== "approved" &&
       tokenService.getValue(USER_AI_ENABLED) === "true" &&
       tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
 
