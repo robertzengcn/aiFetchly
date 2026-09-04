@@ -287,6 +287,11 @@ describe("EmailMarketingController", () => {
       );
       // The SMTP password is still overwritten by the imported value.
       expect(update.firstCall.args[1].password).to.equal("newpass");
+      // Documented invariant: other receive fields stay undefined on update —
+      // TypeORM's changed-column diffing leaves them untouched, so the import
+      // never silently rewrites existing receive config.
+      expect(update.firstCall.args[1].receiveEnabled).to.equal(undefined);
+      expect(update.firstCall.args[1].imapHost).to.equal(undefined);
     });
 
     it("skips a row with a field-count mismatch and imports the valid rows (partial import)", async () => {
@@ -314,6 +319,33 @@ describe("EmailMarketingController", () => {
       );
       expect(create.calledOnce).to.equal(true);
       expect(create.firstCall.args[0].name).to.equal("Good");
+    });
+
+    it("skips a TooFewFields row and imports the valid rows (fewer fields than headers)", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // First data row has 4 fields vs 6 headers → TooFewFields (row 2).
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Bad,b@x.com,smtp.example.com,465\n" +
+        "ValidRow,g@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /too few fields/i.test(e))).to.equal(
+        true
+      );
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("ValidRow");
     });
 
     it("ignores whitespace-only lines between rows", async () => {
