@@ -226,7 +226,7 @@ describe("OutboundEmailWorkerEventBridge", () => {
     expect(outcome?.errorCode).toBe("ECONNRESET");
   });
 
-  it("marks the attempt + batch terminal and recomputes batch status on worker-complete (all sent)", async () => {
+  it("marks the attempt + batch terminal and transitions submitted→sent on worker-complete (all sent)", async () => {
     const ctx = await seedAndClaim();
     const broadcasts: AuthorizedEmailWorkerEvent[] = [];
     const bridge = new OutboundEmailWorkerEventBridge(tmpDir, {
@@ -253,13 +253,61 @@ describe("OutboundEmailWorkerEventBridge", () => {
     // complete event is broadcast.
     expect(broadcasts).toContainEqual(complete);
 
-    // The single outcome is still "submitted" (no provider delivery callback in
-    // this flow), so recomputeBatchStatus leaves the batch non-terminal — but
-    // the attempt must be marked completed.
+    // The single submitted outcome is confirmed `sent` at worker completion
+    // (§8.3) — no provider delivery callback in this local-SMTP flow.
     const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
     const attempt = await deliveryModel.readAttempt(ctx.attemptId);
     expect(attempt?.status).toBe("completed");
     expect(attempt?.completedAt).toBeInstanceOf(Date);
+
+    const outcome = await deliveryModel.findOutcomeByAttemptAndDraft(
+      ctx.attemptId,
+      ctx.draftId
+    );
+    expect(outcome?.status).toBe("sent");
+    expect(outcome?.completedAt).toBeInstanceOf(Date);
+
+    // All outcomes sent ⇒ the batch becomes terminal `sent`.
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const batch = await draftModel.readBatch(ctx.batchId);
+    expect(batch?.status).toBe("sent");
+  });
+
+  it("does not revive an already-terminal outcome on worker-complete", async () => {
+    const ctx = await seedAndClaim();
+    const bridge = new OutboundEmailWorkerEventBridge(tmpDir, {
+      onBroadcast: () => undefined,
+    });
+
+    // Worker reports an ambiguous failure (terminal delivery_unknown), then
+    // completes. The submitted→sent transition must not touch it.
+    await bridge.handleEvent({
+      type: "authorized-email-failed",
+      batchId: ctx.batchId,
+      sendAttemptId: ctx.attemptId,
+      draftId: ctx.draftId,
+      revisionId: ctx.revisionId,
+      envelopeHash: ctx.envelopeHash,
+      errorCode: "ECONNRESET",
+      retrySafety: "unknown",
+    });
+    await bridge.handleEvent({
+      type: "authorized-email-worker-complete",
+      batchId: ctx.batchId,
+      sendAttemptId: ctx.attemptId,
+    });
+
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+    const outcome = await deliveryModel.findOutcomeByAttemptAndDraft(
+      ctx.attemptId,
+      ctx.draftId
+    );
+    expect(outcome?.status).toBe("delivery_unknown");
+
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const batch = await draftModel.readBatch(ctx.batchId);
+    // One delivery_unknown outcome (terminal) ⇒ the batch is delivery_unknown.
+    expect(batch?.status).toBe("delivery_unknown");
   });
 
   it("recomputes batch status to sent when all outcomes reach a terminal sent state", async () => {

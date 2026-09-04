@@ -142,4 +142,28 @@ export class OutboundEmailDeliveryModel extends BaseDb {
       this.outcomeRepo;
     await repo.update(id, { status, ...patch });
   }
+
+  /**
+   * Transition every still-`submitted` outcome of one attempt to `sent` —
+   * the recipient lifecycle §8.3 step `submitted -> sent`. Called only when the
+   * worker has reported `authorized-email-worker-complete` (a normal, clean
+   * finish): the envelope was accepted by SMTP and, in this local-delivery
+   * model with no provider DSNs, worker completion is the confirmation point.
+   * Conditional on `status = 'submitted'` so it is idempotent and never revives
+   * a `delivery_unknown`/`failed` outcome that recovery had already downgraded.
+   */
+  async markAttemptOutcomesSent(
+    sendAttemptId: number,
+    at: Date
+  ): Promise<void> {
+    await this.outcomeRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: "sent", completedAt: at })
+      .where("sendAttemptId = :sendAttemptId AND status = :status", {
+        sendAttemptId,
+        status: "submitted",
+      })
+      .execute();
+  }
 }

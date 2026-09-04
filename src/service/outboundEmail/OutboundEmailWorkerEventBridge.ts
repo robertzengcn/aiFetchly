@@ -190,6 +190,28 @@ export class OutboundEmailWorkerEventBridge extends BaseDb {
       "completed",
       { completedAt: new Date() }
     );
+    // §8.3 recipient lifecycle — `submitted -> sent`. A normal, clean worker
+    // completion means every envelope accepted so far was submitted to (and
+    // accepted by) SMTP; in this local-delivery model with no provider DSNs,
+    // that acceptance is the confirmation point. Flip still-`submitted`
+    // outcomes to `sent` (conditional on status, so it never revives an
+    // outcome recovery already downgraded to `delivery_unknown`/`failed`).
+    const completedAt = new Date();
+    await this.deliveryModel.markAttemptOutcomesSent(
+      event.sendAttemptId,
+      completedAt
+    );
+    await this.auditModel.create(
+      Object.assign(new OutboundEmailAuditLogEntity(), {
+        actorType: "system",
+        eventCode: "recipient_sent",
+        batchId: event.batchId,
+        sendAttemptId: event.sendAttemptId,
+        metadataJson: JSON.stringify({
+          completedAt: completedAt.toISOString(),
+        }),
+      })
+    );
     // Recompute the batch from its outcomes (§21 rule 4). If every outcome is
     // terminal, the batch moves to sent/failed/delivery_unknown/partially_sent;
     // if any are still in-flight, the batch stays non-terminal.
