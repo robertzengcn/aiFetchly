@@ -388,7 +388,7 @@ Behavior per §18. Editing creates a new revision and invalidates approval. Send
 
 - [x] Step 1: failing component tests (render list, edit→invalidate, send disabled on findings, progress display).
 - [x] Step 2: FAIL → Step 3: implement components + translations → Step 4: `yarn test:components` PASS.
-- [x] Step 5: E2E for the critical review→approve→send flow. — Deferred the full Playwright review→approve→**send** spec to Phase 5 (the production `workerStarter`/SMTP worker is not yet wired; BATCH_SEND returns `worker_start_failed`). Added `AiChatV2Message.outboundBatchCard.test.ts` covering the review-entry integration (card render → Review → dialog with Send disabled until approve) in the meantime.
+- [x] Step 5: E2E for the critical review→approve→send flow. — First added `AiChatV2Message.outboundBatchCard.test.ts` covering the review-entry integration (card render → Review → dialog with Send disabled until approve). The full Playwright review→approve→**send** spec (`test/e2e/specs/outbound-email-review.test.ts`, 2 tests: reviewable batch card with no send yet; approve → send ends in `delivery_unknown` on a closed SMTP port with no auto-retry, FR-019) landed after the production `workerStarter` was wired in Phase 4/5. Both tests pass; full E2E suite 16/16 green. Exposed and fixed two production bugs along the way: intent fields (`sourceUserMessageId`/`intentDecisionId`) dropped from every `executeTool` context (loop foreground, loop async, permission-resume), and the draft tool constructing `OutboundEmailDraftService` with no dbpath (SqliteDb singleton reset destroyed the live connection mid-turn).
 - [x] Step 6: Commit — `feat: add outbound email review UI with full localization` (18fccc88, 6c660df2, b4934515).
 
 ---
