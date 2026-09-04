@@ -61,12 +61,25 @@ export class OutboundEmailAuthorizationModel extends BaseDb {
     return authorization;
   }
 
-  /** Mark an authorization consumed (atomic claim). */
+  /**
+   * Mark an authorization consumed (atomic claim). The UPDATE is gated on the
+   * authorization still being `active` and unexpired so a concurrent edit
+   * invalidate or TTL sweep between the claim's pre-check and this write cannot
+   * be clobbered — a dead authorization is never resurrected to `consumed`.
+   */
   async consume(id: number, at: Date, manager?: EntityManager): Promise<void> {
     const repo =
       manager?.getRepository(OutboundEmailAuthorizationEntity) ??
       this.repository;
-    await repo.update(id, { status: "consumed", consumedAt: at });
+    await repo
+      .createQueryBuilder()
+      .update(OutboundEmailAuthorizationEntity)
+      .set({ status: "consumed", consumedAt: at })
+      .where(
+        "id = :id AND status = :status AND invalidatedAt IS NULL AND expiresAt > :now",
+        { id, status: "active", now: at }
+      )
+      .execute();
   }
 
   /** Mark an authorization invalidated (edit/policy change). */

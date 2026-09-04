@@ -65,7 +65,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
 });
 
@@ -98,6 +99,31 @@ describe("OutboundEmailAuthorizationModel", () => {
     expect(found?.status).toBe("consumed");
     expect(found?.consumedAt).not.toBeNull();
   });
+
+  it("does not consume an expired authorization (active-status guard)", async () => {
+    const model = new OutboundEmailAuthorizationModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const created = await model.create(
+      buildAuthorization({ expiresAt: new Date(Date.now() - 1000) })
+    );
+    await model.consume(created.id, new Date());
+    const found = await model.read(created.id);
+    // Consumed is gated on status='active' AND unexpired; the stale row must be
+    // left untouched rather than resurrected as consumed.
+    expect(found?.status).toBe("active");
+    expect(found?.consumedAt).toBeNull();
+  });
+
+  it("does not consume an invalidated authorization (active-status guard)", async () => {
+    const model = new OutboundEmailAuthorizationModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const created = await model.create(buildAuthorization());
+    await model.invalidate(created.id, "edit", new Date());
+    await model.consume(created.id, new Date());
+    const found = await model.read(created.id);
+    expect(found?.status).toBe("invalidated");
+    expect(found?.consumedAt).toBeNull();
+  });
 });
 
 describe("OutboundEmailDeliveryModel", () => {
@@ -106,9 +132,7 @@ describe("OutboundEmailDeliveryModel", () => {
     await SqliteDb.ensureInitialized();
     const created = await model.createAttempt(buildAttempt());
     expect(typeof created.id).toBe("number");
-    await expect(
-      model.createAttempt(buildAttempt())
-    ).rejects.toThrow();
+    await expect(model.createAttempt(buildAttempt())).rejects.toThrow();
   });
 
   it("creates a delivery outcome and enforces unique (sendAttemptId, draftId)", async () => {
@@ -116,9 +140,7 @@ describe("OutboundEmailDeliveryModel", () => {
     await SqliteDb.ensureInitialized();
     const created = await model.createOutcome(buildOutcome());
     expect(typeof created.id).toBe("number");
-    await expect(
-      model.createOutcome(buildOutcome())
-    ).rejects.toThrow();
+    await expect(model.createOutcome(buildOutcome())).rejects.toThrow();
   });
 
   it("lists outcomes for a send attempt", async () => {
