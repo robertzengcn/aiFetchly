@@ -408,6 +408,12 @@ export class EmailMarketingController {
         if (existing?.id && existing.id > 0) {
           // Password is always overwritten by the imported value (import is
           // an explicit act; the file carries the password).
+          // Import files never carry inbound-receive credentials — preserve
+          // the existing service's receivePassword so the update doesn't
+          // wipe it (encryptCredentialsForStorage nulls absent values).
+          if (!entity.receivePassword || entity.receivePassword.length === 0) {
+            entity.receivePassword = existing.receivePassword;
+          }
           await this.emailServiceModule.updateEmailService(existing.id, entity);
         } else {
           await this.emailServiceModule.createEmailService(entity);

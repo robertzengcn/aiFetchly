@@ -257,6 +257,38 @@ describe("EmailMarketingController", () => {
       expect(create.called).to.equal(false);
     });
 
+    it("preserves the existing receivePassword when updating by name match", async () => {
+      // Import files never carry receive credentials — the existing service's
+      // receive password must survive the update (encryptCredentialsForStorage
+      // nulls absent receivePassword values, which would wipe it).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Primary SMTP";
+      existing.receivePassword = "existing-receive-pass";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Primary SMTP,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receivePassword).to.equal(
+        "existing-receive-pass"
+      );
+      // The SMTP password is still overwritten by the imported value.
+      expect(update.firstCall.args[1].password).to.equal("newpass");
+    });
+
     it("skips rows with a missing password and reports the file row number", async () => {
       // validateEmailService returns errors for the passwordless row.
       const validate = sinon.stub();
