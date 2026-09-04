@@ -605,6 +605,30 @@ describe("EmailMarketingController", () => {
       expect(threw).to.equal(true);
     });
 
+    it("treats a 0-byte CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("treats a whitespace-only CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "   \n  \n",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
     it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {
       // A minimal CSV with only required columns — ssl/receiveProtocol columns omitted.
       const create = sinon.stub().resolves(1);

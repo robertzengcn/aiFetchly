@@ -494,6 +494,18 @@ export class EmailMarketingController {
       skipEmptyLines: "greedy",
       transformHeader: (header: string) => header.trim().toLowerCase(),
     });
+    // A file whose only Papa errors are an undetectable delimiter AND that
+    // has no data rows is an empty (0-byte / whitespace-only) file, not a
+    // malformed one: return zero rows so the caller reports "no valid rows"
+    // (import_no_valid_rows) instead of "invalid file".
+    if (
+      (result.data?.length ?? 0) === 0 &&
+      (result.errors ?? []).every(
+        (parseError) => parseError.code === "UndetectableDelimiter"
+      )
+    ) {
+      return { rows: [], rowErrors: new Map() };
+    }
     const rowErrors = new Map<number, string>();
     for (const parseError of result.errors ?? []) {
       // Field-count mismatches are row-level problems: collect them keyed by
