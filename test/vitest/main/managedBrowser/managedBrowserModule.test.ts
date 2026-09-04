@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ManagedBrowserModule } from "@/modules/ManagedBrowserModule";
+import {
+  ManagedBrowserModule,
+  type ManagedBrowserModuleDeps,
+} from "@/modules/ManagedBrowserModule";
+import type { ManagedBrowserCacheCoordinator } from "@/modules/ManagedBrowserCacheModule";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
@@ -9,6 +13,7 @@ import {
 import { ManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
 import {
   ManagedBrowserWorkerClient,
+  type OutboundEvent,
   type WorkerClientDeps,
   type WorkerRequestEnvelope,
 } from "@/service/ManagedBrowserWorkerClient";
@@ -19,6 +24,7 @@ import type {
   EffectiveManagedBrowserSettings,
   SafeBrowserChatNotice,
   SafeManagedBrowserStatus,
+  WorkerBrowserStoragePolicy,
 } from "@/entityTypes/managedBrowserTypes";
 import type { ExecutableResolutionResult } from "@/childprocess/managed-browser/BrowserExecutableResolver";
 
@@ -258,11 +264,59 @@ interface PersistCall {
   partitionPath: string;
 }
 
+/** Records every coordinator call; policy results are settable per test. */
+class FakeCacheCoordinator implements ManagedBrowserCacheCoordinator {
+  public readonly opened: Array<{
+    sessionId: string;
+    accountId: number;
+    scopeToken: string;
+    namespace: string;
+  }> = [];
+  public readonly released: string[] = [];
+  public readonly terminals: string[] = [];
+  public readonly policyCalls: Array<[number, number, boolean]> = [];
+  public nextPolicy: WorkerBrowserStoragePolicy["persistentCache"] = {
+    enabled: false,
+    reasonCode: "fake_disabled",
+  };
+  public failPolicy = false;
+
+  public async buildPersistentCachePolicy(
+    accountId: number,
+    chromeMajor: number,
+    cacheEnabled: boolean
+  ): Promise<WorkerBrowserStoragePolicy["persistentCache"]> {
+    this.policyCalls.push([accountId, chromeMajor, cacheEnabled]);
+    if (this.failPolicy) {
+      throw new Error("scope ladder exploded");
+    }
+    return this.nextPolicy;
+  }
+
+  public onCacheOpened(input: {
+    sessionId: string;
+    accountId: number;
+    scopeToken: string;
+    namespace: string;
+  }): void {
+    this.opened.push(input);
+  }
+
+  public onCacheReleased(sessionId: string): void {
+    this.released.push(sessionId);
+  }
+
+  public onSessionTerminal(sessionId: string): void {
+    this.terminals.push(sessionId);
+  }
+}
+
 interface Harness {
   module: ManagedBrowserModule;
   lease: FakeLease;
   supervisor: FakeSupervisor;
   clients: FakeWorkerClient[];
+  cache: FakeCacheCoordinator;
   notices: SafeBrowserChatNotice[];
   statuses: SafeManagedBrowserStatus[];
   persistCalls: PersistCall[];
@@ -284,6 +338,9 @@ function makeHarness(
       accountId: number
     ) => Promise<{ platformId: number; accountLabel: string } | null>;
     isAiEnabled?: () => boolean;
+    cache?: FakeCacheCoordinator;
+    resolveCachePolicy?: ManagedBrowserModuleDeps["resolveCachePolicy"];
+    useDefaultCachePolicy?: boolean;
   } = {}
 ): Harness {
   const lease = new FakeLease();
@@ -292,6 +349,7 @@ function makeHarness(
     leaseToken: "lease-1",
   };
   const supervisor = new FakeSupervisor();
+  const cache = overrides.cache ?? new FakeCacheCoordinator();
   const notices: SafeBrowserChatNotice[] = [];
   const statuses: SafeManagedBrowserStatus[] = [];
   const clients: FakeWorkerClient[] = [];
@@ -345,7 +403,11 @@ function makeHarness(
     },
     isAiEnabled: overrides.isAiEnabled ?? (() => true),
     mkdtemp: async () => "/tmp/mb-fake-root",
-    resolveCachePolicy: () => ({ enabled: false, reasonCode: "test_disabled" }),
+    cacheModule: cache,
+    resolveCachePolicy: overrides.useDefaultCachePolicy
+      ? undefined
+      : overrides.resolveCachePolicy ??
+        (() => ({ enabled: false, reasonCode: "test_disabled" })),
   });
   const harnessAccountLookup =
     overrides.accountLookup ?? defaultAccountLookup.bind(null);
@@ -354,6 +416,7 @@ function makeHarness(
     lease,
     supervisor,
     clients,
+    cache,
     notices,
     statuses,
     persistCalls,
@@ -804,5 +867,106 @@ describe("ManagedBrowserModule misc", () => {
     await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
     expect(h.module.getStatusByAccount(ACCOUNT_ID)?.accountId).toBe(ACCOUNT_ID);
     expect(h.module.getStatusByAccount(999)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cache coordinator wiring (§13.6)
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule cache coordinator wiring", () => {
+  it("forwards CACHE_OPENED to the cache module registry", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CACHE_OPENED",
+      scopeToken: "a".repeat(24),
+      namespace: "chrome-120-linux-x64-schema-1",
+    } as unknown as OutboundEvent);
+    expect(h.cache.opened).toEqual([
+      {
+        sessionId: status.sessionId,
+        accountId: ACCOUNT_ID,
+        scopeToken: "a".repeat(24),
+        namespace: "chrome-120-linux-x64-schema-1",
+      },
+    ]);
+  });
+
+  it("forwards CACHE_RELEASED to the cache module", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CACHE_RELEASED",
+    } as unknown as OutboundEvent);
+    expect(h.cache.released).toEqual([status.sessionId]);
+  });
+
+  it("releases the scope on session terminal (safety net)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onExited("exit:1");
+    expect(h.cache.terminals).toContain(status.sessionId);
+  });
+
+  it("awaits an async resolveCachePolicy and sends the policy to the worker", async () => {
+    const h = makeHarness({
+      resolveCachePolicy: async () => ({
+        enabled: false,
+        reasonCode: "async_disabled",
+      }),
+    });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "async_disabled",
+    });
+  });
+
+  it("falls back to the cache module policy when no resolver is injected", async () => {
+    const h = makeHarness({ useDefaultCachePolicy: true });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    expect(h.cache.policyCalls).toEqual([[ACCOUNT_ID, 120, true]]);
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "fake_disabled",
+    });
+  });
+
+  it("starts with the cache disabled when the coordinator throws", async () => {
+    const h = makeHarness({ useDefaultCachePolicy: true });
+    h.cache.failPolicy = true;
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "cache_unavailable",
+    });
   });
 });

@@ -46,6 +46,10 @@ import {
   assertCommandAllowed,
   type ManagedBrowserCommandType,
 } from "@/childprocess/managed-browser/ManagedBrowserRuntime";
+import {
+  getDefaultManagedBrowserCacheModule,
+  type ManagedBrowserCacheCoordinator,
+} from "@/modules/ManagedBrowserCacheModule";
 import { normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
 import type {
@@ -154,11 +158,15 @@ export interface ManagedBrowserModuleDeps {
   readonly executableResolver?: { resolve(): ExecutableResolutionResult };
   readonly isAiEnabled?: () => boolean;
   readonly mkdtemp?: (prefix: string) => Promise<string>;
+  /** Cache coordinator (registry + policy). Defaults to the process singleton. */
+  readonly cacheModule?: ManagedBrowserCacheCoordinator;
   readonly resolveCachePolicy?: (
     accountId: number,
     chromeMajor: number,
     cacheEnabled: boolean
-  ) => WorkerBrowserStoragePolicy["persistentCache"];
+  ) =>
+    | WorkerBrowserStoragePolicy["persistentCache"]
+    | Promise<WorkerBrowserStoragePolicy["persistentCache"]>;
 }
 
 const START_SESSION_TIMEOUT_MS =
@@ -184,12 +192,15 @@ export class ManagedBrowserModule {
   };
   private readonly isAiEnabled: () => boolean;
   private readonly mkdtemp: (prefix: string) => Promise<string>;
+  private readonly cacheModule: ManagedBrowserCacheCoordinator;
   private readonly resolveCachePolicy:
     | ((
         accountId: number,
         chromeMajor: number,
         cacheEnabled: boolean
-      ) => WorkerBrowserStoragePolicy["persistentCache"])
+      ) =>
+        | WorkerBrowserStoragePolicy["persistentCache"]
+        | Promise<WorkerBrowserStoragePolicy["persistentCache"]>)
     | undefined;
 
   private readonly sessions = new Map<string, ActiveSessionRecord>();
@@ -214,6 +225,8 @@ export class ManagedBrowserModule {
       deps.executableResolver ?? new BrowserExecutableResolver();
     this.isAiEnabled = deps.isAiEnabled ?? defaultIsAiEnabled;
     this.mkdtemp = deps.mkdtemp ?? ((prefix) => fs.promises.mkdtemp(prefix));
+    this.cacheModule =
+      deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
     this.resolveCachePolicy = deps.resolveCachePolicy;
   }
 
@@ -299,12 +312,16 @@ export class ManagedBrowserModule {
       const temporaryProfilePath = path.join(profileRoot, "profile");
       await fs.promises.mkdir(temporaryProfilePath, { recursive: true });
       const persistentCache = this.resolveCachePolicy
-        ? this.resolveCachePolicy(
+        ? await this.resolveCachePolicy(
             input.accountId,
             resolution.descriptor.majorVersion,
             effective.cacheEnabled
           )
-        : { enabled: false as const, reasonCode: "cache_settings_deferred" };
+        : await this.defaultCachePolicy(
+            input.accountId,
+            resolution.descriptor.majorVersion,
+            effective.cacheEnabled
+          );
 
       // 8-9. Worker client + supervisor registration.
       const record: ActiveSessionRecord = {
@@ -687,6 +704,18 @@ export class ManagedBrowserModule {
         });
         record.state = "challenge_detected";
         break;
+      case "CACHE_OPENED":
+        // Active-scope registry (§13.6): exactly one Chrome per cache scope.
+        this.cacheModule.onCacheOpened({
+          sessionId: record.sessionId,
+          accountId: record.accountId,
+          scopeToken: event.scopeToken,
+          namespace: event.namespace,
+        });
+        break;
+      case "CACHE_RELEASED":
+        this.cacheModule.onCacheReleased(record.sessionId);
+        break;
       default:
         break;
     }
@@ -712,6 +741,9 @@ export class ManagedBrowserModule {
       });
     }
     this.pushStatus(record);
+    // Safety net: release any cache-scope claim even if CACHE_RELEASED was
+    // never delivered (worker crash mid-session, §13.6).
+    this.cacheModule.onSessionTerminal(sessionId);
     this.sessions.delete(sessionId);
   }
 
@@ -790,6 +822,32 @@ export class ManagedBrowserModule {
     };
   }
 
+  /**
+   * Default persistent-cache policy resolution: delegate to the cache module
+   * (scope ladder + opaque tokens, §13.5). Any failure disables the cache for
+   * this session — a session never fails to start because the cache is broken.
+   */
+  private async defaultCachePolicy(
+    accountId: number,
+    chromeMajor: number,
+    cacheEnabled: boolean
+  ): Promise<WorkerBrowserStoragePolicy["persistentCache"]> {
+    try {
+      return await this.cacheModule.buildPersistentCachePolicy(
+        accountId,
+        chromeMajor,
+        cacheEnabled
+      );
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] cache policy unavailable: ${
+          error instanceof Error ? error.name : "unknown"
+        }`
+      );
+      return { enabled: false as const, reasonCode: "cache_unavailable" };
+    }
+  }
+
   private async defaultAccountLookup(
     accountId: number
   ): Promise<AccountLookupResult | null> {
@@ -827,6 +885,35 @@ export class ManagedBrowserModule {
       return null;
     }
   }
+}
+
+let defaultManagedBrowserModule: ManagedBrowserModule | null = null;
+
+/**
+ * Process singleton (design §7.1). Wiring the session stopper here means both
+ * singletons share ONE cache module instance, so the `stop_and_clear` cache
+ * decision can stop the live session for an account.
+ */
+export function getDefaultManagedBrowserModule(): ManagedBrowserModule {
+  if (!defaultManagedBrowserModule) {
+    const managedModule = new ManagedBrowserModule();
+    getDefaultManagedBrowserCacheModule().setSessionStopper(
+      async (accountId: number): Promise<boolean> => {
+        const status = managedModule.getStatusByAccount(accountId);
+        if (!status) {
+          return true; // no live session — nothing to stop
+        }
+        try {
+          await managedModule.stop(status.sessionId, "user_stop");
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    );
+    defaultManagedBrowserModule = managedModule;
+  }
+  return defaultManagedBrowserModule;
 }
 
 const ERROR_CODES: ReadonlySet<string> = new Set<string>([
