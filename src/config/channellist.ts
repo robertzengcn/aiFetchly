@@ -682,3 +682,26 @@ export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";
 
 /** Capability discovery for content reporting (design §13). NOT AI-gated. */
 export const AI_CONTENT_REPORT_CAPABILITIES = "ai:content:report:capabilities";
+
+// ======== Intent-Aware Outbound Email Delivery (§17) ========
+// Request/response (invoke) channels drive the review/approve/send lifecycle.
+// BATCH_PROGRESS is a main→renderer event channel for live status updates.
+// Draft generation is AI-gated; the review/approve/send/discard/status
+// channels are plain (they operate on already-authorized state and must stay
+// usable for inspection even when AI is disabled).
+export const OUTBOUND_EMAIL_BATCH_GET = "outbound:email:batch:get";
+export const OUTBOUND_EMAIL_DRAFT_UPDATE = "outbound:email:draft:update";
+export const OUTBOUND_EMAIL_BATCH_APPROVE = "outbound:email:batch:approve";
+export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
+export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
+export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
+export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== E2E test-support channels ========
+// Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).
+// They exist because the sanitized E2E environment cannot run the production
+// create path for these rows (e.g. email-service credential encryption requires
+// the remote /api/user/secret-key backend, which does not exist in E2E), so the
+// test harness needs a direct, gated seeding path. They never exist in a
+// production or development run.
+export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";

@@ -11,17 +11,13 @@ import {
   Buckemailremotedata,
 } from "@/entityTypes/emailmarketingType";
 import { EmailSend } from "@/childprocess/emailSend";
-import { Proxy } from "@/entityTypes/proxyType";
 // import { VideoDownloadFactory } from "@/modules/videodownload/VideoDownloadFactory"
 // import { VideodoanloadSuccessCall, VideoCaptionGenerateParam, CookiesProxy, processVideoDownloadParam, VideodownloadMsg, VideodownloadTaskMsg } from "@/entityTypes/videoType"
 // import { VideoCaptionFactory } from "@/modules/videoCaption/VideoCaptionFactory"
 // import { VideoCaptionImpl } from '@/modules/interface/VideoCaptionImpl';
 // import { extraFileEntity, VideoCaptionMsg,VideoPublishMsg } from "@/entityTypes/videoType";
-import { TransItemsParam } from "@/entityTypes/translateType";
 // import { VideoTranslateItem } from "@/entityTypes/videoType";
-import { TranslateProducer } from "@/modules/TranslateProducer";
 // import { VideoDownloadTagEntity } from "@/entity/VideoDownloadTag.entity"
-import { CommonMessage } from "@/entityTypes/commonType";
 import { Usersearchdata } from "@/entityTypes/searchControlType";
 import { UserSearch } from "@/childprocess/userSearch";
 import { ResultParseItemType } from "@/entityTypes/scrapeType";
@@ -30,6 +26,11 @@ import { AIRecoveryResponse } from "@/entityTypes/processMessage-type";
 import { handleAIRecoveryResponse } from "@/childprocess/utils/AIRecoveryBridge";
 import { handleAiSupportResponse } from "@/childprocess/utils/AiSupportBridge";
 import type { AiSupportResponseMessage } from "@/modules/interface/BackgroundProcessMessages";
+import { authorizedEmailWorkerPayloadV2Schema } from "@/entityTypes/outboundEmailDeliveryTypes";
+import type {
+  AuthorizedEmailWorkerEvent,
+  AuthorizedEmailWorkerPayloadV2,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 // import { VideoPublishParam } from "./entityTypes/videoPublishType";
@@ -147,6 +148,51 @@ if (parentPort) {
           //});
           break;
         }
+        case "sendAuthorizedEmails":
+          {
+            // §16.1 — validate the versioned payload with the shared schema
+            // before any send. An invalid payload never reaches EmailSend.
+            if (!pme.data) {
+              console.error("[taskCode] sendAuthorizedEmails: data is null");
+              return;
+            }
+            const parsed = authorizedEmailWorkerPayloadV2Schema.safeParse({
+              ...(pme.data as object),
+              emailServices: (pme.data as { emailServices?: unknown[] })
+                .emailServices,
+            });
+            if (!parsed.success) {
+              console.error(
+                "[taskCode] sendAuthorizedEmails: payload failed schema validation:",
+                parsed.error.message
+              );
+              return;
+            }
+            const workerPayload = {
+              ...parsed.data,
+              emailServices: (pme.data as AuthorizedEmailWorkerPayloadV2)
+                .emailServices,
+            } as AuthorizedEmailWorkerPayloadV2;
+            const emailsendModel = new EmailSend();
+            await emailsendModel
+              .sendAuthorizedEnvelopes(workerPayload, (event) => {
+                // §6.4 — forward each typed event to the main process. Events
+                // carry only sanitized codes, never SMTP credentials.
+                const message: ProcessMessage<AuthorizedEmailWorkerEvent> = {
+                  action: "OutboundEmailDeliveryEvent",
+                  data: event,
+                };
+                parentPort.postMessage(JSON.stringify(message));
+              })
+              .catch((error: unknown) => {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                console.error(
+                  `[taskCode] sendAuthorizedEmails failed: ${message}`
+                );
+              });
+          }
+          break;
         case "sendEmail":
           {
             const emailsendModel = new EmailSend();

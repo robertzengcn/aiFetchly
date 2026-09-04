@@ -32,6 +32,9 @@ import {
   listEmailTemplates,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
+import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 import {
   listEmailInboxes,
   fetchUnreadEmails,
@@ -40,6 +43,7 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
+import { htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
 import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
@@ -1578,6 +1582,138 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "draft_outbound_email_batch",
+    description:
+      "Draft a NEW batch of outbound marketing emails as durable, reviewable " +
+      "drafts — does NOT send. Resolves the selected recipient source into " +
+      "canonicalized, deduplicated recipients and creates one immutable draft " +
+      "revision per recipient. Use this BEFORE start_email_send_task so the user " +
+      "can review/approve content. The model supplies campaign inputs (recipient " +
+      "source, service candidates, subject/body or template_ids); it does NOT " +
+      "supply delivery mode or authorization. Returns batch_id, draft_count, and " +
+      "batch_hash. Conversation and authorization context come from trusted app " +
+      "state, not arguments.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_search_task_id: {
+          type: "number",
+          description:
+            "Existing email search task ID. Provide exactly one of this or emails.",
+        },
+        emails: {
+          type: "array",
+          description:
+            "Direct recipient emails. Provide exactly one of this or email_search_task_id.",
+          items: {
+            oneOf: [
+              { type: "string", format: "email" },
+              {
+                type: "object",
+                properties: {
+                  address: { type: "string", format: "email" },
+                  title: { type: "string" },
+                  source: { type: "string" },
+                },
+                required: ["address"],
+              },
+            ],
+          },
+        },
+        email_subject: {
+          type: "string",
+          description:
+            "Email subject line (required when not using templates).",
+        },
+        email_html_content: {
+          type: "string",
+          description: "Email HTML body (required when not using templates).",
+        },
+        template_ids: {
+          type: "array",
+          description:
+            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+          items: { type: "number" },
+        },
+        service_ids: {
+          type: "array",
+          description: "Email service IDs to send with.",
+          items: { type: "number" },
+        },
+        not_duplicate: {
+          type: "boolean",
+          description:
+            "Whether to remove duplicate recipients before drafting.",
+          default: true,
+        },
+      },
+      required: ["service_ids"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      // Resolve the DB path from the Token service, matching the outbound
+      // IPC layer (outboundEmailDelivery-ipc.ts). Passing no dbpath would
+      // make OutboundEmailDraftModel fall back to the os.tmpdir() test
+      // database, which flips SqliteDb.getInstance to a different path and
+      // destroys the process-wide live connection mid-conversation.
+      const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const service = new OutboundEmailDraftService(dbpath);
+      // Resolve recipients from the same sources the send tool accepts, reusing
+      // the existing compatibility helpers so draft/send share materialization.
+      const { resolveBulkRecipients } = await import(
+        "@/service/EmailMarketingAiTools"
+      );
+      const resolved = await resolveBulkRecipients({
+        email_search_task_id: (args as { email_search_task_id?: number })
+          .email_search_task_id,
+        emails: (args as { emails?: unknown[] }).emails as never[] | undefined,
+        not_duplicate:
+          (args as { not_duplicate?: boolean }).not_duplicate ?? true,
+      });
+      // Resolve the frozen envelope sender from the first selected service
+      // (AD-005/AD-006: sender selection completes BEFORE hashing — the worker
+      // sends with exactly this address, never the credential row's login).
+      // Model args never supply it directly (AD-003).
+      const serviceIds = (args as { service_ids?: number[] }).service_ids ?? [];
+      let senderAddress = "";
+      if (serviceIds.length > 0) {
+        const { EmailServiceModel } = await import(
+          "@/model/EmailService.model"
+        );
+        const emailService = await new EmailServiceModel(dbpath).read(
+          serviceIds[0]
+        );
+        senderAddress = (emailService?.from ?? "").trim();
+      }
+      const result = await service.generateBatch({
+        conversationId: context.conversationId,
+        sourceUserMessageId: context.sourceUserMessageId ?? "",
+        intentDecisionId: context.intentDecisionId ?? 0,
+        recipientSourceType: resolved.recipientSource,
+        recipients: resolved.recipients,
+        serviceIds,
+        senderAddress,
+        subject: (args as { email_subject?: string }).email_subject ?? "",
+        // The model supplies an HTML body; store it as `bodyHtml` and derive a
+        // plain-text fallback so markup never leaks into the text body at send
+        // time (and multipart mail carries both parts, not escaped tags).
+        bodyHtml:
+          (args as { email_html_content?: string }).email_html_content ?? null,
+        bodyText: htmlToPlainText(
+          (args as { email_html_content?: string }).email_html_content ?? ""
+        ),
+      });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "start_email_send_task",
     description:
       "Send NEW outbound marketing emails to external contacts/customers. " +
@@ -1657,6 +1793,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "automation",
     source: "built-in",
     timeoutClass: "fast",
+    confirmationPolicy: "request_scoped_action",
     execute: async (args) => {
       const result = await startBulkEmailSendTask(args);
       return {

@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { incrementOutboundMetric } from "@/service/outboundEmail/OutboundEmailMetrics";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import {
@@ -115,6 +116,55 @@ async function getSearchTaskRecipients(
   }
 
   return { emails, module };
+}
+
+interface ParsedBulkEmailTaskInput {
+  email_search_task_id?: number;
+  emails?: EmailMarketingDirectEmailInput[];
+  template_ids: number[];
+  filter_ids: number[];
+  service_ids: number[];
+  not_duplicate: boolean;
+  email_subject?: string;
+  email_html_content?: string;
+  uses_templates: boolean;
+  uses_inline_content: boolean;
+}
+
+function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
+  const parsed = bulkEmailTaskInputSchema.parse(args);
+  const hasSearchTask = parsed.email_search_task_id !== undefined;
+  const hasDirectEmails =
+    parsed.emails !== undefined && parsed.emails.length > 0;
+
+  if (hasSearchTask === hasDirectEmails) {
+    throw new Error("Provide exactly one of email_search_task_id or emails");
+  }
+
+  const templateIds = parsed.template_ids ?? [];
+  const subject = parsed.email_subject?.trim();
+  const html = parsed.email_html_content?.trim();
+  const usesTemplates = templateIds.length > 0;
+  const usesInlineContent = Boolean(subject && html);
+
+  if (!usesTemplates && !usesInlineContent) {
+    throw new Error(
+      "Provide either template_ids or email_subject and email_html_content"
+    );
+  }
+
+  return {
+    email_search_task_id: parsed.email_search_task_id,
+    emails: parsed.emails,
+    template_ids: templateIds,
+    filter_ids: parsed.filter_ids ?? [],
+    service_ids: parsed.service_ids,
+    not_duplicate: parsed.not_duplicate,
+    email_subject: usesInlineContent ? subject : undefined,
+    email_html_content: usesInlineContent ? html : undefined,
+    uses_templates: usesTemplates,
+    uses_inline_content: usesInlineContent,
+  };
 }
 
 export async function resolveBulkRecipients(input: {
@@ -453,13 +503,21 @@ export async function startBulkEmailSendTask(
   args: unknown
 ): Promise<EmailMarketingAiToolResult<BulkEmailStartResult>> {
   try {
-    const input = bulkEmailTaskInputSchema.parse(args);
-    const recipients = await resolveBulkRecipients(input);
+    const parsed = parseBulkEmailTaskInput(args);
+    const recipients = await resolveBulkRecipients(parsed);
+
+    // §27.2 rule 4 — deprecation telemetry for AI calls using legacy inline
+    // content arguments. New sends should go through the domain gate and the
+    // authorized draft pipeline; inline subject/HTML is the pre-gate shape.
+    incrementOutboundMetric("legacy_inline_content_send", {
+      uses_inline_content: parsed.uses_inline_content,
+    });
+
     const module = new BuckEmailTaskModule();
     await module.ensureConnection();
 
     const taskInput = makeBuckEmailTaskInput({
-      ...input,
+      ...parsed,
       // emailtaskentityId, so we pass undefined here to avoid storing a
       // redundant copy in email_list_json. For direct sends, the EmailList is
       // serialized to email_list_json so prepareData() can load it without a
@@ -482,15 +540,15 @@ export async function startBulkEmailSendTask(
       status: "completed",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
-      template_ids: input.template_ids,
-      filter_ids: input.filter_ids,
-      service_ids: input.service_ids,
-      not_duplicate: input.not_duplicate,
-      ...(input.email_subject !== undefined &&
-      input.email_html_content !== undefined
+      template_ids: parsed.template_ids,
+      filter_ids: parsed.filter_ids,
+      service_ids: parsed.service_ids,
+      not_duplicate: parsed.not_duplicate,
+      ...(parsed.email_subject !== undefined &&
+      parsed.email_html_content !== undefined
         ? {
-            email_subject: input.email_subject,
-            email_html_content: input.email_html_content,
+            email_subject: parsed.email_subject,
+            email_html_content: parsed.email_html_content,
           }
         : {}),
     };
