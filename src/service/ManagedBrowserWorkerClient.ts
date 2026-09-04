@@ -42,7 +42,7 @@ export interface UtilityProcessLike {
   removeListener(event: string, listener: (...args: unknown[]) => void): void;
 }
 
-type OutboundEvent = Exclude<
+export type OutboundEvent = Exclude<
   ManagedBrowserOutboundMessage,
   { type: "WORKER_HEARTBEAT" }
 >;
