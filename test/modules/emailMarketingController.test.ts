@@ -289,6 +289,176 @@ describe("EmailMarketingController", () => {
       expect(update.firstCall.args[1].password).to.equal("newpass");
     });
 
+    it("skips a row with a field-count mismatch and imports the valid rows (partial import)", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // Second data row has 7 fields vs 6 headers → TooManyFields.
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Good,g@x.com,smtp.example.com,465,1,pw\n" +
+        "Bad,b@x.com,smtp.example.com,465,1,pw,extra\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 3/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /too many fields/i.test(e))).to.equal(
+        true
+      );
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("Good");
+    });
+
+    it("ignores whitespace-only lines between rows", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "   \n" +
+        "Good,g@x.com,smtp.example.com,465,1,pw\n" +
+        "   \n" +
+        "Good2,g2@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("reports a row error for an unparseable ssl value instead of storing it", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Badssl,b@x.com,smtp.example.com,465,banana,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /ssl/i.test(e))).to.equal(true);
+      expect(create.called).to.equal(false);
+    });
+
+    it("coerces friendly ssl values: true/false/yes/no", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "A,a@x.com,smtp.example.com,465,true,pw\n" +
+        "B,b@x.com,smtp.example.com,465,false,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(create.firstCall.args[0].ssl).to.equal(1);
+      expect(create.secondCall.args[0].ssl).to.equal(0);
+    });
+
+    it("caps reported errors at 10 while counting all skipped rows", async () => {
+      // All 12 rows fail validation → skipped 12, but errors capped at 10.
+      const validate = sinon
+        .stub()
+        .resolves({ valid: false, errors: ["Password is required"] });
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+      });
+
+      const rows = Array.from(
+        { length: 12 },
+        (_, i) => `S${i},u${i}@x.com,smtp.example.com,465,1,\n`
+      ).join("");
+      const csv = "name,from,host,port,ssl,password\n" + rows;
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.skipped).to.equal(12);
+      expect(result.imported).to.equal(0);
+      expect(result.errors.length).to.equal(10);
+    });
+
+    it("throws on a structurally malformed CSV (unterminated quote)", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices(
+          'name,from,host,port,ssl,password\n"Unclosed,x.com,465,1,pw\n',
+          "csv"
+        );
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("throws on a JSON object without a services array", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices('{"foo":1}', "json");
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("skips non-object elements in a JSON array with a row error", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify([
+        {
+          name: "A",
+          from: "a@example.com",
+          host: "h",
+          port: "25",
+          ssl: 1,
+          password: "p",
+        },
+        null,
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+    });
+
     it("skips rows with a missing password and reports the file row number", async () => {
       // validateEmailService returns errors for the passwordless row.
       const validate = sinon.stub();
