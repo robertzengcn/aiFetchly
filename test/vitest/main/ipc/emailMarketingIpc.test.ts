@@ -331,5 +331,45 @@ describe("Email Marketing IPC Handlers", () => {
       expect(result.status).toBe(false);
       expect(result.msg).toBe("import_invalid_file");
     });
+
+    test("rejects a non-empty payload without opening the dialog (strict schema)", async () => {
+      // Pin: the import schema is z.strictObject({}) — any extra field must
+      // be rejected at the boundary before the dialog opens. Locks the
+      // boundary against future schema relaxation.
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEIMPORT,
+        {},
+        JSON.stringify({ foo: 1 })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockShowOpenDialog).not.toHaveBeenCalled();
+      expect(mockImportEmailServices).not.toHaveBeenCalled();
+    });
+
+    test("returns status:false with import_failed when the file cannot be read", async () => {
+      // Delete/permission race between the dialog and the read: the raw
+      // ENOENT/EACCES message (with the full path) must not leak — surface
+      // the stable import_failed key instead.
+      const missingPath = path.join(
+        os.tmpdir(),
+        "email_services_import_missing_test.csv"
+      );
+      if (fs.existsSync(missingPath)) fs.unlinkSync(missingPath);
+      mockShowOpenDialog.mockResolvedValue({
+        canceled: false,
+        filePaths: [missingPath],
+      });
+
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEIMPORT,
+        {},
+        JSON.stringify({})
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(result.msg).toBe("import_failed");
+      expect(mockImportEmailServices).not.toHaveBeenCalled();
+    });
   });
 });

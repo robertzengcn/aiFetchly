@@ -410,7 +410,15 @@ export function registerEmailMarketingIpcHandlers() {
       const filePath = dialogResult.filePaths[0];
       const ext = path.extname(filePath).toLowerCase().replace(".", "");
       const format: "csv" | "json" = ext === "json" ? "json" : "csv";
-      const content = fs.readFileSync(filePath, "utf-8");
+      let content: string;
+      try {
+        content = fs.readFileSync(filePath, "utf-8");
+      } catch {
+        // Read failure (file deleted/moved or unreadable between the dialog
+        // and the read): surface a stable key instead of a raw ENOENT/EACCES
+        // message with the full path.
+        throw new Error("import_failed");
+      }
 
       const controller = new EmailMarketingController();
       let result: EmailServiceImportResult;
