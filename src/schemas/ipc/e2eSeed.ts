@@ -11,9 +11,10 @@ import { lazySchema } from "@/utils/lazySchema";
 
 // E2E_SEED_EMAIL_SERVICE — insert one email_service row with a plaintext
 // password. Host/port shape mirrors EmailServiceEntity (varchar columns).
-// The E2E spec points host at 127.0.0.1 with a closed SMTP port so delivery
-// deterministically ends in delivery_unknown (ECONNREFUSED is an ambiguous
-// SMTP error), exercising the real worker path without any external network.
+// The E2E spec points host at a loopback server that drops the connection
+// mid-greeting, so the worker fails with an ambiguous SMTP error and the
+// delivery deterministically ends in delivery_unknown (FR-019), exercising
+// the real worker path without any external network.
 export const e2eSeedEmailServiceInputSchema = lazySchema(() =>
   z.strictObject({
     name: z.string().min(1, "Service name is required").max(255),
