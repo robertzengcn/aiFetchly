@@ -515,9 +515,24 @@ export class EmailSend {
       };
     }
     // §16.2 items 5,6 — exact subject/body, exact sender address, no template
-    // conversion. html omitted when null.
+    // conversion. html omitted when null. The From header is the frozen
+    // authorized `senderAddress` bound into the envelope hash (AD-005), NOT the
+    // credential row's login `service.from` — the two may differ (a login alias
+    // vs the user-approved display sender) and only the envelope value is what
+    // the user authorized. An empty address (never resolved at draft time) is a
+    // fail-safe: refuse to send rather than invent a From.
+    if (!env.senderAddress || env.senderAddress.trim().length === 0) {
+      return {
+        kind: "failed",
+        draftId: env.draftId,
+        revisionId: env.revisionId,
+        envelopeHash: env.envelopeHash,
+        errorCode: "worker_sender_missing",
+        retrySafety: "safe",
+      };
+    }
     const mail: AuthorizedSmtpMail = {
-      from: service.from,
+      from: env.senderAddress,
       to: env.recipientAddress,
       subject: env.subject,
       text: env.bodyText,

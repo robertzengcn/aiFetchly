@@ -254,13 +254,14 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
     expect(sender1.calls[0]?.mail.text).toBe("Body A");
     expect(sender1.calls[0]?.mail.html).toBe("<p>A</p>");
     expect(sender1.calls[0]?.mail.to).toBe(e1.recipientAddress);
-    expect(sender1.calls[0]?.mail.from).toBe("one@example.com");
+    // From is the frozen authorized sender, not the credential login.
+    expect(sender1.calls[0]?.mail.from).toBe(e1.senderAddress);
 
     expect(sender2.calls[0]?.mail.subject).toBe("Exact Subject B");
     expect(sender2.calls[0]?.mail.text).toBe("Body B");
     expect(sender2.calls[0]?.mail.html).toBe(null);
     expect(sender2.calls[0]?.mail.to).toBe(e2.recipientAddress);
-    expect(sender2.calls[0]?.mail.from).toBe("two@example.com");
+    expect(sender2.calls[0]?.mail.from).toBe(e2.senderAddress);
 
     // Typed submitted events correlate the exact revision + hash.
     const submitted = events.filter(
@@ -285,6 +286,28 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
       revisionId: e2.revisionId,
       envelopeHash: e2.envelopeHash,
     });
+  });
+
+  it("refuses to send when the envelope has no authorized sender address", async () => {
+    const envelope = makeEnvelope({ draftId: 1, senderAddress: "" });
+    const payload = makePayload([envelope], [makeService(1, "s@x.com")]);
+    const sender = new FakeSender(makeService(1, "s@x.com"));
+
+    const events = await runWorker(payload, [sender]);
+
+    // No SMTP submission happened; the envelope failed safe.
+    expect(sender.calls).toHaveLength(0);
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorCode).toBe("worker_sender_missing");
+    expect(failures[0]?.retrySafety).toBe("safe");
   });
 
   it("emits typed failure events with retry safety when SMTP rejects", async () => {
