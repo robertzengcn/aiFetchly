@@ -6,7 +6,6 @@ export type AIChatPlanStatus =
   | "awaiting_approval"
   | "approved"
   | "rejected"
-  | "executing"
   | "completed"
   | "cancelled";
 
@@ -25,10 +24,10 @@ export const PLAN_LIFECYCLE_ENDED_STATUSES: ReadonlySet<AIChatPlanStatus> =
 
 /**
  * True when the given status represents an active, in-progress plan
- * (draft / awaiting_question / awaiting_approval / executing) — i.e. the
- * planning conversation is still open and the chat should stay in plan
- * mode. False for a plan that ended or was approved (approval hands
- * control back to execution in chat mode) and for null (no plan).
+ * (draft / awaiting_question / awaiting_approval) — i.e. the planning
+ * conversation is still open and the chat should stay in plan mode.
+ * False for a plan that ended or was approved (approval hands control
+ * back to execution in chat mode) and for null (no plan).
  */
 export function isPlanStatusPlanningActive(
   status: AIChatPlanStatus | null | undefined

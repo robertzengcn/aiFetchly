@@ -5,7 +5,7 @@ import {
 
 /**
  * Returns true when the given plan state represents an active, in-progress
- * plan (draft / awaiting_question / awaiting_approval / executing).
+ * plan (draft / awaiting_question / awaiting_approval).
  * Returns false when there is no plan, the plan reached a terminal status
  * (completed / cancelled / rejected), or the plan was approved — approval
  * hands control back to the user, so execution rounds run in chat mode.

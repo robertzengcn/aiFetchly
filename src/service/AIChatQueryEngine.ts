@@ -84,13 +84,13 @@ import type {
 
 /**
  * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
- * plan-mode active while it is being drafted, clarified, awaiting approval,
- * or (future) executing. Once the user approves the plan, execution runs in
- * chat mode with the normal system prompt and full tool access — so
- * "approved" is NOT plan-mode active here either. Both predicates delegate
- * to the shared isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the
- * renderer and main process can never disagree about which prompt/toolset
- * a round uses after approval.
+ * plan-mode active while it is being drafted, clarified, or awaiting
+ * approval. Once the user approves the plan, execution runs in chat mode
+ * with the normal system prompt and full tool access — so "approved" is
+ * NOT plan-mode active here either. Both predicates delegate to the shared
+ * isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the renderer and main
+ * process can never disagree about which prompt/toolset a round uses after
+ * approval.
  */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
