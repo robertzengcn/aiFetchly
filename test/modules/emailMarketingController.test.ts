@@ -104,4 +104,75 @@ describe("EmailMarketingController", () => {
       );
     });
   });
+
+  describe("exportEmailServices", () => {
+    const makeService = (id: number, name: string): EmailServiceEntity => {
+      const entity = new EmailServiceEntity();
+      entity.id = id;
+      entity.name = name;
+      entity.from = `user${id}@example.com`;
+      entity.password = "SECRET-smtp-password";
+      entity.host = "smtp.example.com";
+      entity.port = "465";
+      entity.ssl = 1;
+      entity.status = 1;
+      entity.receiveProtocol = "imap";
+      entity.createdAt = new Date("2026-01-15T10:30:00.000Z");
+      return entity;
+    };
+
+    it("exports CSV with header and safe fields only (no password)", async () => {
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon
+          .stub()
+          .resolves([
+            makeService(1, "Primary SMTP"),
+            makeService(2, 'Secondary, SMTP "quoted"'),
+          ]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      expect(csv).to.contain(
+        "id,name,from,host,port,ssl,receiveProtocol,create_time"
+      );
+      expect(csv).to.contain("Primary SMTP");
+      expect(csv).to.contain("user1@example.com");
+      expect(csv).to.contain('"Secondary, SMTP ""quoted"""');
+      expect(csv).to.not.contain("SECRET-smtp-password");
+    });
+
+    it("exports JSON with safe fields only (no password)", async () => {
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon
+          .stub()
+          .resolves([makeService(1, "Primary SMTP")]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const payload = (await emailMarketingController.exportEmailServices(
+        "json"
+      )) as { total: number; services: unknown[]; exportDate: string };
+
+      expect(payload.total).to.equal(1);
+      expect(JSON.stringify(payload)).to.not.contain("SECRET-smtp-password");
+      // Safe fields present: the sender email is a visible list column.
+      expect(JSON.stringify(payload)).to.contain("user1@example.com");
+    });
+
+    it("returns a header-only CSV when there are no services", async () => {
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      expect(csv).to.equal(
+        "id,name,from,host,port,ssl,receiveProtocol,create_time\n"
+      );
+    });
+  });
 });

@@ -161,6 +161,23 @@ export class EmailServiceModule
     }
   }
 
+  /**
+   * List ALL email services for export (no pagination, no search filter).
+   * The controller projects the result down to non-secret fields; passwords
+   * never leave the main process as part of an export.
+   */
+  async exportEmailServicesList(): Promise<EmailServiceEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.decryptServiceCredentialsList(
+        await this.emailServiceModel.listEmailServices(0, 100000)
+      );
+    } catch (error) {
+      console.error("Error listing all email services for export:", error);
+      throw error;
+    }
+  }
+
   /** Services with inbound receive enabled. */
   async listReceiveEnabledServices(): Promise<EmailServiceEntity[]> {
     try {
