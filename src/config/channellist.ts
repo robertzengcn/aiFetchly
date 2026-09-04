@@ -692,3 +692,12 @@ export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
 export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
 export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
 export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== E2E test-support channels ========
+// Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).
+// They exist because the sanitized E2E environment cannot run the production
+// create path for these rows (e.g. email-service credential encryption requires
+// the remote /api/user/secret-key backend, which does not exist in E2E), so the
+// test harness needs a direct, gated seeding path. They never exist in a
+// production or development run.
+export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
