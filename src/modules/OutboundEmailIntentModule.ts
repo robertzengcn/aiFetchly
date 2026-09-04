@@ -1,5 +1,8 @@
 import { BaseModule } from "@/modules/baseModule";
-import { OutboundEmailIntentModel } from "@/model/OutboundEmailIntent.model";
+import {
+  OutboundEmailIntentModel,
+  type OutboundEmailIntentDecisionPatch,
+} from "@/model/OutboundEmailIntent.model";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
 /** Business-logic facade over {@link OutboundEmailIntentModel}. */
@@ -46,6 +49,23 @@ export class OutboundEmailIntentModule extends BaseModule {
       );
     } catch (error) {
       console.error("Error finding outbound email intent by source:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Overwrite the decision fields of an existing intent row when its cached
+   * sourceTextHash / resolverVersion no longer matches the current turn.
+   */
+  async updateDecision(
+    id: number,
+    patch: OutboundEmailIntentDecisionPatch
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.intentModel.updateDecision(id, patch);
+    } catch (error) {
+      console.error("Error updating outbound email intent decision:", error);
       throw error;
     }
   }

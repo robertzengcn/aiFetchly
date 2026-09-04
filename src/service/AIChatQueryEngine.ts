@@ -81,6 +81,8 @@ import type {
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
 import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
@@ -738,14 +740,26 @@ export class AIChatQueryEngine {
       // unique index. Failures resolve to draft_only and never break chat.
       sourceUserMessageId = savedUser.messageId;
       try {
-        const existing = await new OutboundEmailIntentModule().findBySource(
+        const intentModule = new OutboundEmailIntentModule();
+        const existing = await intentModule.findBySource(
           conversationId,
           savedUser.messageId
         );
-        if (existing) {
+        // Re-verify the cached decision against the CURRENT user-authored
+        // text before reusing it (technical design §9): the (conversationId,
+        // sourceUserMessageId) row is only a valid cache hit when its stored
+        // sourceTextHash still matches this turn's text and it was produced
+        // by the current resolver version. A mismatch (text changed or the
+        // resolver was upgraded) re-resolves and overwrites the stale row.
+        const userAuthoredText = request.message || "";
+        const currentHash = hashUserAuthoredText(userAuthoredText);
+        if (
+          existing &&
+          existing.sourceTextHash === currentHash &&
+          existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+        ) {
           intentDecisionId = existing.id;
         } else {
-          const userAuthoredText = request.message || "";
           const decision = OutboundEmailIntentResolver.resolve({
             conversationId,
             sourceUserMessageId: savedUser.messageId,
@@ -753,17 +767,25 @@ export class AIChatQueryEngine {
             previousAssistantMessageId: null,
             previousAssistantText: null,
           });
-          const persisted = await new OutboundEmailIntentModule().create({
-            conversationId,
-            sourceUserMessageId: savedUser.messageId,
+          const decisionFields = {
             mode: decision.mode,
             reasonCode: decision.reasonCode,
             confidence: decision.confidence,
             evidenceJson: JSON.stringify(decision.evidence),
             sourceTextHash: decision.sourceTextHash,
             resolverVersion: decision.resolverVersion,
-          } as OutboundEmailIntentEntity);
-          intentDecisionId = persisted.id;
+          };
+          if (existing) {
+            await intentModule.updateDecision(existing.id, decisionFields);
+            intentDecisionId = existing.id;
+          } else {
+            const persisted = await intentModule.create({
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              ...decisionFields,
+            } as OutboundEmailIntentEntity);
+            intentDecisionId = persisted.id;
+          }
         }
       } catch (err) {
         console.error("[outbound-email-intent] resolve failed:", err);

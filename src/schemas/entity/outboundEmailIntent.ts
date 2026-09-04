@@ -19,3 +19,19 @@ export const outboundEmailIntentWriteSchema = lazySchema(() =>
     previousAssistantMessageId: z.string().max(100).nullable().optional(),
   })
 );
+
+/**
+ * Write-boundary schema for the decision-fields patch accepted by
+ * {@link OutboundEmailIntentModel.updateDecision}. Identity columns are
+ * immutable on update, so they are absent here.
+ */
+export const outboundEmailIntentDecisionPatchSchema = lazySchema(() =>
+  z.object({
+    mode: outboundEmailDeliveryModeSchema,
+    reasonCode: outboundEmailIntentReasonCodeSchema,
+    confidence: z.number().min(0).max(1),
+    evidenceJson: z.string(),
+    sourceTextHash: z.string().length(64),
+    resolverVersion: z.string().min(1).max(50),
+  })
+);

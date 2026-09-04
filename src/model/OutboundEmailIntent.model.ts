@@ -2,8 +2,26 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { parseAndStrip } from "@/utils/parseAndStrip";
-import { outboundEmailIntentWriteSchema } from "@/schemas/entity/outboundEmailIntent";
+import {
+  outboundEmailIntentWriteSchema,
+  outboundEmailIntentDecisionPatchSchema,
+} from "@/schemas/entity/outboundEmailIntent";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
+
+/**
+ * Decision fields overwritten when a cached intent is re-resolved (its stored
+ * sourceTextHash or resolverVersion no longer matches the current turn). The
+ * identity columns (conversationId, sourceUserMessageId) are immutable — the
+ * unique index keeps the decision idempotent per user message.
+ */
+export interface OutboundEmailIntentDecisionPatch {
+  mode: OutboundEmailIntentEntity["mode"];
+  reasonCode: OutboundEmailIntentEntity["reasonCode"];
+  confidence: number;
+  evidenceJson: string;
+  sourceTextHash: string;
+  resolverVersion: string;
+}
 
 export class OutboundEmailIntentModel extends BaseDb {
   private repository: Repository<OutboundEmailIntentEntity>;
@@ -43,5 +61,23 @@ export class OutboundEmailIntentModel extends BaseDb {
     return await this.repository.findOne({
       where: { conversationId, sourceUserMessageId },
     });
+  }
+
+  /**
+   * Overwrite the decision fields of an existing intent row (§9 re-check).
+   * Used when a cached decision's sourceTextHash or resolverVersion no longer
+   * matches the current turn: the re-resolved decision replaces the stale one
+   * in place so the unique (conversationId, sourceUserMessageId) row keeps
+   * reflecting the decision that downstream authorization actually uses.
+   */
+  async updateDecision(
+    id: number,
+    patch: OutboundEmailIntentDecisionPatch
+  ): Promise<void> {
+    const stripped = parseAndStrip(
+      { ...patch },
+      outboundEmailIntentDecisionPatchSchema()
+    ) as unknown as OutboundEmailIntentDecisionPatch;
+    await this.repository.update(id, stripped);
   }
 }

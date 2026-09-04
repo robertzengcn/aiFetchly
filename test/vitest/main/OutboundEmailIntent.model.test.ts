@@ -8,7 +8,9 @@ import fs from "node:fs";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-outbound-intent-model");
 
-function buildEntity(overrides: Partial<OutboundEmailIntentEntity> = {}): OutboundEmailIntentEntity {
+function buildEntity(
+  overrides: Partial<OutboundEmailIntentEntity> = {}
+): OutboundEmailIntentEntity {
   const e = new OutboundEmailIntentEntity();
   e.conversationId = "conv-1";
   e.sourceUserMessageId = "msg-1";
@@ -36,7 +38,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
 });
 
@@ -88,5 +91,58 @@ describe("OutboundEmailIntentModel", () => {
     await expect(
       model.create(buildEntity({ sourceUserMessageId: "bad", confidence: 1.5 }))
     ).rejects.toThrow();
+  });
+
+  it("updateDecision overwrites decision fields and keeps the row identity", async () => {
+    const model = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const created = await model.create(
+      buildEntity({ sourceUserMessageId: "msg-stale" })
+    );
+    await model.updateDecision(created.id, {
+      mode: "draft_only",
+      reasonCode: "ambiguous_instruction",
+      confidence: 0.5,
+      evidenceJson: JSON.stringify([]),
+      sourceTextHash: "b".repeat(64),
+      resolverVersion: "outbound-resolver-v2",
+    });
+
+    const found = await model.read(created.id);
+    expect(found?.mode).toBe("draft_only");
+    expect(found?.reasonCode).toBe("ambiguous_instruction");
+    expect(found?.confidence).toBe(0.5);
+    expect(found?.sourceTextHash).toBe("b".repeat(64));
+    expect(found?.resolverVersion).toBe("outbound-resolver-v2");
+    // Identity columns are untouched — still one row per user message.
+    expect(found?.conversationId).toBe("conv-1");
+    expect(found?.sourceUserMessageId).toBe("msg-stale");
+    // No duplicate row was inserted.
+    const all = await model.findBySource("conv-1", "msg-stale");
+    expect(all?.id).toBe(created.id);
+  });
+
+  it("updateDecision rejects a bad patch via the write schema", async () => {
+    const model = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const created = await model.create(
+      buildEntity({ sourceUserMessageId: "msg-bad-patch" })
+    );
+    await expect(
+      model.updateDecision(created.id, {
+        mode: "draft_only",
+        reasonCode: "ambiguous_instruction",
+        confidence: 9,
+        evidenceJson: "[]",
+        sourceTextHash: "c".repeat(64),
+        resolverVersion: "outbound-resolver-v1",
+      })
+    ).rejects.toThrow();
+    // The row is unchanged after the rejected patch.
+    const found = await model.read(created.id);
+    expect(found?.mode).toBe("send_now");
+    expect(found?.confidence).toBe(1);
   });
 });
