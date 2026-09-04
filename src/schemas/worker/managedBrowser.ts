@@ -206,7 +206,7 @@ const challengeKindSchema = z.enum([
   "ambiguous",
 ]);
 
-const authenticationAssessmentSchema = z.discriminatedUnion("state", [
+export const authenticationAssessmentSchema = z.discriminatedUnion("state", [
   z.strictObject({
     state: z.literal("authenticated"),
     evidenceCodes: z.array(z.string().min(1).max(64)).max(16),
