@@ -33,6 +33,8 @@ import {
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 import {
   listEmailInboxes,
   fetchUnreadEmails,
@@ -1652,7 +1654,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     execute: async (args, context) => {
-      const service = new OutboundEmailDraftService();
+      // Resolve the DB path from the Token service, matching the outbound
+      // IPC layer (outboundEmailDelivery-ipc.ts). Passing no dbpath would
+      // make OutboundEmailDraftModel fall back to the os.tmpdir() test
+      // database, which flips SqliteDb.getInstance to a different path and
+      // destroys the process-wide live connection mid-conversation.
+      const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const service = new OutboundEmailDraftService(dbpath);
       // Resolve recipients from the same sources the send tool accepts, reusing
       // the existing compatibility helpers so draft/send share materialization.
       const { resolveBulkRecipients } = await import(
