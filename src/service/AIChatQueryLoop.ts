@@ -53,6 +53,12 @@ import {
   isEnterPlanModeToolName,
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
+import { OutboundEmailToolGate } from "@/service/outboundEmail/OutboundEmailToolGate";
+import type { OutboundEmailToolGateResult } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+
+/** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
+const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -1789,6 +1795,45 @@ export class AIChatQueryLoop {
             }
           }
 
+          // Outbound-email intent gate: enforce the "model proposes, trusted
+          // app code authorizes" rule (technical design §14.2) BEFORE the send
+          // tool executes. In Phase 1 there is no authorization yet, so the
+          // gate never returns allowed:true; a send_now intent without a
+          // request-scoped authorization is blocked as authorization_missing.
+          if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
+            const gateDecision = await this.evaluateOutboundEmailGate(input);
+            if (!gateDecision.allowed) {
+              await emitToolCall(call.arguments ?? {});
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                outboundGateBlocked: true,
+                code: gateDecision.code,
+                reason:
+                  "Outbound email sending requires a request-scoped authorization " +
+                  "derived from your message; no authorized batch is available.",
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  outboundGateBlocked: true,
+                  code: gateDecision.code,
+                },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            }
+          }
+
           const executableCall = {
             id: call.id,
             name: call.name,
@@ -1879,6 +1924,11 @@ export class AIChatQueryLoop {
                 toolCallId: call.id,
                 toolName: call.name,
                 toolArguments: effectiveArguments,
+                // Trusted intent context must survive the permission pause so
+                // the resume re-execution can still bind the draft batch to
+                // the originating user message (technical design §9).
+                sourceUserMessageId: input.sourceUserMessageId,
+                intentDecisionId: input.intentDecisionId,
                 planContext,
                 eventSink: eventSink,
                 toolCatalogState: catalogActive
@@ -2239,6 +2289,11 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              // Trusted intent context (technical design §9/§14.2): binds the
+              // draft to the exact user message + persisted intent decision
+              // so authorization is never derived from tool arguments.
+              sourceUserMessageId: input.sourceUserMessageId,
+              intentDecisionId: input.intentDecisionId,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -2460,6 +2515,35 @@ export class AIChatQueryLoop {
     }
   }
 
+  /**
+   * Evaluate the outbound-email delivery gate for the current turn (technical
+   * design §14.2). Loads the persisted intent decision threaded into the loop
+   * input by the query engine, then asks {@link OutboundEmailToolGate} whether
+   * the send tool may proceed. Phase 1 has no authorization, so this always
+   * yields a blocking code (draft_required / review_required /
+   * authorization_missing); the authorization is plumbed in Phase 3.
+   */
+  private async evaluateOutboundEmailGate(
+    input: AIChatQueryLoopInput
+  ): Promise<OutboundEmailToolGateResult> {
+    // Without a trusted intent decision for this turn's user message there is
+    // no evidence the user asked to send at all — blocked as draft_required.
+    if (input.intentDecisionId == null) {
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+
+    try {
+      const intentDecision = await new OutboundEmailIntentModule().read(
+        input.intentDecisionId
+      );
+      return OutboundEmailToolGate.evaluate(intentDecision, null, null);
+    } catch (err) {
+      console.error("[outbound-email-intent] gate lookup failed:", err);
+      // Fail closed: an unreadable decision must never authorize a send.
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+  }
+
   private async prepareToolCall(
     input: AIChatQueryLoopInput,
     call: {
@@ -2591,6 +2675,11 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         args: call.arguments,
         model: input.request.model,
+        // Trusted intent context (technical design §9/§14.2): binds the
+        // draft to the exact user message + persisted intent decision
+        // so authorization is never derived from tool arguments.
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

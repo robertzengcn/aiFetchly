@@ -1,7 +1,10 @@
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
-import type { SkillPermissionCategory } from "@/entityTypes/skillTypes";
+import type {
+  SkillPermissionCategory,
+  ToolConfirmationPolicy,
+} from "@/entityTypes/skillTypes";
 
 export interface ChatToolApprovalPolicyInput {
   readonly conversationId: string;
@@ -9,6 +12,14 @@ export interface ChatToolApprovalPolicyInput {
   readonly toolName: string;
   readonly permissionCategory?: SkillPermissionCategory;
   readonly isDependencyInstall: boolean;
+  /**
+   * The skill's tool-confirmation classification. When `request_scoped_action`
+   * (e.g. outbound email send), the tool can never be auto-approved purely by
+   * the conversation approval mode (§14.1): it needs a request-scoped
+   * authorization derived from trusted current-turn state, not `approve_for_me`
+   * / `full_access` alone.
+   */
+  readonly confirmationPolicy?: ToolConfirmationPolicy;
 }
 
 export interface ChatToolApprovalPolicyDecision {
@@ -45,6 +56,18 @@ export function evaluateToolApproval(
     return {
       autoApprove: false,
       reason: "Dependency install requires explicit approval",
+    };
+  }
+
+  // Request-scoped actions (e.g. outbound email send) are never auto-approved
+  // by a chat approval mode alone (§14.1). Their side effects must be bound to
+  // an explicit request-scoped authorization from trusted current-turn state.
+  const confirmationPolicy: ToolConfirmationPolicy =
+    input.confirmationPolicy ?? resolveConfirmationPolicy(input.toolName);
+  if (confirmationPolicy === "request_scoped_action") {
+    return {
+      autoApprove: false,
+      reason: "Request-scoped action requires explicit authorization",
     };
   }
 
@@ -120,4 +143,10 @@ function resolvePermissionCategory(
     return "network";
   }
   return undefined;
+}
+
+/** Resolve a skill's tool-confirmation classification, defaulting to standard. */
+function resolveConfirmationPolicy(toolName: string): ToolConfirmationPolicy {
+  const skill = SkillRegistry.getSkill(toolName);
+  return skill?.confirmationPolicy ?? "standard_permission";
 }

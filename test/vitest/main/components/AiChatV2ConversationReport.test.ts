@@ -10,7 +10,10 @@ vi.mock("@/views/api/aiContentReport", () => ({
   createAIContentReport: (...a: unknown[]) => createMock(...a),
 }));
 
-import { useReportCapabilities } from "@/views/utils/reportCapabilities";
+import {
+  useReportCapabilities,
+  resetReportCapabilitiesForTest,
+} from "@/views/utils/reportCapabilities";
 
 const i18n = createI18n({
   legacy: false,
@@ -65,6 +68,7 @@ describe("AiChatV2 conversation-report orchestration", () => {
   beforeEach(() => {
     capsMock.mockReset();
     createMock.mockReset();
+    resetReportCapabilitiesForTest();
   });
 
   it("disables the button when capabilities are disabled (fail-closed)", async () => {
@@ -251,12 +255,15 @@ describe("AiChatV2 conversation-report orchestration", () => {
       // Chat starts empty, then the user loads a history conversation
       // with eligible assistant output.
       const hasEligibleOutput = ref(false);
+      const activeConversationId = ref("conv-1");
       const Harness = defineComponent({
         components: { AIConversationReportButton },
         setup() {
-          // Same wiring as AiChatV2: composable state gates the button.
+          // Same wiring as AiChatV2: composable state (plus the
+          // conversation-id rearm key) gates the button.
           const { capabilities, loading } = useReportCapabilities({
             hasEligibleOutput: () => hasEligibleOutput.value,
+            rearmKey: () => activeConversationId.value,
           });
           const conversationReportEnabled = computed(
             () =>

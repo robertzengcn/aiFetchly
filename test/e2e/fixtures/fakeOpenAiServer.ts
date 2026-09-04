@@ -26,6 +26,7 @@ import {
   type FakeAiScenarioName,
 } from "../scenarios/openAiProtocol";
 import { resolveScenario } from "../scenarios/aiChatScenarios";
+import { isDeferralRetryRequest } from "../scenarios/deferredToolRetry";
 
 export interface RedactedRequest {
   readonly method: string;
@@ -217,12 +218,34 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       // Determine the effective plan for this request:
       //  - a tool-result continuation (app executed an approved tool + fed the
       //    result back) -> short follow-up completion.
+      //  - a deferral retry (the app's deferred tool catalog loaded the tool
+      //    and told the model to retry) -> re-emit the tool call like a real
+      //    model would, under a FRESH call id (the renderer dedups tool
+      //    results by toolCallId, so reusing the original id would leave the
+      //    stale "deferred tool loaded" row and drop the real result).
       //  - else a configured tool call -> emit tool_calls so the app's approval
       //    flow can gate execution.
       //  - else the active scenario.
       const isContinuation = hasToolResultMessage(rawBody);
+      const isDeferralRetry = isContinuation && isDeferralRetryRequest(rawBody);
       let plan;
-      if (isContinuation) {
+      if (isDeferralRetry && toolCallConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            {
+              delayMs: 0,
+              payload: toolCallChunk({
+                index: 0,
+                id: `call_e2e_retry_${Date.now()}`,
+                name: toolCallConfig.name,
+                arguments: toolCallConfig.arguments,
+              }),
+            },
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
+      } else if (isContinuation) {
         plan = resolveScenario("tool-success-followup");
       } else if (toolCallConfig) {
         plan = {

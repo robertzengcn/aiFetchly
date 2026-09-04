@@ -345,15 +345,14 @@ export default defineComponent({
     const hasReportableConversationOutput = computed(() =>
       hasEligibleKnowledgeCandidate(knowledgeReportMessages.value)
     );
-    // Capability state with bounded lazy retry (2026-09-04 fix): the previous
-    // one-shot mount-time fetch left the button permanently grey when that
-    // single request failed — eligible content restored from localStorage
-    // never re-asked the capabilities endpoint. The composable retries
-    // (capped backoff) once eligible output exists but capabilities have
-    // not resolved enabled:true. Still fail-closed and NOT AI-gated (FR-4.4).
+    // Capability state with retry — see the useReportCapabilities
+    // docstring (src/views/utils/reportCapabilities.ts) for the bug
+    // history. The rearm key makes every conversation id change (Clear
+    // regenerates it) restart the retry chain.
     const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
       useReportCapabilities({
         hasEligibleOutput: () => hasReportableConversationOutput.value,
+        rearmKey: () => knowledgeConversationId.value,
       });
     const conversationReportEnabled = computed(
       () =>
@@ -664,13 +663,6 @@ export default defineComponent({
           console.error('Failed to load chat history:', error);
         }
       }
-
-      // Conversation-report capabilities are now owned by the
-      // useReportCapabilities composable (see its declaration after the
-      // hasReportableConversationOutput computed), which fetches at scope
-      // creation and applies a bounded retry once eligible output exists —
-      // replacing the previous one-shot fetch here that permanently greyed
-      // the button when it failed at mount.
     });
 
     // Save chat history to localStorage

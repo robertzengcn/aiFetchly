@@ -184,7 +184,26 @@ export interface SkillDefinition {
   readonly buildPermissionPreview?: (
     args: Record<string, unknown>
   ) => PermissionPreview | undefined;
+
+  /**
+   * Optional tool-confirmation classification. `request_scoped_action` tools
+   * (e.g. outbound email send) can never be auto-approved purely by the
+   * conversation's approval mode; they require an explicit request-scoped
+   * authorization derived from trusted current-turn state (technical design
+   * §14.1). Defaults to `standard_permission`.
+   */
+  readonly confirmationPolicy?: ToolConfirmationPolicy;
 }
+
+/**
+ * How a tool's confirmation is decided relative to the generic chat approval
+ * modes (technical design §14.1). `request_scoped_action` marks tools whose
+ * side effects must be authorized by the current user request, not by
+ * `approve_for_me` / `full_access` alone.
+ */
+export type ToolConfirmationPolicy =
+  | "standard_permission"
+  | "request_scoped_action";
 
 // ---------------------------------------------------------------------------
 // SkillExecutionContext — Context passed to the executor
@@ -251,6 +270,19 @@ export interface SkillExecutionContext {
    * (<= 6,000,000 chars). Undefined when the caller does not supply it.
    */
   readonly currentRequestImageDataUrlChars?: number;
+
+  /**
+   * Trusted current-turn user message id (main process supplied, never tool
+   * args). Threads into intent-aware delivery tools so authorization is bound
+   * to the exact user message that requested the action.
+   */
+  readonly sourceUserMessageId?: string;
+
+  /**
+   * Persisted outbound-email intent decision id for this turn. Null when no
+   * outbound-email intent was resolved. Supplied by the main process.
+   */
+  readonly intentDecisionId?: number | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -97,4 +97,25 @@ describe("outbound email completion", () => {
 
     expect(success).toHaveBeenCalledTimes(2);
   });
+
+  it("reports a missing SMTP service as a send failure", async () => {
+    const campaign: Buckemailremotedata = {
+      Receiverlist: [{ address: "one@example.com", source: "direct" }],
+      Emailtemplist: [],
+      Emailfilterlist: [],
+      Emailservicelist: [],
+      email_subject: "Campaign subject",
+      email_html_content: "<p>Body</p>",
+    };
+    const failure = vi.fn();
+
+    await new EmailSend().send(campaign, undefined, failure);
+
+    expect(failure).toHaveBeenCalledWith(
+      "one@example.com",
+      "No email service is available for this task",
+      "Campaign subject",
+      "<p>Body</p>"
+    );
+  });
 });

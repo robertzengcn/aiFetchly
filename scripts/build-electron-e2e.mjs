@@ -4,12 +4,16 @@
 //   .vite/e2e/build/
 //     e2e-main.js   <- E2E bootstrap entry, launched via _electron.launch()
 //     preload.js    <- production preload (same source, no test bridge)
+//     taskCode.js   <- production utility-process entry (outbound SMTP worker,
+//                      resolved by OutboundEmailWorkerStarter via __dirname)
 //     vec0.so|dll|dy  <- sqlite-vec native extension (copied by platformCopyPlugin)
 //     icon.png|ico|icns <- platform icon (copied by platformCopyPlugin)
 //
 // Output order matters: the main build runs first (its platformCopyPlugin
 // populates the dir + native assets), then the preload build is merged into the
-// same dir with emptyOutDir:false so it never deletes e2e-main.js.
+// same dir with emptyOutDir:false so it never deletes e2e-main.js. taskCode.js
+// must live beside e2e-main.js because the production worker starter resolves
+// it relative to the main bundle's __dirname (OutboundEmailWorkerStarter).
 //
 // Usage: yarn build:e2e
 
@@ -47,8 +51,17 @@ async function main() {
     mode: "development",
   });
 
+  step("Building production taskCode into .vite/e2e/build (taskCode.js)");
+  await build({
+    configFile: path.resolve(
+      projectRoot,
+      "vite.e2e.taskCode.config.mjs"
+    ),
+    mode: "development",
+  });
+
   step("Verifying required E2E artifacts");
-  const required = ["e2e-main.js", "preload.js"];
+  const required = ["e2e-main.js", "preload.js", "taskCode.js"];
   const missing = required.filter((f) => {
     const p = path.join(e2eOutDir, f);
     return !fs.existsSync(p) || fs.statSync(p).size === 0;

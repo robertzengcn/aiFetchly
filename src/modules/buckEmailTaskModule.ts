@@ -520,6 +520,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     });
     const waitForExit = options?.waitForExit === true;
+    let sendFailure: Error | undefined;
     let settled = false;
     let resolveWait: ((taskId: number) => void) | undefined;
     let rejectWait: ((error: Error) => void) | undefined;
@@ -564,9 +565,14 @@ export class BuckEmailTaskModule extends BaseModule {
         this.updateTaskStatus(taskId, TaskStatus.Error);
         settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
-        console.log("Child process exited successfully");
-        this.updateTaskStatus(taskId, TaskStatus.Complete);
-        settleSuccess();
+        if (sendFailure) {
+          this.updateTaskStatus(taskId, TaskStatus.Error);
+          settleFailure(sendFailure);
+        } else {
+          console.log("Child process exited successfully");
+          this.updateTaskStatus(taskId, TaskStatus.Complete);
+          settleSuccess();
+        }
       }
     });
     child.on("message", async (message: unknown) => {
@@ -624,6 +630,11 @@ export class BuckEmailTaskModule extends BaseModule {
                 console.error("EmailSendFailure: childdata.data is undefined");
                 break;
               }
+              sendFailure ??= new Error(
+                `Email delivery to ${childdata.data.receiver} failed: ${
+                  childdata.data.info || "Unknown SMTP error"
+                }`
+              );
               const emailMarketLog = new EmailMarketingSendLogEntity();
               emailMarketLog.task_id = taskId;
               emailMarketLog.status = SendStatus.Failure;
@@ -644,8 +655,13 @@ export class BuckEmailTaskModule extends BaseModule {
             break;
           case "sendEmailEnd":
             {
-              this.updateTaskStatus(taskId, TaskStatus.Complete);
-              settleSuccess();
+              if (sendFailure) {
+                await this.updateTaskStatus(taskId, TaskStatus.Error);
+                settleFailure(sendFailure);
+              } else {
+                await this.updateTaskStatus(taskId, TaskStatus.Complete);
+                settleSuccess();
+              }
             }
             break;
         }

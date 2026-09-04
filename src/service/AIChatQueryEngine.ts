@@ -81,6 +81,11 @@ import type {
   ToolCatalogModeDecision,
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
+import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
 /**
  * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
@@ -579,6 +584,8 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let messages: OpenAIChatMessage[];
     let textApprovedPlanState: AIChatPlanStateView | null = null;
+    let intentDecisionId: number | null = null;
+    let sourceUserMessageId: string | undefined;
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -731,6 +738,65 @@ export class AIChatQueryEngine {
           conversationId,
           savedUser.messageId
         );
+      }
+
+      // Resolve and persist the outbound-email delivery intent for this turn
+      // from TRUSTED user-authored text only (technical design §9): raw user
+      // message, never tool args / retrieved content / assistant statements.
+      // Idempotent across stream retries via the (conversationId, sourceUserMessageId)
+      // unique index. Failures resolve to draft_only and never break chat.
+      sourceUserMessageId = savedUser.messageId;
+      try {
+        const intentModule = new OutboundEmailIntentModule();
+        const existing = await intentModule.findBySource(
+          conversationId,
+          savedUser.messageId
+        );
+        // Re-verify the cached decision against the CURRENT user-authored
+        // text before reusing it (technical design §9): the (conversationId,
+        // sourceUserMessageId) row is only a valid cache hit when its stored
+        // sourceTextHash still matches this turn's text and it was produced
+        // by the current resolver version. A mismatch (text changed or the
+        // resolver was upgraded) re-resolves and overwrites the stale row.
+        const userAuthoredText = request.message || "";
+        const currentHash = hashUserAuthoredText(userAuthoredText);
+        if (
+          existing &&
+          existing.sourceTextHash === currentHash &&
+          existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+        ) {
+          intentDecisionId = existing.id;
+        } else {
+          const decision = OutboundEmailIntentResolver.resolve({
+            conversationId,
+            sourceUserMessageId: savedUser.messageId,
+            userAuthoredText,
+            previousAssistantMessageId: null,
+            previousAssistantText: null,
+          });
+          const decisionFields = {
+            mode: decision.mode,
+            reasonCode: decision.reasonCode,
+            confidence: decision.confidence,
+            evidenceJson: JSON.stringify(decision.evidence),
+            sourceTextHash: decision.sourceTextHash,
+            resolverVersion: decision.resolverVersion,
+          };
+          if (existing) {
+            await intentModule.updateDecision(existing.id, decisionFields);
+            intentDecisionId = existing.id;
+          } else {
+            const persisted = await intentModule.create({
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              ...decisionFields,
+            } as OutboundEmailIntentEntity);
+            intentDecisionId = persisted.id;
+          }
+        }
+      } catch (err) {
+        console.error("[outbound-email-intent] resolve failed:", err);
+        intentDecisionId = null;
       }
 
       // Load history and build transcript.
@@ -944,6 +1010,8 @@ export class AIChatQueryEngine {
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
+      sourceUserMessageId,
+      intentDecisionId,
     };
 
     try {
@@ -1112,6 +1180,12 @@ export class AIChatQueryEngine {
           toolCallId: matchedByToolId.toolCallId,
           args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
+          // Trusted intent context (technical design §9/§14.2): re-thread the
+          // originating turn's persisted user-message id + intent decision id
+          // so outbound-email tools bind the draft to the exact user message
+          // even when executed via the permission-resume path.
+          sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+          intentDecisionId: matchedByToolId.intentDecisionId,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.

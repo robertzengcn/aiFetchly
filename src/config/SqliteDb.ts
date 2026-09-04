@@ -92,6 +92,14 @@ import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.en
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
+import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
+import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
+import { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
+import { OutboundEmailAuditLogEntity } from "@/entity/OutboundEmailAuditLog.entity";
+import { OutboundEmailAuthorizationEntity } from "@/entity/OutboundEmailAuthorization.entity";
+import { OutboundEmailSendAttemptEntity } from "@/entity/OutboundEmailSendAttempt.entity";
+import { OutboundEmailDeliveryOutcomeEntity } from "@/entity/OutboundEmailDeliveryOutcome.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import Database from "better-sqlite3";
@@ -516,6 +524,14 @@ export class SqliteDb {
           EmailReplyDraftRevisionEntity,
           EmailReplyApprovalEntity,
           EmailReplySendAttemptEntity,
+          OutboundEmailIntentEntity,
+          OutboundEmailDraftBatchEntity,
+          OutboundEmailDraftEntity,
+          OutboundEmailDraftRevisionEntity,
+          OutboundEmailAuditLogEntity,
+          OutboundEmailAuthorizationEntity,
+          OutboundEmailSendAttemptEntity,
+          OutboundEmailDeliveryOutcomeEntity,
           EmailConversationEntity,
           EmailReplyKnowledgeScopeEntity,
           AIChatPlanEntity,

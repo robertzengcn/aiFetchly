@@ -158,6 +158,14 @@ export async function launchAiFetchly(
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      // Force the renderer locale to English regardless of the host OS
+      // language. The state manifest declares `locale: "en"` (validated in
+      // E2EEnvironment), but nothing applied it: the renderer's getLocale()
+      // falls back to navigator.language, so on a non-English host the app
+      // boots in a different language until the DB preference load races in.
+      // Specs assert translated UI text (e.g. "Delivery Unknown"), so the
+      // manifest contract must hold deterministically from first paint.
+      "--lang=en",
     ],
     cwd: process.cwd(),
     env,
