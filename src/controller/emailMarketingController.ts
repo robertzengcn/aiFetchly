@@ -2,11 +2,11 @@
 import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
 import { ListData } from "@/entityTypes/commonType";
 import {
-  EmailTemplatedata,
   EmailFilterdata,
   EmailServiceListdata,
   EmailServiceEntitydata,
   EmailSendParam,
+  EmailServiceExportPayload,
 } from "@/entityTypes/emailmarketingType";
 //import {EmailMarketingFilterApi} from "@/api/emailMarketingFilterApi";
 //import {EmailServiceApi} from "@/api/emailServiceApi";
@@ -308,12 +308,69 @@ export class EmailMarketingController {
     return await this.emailServiceModule.deleteEmailService(id);
   }
 
+  // Export email services (safe fields only). format: "csv" | "json"
+  public async exportEmailServices(
+    format: "csv" | "json" = "csv"
+  ): Promise<string | EmailServiceExportPayload> {
+    const entities = await this.emailServiceModule.exportEmailServicesList();
+
+    if (format === "json") {
+      const rows: EmailServiceListdata[] = entities.map((item) => ({
+        id: item.id,
+        name: item.name,
+        from: item.from,
+        host: item.host,
+        receiveProtocol: item.receiveProtocol,
+        create_time: item.createdAt?.toISOString() || "",
+      }));
+      return {
+        total: rows.length,
+        services: rows,
+        exportDate: new Date().toISOString(),
+      };
+    }
+
+    const headers = [
+      "id",
+      "name",
+      "from",
+      "host",
+      "port",
+      "ssl",
+      "receiveProtocol",
+      "create_time",
+    ];
+    const csvRows = entities.map((item) => [
+      item.id?.toString() ?? "",
+      this.escapeCsvField(item.name ?? ""),
+      this.escapeCsvField(item.from ?? ""),
+      this.escapeCsvField(item.host ?? ""),
+      item.port ?? "",
+      item.ssl?.toString() ?? "",
+      item.receiveProtocol ?? "",
+      item.createdAt?.toISOString() ?? "",
+    ]);
+    const csv = [
+      headers.join(","),
+      ...csvRows.map((row) => row.join(",")),
+    ].join("\n");
+    return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
+  }
+
+  /** Quote/escape a CSV field when it contains `,`, `"`, or newline. */
+  private escapeCsvField(value: string): string {
+    if (/[",\n\r]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
   //send email
   public async sendEmail(
     param: EmailSendParam,
     errorCall?: (errorMessage: string) => void,
     successCallback?: () => void
-  ): Promise<any> {
+  ): Promise<void> {
     const emailService = new EmailService(param.Setting);
     await emailService.sendEmail(
       param.EmailRequestData,
