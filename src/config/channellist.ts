@@ -54,6 +54,7 @@ export const EMAILSERVICEUPDATE = "email:service:update";
 export const EMAILSERVICEDETAIL = "email:service:detail";
 export const EMAILSERVICELIST = "email:service:list";
 export const EMAILSERVICEDELETE = "email:service:delete";
+export const EMAILSERVICEEXPORT = "email:service:export";
 
 //email template
 export const EMAILTEMPLATE_LIST = "email:template:list";
