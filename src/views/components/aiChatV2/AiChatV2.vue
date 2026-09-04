@@ -3470,12 +3470,20 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.planId,
       planState.value.currentVersion
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Approval did not take effect (no updated state came back). Do NOT
+      // send the "begin executing" message — the model would start executing
+      // a plan that was never approved. Surface the failure so the user can
+      // retry from the still-pinned card.
+      streamError.value =
+        t("aiChatV2Plan.approve_failed") ||
+        "Plan approval did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After approval, kick off a new AI round so the assistant begins
     // executing the plan. applyPlanState above flipped the mode back to
@@ -3501,12 +3509,19 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Rejection did not take effect. Do not send the revise message —
+      // the plan status is unchanged and the model must not be told the
+      // user rejected it. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.reject_failed") ||
+        "Plan rejection did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After rejection, send the feedback to the LLM so it can revise
     // the plan or respond accordingly.
@@ -3532,12 +3547,19 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // The change request did not take effect. Do not send the update
+      // message — the plan status is unchanged and the model must not be
+      // told the user requested changes. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.changes_request_failed") ||
+        "Requesting plan changes did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After requesting changes, send the feedback to the LLM so it can
     // update the plan accordingly.

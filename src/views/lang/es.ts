@@ -2730,6 +2730,11 @@ export default {
       "Plan rechazado. Por favor, revisa el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
     changes_requested_continue_message:
       "Cambios solicitados en el plan. Por favor, actualiza el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
+    approve_failed:
+      "La aprobación del plan no se completó. Inténtalo de nuevo.",
+    reject_failed: "El rechazo del plan no se completó. Inténtalo de nuevo.",
+    changes_request_failed:
+      "La solicitud de cambios del plan no se completó. Inténtalo de nuevo.",
     reject_feedback: "Motivo de rechazo",
     changes_feedback: "¿Qué necesita cambiar?",
     no_plan_yet: "Aún no hay contenido del plan.",

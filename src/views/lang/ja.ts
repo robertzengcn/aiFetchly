@@ -2666,6 +2666,10 @@ export default {
       "計画が拒否されました。以下のフィードバックに基づいて計画を修正し、承認のために再提出してください。",
     changes_requested_continue_message:
       "計画の変更が要求されました。以下のフィードバックに基づいて計画を更新し、承認のために再提出してください。",
+    approve_failed: "計画の承認が完了しませんでした。もう一度お試しください。",
+    reject_failed: "計画の拒否が完了しませんでした。もう一度お試しください。",
+    changes_request_failed:
+      "計画変更の要求が完了しませんでした。もう一度お試しください。",
     reject_feedback: "拒否の理由",
     changes_feedback: "何を変更する必要がありますか？",
     no_plan_yet: "計画内容がまだありません。",

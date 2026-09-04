@@ -2702,6 +2702,10 @@ export default {
       "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
     changes_requested_continue_message:
       "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
+    approve_failed: "Plan approval did not complete. Please try again.",
+    reject_failed: "Plan rejection did not complete. Please try again.",
+    changes_request_failed:
+      "Requesting plan changes did not complete. Please try again.",
     reject_feedback: "Reason for rejection",
     changes_feedback: "What needs to change?",
     no_plan_yet: "No plan content yet.",

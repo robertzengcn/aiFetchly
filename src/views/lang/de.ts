@@ -2722,6 +2722,12 @@ export default {
       "Plan abgelehnt. Bitte überarbeiten Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
     changes_requested_continue_message:
       "Planänderungen angefordert. Bitte aktualisieren Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
+    approve_failed:
+      "Die Plan-Genehmigung wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
+    reject_failed:
+      "Die Plan-Ablehnung wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
+    changes_request_failed:
+      "Die Anforderung von Planänderungen wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
     reject_feedback: "Grund für Ablehnung",
     changes_feedback: "Was muss geändert werden?",
     no_plan_yet: "Noch kein Planinhalt.",

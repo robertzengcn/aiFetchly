@@ -368,4 +368,50 @@ describe("AiChatV2 plan mode exit after approval", () => {
     // The execution round was kicked off (continue message).
     expect(streamChatV2Message).toHaveBeenCalled();
   });
+
+  it("does not send the execution message when approval returns no updated state", async () => {
+    // Regression: handleApprovePlan used to fire onSend even when
+    // approveChatV2Plan resolved null (approval did not take effect), telling
+    // the model to execute a plan that was never approved. It must now bail
+    // out with an error and leave the card pinned for a retry.
+    const awaiting = makePlanState("awaiting_approval");
+    vi.mocked(approveChatV2Plan).mockResolvedValue(null);
+    vi.mocked(streamChatV2Message).mockImplementation(
+      async (
+        _req: unknown,
+        handler: ChunkHandler,
+        onComplete: CompleteHandler
+      ) => {
+        capturedChunkHandler = handler;
+        capturedCompleteHandler = onComplete;
+      }
+    );
+
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send"]').trigger("click");
+    await flushPromises();
+    emitChunk({ eventType: "start", messageId: MSG_ID });
+    emitChunk({ eventType: "plan_submitted", planState: awaiting });
+    await flushPromises();
+    completeStream();
+    await flushPromises();
+
+    const callsBefore = vi.mocked(streamChatV2Message).mock.calls.length;
+    await wrapper.find('[data-testid="approve-plan"]').trigger("click");
+    await flushPromises();
+
+    // The approval IPC was attempted…
+    expect(approveChatV2Plan).toHaveBeenCalledOnce();
+    // …but no new stream round was kicked off.
+    expect(vi.mocked(streamChatV2Message).mock.calls.length).toBe(callsBefore);
+    // The plan stays pinned (retry is possible) and plan mode stays on.
+    expect(wrapper.find('[data-testid="plan-approval-card"]').exists()).toBe(
+      true
+    );
+    expect(
+      wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
+    ).toBe("plan");
+  });
 });

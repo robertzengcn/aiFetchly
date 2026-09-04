@@ -2590,6 +2590,9 @@ export default {
       "计划已拒绝。请根据以下反馈修改计划并重新提交审批。",
     changes_requested_continue_message:
       "已请求修改计划。请根据以下反馈更新计划并重新提交审批。",
+    approve_failed: "计划审批未完成，请重试。",
+    reject_failed: "计划拒绝未完成，请重试。",
+    changes_request_failed: "请求修改计划未完成，请重试。",
     reject_feedback: "拒绝原因",
     changes_feedback: "需要修改什么？",
     no_plan_yet: "尚无计划内容。",

@@ -2711,6 +2711,11 @@ export default {
       "Plan rejeté. Veuillez réviser le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
     changes_requested_continue_message:
       "Modifications demandées. Veuillez mettre à jour le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
+    approve_failed:
+      "L'approbation du plan ne s'est pas terminée. Veuillez réessayer.",
+    reject_failed: "Le rejet du plan ne s'est pas terminé. Veuillez réessayer.",
+    changes_request_failed:
+      "La demande de modifications du plan ne s'est pas terminée. Veuillez réessayer.",
     reject_feedback: "Raison du rejet",
     changes_feedback: "Qu'est-ce qui doit changer?",
     no_plan_yet: "Pas encore de contenu de plan.",
