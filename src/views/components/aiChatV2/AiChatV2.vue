@@ -884,8 +884,7 @@ import {
   buildChatV2ConversationSnapshot,
   hasEligibleChatV2Candidate,
 } from "@/views/components/aiContentReport/conversationReportSnapshot";
-import { getAIContentReportCapabilities } from "@/views/api/aiContentReport";
-import type { AIContentReportCapabilities } from "@/entityTypes/aiContentReportTypes";
+import { useReportCapabilities } from "@/views/utils/reportCapabilities";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 /**
@@ -946,8 +945,6 @@ const conversationReportSnapshot = ref<
   ReturnType<typeof buildChatV2ConversationSnapshot> | null
 >(null);
 const reportedMessageIds = ref<Set<string>>(new Set());
-const reportCapabilities = ref<AIContentReportCapabilities | null>(null);
-const reportCapabilitiesLoading = ref(false);
 const singleReportDialogOpen = ref(false);
 const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
 
@@ -2614,6 +2611,18 @@ const hasReportableConversationOutput = computed(() =>
     streamStatus: streamStatus.value,
   })
 );
+// Capability state with bounded lazy retry (2026-09-04 fix): the previous
+// one-shot mount-time fetch left the button permanently grey when that
+// single request failed (backend 502 / network blip) — loading a history
+// conversation with eligible content never re-asked the capabilities
+// endpoint. The composable retries (capped backoff) once eligible output
+// exists but capabilities have not resolved enabled:true, and cleans up on
+// component unmount. NOT AI-gated (PRD FR-4.4); still fail-closed: the
+// button only enables on a fetched enabled:true envelope.
+const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+  useReportCapabilities({
+    hasEligibleOutput: () => hasReportableConversationOutput.value,
+  });
 const conversationReportEnabled = computed(
   () =>
     reportCapabilities.value?.conversationReporting.enabled === true &&
@@ -4903,20 +4912,12 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
-  // Conversation-report capability fetch (design §11.1). NOT AI-gated: the
-  // capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
-  // Fail-closed: a network error leaves reportCapabilities null, which the
-  // computed treats as disabled.
-  reportCapabilitiesLoading.value = true;
-  void (async () => {
-    try {
-      reportCapabilities.value = await getAIContentReportCapabilities();
-    } catch {
-      reportCapabilities.value = null;
-    } finally {
-      reportCapabilitiesLoading.value = false;
-    }
-  })();
+  // Conversation-report capabilities are now owned by the
+  // useReportCapabilities composable (see its declaration above the
+  // conversationReportEnabled computed), which fetches at scope creation
+  // and applies a bounded retry once eligible output exists — replacing
+  // the previous one-shot fetch here that permanently greyed the button
+  // when it failed at mount.
 });
 
 // --- Conversation + single-output report orchestration (design §11.1) -----

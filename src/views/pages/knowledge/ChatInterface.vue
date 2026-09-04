@@ -274,7 +274,7 @@ import {
   buildKnowledgeConversationSnapshot,
   hasEligibleKnowledgeCandidate,
 } from '@/views/components/aiContentReport/conversationReportSnapshot';
-import { getAIContentReportCapabilities } from '@/views/api/aiContentReport';
+import { useReportCapabilities } from '@/views/utils/reportCapabilities';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
 /**
@@ -309,14 +309,12 @@ export default defineComponent({
 
     // Whole-conversation report orchestration (design §11.3). NOT AI-gated:
     // the capabilities endpoint works regardless of USER_AI_ENABLED (PRD
-    // FR-4.4). Fail-closed: a network error leaves reportCapabilities null,
-    // which the computed treats as disabled.
+    // FR-4.4). Capability state is owned by the useReportCapabilities
+    // composable (with bounded lazy retry) — see its declaration after the
+    // eligibility computed below.
     const conversationReportDialogOpen = ref(false);
     /** @type {import('vue').Ref<ReturnType<typeof buildKnowledgeConversationSnapshot> | null>} */
     const conversationReportSnapshot = ref(null);
-    /** @type {import('vue').Ref<import('@/entityTypes/aiContentReportTypes').AIContentReportCapabilities | null>} */
-    const reportCapabilities = ref(null);
-    const reportCapabilitiesLoading = ref(false);
     // Stable conversation id for the knowledge chat session. There is no
     // server-side conversation id here (knowledge chat is local-only), so one
     // is minted per session and kept in a ref (design §11.3).
@@ -347,6 +345,16 @@ export default defineComponent({
     const hasReportableConversationOutput = computed(() =>
       hasEligibleKnowledgeCandidate(knowledgeReportMessages.value)
     );
+    // Capability state with bounded lazy retry (2026-09-04 fix): the previous
+    // one-shot mount-time fetch left the button permanently grey when that
+    // single request failed — eligible content restored from localStorage
+    // never re-asked the capabilities endpoint. The composable retries
+    // (capped backoff) once eligible output exists but capabilities have
+    // not resolved enabled:true. Still fail-closed and NOT AI-gated (FR-4.4).
+    const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+      useReportCapabilities({
+        hasEligibleOutput: () => hasReportableConversationOutput.value,
+      });
     const conversationReportEnabled = computed(
       () =>
         reportCapabilities.value?.conversationReporting?.enabled === true &&
@@ -657,20 +665,12 @@ export default defineComponent({
         }
       }
 
-      // Conversation-report capability fetch (design §11.3). NOT AI-gated:
-      // the capabilities endpoint works regardless of USER_AI_ENABLED (PRD
-      // FR-4.4). Fail-closed: a network error leaves reportCapabilities null,
-      // which the computed treats as disabled.
-      reportCapabilitiesLoading.value = true;
-      void (async () => {
-        try {
-          reportCapabilities.value = await getAIContentReportCapabilities();
-        } catch {
-          reportCapabilities.value = null;
-        } finally {
-          reportCapabilitiesLoading.value = false;
-        }
-      })();
+      // Conversation-report capabilities are now owned by the
+      // useReportCapabilities composable (see its declaration after the
+      // hasReportableConversationOutput computed), which fetches at scope
+      // creation and applies a bounded retry once eligible output exists —
+      // replacing the previous one-shot fetch here that permanently greyed
+      // the button when it failed at mount.
     });
 
     // Save chat history to localStorage

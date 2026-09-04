@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
-import { defineComponent, ref, watch } from "vue";
+import { computed, defineComponent, ref, watch } from "vue";
 
 const capsMock = vi.fn();
 const createMock = vi.fn();
@@ -9,6 +9,8 @@ vi.mock("@/views/api/aiContentReport", () => ({
   getAIContentReportCapabilities: (...a: unknown[]) => capsMock(...a),
   createAIContentReport: (...a: unknown[]) => createMock(...a),
 }));
+
+import { useReportCapabilities } from "@/views/utils/reportCapabilities";
 
 const i18n = createI18n({
   legacy: false,
@@ -205,5 +207,110 @@ describe("AiChatV2 conversation-report orchestration", () => {
     activeConversationId.value = "conv-2";
     await w.vm.$nextTick();
     expect(conversationReportDialogOpen.value).toBe(false);
+  });
+
+  // 2026-09-04 bugfix regression test: the reported bug was that every
+  // surface fetched capabilities exactly once at mount, so a transient
+  // startup failure (backend 502 / network blip fail-closing to
+  // enabled:false) left the header button permanently grey — even after
+  // the user loaded a history conversation full of eligible output, no
+  // second fetch ever happened. This harness replicates AiChatV2's exact
+  // wiring — useReportCapabilities driving the button's `enabled` prop —
+  // and asserts the recovery the composable now provides.
+  it("re-enables the header button after a failed mount-time fetch once history content appears", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Mount-time fetch fail-closes (capabilities endpoint unreachable
+      // during startup — exactly what the main process returns).
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1],
+        conversationReporting: {
+          enabled: false,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+      // The retry fetch succeeds — the transient outage healed.
+      capsMock.mockResolvedValueOnce({
+        acceptedSchemaVersions: [1, 2],
+        conversationReporting: {
+          enabled: true,
+          maxAIItems: 10,
+          maxUserItems: 10,
+          maxTotalItems: 20,
+          maxItemTextChars: 8000,
+          maxAggregateTextChars: 32000,
+          maxImages: 3,
+        },
+      });
+
+      // Chat starts empty, then the user loads a history conversation
+      // with eligible assistant output.
+      const hasEligibleOutput = ref(false);
+      const Harness = defineComponent({
+        components: { AIConversationReportButton },
+        setup() {
+          // Same wiring as AiChatV2: composable state gates the button.
+          const { capabilities, loading } = useReportCapabilities({
+            hasEligibleOutput: () => hasEligibleOutput.value,
+          });
+          const conversationReportEnabled = computed(
+            () =>
+              capabilities.value?.conversationReporting.enabled === true &&
+              hasEligibleOutput.value
+          );
+          return { conversationReportEnabled, loading };
+        },
+        template: `
+          <AIConversationReportButton
+            :enabled="conversationReportEnabled"
+            :loading="loading"
+            compact
+          />
+        `,
+      });
+      const w = mount(Harness, {
+        global: { plugins: [i18n], stubs: { VBtn, VIcon } },
+      });
+
+      // Initial fetch settles fail-closed.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(capsMock).toHaveBeenCalledTimes(1));
+
+      // The user loads the history conversation: eligible content now
+      // exists, but capabilities are still fail-closed → button grey.
+      hasEligibleOutput.value = true;
+      await w.vm.$nextTick();
+      expect(
+        (
+          w.find('[data-testid="report-conversation"]')
+            .element as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+
+      // The composable's bounded backoff fires (first delay: 2s) and the
+      // retry resolves enabled:true → the button recovers.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await vi.waitFor(() =>
+        expect(capsMock.mock.calls.length).toBeGreaterThanOrEqual(2)
+      );
+      await vi.waitFor(() => {
+        expect(
+          (
+            w.find('[data-testid="report-conversation"]')
+              .element as HTMLButtonElement
+          ).disabled
+        ).toBe(false);
+      });
+      // The retry chain stops once enabled — no runaway refetching.
+      expect(capsMock).toHaveBeenCalledTimes(2);
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

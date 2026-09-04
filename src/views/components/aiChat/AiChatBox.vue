@@ -846,9 +846,8 @@ import {
   buildLegacyConversationSnapshot,
   hasEligibleLegacyCandidate,
 } from '@/views/components/aiContentReport/conversationReportSnapshot';
-import { getAIContentReportCapabilities } from '@/views/api/aiContentReport';
+import { useReportCapabilities } from '@/views/utils/reportCapabilities';
 import type { ReportableOutputDescriptor } from '@/views/components/aiContentReport/reportableOutput';
-import type { AIContentReportCapabilities } from '@/entityTypes/aiContentReportTypes';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
 // Stream state enum for type safety
@@ -930,14 +929,12 @@ const reportedMessageIds = ref<Set<string>>(new Set());
 // Conversation-report (whole-conversation) orchestration (design §11.2).
 // Shares reportedMessageIds with the single-output flow above. NOT AI-gated:
 // the capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
-// Fail-closed: a network error leaves reportCapabilities null, which the
-// computed treats as disabled.
+// Capability state is owned by the useReportCapabilities composable (with
+// bounded lazy retry) — see its declaration after the eligibility computed.
 const conversationReportDialogOpen = ref(false);
 const conversationReportSnapshot = ref<
   ReturnType<typeof buildLegacyConversationSnapshot> | null
 >(null);
-const reportCapabilities = ref<AIContentReportCapabilities | null>(null);
-const reportCapabilitiesLoading = ref(false);
 /**
  * Derive the active streaming assistant message id so the snapshot excludes
  * the still-streaming placeholder (eligibility rule, design §7.2). While a
@@ -1264,6 +1261,16 @@ const hasReportableConversationOutput = computed(() =>
     streamingAssistantMessageId: activeStreamingAssistantId.value,
   })
 );
+// Capability state with bounded lazy retry (2026-09-04 fix): the previous
+// one-shot mount-time fetch left the button permanently grey when that
+// single request failed — loading a history conversation with eligible
+// content never re-asked the capabilities endpoint. The composable retries
+// (capped backoff) once eligible output exists but capabilities have not
+// resolved enabled:true. Still fail-closed and NOT AI-gated (PRD FR-4.4).
+const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+  useReportCapabilities({
+    hasEligibleOutput: () => hasReportableConversationOutput.value,
+  });
 const conversationReportEnabled = computed(
   () =>
     reportCapabilities.value?.conversationReporting.enabled === true &&
@@ -1413,20 +1420,12 @@ onMounted(async () => {
     fileOps.value = next;
   });
 
-  // Conversation-report capability fetch (design §11.2). NOT AI-gated: the
-  // capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
-  // Fail-closed: a network error leaves reportCapabilities null, which the
-  // computed treats as disabled.
-  reportCapabilitiesLoading.value = true;
-  void (async () => {
-    try {
-      reportCapabilities.value = await getAIContentReportCapabilities();
-    } catch {
-      reportCapabilities.value = null;
-    } finally {
-      reportCapabilitiesLoading.value = false;
-    }
-  })();
+  // Conversation-report capabilities are now owned by the
+  // useReportCapabilities composable (see its declaration above the
+  // conversationReportEnabled computed), which fetches at scope creation
+  // and applies a bounded retry once eligible output exists — replacing
+  // the previous one-shot fetch here that permanently greyed the button
+  // when it failed at mount.
 });
 
 // Clean up file operation subscription
