@@ -5,6 +5,7 @@ import sinon from "sinon";
 import { EmailMarketingController } from "@/controller/emailMarketingController";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailServiceModuleInterface } from "@/modules/interface/EmailServiceModuleInterface";
+import type { EmailServiceImportResult } from "@/entityTypes/emailmarketingType";
 
 describe("EmailMarketingController", () => {
   let emailMarketingController: EmailMarketingController;
@@ -173,6 +174,217 @@ describe("EmailMarketingController", () => {
       expect(csv).to.equal(
         "id,name,from,host,port,ssl,receiveProtocol,create_time\n"
       );
+    });
+  });
+
+  describe("importEmailServices", () => {
+    // Build a stubbed module with sensible defaults; individual tests override
+    // the methods they care about.
+    const makeStubModule = (
+      overrides: Partial<
+        Record<
+          | "findEmailServiceByName"
+          | "createEmailService"
+          | "updateEmailService"
+          | "validateEmailService",
+          unknown
+        >
+      > = {}
+    ) => {
+      const existing: EmailServiceEntity | undefined = undefined;
+      return {
+        findEmailServiceByName:
+          overrides.findEmailServiceByName ?? sinon.stub().resolves(existing),
+        createEmailService:
+          overrides.createEmailService ?? sinon.stub().resolves(1),
+        updateEmailService:
+          overrides.updateEmailService ?? sinon.stub().resolves(),
+        validateEmailService:
+          overrides.validateEmailService ??
+          sinon.stub().resolves({ valid: true, errors: [] }),
+      } as unknown as EmailServiceModuleInterface;
+    };
+
+    it("parses a valid CSV and upserts each row (create when no name match)", async () => {
+      const create = sinon.stub().resolves(5);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Primary,user1@example.com,smtp.example.com,465,1,secret1,imap\n" +
+        "Secondary,user2@example.com,smtp2.example.com,587,0,secret2,imap\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(result.skipped).to.equal(0);
+      expect(create.calledTwice).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("Primary");
+      expect(create.firstCall.args[0].password).to.equal("secret1");
+      expect(create.secondCall.args[0].name).to.equal("Secondary");
+    });
+
+    it("updates an existing service when the name matches (no create)", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Primary SMTP";
+      const update = sinon.stub().resolves();
+      const create = sinon.stub().resolves(99);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Primary SMTP,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[0]).to.equal(7); // existing id
+      expect(update.firstCall.args[1].password).to.equal("newpass"); // overwritten
+      expect(create.called).to.equal(false);
+    });
+
+    it("skips rows with a missing password and reports the file row number", async () => {
+      // validateEmailService returns errors for the passwordless row.
+      const validate = sinon.stub();
+      validate
+        .onCall(0)
+        .resolves({ valid: false, errors: ["Password is required"] });
+      validate.onCall(1).resolves({ valid: true, errors: [] });
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "NoPass,user@example.com,smtp.example.com,465,1,\n" + // row 2
+        "WithPass,user2@example.com,smtp2.example.com,465,1,secret\n"; // row 3
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /password/i.test(e))).to.equal(true);
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("WithPass");
+    });
+
+    it("parses JSON in export-shape ({total,services,exportDate}) and imports", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify({
+        total: 1,
+        services: [
+          {
+            name: "Primary SMTP",
+            from: "sender@example.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "secret",
+            receiveProtocol: "imap",
+          },
+        ],
+        exportDate: "2026-09-04T00:00:00.000Z",
+      });
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].from).to.equal("sender@example.com");
+    });
+
+    it("parses JSON in bare-array shape and imports", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify([
+        {
+          name: "A",
+          from: "a@example.com",
+          host: "h",
+          port: "25",
+          ssl: 1,
+          password: "p",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+    });
+
+    it("returns 0 imported and a skipped count for a CSV with no data rows", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const csv = "name,from,host,port,ssl,password\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+    });
+
+    it("throws on malformed JSON (invalid-file signal to the IPC layer)", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices(
+          "{ not json ",
+          "json"
+        );
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {
+      // A minimal CSV with only required columns — ssl/receiveProtocol columns omitted.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+      const csv =
+        "name,from,host,port,password\n" +
+        "Minimal,m@example.com,smtp.example.com,465,pw\n";
+
+      await emailMarketingController.importEmailServices(csv, "csv");
+
+      expect(create.firstCall.args[0].ssl).to.equal(1);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
     });
   });
 });

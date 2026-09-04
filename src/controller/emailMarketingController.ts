@@ -7,6 +7,7 @@ import {
   EmailServiceEntitydata,
   EmailSendParam,
   EmailServiceExportPayload,
+  EmailServiceImportResult,
 } from "@/entityTypes/emailmarketingType";
 //import {EmailMarketingFilterApi} from "@/api/emailMarketingFilterApi";
 //import {EmailServiceApi} from "@/api/emailServiceApi";
@@ -25,6 +26,7 @@ import { EmailFilterDetailModuleInterface } from "@/modules/interface/EmailFilte
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType";
+import Papa from "papaparse";
 export class EmailMarketingController {
   emailTemplateModule: EmailTemplateModuleInterface;
   emailFilterTaskRelationModule: EmailFilterTaskRelationModuleInterface;
@@ -363,6 +365,132 @@ export class EmailMarketingController {
       return `"${value.replace(/"/g, '""')}"`;
     }
     return value;
+  }
+
+  // Import email services from raw file content. format: "csv" | "json".
+  // Parses, maps each row to a strict field whitelist (including password),
+  // validates each row, and upserts by name. id / create_time are read but
+  // ignored on write. Returns counts + per-row errors with file row numbers.
+  public async importEmailServices(
+    content: string,
+    format: "csv" | "json"
+  ): Promise<EmailServiceImportResult> {
+    const rows: Record<string, unknown>[] = this.parseImportContent(
+      content,
+      format
+    );
+
+    let imported = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (let index = 0; index < rows.length; index++) {
+      // File row number: CSV header is row 1, data starts row 2; JSON array
+      // index + 1 (so a single-element file reports "row 1").
+      const rowNumber = index + (format === "csv" ? 2 : 1);
+      const entity = this.mapImportRowToEntity(rows[index]);
+      const name = entity.name ?? "";
+
+      // validateEmailService covers email format, port numeric, required
+      // fields (incl. password), and receive-protocol-specific rules.
+      const validation = await this.emailServiceModule.validateEmailService(
+        entity
+      );
+      if (!validation.valid) {
+        skipped++;
+        errors.push(`row ${rowNumber}: ${validation.errors.join("; ")}`);
+        continue;
+      }
+      try {
+        const existing = name
+          ? await this.emailServiceModule.findEmailServiceByName(name)
+          : undefined;
+        if (existing?.id && existing.id > 0) {
+          // Password is always overwritten by the imported value (import is
+          // an explicit act; the file carries the password).
+          await this.emailServiceModule.updateEmailService(existing.id, entity);
+        } else {
+          await this.emailServiceModule.createEmailService(entity);
+        }
+        imported++;
+      } catch (rowError) {
+        skipped++;
+        const reason =
+          rowError instanceof Error ? rowError.message : String(rowError);
+        errors.push(`row ${rowNumber}: ${reason}`);
+      }
+    }
+
+    // Cap reported errors to the first 10 to keep the snackbar readable.
+    const cappedErrors = errors.slice(0, 10);
+    return { imported, skipped, errors: cappedErrors };
+  }
+
+  /** Parse raw import content into a list of row records. Throws on malformed input. */
+  private parseImportContent(
+    content: string,
+    format: "csv" | "json"
+  ): Record<string, unknown>[] {
+    if (format === "json") {
+      const parsed: unknown = JSON.parse(content);
+      // Export shape { total, services, exportDate } or bare array.
+      if (Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>[];
+      }
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        Array.isArray((parsed as { services?: unknown }).services)
+      ) {
+        return (parsed as { services: Record<string, unknown>[] }).services;
+      }
+      throw new Error("Invalid JSON structure for import");
+    }
+
+    // CSV — header row, case-insensitive columns.
+    const result = Papa.parse<Record<string, unknown>>(content, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (header: string) => header.trim().toLowerCase(),
+    });
+    if (result.errors && result.errors.length > 0) {
+      // Papa reports structural parse errors (quote mismatches, etc.).
+      throw new Error(`CSV parse error: ${result.errors[0].message}`);
+    }
+    return (result.data as Record<string, unknown>[]).filter(
+      (row) => row && Object.keys(row).length > 0
+    );
+  }
+
+  /** Map a parsed row record to an EmailServiceEntity (strict whitelist). */
+  private mapImportRowToEntity(
+    row: Record<string, unknown>
+  ): EmailServiceEntity {
+    const entity = new EmailServiceEntity();
+    entity.name = this.rowValueToString(row.name);
+    entity.from = this.rowValueToString(row.from);
+    entity.host = this.rowValueToString(row.host);
+    entity.port = this.rowValueToString(row.port);
+    entity.password = this.rowValueToString(row.password);
+    // ssl defaults to 1 when absent/blank.
+    const sslRaw = this.rowValueToString(row.ssl);
+    entity.ssl = sslRaw.length === 0 ? 1 : Number(sslRaw);
+    // receiveProtocol defaults to "imap" when absent/blank.
+    const protocolRaw = this.rowValueToString(
+      row.receiveProtocol
+    ).toLowerCase();
+    entity.receiveProtocol =
+      protocolRaw.length === 0
+        ? "imap"
+        : (protocolRaw as EmailServiceEntity["receiveProtocol"]);
+    // id and create_time are read but intentionally ignored on write.
+    return entity;
+  }
+
+  /** Coerce a possibly non-string row value (JSON numbers) to a trimmed string. */
+  private rowValueToString(value: unknown): string {
+    if (value === null || value === undefined) return "";
+    return String(value).trim();
   }
 
   //send email

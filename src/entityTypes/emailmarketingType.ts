@@ -193,6 +193,13 @@ export type EmailServiceExportPayload = {
   exportDate: string;
 };
 
+/** Result envelope for email service import (counts + per-row errors). */
+export type EmailServiceImportResult = {
+  imported: number;
+  skipped: number;
+  errors: string[]; // capped at first 10, e.g. "row 4: password is required"
+};
+
 /**
  * Receive-facing summary of an email service, with all secrets stripped.
  * Returned by the `list_email_inboxes` AI tool and the receive settings UI list.
