@@ -75,6 +75,7 @@ import {
 import { cleanupContactExtractionWorker } from "@/main-process/communication/contactExtraction-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 import {
@@ -1055,6 +1056,18 @@ function initialize() {
       getDefaultToolJobRegistry().shutdown();
     } catch (err) {
       console.error("[shutdown] ToolJobRegistry shutdown failed", err);
+    }
+
+    // Managed-browser supervisor: graceful session stops + verified orphan
+    // Chrome cleanup within a global deadline (design §8.5 / FR-RUNTIME-015).
+    try {
+      const supervisor = getDefaultManagedBrowserSupervisor();
+      if (supervisor.listSessions().length > 0) {
+        await supervisor.shutdownAll(5_000);
+        log.info("Managed browser supervisor shutdown completed");
+      }
+    } catch (err) {
+      log.warn("[shutdown] managed-browser supervisor failed", err);
     }
 
     // WS-4 R4.5: clean up the contact-extraction worker on app quit
