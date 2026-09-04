@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { createHash } from "node:crypto";
 import { HttpClient } from "@/modules/lib/httpclient";
 import { log } from "@/modules/Logger";
 import { getOrCreateInstallId } from "@/modules/diagnostics/DiagnosticIdentity";
@@ -7,6 +8,7 @@ import {
   AIContentReportError,
   type AIContentReportCapabilities,
   type AIContentReportContext,
+  type AIContentReportImagePreview,
   type CreateAIContentReportRequest,
   type CreateAIContentReportResponse,
   type CreateAIConversationReportRequest,
@@ -160,7 +162,10 @@ export class AIContentReportService {
       ...partial,
       appVersion: this.appVersion(),
       platform: process.platform as "win32" | "darwin" | "linux",
-      installId: this.installId(),
+      // Never on the wire body: the backend resolves install identity from
+      // the X-AiFetchly-Install-Id header (marketing design §7.1) and rejects
+      // unknown body fields outright (DisallowUnknownFields → 400).
+      installId: undefined,
     };
   }
 
@@ -188,17 +193,29 @@ export class AIContentReportService {
 
   /**
    * Normalize the output evidence: truncate text to the 32000-char limit
-   * (PRD FR-3.2). Image previews are already bounded by the Zod schema and
-   * the renderer-side encoder, so they pass through unchanged.
+   * (PRD FR-3.2), backfill each preview's sha256, and materialize the keys
+   * the backend requires to be PRESENT (its requiredKeys set distinguishes
+   * an absent key from an explicit zero value — omitting textTruncated /
+   * imagePreviews / evidenceUnavailable is a 400, marketing design §9).
    */
   normalizeOutput(
     output: CreateAIContentReportRequest["output"]
   ): CreateAIContentReportRequest["output"] {
-    const normalized: CreateAIContentReportRequest["output"] = { ...output };
+    const normalized: CreateAIContentReportRequest["output"] = {
+      ...output,
+      // Backend requires presence; JSON.stringify drops undefined.
+      textTruncated: output.textTruncated ?? false,
+      imagePreviews: output.imagePreviews ?? [],
+      evidenceUnavailable: output.evidenceUnavailable ?? false,
+    };
     const textResult = this.normalizeText(output.text);
     if (typeof textResult.text === "string") {
       normalized.text = textResult.text;
-      normalized.textTruncated = textResult.textTruncated;
+      normalized.textTruncated = textResult.textTruncated ?? false;
+    }
+    if (normalized.imagePreviews) {
+      normalized.imagePreviews =
+        normalized.imagePreviews.map(backfillImageSha256);
     }
     return normalized;
   }
@@ -284,7 +301,13 @@ export class AIContentReportService {
     try {
       raw = await this.httpClient.postJson<
         CommonApiresp<CreateAIContentReportResponse>
-      >(REPORT_ENDPOINT, normalizedRequest);
+      >(REPORT_ENDPOINT, normalizedRequest, {
+        // Backend design §7.1: install id rides the header (used for the
+        // anonymous rate-limit scope; ignored when a bearer is present).
+        headers: {
+          "X-AiFetchly-Install-Id": this.installId(),
+        },
+      });
     } catch (err) {
       const code = mapReportError(err);
       const status = extractStatus(err);
@@ -379,7 +402,12 @@ export class AIContentReportService {
     try {
       raw = await this.httpClient.postJson<
         CommonApiresp<CreateAIContentReportResponse>
-      >(REPORT_ENDPOINT, normalizedRequest);
+      >(REPORT_ENDPOINT, normalizedRequest, {
+        // Backend design §7.1: install id rides the header, never the body.
+        headers: {
+          "X-AiFetchly-Install-Id": this.installId(),
+        },
+      });
     } catch (err) {
       const code = mapReportError(err);
       httpStatus = extractStatus(err);
@@ -453,11 +481,18 @@ export class AIContentReportService {
     const normalized = normalizeConversationTexts(inputs);
     const byId = new Map(normalized.texts.map((text) => [text.itemId, text]));
     return items.map((item) => {
-      if (!item.text) return item;
+      const backfilled: CreateAIConversationReportRequest["items"][number] =
+        item.imagePreviews
+          ? {
+              ...item,
+              imagePreviews: item.imagePreviews.map(backfillImageSha256),
+            }
+          : item;
+      if (!item.text) return backfilled;
       const text = byId.get(item.itemId);
-      if (!text) return item;
+      if (!text) return backfilled;
       return {
-        ...item,
+        ...backfilled,
         text: text.text,
         textTruncated: text.truncated || undefined,
       };
@@ -476,7 +511,8 @@ export class AIContentReportService {
       ...partial,
       appVersion: this.appVersion(),
       platform: process.platform as "win32" | "darwin" | "linux",
-      installId: this.installId(),
+      // Never on the wire body — see assembleContext.
+      installId: undefined,
     };
   }
 
@@ -501,6 +537,27 @@ function durationBucket(ms: number): string {
   if (ms < 5000) return "1-5s";
   if (ms < 30000) return "5-30s";
   return ">30s";
+}
+
+/**
+ * Backfill the SHA-256 over an image preview's decoded base64 bytes.
+ *
+ * The renderer encoder emits previews without `sha256`, but the backend
+ * requires the field present AND matching its own recomputed hash of the
+ * decoded bytes (marketing services/aicontentreport/image.go) — a missing or
+ * stale client hash is a 400. A client-supplied hash is trusted verbatim
+ * (the backend recomputes from `dataBase64` regardless).
+ */
+function backfillImageSha256(
+  preview: AIContentReportImagePreview
+): AIContentReportImagePreview {
+  if (preview.sha256) return preview;
+  return {
+    ...preview,
+    sha256: createHash("sha256")
+      .update(Buffer.from(preview.dataBase64, "base64"))
+      .digest("hex"),
+  };
 }
 
 /** Best-effort HTTP status extraction from an unknown thrown value. */

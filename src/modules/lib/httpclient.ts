@@ -196,9 +196,18 @@ export class HttpClient {
     isRetry = false
   ): Promise<unknown> {
     // await this.setheaderToken()
+    // Merge instance headers (Authorization) with per-call headers
+    // (Accept/Content-Type from postJson/put). Previously `headers:
+    // this._headers` replaced options.headers entirely, so a string body
+    // went out with fetch's auto-set `text/plain;charset=UTF-8` — rejected
+    // with 415 by backends that enforce application/json strictly
+    // (marketing POST /api/ai/content-reports). Per-call headers win.
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
-      headers: this._headers,
+      headers: {
+        ...this._headers,
+        ...(options.headers as Record<string, string>),
+      },
     });
 
     // Handle 401 Unauthorized and 403 Forbidden - Token might be expired.
@@ -362,8 +371,9 @@ export class HttpClient {
     data,
     options = {}
   ): Promise<T> {
-    // this.setHeader('Accept', 'application/json')
-    // this.setHeader('Content-Type', 'application/json')
+    // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
+    // default to the standard JSON accept/content-type. The hard-coded
+    // defaults win only when the caller did not set them.
     return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -371,8 +381,8 @@ export class HttpClient {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        ...((options as { headers?: Record<string, string> }).headers ?? {}),
       },
-      // headers: this._headers,
     })) as T;
   }
 
