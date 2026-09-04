@@ -21,7 +21,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
 });
 
@@ -124,6 +125,10 @@ describe("OutboundEmailDraftService.generateBatch", () => {
     // Batch hash pointer was set.
     const batch = await model.readBatch(result.batchId!);
     expect(batch?.batchHash).toMatch(/^[0-9a-f]{64}$/);
+    // Policy/validation versions are persisted at batch creation (§15.1.7) so
+    // the claim can detect a stale policy/validator before send.
+    expect(batch?.policyVersion).toBe("outbound-policy-v1");
+    expect(batch?.validationVersion).toBe("outbound-validation-v1");
   });
 
   it("creates revisions immutably (append creates a new revision, not a mutation)", async () => {

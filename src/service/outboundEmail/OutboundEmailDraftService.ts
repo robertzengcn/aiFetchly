@@ -9,6 +9,10 @@ import {
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
+import {
+  OUTBOUND_POLICY_VERSION,
+  OUTBOUND_VALIDATION_VERSION,
+} from "@/service/outboundEmail/outboundReliabilityVersions";
 
 /**
  * Draft generation + personalization for the intent-aware outbound-email
@@ -27,7 +31,10 @@ import type { EmailItem } from "@/entityTypes/emailmarketingType";
 export interface PersonalizationEvidence {
   readonly field: string;
   readonly valueHash: string;
-  readonly sourceType: "recipient_record" | "knowledge_document" | "user_instruction";
+  readonly sourceType:
+    | "recipient_record"
+    | "knowledge_document"
+    | "user_instruction";
   readonly sourceId: string;
   readonly confidence: number;
 }
@@ -111,9 +118,7 @@ export class OutboundEmailDraftService {
    * title/source for that address is preserved. Pure — no DB access, safe to
    * call from tests directly.
    */
-  materializeRecipients(
-    recipients: ReadonlyArray<EmailItem>
-  ): EmailItem[] {
+  materializeRecipients(recipients: ReadonlyArray<EmailItem>): EmailItem[] {
     const seen = new Set<string>();
     const materialized: EmailItem[] = [];
     for (const r of recipients) {
@@ -145,9 +150,7 @@ export class OutboundEmailDraftService {
    * model for `conversationId`/`sourceUserMessageId`/`intentDecisionId` —
    * those come from trusted caller input (§10.1).
    */
-  async generateBatch(
-    input: GenerateBatchInput
-  ): Promise<GenerateBatchResult> {
+  async generateBatch(input: GenerateBatchInput): Promise<GenerateBatchResult> {
     if (!this.isAiEnabled()) {
       return { success: false, code: "ai_disabled" };
     }
@@ -171,6 +174,8 @@ export class OutboundEmailDraftService {
         recipientCount: materialized.length,
         validRecipientCount: materialized.length,
         emailServiceIdsJson: JSON.stringify([...input.serviceIds]),
+        policyVersion: OUTBOUND_POLICY_VERSION,
+        validationVersion: OUTBOUND_VALIDATION_VERSION,
       })
     );
 

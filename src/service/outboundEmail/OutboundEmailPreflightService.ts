@@ -7,6 +7,10 @@ import type {
   OutboundEmailPreflightResult,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 import { OUTBOUND_EMAIL_BATCH_LIMITS } from "@/service/outboundEmail/outboundEmailLimits";
+import {
+  OUTBOUND_POLICY_VERSION,
+  OUTBOUND_VALIDATION_VERSION,
+} from "@/service/outboundEmail/outboundReliabilityVersions";
 export { OUTBOUND_EMAIL_BATCH_LIMITS };
 
 /**
@@ -35,8 +39,8 @@ export interface PreflightEntry {
   readonly storedHash: string | null;
 }
 
-const POLICY_VERSION = "outbound-policy-v1";
-const VALIDATION_VERSION = "outbound-validation-v1";
+const POLICY_VERSION = OUTBOUND_POLICY_VERSION;
+const VALIDATION_VERSION = OUTBOUND_VALIDATION_VERSION;
 
 // RFC-5322-adjacent email pattern: non-empty local part, @, a domain with a dot.
 // Preflight is a coarse guard; precise deliverability is the provider's job.

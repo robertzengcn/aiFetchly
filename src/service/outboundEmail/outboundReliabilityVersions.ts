@@ -8,7 +8,7 @@ export const OUTBOUND_RESOLVER_VERSION = "outbound-resolver-v1";
 
 export const OUTBOUND_POLICY_VERSION = "outbound-policy-v1";
 
-export const OUTBOUND_VALIDATOR_VERSION = "outbound-validator-v1";
+export const OUTBOUND_VALIDATION_VERSION = "outbound-validation-v1";
 
 /**
  * Recovery threshold: a claimed attempt with no worker-start acknowledgement

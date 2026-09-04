@@ -14,6 +14,10 @@ import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
 import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import {
+  OUTBOUND_POLICY_VERSION,
+  OUTBOUND_VALIDATION_VERSION,
+} from "@/service/outboundEmail/outboundReliabilityVersions";
 
 /**
  * Authoritative delivery service for the intent-aware outbound-email pipeline
@@ -39,8 +43,8 @@ function buildIdempotencyKey(
 }
 
 /** Current preflight policy/validation versions the claim enforces (§15.1.7). */
-const POLICY_VERSION = "outbound-policy-v1";
-const VALIDATION_VERSION = "outbound-validation-v1";
+const POLICY_VERSION = OUTBOUND_POLICY_VERSION;
+const VALIDATION_VERSION = OUTBOUND_VALIDATION_VERSION;
 
 export interface ClaimInput {
   readonly batchId: number;
