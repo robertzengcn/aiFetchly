@@ -46,6 +46,21 @@ function buildIdempotencyKey(
 const POLICY_VERSION = OUTBOUND_POLICY_VERSION;
 const VALIDATION_VERSION = OUTBOUND_VALIDATION_VERSION;
 
+/**
+ * Sentinel thrown from inside the claim transaction when the in-transaction
+ * idempotency-key re-check finds a row a concurrent claim just inserted. The
+ * outer catch converts it to `already_processed` instead of surfacing a raw
+ * unique-constraint violation.
+ */
+class IdempotencyKeyAlreadyClaimed extends Error {
+  readonly existingAttemptId: number;
+  constructor(existingAttemptId: number) {
+    super(`idempotency_key_already_claimed: ${existingAttemptId}`);
+    this.name = "IdempotencyKeyAlreadyClaimed";
+    this.existingAttemptId = existingAttemptId;
+  }
+}
+
 export interface ClaimInput {
   readonly batchId: number;
   readonly authorizationId: number;
@@ -139,7 +154,8 @@ export class OutboundEmailDeliveryService extends BaseDb {
       input.batchHash
     );
 
-    // §15.1 step 1 (partial) — check for a duplicate before the transaction.
+    // §15.1 step 1 (partial) — check for a duplicate before the transaction
+    // as a fast path to avoid the transaction entirely on the hot retry.
     const existing = await this.deliveryModel.findAttemptByIdempotencyKey(
       idempotencyKey
     );
@@ -148,176 +164,218 @@ export class OutboundEmailDeliveryService extends BaseDb {
     }
 
     // §15.1 steps 1–11 in one transaction.
-    const claimed = await this.sqliteDb.connection.transaction(
-      async (manager: EntityManager) => {
-        // Step 1 — load batch, authorization.
-        const batch = await this.draftModel.readBatch(input.batchId, manager);
-        if (!batch) {
-          throw new Error(
-            `batch_not_found: batch ${input.batchId} does not exist`
-          );
-        }
-        const authorization = await this.authorizationModel.read(
-          input.authorizationId
-        );
-        if (!authorization) {
-          throw new Error(
-            `authorization_not_found: authorization ${input.authorizationId} does not exist`
-          );
-        }
-
-        // Step 2 — ownership: the authorization must bind this batch.
-        if (authorization.batchId !== input.batchId) {
-          throw new Error(
-            "authorization_batch_mismatch: authorization does not bind this batch"
-          );
-        }
-
-        // Step 3 — batch status must be direct_authorized or review_authorized.
-        if (
-          batch.status !== "direct_authorized" &&
-          batch.status !== "review_authorized"
-        ) {
-          throw new Error(
-            `batch_status_unauthorized: batch status is ${batch.status}, expected direct_authorized or review_authorized`
-          );
-        }
-
-        // Step 4 — authorization active and not expired.
-        if (authorization.status !== "active") {
-          throw new Error(
-            `authorization_not_active: status is ${authorization.status}`
-          );
-        }
-        if (authorization.expiresAt.getTime() < Date.now()) {
-          throw new Error("authorization_expired");
-        }
-        if (authorization.invalidatedAt) {
-          throw new Error("authorization_invalidated");
-        }
-
-        // Step 5 — recompute envelope + batch hashes from current revisions.
-        const drafts = await this.draftModel.listDraftsByBatch(
-          input.batchId,
-          manager
-        );
-        const envelopes: BatchEnvelopeEntry[] = [];
-        const revisions: OutboundEmailDraftRevisionEntity[] = [];
-        for (const draft of drafts) {
-          const revision = await this.draftModel.readCurrentRevision(draft.id);
-          if (!revision) {
+    let claimed: {
+      attemptId: number;
+      batch: OutboundEmailDraftBatchEntity;
+      drafts: OutboundEmailDraftEntity[];
+      revisions: OutboundEmailDraftRevisionEntity[];
+      authorization: OutboundEmailAuthorizationEntity;
+    };
+    try {
+      claimed = await this.sqliteDb.connection.transaction(
+        async (manager: EntityManager) => {
+          // Step 1 — load batch, authorization.
+          const batch = await this.draftModel.readBatch(input.batchId, manager);
+          if (!batch) {
             throw new Error(
-              `missing_current_revision: draft ${draft.id} has no current revision`
+              `batch_not_found: batch ${input.batchId} does not exist`
             );
           }
-          revisions.push(revision);
-          envelopes.push({
-            version: 1,
-            draftId: draft.id,
-            emailServiceId: revision.emailServiceId,
-            senderAddress: revision.senderAddress,
-            recipientAddress: revision.recipientAddress,
-            subject: revision.subject,
-            bodyText: revision.bodyText,
-            bodyHtml: revision.bodyHtml,
-          });
-        }
-        const recomputedBatchHash =
-          OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+          const authorization = await this.authorizationModel.read(
+            input.authorizationId
+          );
+          if (!authorization) {
+            throw new Error(
+              `authorization_not_found: authorization ${input.authorizationId} does not exist`
+            );
+          }
 
-        // Step 6 — authorization hash equals the current batch hash.
-        if (authorization.batchHash !== recomputedBatchHash) {
-          throw new Error(
-            `batch_hash_mismatch: authorization hash ${authorization.batchHash} != recomputed ${recomputedBatchHash}`
-          );
-        }
-        // The caller-supplied hash must also match (defense-in-depth).
-        if (input.batchHash !== recomputedBatchHash) {
-          throw new Error(
-            `batch_hash_mismatch: claim hash ${input.batchHash} != recomputed ${recomputedBatchHash}`
-          );
-        }
-
-        // Step 7 — preflight policy/validation versions remain current.
-        if (batch.policyVersion && batch.policyVersion !== POLICY_VERSION) {
-          throw new Error(
-            `policy_version_stale: ${batch.policyVersion} != ${POLICY_VERSION}`
-          );
-        }
-        if (
-          batch.validationVersion &&
-          batch.validationVersion !== VALIDATION_VERSION
-        ) {
-          throw new Error(
-            `validation_version_stale: ${batch.validationVersion} != ${VALIDATION_VERSION}`
-          );
-        }
-
-        // Step 8 — insert the send attempt (unique idempotency key).
-        const now = new Date();
-        const attempt = await this.deliveryModel.createAttempt(
-          Object.assign(new OutboundEmailSendAttemptEntity(), {
-            batchId: input.batchId,
-            authorizationId: input.authorizationId,
-            batchHash: recomputedBatchHash,
+          // Step 1b — re-check the idempotency key INSIDE the transaction. The
+          // pre-transaction check above races a concurrent claim that inserts
+          // the same key between the check and this transaction; the unique
+          // index is the final backstop, but re-checking here turns the race
+          // into a clean `already_processed` return instead of a constraint
+          // violation thrown out of the transaction.
+          const raced = await this.deliveryModel.findAttemptByIdempotencyKey(
             idempotencyKey,
-            status: "claimed",
-            claimedAt: now,
-          }),
-          manager
-        );
-
-        // Step 9 — one pending outcome per draft.
-        for (let i = 0; i < drafts.length; i++) {
-          const draft = drafts[i];
-          const revision = revisions[i];
-          const envelopeHash = OutboundEmailEnvelopeHasher.hashEnvelope(
-            envelopes[i]
+            manager
           );
-          await this.deliveryModel.createOutcome(
-            Object.assign(new OutboundEmailDeliveryOutcomeEntity(), {
-              sendAttemptId: attempt.id,
-              batchId: input.batchId,
+          if (raced) {
+            // Throw a sentinel the outer handler converts to already_processed;
+            // cannot `return` from inside the transaction callback cleanly.
+            throw new IdempotencyKeyAlreadyClaimed(raced.id);
+          }
+
+          // Step 2 — ownership: the authorization must bind this batch.
+          if (authorization.batchId !== input.batchId) {
+            throw new Error(
+              "authorization_batch_mismatch: authorization does not bind this batch"
+            );
+          }
+
+          // Step 3 — batch status must be direct_authorized or review_authorized.
+          if (
+            batch.status !== "direct_authorized" &&
+            batch.status !== "review_authorized"
+          ) {
+            throw new Error(
+              `batch_status_unauthorized: batch status is ${batch.status}, expected direct_authorized or review_authorized`
+            );
+          }
+
+          // Step 4 — authorization active and not expired.
+          if (authorization.status !== "active") {
+            throw new Error(
+              `authorization_not_active: status is ${authorization.status}`
+            );
+          }
+          if (authorization.expiresAt.getTime() < Date.now()) {
+            throw new Error("authorization_expired");
+          }
+          if (authorization.invalidatedAt) {
+            throw new Error("authorization_invalidated");
+          }
+
+          // Step 5 — recompute envelope + batch hashes from current revisions.
+          const drafts = await this.draftModel.listDraftsByBatch(
+            input.batchId,
+            manager
+          );
+          const envelopes: BatchEnvelopeEntry[] = [];
+          const revisions: OutboundEmailDraftRevisionEntity[] = [];
+          for (const draft of drafts) {
+            const revision = await this.draftModel.readCurrentRevision(
+              draft.id
+            );
+            if (!revision) {
+              throw new Error(
+                `missing_current_revision: draft ${draft.id} has no current revision`
+              );
+            }
+            revisions.push(revision);
+            envelopes.push({
+              version: 1,
               draftId: draft.id,
-              revisionId: revision.id,
-              envelopeHash,
+              emailServiceId: revision.emailServiceId,
+              senderAddress: revision.senderAddress,
               recipientAddress: revision.recipientAddress,
-              status: "pending",
+              subject: revision.subject,
+              bodyText: revision.bodyText,
+              bodyHtml: revision.bodyHtml,
+            });
+          }
+          const recomputedBatchHash =
+            OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+
+          // Step 6 — authorization hash equals the current batch hash.
+          if (authorization.batchHash !== recomputedBatchHash) {
+            throw new Error(
+              `batch_hash_mismatch: authorization hash ${authorization.batchHash} != recomputed ${recomputedBatchHash}`
+            );
+          }
+          // The caller-supplied hash must also match (defense-in-depth).
+          if (input.batchHash !== recomputedBatchHash) {
+            throw new Error(
+              `batch_hash_mismatch: claim hash ${input.batchHash} != recomputed ${recomputedBatchHash}`
+            );
+          }
+
+          // Step 7 — preflight policy/validation versions remain current.
+          if (batch.policyVersion && batch.policyVersion !== POLICY_VERSION) {
+            throw new Error(
+              `policy_version_stale: ${batch.policyVersion} != ${POLICY_VERSION}`
+            );
+          }
+          if (
+            batch.validationVersion &&
+            batch.validationVersion !== VALIDATION_VERSION
+          ) {
+            throw new Error(
+              `validation_version_stale: ${batch.validationVersion} != ${VALIDATION_VERSION}`
+            );
+          }
+
+          // Step 8 — insert the send attempt (unique idempotency key).
+          const now = new Date();
+          const attempt = await this.deliveryModel.createAttempt(
+            Object.assign(new OutboundEmailSendAttemptEntity(), {
+              batchId: input.batchId,
+              authorizationId: input.authorizationId,
+              batchHash: recomputedBatchHash,
+              idempotencyKey,
+              status: "claimed",
+              claimedAt: now,
             }),
             manager
           );
+
+          // Step 9 — one pending outcome per draft.
+          for (let i = 0; i < drafts.length; i++) {
+            const draft = drafts[i];
+            const revision = revisions[i];
+            const envelopeHash = OutboundEmailEnvelopeHasher.hashEnvelope(
+              envelopes[i]
+            );
+            await this.deliveryModel.createOutcome(
+              Object.assign(new OutboundEmailDeliveryOutcomeEntity(), {
+                sendAttemptId: attempt.id,
+                batchId: input.batchId,
+                draftId: draft.id,
+                revisionId: revision.id,
+                envelopeHash,
+                recipientAddress: revision.recipientAddress,
+                status: "pending",
+              }),
+              manager
+            );
+          }
+
+          // Step 10 — mark authorization consumed.
+          await this.authorizationModel.consume(
+            input.authorizationId,
+            now,
+            manager
+          );
+
+          // Step 11 — mark batch + drafts queued.
+          await this.draftModel.updateBatchStatus(
+            input.batchId,
+            "queued",
+            {
+              sendAttemptId: attempt.id,
+              queuedAt: now,
+            },
+            manager
+          );
+          for (const draft of drafts) {
+            await this.draftModel.updateDraftStatus(
+              draft.id,
+              "queued",
+              manager
+            );
+          }
+
+          return {
+            attemptId: attempt.id,
+            batch,
+            drafts,
+            revisions,
+            authorization,
+          };
         }
-
-        // Step 10 — mark authorization consumed.
-        await this.authorizationModel.consume(
-          input.authorizationId,
-          now,
-          manager
-        );
-
-        // Step 11 — mark batch + drafts queued.
-        await this.draftModel.updateBatchStatus(
-          input.batchId,
-          "queued",
-          {
-            sendAttemptId: attempt.id,
-            queuedAt: now,
-          },
-          manager
-        );
-        for (const draft of drafts) {
-          await this.draftModel.updateDraftStatus(draft.id, "queued", manager);
-        }
-
+      );
+    } catch (error: unknown) {
+      // The in-transaction idempotency-key re-check throws a sentinel when a
+      // concurrent claim won the race; surface it as already_processed instead
+      // of a constraint-violation error.
+      if (error instanceof IdempotencyKeyAlreadyClaimed) {
         return {
-          attemptId: attempt.id,
-          batch,
-          drafts,
-          revisions,
-          authorization,
+          status: "already_processed",
+          attemptId: error.existingAttemptId,
         };
       }
-    );
+      throw error;
+    }
 
     // §15.2 worker prep — AFTER the transaction commits. Any failure here is
     // recoverable to `worker_start_failed` (§15.3), never a silent duplicate.

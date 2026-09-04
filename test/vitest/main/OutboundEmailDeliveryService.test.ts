@@ -161,6 +161,65 @@ describe("OutboundEmailDeliveryService.claim", () => {
     expect(starts).toBe(1);
   });
 
+  it("returns already_processed when a concurrent claim inserts the key between the pre-check and the transaction", async () => {
+    // Simulate the race: the pre-transaction duplicate check sees no row, but
+    // a concurrent claim inserts the idempotency key before this claim's
+    // transaction re-checks. The in-transaction re-check must turn that race
+    // into a clean already_processed instead of a thrown constraint violation.
+    const seed = await seedAuthorizedBatch();
+    let starts = 0;
+    const service = new OutboundEmailDeliveryService(tmpDir, {
+      workerStarter: async () => {
+        starts += 1;
+        return { started: true };
+      },
+    });
+
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+    const { OutboundEmailSendAttemptEntity } = await import(
+      "@/entity/OutboundEmailSendAttempt.entity"
+    );
+
+    // Stub the model so the FIRST (pre-txn) lookup returns null and the SECOND
+    // (in-txn) lookup returns a row a concurrent claim just inserted.
+    let lookupCount = 0;
+    const originalFind =
+      deliveryModel.findAttemptByIdempotencyKey.bind(deliveryModel);
+    deliveryModel.findAttemptByIdempotencyKey = async (key: string) => {
+      lookupCount += 1;
+      if (lookupCount === 1) {
+        // Pre-transaction fast path: nothing yet.
+        return null;
+      }
+      // In-transaction re-check: simulate the concurrent winner.
+      const raced = new OutboundEmailSendAttemptEntity();
+      raced.id = 999;
+      raced.batchId = seed.batchId;
+      raced.authorizationId = seed.authorizationId;
+      raced.batchHash = seed.batchHash;
+      raced.idempotencyKey = key;
+      raced.status = "claimed";
+      return raced;
+    };
+    // Force the service to use this stubbed model instance.
+    (
+      service as unknown as { deliveryModel: OutboundEmailDeliveryModel }
+    ).deliveryModel = deliveryModel;
+    void originalFind;
+
+    const result = await service.claim({
+      batchId: seed.batchId,
+      authorizationId: seed.authorizationId,
+      batchHash: seed.batchHash,
+    });
+    expect(result.status).toBe("already_processed");
+    expect(result.attemptId).toBe(999);
+    // The worker was never started for the losing claim.
+    expect(starts).toBe(0);
+    // Suppress unused-original lint — the stub replaces findAttemptByIdempotencyKey.
+    void originalFind;
+  });
+
   it("throws batch_hash_mismatch when the stored batch hash differs from the claim", async () => {
     const seed = await seedAuthorizedBatch();
     const service = new OutboundEmailDeliveryService(tmpDir, {

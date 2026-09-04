@@ -48,9 +48,13 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   async findAttemptByIdempotencyKey(
-    idempotencyKey: string
+    idempotencyKey: string,
+    manager?: EntityManager
   ): Promise<OutboundEmailSendAttemptEntity | null> {
-    return await this.attemptRepo.findOne({ where: { idempotencyKey } });
+    const repo =
+      manager?.getRepository(OutboundEmailSendAttemptEntity) ??
+      this.attemptRepo;
+    return await repo.findOne({ where: { idempotencyKey } });
   }
 
   async updateAttemptStatus(
