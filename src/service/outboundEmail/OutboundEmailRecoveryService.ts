@@ -62,15 +62,21 @@ export class OutboundEmailRecoveryService extends BaseDb {
     const expired = await this.authorizationModel.listExpiredActive(now);
     let count = 0;
     for (const authorization of expired) {
-      await this.authorizationModel.expire(authorization.id);
-      await this.audit(
-        {
-          eventCode: "authorization_expired",
-          batchId: authorization.batchId,
-          authorizationId: authorization.id,
-        },
-        { expiresAt: authorization.expiresAt.toISOString() }
-      );
+      // Each expiration is its own transaction so one poisoned row cannot
+      // roll back the whole sweep; the expire write and its audit record
+      // commit (or roll back) together (rule 6, §15.4 atomicity).
+      await this.sqliteDb.connection.transaction(async (manager) => {
+        await this.authorizationModel.expire(authorization.id, manager);
+        await this.audit(
+          {
+            eventCode: "authorization_expired",
+            batchId: authorization.batchId,
+            authorizationId: authorization.id,
+          },
+          { expiresAt: authorization.expiresAt.toISOString() },
+          manager
+        );
+      });
       count += 1;
     }
     return count;
@@ -112,7 +118,10 @@ export class OutboundEmailRecoveryService extends BaseDb {
       { lastErrorCode: "worker_never_started", completedAt: now },
       manager
     );
-    const outcomes = await this.deliveryModel.listOutcomesByAttempt(attemptId);
+    const outcomes = await this.deliveryModel.listOutcomesByAttempt(
+      attemptId,
+      manager
+    );
     for (const outcome of outcomes) {
       if (outcome.status === "pending") {
         await this.deliveryModel.updateOutcomeStatus(
@@ -135,7 +144,8 @@ export class OutboundEmailRecoveryService extends BaseDb {
         batchId,
         sendAttemptId: attemptId,
       },
-      { lastErrorCode: "worker_never_started" }
+      { lastErrorCode: "worker_never_started" },
+      manager
     );
   }
 
@@ -152,7 +162,10 @@ export class OutboundEmailRecoveryService extends BaseDb {
       { lastErrorCode: "recovery_timeout", completedAt: now },
       manager
     );
-    const outcomes = await this.deliveryModel.listOutcomesByAttempt(attemptId);
+    const outcomes = await this.deliveryModel.listOutcomesByAttempt(
+      attemptId,
+      manager
+    );
     for (const outcome of outcomes) {
       if (outcome.status === "pending" || outcome.status === "submitted") {
         await this.deliveryModel.updateOutcomeStatus(
@@ -175,7 +188,8 @@ export class OutboundEmailRecoveryService extends BaseDb {
         batchId,
         sendAttemptId: attemptId,
       },
-      { lastErrorCode: "recovery_timeout" }
+      { lastErrorCode: "recovery_timeout" },
+      manager
     );
   }
 
@@ -229,7 +243,8 @@ export class OutboundEmailRecoveryService extends BaseDb {
       sendAttemptId?: number | null;
       authorizationId?: number | null;
     },
-    metadata: Record<string, string>
+    metadata: Record<string, string>,
+    manager?: EntityManager
   ): Promise<void> {
     await this.auditModel.create(
       Object.assign(new OutboundEmailAuditLogEntity(), {
@@ -239,7 +254,8 @@ export class OutboundEmailRecoveryService extends BaseDb {
         sendAttemptId: fields.sendAttemptId ?? null,
         authorizationId: fields.authorizationId ?? null,
         metadataJson: JSON.stringify(metadata),
-      })
+      }),
+      manager
     );
   }
 }

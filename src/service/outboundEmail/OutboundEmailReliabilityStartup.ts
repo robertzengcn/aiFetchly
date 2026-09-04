@@ -21,23 +21,30 @@ export class OutboundEmailReliabilityStartup {
   }
 
   /**
-   * Run one recovery sweep immediately, then start the bounded interval. Safe
-   * to call once at app startup after the DB is initialized.
+   * Start the bounded interval FIRST, then run one recovery sweep. Arming the
+   * watchdog before the initial sweep guarantees a hanging first sweep (e.g. a
+   * locked SQLite) cannot leave the app with no recovery at all; the interval
+   * keeps firing until stop(). Safe to call once at app startup after the DB
+   * is initialized.
    */
   async start(
     recoveryIntervalMs: number = DEFAULT_RECOVERY_INTERVAL_MS
   ): Promise<{ authorizationsExpired: number; attemptsRecovered: number }> {
-    const initialized = await this.runRecoverySweep();
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
     }
     this.intervalHandle = setInterval(() => {
       this.runRecoverySweep().catch((error) => {
-        console.error("[outbound-reliability] interval recovery failed:", error);
+        console.error(
+          "[outbound-reliability] interval recovery failed:",
+          error
+        );
       });
     }, recoveryIntervalMs);
     // Don't keep the process alive just for the sweep.
     this.intervalHandle.unref?.();
+
+    const initialized = await this.runRecoverySweep();
     return initialized;
   }
 

@@ -86,9 +86,13 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   async listOutcomesByAttempt(
-    sendAttemptId: number
+    sendAttemptId: number,
+    manager?: EntityManager
   ): Promise<OutboundEmailDeliveryOutcomeEntity[]> {
-    return await this.outcomeRepo.find({ where: { sendAttemptId } });
+    const repo =
+      manager?.getRepository(OutboundEmailDeliveryOutcomeEntity) ??
+      this.outcomeRepo;
+    return await repo.find({ where: { sendAttemptId } });
   }
 
   async listOutcomesByBatch(
