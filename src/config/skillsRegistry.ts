@@ -1674,14 +1674,29 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         not_duplicate:
           (args as { not_duplicate?: boolean }).not_duplicate ?? true,
       });
+      // Resolve the frozen envelope sender from the first selected service
+      // (AD-005/AD-006: sender selection completes BEFORE hashing — the worker
+      // sends with exactly this address, never the credential row's login).
+      // Model args never supply it directly (AD-003).
+      const serviceIds = (args as { service_ids?: number[] }).service_ids ?? [];
+      let senderAddress = "";
+      if (serviceIds.length > 0) {
+        const { EmailServiceModel } = await import(
+          "@/model/EmailService.model"
+        );
+        const emailService = await new EmailServiceModel(dbpath).read(
+          serviceIds[0]
+        );
+        senderAddress = (emailService?.from ?? "").trim();
+      }
       const result = await service.generateBatch({
         conversationId: context.conversationId,
         sourceUserMessageId: context.sourceUserMessageId ?? "",
         intentDecisionId: context.intentDecisionId ?? 0,
         recipientSourceType: resolved.recipientSource,
         recipients: resolved.recipients,
-        serviceIds: (args as { service_ids?: number[] }).service_ids ?? [],
-        senderAddress: "", // Resolved from the selected service in a later phase.
+        serviceIds,
+        senderAddress,
         subject: (args as { email_subject?: string }).email_subject ?? "",
         // The model supplies an HTML body; store it as `bodyHtml` and derive a
         // plain-text fallback so markup never leaks into the text body at send

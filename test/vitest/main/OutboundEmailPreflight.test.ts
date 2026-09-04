@@ -101,6 +101,23 @@ describe("OutboundEmailPreflightService", () => {
     ).toBe(true);
   });
 
+  it("blocks a revision whose frozen envelope sender address is empty", () => {
+    // §12 item 6 — the sender is bound into the hash the user authorized
+    // (AD-005); an unresolved/empty sender must never reach the worker.
+    const view = makeView({ senderAddress: "" });
+    const result = service.run([
+      {
+        view,
+        envelope: envelopeFor(view),
+        storedHash: view.revision!.contentHash,
+      },
+    ]);
+    expect(result.passed).toBe(false);
+    expect(
+      result.findings.some((f) => f.code === "sender_address_missing")
+    ).toBe(true);
+  });
+
   it("blocks a draft with no current revision", () => {
     const view = makeView();
     view.revision = null;

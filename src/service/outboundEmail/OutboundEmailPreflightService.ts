@@ -124,6 +124,21 @@ export class OutboundEmailPreflightService {
       }
       seenAddresses.add(normalized);
 
+      // §12 item 6 — the frozen envelope sender must be a real address
+      // (AD-005: it is bound into the hash the user authorized). An empty
+      // sender can never pass preflight; the worker refuses to send on it.
+      if (
+        !revision.senderAddress ||
+        revision.senderAddress.trim().length === 0
+      ) {
+        findings.push({
+          recipientAddress: address || null,
+          code: "sender_address_missing",
+          message: "Frozen envelope sender address is empty.",
+          severity: "block",
+        });
+      }
+
       // §12.7 — non-empty subject/bodies.
       if (!revision.subject || revision.subject.trim().length === 0) {
         findings.push({
