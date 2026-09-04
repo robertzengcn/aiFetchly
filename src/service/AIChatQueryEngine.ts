@@ -1145,6 +1145,12 @@ export class AIChatQueryEngine {
           toolCallId: matchedByToolId.toolCallId,
           args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
+          // Trusted intent context (technical design §9/§14.2): re-thread the
+          // originating turn's persisted user-message id + intent decision id
+          // so outbound-email tools bind the draft to the exact user message
+          // even when executed via the permission-resume path.
+          sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+          intentDecisionId: matchedByToolId.intentDecisionId,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.

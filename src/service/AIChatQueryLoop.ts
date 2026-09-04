@@ -1924,6 +1924,11 @@ export class AIChatQueryLoop {
                 toolCallId: call.id,
                 toolName: call.name,
                 toolArguments: effectiveArguments,
+                // Trusted intent context must survive the permission pause so
+                // the resume re-execution can still bind the draft batch to
+                // the originating user message (technical design §9).
+                sourceUserMessageId: input.sourceUserMessageId,
+                intentDecisionId: input.intentDecisionId,
                 planContext,
                 eventSink: eventSink,
                 toolCatalogState: catalogActive
@@ -2284,6 +2289,11 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              // Trusted intent context (technical design §9/§14.2): binds the
+              // draft to the exact user message + persisted intent decision
+              // so authorization is never derived from tool arguments.
+              sourceUserMessageId: input.sourceUserMessageId,
+              intentDecisionId: input.intentDecisionId,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -2665,6 +2675,11 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         args: call.arguments,
         model: input.request.model,
+        // Trusted intent context (technical design §9/§14.2): binds the
+        // draft to the exact user message + persisted intent decision
+        // so authorization is never derived from tool arguments.
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

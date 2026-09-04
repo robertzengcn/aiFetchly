@@ -323,6 +323,14 @@ export interface PendingPermissionTurn {
   toolCallId: string;
   toolName: string;
   toolArguments: Record<string, unknown>;
+  /**
+   * Trusted intent context (technical design §9/§14.2): the persisted user
+   * message id + outbound intent decision id from the originating turn. The
+   * permission-resume re-execution must carry them so outbound-email tools
+   * still bind the draft to the exact user message after approval.
+   */
+  sourceUserMessageId?: string;
+  intentDecisionId?: number | null;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
   /**
