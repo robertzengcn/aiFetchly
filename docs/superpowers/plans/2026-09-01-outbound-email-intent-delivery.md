@@ -403,17 +403,19 @@ Behavior per §18. Editing creates a new revision and invalidates approval. Send
 
 Implement §21 rules 1–6 (expire authorizations, conservative attempt recovery, `delivery_unknown` for uncertain recipients, recompute batch status, never create new attempts, audit every transition).
 
-- [ ] Step 1: failing tests (expired auth → expired; dead-worker sending → `delivery_unknown`; no new attempt created).
-- [ ] Step 2: FAIL → Step 3: implement → Step 4: PASS + `yarn testmain`.
-- [ ] Step 5: Commit — `feat: add outbound email recovery and startup reconciliation`.
+- [x] Step 1: failing tests (expired auth → expired; dead-worker sending → `delivery_unknown`; no new attempt created).
+- [x] Step 2: FAIL → Step 3: implement → Step 4: PASS + `yarn testmain`.
+- [x] Step 5: Commit — `feat: add outbound email recovery and startup reconciliation` (6f9ba955).
 
 ### Task 5.2: Telemetry + legacy retirement
 
 **Files:** add metrics per §23.1; deprecate/gate the legacy AI send path in `EmailMarketingAiTools.ts` so all AI outbound sends route through the delivery service. **Test:** regression + intent evaluation corpus test (`test/vitest/main/OutboundEmailIntentCorpus.test.ts`) asserting zero false direct sends on the deny/review corpus.
 
-- [ ] Step 1: failing corpus test (deny/review phrases never yield `send_now`).
-- [ ] Step 2: FAIL → Step 3: implement → Step 4: PASS.
-- [ ] Step 5: Commit — `feat: add outbound telemetry and retire legacy AI send path`.
+- [x] Step 1: failing corpus test (deny/review phrases never yield `send_now`).
+- [x] Step 2: PASS (resolver + gate already enforce the invariant; corpus test is a regression guard).
+- [x] Step 3: implement `OutboundEmailMetrics` + legacy inline-content deprecation telemetry.
+- [x] Step 4: `tsc`/eslint/vue-tsc clean; corpus test green; existing `startBulkEmailSendTask` test green.
+- [x] Step 5: Commit — `feat: add outbound telemetry and retire legacy AI send path` (d1828707).
 
 ---
 
