@@ -130,7 +130,17 @@ export class OutboundEmailWorkerStarter extends BaseDb {
     ) => {
       void _authorization;
       const payload = await this.buildPayload(attemptId, batch, drafts);
-      const child = this.spawnWorker(payload);
+      const child = this.forkWorker();
+
+      // Attach the message listener BEFORE posting the payload. Electron's
+      // utility-process MessagePort is a non-buffering EventEmitter: the worker
+      // may emit synchronously on early failure paths (payload-invalid,
+      // batch-too-large, hash-mismatch, duplicate-service) before any SMTP
+      // await, so a listener attached after postMessage would drop those events
+      // and strand the attempt in `sending`. Wiring first guarantees none are
+      // lost.
+      this.wireEventBridge(child, attemptId, batch.id);
+      this.postPayload(child, payload);
 
       // Mark the attempt `sending` with the worker's pid + start time. This
       // happens AFTER the fork succeeds so a failed spawn doesn't record a
@@ -141,8 +151,6 @@ export class OutboundEmailWorkerStarter extends BaseDb {
         workerPid: child.pid ?? null,
         workerStartedAt: new Date(),
       });
-
-      this.wireEventBridge(child, attemptId, batch.id);
 
       return { started: true };
     };
@@ -233,25 +241,35 @@ export class OutboundEmailWorkerStarter extends BaseDb {
   // -- fork + event wiring ---------------------------------------------------
 
   /**
-   * Fork `taskCode.js` and post the `sendAuthorizedEmails` message. Mirrors the
-   * reference fork pattern in `buckEmailTaskModule` (resolve packaged path,
-   * `utilityProcess.fork`). The payload is posted immediately after a successful
-   * fork — Electron's `UtilityProcess.postMessage` buffers until the child is
-   * ready, so no `spawn` gate is needed (and a `spawn` gate would break test
-   * doubles that never emit it).
+   * Fork `taskCode.js` (without posting the payload yet). Mirrors the reference
+   * fork pattern in `buckEmailTaskModule` (resolve packaged path,
+   * `utilityProcess.fork`). The caller attaches the message listener before
+   * {@link postPayload} so no early worker event is dropped (§15.4 race fix).
    */
-  private spawnWorker(payload: AuthorizedEmailWorkerPayloadV2): ForkedChild {
-    const { childPath, port, env } = this.resolveForkContext();
-    const child = this.forkFn(childPath, [], {
+  private forkWorker(): ForkedChild {
+    const { childPath, env } = this.resolveForkContext();
+    return this.forkFn(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env,
     });
+  }
+
+  /**
+   * Post the `sendAuthorizedEmails` message over the forked child's MessagePort.
+   * Electron's `UtilityProcess.postMessage` buffers until the child is ready, so
+   * no `spawn` gate is needed (and a `spawn` gate would break test doubles that
+   * never emit it).
+   */
+  private postPayload(
+    child: ForkedChild,
+    payload: AuthorizedEmailWorkerPayloadV2
+  ): void {
+    const { port } = this.resolveForkContext();
     child.postMessage(
       JSON.stringify({ action: "sendAuthorizedEmails", data: payload }),
       port ? [port] : []
     );
-    return child;
   }
 
   /**

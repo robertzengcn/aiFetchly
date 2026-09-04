@@ -52,6 +52,10 @@ function makeFakeFork() {
     child: FakeChild;
     messages: Array<{ action: string; data: unknown }>;
   }> = [];
+  // Records the ordered sequence of listener-attach vs message-post calls per
+  // child, so a test can assert the listener is wired BEFORE the payload is
+  // posted (the §15.4 event-drop race fix).
+  const ordering: string[] = [];
   const fork = (
     modulePath: string,
     args: string[],
@@ -65,9 +69,11 @@ function makeFakeFork() {
     const child: FakeChild = {
       pid: pidCounter++,
       postMessage: (message: string) => {
+        ordering.push("post");
         messages.push(JSON.parse(message));
       },
       on: (event, handler) => {
+        ordering.push(`on:${event}`);
         if (!handlers.has(event)) handlers.set(event, []);
         handlers.get(event)!.push(handler);
       },
@@ -89,7 +95,7 @@ function makeFakeFork() {
     spawned.push({ child, messages });
     return child;
   };
-  return { fork, spawned };
+  return { fork, spawned, ordering };
 }
 
 async function seedAndClaim(starter: OutboundEmailWorkerStarter): Promise<{
@@ -247,6 +253,40 @@ describe("OutboundEmailWorkerStarter", () => {
     expect(ctx).toBeDefined();
     // No worker forked when credentials can't be resolved.
     expect(spawned).toHaveLength(0);
+  });
+
+  it("attaches the message listener before posting the payload (no early-event drop)", async () => {
+    const { fork, spawned, ordering } = makeFakeFork();
+    const credentialLoader = vi.fn(
+      async (id: number): Promise<EmailServiceEntity | undefined> =>
+        ({
+          id,
+          name: "Primary",
+          from: "sender@example.com",
+          password: "x",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          status: 1,
+        } as EmailServiceEntity)
+    );
+    const starter = new OutboundEmailWorkerStarter({
+      dbpath: tmpDir,
+      fork,
+      credentialLoader,
+    });
+    const ctx = await seedAndClaim(starter);
+    expect(ctx.status).toBe("claimed");
+    expect(spawned).toHaveLength(1);
+
+    // The "message" listener must be attached before the payload is posted —
+    // otherwise the worker's synchronous early-emit paths (payload-invalid,
+    // batch-too-large, hash-mismatch, duplicate-service) would be dropped and
+    // the attempt stranded in `sending` (§15.4 race).
+    expect(ordering).toContain("on:message");
+    expect(ordering.indexOf("on:message")).toBeLessThan(
+      ordering.indexOf("post")
+    );
   });
 
   it("returns started:true and never forks when fork is omitted in a dry-run (returns a started result without spawning)", async () => {
