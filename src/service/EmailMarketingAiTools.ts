@@ -469,16 +469,17 @@ export async function startBulkEmailSendTask(
           ? recipients.recipients
           : undefined,
     });
-    // Persist SMTP/template/filter relations and return as soon as the
-    // worker is forked. Waiting for SMTP (waitForExit: true) left the AI
-    // tool card stuck on "running" when the worker never posted
-    // sendEmailEnd (empty template list + crypto.randomInt(0)).
-    const taskId = await module.startBuckEmailCampaign(taskInput);
+    // Do not report tool success until every SMTP attempt has finished.
+    // The worker's empty-template completion bug has been fixed, so waiting
+    // here now gives the caller an accurate delivery outcome.
+    const taskId = await module.startBuckEmailCampaign(taskInput, {
+      waitForExit: true,
+    });
 
     return {
       success: true,
       task_id: taskId,
-      status: "started",
+      status: "completed",
       recipient_source: recipients.recipientSource,
       recipient_count: recipients.recipients.length,
       template_ids: input.template_ids,

@@ -90,6 +90,12 @@ export class EmailSend {
           "No email service available, skipping recipient:",
           item.address
         );
+        errorCallback?.(
+          item.address,
+          "No email service is available for this task",
+          param.email_subject ?? "",
+          param.email_html_content ?? ""
+        );
         return;
       }
 
