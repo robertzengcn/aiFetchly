@@ -80,28 +80,41 @@ const workerEmailServiceSchema = z.object({
 });
 
 /**
- * Patterns that indicate an ambiguous / network-class SMTP failure: the
- * message may or may not have been accepted by the provider, so a retry risks
- * a duplicate (FR-019). Classified `retrySafety: "unknown"`.
+ * Patterns that prove the server NEVER accepted the message, so a retry is a
+ * definite pre-acceptance rejection and safe ("safe"). Mirrors
+ * `EmailSubmissionClassifier` (FR-019): only known pre-acceptance failures are
+ * definite; everything else is ambiguous/`unknown`.
  */
-const AMBIGUOUS_SMTP_PATTERNS: readonly RegExp[] = [
-  /ETIMEDOUT/i,
-  /ESOCKET/i,
-  /ECONNRESET/i,
+const DEFINITE_REJECTION_PATTERNS: readonly RegExp[] = [
+  /EAUTH/i,
+  /Invalid login/i,
+  /authentication/i,
+  /Username and Password not accepted/i,
+  /EENVELOPE/i,
+  /Recipient address rejected/i,
+  /Sender address rejected/i,
+  /Relay access denied/i,
+  /User unknown/i,
+  /no mailbox/i,
   /ECONNREFUSED/i,
-  /EPIPE/i,
+  /connection refused/i,
+  /ENOTFOUND/i,
+  /getaddrinfo/i,
   /EHOSTUNREACH/i,
-  /ENETUNREACH/i,
-  /Greeting/i,
-  /timeout/i,
-  /timed out/i,
-  /connection/i,
+  /certificate/i,
+  /self-signed/i,
+  /UNABLE_TO_VERIFY/i,
+  /self.signed certificate/i,
+  /Recipients rejected/i,
 ];
 
 function classifySmtpError(message: string): "safe" | "unknown" {
-  return AMBIGUOUS_SMTP_PATTERNS.some((p) => p.test(message))
-    ? "unknown"
-    : "safe";
+  // Default-safe: only a known pre-acceptance rejection is `safe` to retry;
+  // an ambiguous (timeout, mid-transfer drop) or unrecognized error falls
+  // through to `unknown` so `delivery_unknown` is never auto-retried (FR-019).
+  return DEFINITE_REJECTION_PATTERNS.some((p) => p.test(message))
+    ? "safe"
+    : "unknown";
 }
 
 /** Build a real nodemailer-backed sender for a service record. */

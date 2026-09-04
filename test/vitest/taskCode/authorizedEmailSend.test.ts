@@ -316,7 +316,7 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
 
     const events: AuthorizedEmailWorkerEvent[] = [];
     const worker = new EmailSend(() => ({
-      send: () => Promise.reject(new Error("550 mailbox unavailable")),
+      send: () => Promise.reject(new Error("550 Recipient address rejected")),
       close: () => undefined,
     }));
     await worker.sendAuthorizedEnvelopes(payload, (e) => events.push(e));
@@ -356,6 +356,50 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
       > => e.type === "authorized-email-failed"
     );
     expect(failures[0]?.retrySafety).toBe("unknown");
+  });
+
+  it("classifies an unrecognized SMTP error as retry-unknown (default-safe)", async () => {
+    const envelope = makeEnvelope({ draftId: 1 });
+    const payload = makePayload([envelope], [makeService(1, "s@x.com")]);
+
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const worker = new EmailSend(() => ({
+      send: () => Promise.reject(new Error("unexpected transport glitch")),
+      close: () => undefined,
+    }));
+    await worker.sendAuthorizedEnvelopes(payload, (e) => events.push(e));
+
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures[0]?.retrySafety).toBe("unknown");
+  });
+
+  it("classifies a definite pre-acceptance rejection as retry-safe", async () => {
+    const envelope = makeEnvelope({ draftId: 1 });
+    const payload = makePayload([envelope], [makeService(1, "s@x.com")]);
+
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const worker = new EmailSend(() => ({
+      send: () => Promise.reject(new Error("ECONNREFUSED")),
+      close: () => undefined,
+    }));
+    await worker.sendAuthorizedEnvelopes(payload, (e) => events.push(e));
+
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures[0]?.retrySafety).toBe("safe");
   });
 
   it("aborts when an envelope references a missing service record", async () => {
