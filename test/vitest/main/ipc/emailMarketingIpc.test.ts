@@ -306,11 +306,16 @@ describe("Email Marketing IPC Handlers", () => {
       expect(result.data!.errors[0]).toContain("row 2");
     });
 
-    test("returns status:false with import_invalid_file when the controller rejects", async () => {
+    test("returns status:false with exactly the import_invalid_file key (no parse detail) when the controller rejects", async () => {
       const malformed = "{ not json ";
       fs.writeFileSync(tmpImportJsonPath, malformed, "utf-8");
+      // V8 embeds raw source snippets in JSON.parse errors — e.g. an
+      // unquoted password value would echo into the message. The envelope
+      // must carry ONLY the stable key, never the parse detail.
       mockImportEmailServices.mockRejectedValue(
-        new SyntaxError("Unexpected token")
+        new SyntaxError(
+          'Unexpected token \'s\', ..."assword": mysecret}" is not valid JSON'
+        )
       );
       mockShowOpenDialog.mockResolvedValue({
         canceled: false,
@@ -324,7 +329,7 @@ describe("Email Marketing IPC Handlers", () => {
       )) as CommonMessage<null>;
 
       expect(result.status).toBe(false);
-      expect(result.msg).toContain("import_invalid_file");
+      expect(result.msg).toBe("import_invalid_file");
     });
   });
 });
