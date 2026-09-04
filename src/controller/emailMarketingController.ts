@@ -7,6 +7,7 @@ import {
   EmailServiceEntitydata,
   EmailSendParam,
   EmailServiceExportPayload,
+  EmailServiceImportResult,
 } from "@/entityTypes/emailmarketingType";
 //import {EmailMarketingFilterApi} from "@/api/emailMarketingFilterApi";
 //import {EmailServiceApi} from "@/api/emailServiceApi";
@@ -25,6 +26,7 @@ import { EmailFilterDetailModuleInterface } from "@/modules/interface/EmailFilte
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType";
+import Papa from "papaparse";
 export class EmailMarketingController {
   emailTemplateModule: EmailTemplateModuleInterface;
   emailFilterTaskRelationModule: EmailFilterTaskRelationModuleInterface;
@@ -363,6 +365,199 @@ export class EmailMarketingController {
       return `"${value.replace(/"/g, '""')}"`;
     }
     return value;
+  }
+
+  // Import email services from raw file content. format: "csv" | "json".
+  // Parses, maps each row to a strict field whitelist (including password),
+  // validates each row, and upserts by name. id / create_time are read but
+  // ignored on write. Returns counts + per-row errors with file row numbers.
+  public async importEmailServices(
+    content: string,
+    format: "csv" | "json"
+  ): Promise<EmailServiceImportResult> {
+    const { rows, rowErrors } = this.parseImportContent(content, format);
+
+    let imported = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (let index = 0; index < rows.length; index++) {
+      // File row number: CSV header is row 1, data starts row 2; JSON array
+      // index + 1. (Approximate when blank lines are skipped mid-file —
+      // accepted trade-off.)
+      const rowNumber = index + (format === "csv" ? 2 : 1);
+
+      // Non-object entries (e.g. null in a JSON array) can't map to a row.
+      const rawRow = rows[index];
+      if (!rawRow || typeof rawRow !== "object") {
+        skipped++;
+        errors.push(`row ${rowNumber}: invalid row entry`);
+        continue;
+      }
+
+      // Field-count mismatches Papa flagged for this data row index.
+      const parseError = rowErrors.get(index);
+      if (parseError) {
+        skipped++;
+        errors.push(`row ${rowNumber}: ${parseError}`);
+        continue;
+      }
+
+      const entity = this.mapImportRowToEntity(rawRow);
+
+      // Unparseable ssl is a row error, never a silent NULL in the DB
+      // (better-sqlite3 binds NaN as NULL, which would disable secure SMTP).
+      if (Number.isNaN(entity.ssl)) {
+        skipped++;
+        errors.push(`row ${rowNumber}: ssl must be 0 or 1`);
+        continue;
+      }
+
+      const name = entity.name ?? "";
+
+      // validateEmailService covers email format, port numeric, required
+      // fields (incl. password), and receive-protocol-specific rules.
+      const validation = await this.emailServiceModule.validateEmailService(
+        entity
+      );
+      if (!validation.valid) {
+        skipped++;
+        errors.push(`row ${rowNumber}: ${validation.errors.join("; ")}`);
+        continue;
+      }
+      try {
+        const existing = name
+          ? await this.emailServiceModule.findEmailServiceByName(name)
+          : undefined;
+        if (existing?.id && existing.id > 0) {
+          // Import files never carry inbound-receive credentials — preserve
+          // the existing service's receivePassword so the update doesn't
+          // wipe it (encryptCredentialsForStorage nulls absent values).
+          // Other receive fields survive as undefined via TypeORM's changed-
+          // column diffing; do NOT default them here — a default would
+          // silently rewrite existing receive config on every import update.
+          if (!entity.receivePassword || entity.receivePassword.length === 0) {
+            entity.receivePassword = existing.receivePassword;
+          }
+          // The SMTP password IS always overwritten by the imported value
+          // (import is an explicit act; the file carries the password).
+          await this.emailServiceModule.updateEmailService(existing.id, entity);
+        } else {
+          await this.emailServiceModule.createEmailService(entity);
+        }
+        imported++;
+      } catch (rowError) {
+        skipped++;
+        const reason =
+          rowError instanceof Error ? rowError.message : String(rowError);
+        errors.push(`row ${rowNumber}: ${reason}`);
+      }
+    }
+
+    // Cap reported errors to the first 10 to keep the snackbar readable.
+    const cappedErrors = errors.slice(0, 10);
+    return { imported, skipped, errors: cappedErrors };
+  }
+
+  /** Parse raw import content into rows + per-row parse errors. Throws on malformed input. */
+  private parseImportContent(
+    content: string,
+    format: "csv" | "json"
+  ): { rows: Record<string, unknown>[]; rowErrors: Map<number, string> } {
+    if (format === "json") {
+      const parsed: unknown = JSON.parse(content);
+      // Export shape { total, services, exportDate } or bare array.
+      if (Array.isArray(parsed)) {
+        return {
+          rows: parsed as Record<string, unknown>[],
+          rowErrors: new Map(),
+        };
+      }
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        Array.isArray((parsed as { services?: unknown }).services)
+      ) {
+        return {
+          rows: (parsed as { services: Record<string, unknown>[] }).services,
+          rowErrors: new Map(),
+        };
+      }
+      throw new Error("Invalid JSON structure for import");
+    }
+
+    // CSV — header row, case-insensitive columns. "greedy" also skips
+    // whitespace-only lines (stray-space lines are common in hand-edited
+    // CSVs; with plain `true` they surface as TooFewFields errors).
+    const result = Papa.parse<Record<string, unknown>>(content, {
+      header: true,
+      skipEmptyLines: "greedy",
+      transformHeader: (header: string) => header.trim().toLowerCase(),
+    });
+    const rowErrors = new Map<number, string>();
+    for (const parseError of result.errors ?? []) {
+      // Field-count mismatches are row-level problems: collect them keyed by
+      // Papa's 0-based data row index so the rest of the file still imports
+      // (partial-import semantics). All other errors (quotes, delimiter)
+      // are structural: the file is invalid as a whole. Match on the stable
+      // ParseError.type discriminator from @types/papaparse.
+      if (
+        parseError.type === "FieldMismatch" &&
+        parseError.row !== undefined &&
+        parseError.row >= 0
+      ) {
+        rowErrors.set(parseError.row, parseError.message);
+        continue;
+      }
+      throw new Error(`CSV parse error: ${parseError.message}`);
+    }
+    return { rows: result.data, rowErrors };
+  }
+
+  /** Map a parsed row record to an EmailServiceEntity (strict whitelist). */
+  private mapImportRowToEntity(
+    row: Record<string, unknown>
+  ): EmailServiceEntity {
+    const entity = new EmailServiceEntity();
+    entity.name = this.rowValueToString(row.name);
+    entity.from = this.rowValueToString(row.from);
+    entity.host = this.rowValueToString(row.host);
+    entity.port = this.rowValueToString(row.port);
+    entity.password = this.rowValueToString(row.password);
+    // ssl defaults to 1 (secure) when absent/blank; invalid → NaN → row error.
+    entity.ssl = this.parseImportSsl(this.rowValueToString(row.ssl));
+    // receiveProtocol defaults to "imap" when absent/blank.
+    const protocolRaw = this.rowValueToString(
+      row.receiveProtocol
+    ).toLowerCase();
+    entity.receiveProtocol =
+      protocolRaw.length === 0
+        ? "imap"
+        : (protocolRaw as EmailServiceEntity["receiveProtocol"]);
+    // id and create_time are read but intentionally ignored on write.
+    return entity;
+  }
+
+  /**
+   * Parse a row's ssl value to 0/1. Blank defaults to 1 (secure);
+   * true/false/yes/no coerce to 1/0; 0/1 pass through. Anything else
+   * returns NaN — the import loop turns that into a row error so an
+   * unparseable ssl never reaches the DB (where it would bind as NULL
+   * and silently disable secure SMTP).
+   */
+  private parseImportSsl(raw: string): number {
+    const normalized = raw.toLowerCase();
+    if (normalized.length === 0) return 1;
+    if (normalized === "true" || normalized === "yes") return 1;
+    if (normalized === "false" || normalized === "no") return 0;
+    const numeric = Number(normalized);
+    return numeric === 0 || numeric === 1 ? numeric : NaN;
+  }
+
+  /** Coerce a possibly non-string row value (JSON numbers) to a trimmed string. */
+  private rowValueToString(value: unknown): string {
+    if (value === null || value === undefined) return "";
+    return String(value).trim();
   }
 
   //send email

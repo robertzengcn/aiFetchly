@@ -15,6 +15,15 @@ export const emailServiceExportInputSchema = lazySchema(() =>
 );
 
 /**
+ * EMAILSERVICEIMPORT: the renderer sends no data — the file path is chosen
+ * via the native open dialog in the main process. An empty strict object
+ * validates that no unexpected payload crosses the boundary.
+ */
+export const emailServiceImportInputSchema = lazySchema(() =>
+  z.strictObject({})
+);
+
+/**
  * By-id handlers (REMOVE/DETAIL/DELETE).
  *
  * 原代码 CommonIdrequest<string>，handler 内 Number(qdata.id) 转换。

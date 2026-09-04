@@ -5,6 +5,7 @@ import sinon from "sinon";
 import { EmailMarketingController } from "@/controller/emailMarketingController";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailServiceModuleInterface } from "@/modules/interface/EmailServiceModuleInterface";
+import type { EmailServiceImportResult } from "@/entityTypes/emailmarketingType";
 
 describe("EmailMarketingController", () => {
   let emailMarketingController: EmailMarketingController;
@@ -173,6 +174,451 @@ describe("EmailMarketingController", () => {
       expect(csv).to.equal(
         "id,name,from,host,port,ssl,receiveProtocol,create_time\n"
       );
+    });
+  });
+
+  describe("importEmailServices", () => {
+    // Build a stubbed module with sensible defaults; individual tests override
+    // the methods they care about.
+    const makeStubModule = (
+      overrides: Partial<
+        Record<
+          | "findEmailServiceByName"
+          | "createEmailService"
+          | "updateEmailService"
+          | "validateEmailService",
+          unknown
+        >
+      > = {}
+    ) => {
+      const existing: EmailServiceEntity | undefined = undefined;
+      return {
+        findEmailServiceByName:
+          overrides.findEmailServiceByName ?? sinon.stub().resolves(existing),
+        createEmailService:
+          overrides.createEmailService ?? sinon.stub().resolves(1),
+        updateEmailService:
+          overrides.updateEmailService ?? sinon.stub().resolves(),
+        validateEmailService:
+          overrides.validateEmailService ??
+          sinon.stub().resolves({ valid: true, errors: [] }),
+      } as unknown as EmailServiceModuleInterface;
+    };
+
+    it("parses a valid CSV and upserts each row (create when no name match)", async () => {
+      const create = sinon.stub().resolves(5);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Primary,user1@example.com,smtp.example.com,465,1,secret1,imap\n" +
+        "Secondary,user2@example.com,smtp2.example.com,587,0,secret2,imap\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(result.skipped).to.equal(0);
+      expect(create.calledTwice).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("Primary");
+      expect(create.firstCall.args[0].password).to.equal("secret1");
+      expect(create.secondCall.args[0].name).to.equal("Secondary");
+    });
+
+    it("updates an existing service when the name matches (no create)", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Primary SMTP";
+      const update = sinon.stub().resolves();
+      const create = sinon.stub().resolves(99);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Primary SMTP,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[0]).to.equal(7); // existing id
+      expect(update.firstCall.args[1].password).to.equal("newpass"); // overwritten
+      expect(create.called).to.equal(false);
+    });
+
+    it("preserves the existing receivePassword when updating by name match", async () => {
+      // Import files never carry receive credentials — the existing service's
+      // receive password must survive the update (encryptCredentialsForStorage
+      // nulls absent receivePassword values, which would wipe it).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Primary SMTP";
+      existing.receivePassword = "existing-receive-pass";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Primary SMTP,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receivePassword).to.equal(
+        "existing-receive-pass"
+      );
+      // The SMTP password is still overwritten by the imported value.
+      expect(update.firstCall.args[1].password).to.equal("newpass");
+      // Documented invariant: other receive fields stay undefined on update —
+      // TypeORM's changed-column diffing leaves them untouched, so the import
+      // never silently rewrites existing receive config.
+      expect(update.firstCall.args[1].receiveEnabled).to.equal(undefined);
+      expect(update.firstCall.args[1].imapHost).to.equal(undefined);
+    });
+
+    it("skips a row with a field-count mismatch and imports the valid rows (partial import)", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // Second data row has 7 fields vs 6 headers → TooManyFields.
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Good,g@x.com,smtp.example.com,465,1,pw\n" +
+        "Bad,b@x.com,smtp.example.com,465,1,pw,extra\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 3/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /too many fields/i.test(e))).to.equal(
+        true
+      );
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("Good");
+    });
+
+    it("skips a TooFewFields row and imports the valid rows (fewer fields than headers)", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // First data row has 4 fields vs 6 headers → TooFewFields (row 2).
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Bad,b@x.com,smtp.example.com,465\n" +
+        "ValidRow,g@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /too few fields/i.test(e))).to.equal(
+        true
+      );
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("ValidRow");
+    });
+
+    it("ignores whitespace-only lines between rows", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "   \n" +
+        "Good,g@x.com,smtp.example.com,465,1,pw\n" +
+        "   \n" +
+        "Good2,g2@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("reports a row error for an unparseable ssl value instead of storing it", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Badssl,b@x.com,smtp.example.com,465,banana,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /ssl/i.test(e))).to.equal(true);
+      expect(create.called).to.equal(false);
+    });
+
+    it("coerces friendly ssl values: true/false/yes/no", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "A,a@x.com,smtp.example.com,465,true,pw\n" +
+        "B,b@x.com,smtp.example.com,465,false,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(2);
+      expect(create.firstCall.args[0].ssl).to.equal(1);
+      expect(create.secondCall.args[0].ssl).to.equal(0);
+    });
+
+    it("caps reported errors at 10 while counting all skipped rows", async () => {
+      // All 12 rows fail validation → skipped 12, but errors capped at 10.
+      const validate = sinon
+        .stub()
+        .resolves({ valid: false, errors: ["Password is required"] });
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+      });
+
+      const rows = Array.from(
+        { length: 12 },
+        (_, i) => `S${i},u${i}@x.com,smtp.example.com,465,1,\n`
+      ).join("");
+      const csv = "name,from,host,port,ssl,password\n" + rows;
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.skipped).to.equal(12);
+      expect(result.imported).to.equal(0);
+      expect(result.errors.length).to.equal(10);
+    });
+
+    it("throws on a structurally malformed CSV (unterminated quote)", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices(
+          'name,from,host,port,ssl,password\n"Unclosed,x.com,465,1,pw\n',
+          "csv"
+        );
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("throws on a JSON object without a services array", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices('{"foo":1}', "json");
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("skips non-object elements in a JSON array with a row error", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify([
+        {
+          name: "A",
+          from: "a@example.com",
+          host: "h",
+          port: "25",
+          ssl: 1,
+          password: "p",
+        },
+        null,
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+    });
+
+    it("skips rows with a missing password and reports the file row number", async () => {
+      // validateEmailService returns errors for the passwordless row.
+      const validate = sinon.stub();
+      validate
+        .onCall(0)
+        .resolves({ valid: false, errors: ["Password is required"] });
+      validate.onCall(1).resolves({ valid: true, errors: [] });
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "NoPass,user@example.com,smtp.example.com,465,1,\n" + // row 2
+        "WithPass,user2@example.com,smtp2.example.com,465,1,secret\n"; // row 3
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /row 2/.test(e))).to.equal(true);
+      expect(result.errors.some((e) => /password/i.test(e))).to.equal(true);
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].name).to.equal("WithPass");
+    });
+
+    it("parses JSON in export-shape ({total,services,exportDate}) and imports", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify({
+        total: 1,
+        services: [
+          {
+            name: "Primary SMTP",
+            from: "sender@example.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "secret",
+            receiveProtocol: "imap",
+          },
+        ],
+        exportDate: "2026-09-04T00:00:00.000Z",
+      });
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].from).to.equal("sender@example.com");
+    });
+
+    it("parses JSON in bare-array shape and imports", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const json = JSON.stringify([
+        {
+          name: "A",
+          from: "a@example.com",
+          host: "h",
+          port: "25",
+          ssl: 1,
+          password: "p",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+    });
+
+    it("returns 0 imported and a skipped count for a CSV with no data rows", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const csv = "name,from,host,port,ssl,password\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+    });
+
+    it("throws on malformed JSON (invalid-file signal to the IPC layer)", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      let threw = false;
+      try {
+        await emailMarketingController.importEmailServices(
+          "{ not json ",
+          "json"
+        );
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+
+    it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {
+      // A minimal CSV with only required columns — ssl/receiveProtocol columns omitted.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+      const csv =
+        "name,from,host,port,password\n" +
+        "Minimal,m@example.com,smtp.example.com,465,pw\n";
+
+      await emailMarketingController.importEmailServices(csv, "csv");
+
+      expect(create.firstCall.args[0].ssl).to.equal(1);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
     });
   });
 });
