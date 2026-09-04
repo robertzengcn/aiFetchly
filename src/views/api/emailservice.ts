@@ -9,6 +9,7 @@ import {
   EMAILSERVICELIST,
   EMAILSERVICEDELETE,
   EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
 } from "@/config/channellist";
@@ -64,6 +65,24 @@ export async function exportEmailServices(
     throw new Error("unknow error");
   }
   return resp as string;
+}
+/** Result envelope for email service import (counts + per-row errors). */
+export interface EmailServiceImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+// Import email services from a file chosen via the native open dialog (the
+// file path is picked in the main process; the renderer sends no data).
+// Resolves with the import summary; rejects (Error) on cancel/failure so the
+// component's try/catch can pick the snackbar type from error.message.
+export async function importEmailServices(): Promise<EmailServiceImportResult> {
+  const resp = await windowInvoke(EMAILSERVICEIMPORT, {});
+  if (!resp) {
+    throw new Error("unknow error");
+  }
+  return resp as EmailServiceImportResult;
 }
 //send test email
 export async function sendTestemail(params: EmailSendParam) {
