@@ -2769,6 +2769,11 @@ export default {
       "Plan rechazado. Por favor, revisa el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
     changes_requested_continue_message:
       "Cambios solicitados en el plan. Por favor, actualiza el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
+    approve_failed:
+      "La aprobación del plan no se completó. Inténtalo de nuevo.",
+    reject_failed: "El rechazo del plan no se completó. Inténtalo de nuevo.",
+    changes_request_failed:
+      "La solicitud de cambios del plan no se completó. Inténtalo de nuevo.",
     reject_feedback: "Motivo de rechazo",
     changes_feedback: "¿Qué necesita cambiar?",
     no_plan_yet: "Aún no hay contenido del plan.",
@@ -3204,6 +3209,59 @@ export default {
         "No se pudo enviar el informe. Tus datos se han conservado para que puedas intentarlo de nuevo.",
       unknown:
         "No se pudo enviar el informe. Tus datos se han conservado para que puedas intentarlo de nuevo.",
+    },
+  },
+  aiConversationReport: {
+    action: "Reportar conversación",
+    actionAriaLabel: "Reportar esta conversación para su revisión",
+    unavailable:
+      "La función de reporte de conversación no está disponible actualmente.",
+    noEligibleOutputs:
+      "Todavía no hay resultados de IA reportables en esta conversación.",
+    dialogTitle: "Reportar conversación",
+    selectionInstruction: "Selecciona los resultados de IA a reportar.",
+    selectionCount: "{n} seleccionados",
+    selectionCountOfMax: "{n} de {max} seleccionados",
+    selectAll: "Seleccionar todo",
+    includeRelatedUserContext:
+      "Incluir mi mensaje relacionado que originó el resultado de IA",
+    userMessageWillBeSent:
+      "Si continúas, tu mensaje relacionado seleccionado se enviará a AiFetchly junto con los resultados de IA.",
+    relatedUserLabel: "Tu mensaje — se enviará",
+    attachmentOmitted:
+      "Se omitió un archivo adjunto de tu mensaje; solo se incluye el texto del mensaje.",
+    imageLabel: "Incluir imagen en el informe",
+    generatedAtLabel: "Generado el",
+    consentDefault:
+      "Solo se enviarán los resultados de IA seleccionados y tu descripción. Tus otros mensajes, archivos y el razonamiento de la IA no se incluyen.",
+    consentWithUserContext:
+      "Has elegido incluir tu mensaje relacionado. Se enviará junto con los resultados de IA que seleccionaste.",
+    truncationWarning:
+      "Los resultados extensos se recortaron para ajustarse al límite de tamaño del informe.",
+    listTruncated:
+      "Mostrando los primeros {shown} de {total} resultados. Desplázate por la conversación para reportar otro.",
+    continueAndSubmit: "Enviar informe",
+    cancel: "Cancelar",
+    conversationChanged:
+      "La conversación cambió mientras el informe estaba abierto. Vuelve a abrirlo.",
+    categoryLabel: "¿Qué problema tiene esta conversación?",
+    commentLabel: "Detalles adicionales (opcional)",
+    itemTypes: {
+      text: "Texto",
+      image: "Imagen",
+      mixed: "Texto e imágenes",
+      plan: "Plan",
+      artifact: "Artefacto",
+    },
+    errors: {
+      selectionRequired:
+        "Selecciona al menos un resultado de IA para reportar.",
+      selectionLimit: "Puedes seleccionar como máximo 10 resultados de IA.",
+      imageLimit: "Un informe puede incluir como máximo 3 imágenes.",
+      relatedMessageUnavailable:
+        "No hay ningún mensaje relacionado disponible para el resultado seleccionado.",
+      unsupportedSchema:
+        "Este tipo de informe no es compatible. Actualiza la aplicación.",
     },
   },
 };

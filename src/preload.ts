@@ -41,6 +41,7 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICELIST,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
   EMAILFILTERDELETE,
   BUCKEMAILSEND,
   BUCKEMAILSENDMESSAGE,
@@ -451,6 +452,8 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+  AI_CONTENT_REPORT_CAPABILITIES,
   // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle
   OUTBOUND_EMAIL_BATCH_GET,
   OUTBOUND_EMAIL_DRAFT_UPDATE,
@@ -797,6 +800,7 @@ contextBridge.exposeInMainWorld("api", {
       EMAILSERVICEDETAIL,
       EMAILSERVICELIST,
       EMAILSERVICEDELETE,
+      EMAILSERVICEEXPORT,
       EMAILFILTERDELETE,
       BUCKEMAILTASKLIST,
       BUCKEMAILTASKSENDLOG,
@@ -1152,6 +1156,8 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+      AI_CONTENT_REPORT_CAPABILITIES,
       // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
       // Plain handlers (not AI-gated): operate on already-authorized state.
       OUTBOUND_EMAIL_BATCH_GET,

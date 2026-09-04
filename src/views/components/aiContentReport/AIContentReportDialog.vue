@@ -106,6 +106,7 @@
         <v-btn
           color="primary"
           variant="flat"
+          data-testid="ai-content-report-submit"
           :loading="submitting"
           :disabled="submitting"
           @click="onSubmit"
@@ -337,6 +338,18 @@ async function onSubmit(): Promise<void> {
     categoryError.value =
       t("aiContentReport.errors.categoryRequired") || "Please choose a category.";
     return;
+  }
+
+  // Defense-in-depth: guarantee a non-empty clientReportId before transmission.
+  // The id is normally generated in the modelValue open-watcher, but that
+  // watcher is non-immediate and does NOT fire when the dialog is mounted
+  // already-open (the v-if mount-on-demand pattern used by AiChatV2.vue and
+  // other parents). Generating here on first submit closes that gap so the
+  // IPC schema's `clientReportId: z.string().min(1)` can never reject an
+  // empty id. The guard is idempotent — a non-empty value is left untouched,
+  // so retries reuse the same id (PRD §13.2 / FR-4.8 dedup invariant).
+  if (!clientReportId.value) {
+    clientReportId.value = generateClientReportId();
   }
 
   // Build image previews for the selected images.

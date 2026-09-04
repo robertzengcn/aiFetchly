@@ -5,6 +5,7 @@ import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
+import { buildApprovedPlanContextBlock } from "@/service/ApprovedPlanContextBlock";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import {
@@ -233,6 +234,29 @@ export class AIChatContextAssembler {
         "[ai-chat-context] built-in tool capabilities injection failed:",
         err
       );
+    }
+
+    // Approved-plan execution context. `buildPlanModeSystemPrompt` (the only
+    // other path that inlines planMarkdown into the system prompt) is gated on
+    // `mode === "plan"`, but after a user approves the plan the execution round
+    // runs in chat mode (the mode selector returns to "chat"). Inject the
+    // approved plan's markdown here, independent of mode, so the model still
+    // sees the steps it is supposed to execute. Skipped while the plan-mode
+    // prompt is already in use (planning rounds) to avoid duplicating the block.
+    if (input.mode !== "plan" && input.planState?.status === "approved") {
+      try {
+        messages.push({
+          role: "system",
+          content: buildApprovedPlanContextBlock({
+            planState: input.planState,
+          }),
+        });
+      } catch (err) {
+        console.error(
+          "[ai-chat-context] approved plan context injection failed:",
+          err
+        );
+      }
     }
 
     // Durable user memory injection. Reads the user-controllable toggle from

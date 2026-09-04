@@ -569,4 +569,115 @@ describe("AIChatContextAssembler — built-in tool capabilities", () => {
     // intent to reach for the artifact tool before it is promoted.
     expect(guidance).toBeTruthy();
   });
+
+  describe("approved plan execution context injection", () => {
+    const approvedPlanState = {
+      conversationId: "v2-conv",
+      planId: "plan-1",
+      status: "approved" as const,
+      title: "Campaign plan",
+      objective: "Launch a Facebook campaign",
+      currentVersion: 1,
+      approvedAt: "2026-09-03T12:00:00.000Z",
+      latestVersion: {
+        planId: "plan-1",
+        version: 1,
+        planMarkdown: "# Campaign plan\n1. Step one\n2. Step two",
+        createdAt: "2026-09-03T11:00:00.000Z",
+        createdBy: "assistant" as const,
+      },
+    };
+
+    beforeEach(() => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetActiveSummary.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue([]);
+    });
+
+    it("injects approved plan markdown in chat mode (execution round)", async () => {
+      // Regression core: after the user approves the plan, the chat returns to
+      // "chat" mode (buildPlanModeSystemPrompt is skipped), but the model must
+      // still see the plan steps to execute them.
+      const assembler = new AIChatContextAssembler();
+      const result = await assembler.assemble({
+        conversationId: "v2-conv",
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        baseSystemPrompt: "you are helpful",
+        mode: "chat",
+        planState: approvedPlanState,
+      });
+
+      const planBlock = result.messages.find(
+        (m) =>
+          m.role === "system" &&
+          typeof m.content === "string" &&
+          m.content.includes("Approved Plan — Execution Context")
+      );
+      expect(planBlock).toBeTruthy();
+      expect(planBlock!.content).toContain("# Campaign plan");
+      expect(planBlock!.content).toContain("Step one");
+      expect(planBlock!.content).toContain("Step two");
+      expect(planBlock!.content).toContain("Status: approved");
+    });
+
+    it("does NOT inject the approved-plan block in plan mode (plan-mode prompt already carries it)", async () => {
+      const assembler = new AIChatContextAssembler();
+      const result = await assembler.assemble({
+        conversationId: "v2-conv",
+        currentUserMessage: "continue planning",
+        baseSystemPrompt: "you are helpful",
+        mode: "plan",
+        planState: approvedPlanState,
+      });
+
+      const duplicateBlock = result.messages.filter(
+        (m) =>
+          m.role === "system" &&
+          typeof m.content === "string" &&
+          m.content.includes("Approved Plan — Execution Context")
+      );
+      // Plan mode uses buildPlanModeSystemPrompt which already inlines the
+      // markdown; the standalone block must not be duplicated.
+      expect(duplicateBlock).toHaveLength(0);
+    });
+
+    it("does not inject the block when there is no approved plan", async () => {
+      const assembler = new AIChatContextAssembler();
+      const result = await assembler.assemble({
+        conversationId: "v2-conv",
+        currentUserMessage: "hello",
+        baseSystemPrompt: "you are helpful",
+        mode: "chat",
+        planState: null,
+      });
+
+      const planBlock = result.messages.find(
+        (m) =>
+          m.role === "system" &&
+          typeof m.content === "string" &&
+          m.content.includes("Approved Plan — Execution Context")
+      );
+      expect(planBlock).toBeUndefined();
+    });
+
+    it("does not inject the block for a plan that is only awaiting approval", async () => {
+      const assembler = new AIChatContextAssembler();
+      const result = await assembler.assemble({
+        conversationId: "v2-conv",
+        currentUserMessage: "looks good",
+        baseSystemPrompt: "you are helpful",
+        mode: "plan",
+        planState: { ...approvedPlanState, status: "awaiting_approval" },
+      });
+
+      const planBlock = result.messages.find(
+        (m) =>
+          m.role === "system" &&
+          typeof m.content === "string" &&
+          m.content.includes("Approved Plan — Execution Context")
+      );
+      expect(planBlock).toBeUndefined();
+    });
+  });
 });

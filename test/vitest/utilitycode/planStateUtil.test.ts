@@ -18,14 +18,15 @@ describe("planStateUtil - isPlanStateActive", () => {
     expect(isPlanStateActive(null)).toBe(false);
   });
 
-  it.each([
-    "draft",
-    "awaiting_question",
-    "awaiting_approval",
-    "approved",
-    "executing",
-  ] as const)("returns true for an in-progress plan status (%s)", (status) => {
-    expect(isPlanStateActive(makeState(status))).toBe(true);
+  it.each(["draft", "awaiting_question", "awaiting_approval"] as const)(
+    "returns true for an in-progress plan status (%s)",
+    (status) => {
+      expect(isPlanStateActive(makeState(status))).toBe(true);
+    }
+  );
+
+  it("returns false for an approved plan (execution phase runs in chat mode)", () => {
+    expect(isPlanStateActive(makeState("approved"))).toBe(false);
   });
 
   it.each(["completed", "cancelled", "rejected"] as const)(

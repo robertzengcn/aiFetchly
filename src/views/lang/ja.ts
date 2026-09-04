@@ -2705,6 +2705,10 @@ export default {
       "計画が拒否されました。以下のフィードバックに基づいて計画を修正し、承認のために再提出してください。",
     changes_requested_continue_message:
       "計画の変更が要求されました。以下のフィードバックに基づいて計画を更新し、承認のために再提出してください。",
+    approve_failed: "計画の承認が完了しませんでした。もう一度お試しください。",
+    reject_failed: "計画の拒否が完了しませんでした。もう一度お試しください。",
+    changes_request_failed:
+      "計画変更の要求が完了しませんでした。もう一度お試しください。",
     reject_feedback: "拒否の理由",
     changes_feedback: "何を変更する必要がありますか？",
     no_plan_yet: "計画内容がまだありません。",
@@ -3139,6 +3143,54 @@ export default {
         "報告を送信できませんでした。入力内容は保存されているので、再試行できます。",
       unknown:
         "報告を送信できませんでした。入力内容は保存されているので、再試行できます。",
+    },
+  },
+  aiConversationReport: {
+    action: "会話を報告",
+    actionAriaLabel: "この会話を確認のために報告する",
+    unavailable: "会話の報告機能は現在利用できません。",
+    noEligibleOutputs: "この会話にはまだ報告可能な AI 出力がありません。",
+    dialogTitle: "会話を報告",
+    selectionInstruction: "報告する AI 出力を選択してください。",
+    selectionCount: "{n} 件選択中",
+    selectionCountOfMax: "{max} 件中 {n} 件選択中",
+    selectAll: "すべて選択",
+    includeRelatedUserContext: "AI 出力の元になった関連メッセージを含める",
+    userMessageWillBeSent:
+      "続行すると、選択した関連メッセージが AI 出力とともに AiFetchly に送信されます。",
+    relatedUserLabel: "あなたのメッセージ——送信されます",
+    attachmentOmitted:
+      "メッセージ内の添付ファイルは省略されました。メッセージのテキストのみが含まれます。",
+    imageLabel: "画像を報告に含める",
+    generatedAtLabel: "生成日時",
+    consentDefault:
+      "選択した AI 出力とあなたの説明のみが送信されます。他のメッセージ、ファイル、AI の推論は含まれません。",
+    consentWithUserContext:
+      "関連メッセージを含めることを選択しました。選択した AI 出力とともに送信されます。",
+    truncationWarning:
+      "長すぎる出力は報告サイズの上限に合わせて切り詰められました。",
+    listTruncated:
+      "最初の {shown} 件（全 {total} 件）を表示しています。他の出力を報告するには会話をスクロールしてください。",
+    continueAndSubmit: "報告を送信",
+    cancel: "キャンセル",
+    conversationChanged:
+      "報告が開かれている間に会話が変更されました。もう一度開いてください。",
+    categoryLabel: "この会話のどこに問題がありますか？",
+    commentLabel: "追加の詳細（任意）",
+    itemTypes: {
+      text: "テキスト",
+      image: "画像",
+      mixed: "テキストと画像",
+      plan: "計画",
+      artifact: "アーティファクト",
+    },
+    errors: {
+      selectionRequired: "報告する AI 出力を少なくとも 1 つ選択してください。",
+      selectionLimit: "選択できる AI 出力は最大 10 件です。",
+      imageLimit: "1 つの報告に含められる画像は最大 3 枚です。",
+      relatedMessageUnavailable: "選択した出力には関連メッセージがありません。",
+      unsupportedSchema:
+        "この報告タイプは対応していません。アプリを更新してください。",
     },
   },
 };

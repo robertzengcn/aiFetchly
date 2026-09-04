@@ -34,6 +34,23 @@ export function isRefreshTokenInvalidError(error: unknown): boolean {
   );
 }
 
+/**
+ * Error thrown when an HTTP response has a non-2xx status (design §15.5).
+ * Preserves the numeric status that `new Error(res.statusText)` discarded, so
+ * callers (e.g. `AIContentReportService.extractStatus`, the error mapper) can
+ * map 400/413/422/429/500/503 to structured error codes without string-sniffing.
+ */
+export class HttpResponseError extends Error {
+  readonly status: number;
+  readonly statusText: string;
+  constructor(status: number, statusText: string) {
+    super(statusText || `HTTP ${status}`);
+    this.name = "HttpResponseError";
+    this.status = status;
+    this.statusText = statusText;
+  }
+}
+
 // export type RemoteResp = {
 //   status: boolean,
 //   msg: string,
@@ -179,9 +196,18 @@ export class HttpClient {
     isRetry = false
   ): Promise<unknown> {
     // await this.setheaderToken()
+    // Merge instance headers (Authorization) with per-call headers
+    // (Accept/Content-Type from postJson/put). Previously `headers:
+    // this._headers` replaced options.headers entirely, so a string body
+    // went out with fetch's auto-set `text/plain;charset=UTF-8` — rejected
+    // with 415 by backends that enforce application/json strictly
+    // (marketing POST /api/ai/content-reports). Per-call headers win.
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
-      headers: this._headers,
+      headers: {
+        ...this._headers,
+        ...(options.headers as Record<string, string>),
+      },
     });
 
     // Handle 401 Unauthorized and 403 Forbidden - Token might be expired.
@@ -236,7 +262,7 @@ export class HttpClient {
       }
     }
 
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) throw new HttpResponseError(res.status, res.statusText);
 
     //   if (options.parseResponse !== false && res.status !== 204)
     //     return res.json();
@@ -345,8 +371,9 @@ export class HttpClient {
     data,
     options = {}
   ): Promise<T> {
-    // this.setHeader('Accept', 'application/json')
-    // this.setHeader('Content-Type', 'application/json')
+    // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
+    // default to the standard JSON accept/content-type. The hard-coded
+    // defaults win only when the caller did not set them.
     return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -354,8 +381,8 @@ export class HttpClient {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        ...((options as { headers?: Record<string, string> }).headers ?? {}),
       },
-      // headers: this._headers,
     })) as T;
   }
 

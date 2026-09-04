@@ -598,6 +598,7 @@ export class EmailSend {
     }
 
     //loop receiver
+    const sendPromises: Promise<void>[] = [];
     param.Receiverlist.forEach((item) => {
       //check if item in filter list
       if (totalfilter.includes(item.address)) {
@@ -652,6 +653,12 @@ export class EmailSend {
           "No email service available, skipping recipient:",
           item.address
         );
+        errorCallback?.(
+          item.address,
+          "No email service is available for this task",
+          param.email_subject ?? "",
+          param.email_html_content ?? ""
+        );
         return;
       }
 
@@ -698,27 +705,29 @@ export class EmailSend {
         Title: emailTpldata.TplTitle,
         Content: emailTpldata.TplContent,
       };
-      emailServie.sendEmail(
-        emailRequestdata,
-        function (error) {
-          if (errorCallback) {
-            errorCallback(
-              item.address,
-              error,
-              emailTpldata.TplTitle,
-              emailTpldata.TplContent
-            );
+      sendPromises.push(
+        emailServie.sendEmail(
+          emailRequestdata,
+          function (error) {
+            if (errorCallback) {
+              errorCallback(
+                item.address,
+                error,
+                emailTpldata.TplTitle,
+                emailTpldata.TplContent
+              );
+            }
+          },
+          function () {
+            if (successCallback) {
+              successCallback(
+                item.address,
+                emailTpldata.TplTitle,
+                emailTpldata.TplContent
+              );
+            }
           }
-        },
-        function () {
-          if (successCallback) {
-            successCallback(
-              item.address,
-              emailTpldata.TplTitle,
-              emailTpldata.TplContent
-            );
-          }
-        }
+        )
       );
       // // Send the email
       // transporter.sendMail(mailOptions, function (error, info) {
@@ -735,6 +744,7 @@ export class EmailSend {
       //     }
       // });
     });
+    await Promise.all(sendPromises);
   }
   // Function to get a random item from an array.
   // Empty lists must return undefined: crypto.randomInt(0) throws, which

@@ -2741,6 +2741,10 @@ export default {
       "Plan rejected. Please revise the plan based on the following feedback and resubmit for approval.",
     changes_requested_continue_message:
       "Plan changes requested. Please update the plan based on the following feedback and resubmit for approval.",
+    approve_failed: "Plan approval did not complete. Please try again.",
+    reject_failed: "Plan rejection did not complete. Please try again.",
+    changes_request_failed:
+      "Requesting plan changes did not complete. Please try again.",
     reject_feedback: "Reason for rejection",
     changes_feedback: "What needs to change?",
     no_plan_yet: "No plan content yet.",
@@ -3170,6 +3174,57 @@ export default {
         "The report could not be submitted. Your details have been kept so you can try again.",
       unknown:
         "The report could not be submitted. Your details have been kept so you can try again.",
+    },
+  },
+  aiConversationReport: {
+    action: "Report conversation",
+    actionAriaLabel: "Report this conversation for review",
+    unavailable: "Conversation reporting is currently unavailable.",
+    noEligibleOutputs:
+      "There are no reportable AI outputs in this conversation yet.",
+    dialogTitle: "Report conversation",
+    selectionInstruction: "Select the AI outputs to report.",
+    selectionCount: "{n} selected",
+    selectionCountOfMax: "{n} of {max} selected",
+    selectAll: "Select all",
+    includeRelatedUserContext:
+      "Include my related message that prompted the AI output",
+    userMessageWillBeSent:
+      "If you continue, your selected related message will be sent to AiFetchly along with the AI outputs.",
+    relatedUserLabel: "Your message — will be sent",
+    attachmentOmitted:
+      "An attachment in your message was omitted; only the message text is included.",
+    imageLabel: "Include image in report",
+    generatedAtLabel: "Generated at",
+    consentDefault:
+      "Only the selected AI outputs and your description will be sent. Your other messages, files, and AI reasoning are not included.",
+    consentWithUserContext:
+      "You have chosen to include your related message. It will be sent with the AI outputs you selected.",
+    truncationWarning:
+      "Long outputs were trimmed to fit the report size limit.",
+    listTruncated:
+      "Showing the first {shown} of {total} outputs. Scroll the conversation to report a different one.",
+    continueAndSubmit: "Submit report",
+    cancel: "Cancel",
+    conversationChanged:
+      "The conversation changed while the report was open. Please reopen it.",
+    categoryLabel: "What is wrong with this conversation?",
+    commentLabel: "Additional details (optional)",
+    itemTypes: {
+      text: "Text",
+      image: "Image",
+      mixed: "Text and images",
+      plan: "Plan",
+      artifact: "Artifact",
+    },
+    errors: {
+      selectionRequired: "Select at least one AI output to report.",
+      selectionLimit: "You can select at most 10 AI outputs.",
+      imageLimit: "A report can include at most 3 images.",
+      relatedMessageUnavailable:
+        "No related message is available for the selected output.",
+      unsupportedSchema:
+        "This report type is not supported. Please update the app.",
     },
   },
 };

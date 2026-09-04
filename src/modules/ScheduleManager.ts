@@ -1,10 +1,8 @@
-import { BaseDb } from "@/model/Basedb";
 //import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
 import {ScheduleTaskModuleInterface} from "@/modules/interface/ScheduleTaskModuleInterface"
-import { ScheduleExecutionLogModel } from "@/model/ScheduleExecutionLog.model";
 //import { ScheduleDependencyModel } from "@/model/ScheduleDependency.model";
-import { ScheduleTaskEntity, TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
+import { ScheduleTaskEntity, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
 import { ExecutionStatus, TriggerType as LogTriggerType } from "@/entity/ScheduleExecutionLog.entity";
 import { TaskExecutorService } from "./TaskExecutorService";
 import { CronJob } from 'cron';
@@ -12,7 +10,10 @@ import {ScheduleExecutionLogInterface} from "@/modules/interface/ScheduleExecuti
 import { ScheduleExecutionLogModule } from "./ScheduleExecutionLogModule";
 import { ScheduleDependencyModule } from "./ScheduleDependencyModule";
 import { ScheduleDependencyInterface, DependencyStatistics } from "./interface/ScheduleDependencyInterface";
-import { SchedulerStatusModel } from "@/model/SchedulerStatus.model";
+import {
+    isDatabaseConnectionClosedError,
+    SchedulerStatusModel
+} from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
 export interface SchedulerStatus {
@@ -220,7 +221,7 @@ export class ScheduleManager {
 
             try {
                 // Execute the task
-                const taskOutputId = await this.taskExecutorModule.executeScheduledTask(schedule);
+                await this.taskExecutorModule.executeScheduledTask(schedule);
 
                 // Calculate duration
                 const duration = Date.now() - startTime;
@@ -486,7 +487,7 @@ export class ScheduleManager {
         this.isRunning = false;
 
         // Stop all cron jobs
-        for (const [scheduleId, cronJob] of this.cronJobs) {
+        for (const cronJob of this.cronJobs.values()) {
             cronJob.stop();
         }
         this.cronJobs.clear();
@@ -542,7 +543,6 @@ export class ScheduleManager {
      */
     async handleAppShutdown(): Promise<void> {
         console.log('Shutting down ScheduleManager...');
-        await this.persistStoppedStatus();
         await this.stop();
     }
 
@@ -590,6 +590,9 @@ export class ScheduleManager {
      * Persist stopped status to database
      */
     async persistStoppedStatus(): Promise<void> {
+        if (!this.schedulerStatusModel.isConnectionOpen()) {
+            return;
+        }
         try {
             await this.schedulerStatusModel.updateStatus({
                 is_running: false,
@@ -597,6 +600,9 @@ export class ScheduleManager {
                 last_error_message: undefined
             });
         } catch (error) {
+            if (isDatabaseConnectionClosedError(error)) {
+                return;
+            }
             console.error('Failed to persist stopped status:', error);
         }
     }

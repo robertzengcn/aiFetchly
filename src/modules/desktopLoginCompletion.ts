@@ -217,13 +217,14 @@ export async function completeDesktopLogin(
     const freshTokens = new Token();
     const newDbPath = freshTokens.getValue(USERSDBPATH);
     if (newDbPath && newDbPath.length > 0) {
-      // Reset ScheduleManager first so it stops cleanly before the DB
-      // connection is destroyed.
-      await ScheduleManager.resetInstance();
-      log.info("ScheduleManager reset to new path after login");
+      // Drop scheduler models before replacing the DataSource they reference.
+      await ScheduleManager.destroyInstance();
 
       const newDbInstance = await SqliteDb.resetInstance(newDbPath);
       log.info("SqliteDb reset to new path after login:", newDbPath);
+
+      ScheduleManager.getInstance();
+      log.info("ScheduleManager rebuilt for new path after login");
 
       SearchController.resetInstance();
       YellowPagesController.resetInstance();

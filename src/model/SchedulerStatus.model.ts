@@ -2,12 +2,26 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
 
+export function isDatabaseConnectionClosedError(error: unknown): boolean {
+    return error instanceof Error &&
+        error.message === 'The database connection is not open';
+}
+
 export class SchedulerStatusModel extends BaseDb {
     private repository: Repository<SchedulerStatusEntity>;
     
     constructor(filepath: string) {
         super(filepath);
         this.repository = this.sqliteDb.connection.getRepository(SchedulerStatusEntity);
+    }
+
+    /**
+     * The repository is bound to the DataSource captured at construction.
+     * During account switching or shutdown that DataSource may be closed even
+     * when a newer process-wide SqliteDb instance is already available.
+     */
+    isConnectionOpen(): boolean {
+        return this.sqliteDb.connection.isInitialized;
     }
     
     /**
@@ -21,6 +35,9 @@ export class SchedulerStatusModel extends BaseDb {
             });
             return status;
         } catch (error) {
+            if (isDatabaseConnectionClosedError(error)) {
+                throw error;
+            }
             console.error('Failed to get scheduler status:', error);
             return null;
         }
@@ -38,7 +55,9 @@ export class SchedulerStatusModel extends BaseDb {
                 await this.repository.save(status);
             }
         } catch (error) {
-            console.error('Failed to update scheduler status:', error);
+            if (!isDatabaseConnectionClosedError(error)) {
+                console.error('Failed to update scheduler status:', error);
+            }
             throw error;
         }
     }
@@ -101,4 +120,4 @@ export class SchedulerStatusModel extends BaseDb {
             return false;
         }
     }
-} 
+}

@@ -1,14 +1,22 @@
 import { app } from "electron";
+import { createHash } from "node:crypto";
 import { HttpClient } from "@/modules/lib/httpclient";
 import { log } from "@/modules/Logger";
 import { getOrCreateInstallId } from "@/modules/diagnostics/DiagnosticIdentity";
 import { mapReportError } from "@/service/AIContentReportErrorMapper";
 import {
   AIContentReportError,
+  type AIContentReportCapabilities,
   type AIContentReportContext,
+  type AIContentReportImagePreview,
   type CreateAIContentReportRequest,
   type CreateAIContentReportResponse,
+  type CreateAIConversationReportRequest,
+  type CreateAnyAIContentReportRequest,
 } from "@/entityTypes/aiContentReportTypes";
+import { aiContentReportCapabilitiesResponseSchema } from "@/schemas/api/aiContentReport";
+import { DESKTOP_CONVERSATION_REPORT_LIMITS } from "@/schemas/ipc/aiContentReport";
+import { normalizeConversationTexts } from "@/views/components/aiContentReport/conversationReportText";
 import type { CommonApiresp } from "@/entityTypes/commonType";
 
 /**
@@ -30,7 +38,82 @@ import type { CommonApiresp } from "@/entityTypes/commonType";
  */
 
 const REPORT_ENDPOINT = "/api/ai/content-reports";
+const CAPABILITIES_ENDPOINT = "/api/ai/content-reports/capabilities";
 const MAX_TEXT_CHARS = 32000;
+const CAPABILITY_TTL_MS = 5 * 60 * 1000; // 5 minutes (design §15.2)
+
+/** Fail-closed default: conversation reporting stays hidden unless the backend
+ * explicitly advertises it (design §15.2). */
+const FAIL_CLOSED_CAPABILITIES: AIContentReportCapabilities = {
+  acceptedSchemaVersions: [1],
+  conversationReporting: {
+    enabled: false,
+    maxAIItems: 10,
+    maxUserItems: 10,
+    maxTotalItems: 20,
+    maxItemTextChars: 8000,
+    maxAggregateTextChars: 32000,
+    maxImages: 3,
+  },
+};
+
+interface CapabilityCacheEntry {
+  value: AIContentReportCapabilities;
+  expiresAt: number;
+}
+
+/**
+ * Clamp server-advertised conversation-report limits to the desktop hard
+ * maximums (design §15.2).
+ *
+ * The backend may advertise per-account limits (e.g. a trial tier with
+ * `maxAIItems: 5`), but it must never be able to LIFT the desktop v2 caps —
+ * otherwise an over-advertised or compromised backend (e.g. `maxAIItems: 200`)
+ * would bypass the IPC schema's `.max()` bounds and produce oversized reports
+ * the renderer budgets against. Each numeric limit becomes
+ * `Math.min(server, desktopMax)`; `enabled` and `acceptedSchemaVersions`
+ * pass through unchanged. The cache stores the clamped value so the renderer
+ * always reads the safe bound.
+ */
+function clampConversationLimits(
+  caps: AIContentReportCapabilities
+): AIContentReportCapabilities {
+  const cr = caps.conversationReporting;
+  return {
+    ...caps,
+    conversationReporting: {
+      enabled: cr.enabled,
+      maxAIItems: Math.min(
+        cr.maxAIItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxAIItems
+      ),
+      maxUserItems: Math.min(
+        cr.maxUserItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxUserItems
+      ),
+      maxTotalItems: Math.min(
+        cr.maxTotalItems,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxTotalItems
+      ),
+      maxItemTextChars: Math.min(
+        cr.maxItemTextChars,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxItemTextChars
+      ),
+      maxAggregateTextChars: Math.min(
+        cr.maxAggregateTextChars,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxAggregateTextChars
+      ),
+      maxImages: Math.min(
+        cr.maxImages,
+        DESKTOP_CONVERSATION_REPORT_LIMITS.maxImages
+      ),
+    },
+  };
+}
+
+// Module-level: each IPC call constructs a new service instance, so the cache
+// must live at module scope to be shared across calls (design §15.2).
+let capabilityCache: CapabilityCacheEntry | null = null;
 
 /** Inject for testability; defaults to the real Electron app. */
 export interface AppVersionProvider {
@@ -48,7 +131,7 @@ function defaultAppVersion(): string {
 
 export interface AIContentReportServiceOptions {
   /** Override the HTTP client (tests inject a stub). */
-  httpClient?: Pick<HttpClient, "postJson">;
+  httpClient?: Pick<HttpClient, "postJson" | "get">;
   /** Override the app-version source (tests inject a stub). */
   appVersion?: AppVersionProvider;
   /** Override the stable install id (tests inject a stub). */
@@ -56,7 +139,7 @@ export interface AIContentReportServiceOptions {
 }
 
 export class AIContentReportService {
-  private readonly httpClient: Pick<HttpClient, "postJson">;
+  private readonly httpClient: Pick<HttpClient, "postJson" | "get">;
   private readonly appVersion: AppVersionProvider;
   private readonly installId: () => string;
 
@@ -79,7 +162,10 @@ export class AIContentReportService {
       ...partial,
       appVersion: this.appVersion(),
       platform: process.platform as "win32" | "darwin" | "linux",
-      installId: this.installId(),
+      // Never on the wire body: the backend resolves install identity from
+      // the X-AiFetchly-Install-Id header (marketing design §7.1) and rejects
+      // unknown body fields outright (DisallowUnknownFields → 400).
+      installId: undefined,
     };
   }
 
@@ -107,25 +193,86 @@ export class AIContentReportService {
 
   /**
    * Normalize the output evidence: truncate text to the 32000-char limit
-   * (PRD FR-3.2). Image previews are already bounded by the Zod schema and
-   * the renderer-side encoder, so they pass through unchanged.
+   * (PRD FR-3.2), backfill each preview's sha256, and materialize the keys
+   * the backend requires to be PRESENT (its requiredKeys set distinguishes
+   * an absent key from an explicit zero value — omitting textTruncated /
+   * imagePreviews / evidenceUnavailable is a 400, marketing design §9).
    */
   normalizeOutput(
     output: CreateAIContentReportRequest["output"]
   ): CreateAIContentReportRequest["output"] {
-    const normalized: CreateAIContentReportRequest["output"] = { ...output };
+    const normalized: CreateAIContentReportRequest["output"] = {
+      ...output,
+      // Backend requires presence; JSON.stringify drops undefined.
+      textTruncated: output.textTruncated ?? false,
+      imagePreviews: output.imagePreviews ?? [],
+      evidenceUnavailable: output.evidenceUnavailable ?? false,
+    };
     const textResult = this.normalizeText(output.text);
     if (typeof textResult.text === "string") {
       normalized.text = textResult.text;
-      normalized.textTruncated = textResult.textTruncated;
+      normalized.textTruncated = textResult.textTruncated ?? false;
+    }
+    if (normalized.imagePreviews) {
+      normalized.imagePreviews =
+        normalized.imagePreviews.map(backfillImageSha256);
     }
     return normalized;
   }
 
   /**
-   * Submit the report to the backend. Throws `AIContentReportError` (with a
-   * safe code) on any failure; the IPC handler wraps it and the dialog maps
-   * the code to a localized message.
+   * Fetch conversation-reporting capabilities with a 5-minute main-process
+   * cache (design §15.2). Fail-closed to `enabled: false` on network error,
+   * schema rejection, or a `status:false` envelope — so the v2 UI never
+   * appears when the backend cannot accept conversation reports.
+   *
+   * NOT AI-gated: uses the plain authenticated `HttpClient` and never touches
+   * `USER_AI_ENABLED` (PRD FR-4.4). Failed fetches are NOT cached, so a
+   * transient outage heals on the next call.
+   */
+  async getCapabilities(): Promise<AIContentReportCapabilities> {
+    if (capabilityCache && capabilityCache.expiresAt > Date.now()) {
+      return capabilityCache.value;
+    }
+    try {
+      const raw = await this.httpClient.get<unknown>(CAPABILITIES_ENDPOINT);
+      const parsed = aiContentReportCapabilitiesResponseSchema().safeParse(raw);
+      if (!parsed.success || parsed.data.status !== true) {
+        log.warn("[ai-content-report] capability response rejected");
+        return FAIL_CLOSED_CAPABILITIES;
+      }
+      // Clamp server limits to desktop hard maximums (design §15.2) so an
+      // over-advertised backend can never lift the v2 schema caps.
+      const value = clampConversationLimits(parsed.data.data);
+      capabilityCache = {
+        value,
+        expiresAt: Date.now() + CAPABILITY_TTL_MS,
+      };
+      return value;
+    } catch (err) {
+      log.warn("[ai-content-report] capability fetch failed", {
+        code: mapReportError(err),
+      });
+      return FAIL_CLOSED_CAPABILITIES;
+    }
+  }
+
+  /**
+   * Dispatch on schemaVersion. v1 → single-output path; v2 → conversation
+   * path. Both share HTTP, error mapping, and metadata-only logging.
+   */
+  async submitReport(
+    request: CreateAnyAIContentReportRequest
+  ): Promise<CreateAIContentReportResponse> {
+    return request.schemaVersion === 2
+      ? this.submitVersion2(request)
+      : this.submitVersion1(request);
+  }
+
+  /**
+   * Submit a version-1 (single-output) report. Throws `AIContentReportError`
+   * (with a safe code) on any failure; the IPC handler wraps it and the
+   * dialog maps the code to a localized message.
    *
    * Server-side normalization (authoritative, PRD FR-3.1/3.2):
    *  - text is truncated to 32000 chars preserving head+tail
@@ -133,7 +280,7 @@ export class AIContentReportService {
    *    sources (the renderer cannot know these reliably)
    * The renderer's placeholder values are overwritten here.
    */
-  async submitReport(
+  private async submitVersion1(
     request: CreateAIContentReportRequest
   ): Promise<CreateAIContentReportResponse> {
     const startedAt = Date.now();
@@ -154,7 +301,13 @@ export class AIContentReportService {
     try {
       raw = await this.httpClient.postJson<
         CommonApiresp<CreateAIContentReportResponse>
-      >(REPORT_ENDPOINT, normalizedRequest);
+      >(REPORT_ENDPOINT, normalizedRequest, {
+        // Backend design §7.1: install id rides the header (used for the
+        // anonymous rate-limit scope; ignored when a bearer is present).
+        headers: {
+          "X-AiFetchly-Install-Id": this.installId(),
+        },
+      });
     } catch (err) {
       const code = mapReportError(err);
       const status = extractStatus(err);
@@ -221,6 +374,149 @@ export class AIContentReportService {
   }
 
   /**
+   * Submit a version-2 (conversation) report. Defense in depth: re-normalize
+   * item texts with the same pure utility the renderer used, then assemble
+   * the v2 context from main-process sources. The renderer's placeholder
+   * values are overwritten here (design §8, §15).
+   *
+   * Logging is metadata-only: `clientReportId`, `reportId`, surface,
+   * category, HTTP status, duration. Never item text, comments, image bytes,
+   * conversation content, or identifiers.
+   */
+  private async submitVersion2(
+    request: CreateAIConversationReportRequest
+  ): Promise<CreateAIContentReportResponse> {
+    const startedAt = Date.now();
+    const { clientReportId, surface, category } = request;
+
+    const normalizedItems = this.normalizeConversationItems(request.items);
+    const normalizedContext = this.assembleVersion2Context(request.context);
+    const normalizedRequest: CreateAIConversationReportRequest = {
+      ...request,
+      items: normalizedItems,
+      context: normalizedContext,
+    };
+
+    let raw: CommonApiresp<CreateAIContentReportResponse> | undefined;
+    let httpStatus: number | undefined;
+    try {
+      raw = await this.httpClient.postJson<
+        CommonApiresp<CreateAIContentReportResponse>
+      >(REPORT_ENDPOINT, normalizedRequest, {
+        // Backend design §7.1: install id rides the header, never the body.
+        headers: {
+          "X-AiFetchly-Install-Id": this.installId(),
+        },
+      });
+    } catch (err) {
+      const code = mapReportError(err);
+      httpStatus = extractStatus(err);
+      log.info("[ai-content-report] submit failed", {
+        clientReportId,
+        surface,
+        category,
+        httpStatus,
+        durationMs: Date.now() - startedAt,
+        code,
+        schemaVersion: 2,
+      });
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
+      throw new AIContentReportError(code, code);
+    }
+
+    const data = raw?.data;
+    if (!raw?.status || !data || !data.reportId) {
+      const code = mapReportError({ status: httpStatus });
+      log.info("[ai-content-report] submit rejected by server", {
+        clientReportId,
+        surface,
+        category,
+        httpStatus,
+        durationMs: Date.now() - startedAt,
+        code,
+        schemaVersion: 2,
+      });
+      this.emitAnalyticsEvent("ai_content_report_failed", {
+        surface,
+        appVersion: normalizedContext.appVersion,
+        code,
+      });
+      throw new AIContentReportError(code, code);
+    }
+
+    log.info("[ai-content-report] submitted", {
+      clientReportId,
+      reportId: data.reportId,
+      surface,
+      category,
+      httpStatus,
+      durationMs: Date.now() - startedAt,
+      schemaVersion: 2,
+    });
+    this.emitAnalyticsEvent("ai_content_report_submitted", {
+      surface,
+      category,
+      appVersion: normalizedContext.appVersion,
+      durationBucket: durationBucket(Date.now() - startedAt),
+    });
+    return data;
+  }
+
+  /**
+   * Re-normalize v2 item texts (defense in depth — the renderer already
+   * normalized, but the service is the last boundary before HTTP). Image-only
+   * and `evidenceUnavailable` items have no text and pass through unchanged.
+   */
+  private normalizeConversationItems(
+    items: CreateAIConversationReportRequest["items"]
+  ): CreateAIConversationReportRequest["items"] {
+    const inputs = items.map((item) => ({
+      itemId: item.itemId,
+      text: item.text ?? "",
+    }));
+    const normalized = normalizeConversationTexts(inputs);
+    const byId = new Map(normalized.texts.map((text) => [text.itemId, text]));
+    return items.map((item) => {
+      const backfilled: CreateAIConversationReportRequest["items"][number] =
+        item.imagePreviews
+          ? {
+              ...item,
+              imagePreviews: item.imagePreviews.map(backfillImageSha256),
+            }
+          : item;
+      if (!item.text) return backfilled;
+      const text = byId.get(item.itemId);
+      if (!text) return backfilled;
+      return {
+        ...backfilled,
+        text: text.text,
+        textTruncated: text.truncated || undefined,
+      };
+    });
+  }
+
+  /**
+   * Assemble the v2 context: overwrite appVersion/platform/installId from
+   * main-process sources; preserve the renderer-supplied conversationId,
+   * counts, aggregateTextTruncated, and locale.
+   */
+  private assembleVersion2Context(
+    partial: CreateAIConversationReportRequest["context"]
+  ): CreateAIConversationReportRequest["context"] {
+    return {
+      ...partial,
+      appVersion: this.appVersion(),
+      platform: process.platform as "win32" | "darwin" | "linux",
+      // Never on the wire body — see assembleContext.
+      installId: undefined,
+    };
+  }
+
+  /**
    * Emit an allowed analytics event (PRD §15). Properties are strictly
    * metadata-only — never report text, comments, image bytes, message/
    * conversation identifiers, the report identifier, model prompts, or raw
@@ -241,6 +537,27 @@ function durationBucket(ms: number): string {
   if (ms < 5000) return "1-5s";
   if (ms < 30000) return "5-30s";
   return ">30s";
+}
+
+/**
+ * Backfill the SHA-256 over an image preview's decoded base64 bytes.
+ *
+ * The renderer encoder emits previews without `sha256`, but the backend
+ * requires the field present AND matching its own recomputed hash of the
+ * decoded bytes (marketing services/aicontentreport/image.go) — a missing or
+ * stale client hash is a 400. A client-supplied hash is trusted verbatim
+ * (the backend recomputes from `dataBase64` regardless).
+ */
+function backfillImageSha256(
+  preview: AIContentReportImagePreview
+): AIContentReportImagePreview {
+  if (preview.sha256) return preview;
+  return {
+    ...preview,
+    sha256: createHash("sha256")
+      .update(Buffer.from(preview.dataBase64, "base64"))
+      .digest("hex"),
+  };
 }
 
 /** Best-effort HTTP status extraction from an unknown thrown value. */

@@ -29,6 +29,7 @@ vi.mock("@/modules/buckEmailTaskModule", () => ({
       email_subject: string;
       email_html_content: string;
     }> {
+      void _input;
       return {
         emailservicelist: [],
         filterlist: [],
@@ -52,7 +53,6 @@ import {
   previewBulkEmailSendTask,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
-import { DIRECT_EMAIL_SOURCE as DIRECT_EMAIL_SOURCE_AI } from "@/entityTypes/emailMarketingAiTypes";
 
 describe("EmailMarketingAiTools", () => {
   afterEach(() => {
@@ -289,7 +289,7 @@ describe("EmailMarketingAiTools", () => {
   });
 
   describe("startBulkEmailSendTask", () => {
-    it("starts content-only sends and returns without waiting for SMTP", async () => {
+    it("waits for content-only SMTP delivery before returning", async () => {
       sinon.stub(BuckEmailTaskModule.prototype, "ensureConnection").resolves();
       const startStub = sinon
         .stub(BuckEmailTaskModule.prototype, "startBuckEmailCampaign")
@@ -307,11 +307,11 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.task_id).to.equal(77);
-      expect(result.status).to.equal("started");
+      expect(result.status).to.equal("completed");
       expect(result.recipient_count).to.equal(1);
       expect(result.template_ids).to.equal(undefined);
       expect(startStub.calledOnce).to.equal(true);
-      expect(startStub.firstCall.args[1]?.waitForExit).to.not.equal(true);
+      expect(startStub.firstCall.args[1]).to.deep.equal({ waitForExit: true });
 
       const startArgs = startStub.firstCall.args[0] as Buckemailstruct;
       expect(startArgs.email_subject).to.equal("Campaign subject");
@@ -349,10 +349,10 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.task_id).to.equal(123);
-      expect(result.status).to.equal("started");
+      expect(result.status).to.equal("completed");
       expect(result.recipient_count).to.equal(2);
       expect(startStub.calledOnce).to.equal(true);
-      expect(startStub.firstCall.args[1]).to.equal(undefined);
+      expect(startStub.firstCall.args[1]).to.deep.equal({ waitForExit: true });
       expect(startStub.firstCall.args[0]).to.deep.equal({
         EmailBtype: BuckEmailType.EXTRACTEMAIL,
         EmailtaskentityId: undefined,

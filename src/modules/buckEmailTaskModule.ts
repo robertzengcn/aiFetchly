@@ -1,5 +1,4 @@
 import { Token } from "@/modules/token";
-import { USERSDBPATH } from "@/config/usersetting";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
@@ -28,7 +27,6 @@ import { v4 as uuidv4 } from "uuid";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import { SendStatus } from "@/model/emailMarketingSendLog.model";
@@ -319,7 +317,31 @@ export class BuckEmailTaskModule extends BaseModule {
     options?: { waitForExit?: boolean }
   ): Promise<number> {
     const taskId = await this.createBuckEmailTask(param);
-    return await this.buckEmailsend(taskId, options);
+    const sendPromise = this.buckEmailsend(taskId, options);
+
+    if (options?.waitForExit === true) {
+      return await sendPromise;
+    }
+
+    void sendPromise.catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `Failed to start background email task ${taskId}: ${message}`
+      );
+      try {
+        await this.updateTaskStatus(taskId, TaskStatus.Error);
+      } catch (statusError: unknown) {
+        const statusMessage =
+          statusError instanceof Error
+            ? statusError.message
+            : String(statusError);
+        console.error(
+          `Failed to mark email task ${taskId} as errored: ${statusMessage}`
+        );
+      }
+    });
+
+    return taskId;
   }
 
   //create buck email task from entity (direct DB entity)
@@ -460,7 +482,7 @@ export class BuckEmailTaskModule extends BaseModule {
         `child js path not exist. Tried: ${candidates.join(", ")}`
       );
     }
-    const { port1, port2 } = new MessageChannelMain();
+    const { port1 } = new MessageChannelMain();
 
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
@@ -498,6 +520,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     });
     const waitForExit = options?.waitForExit === true;
+    let sendFailure: Error | undefined;
     let settled = false;
     let resolveWait: ((taskId: number) => void) | undefined;
     let rejectWait: ((error: Error) => void) | undefined;
@@ -542,9 +565,14 @@ export class BuckEmailTaskModule extends BaseModule {
         this.updateTaskStatus(taskId, TaskStatus.Error);
         settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
-        console.log("Child process exited successfully");
-        this.updateTaskStatus(taskId, TaskStatus.Complete);
-        settleSuccess();
+        if (sendFailure) {
+          this.updateTaskStatus(taskId, TaskStatus.Error);
+          settleFailure(sendFailure);
+        } else {
+          console.log("Child process exited successfully");
+          this.updateTaskStatus(taskId, TaskStatus.Complete);
+          settleSuccess();
+        }
       }
     });
     child.on("message", async (message: unknown) => {
@@ -602,6 +630,11 @@ export class BuckEmailTaskModule extends BaseModule {
                 console.error("EmailSendFailure: childdata.data is undefined");
                 break;
               }
+              sendFailure ??= new Error(
+                `Email delivery to ${childdata.data.receiver} failed: ${
+                  childdata.data.info || "Unknown SMTP error"
+                }`
+              );
               const emailMarketLog = new EmailMarketingSendLogEntity();
               emailMarketLog.task_id = taskId;
               emailMarketLog.status = SendStatus.Failure;
@@ -622,8 +655,13 @@ export class BuckEmailTaskModule extends BaseModule {
             break;
           case "sendEmailEnd":
             {
-              this.updateTaskStatus(taskId, TaskStatus.Complete);
-              settleSuccess();
+              if (sendFailure) {
+                await this.updateTaskStatus(taskId, TaskStatus.Error);
+                settleFailure(sendFailure);
+              } else {
+                await this.updateTaskStatus(taskId, TaskStatus.Complete);
+                settleSuccess();
+              }
             }
             break;
         }

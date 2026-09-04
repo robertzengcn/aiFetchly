@@ -18,7 +18,7 @@
       :disabled="isStreaming"
       :workspace-root="workspaceRoot"
       :show-reasoning="showReasoning"
-      :reported="reportedMessageIds.has(m.id)"
+      :reported="props.reportedMessageIds.has(m.id)"
       @grant-permission="onGrantPermission"
       @deny-permission="onDenyPermission"
       @approve-plan="emit('approve-plan')"
@@ -27,14 +27,6 @@
       @open-artifact="(id: string) => emit('open-artifact', id)"
       @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
       @report="onReportRequest"
-    />
-    <!-- Single shared report dialog for the whole chat surface region
-         (PRD §13.1: one dialog per surface region to avoid focus races). -->
-    <AIContentReportDialog
-      v-model="reportDialogOpen"
-      :descriptor="activeReportDescriptor"
-      :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
-      @submitted="onReportSubmitted"
     />
     <div
       v-if="showTypingIndicator"
@@ -76,9 +68,7 @@ import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
-import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
-import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -105,6 +95,8 @@ const props = defineProps<{
   } | null;
   workspaceRoot?: string;
   showReasoning?: boolean;
+  /** Message ids already reported this session (parent-owned after lift). */
+  reportedMessageIds: Set<string>;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
@@ -114,26 +106,16 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();
 const { t } = useI18n();
 
-// AI Content Report — one shared dialog for the chat surface region (PRD
-// §13.1). The per-message button emits `report` with a descriptor; we open
-// the single dialog here and mark the originating message reported on success.
-const reportDialogOpen = ref(false);
-const activeReportDescriptor = ref<ReportableOutputDescriptor | null>(null);
-const reportedMessageIds = ref<Set<string>>(new Set());
-
+// AI Content Report — the single-output dialog is now owned by the parent
+// (AiChatV2.vue) so the conversation-report dialog and the single-output
+// dialog share one mount point (design §11.1). This component just emits
+// `report` upward with the descriptor.
 function onReportRequest(descriptor: ReportableOutputDescriptor): void {
-  activeReportDescriptor.value = descriptor;
-  reportDialogOpen.value = true;
-}
-
-function onReportSubmitted(): void {
-  const id = activeReportDescriptor.value?.context.messageId;
-  if (id) {
-    reportedMessageIds.value = new Set(reportedMessageIds.value).add(id);
-  }
+  emit("report", descriptor);
 }
 
 const scroller = ref<HTMLDivElement | null>(null);

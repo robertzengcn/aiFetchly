@@ -3,6 +3,13 @@
     <div class="header">
       <h2>Chat with Knowledge Base</h2>
       <div class="header-actions">
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
         <v-btn
           icon
           @click="clearChat"
@@ -245,18 +252,47 @@
       :privacy-policy-url="privacyPolicyUrl"
       @submitted="onKnowledgeReportSubmitted"
     />
+
+    <!-- Whole-conversation report dialog (design §11.3) -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      :privacy-policy-url="privacyPolicyUrl"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
 <script>
-import { defineComponent, ref, onMounted, nextTick, watch } from 'vue';
+import { defineComponent, ref, computed, onMounted, nextTick, watch } from 'vue';
 import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
+import AIConversationReportButton from '@/views/components/aiContentReport/AIConversationReportButton.vue';
+import AIConversationReportDialog from '@/views/components/aiContentReport/AIConversationReportDialog.vue';
+import {
+  buildKnowledgeConversationSnapshot,
+  hasEligibleKnowledgeCandidate,
+} from '@/views/components/aiContentReport/conversationReportSnapshot';
+import { useReportCapabilities } from '@/views/utils/reportCapabilities';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
+
+/**
+ * Generate a stable message id. Knowledge messages historically had no id,
+ * so one is minted at creation time (design §11.3). Uses crypto.randomUUID
+ * when available, with a timestamp+random fallback.
+ * @return {string}
+ */
+const generateMessageId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 export default defineComponent({
   name: 'ChatInterface',
-  components: { AIContentReportButton, AIContentReportDialog },
+  components: { AIContentReportButton, AIContentReportDialog, AIConversationReportButton, AIConversationReportDialog },
   setup() {
     const messages = ref([]);
     const inputMessage = ref('');
@@ -270,6 +306,80 @@ export default defineComponent({
     const activeReportDescriptor = ref(null);
     const reportedKnowledgeIndices = ref(new Set());
     const activeReportIndex = ref(/** @type {number|null} */ (null));
+
+    // Whole-conversation report orchestration (design §11.3). NOT AI-gated:
+    // the capabilities endpoint works regardless of USER_AI_ENABLED (PRD
+    // FR-4.4). Capability state is owned by the useReportCapabilities
+    // composable (with bounded lazy retry) — see its declaration after the
+    // eligibility computed below.
+    const conversationReportDialogOpen = ref(false);
+    /** @type {import('vue').Ref<ReturnType<typeof buildKnowledgeConversationSnapshot> | null>} */
+    const conversationReportSnapshot = ref(null);
+    // Stable conversation id for the knowledge chat session. There is no
+    // server-side conversation id here (knowledge chat is local-only), so one
+    // is minted per session and kept in a ref (design §11.3).
+    const knowledgeConversationId = ref(generateMessageId());
+
+    /**
+     * Adapter that maps the untyped component-local message objects to the
+     * typed KnowledgeChatMessage contract so buildKnowledgeConversationSnapshot
+     * never bridges with `any` (design §7.1, §11.3). Messages restored from
+     * localStorage may lack an id; one is minted lazily and persisted back via
+     * the deep watcher.
+     * @return {ReadonlyArray<{ id: string, type: 'user'|'ai', content: string, timestamp: Date|string }>}
+     */
+    const knowledgeReportMessages = computed(() =>
+      messages.value.map((msg) => ({
+        id: typeof msg.id === 'string' && msg.id ? msg.id : generateMessageId(),
+        type: msg.type === 'user' ? 'user' : 'ai',
+        content: typeof msg.content === 'string' ? msg.content : '',
+        timestamp: msg.timestamp instanceof Date ? msg.timestamp.toISOString() : (msg.timestamp ?? ''),
+      }))
+    );
+
+    // FR-1.3, §9.1: the header button is enabled only when the capability
+    // envelope enables v2 reporting AND at least one visible message is an
+    // eligible reportable AI output. With zero eligible outputs the button is
+    // disabled and announces the noEligibleOutputs reason so the action is
+    // stable-but-clear rather than opening an empty dialog.
+    const hasReportableConversationOutput = computed(() =>
+      hasEligibleKnowledgeCandidate(knowledgeReportMessages.value)
+    );
+    // Capability state with bounded lazy retry (2026-09-04 fix): the previous
+    // one-shot mount-time fetch left the button permanently grey when that
+    // single request failed — eligible content restored from localStorage
+    // never re-asked the capabilities endpoint. The composable retries
+    // (capped backoff) once eligible output exists but capabilities have
+    // not resolved enabled:true. Still fail-closed and NOT AI-gated (FR-4.4).
+    const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+      useReportCapabilities({
+        hasEligibleOutput: () => hasReportableConversationOutput.value,
+      });
+    const conversationReportEnabled = computed(
+      () =>
+        reportCapabilities.value?.conversationReporting?.enabled === true &&
+        hasReportableConversationOutput.value
+    );
+    const conversationReportDisabledReason = computed(() => {
+      if (reportCapabilities.value?.conversationReporting?.enabled !== true) {
+        return 'Conversation reporting is currently unavailable.';
+      }
+      if (!hasReportableConversationOutput.value) {
+        return 'There are no reportable AI outputs in this conversation yet.';
+      }
+      return '';
+    });
+
+    // Journey 11.5, §19: if the knowledge conversation identity changes
+    // while the report dialog is open (e.g. after Clear regenerates it — see
+    // TODO-14), the frozen snapshot would describe the prior session. Close
+    // the dialog without submitting so a later open rebuilds a fresh snapshot.
+    watch(knowledgeConversationId, () => {
+      if (!conversationReportDialogOpen.value) return;
+      conversationReportDialogOpen.value = false;
+      conversationReportSnapshot.value = null;
+    });
+
 
     /**
      * @param {{ content: string, timestamp?: Date }} message
@@ -306,6 +416,38 @@ export default defineComponent({
       }
     };
 
+    // --- Whole-conversation report handlers (design §11.3) ----------------
+    // The snapshot is captured at open time from the typed adapter so the
+    // report is frozen against the current visible messages.
+    const onOpenConversationReport = () => {
+      conversationReportSnapshot.value = buildKnowledgeConversationSnapshot({
+        conversationId: knowledgeConversationId.value,
+        messages: knowledgeReportMessages.value,
+      });
+      conversationReportDialogOpen.value = true;
+    };
+
+    /**
+     * @param {{ reportId: string, selectedMessageIds: string[] }} payload
+     * @return {void}
+     */
+    const onConversationReportSubmitted = (payload) => {
+      // Record reported state by index (the single-output flow tracks by
+      // index too) so the per-message "Reported" badge reflects the whole-
+      // conversation submission.
+      const idToIndex = new Map(
+        knowledgeReportMessages.value.map((m, i) => [m.id, i])
+      );
+      const next = new Set(reportedKnowledgeIndices.value);
+      for (const id of payload.selectedMessageIds) {
+        const idx = idToIndex.get(id);
+        if (idx !== undefined) next.add(idx);
+      }
+      reportedKnowledgeIndices.value = next;
+      // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
+      // and copy the report reference; the dialog itself owns closing on dismiss.
+    };
+
     const settings = ref({
       model: 'gpt-3.5-turbo',
       temperature: 0.7,
@@ -330,6 +472,7 @@ export default defineComponent({
       if (!inputMessage.value.trim() || isTyping.value) return;
 
       const userMessage = {
+        id: generateMessageId(),
         type: 'user',
         content: inputMessage.value.trim(),
         timestamp: new Date(),
@@ -349,6 +492,7 @@ export default defineComponent({
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       const aiMessage = {
+        id: generateMessageId(),
         type: 'ai',
         content: `I understand you're asking about "${currentInput}". Based on the knowledge base, here's what I found: This is a mock response that would normally be generated by the RAG system. The actual implementation would search through your documents and provide relevant information based on the context.`,
         timestamp: new Date(),
@@ -431,6 +575,11 @@ export default defineComponent({
     const clearChat = () => {
       if (confirm('Are you sure you want to clear the chat history?')) {
         messages.value = [];
+        // Design §11.3, TODO-14: mint a fresh conversation id after Clear so a
+        // report is never attributed across cleared sessions. This also trips
+        // the conversation-changed watcher (TODO-8) to close any open report
+        // dialog whose frozen snapshot belongs to the prior session.
+        knowledgeConversationId.value = generateMessageId();
       }
     };
 
@@ -502,11 +651,26 @@ export default defineComponent({
       const savedMessages = localStorage.getItem('chatHistory');
       if (savedMessages) {
         try {
-          messages.value = JSON.parse(savedMessages);
+          // Backfill stable ids on restored messages that predate the id
+          // field (design §11.3) so the snapshot adapter never mints ids
+          // that drift between render and submit.
+          const parsed = JSON.parse(savedMessages);
+          messages.value = (Array.isArray(parsed) ? parsed : []).map((msg) =>
+            typeof msg.id === 'string' && msg.id
+              ? msg
+              : { ...msg, id: generateMessageId() }
+          );
         } catch (error) {
           console.error('Failed to load chat history:', error);
         }
       }
+
+      // Conversation-report capabilities are now owned by the
+      // useReportCapabilities composable (see its declaration after the
+      // hasReportableConversationOutput computed), which fetches at scope
+      // creation and applies a bounded retry once eligible output exists —
+      // replacing the previous one-shot fetch here that permanently greyed
+      // the button when it failed at mount.
     });
 
     // Save chat history to localStorage
@@ -547,6 +711,14 @@ export default defineComponent({
       buildKnowledgeDescriptor,
       openKnowledgeReportDialog,
       onKnowledgeReportSubmitted,
+      // Whole-conversation report (design §11.3)
+      conversationReportDialogOpen,
+      conversationReportSnapshot,
+      reportCapabilitiesLoading,
+      conversationReportEnabled,
+      conversationReportDisabledReason,
+      onOpenConversationReport,
+      onConversationReportSubmitted,
     };
   }
 });

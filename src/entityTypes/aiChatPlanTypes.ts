@@ -6,9 +6,35 @@ export type AIChatPlanStatus =
   | "awaiting_approval"
   | "approved"
   | "rejected"
-  | "executing"
   | "completed"
   | "cancelled";
+
+/**
+ * Statuses where the plan has left the planning conversation and the chat
+ * should behave as plain chat again: the lifecycle ended (completed /
+ * cancelled / rejected), or the user already approved the plan so execution
+ * runs with the normal chat prompt and full tool access.
+ *
+ * Single source of truth shared by the renderer (mode selector via
+ * planStateUtil.ts) and the main process (AIChatQueryEngine) so the two
+ * processes can never disagree about which prompt/toolset a round uses.
+ */
+export const PLAN_LIFECYCLE_ENDED_STATUSES: ReadonlySet<AIChatPlanStatus> =
+  new Set<AIChatPlanStatus>(["approved", "completed", "cancelled", "rejected"]);
+
+/**
+ * True when the given status represents an active, in-progress plan
+ * (draft / awaiting_question / awaiting_approval) — i.e. the planning
+ * conversation is still open and the chat should stay in plan mode.
+ * False for a plan that ended or was approved (approval hands control
+ * back to execution in chat mode) and for null (no plan).
+ */
+export function isPlanStatusPlanningActive(
+  status: AIChatPlanStatus | null | undefined
+): boolean {
+  if (!status) return false;
+  return !PLAN_LIFECYCLE_ENDED_STATUSES.has(status);
+}
 
 export type AIChatPlanQuestionStatus = "pending" | "answered" | "cancelled";
 

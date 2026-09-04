@@ -1,5 +1,7 @@
 import { EmailMarketingController } from "@/controller/emailMarketingController";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
+import * as fs from "fs";
+import * as path from "path";
 import {
   EMAILMARKETINGTEMPLIST,
   EMAILMARKETINGTEMPREMOVE,
@@ -12,13 +14,13 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICEUPDATE,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
   EMAILFILTERDELETE,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
 } from "@/config/channellist";
 import {
   CommonResponse,
-  CommonMessage,
   CommonIdrequest,
   CommonDialogMsg,
 } from "@/entityTypes/commonType";
@@ -39,7 +41,9 @@ import {
   emailMarketingListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
+  emailServiceExportInputSchema,
 } from "@/schemas/ipc/emailMarketing";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 
 /**
  * Email Marketing IPC handlers.
@@ -338,6 +342,45 @@ export function registerEmailMarketingIpcHandlers() {
       const emailmarketCon = new EmailMarketingController();
       await emailmarketCon.deleteEmailService(id);
       return id;
+    }
+  );
+
+  // ── Service export ────────────────────────────────────────────────────
+
+  registerValidatedHandler(
+    EMAILSERVICEEXPORT,
+    emailServiceExportInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      const format = input.format ?? "csv";
+      const exportData = await controller.exportEmailServices(format);
+      const fileExtension = format === "csv" ? "csv" : "json";
+      const defaultFilename = `email_services_export_${
+        new Date().toISOString().split("T")[0]
+      }.${fileExtension}`;
+
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showSaveDialog({
+        title: "Export Email Services",
+        defaultPath: path.join(app.getPath("documents"), defaultFilename),
+        filters: [
+          {
+            name: format === "csv" ? "CSV Files" : "JSON Files",
+            extensions: [fileExtension],
+          },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+        throw new Error("Export cancelled by user");
+      }
+      const filePath = dialogResult.filePaths[0];
+      const content =
+        format === "csv"
+          ? (exportData as string)
+          : JSON.stringify(exportData, null, 2);
+      fs.writeFileSync(filePath, content, "utf-8");
+      return filePath;
     }
   );
 

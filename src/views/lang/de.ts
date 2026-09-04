@@ -2761,6 +2761,12 @@ export default {
       "Plan abgelehnt. Bitte überarbeiten Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
     changes_requested_continue_message:
       "Planänderungen angefordert. Bitte aktualisieren Sie den Plan basierend auf dem folgenden Feedback und reichen Sie ihn erneut zur Genehmigung ein.",
+    approve_failed:
+      "Die Plan-Genehmigung wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
+    reject_failed:
+      "Die Plan-Ablehnung wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
+    changes_request_failed:
+      "Die Anforderung von Planänderungen wurde nicht abgeschlossen. Bitte versuchen Sie es erneut.",
     reject_feedback: "Grund für Ablehnung",
     changes_feedback: "Was muss geändert werden?",
     no_plan_yet: "Noch kein Planinhalt.",
@@ -3202,6 +3208,59 @@ export default {
         "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
       unknown:
         "Die Meldung konnte nicht gesendet werden. Ihre Angaben wurden gespeichert, damit Sie es erneut versuchen können.",
+    },
+  },
+  aiConversationReport: {
+    action: "Konversation melden",
+    actionAriaLabel: "Diese Konversation zur Überprüfung melden",
+    unavailable:
+      "Die Funktion zur Konversationsmeldung ist derzeit nicht verfügbar.",
+    noEligibleOutputs:
+      "In dieser Konversation gibt es noch keine meldbaren KI-Ausgaben.",
+    dialogTitle: "Konversation melden",
+    selectionInstruction: "Wählen Sie die zu meldenden KI-Ausgaben aus.",
+    selectionCount: "{n} ausgewählt",
+    selectionCountOfMax: "{n} von {max} ausgewählt",
+    selectAll: "Alle auswählen",
+    includeRelatedUserContext:
+      "Meine verwandte Nachricht einbeziehen, die die KI-Ausgabe ausgelöst hat",
+    userMessageWillBeSent:
+      "Wenn Sie fortfahren, wird Ihre ausgewählte verwandte Nachricht zusammen mit den KI-Ausgaben an AiFetchly gesendet.",
+    relatedUserLabel: "Ihre Nachricht — wird gesendet",
+    attachmentOmitted:
+      "Ein Anhang in Ihrer Nachricht wurde weggelassen; nur der Nachrichtentext ist enthalten.",
+    imageLabel: "Bild in den Bericht aufnehmen",
+    generatedAtLabel: "Erstellt am",
+    consentDefault:
+      "Es werden nur die ausgewählten KI-Ausgaben und Ihre Beschreibung gesendet. Ihre anderen Nachrichten, Dateien und die KI-Begründung werden nicht einbezogen.",
+    consentWithUserContext:
+      "Sie haben sich entschieden, Ihre verwandte Nachricht einzubeziehen. Sie wird zusammen mit den von Ihnen ausgewählten KI-Ausgaben gesendet.",
+    truncationWarning:
+      "Zu lange Ausgaben wurden gekürzt, um das Größenlimit des Berichts einzuhalten.",
+    listTruncated:
+      "Die ersten {shown} von {total} Ausgaben werden angezeigt. Scrollen Sie in der Konversation, um eine andere zu melden.",
+    continueAndSubmit: "Bericht senden",
+    cancel: "Abbrechen",
+    conversationChanged:
+      "Die Konversation hat sich geändert, während der Bericht geöffnet war. Bitte öffnen Sie ihn erneut.",
+    categoryLabel: "Was ist mit dieser Konversation nicht in Ordnung?",
+    commentLabel: "Zusätzliche Details (optional)",
+    itemTypes: {
+      text: "Text",
+      image: "Bild",
+      mixed: "Text und Bilder",
+      plan: "Plan",
+      artifact: "Artefakt",
+    },
+    errors: {
+      selectionRequired:
+        "Wählen Sie mindestens eine KI-Ausgabe zum Melden aus.",
+      selectionLimit: "Sie können höchstens 10 KI-Ausgaben auswählen.",
+      imageLimit: "Ein Bericht kann höchstens 3 Bilder enthalten.",
+      relatedMessageUnavailable:
+        "Für die ausgewählte Ausgabe ist keine verwandte Nachricht verfügbar.",
+      unsupportedSchema:
+        "Dieser Berichtstyp wird nicht unterstützt. Bitte aktualisieren Sie die App.",
     },
   },
 };

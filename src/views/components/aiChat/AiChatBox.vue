@@ -7,6 +7,13 @@
         <span class="header-title">{{ t('knowledge.ai_assistant') }}</span>
       </div>
       <div class="header-actions">
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
         <v-btn
           icon
           size="small"
@@ -807,6 +814,15 @@ class="message-bubble" :class="{
       :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
       @submitted="onReportSubmitted"
     />
+
+    <!-- Whole-conversation report dialog (design §11.2) -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
@@ -824,6 +840,13 @@ import FileOperationBadge from './FileOperationBadge.vue';
 import type { FileOperationRecord } from '@/entityTypes/fileOperationTypes';
 import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
 import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
+import AIConversationReportButton from '@/views/components/aiContentReport/AIConversationReportButton.vue';
+import AIConversationReportDialog from '@/views/components/aiContentReport/AIConversationReportDialog.vue';
+import {
+  buildLegacyConversationSnapshot,
+  hasEligibleLegacyCandidate,
+} from '@/views/components/aiContentReport/conversationReportSnapshot';
+import { useReportCapabilities } from '@/views/utils/reportCapabilities';
 import type { ReportableOutputDescriptor } from '@/views/components/aiContentReport/reportableOutput';
 import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo';
 
@@ -903,6 +926,30 @@ const reportDialogOpen = ref(false);
 const activeReportDescriptor = ref<ReportableOutputDescriptor | null>(null);
 const reportedMessageIds = ref<Set<string>>(new Set());
 
+// Conversation-report (whole-conversation) orchestration (design §11.2).
+// Shares reportedMessageIds with the single-output flow above. NOT AI-gated:
+// the capabilities endpoint works regardless of USER_AI_ENABLED (PRD FR-4.4).
+// Capability state is owned by the useReportCapabilities composable (with
+// bounded lazy retry) — see its declaration after the eligibility computed.
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<
+  ReturnType<typeof buildLegacyConversationSnapshot> | null
+>(null);
+/**
+ * Derive the active streaming assistant message id so the snapshot excludes
+ * the still-streaming placeholder (eligibility rule, design §7.2). While a
+ * stream is active, the last assistant message is the in-flight placeholder.
+ */
+const activeStreamingAssistantId = computed<string | undefined>(() => {
+  if (!isLoading.value) return undefined;
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') {
+      return messages.value[i].id;
+    }
+  }
+  return undefined;
+});
+
 function buildLegacyChatDescriptor(message: ChatMessage): ReportableOutputDescriptor {
   return {
     surface: 'legacy_chat',
@@ -929,6 +976,30 @@ function onReportSubmitted(): void {
   if (id) {
     reportedMessageIds.value = new Set(reportedMessageIds.value).add(id);
   }
+}
+
+// --- Whole-conversation report handlers (design §11.2) ---------------------
+// The snapshot is captured at open time from the visible messages so a
+// streaming response is frozen; the active streaming placeholder is excluded.
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildLegacyConversationSnapshot({
+    conversationId: conversationId.value ?? '',
+    messages: visibleMessages.value,
+    streamingAssistantMessageId: activeStreamingAssistantId.value,
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  reportedMessageIds.value = new Set([
+    ...reportedMessageIds.value,
+    ...payload.selectedMessageIds,
+  ]);
+  // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
+  // and copy the report reference; the dialog itself owns closing on dismiss.
 }
 const isUploadingFiles = ref(false);
 const isLoadingHistory = ref(false);
@@ -1178,6 +1249,59 @@ const visibleMessages = computed(() => {
   );
 });
 
+// FR-1.3, §9.1: the header button is enabled only when the capability
+// envelope enables v2 reporting AND at least one visible message is an
+// eligible reportable AI output. With zero eligible outputs the button is
+// disabled and announces the noEligibleOutputs reason so the action is
+// stable-but-clear rather than opening an empty dialog.
+const hasReportableConversationOutput = computed(() =>
+  hasEligibleLegacyCandidate({
+    conversationId: conversationId.value ?? '',
+    messages: visibleMessages.value,
+    streamingAssistantMessageId: activeStreamingAssistantId.value,
+  })
+);
+// Capability state with bounded lazy retry (2026-09-04 fix): the previous
+// one-shot mount-time fetch left the button permanently grey when that
+// single request failed — loading a history conversation with eligible
+// content never re-asked the capabilities endpoint. The composable retries
+// (capped backoff) once eligible output exists but capabilities have not
+// resolved enabled:true. Still fail-closed and NOT AI-gated (PRD FR-4.4).
+const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+  useReportCapabilities({
+    hasEligibleOutput: () => hasReportableConversationOutput.value,
+  });
+const conversationReportEnabled = computed(
+  () =>
+    reportCapabilities.value?.conversationReporting.enabled === true &&
+    hasReportableConversationOutput.value
+);
+const conversationReportDisabledReason = computed(() => {
+  if (reportCapabilities.value?.conversationReporting.enabled !== true) {
+    return (
+      t('aiConversationReport.unavailable') ||
+      'Conversation reporting is currently unavailable.'
+    );
+  }
+  if (!hasReportableConversationOutput.value) {
+    return (
+      t('aiConversationReport.noEligibleOutputs') ||
+      'There are no reportable AI outputs in this conversation yet.'
+    );
+  }
+  return '';
+});
+
+// Journey 11.5, §19: if the active conversation changes while the report
+// dialog is open, the frozen snapshot would describe a conversation the user
+// is no longer viewing. Close the dialog without submitting so a later open
+// rebuilds a fresh snapshot against the new conversation.
+watch(conversationId, () => {
+  if (!conversationReportDialogOpen.value) return;
+  conversationReportDialogOpen.value = false;
+  conversationReportSnapshot.value = null;
+});
+
 // Computed properties for plan state optimization
 const planProgress = computed(() => {
   if (!currentPlan.value || currentPlan.value.steps.length === 0) {
@@ -1295,6 +1419,13 @@ onMounted(async () => {
     next.set(convId, [...current, record]);
     fileOps.value = next;
   });
+
+  // Conversation-report capabilities are now owned by the
+  // useReportCapabilities composable (see its declaration above the
+  // conversationReportEnabled computed), which fetches at scope creation
+  // and applies a bounded retry once eligible output exists — replacing
+  // the previous one-shot fetch here that permanently greyed the button
+  // when it failed at mount.
 });
 
 // Clean up file operation subscription

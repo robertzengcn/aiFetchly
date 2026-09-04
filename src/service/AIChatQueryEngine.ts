@@ -74,6 +74,7 @@ import type {
   OpenAIImageUrlContentPart,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
@@ -86,13 +87,19 @@ import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundRelia
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
+/**
+ * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
+ * plan-mode active while it is being drafted, clarified, or awaiting
+ * approval. Once the user approves the plan, execution runs in chat mode
+ * with the normal system prompt and full tool access — so "approved" is
+ * NOT plan-mode active here either. Both predicates delegate to the shared
+ * isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the renderer and main
+ * process can never disagree about which prompt/toolset a round uses after
+ * approval.
+ */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
-  return (
-    plan.status !== "completed" &&
-    plan.status !== "cancelled" &&
-    plan.status !== "rejected"
-  );
+  return isPlanStatusPlanningActive(plan.status);
 }
 
 /**
@@ -866,9 +873,15 @@ export class AIChatQueryEngine {
     // Resolve auto-plan config. Only active in plain chat mode (not when the
     // conversation is already in plan mode), only when AI is enabled, and only
     // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    // An approved plan also blocks auto-entry: its execution rounds run in
+    // chat mode (isActivePlanState is false), but EnterPlanMode would be
+    // guaranteed to fail there — ensurePlanForConversation resolves the
+    // approved plan and handleEnterPlanMode rejects re-entry — so advertising
+    // the tool mid-execution only invites a doomed call.
     const tokenService = new Token();
     const autoPlanEnabled =
       !isPlanMode &&
+      planState?.status !== "approved" &&
       tokenService.getValue(USER_AI_ENABLED) === "true" &&
       tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
 

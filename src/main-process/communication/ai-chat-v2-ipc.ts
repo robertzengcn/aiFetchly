@@ -79,7 +79,10 @@ import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
  * Mirrors the inline cast pattern used in ai-chat-ipc.ts (v1 handler).
  */
 type IpcEventLike = {
-  sender: { send: (channel: string, message: string) => void };
+  sender: {
+    isDestroyed?: () => boolean;
+    send: (channel: string, message: string) => void;
+  };
 };
 
 // -------------------------------------------------------------------------
@@ -329,7 +332,28 @@ function sendChunk(
   chunk: ChatV2StreamChunk,
   channel: string = AI_CHAT_V2_STREAM_CHUNK
 ): void {
-  event.sender.send(channel, JSON.stringify(chunk));
+  sendToRenderer(event, channel, JSON.stringify(chunk));
+}
+
+function sendToRenderer(
+  event: IpcEventLike,
+  channel: string,
+  message: string
+): void {
+  if (event.sender.isDestroyed?.()) {
+    return;
+  }
+
+  try {
+    event.sender.send(channel, message);
+  } catch (error) {
+    // The renderer can be destroyed between isDestroyed() and send(). That is
+    // expected during window/app shutdown and must not become a chat error.
+    if (error instanceof Error && error.message === "Object has been destroyed") {
+      return;
+    }
+    throw error;
+  }
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
@@ -342,7 +366,11 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
       chunk.errorMessage ? "yes" : "no"
     }`
   );
-  event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
+  sendToRenderer(
+    event,
+    AI_CHAT_V2_STREAM_COMPLETE,
+    JSON.stringify(chunk)
+  );
 }
 
 /**

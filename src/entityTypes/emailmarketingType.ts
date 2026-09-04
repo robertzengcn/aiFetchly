@@ -186,6 +186,13 @@ export type EmailServiceListdata = {
   create_time: string;
 };
 
+/** JSON export envelope for the email service list (safe fields only). */
+export type EmailServiceExportPayload = {
+  total: number;
+  services: EmailServiceListdata[];
+  exportDate: string;
+};
+
 /**
  * Receive-facing summary of an email service, with all secrets stripped.
  * Returned by the `list_email_inboxes` AI tool and the receive settings UI list.

@@ -3,26 +3,8 @@ import { EmailMarketingTemplateApi } from "@/api/emailMarketingTemplateApi";
 
 import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
 import { EmailServiceApi } from "@/api/emailServiceApi";
-import * as path from "path";
-import * as fs from "fs";
-import { utilityProcess, MessageChannelMain } from "electron";
-import { Token } from "@/modules/token";
-import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
-import {
-  WriteLog,
-  getApplogspath,
-  getRandomValues,
-} from "@/modules/lib/function";
-import { v4 as uuidv4 } from "uuid";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
-import { BuckemailEntity } from "@/model/buckEmailTaskdb";
-import { TaskStatus } from "@/entityTypes/commonType";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
-import { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
-// import { EmailMarketingSendLogEntity,SendStatus } from "@/model/emailMarketingSendLogdb"
-import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
-import { SendStatus } from "@/model/emailMarketingSendLog.model";
 import { SortBy } from "@/entityTypes/commonType";
 import {
   BuckEmailListType,
