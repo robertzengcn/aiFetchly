@@ -43,6 +43,7 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
+import { htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
 import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
@@ -1682,9 +1683,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         serviceIds: (args as { service_ids?: number[] }).service_ids ?? [],
         senderAddress: "", // Resolved from the selected service in a later phase.
         subject: (args as { email_subject?: string }).email_subject ?? "",
-        bodyText:
-          (args as { email_html_content?: string }).email_html_content ?? "",
-        bodyHtml: null,
+        // The model supplies an HTML body; store it as `bodyHtml` and derive a
+        // plain-text fallback so markup never leaks into the text body at send
+        // time (and multipart mail carries both parts, not escaped tags).
+        bodyHtml:
+          (args as { email_html_content?: string }).email_html_content ?? null,
+        bodyText: htmlToPlainText(
+          (args as { email_html_content?: string }).email_html_content ?? ""
+        ),
       });
       return {
         success: result.success,
