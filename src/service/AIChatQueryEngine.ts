@@ -74,6 +74,7 @@ import type {
   OpenAIImageUrlContentPart,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
@@ -86,18 +87,14 @@ import type {
  * plan-mode active while it is being drafted, clarified, awaiting approval,
  * or (future) executing. Once the user approves the plan, execution runs in
  * chat mode with the normal system prompt and full tool access — so
- * "approved" is NOT plan-mode active here either. Keeping both predicates in
- * sync prevents the renderer and main process from disagreeing about which
- * prompt/toolset a round uses after approval.
+ * "approved" is NOT plan-mode active here either. Both predicates delegate
+ * to the shared isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the
+ * renderer and main process can never disagree about which prompt/toolset
+ * a round uses after approval.
  */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
-  return (
-    plan.status !== "approved" &&
-    plan.status !== "completed" &&
-    plan.status !== "cancelled" &&
-    plan.status !== "rejected"
-  );
+  return isPlanStatusPlanningActive(plan.status);
 }
 
 /**
