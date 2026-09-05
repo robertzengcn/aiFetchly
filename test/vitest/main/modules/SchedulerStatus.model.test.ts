@@ -13,10 +13,15 @@ const mockConnection = vi.hoisted(() => ({
 
 const mockEnsureInitialized = vi.hoisted(() => vi.fn());
 
+const mockSqliteDb = vi.hoisted(() => ({
+  connection: mockConnection,
+}));
+
 vi.mock("@/config/SqliteDb", () => ({
   SqliteDb: {
     ensureInitialized: mockEnsureInitialized,
-    getInstance: vi.fn(() => ({ connection: mockConnection })),
+    getInstance: vi.fn(() => mockSqliteDb),
+    getLiveInstance: vi.fn(() => mockSqliteDb),
   },
 }));
 
@@ -41,9 +46,9 @@ describe("SchedulerStatusModel.updateStatus", () => {
       .mockImplementation(() => undefined);
     const model = new SchedulerStatusModel("/tmp/scheduler-status-test");
 
-    await expect(
-      model.updateStatus({ is_running: false })
-    ).rejects.toThrow("The database connection is not open");
+    await expect(model.updateStatus({ is_running: false })).rejects.toThrow(
+      "The database connection is not open"
+    );
     expect(errorSpy).not.toHaveBeenCalled();
 
     errorSpy.mockRestore();
@@ -56,9 +61,9 @@ describe("SchedulerStatusModel.updateStatus", () => {
       .mockImplementation(() => undefined);
     const model = new SchedulerStatusModel("/tmp/scheduler-status-test");
 
-    await expect(
-      model.updateStatus({ is_running: false })
-    ).rejects.toThrow("disk is full");
+    await expect(model.updateStatus({ is_running: false })).rejects.toThrow(
+      "disk is full"
+    );
     expect(errorSpy).toHaveBeenCalledWith(
       "Failed to update scheduler status:",
       expect.objectContaining({ message: "disk is full" })

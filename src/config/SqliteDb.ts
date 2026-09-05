@@ -105,7 +105,7 @@ import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import * as fs from "fs";
-
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -430,6 +430,37 @@ function getSqliteVecExtensionPath(): string | null {
   }
 }
 
+/** Directory BaseDb/BaseModule use when constructed without a filepath. */
+export function getSqliteTestFallbackDir(): string {
+  return path.resolve(path.join(os.tmpdir(), "aifetchly-test"));
+}
+
+function normalizeDbDir(filepath: string): string {
+  return path.resolve(filepath);
+}
+
+function isTestFallbackDir(filepath: string): boolean {
+  return normalizeDbDir(filepath) === getSqliteTestFallbackDir();
+}
+
+/**
+ * TypeORM can report `isInitialized` after the underlying better-sqlite3
+ * handle has already been closed (path bounce, fire-and-forget destroy).
+ */
+export function isNativeSqliteConnectionOpen(connection: DataSource): boolean {
+  if (!connection?.isInitialized) {
+    return false;
+  }
+  const driver = connection.driver as
+    | { databaseConnection?: { open?: boolean } }
+    | undefined;
+  const native = driver?.databaseConnection;
+  if (native && typeof native.open === "boolean") {
+    return native.open;
+  }
+  return true;
+}
+
 export class SqliteDb {
   public connection: DataSource;
   private static instance: SqliteDb | null = null;
@@ -646,16 +677,49 @@ export class SqliteDb {
     await SqliteDb.initPromise;
   }
 
+  public static getLiveInstance(): SqliteDb | null {
+    return SqliteDb.instance;
+  }
+
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
       throw new Error("Cannot create SqliteDb instance with empty filepath");
     }
 
-    // Check if path has changed - if so, reset the instance
-    if (SqliteDb.instance && SqliteDb.currentDbPath !== filepath) {
+    const normalized = normalizeDbDir(filepath);
+    const currentNormalized = SqliteDb.currentDbPath
+      ? normalizeDbDir(SqliteDb.currentDbPath)
+      : null;
+
+    if (SqliteDb.instance && currentNormalized === normalized) {
+      SqliteDb.currentDbPath = normalized;
+      return SqliteDb.instance;
+    }
+
+    // BaseDb/BaseModule fall back to os.tmpdir()/aifetchly-test when
+    // constructed without a path. That must not fire-and-forget destroy()
+    // the live user DataSource — long-lived scheduler models keep
+    // repositories bound to it and then throw "The database connection
+    // is not open" on every poll.
+    if (
+      SqliteDb.instance &&
+      SqliteDb.instance.connection?.isInitialized &&
+      currentNormalized !== null &&
+      !isTestFallbackDir(currentNormalized) &&
+      isTestFallbackDir(normalized)
+    ) {
+      console.warn(
+        "SqliteDb.getInstance refused to switch the live connection " +
+          `from ${currentNormalized} to the test fallback ${normalized}. ` +
+          "Use SqliteDb.resetInstance() to switch databases."
+      );
+      return SqliteDb.instance;
+    }
+
+    if (SqliteDb.instance && currentNormalized !== normalized) {
       console.log(
-        `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${filepath}, resetting instance...`
+        `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${normalized}, resetting instance...`
       );
       // Destroy old connection asynchronously (fire and forget)
       // The old instance will be replaced immediately with a new one
@@ -668,14 +732,12 @@ export class SqliteDb {
           );
         });
       }
-      // Create new instance immediately with new path
-      SqliteDb.instance = new SqliteDb(filepath);
-      SqliteDb.currentDbPath = filepath;
+      SqliteDb.instance = new SqliteDb(normalized);
+      SqliteDb.currentDbPath = normalized;
       SqliteDb.initPromise = null;
     } else if (!SqliteDb.instance) {
-      SqliteDb.instance = new SqliteDb(filepath);
-      SqliteDb.currentDbPath = filepath;
-      // await SqliteDb.instance.checkConnection();
+      SqliteDb.instance = new SqliteDb(normalized);
+      SqliteDb.currentDbPath = normalized;
     }
 
     return SqliteDb.instance;
@@ -713,8 +775,18 @@ export class SqliteDb {
     if (!SqliteDb.instance) {
       throw new Error("SqliteDb not created yet — call getInstance first");
     }
-    if (SqliteDb.instance.connection.isInitialized) {
+    if (isNativeSqliteConnectionOpen(SqliteDb.instance.connection)) {
       return;
+    }
+    if (SqliteDb.instance.connection.isInitialized) {
+      try {
+        await SqliteDb.instance.connection.destroy();
+      } catch (error) {
+        console.error(
+          "Failed to destroy stale SqliteDb connection before re-init:",
+          error
+        );
+      }
     }
     await SqliteDb.initializeDataSource(SqliteDb.instance);
   }

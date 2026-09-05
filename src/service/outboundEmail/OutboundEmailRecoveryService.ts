@@ -39,7 +39,11 @@ export class OutboundEmailRecoveryService extends BaseDb {
     this.authorizationModel = new OutboundEmailAuthorizationModel(dbpath);
     this.deliveryModel = new OutboundEmailDeliveryModel(dbpath);
     this.auditModel = new OutboundEmailAuditLogModel(dbpath);
-    this.sqliteDb = SqliteDb.getInstance(dbpath);
+    // getInstance("") throws; BaseDb already bound sqliteDb via the
+    // empty-path test fallback (or refused to leave a live user DB).
+    if (dbpath) {
+      this.sqliteDb = SqliteDb.getInstance(dbpath);
+    }
   }
 
   /** §21 one-shot sweep. Returns counts for observability; never throws. */

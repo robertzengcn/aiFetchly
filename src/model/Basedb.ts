@@ -80,6 +80,30 @@ export abstract class BaseDb {
    */
   public async ensureConnection(): Promise<void> {
     await SqliteDb.ensureInitialized();
+    const live =
+      typeof SqliteDb.getLiveInstance === "function"
+        ? SqliteDb.getLiveInstance()
+        : null;
+    if (!live) {
+      return;
+    }
+    const capturedIsLive = this.sqliteDb === live;
+    const capturedUsable =
+      capturedIsLive && this.sqliteDb.connection.isInitialized;
+    if (!capturedUsable) {
+      this.sqliteDb = live;
+      this.onSqliteDbRebound();
+    }
+  }
+
+  /**
+   * Called when {@link ensureConnection} rebinds `this.sqliteDb` to a newer
+   * process-wide singleton. Subclasses that cache TypeORM repositories must
+   * recreate them here — repositories are bound to the DataSource captured
+   * at construction.
+   */
+  protected onSqliteDbRebound(): void {
+    return;
   }
 
   protected log(message: string): void {
