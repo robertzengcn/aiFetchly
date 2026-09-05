@@ -1,81 +1,92 @@
-import { mount } from '@vue/test-utils';
-import { createI18n } from 'vue-i18n';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import EmailServiceTable from '@/views/pages/emailservice/widgets/EmailServiceTable.vue';
-import type { EmailServiceListdata } from '@/entityTypes/emailmarketingType';
+import { mount } from "@vue/test-utils";
+import { createI18n } from "vue-i18n";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import EmailServiceTable from "@/views/pages/emailservice/widgets/EmailServiceTable.vue";
+import type { EmailServiceListdata } from "@/entityTypes/emailmarketingType";
 
 // Mock the emailservice API so no IPC is invoked.
 const apiMocks = vi.hoisted(() => ({
   getEmailServiceList: vi.fn(),
   deleteEmailService: vi.fn(),
   exportEmailServices: vi.fn(),
+  importEmailServices: vi.fn(),
 }));
 
-vi.mock('@/views/api/emailservice', () => ({
+vi.mock("@/views/api/emailservice", () => ({
   getEmailServiceList: (...args: unknown[]) =>
     apiMocks.getEmailServiceList(...args),
   deleteEmailService: (...args: unknown[]) =>
     apiMocks.deleteEmailService(...args),
   exportEmailServices: (...args: unknown[]) =>
     apiMocks.exportEmailServices(...args),
+  importEmailServices: (...args: unknown[]) =>
+    apiMocks.importEmailServices(...args),
 }));
 
 // Stub vue-router's useRouter — component pushes routes on edit/create.
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const i18n = createI18n({
   legacy: false,
-  locale: 'en',
+  locale: "en",
   missingWarn: false,
   fallbackWarn: false,
   messages: {
     en: {
       common: {
-        export: 'Export',
-        export_success: 'Export successful',
-        export_failed: 'Export failed',
-        export_cancelled: 'Export cancelled',
-        actions: 'Actions',
-        created_time: 'created time',
+        export: "Export",
+        export_success: "Export successful",
+        export_failed: "Export failed",
+        export_cancelled: "Export cancelled",
+        import: "Import",
+        import_success: "Import successful",
+        import_partial: "Imported {imported}, skipped {skipped} invalid rows",
+        import_partial_skipped: ": {errors}",
+        import_cancelled: "Import cancelled",
+        import_failed: "Import failed",
+        import_no_valid_rows: "No valid services found in file",
+        import_invalid_file: "Invalid file format",
+        actions: "Actions",
+        created_time: "created time",
       },
       emailservice: {
-        id: 'id',
-        name: 'name',
-        from: 'sender account',
-        create_service: 'create email service',
+        id: "id",
+        name: "name",
+        from: "sender account",
+        create_service: "create email service",
       },
     },
   },
 });
 
 const stubs = {
-  VTextField: { template: '<input />' },
+  VTextField: { template: "<input />" },
   VBtn: {
-    props: ['loading', 'prependIcon', 'variant', 'color'],
-    emits: ['click'],
+    props: ["loading", "prependIcon", "variant", "color"],
+    emits: ["click"],
     template:
-      '<button :data-loading="loading ? \'true\' : \'false\'" @click="$emit(\'click\')"><slot /></button>',
+      "<button :data-loading=\"loading ? 'true' : 'false'\" @click=\"$emit('click')\"><slot /></button>",
   },
   VDataTableServer: {
     props: [
-      'items',
-      'itemsLength',
-      'loading',
-      'headers',
-      'itemsPerPage',
-      'search',
-      'itemValue',
-      'showSelect',
-      'modelValue',
+      "items",
+      "itemsLength",
+      "loading",
+      "headers",
+      "itemsPerPage",
+      "search",
+      "itemValue",
+      "showSelect",
+      "modelValue",
     ],
-    emits: ['update:options', 'update:modelValue'],
+    emits: ["update:options", "update:modelValue"],
     template: '<div data-testid="v-data-table-server" />',
   },
   VIcon: true,
   DeleteDialog: true,
   NoticeSnackbar: {
-    props: ['modelValue', 'message', 'type'],
-    emits: ['update:modelValue'],
+    props: ["modelValue", "message", "type"],
+    emits: ["update:modelValue"],
     template:
       '<div data-testid="notice-snackbar" :data-message="message" :data-type="type" v-if="modelValue" />',
   },
@@ -84,11 +95,11 @@ const stubs = {
 const SAMPLE: EmailServiceListdata[] = [
   {
     id: 1,
-    name: 'Primary SMTP',
-    from: 'a@example.com',
-    host: 'smtp.example.com',
-    receiveProtocol: 'imap',
-    create_time: '2026-01-01T00:00:00.000Z',
+    name: "Primary SMTP",
+    from: "a@example.com",
+    host: "smtp.example.com",
+    receiveProtocol: "imap",
+    create_time: "2026-01-01T00:00:00.000Z",
   },
 ];
 
@@ -99,64 +110,223 @@ function mountTable(props: Record<string, unknown> = {}) {
   });
 }
 
-describe('EmailServiceTable export', () => {
+describe("EmailServiceTable export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
   });
 
-  it('renders an export button (standalone list mode)', () => {
+  it("renders an export button (standalone list mode)", () => {
     const wrapper = mountTable();
     expect(
       wrapper.find('[data-testid="email-service-export-btn"]').exists()
     ).toBe(true);
   });
 
-  it('hides the export button in selection mode (isSelectedtable=true)', () => {
+  it("hides the export button in selection mode (isSelectedtable=true)", () => {
     const wrapper = mountTable({ isSelectedtable: true });
     expect(
       wrapper.find('[data-testid="email-service-export-btn"]').exists()
     ).toBe(false);
   });
 
-  it('calls exportEmailServices and shows a success notice on success', async () => {
-    apiMocks.exportEmailServices.mockResolvedValue('/tmp/export.csv');
+  it("calls exportEmailServices and shows a success notice on success", async () => {
+    apiMocks.exportEmailServices.mockResolvedValue("/tmp/export.csv");
     const wrapper = mountTable();
 
-    await wrapper.find('[data-testid="email-service-export-btn"]').trigger('click');
+    await wrapper
+      .find('[data-testid="email-service-export-btn"]')
+      .trigger("click");
     await vi.waitFor(() => {
-      expect(apiMocks.exportEmailServices).toHaveBeenCalledWith('csv');
+      expect(apiMocks.exportEmailServices).toHaveBeenCalledWith("csv");
     });
 
     const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
     expect(snackbar.exists()).toBe(true);
-    expect(snackbar.attributes('data-type')).toBe('success');
-    expect(snackbar.attributes('data-message')).toContain('/tmp/export.csv');
+    expect(snackbar.attributes("data-type")).toBe("success");
+    expect(snackbar.attributes("data-message")).toContain("/tmp/export.csv");
   });
 
-  it('shows a cancelled notice when the user cancels the save dialog', async () => {
+  it("shows a cancelled notice when the user cancels the save dialog", async () => {
     apiMocks.exportEmailServices.mockRejectedValue(
-      new Error('Export cancelled by user')
+      new Error("Export cancelled by user")
     );
     const wrapper = mountTable();
 
-    await wrapper.find('[data-testid="email-service-export-btn"]').trigger('click');
+    await wrapper
+      .find('[data-testid="email-service-export-btn"]')
+      .trigger("click");
     await vi.waitFor(() => {
       const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
       expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes('data-message')).toContain('Export cancelled');
+      expect(snackbar.attributes("data-message")).toContain("Export cancelled");
     });
   });
 
-  it('shows an error notice when the export fails for another reason', async () => {
-    apiMocks.exportEmailServices.mockRejectedValue(new Error('disk full'));
+  it("shows an error notice when the export fails for another reason", async () => {
+    apiMocks.exportEmailServices.mockRejectedValue(new Error("disk full"));
     const wrapper = mountTable();
 
-    await wrapper.find('[data-testid="email-service-export-btn"]').trigger('click');
+    await wrapper
+      .find('[data-testid="email-service-export-btn"]')
+      .trigger("click");
     await vi.waitFor(() => {
       const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
       expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes('data-message')).toContain('disk full');
+      expect(snackbar.attributes("data-message")).toContain("disk full");
+    });
+  });
+});
+
+describe("EmailServiceTable import", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
+  });
+
+  it("renders an import button (standalone list mode)", () => {
+    const wrapper = mountTable();
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(true);
+  });
+
+  it("hides the import button in selection mode (isSelectedtable=true)", () => {
+    const wrapper = mountTable({ isSelectedtable: true });
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(false);
+  });
+
+  it("shows a success snackbar and reloads the list on full success", async () => {
+    apiMocks.importEmailServices.mockResolvedValue({
+      imported: 3,
+      skipped: 0,
+      errors: [],
+    });
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      expect(apiMocks.importEmailServices).toHaveBeenCalled();
+    });
+
+    const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+    expect(snackbar.exists()).toBe(true);
+    expect(snackbar.attributes("data-type")).toBe("success");
+    expect(snackbar.attributes("data-message")).toContain("3");
+    // A successful import reloads the list so imported services appear.
+    // (The stubbed data table emits no update:options, so this call can
+    // only come from handleImport's reload.)
+    await vi.waitFor(() => {
+      expect(apiMocks.getEmailServiceList).toHaveBeenCalled();
+    });
+  });
+
+  it("shows a warning snackbar on partial import", async () => {
+    apiMocks.importEmailServices.mockResolvedValue({
+      imported: 1,
+      skipped: 2,
+      errors: ["row 2: password is required"],
+    });
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-type")).toBe("warning");
+      expect(snackbar.attributes("data-message")).toContain("1");
+      expect(snackbar.attributes("data-message")).toContain("2");
+    });
+  });
+
+  it("shows a cancelled notice when the user cancels the open dialog", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("Import cancelled by user")
+    );
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain("Import cancelled");
+    });
+  });
+
+  it("shows an error notice when the import fails for another reason", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(new Error("disk full"));
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-type")).toBe("error");
+      expect(snackbar.attributes("data-message")).toContain("Import failed");
+      expect(snackbar.attributes("data-message")).toContain("disk full");
+    });
+  });
+
+  it("maps the bare import_failed key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(new Error("import_failed"));
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain("Import failed");
+      expect(snackbar.attributes("data-message")).not.toContain(
+        "import_failed"
+      );
+    });
+  });
+
+  it("maps the bare import_no_valid_rows key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("import_no_valid_rows")
+    );
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain(
+        "No valid services found in file"
+      );
+    });
+  });
+
+  it("maps the bare import_invalid_file key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("import_invalid_file")
+    );
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain(
+        "Invalid file format"
+      );
     });
   });
 });
