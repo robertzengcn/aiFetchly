@@ -74,6 +74,11 @@ export interface StartWorkspaceRunRequest {
     contentBase64: string;
     kind: "document" | "image";
   }[];
+  /** Generated images attached as edit references (message + tile index). */
+  readonly generatedImageReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
   readonly resourceClass?: "general";
 }
 
@@ -129,7 +134,9 @@ export async function loadHistoryPage(
   conversationId: string,
   limit: number,
   before?: HistoryCursor
-): Promise<import("@/entityTypes/aiChatWorkspaceTypes").ChatHistoryPageResponse> {
+): Promise<
+  import("@/entityTypes/aiChatWorkspaceTypes").ChatHistoryPageResponse
+> {
   const request: ChatHistoryPageRequest = {
     conversationId,
     limit,
@@ -244,6 +251,9 @@ export async function duplicateConversation(
 
 export async function exportConversation(
   conversationId: string
-): Promise<{ conversationId: string; messages: ExportedConversationMessage[] }> {
+): Promise<{
+  conversationId: string;
+  messages: ExportedConversationMessage[];
+}> {
   return windowInvoke(AI_CHAT_WORKSPACE_EXPORT, { conversationId });
 }

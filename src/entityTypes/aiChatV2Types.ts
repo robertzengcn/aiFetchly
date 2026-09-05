@@ -129,6 +129,13 @@ export interface ChatV2MessageMetadata {
   toolResult?: Record<string, unknown>;
   toolResultStatus?: "success" | "error";
   toolResultSummary?: string;
+  /**
+   * Presentation-only marker set by the renderer presenter when a permission
+   * prompt was approved and the real tool result replaced it (design §15.5):
+   * keeps the owning execution group expanded so the just-approved output is
+   * visible instead of auto-collapsing on completion.
+   */
+  permissionResumed?: boolean;
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;

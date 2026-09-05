@@ -99,6 +99,18 @@ export const startChatRunRequestSchema = z
       )
       .max(20)
       .optional(),
+    /** Generated images attached as edit references (message + tile index). */
+    generatedImageReferences: z
+      .array(
+        z
+          .object({
+            messageId: z.string().min(1).max(100),
+            imageIndex: z.number().int().min(0).max(50),
+          })
+          .strict()
+      )
+      .max(50)
+      .optional(),
     resourceClass: z.literal("general").optional(),
   })
   .strict();

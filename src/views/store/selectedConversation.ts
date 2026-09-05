@@ -23,6 +23,9 @@ import {
   subscribeDetailEvents,
   unsubscribeDetail,
 } from "@/views/api/aiChatWorkspace";
+import { windowInvoke } from "@/views/utils/apirequest";
+import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
+import { markPermissionPromptExecuting } from "@/views/components/aiChatV2/toolExecutionStateUtil";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 
 /** Default mounted ordinary message rows (design §12.2: bounded window). */
@@ -44,6 +47,25 @@ export interface SendOptions {
     contentBase64: string;
     kind: "document" | "image";
   }[];
+  /**
+   * Generated images attached as edit references (message + tile index).
+   * The engine resolves them against persisted history and forwards the
+   * image bytes to the model as `image_url` parts.
+   */
+  readonly generatedImageReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
+}
+
+/**
+ * Localized permission-card strings passed in by the surface that owns
+ * `useI18n` — the store stays i18n-free (technical-design §14.2).
+ */
+export interface PermissionActionTexts {
+  readonly deniedText: string;
+  readonly resumeFailedText: string;
+  readonly noToolIdText: string;
 }
 
 /**
@@ -262,6 +284,7 @@ export const useSelectedConversationStore = defineStore(
           toolApprovalMode: options?.toolApprovalMode,
           showReasoning: options?.showReasoning,
           uploadedFiles: options?.attachments,
+          generatedImageReferences: options?.generatedImageReferences,
         });
         activeRunId.value = response.runId;
         runtimeStatus.value = response.status;
@@ -283,6 +306,118 @@ export const useSelectedConversationStore = defineStore(
       } catch {
         // Terminal events still arrive via the detail subscription.
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // Tool permission actions (design §15.5)
+    // -------------------------------------------------------------------------
+
+    /** One in-flight resume per tool id — double clicks are no-ops. */
+    const permissionResumeInFlightToolIds = new Set<string>();
+
+    /** Resolve the tool id for a permission message: direct metadata first,
+     * then the nearest preceding TOOL_CALL with the same tool name (mirrors
+     * the legacy dock's resolution for histories without toolCallId rows). */
+    function resolveToolIdForPermission(
+      message: ChatV2MessageView
+    ): string | undefined {
+      const direct = message.metadata?.toolCallId;
+      if (typeof direct === "string" && direct.length > 0) {
+        return direct;
+      }
+      const toolName = message.metadata?.toolName;
+      if (!toolName) {
+        return undefined;
+      }
+      const idx = messages.value.findIndex((m) => m.id === message.id);
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const candidate = messages.value[i];
+        if (
+          candidate.messageType === MessageType.TOOL_CALL &&
+          candidate.metadata?.toolName === toolName &&
+          candidate.metadata?.toolCallId
+        ) {
+          return candidate.metadata.toolCallId;
+        }
+      }
+      return undefined;
+    }
+
+    /**
+     * Grant a parked tool permission: mark the prompt executing locally,
+     * resume the main-process turn, and surface failures on the row (the
+     * resumed tool_result event replaces the row on success).
+     */
+    async function grantToolPermission(
+      message: ChatV2MessageView,
+      texts: PermissionActionTexts
+    ): Promise<void> {
+      const toolId = resolveToolIdForPermission(message);
+      if (!toolId) {
+        errorMessage.value = texts.noToolIdText;
+        return;
+      }
+      if (permissionResumeInFlightToolIds.has(toolId)) return;
+      permissionResumeInFlightToolIds.add(toolId);
+      // Executing rewrite goes through the presenter so the next presenter
+      // mutation cannot clobber it (single source of truth for the window).
+      presenter.rewriteMessage(message.id, (m) => {
+        const [next] = markPermissionPromptExecuting([m], message.id);
+        return next;
+      });
+      try {
+        const raw = await windowInvoke(
+          AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+          {
+            toolId,
+            conversationId:
+              message.conversationId || workspaceStore.selectedConversationId,
+          }
+        );
+        const res = raw as { ok: boolean; error?: string } | null;
+        if (!res?.ok) {
+          const errMsg = res?.error || texts.resumeFailedText;
+          presenter.rewriteMessage(message.id, (m) => ({
+            ...m,
+            content: errMsg,
+            metadata: {
+              ...m.metadata,
+              source: "chat-v2",
+              toolResult: { error: errMsg, success: false },
+              success: false,
+              error: errMsg,
+            },
+          }));
+          errorMessage.value = errMsg;
+        }
+      } catch (error) {
+        errorMessage.value =
+          error instanceof Error ? error.message : String(error);
+      } finally {
+        permissionResumeInFlightToolIds.delete(toolId);
+      }
+    }
+
+    /**
+     * Deny a parked tool permission: rewrite the row to a denied receipt
+     * locally, then stop the parked run so the durable state settles to
+     * cancelled through the normal terminal path.
+     */
+    function denyToolPermission(
+      message: ChatV2MessageView,
+      texts: PermissionActionTexts
+    ): void {
+      presenter.rewriteMessage(message.id, (m) => ({
+        ...m,
+        content: texts.deniedText,
+        metadata: {
+          ...m.metadata,
+          source: "chat-v2",
+          toolResult: undefined,
+          success: false,
+        },
+      }));
+      void stopActiveRun();
     }
 
     function teardown(): void {
@@ -330,6 +465,8 @@ export const useSelectedConversationStore = defineStore(
       loadOlder,
       sendMessage,
       stopActiveRun,
+      grantToolPermission,
+      denyToolPermission,
       applyDetailEvent,
       markReadAfterLoad,
       teardown,

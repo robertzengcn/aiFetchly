@@ -115,6 +115,14 @@ export function createWorkspaceStreamPresenter(
   prependHistory(messages: ChatV2MessageView[]): void;
   /** Optimistic user message shown while the run request is in flight. */
   appendLocalUserMessage(view: ChatV2MessageView): void;
+  /**
+   * Rewrite one row in place (permission grant/deny local presentation).
+   * Returns false when no row with that id exists.
+   */
+  rewriteMessage(
+    messageId: string,
+    updater: (view: ChatV2MessageView) => ChatV2MessageView
+  ): boolean;
   /** Consume a pending openImmediately artifact auto-open request. */
   consumePendingArtifactOpen(): { artifactId: string } | null;
   /** Evict oldest rows beyond a bounded window without resetting streaming. */
@@ -347,6 +355,57 @@ export function createWorkspaceStreamPresenter(
         const artifact = chunk.artifact as
           | ChatV2MessageMetadata["artifact"]
           | undefined;
+        const toolResult =
+          (chunk.toolResult as Record<string, unknown> | undefined) ??
+          undefined;
+        const metadata: ChatV2MessageMetadata = {
+          ...m0Metadata(),
+          toolCallId,
+          toolName: str(chunk.toolName),
+          toolResult,
+          // Mirror the legacy dock's derivation so the transcript
+          // projection can classify rows without re-reading toolResult.
+          toolResultStatus: toolResult?.success === false ? "error" : "success",
+          toolResultSummary:
+            typeof toolResult?.summary === "string"
+              ? toolResult.summary
+              : undefined,
+          success: toolResult?.success !== false,
+          ...(artifact ? { artifact } : {}),
+        };
+        // Permission-grant resume: the engine re-emits the tool result that
+        // previously rendered as a permission prompt, so REPLACE the paused
+        // message in place — the id-keyed append would silently drop it.
+        const resumeToolId = str(chunk.replacesPermissionPromptForToolId);
+        if (resumeToolId) {
+          const pausedIdx = messages.findIndex(
+            (m) =>
+              m.messageType === MessageType.TOOL_RESULT &&
+              m.metadata?.toolCallId === resumeToolId
+          );
+          if (pausedIdx !== -1) {
+            const updated = [...messages];
+            updated[pausedIdx] = {
+              ...updated[pausedIdx],
+              content: str(chunk.fullContent) ?? "",
+              // `permissionResumed` is presentation-only: it tells the
+              // transcript projection to keep the owning execution group
+              // expanded so the just-approved output stays visible instead
+              // of auto-collapsing the moment the result completes.
+              metadata: {
+                ...updated[pausedIdx].metadata,
+                ...metadata,
+                permissionResumed: true,
+              },
+            };
+            messages = updated;
+            notifyMutate?.();
+            if (artifact?.openImmediately === true) {
+              pendingArtifactOpen = { artifactId: artifact.id };
+            }
+            break;
+          }
+        }
         appendMessage({
           id: `tool-result-${toolCallId}`,
           conversationId: conversationId ?? "",
@@ -354,15 +413,7 @@ export function createWorkspaceStreamPresenter(
           content: str(chunk.fullContent) ?? "",
           timestamp: new Date().toISOString(),
           messageType: MessageType.TOOL_RESULT,
-          metadata: {
-            ...(m0Metadata()),
-            toolCallId,
-            toolName: str(chunk.toolName),
-            toolResult:
-              (chunk.toolResult as Record<string, unknown> | undefined) ??
-              undefined,
-            ...(artifact ? { artifact } : {}),
-          },
+          metadata,
         });
         // FR-026: openImmediately artifacts auto-open the inspector preview.
         if (artifact?.openImmediately === true) {
@@ -448,7 +499,12 @@ export function createWorkspaceStreamPresenter(
       case "goal_state": {
         bufferedOnly = false;
         const goalState = chunk.goalState as
-          | { goalId?: string; objective?: string; status?: string; iterationCount?: number }
+          | {
+              goalId?: string;
+              objective?: string;
+              status?: string;
+              iterationCount?: number;
+            }
           | undefined;
         if (goalState?.goalId) {
           goal = {
@@ -609,6 +665,21 @@ export function createWorkspaceStreamPresenter(
     /** Optimistic user message shown while the run request is in flight. */
     appendLocalUserMessage(view: ChatV2MessageView): void {
       appendMessage(view);
+    },
+    /**
+     * Rewrite one row in place (permission grant/deny local presentation —
+     * design §15.5). Returns false when no row with that id exists, so the
+     * caller can distinguish a no-op from an applied rewrite.
+     */
+    rewriteMessage(
+      messageId: string,
+      updater: (view: ChatV2MessageView) => ChatV2MessageView
+    ): boolean {
+      const exists = messages.some((m) => m.id === messageId);
+      if (exists) {
+        updateMessage(messageId, updater);
+      }
+      return exists;
     },
     /**
      * Evict the oldest rows beyond the bounded window WITHOUT resetting

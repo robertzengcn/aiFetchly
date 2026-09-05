@@ -100,6 +100,10 @@
         @discard="onLegacyPlanAction('reject-plan')"
         @open-activity="workspaceStore.openInspector('activity')"
         @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
+        @grant-permission="onGrantPermission"
+        @deny-permission="onDenyPermission"
+        @use-generated-image="onUseGeneratedImage"
+        @edit-generated-image="onEditGeneratedImage"
       />
       <button
         v-if="selectedStore.hasOlder && conversationId"
@@ -129,8 +133,14 @@
       :voice-playback-error="voice.playbackError.value"
       :voice-speaking="voice.speaking.value"
       :voice-chat-ready="voice.chatReady.value"
+      :selected-generated-images="selectedGeneratedImageViews"
+      :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
+      :generated-image-focus-signal="composerFocusSignal"
       @send="onComposerSend"
       @stop="selectedStore.stopActiveRun()"
+      @remove-generated-image="onRemoveGeneratedImage"
+      @clear-generated-images="onClearGeneratedImages"
+      @reorder-generated-images="onReorderGeneratedImages"
       @install-voice-model="voice.installRequiredModel"
       @install-voice-runtime="voice.installRequiredRuntime"
       @voice-recording-start="voice.onRecordingStart"
@@ -174,6 +184,31 @@
         />
       </template>
     </AiChatV2Composer>
+
+    <!-- Generated-image reference notice (over-limit preflight abort). -->
+    <div
+      v-if="generatedImageNotice !== null"
+      class="chat-center__genimg-notice"
+      role="alert"
+      data-testid="workspace-genimg-notice"
+    >
+      <v-icon size="x-small" color="warning" class="mr-1">
+        mdi-image-alert-outline
+      </v-icon>
+      <span class="chat-center__genimg-notice-text">
+        {{ generatedImageNotice }}
+      </span>
+      <v-btn
+        size="x-small"
+        variant="text"
+        class="ml-1"
+        :aria-label="t('common.close') || 'Close'"
+        data-testid="workspace-genimg-notice-dismiss"
+        @click="generatedImageNotice = null"
+      >
+        {{ t("common.close") || "Close" }}
+      </v-btn>
+    </div>
 
     <!-- TTS prerequisite notice (shared voice states, design §11.4). -->
     <div
@@ -323,9 +358,12 @@ import {
 import { stopGoalLoop } from "@/views/api/aiChatGoal";
 import { controlScheduledLoop } from "@/views/api/aiChatScheduledLoop";
 import type {
+  ChatV2GeneratedImageReference,
+  ChatV2MessageView,
   ChatV2Mode,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import {
@@ -335,7 +373,10 @@ import {
   exportConversation,
 } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
-import { useSelectedConversationStore } from "@/views/store/selectedConversation";
+import {
+  useSelectedConversationStore,
+  type PermissionActionTexts,
+} from "@/views/store/selectedConversation";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
@@ -457,6 +498,179 @@ async function onStopFromStrip(): Promise<void> {
   }
   await selectedStore.stopActiveRun();
 }
+
+// --- Tool permission card (design §15.5) --------------------------------------
+// The store stays i18n-free, so localized strings are passed in from here.
+const permissionTexts = computed<PermissionActionTexts>(() => ({
+  deniedText:
+    t("aiChatV2.permission_denied") ||
+    "Permission denied. The tool will not be executed.",
+  resumeFailedText:
+    t("aiChatV2.permission_resume_failed") ||
+    "Could not continue the tool after permission was granted.",
+  noToolIdText:
+    t("aiChatV2.permission_resume_no_tool_id") ||
+    "Missing tool call information; cannot continue execution.",
+}));
+
+function onGrantPermission(
+  message: ChatV2MessageView,
+  payload: { persistent: boolean }
+): void {
+  // The card exposes allow-always via payload.persistent; the resume IPC
+  // keys on tool id + conversation only (parity with the legacy dock).
+  void payload.persistent;
+  void selectedStore.grantToolPermission(message, permissionTexts.value);
+}
+
+function onDenyPermission(message: ChatV2MessageView): void {
+  selectedStore.denyToolPermission(message, permissionTexts.value);
+}
+
+// --- Generated-image reference drafts (composer tray, legacy parity) ----------
+// Per-conversation selected image references. This surface stays mounted
+// across conversation switches, so a Map keyed by conversation id keeps each
+// conversation's tray selection and restores it when the user switches back.
+interface GeneratedImageDraftState {
+  readonly references: readonly ChatV2GeneratedImageReference[];
+}
+type GeneratedImageDraftMap = Map<string, GeneratedImageDraftState>;
+
+/** Stored selections per conversation (bounded, legacy parity). */
+const GENERATED_IMAGE_DRAFT_CAP = 50;
+/** Max references forwarded in a single request (composer contract). */
+const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
+const DRAFT_KEY_PENDING = "__pending_conversation__";
+/**
+ * Reference-only sends (no typed text) still need a message for the model —
+ * the legacy surface forwards the same deterministic fallback prompt.
+ */
+const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
+
+const generatedImageDrafts = ref<GeneratedImageDraftMap>(new Map());
+const composerFocusSignal = ref(0);
+/** Draft key whose selection is cleared once its turn completes (see below). */
+const pendingDraftClearKey = ref<string | null>(null);
+const generatedImageNotice = ref<string | null>(null);
+
+function draftKeyFor(conversationId: string | null): string {
+  return conversationId ?? DRAFT_KEY_PENDING;
+}
+
+const sameGeneratedImageRef = (
+  a: ChatV2GeneratedImageReference,
+  b: ChatV2GeneratedImageReference
+): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+
+function setGeneratedImageDraft(
+  key: string,
+  references: readonly ChatV2GeneratedImageReference[]
+): void {
+  const nextMap: GeneratedImageDraftMap = new Map(generatedImageDrafts.value);
+  if (references.length === 0) {
+    nextMap.delete(key);
+  } else if (nextMap.size < GENERATED_IMAGE_DRAFT_CAP || nextMap.has(key)) {
+    nextMap.set(key, { references });
+  }
+  generatedImageDrafts.value = nextMap;
+}
+
+function getGeneratedImageDraft(
+  conversationId: string | null
+): ChatV2GeneratedImageReference[] {
+  return [
+    ...(generatedImageDrafts.value.get(draftKeyFor(conversationId))
+      ?.references ?? []),
+  ];
+}
+
+/** References attached to the composer tray for the SELECTED conversation. */
+const activeGeneratedImageRefs = computed(() =>
+  getGeneratedImageDraft(conversationId.value)
+);
+
+/** Resolve tray chips against the mounted message window (thumb + name). */
+function resolveGeneratedImageViewModel(
+  reference: ChatV2GeneratedImageReference
+): GeneratedImageReferenceView {
+  const message = selectedStore.messages.find(
+    (m) => m.id === reference.messageId
+  );
+  const image = message?.metadata?.generatedImages?.[reference.imageIndex];
+  return {
+    reference,
+    fileName:
+      typeof image?.file_name === "string" ? image.file_name : undefined,
+    thumbUrl: typeof image?.url === "string" ? image.url : undefined,
+  };
+}
+
+const selectedGeneratedImageViews = computed(() =>
+  activeGeneratedImageRefs.value.map(resolveGeneratedImageViewModel)
+);
+
+/** "Use as reference" tile action: toggle the image in the tray. */
+function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  generatedImageNotice.value = null;
+  const key = draftKeyFor(conversationId.value);
+  const current = getGeneratedImageDraft(conversationId.value);
+  if (current.some((r) => sameGeneratedImageRef(r, reference))) {
+    setGeneratedImageDraft(
+      key,
+      current.filter((r) => !sameGeneratedImageRef(r, reference))
+    );
+    return;
+  }
+  setGeneratedImageDraft(key, [...current, reference]);
+}
+
+/** "Edit" tile action: exactly this image becomes the tray selection. */
+function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
+  generatedImageNotice.value = null;
+  setGeneratedImageDraft(draftKeyFor(conversationId.value), [reference]);
+  composerFocusSignal.value += 1;
+}
+
+function onRemoveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): void {
+  const key = draftKeyFor(conversationId.value);
+  setGeneratedImageDraft(
+    key,
+    getGeneratedImageDraft(conversationId.value).filter(
+      (r) => !sameGeneratedImageRef(r, reference)
+    )
+  );
+}
+
+function onClearGeneratedImages(): void {
+  setGeneratedImageDraft(draftKeyFor(conversationId.value), []);
+}
+
+function onReorderGeneratedImages(
+  references: ChatV2GeneratedImageReference[]
+): void {
+  setGeneratedImageDraft(draftKeyFor(conversationId.value), references);
+}
+
+/**
+ * Clear the sent draft only when its turn is ACCEPTED end-to-end: the
+ * presenter maps the terminal `complete` detail event to streamStatus
+ * "idle". Error/cancel paths intentionally keep the selection so the user
+ * can retry without re-picking (legacy parity).
+ */
+watch(
+  () => selectedStore.streamStatus,
+  (status, previous) => {
+    if (previous !== "streaming") return;
+    const key = pendingDraftClearKey.value;
+    if (!key) return;
+    pendingDraftClearKey.value = null;
+    if (status === "idle") {
+      setGeneratedImageDraft(key, []);
+    }
+  }
+);
 
 // --- Next-message settings (owned here, rendered below the textarea) --------
 const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
@@ -610,6 +824,20 @@ async function onComposerSend(
   files: File[],
   options?: { fromVoice?: boolean }
 ): Promise<void> {
+  // Generated-image preflight: explicit tray selections only (the legacy
+  // ambiguity/inference offer is not part of the shell surface).
+  const generatedImageReferences = activeGeneratedImageRefs.value;
+  if (generatedImageReferences.length > GENERATED_IMAGE_REFERENCE_LIMIT) {
+    generatedImageNotice.value =
+      t("aiChatV2.generatedImageRefs.errors.generated_image_reference_limit") ||
+      "Too many referenced images for one request.";
+    return;
+  }
+  // Reference-only sends still need a message for the model (legacy parity).
+  const messageText =
+    generatedImageReferences.length > 0 && text.trim().length === 0
+      ? GENERATED_IMAGE_FALLBACK_PROMPT
+      : text;
   const uploadedFiles =
     files.length > 0
       ? (await Promise.all(files.map(encodeFile))).filter(
@@ -625,11 +853,16 @@ async function onComposerSend(
     }
   }
   voice.beginAssistantResponse(options?.fromVoice === true);
-  await selectedStore.sendMessage(text, {
+  if (generatedImageReferences.length > 0) {
+    pendingDraftClearKey.value = draftKeyFor(conversationId.value);
+  }
+  await selectedStore.sendMessage(messageText, {
     model: selectedModel.value,
     mode: mode.value,
     toolApprovalMode: toolApprovalMode.value,
     attachments: uploadedFiles,
+    generatedImageReferences:
+      generatedImageReferences.length > 0 ? generatedImageReferences : undefined,
   });
 }
 
@@ -980,6 +1213,20 @@ onUnmounted(() => {
 }
 
 .chat-center__tts-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-center__genimg-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 12px 8px;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.8);
+}
+
+.chat-center__genimg-notice-text {
   flex: 1 1 auto;
   min-width: 0;
 }

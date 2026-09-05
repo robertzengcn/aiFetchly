@@ -16,6 +16,7 @@ const getVoiceSettingsMock = vi.fn();
 const getVoiceStatusMock = vi.fn();
 const getLocalAiRuntimeStatusMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
+const startChatRunMock = vi.fn();
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...args: unknown[]) => getWorkspaceMock(...args),
@@ -98,7 +99,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   unsubscribeDetail: vi.fn(),
   loadHistoryPage: vi.fn(),
   markConversationRead: vi.fn().mockResolvedValue(undefined),
-  startChatRun: vi.fn(),
+  startChatRun: (...args: unknown[]) => startChatRunMock(...args),
   cancelChatRun: vi.fn(),
   createClientRequestId: vi.fn().mockReturnValue("req-1"),
 }));
@@ -135,7 +136,14 @@ const i18n = createI18n({
 /** Composer stub renders its lower slots so control placement is testable. */
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
-  props: ["isStreaming", "conversationId", "voiceEnabled"],
+  props: [
+    "isStreaming",
+    "conversationId",
+    "voiceEnabled",
+    "selectedGeneratedImages",
+    "generatedImageReferenceLimit",
+    "generatedImageFocusSignal",
+  ],
   emits: ["send", "stop"],
   template:
     '<div class="composer-stub" data-testid="composer-stub">' +
@@ -170,6 +178,7 @@ function mountSurface() {
         AiChatV2Composer: ComposerStub,
         AiChatConversationHeader: HeaderStub,
         AiChatWorkspaceTranscript: defineComponent({
+          name: "AiChatWorkspaceTranscript",
           template: '<div data-testid="transcript-stub" />',
         }),
         AiChatRunStrip: true,
@@ -375,5 +384,287 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     chatWorkspace.setInspectorOpen(false);
     await flushPromises();
     expect(inspector.target).toBeNull();
+  });
+});
+
+describe("AiChatCenterSurface generated-image reference drafts (legacy parity)", () => {
+  /** Tray references currently bound to the composer stub, order preserved. */
+  function trayReferences(wrapper: ReturnType<typeof mountSurface>): unknown[] {
+    return wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .props("selectedGeneratedImages")
+      .map((v: { reference: unknown }) => v.reference);
+  }
+
+  /** Select a conversation and let the surface re-render. */
+  async function selectConversation(conversationId: string): Promise<void> {
+    useChatWorkspaceStore().setSelected(conversationId);
+    await flushPromises();
+  }
+
+  it("toggles tray selections from use-generated-image events and forwards them as composer props", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    await flushPromises();
+
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    expect(composer.props("generatedImageReferenceLimit")).toBe(3);
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+
+    // A distinct reference adds alongside.
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 1,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
+
+    // The SAME reference again toggles it OFF (toggle, not a duplicate add).
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 1 },
+    ]);
+  });
+
+  it("edit-generated-image replaces the tray with exactly that image and signals composer focus", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toHaveLength(2);
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    const signalBefore: number = composer.props("generatedImageFocusSignal");
+
+    transcript.vm.$emit("edit-generated-image", {
+      messageId: "m3",
+      imageIndex: 1,
+    });
+    await flushPromises();
+
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m3", imageIndex: 1 },
+    ]);
+    expect(composer.props("generatedImageFocusSignal")).toBe(signalBefore + 1);
+  });
+
+  it("applies composer tray remove/reorder/clear events to the conversation draft", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("remove-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    // Re-add (appends), then reorder swaps the order.
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    composer.vm.$emit("reorder-generated-images", [
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    composer.vm.$emit("clear-generated-images");
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([]);
+  });
+
+  it("keeps tray selections isolated per conversation across switches", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+
+    // Switching conversations shows the OTHER conversation's (empty) tray…
+    useChatWorkspaceStore().setSelected("conv-2");
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([]);
+
+    // …and building a selection there does not leak into the first.
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m2",
+      imageIndex: 0,
+    });
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m2", imageIndex: 0 },
+    ]);
+
+    // Switching back restores the first conversation's selection.
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
+  });
+
+  it("aborts an over-limit reference send with a dismissible notice and no run", async () => {
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    for (let i = 0; i < 4; i += 1) {
+      transcript.vm.$emit("use-generated-image", {
+        messageId: `over-${i}`,
+        imageIndex: 0,
+      });
+    }
+    await flushPromises();
+    expect(trayReferences(wrapper)).toHaveLength(4);
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "hello", []);
+    await flushPromises();
+
+    expect(startChatRunMock).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="workspace-genimg-notice"]').exists()
+    ).toBe(true);
+    // The over-limit selection is kept so the user can deselect and retry.
+    expect(trayReferences(wrapper)).toHaveLength(4);
+
+    await wrapper
+      .get('[data-testid="workspace-genimg-notice-dismiss"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-genimg-notice"]').exists()
+    ).toBe(false);
+  });
+
+  it("sends a reference-only message with the fallback prompt and clears the draft on accepted completion", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "", []);
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "conv-1",
+      message: "Describe the selected image.",
+      generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+    });
+
+    const selected = useSelectedConversationStore();
+    expect(selected.streamStatus).toBe("streaming");
+    // While the turn streams, the tray keeps the selection.
+    expect(trayReferences(wrapper)).toHaveLength(1);
+
+    // Terminal `complete` (presenter → "idle") clears the sent draft.
+    selected.streamStatus = "idle";
+    await flushPromises();
+    expect(trayReferences(wrapper)).toEqual([]);
+  });
+
+  it("keeps the draft when the turn errors so the user can retry the same selection", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    await selectConversation("conv-1");
+    const transcript = wrapper.findComponent({
+      name: "AiChatWorkspaceTranscript",
+    });
+    transcript.vm.$emit("use-generated-image", {
+      messageId: "m1",
+      imageIndex: 0,
+    });
+    await flushPromises();
+
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    composer.vm.$emit("send", "edit this image", []);
+    await flushPromises();
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+
+    const selected = useSelectedConversationStore();
+    selected.streamStatus = "error";
+    await flushPromises();
+    // Error keeps the selection (legacy parity) — no data loss on failure.
+    expect(trayReferences(wrapper)).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+    ]);
   });
 });

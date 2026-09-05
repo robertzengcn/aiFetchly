@@ -15,6 +15,8 @@
         v-if="item.kind === 'user-message'"
         :message="item.message"
         :show-reasoning="false"
+        @use-generated-image="(ref) => emit('use-generated-image', ref)"
+        @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
       />
 
       <!-- Assistant messages render normally (content + reasoning). -->
@@ -23,6 +25,8 @@
         :message="item.message"
         :status="streamStatusForMessage(item.message)"
         :show-reasoning="showReasoning"
+        @use-generated-image="(ref) => emit('use-generated-image', ref)"
+        @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
       />
 
       <!-- Execution groups: one compact section per assistant response. -->
@@ -36,6 +40,18 @@
       <AiChatExecutionRow
         v-else-if="item.kind === 'legacy-receipt'"
         :execution="item.execution"
+      />
+
+      <!-- Permission prompt (FR-047, design §15.5): interactive approval
+           card for a gated tool parked mid-execution. -->
+      <AiChatV2Message
+        v-else-if="item.kind === 'permission-prompt'"
+        :message="item.message"
+        :show-reasoning="false"
+        @grant-permission="
+          (msg, payload) => emit('grant-permission', msg, payload)
+        "
+        @deny-permission="(msg) => emit('deny-permission', msg)"
       />
 
       <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
@@ -66,7 +82,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2GeneratedImageReference,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
 import AiChatExecutionGroup from "@/views/components/aiChatWorkspace/AiChatExecutionGroup.vue";
 import AiChatExecutionRow from "@/views/components/aiChatWorkspace/AiChatExecutionRow.vue";
@@ -107,6 +126,25 @@ const emit = defineEmits<{
   (e: "discard"): void;
   /** FR-030: reopen a persisted artifact from the transcript. */
   (e: "reopen-artifact", artifactId: string): void;
+  /** Permission card forwarded from AiChatV2Message (design §15.5). */
+  (
+    e: "grant-permission",
+    message: ChatV2MessageView,
+    payload: { persistent: boolean }
+  ): void;
+  (e: "deny-permission", message: ChatV2MessageView): void;
+  /**
+   * Generated-image reference actions forwarded from AiChatV2Message tiles
+   * (Use as reference / Edit) so the composer tray can attach them.
+   */
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
 }>();
 
 type ProjectedItem =
@@ -116,7 +154,8 @@ type ProjectedItem =
   | { kind: "legacy-receipt"; key: string; execution: ToolExecutionView }
   | { kind: "plan-decision"; key: string; plan: PlanPresentationView }
   | { kind: "plan-receipt"; key: string; plan: PlanPresentationView }
-  | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView };
+  | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView }
+  | { kind: "permission-prompt"; key: string; message: ChatV2MessageView };
 
 /**
  * Project the raw message list into the workspace transcript:
@@ -168,7 +207,8 @@ const projectedItems = computed<ProjectedItem[]>(() => {
       );
       if (group && group.executions.length > 0) {
         // One group per assistant response. Skip ahead past all tool messages
-        // in this group.
+        // in this group, surfacing gated-tool permission prompts hidden among
+        // them as interactive cards after the group (design §15.5).
         result.push({
           kind: "execution-group",
           key: group.key,
@@ -181,8 +221,24 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           (messages[i].messageType === ("tool_call" as MessageType) ||
             messages[i].messageType === ("tool_result" as MessageType))
         ) {
+          if (isPermissionPrompt(messages[i])) {
+            result.push({
+              kind: "permission-prompt",
+              key: `permission-${messages[i].id}`,
+              message: messages[i],
+            });
+          }
           i += 1;
         }
+      } else if (isPermissionPrompt(msg)) {
+        // Unpaired gated tool result: the interactive card IS the surface —
+        // a compact receipt would hide the approval decision from the user.
+        result.push({
+          kind: "permission-prompt",
+          key: `permission-${msg.id}`,
+          message: msg,
+        });
+        i += 1;
       } else {
         // Legacy unpaired receipt.
         result.push({
@@ -268,6 +324,14 @@ function streamStatusForMessage(
     return props.streamStatus;
   }
   return undefined;
+}
+
+/** A gated tool result parked on the permission card (design §15.5). */
+function isPermissionPrompt(message: ChatV2MessageView): boolean {
+  return (
+    message.messageType === ("tool_result" as MessageType) &&
+    message.metadata?.toolResult?.needsPermissionPrompt === true
+  );
 }
 
 function onPlanApprove(): void {
