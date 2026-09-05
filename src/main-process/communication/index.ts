@@ -47,6 +47,7 @@ import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-p
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
+import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
@@ -124,6 +125,7 @@ export function registerCommunicationIpcHandlers(
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
+    registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();

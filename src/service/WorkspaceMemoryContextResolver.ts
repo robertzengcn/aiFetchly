@@ -54,7 +54,14 @@ export class WorkspaceMemoryContextResolver {
     try {
       const scope = await this.scopeResolver.resolveForWorkspace(resolved);
       scopeId = scope?.scopeId;
-    } catch {
+    } catch (err) {
+      // Best-effort only for legacy flows, but never silent — a broken scope
+      // resolution otherwise surfaces later as an opaque "scope unavailable".
+      console.warn(
+        "[workspace-memory] scope resolution failed for workspace",
+        resolved.workspaceKey,
+        err
+      );
       scopeId = undefined;
     }
     return {
