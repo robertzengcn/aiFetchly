@@ -83,6 +83,7 @@ import type {
 } from "@/entityTypes/toolCatalogTypes";
 import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { buildResolverInput } from "@/service/outboundEmail/OutboundEmailPreviousAssistantContext";
 import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
@@ -767,13 +768,25 @@ export class AIChatQueryEngine {
         ) {
           intentDecisionId = existing.id;
         } else {
-          const decision = OutboundEmailIntentResolver.resolve({
-            conversationId,
-            sourceUserMessageId: savedUser.messageId,
-            userAuthoredText,
-            previousAssistantMessageId: null,
-            previousAssistantText: null,
-          });
+          // Load the conversation's messages (chronological ASC) so the
+          // resolver can evaluate the contextual-affirmation path (§9.1/§9.4):
+          // a short "yes, send it" authorizes a send ONLY when the immediately
+          // preceding assistant message asked an explicit send-confirmation
+          // question. Passing null here (the prior bug, RC3) made that path
+          // dead and forced every affirmation back to draft_only.
+          const priorMessages = await module.getConversationMessages(
+            conversationId
+          );
+          const decision = OutboundEmailIntentResolver.resolve(
+            buildResolverInput(
+              {
+                conversationId,
+                sourceUserMessageId: savedUser.messageId,
+                userAuthoredText,
+              },
+              priorMessages
+            )
+          );
           const decisionFields = {
             mode: decision.mode,
             reasonCode: decision.reasonCode,
