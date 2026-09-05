@@ -131,3 +131,85 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
     expect(refusedCode(withAuth)).toBe("draft_required");
   });
 });
+
+/**
+ * Direct-send phrasing corpus (technical design §9.2 / §13.1 / AD-001).
+ *
+ * "please send a test email to …" is an unambiguous send instruction: the user
+ * is asking for delivery now, not a draft for later review. It must resolve to
+ * `send_now` so that, once a draft batch exists for the turn, trusted app code
+ * can create the §13.1 direct-send authorization. The deny/review/ambiguous
+ * corpus above is unchanged — only wording that clearly asks for the send
+ * resolves here.
+ */
+describe("OutboundEmailIntentCorpus — direct-send phrasing resolves send_now", () => {
+  const SEND_CORPUS: string[] = [
+    "please send a test email to 1093968009@qq.com",
+    "send a test email to bob@example.com",
+    "send an email to the team",
+    "send a test email now",
+  ];
+
+  it("resolves each direct-send phrase to send_now (no preceding confirmation)", () => {
+    for (const text of SEND_CORPUS) {
+      const d = OutboundEmailIntentResolver.resolve(input(text));
+      expect(d.mode, `"${text}" must resolve send_now`).toBe("send_now");
+    }
+  });
+
+  it("a direct-send phrase stays draft_only when preceded by 'review before' wording", () => {
+    // "send … but let me review first" is a review request (AD-002) — review
+    // always overrides send. Confirms the new send phrases do NOT weaken the
+    // review-wins precedence.
+    const d = OutboundEmailIntentResolver.resolve(
+      input("send a test email to bob@example.com but let me review first")
+    );
+    expect(d.mode).toBe("review_first");
+  });
+});
+
+/**
+ * Contextual affirmation corpus (technical design §9.4). A short affirmative
+ * reply ("yes, send it") authorizes a send ONLY when the immediately preceding
+ * assistant message asked an explicit send-confirmation question. This is the
+ * path that lets the user approve a send after the model asks "Send batch 42
+ * now?" — and it is currently dead because the engine passes
+ * previousAssistantText: null (RC3).
+ */
+describe("OutboundEmailIntentCorpus — contextual affirmation (§9.4)", () => {
+  function inputWithPrior(
+    text: string,
+    previousAssistantText: string
+  ): ResolveOutboundEmailIntentInput {
+    return {
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      userAuthoredText: text,
+      previousAssistantMessageId: "assistant-msg-0",
+      previousAssistantText,
+    };
+  }
+
+  it("'yes, send it' resolves send_now after a send-confirmation question", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      inputWithPrior("yes, send it", "Ready to send batch 42 now?")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("contextual_affirmation");
+  });
+
+  it("'yes' alone resolves send_now after a send-confirmation question", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      inputWithPrior("yes", "Shall I send these emails now?")
+    );
+    expect(d.mode).toBe("send_now");
+  });
+
+  it("'yes' resolves draft_only when the prior message is NOT a send-confirmation question", () => {
+    // A generic prior message must never turn a bare "yes" into authorization.
+    const d = OutboundEmailIntentResolver.resolve(
+      inputWithPrior("yes", "The drafts are ready for your review.")
+    );
+    expect(d.mode).not.toBe("send_now");
+  });
+});
