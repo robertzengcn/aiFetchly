@@ -26,7 +26,8 @@ export class OutboundEmailToolGate {
    *   authorization exists for the target batch. Resolved by the caller
    *   (the query loop, via `OutboundEmailAuthorizationService.resolveDirectSendForTurn`)
    *   from the turn's intent + draft batch — never from tool arguments. When
-   *   null, a `send_now` intent is blocked as `authorization_missing`.
+   *   null, a `send_now` intent with no batch is blocked as `draft_required`;
+   *   a known batch without authorization is `authorization_missing`.
    * @param batchId the target batch id when one exists, else null.
    */
   static evaluate(
@@ -49,6 +50,12 @@ export class OutboundEmailToolGate {
         return { allowed: false, code: "review_required", batchId };
       case "send_now":
       default: {
+        // The user has already asked to send, but there is not yet a durable
+        // batch to authorize. Tell the model to create the non-sending draft
+        // first instead of asking the user to confirm the same instruction.
+        if (!authorization && batchId == null) {
+          return { allowed: false, code: "draft_required", batchId };
+        }
         // A send_now intent still needs a durable, request-scoped
         // authorization before anything goes out (AD-001, AD-009). The caller
         // resolves it from trusted turn state; when none exists, block.

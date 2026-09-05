@@ -7,8 +7,8 @@
  *   2. Resolves the trusted authorization triple for a send_now turn whose
  *      latest batch is draft_ready, returning allowed:true with
  *      {batchId, authorizationId, batchHash} for the send tool to claim.
- *   3. Blocks authorization_missing when the turn is send_now but has no
- *      authorizable batch (only terminal batches exist).
+ *   3. Blocks draft_required when the turn is send_now but has no authorizable
+ *      batch (only terminal batches exist).
  *   4. Threads the allowed triple through prepareToolCall →
  *      executePreparedToolWithTimeout → the SkillExecutionContext passed to
  *      deps.executeTool, so `start_email_send_task` receives
@@ -204,7 +204,7 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
     expect(reloaded?.status).toBe("direct_authorized");
   });
 
-  it("blocks authorization_missing for a send_now turn with no authorizable batch", async () => {
+  it("blocks draft_required for a send_now turn with no authorizable batch", async () => {
     const intentModel = new OutboundEmailIntentModel(tmpDir);
     const draftModel = new OutboundEmailDraftModel(tmpDir);
     await SqliteDb.ensureInitialized();
@@ -224,9 +224,10 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
       makeGateInput(intent.id)
     );
     expect(result.allowed).toBe(false);
-    // send_now intent + no authorizable batch → no authorization → the gate's
-    // authorization_missing branch.
-    expect(result.code).toBe("authorization_missing");
+    // A send_now instruction is already authorization intent. With no
+    // authorizable batch yet, the next action is drafting, not asking the user
+    // to confirm the same send a second time.
+    expect(result.code).toBe("draft_required");
   });
 
   it("blocks review_required for a review_first intent even with a batch", async () => {

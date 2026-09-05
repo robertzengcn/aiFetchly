@@ -61,6 +61,7 @@ import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailG
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
 const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
+const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -2341,6 +2342,9 @@ export class AIChatQueryLoop {
               // Trusted gate-resolved authorization for an allowed send
               // (§15.1); threaded for uniformity with the foreground path.
               outboundAuthorization,
+              // Draft generation only persists reviewable local state; it
+              // does not contact recipients. The send tool remains gated.
+              skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -2792,6 +2796,9 @@ export class AIChatQueryLoop {
         // (§14.2/§15.1). The send tool claims the batch via this; never
         // sourced from tool arguments (AD-003).
         outboundAuthorization,
+        // Preparing reviewable local drafts must not create a second user
+        // decision before the separately protected outbound send action.
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

@@ -1303,6 +1303,12 @@ export class AIChatQueryEngine {
         toolCatalog: resumeCatalogContext.toolCatalog,
         toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
         toolCatalogState: matchedByToolId.toolCatalogState,
+        // Keep the originating user turn attached to every round after a
+        // permission resume. Without these fields, a successfully approved
+        // draft is followed by a send round with no trusted intent, so the
+        // outbound gate incorrectly falls back to `draft_required`.
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
       };
 
       void this.loop

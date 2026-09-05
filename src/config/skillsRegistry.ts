@@ -1650,7 +1650,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["service_ids"],
     },
     tier: "main",
-    requiresConfirmation: true,
+    // Creating a durable draft does not contact recipients. Keep the actual
+    // start_email_send_task permission-gated so the user makes one outbound
+    // decision instead of approving both preparation and delivery.
+    requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
     timeoutClass: "fast",

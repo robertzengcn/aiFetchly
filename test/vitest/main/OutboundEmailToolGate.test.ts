@@ -33,12 +33,12 @@ describe("OutboundEmailToolGate", () => {
     });
   });
 
-  it("blocks authorization_missing for a send_now intent without authorization", () => {
+  it("requires a draft before asking for send authorization", () => {
     expect(
       OutboundEmailToolGate.evaluate(intent("send_now"), null, null)
     ).toEqual({
       allowed: false,
-      code: "authorization_missing",
+      code: "draft_required",
       batchId: null,
     });
   });

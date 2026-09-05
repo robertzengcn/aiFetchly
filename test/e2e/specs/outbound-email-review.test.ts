@@ -12,8 +12,8 @@
  *      ("Unexpected socket close") — neither a success nor a definite
  *      pre-acceptance rejection — and the pipeline must land on
  *      delivery_unknown and NEVER auto-retry it (FR-019).
- *   2. The fake AI calls draft_outbound_email_batch; the permission card gates
- *      it; "Allow once" runs the tool against the isolated per-test database.
+ *   2. The fake AI calls draft_outbound_email_batch, which prepares the
+ *      reviewable batch without a separate permission decision.
  *   3. The tool result renders the batch card; "Review" opens the review
  *      dialog (§18).
  *   4. Approve reruns preflight and creates the exact-draft authorization
@@ -129,9 +129,8 @@ async function seedDroppingSmtpService(
 
 /**
  * Full draft flow: open the chat, warm the conversation with a plain turn,
- * then make the fake AI call draft_outbound_email_batch (gated by the
- * permission card). Returns once the user has approved execution and the
- * follow-up turn ("Done.") completed, with the tool result rendered.
+ * then make the fake AI call draft_outbound_email_batch. Returns once the
+ * follow-up turn ("Done.") completes with the tool result rendered.
  */
 async function draftBatchViaTool(
   app: LaunchedApp,
@@ -165,15 +164,8 @@ async function draftBatchViaTool(
   );
   await sendUnique(app, "e2e-outbound-draft");
 
-  // The permission card gates the automation-category tool before execution.
-  const card = app.mainWindow.getByTestId("ai-chat-permission-card");
-  await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card).toContainText("draft_outbound_email_batch", {
-    timeout: 15_000,
-  });
-  await app.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
-
-  // Tool executed -> the fake server answers the continuation with "Done."
+  // Draft preparation is non-sending, so it executes without a permission
+  // card. The fake server answers the continuation with "Done."
   await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
     "Done.",
     { timeout: 30_000 }

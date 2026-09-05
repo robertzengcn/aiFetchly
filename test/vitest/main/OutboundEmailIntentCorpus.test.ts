@@ -89,7 +89,7 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
     }
   });
 
-  it("blocks a send_now intent when no request-scoped authorization exists", () => {
+  it("requires a draft for send_now before asking for authorization", () => {
     // Even the clearest send instruction is still refused by the gate without
     // a persisted authorization (AD-003/AD-009). authorization === null is the
     // invariant: no authorization, no send.
@@ -99,7 +99,7 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
     expect(d.mode).toBe("send_now");
 
     const gate = OutboundEmailToolGate.evaluate(d, null, null);
-    expect(refusedCode(gate)).toBe("authorization_missing");
+    expect(refusedCode(gate)).toBe("draft_required");
   });
 
   it("blocks a review_first intent even if an authorization were somehow present", () => {
