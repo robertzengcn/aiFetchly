@@ -283,6 +283,21 @@ export interface SkillExecutionContext {
    * outbound-email intent was resolved. Supplied by the main process.
    */
   readonly intentDecisionId?: number | null;
+
+  /**
+   * Trusted outbound-email authorization triple for a direct send, resolved by
+   * the tool gate (§14.2) from the turn's intent + draft batch — NEVER from
+   * tool arguments (AD-003). Present only when the gate has authorized a
+   * `start_email_send_task` call; the send tool uses it to claim the batch
+   * via `OutboundEmailDeliveryService.claim` (§15.1 idempotency key) instead of
+   * the legacy `startBulkEmailSendTask` path. Null/undefined for non-send
+   * tools and for blocked send calls.
+   */
+  readonly outboundAuthorization?: {
+    readonly batchId: number;
+    readonly authorizationId: number;
+    readonly batchHash: string;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------

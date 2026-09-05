@@ -331,6 +331,17 @@ export interface PendingPermissionTurn {
    */
   sourceUserMessageId?: string;
   intentDecisionId?: number | null;
+  /**
+   * Trusted outbound-email authorization triple resolved by the tool gate
+   * (§14.2) when it allowed the send. The permission-resume re-execution
+   * must carry it so the send tool claims the batch (§15.1) instead of
+   * silently falling to the legacy send path after the user approves.
+   */
+  outboundAuthorization?: {
+    batchId: number;
+    authorizationId: number;
+    batchHash: string;
+  };
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
   /**

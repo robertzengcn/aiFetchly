@@ -23,14 +23,19 @@ export class OutboundEmailToolGate {
    * @param intentDecision the persisted intent for this turn's user message,
    *   or null when no trusted decision exists.
    * @param authorization Present when a valid, unexpired request-scoped
-   *   authorization exists for the target batch. Phase 1 never supplies one,
-   *   so `send_now` intent is reported as `authorization_missing`; the
-   *   `allowed:true` branch becomes reachable only in Phase 3.
+   *   authorization exists for the target batch. Resolved by the caller
+   *   (the query loop, via `OutboundEmailAuthorizationService.resolveDirectSendForTurn`)
+   *   from the turn's intent + draft batch — never from tool arguments. When
+   *   null, a `send_now` intent is blocked as `authorization_missing`.
    * @param batchId the target batch id when one exists, else null.
    */
   static evaluate(
     intentDecision: { mode: OutboundEmailDeliveryMode } | null,
-    authorization: { batchId: number; authorizationId: number } | null,
+    authorization: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
+    } | null,
     batchId: number | null
   ): OutboundEmailToolGateResult {
     if (!intentDecision) {
@@ -45,9 +50,8 @@ export class OutboundEmailToolGate {
       case "send_now":
       default: {
         // A send_now intent still needs a durable, request-scoped
-        // authorization before anything goes out (AD-001, AD-009). Until
-        // Phase 3 plum it in, `authorization` is always null and the gate
-        // never returns allowed:true.
+        // authorization before anything goes out (AD-001, AD-009). The caller
+        // resolves it from trusted turn state; when none exists, block.
         if (!authorization) {
           return { allowed: false, code: "authorization_missing", batchId };
         }
@@ -55,6 +59,7 @@ export class OutboundEmailToolGate {
           allowed: true,
           batchId: authorization.batchId,
           authorizationId: authorization.authorizationId,
+          batchHash: authorization.batchHash,
         };
       }
     }

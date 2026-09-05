@@ -43,6 +43,16 @@ export const SEND_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
     "immediately send",
     "send immediately",
     "right now send",
+    // Direct "send a/an … email" instructions: the user is asking for the send
+    // to happen, not merely to draft. "please send a test email to …" is the
+    // canonical direct-send phrasing that previously fell through to draft_only
+    // (RC2). Only add forms whose presence reliably implies send intent — see
+    // the dictionary rule above ("when in doubt, leave it out").
+    "send a test email",
+    "send an email",
+    "send a test email to",
+    "send an email to",
+    "send a email",
   ],
   zh: [
     "立即发送",

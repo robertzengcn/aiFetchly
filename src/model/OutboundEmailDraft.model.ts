@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, EntityManager } from "typeorm";
+import { Repository, EntityManager, In } from "typeorm";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
@@ -70,6 +70,35 @@ export class OutboundEmailDraftModel extends BaseDb {
     const repo =
       manager?.getRepository(OutboundEmailDraftBatchEntity) ?? this.batchRepo;
     return await repo.findOne({ where: { id } });
+  }
+
+  /**
+   * The newest non-terminal batch for a conversation + user turn, or null when
+   * none exists. Used by the outbound-email tool gate (§14.2) to find the
+   * draft_ready batch that a send_now intent should authorize (§13.1). Only
+   * authorizable statuses are considered — a batch that has already reached a
+   * terminal state (sent / failed / discarded / delivery_unknown /
+   * partially_sent) is never returned, so a stale turn never authorizes a
+   * second send against an old batch (AD-009).
+   */
+  async findLatestBatchForTurn(
+    conversationId: string,
+    sourceUserMessageId: string
+  ): Promise<OutboundEmailDraftBatchEntity | null> {
+    const authorizable = [
+      "draft_ready",
+      "direct_authorized",
+      "review_authorized",
+      "awaiting_review",
+    ] as const;
+    return await this.batchRepo.findOne({
+      where: {
+        conversationId,
+        sourceUserMessageId,
+        status: In(authorizable),
+      },
+      order: { id: "DESC" },
+    });
   }
 
   /** Advance the batch's envelope-set hash pointer (post-preflight). */

@@ -83,6 +83,7 @@ import type {
 } from "@/entityTypes/toolCatalogTypes";
 import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
 import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { buildResolverInput } from "@/service/outboundEmail/OutboundEmailPreviousAssistantContext";
 import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
@@ -767,13 +768,25 @@ export class AIChatQueryEngine {
         ) {
           intentDecisionId = existing.id;
         } else {
-          const decision = OutboundEmailIntentResolver.resolve({
-            conversationId,
-            sourceUserMessageId: savedUser.messageId,
-            userAuthoredText,
-            previousAssistantMessageId: null,
-            previousAssistantText: null,
-          });
+          // Load the conversation's messages (chronological ASC) so the
+          // resolver can evaluate the contextual-affirmation path (§9.1/§9.4):
+          // a short "yes, send it" authorizes a send ONLY when the immediately
+          // preceding assistant message asked an explicit send-confirmation
+          // question. Passing null here (the prior bug, RC3) made that path
+          // dead and forced every affirmation back to draft_only.
+          const priorMessages = await module.getConversationMessages(
+            conversationId
+          );
+          const decision = OutboundEmailIntentResolver.resolve(
+            buildResolverInput(
+              {
+                conversationId,
+                sourceUserMessageId: savedUser.messageId,
+                userAuthoredText,
+              },
+              priorMessages
+            )
+          );
           const decisionFields = {
             mode: decision.mode,
             reasonCode: decision.reasonCode,
@@ -1186,6 +1199,10 @@ export class AIChatQueryEngine {
           // even when executed via the permission-resume path.
           sourceUserMessageId: matchedByToolId.sourceUserMessageId,
           intentDecisionId: matchedByToolId.intentDecisionId,
+          // Re-thread the gate-resolved outbound authorization (§14.2/§15.1)
+          // so the approved send claims the draft batch instead of silently
+          // falling to the legacy send path (RC4).
+          outboundAuthorization: matchedByToolId.outboundAuthorization,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.

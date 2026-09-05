@@ -43,6 +43,25 @@ export interface DirectSendAuthorizationResult {
   readonly type?: OutboundEmailAuthorizationType;
 }
 
+export interface ResolveDirectSendForTurnInput {
+  readonly conversationId: string;
+  readonly sourceUserMessageId: string;
+  readonly intentDecisionId: number;
+}
+
+/**
+ * The authorization triple the outbound-email tool gate (§14.2) and the
+ * delivery claim transaction (§15.1) both need. The gate checks that a
+ * non-null triple exists for a send_now intent before the send tool runs;
+ * the claim transaction uses `{batchId, authorizationId, batchHash}` as its
+ * idempotency key. This is what `resolveDirectSendForTurn` returns.
+ */
+export interface ResolvedDirectSend {
+  readonly batchId: number;
+  readonly authorizationId: number;
+  readonly batchHash: string;
+}
+
 export interface ReviewApprovalInput {
   readonly batchId: number;
   readonly batchHash: string;
@@ -154,6 +173,83 @@ export class OutboundEmailAuthorizationService {
       success: true,
       authorizationId: created.id,
       type: "explicit_user_instruction",
+    };
+  }
+
+  /**
+   * Orchestrate direct-send authorization for a turn (technical design §13.1 +
+   * §14.2). This is the single seam the outbound-email tool gate calls: given
+   * the trusted turn identity (conversationId + sourceUserMessageId) and the
+   * persisted intent decision id, it locates the turn's latest authorizable
+   * batch, creates (or reuses) an `explicit_user_instruction` authorization,
+   * and returns the {batchId, authorizationId, batchHash} triple the gate
+   * needs to allow the send and the delivery service needs to claim (§15.1).
+   *
+   * Returns null when the turn has no authorizable batch or the intent is not
+   * send_now — both map to a blocking gate code (draft_required /
+   * authorization_missing), so the send tool never executes.
+   *
+   * Idempotent across retries: if an active authorization already exists for
+   * the batch (the model re-called the send tool after the gate allowed),
+   * reuse it rather than erroring. This is the safe path — one authorization
+   * per batch (AD-009) is still honored because `findActiveByBatch` returns
+   * the single active row.
+   */
+  async resolveDirectSendForTurn(
+    input: ResolveDirectSendForTurnInput
+  ): Promise<ResolvedDirectSend | null> {
+    // Find the turn's latest non-terminal batch. Returns null when only
+    // terminal batches exist (sent/failed/discarded) or the turn has no
+    // batch at all — a stale turn never authorizes a second send (AD-009).
+    const batch = await this.draftModel.findLatestBatchForTurn(
+      input.conversationId,
+      input.sourceUserMessageId
+    );
+    if (!batch) {
+      return null;
+    }
+
+    // AD-005: authorization binds to the batch's immutable envelope hash. A
+    // batch whose hash has not been set (pre-preflight or malformed) has
+    // nothing to bind an authorization to — it must not be authorized. This
+    // also narrows the type to `string` for the returned triple.
+    const batchHash = batch.batchHash;
+    if (!batchHash) {
+      return null;
+    }
+
+    // Reuse an already-active authorization for this batch if one exists.
+    // This handles the idempotent retry path: after the gate allows and the
+    // model re-calls the send tool, we must not error with
+    // authorization_already_active — we return the same triple.
+    const existing = await this.authorizationModel.findActiveByBatch(batch.id);
+    if (existing) {
+      return {
+        batchId: batch.id,
+        authorizationId: existing.id,
+        batchHash,
+      };
+    }
+
+    // Create a fresh explicit_user_instruction authorization (§13.1). All
+    // conditions (send_now, source/conversation match, resolver version,
+    // batch hash match) are checked inside; a failure code means the turn is
+    // not eligible for direct send and the gate must block.
+    const created = await this.createDirectSendAuthorization({
+      intentDecisionId: input.intentDecisionId,
+      batchId: batch.id,
+      sourceUserMessageId: input.sourceUserMessageId,
+      conversationId: input.conversationId,
+      batchHash,
+    });
+    if (!created.success) {
+      return null;
+    }
+
+    return {
+      batchId: batch.id,
+      authorizationId: created.authorizationId!,
+      batchHash,
     };
   }
 
