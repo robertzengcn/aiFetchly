@@ -464,8 +464,13 @@ export class EmailMarketingController {
     content: string,
     format: "csv" | "json"
   ): { rows: Record<string, unknown>[]; rowErrors: Map<number, string> } {
+    // Strip a leading BOM (U+FEFF) — common in Excel-on-Windows and Notepad
+    // exports. JSON.parse rejects it outright; on the CSV side it would land
+    // in the first header name unless stripped (done here explicitly rather
+    // than relying on the transformHeader trim()).
+    const sanitized = content.replace(/^\uFEFF/, "");
     if (format === "json") {
-      const parsed: unknown = JSON.parse(content);
+      const parsed: unknown = JSON.parse(sanitized);
       // Export shape { total, services, exportDate } or bare array.
       if (Array.isArray(parsed)) {
         return {
@@ -489,14 +494,15 @@ export class EmailMarketingController {
     // CSV — header row, case-insensitive columns. "greedy" also skips
     // whitespace-only lines (stray-space lines are common in hand-edited
     // CSVs; with plain `true` they surface as TooFewFields errors).
-    const result = Papa.parse<Record<string, unknown>>(content, {
+    const result = Papa.parse<Record<string, unknown>>(sanitized, {
       header: true,
       skipEmptyLines: "greedy",
       transformHeader: (header: string) => header.trim().toLowerCase(),
     });
-    // A file whose only Papa errors are an undetectable delimiter AND that
-    // has no data rows is an empty (0-byte / whitespace-only) file, not a
-    // malformed one: return zero rows so the caller reports "no valid rows"
+    // A file with no data rows whose only Papa errors are an undetectable
+    // delimiter (0-byte, whitespace-only, BOM-only, header-only, or text
+    // without row breaks) is an empty-in-effect file, not a malformed one:
+    // return zero rows so the caller reports "no valid rows"
     // (import_no_valid_rows) instead of "invalid file".
     if (
       (result.data?.length ?? 0) === 0 &&

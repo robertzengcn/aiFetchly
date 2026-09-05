@@ -629,6 +629,60 @@ describe("EmailMarketingController", () => {
       expect(result.errors.length).to.equal(0);
     });
 
+    it("imports a BOM-prefixed CSV (Excel/Windows export) normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // U+FEFF BOM before the first header, as Excel-on-Windows writes.
+      // Papa does not strip it (trim() treats Cf as non-whitespace), so it
+      // otherwise lands in the first column name and every row loses `name`.
+      const bom = String.fromCharCode(0xfeff);
+      const csv =
+        bom + "name,from,host,port,ssl,password\n" +
+        "Bom,b@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(0);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
+    });
+
+    it("imports a BOM-prefixed JSON file normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // A leading BOM makes JSON.parse reject the whole file otherwise.
+      const bom = String.fromCharCode(0xfeff);
+      const json =
+        bom +
+        JSON.stringify([
+          {
+            name: "Bom",
+            from: "b@example.com",
+            host: "h",
+            port: "25",
+            ssl: 1,
+            password: "p",
+          },
+        ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
+    });
+
     it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {
       // A minimal CSV with only required columns — ssl/receiveProtocol columns omitted.
       const create = sinon.stub().resolves(1);
