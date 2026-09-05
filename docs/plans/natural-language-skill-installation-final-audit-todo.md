@@ -1,9 +1,9 @@
 # Natural-Language Skill Installation — Final Audit TODO
 
-**Audit date:** 2026-09-02 (updated 2026-09-03)  
-**Status:** Items 1, 2, 4, 5, 6 COMPLETE. Item 3 (Windows CI run) IN
-PROGRESS — PR #85 open, windows-shell-matrix job queued/running; record the
-run URL below when it completes.  
+**Audit date:** 2026-09-02 (updated 2026-09-05)  
+**Status:** ALL ITEMS (1–6) COMPLETE. Item 3 closed 2026-09-05: the required
+windows-shell-matrix job passed 46/46 on a real `windows-2022` runner at the
+branch HEAD; run URL recorded under item 3.  
 **Scope:** Remaining work identified by comparing the implementation against:
 
 - `docs/prd/natural-language-skill-installation-prd.md` v1.1
@@ -104,10 +104,10 @@ their full Electron-E2E lifts need seams this pass does not add.
 
 ### 3. Run and record the blocking Windows process-provider CI gate
 
-- [ ] Push the branch or PR and run the `windows-shell-matrix` job on a real
+- [x] Push the branch or PR and run the `windows-shell-matrix` job on a real
       `windows-2022` runner.
-- [ ] Record the successful run URL or artifact in the PR verification notes.
-- [ ] Ensure the job remains required and cannot be silently skipped.
+- [x] Record the successful run URL or artifact in the PR verification notes.
+- [x] Ensure the job remains required and cannot be silently skipped.
 
 **Reason:** The Windows provider and a blocking workflow job exist, but a Linux
 worktree cannot demonstrate that PowerShell, cmd, native programs, encoding,
@@ -119,6 +119,49 @@ and §25.
 
 **Complete when:** The current commit passes the required Windows job with no
 skipped Windows cases.
+
+**DONE (2026-09-05):** Getting the gate green required four fixes, each
+surfaced by the gate itself on the real runner:
+
+1. The vitest `tsc --noEmit` globalSetup spawned the extensionless POSIX
+   shim `node_modules/.bin/tsc`, which cannot execute on win32 — the job
+   died before running a single test. Now invoked as
+   `process.execPath node_modules/typescript/bin/tsc` (90564c28).
+2. The CI lint job's utilityCode suites failed collection with
+   `ERR_MODULE_NOT_FOUND: ws` from a relative-string resolve alias
+   (`'./node_modules/ws/index.js'` resolves against the importer's
+   directory). Made absolute (46a04e41).
+3. The live unicode round-trip caught a real PRD §16.2 defect: PowerShell
+   5.1 encodes redirected stdout in the console ANSI codepage
+   (`'你好世界 🎬'` → `'???? ??'`). The provider now prepends a
+   try/catch-wrapped `[Console]::OutputEncoding = UTF8Encoding($false)`
+   preamble to PowerShell `-Command` invocations (7d498fdf).
+4. Playwright 1.62 aborted whole-suite E2E collection on
+   `async (_fixtures, testInfo)` in skillInstallationMatrix.test.ts — the
+   restart-while-awaiting-secret flow had never executed. Fixed with the
+   documented `{}` no-fixtures pattern (ef72be4c).
+
+**Run URLs (real `windows-2022`, 10.0.20348):**
+
+- Branch HEAD `ef72be4c`, all jobs green:
+  https://github.com/robertzengcn/aiFetchly/actions/runs/33950796605
+  (windows-shell-matrix: 46/46 tests, 0 skipped, tsc gate clean ~70 s. One
+  prior attempt on the same commit hit a PowerShell cold-start timeout in
+  the env-scrubbing case — runner flake, green on rerun.)
+- First-try clean pass on `7d498fdf` (provider code identical to HEAD;
+  the later commit only touched an E2E spec the Windows job never runs):
+  https://github.com/robertzengcn/aiFetchly/actions/runs/33933536587
+
+**Cannot be silently skipped:** the job has no `if:` condition, no
+`continue-on-error`, the step is explicitly labelled BLOCKING, and the
+workflow has no `paths:` filter — it fires on every push to
+`dev`/`master`/`test` and every PR targeting them, so it keeps running
+after merge (the temporary installer-branch entry in the push trigger
+list is removed at merge time, dev/master/test remain). Residual note:
+GitHub branch protection on `dev` is not enabled in this repo (404 from
+the protection API), so "required status check" enforcement at the repo
+level is an owner action — the workflow-level blocking described above is
+the enforced guarantee.
 
 ### 4. Expand the real Windows diagnostic matrix to the complete contract
 
@@ -211,13 +254,21 @@ implementation work from outstanding acceptance and platform-verification work.
 **DONE (2026-09-03):** `natural-language-skill-installation-todo.md` now
 marks all nine items `[x]` with "(now fixed)" reasons, links the open
 acceptance/platform work to THIS file, and this file carries per-item DONE
-evidence. Remaining open evidence slot: the Windows CI run URL (item 3).
+evidence. The Windows CI run URL (item 3) was recorded 2026-09-05; no open
+evidence slots remain.
 
-## Verification snapshot (updated 2026-09-03)
+## Verification snapshot (updated 2026-09-05)
 
 - TypeScript `tsc --noEmit` / `vue-tsc`: 0 errors
 - Component suite: 172/172 (incl. the card state/mode/i18n tests)
-- Provider suite: 42/42 (POSIX live + Windows-logic cases)
-- Electron installer E2E: 11/11 flows (3 original + model-driven + matrix)
-- PR #85 open against `dev`; `windows-shell-matrix` job is required and
-  its run URL is the last open evidence slot (item 3).
+- Provider suite: 46/46 on a real `windows-2022` runner, 0 skipped
+  (42 original + 4 UTF-8-preamble unit cases; the live matrix includes the
+  formerly-failing unicode round-trip, now green via the provider fix)
+- Electron E2E: 25/25 on CI (9 files), incl. all 11 installer flows —
+  the matrix spec was collection-blocked on Playwright 1.62 until
+  2026-09-05, so the restart-while-awaiting-secret flow ran for the first
+  time in that green run
+- CI "Lint and unit tests" job green on HEAD (utilityCode 154/154 files,
+  1852/1852 tests after the ws alias fix)
+- PR #85 open against `dev`; `windows-shell-matrix` passed at HEAD —
+  run URL recorded under item 3. All audit items closed.
