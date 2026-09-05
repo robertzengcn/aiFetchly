@@ -28,7 +28,7 @@ function memoryDir(root: E2ETestRoot): string {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(app.mainWindow.getByTestId("ai-chat-composer")).toBeVisible({
     timeout: 30_000,
   });
@@ -44,7 +44,7 @@ async function ensureConversation(app: LaunchedApp): Promise<void> {
   await textarea.fill(`setup ${Date.now()}`);
   await app.mainWindow.getByTestId("ai-chat-send").click();
   // Wait for the streamed response to complete (creates the conversation row).
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+  await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
     "Hello world!",
     { timeout: 30_000 }
   );

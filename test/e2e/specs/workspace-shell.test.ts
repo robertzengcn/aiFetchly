@@ -1,4 +1,5 @@
 import { e2eTest as test, expect } from "../fixtures/base";
+import { warmLazyRouteModules } from "../support/devServerWarmup";
 
 /**
  * Persistent chat-first shell E2E (chat-first shell design §25.6, PRD §26.4).
@@ -10,9 +11,15 @@ import { e2eTest as test, expect } from "../fixtures/base";
  * inherit a developer's saved bounds or sidebar state.
  */
 
+// Discover the inner pages' dev-server dependencies BEFORE any renderer
+// connects, so vite's dep-optimization reload cannot land mid-test.
+test.beforeAll(() => warmLazyRouteModules());
+
 const LIVE_AI = process.env.AIFETCHLY_E2E_LIVE_AI === "1";
 
-async function openWorkspace(page: import("@playwright/test").Page): Promise<void> {
+async function openWorkspace(
+  page: import("@playwright/test").Page
+): Promise<void> {
   await page.goto("http://127.0.0.1:5173/#/aiworkspace");
   await expect(page.getByTestId("chat-center-surface")).toBeVisible({
     timeout: 20_000,
@@ -74,9 +81,10 @@ test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
     expect(await textarea.getAttribute("rows")).toBe("2");
     // Mode/model/approval render after the textarea in DOM order.
     const order = await page.evaluate(() => {
-      const input = document
-        .querySelector('[data-testid="ai-chat-composer"]')
-        ?.querySelector("textarea.v-field__input:not(.v-textarea__sizer)") ??
+      const input =
+        document
+          .querySelector('[data-testid="ai-chat-composer"]')
+          ?.querySelector("textarea.v-field__input:not(.v-textarea__sizer)") ??
         null;
       const controls = document.querySelector(
         '[data-testid="v2-composer-controls"]'

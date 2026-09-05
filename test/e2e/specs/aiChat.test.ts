@@ -23,11 +23,14 @@ function composerTextarea(app: {
     .first();
 }
 
-/** Open the AI chat dock and wait for the composer to be actionable. */
+/** Open the chat center surface and wait for the composer to be actionable.
+ * The chat-first shell lands authenticated users in the persistent workspace;
+ * New chat creates + selects a conversation, mounting the same composer the
+ * legacy dock used to open. */
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -53,8 +56,10 @@ test.describe("AI chat (Electron integration)", () => {
     aiApp,
   }) => {
     await openChat(aiApp);
-    // Composer + root landmark render via the real layout/AiChatV2 components.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toBeVisible();
+    // Composer + surface landmark render via the real shell/AiChatV2 components.
+    await expect(
+      aiApp.mainWindow.getByTestId("chat-center-surface")
+    ).toBeVisible();
     await expect(composerTextarea(aiApp)).toBeVisible();
   });
 
@@ -77,10 +82,9 @@ test.describe("AI chat (Electron integration)", () => {
       .toBeGreaterThanOrEqual(1);
 
     // Final streamed content renders exactly (chunks arrive in order, no dupes).
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      STREAM_TEXT_FINAL,
-      { timeout: 30_000 }
-    );
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText(STREAM_TEXT_FINAL, { timeout: 30_000 });
   });
 
   test("AI-disabled gate rejects before any transport call (T-04)", async ({

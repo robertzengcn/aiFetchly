@@ -24,11 +24,11 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
-test("conversation persists across a controlled restart (T-12)", async ({}, testInfo) => {
+test("conversation persists across a controlled restart (T-12)", async (_, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -57,10 +57,9 @@ test("conversation persists across a controlled restart (T-12)", async ({}, test
       await composer(app1).fill(marker);
       await app1.mainWindow.getByTestId("ai-chat-send").click();
       // Wait for the streamed response to complete -> the turn + message persist.
-      await expect(app1.mainWindow.getByTestId("ai-chat-root")).toContainText(
-        "Hello world!",
-        { timeout: 30_000 }
-      );
+      await expect(
+        app1.mainWindow.getByTestId("workspace-transcript")
+      ).toContainText("Hello world!", { timeout: 30_000 });
       await expect(app1.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
         timeout: 30_000,
       });

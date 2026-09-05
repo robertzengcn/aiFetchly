@@ -30,7 +30,10 @@ export interface E2EFixtures {
 }
 
 export const e2eTest = base.extend<E2EFixtures>({
-  testRoot: async (_, use, testInfo) => {
+  // Playwright requires the object-destructuring first argument even when
+  // no fixtures are consumed; the empty pattern is intentional here.
+  // eslint-disable-next-line no-empty-pattern
+  testRoot: async ({}, use, testInfo) => {
     const root = createTemporaryRoot({
       testId: testInfo.titlePath.join(" "),
       workerIndex: testInfo.workerIndex,
@@ -65,7 +68,8 @@ export const e2eTest = base.extend<E2EFixtures>({
   },
 
   // Worker-scoped: start the fake AI server once per worker, share across tests.
-  fakeAi: async (_, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  fakeAi: async ({}, use) => {
     const fakeAi = await startFakeOpenAiServer();
     await use(fakeAi);
     await fakeAi.stop();
