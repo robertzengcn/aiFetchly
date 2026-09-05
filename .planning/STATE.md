@@ -101,7 +101,9 @@ Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Chec
 
 ### Pending Todos
 
-None yet.
+- Complete natural-language skill installation PRD gaps — 15 audited tasks
+  covering incomplete functional, non-functional, security, lifecycle, and
+  end-to-end requirements
 
 ### Blockers/Concerns
 
