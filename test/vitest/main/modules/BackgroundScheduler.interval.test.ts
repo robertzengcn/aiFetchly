@@ -18,6 +18,7 @@ const mockSqliteDbReset = vi.hoisted(() =>
 vi.mock("@/config/SqliteDb", () => ({
   SqliteDb: {
     getInstance: () => ({ connection: {} }),
+    getLiveInstance: () => ({ connection: {} }),
     ensureInitialized: vi.fn(async () => undefined),
     resetInstance: mockSqliteDbReset,
   },

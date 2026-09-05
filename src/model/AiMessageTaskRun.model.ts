@@ -15,6 +15,12 @@ export class AiMessageTaskRunModel extends BaseDb {
     );
   }
 
+  protected override onSqliteDbRebound(): void {
+    this.repository = this.sqliteDb.connection.getRepository(
+      AiMessageTaskRunEntity
+    );
+  }
+
   async create(entity: Partial<AiMessageTaskRunEntity>): Promise<number> {
     const saved = await this.repository.save(entity);
     return saved.id;

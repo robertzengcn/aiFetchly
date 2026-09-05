@@ -106,21 +106,21 @@ export class OutboundEmailDeliveryService extends BaseDb {
     options: OutboundEmailDeliveryServiceOptions | string = {},
     legacyOptions?: OutboundEmailDeliveryServiceOptions
   ) {
-    super("");
-    // Accept either a dbpath string (production wiring passes a path) or an
-    // options object (tests pass overrides). Tolerate either positional form.
+    // Parse before super() so BaseDb.getInstance hits the real user path in
+    // one call. super("") used to bounce the singleton onto
+    // os.tmpdir()/aifetchly-test and fire-and-forget destroy() the live
+    // connection — the scheduler then threw "The database connection is
+    // not open" on every poll.
     const opts: OutboundEmailDeliveryServiceOptions =
       typeof options === "string"
         ? { dbpath: options, ...legacyOptions }
         : options;
-    // Re-initialize models with the requested dbpath. BaseDb("") would fall
-    // back to the test temp dir; respect an explicit path instead.
-    this.draftModel = new OutboundEmailDraftModel(opts.dbpath ?? "");
-    this.authorizationModel = new OutboundEmailAuthorizationModel(
-      opts.dbpath ?? ""
-    );
-    this.deliveryModel = new OutboundEmailDeliveryModel(opts.dbpath ?? "");
-    this.auditModel = new OutboundEmailAuditLogModel(opts.dbpath ?? "");
+    const dbpath = opts.dbpath ?? "";
+    super(dbpath);
+    this.draftModel = new OutboundEmailDraftModel(dbpath);
+    this.authorizationModel = new OutboundEmailAuthorizationModel(dbpath);
+    this.deliveryModel = new OutboundEmailDeliveryModel(dbpath);
+    this.auditModel = new OutboundEmailAuditLogModel(dbpath);
     this.workerStarter =
       opts.workerStarter ??
       (async () => {
@@ -131,12 +131,9 @@ export class OutboundEmailDeliveryService extends BaseDb {
           "[outbound-email-delivery] No workerStarter configured"
         );
       });
-    // Re-establish the sqliteDb handle so ensureConnection() and the
-    // transaction API target the correct (explicit) database path. BaseDb("")
-    // fell back to the test temp dir; rebind to the dbpath instance the models
-    // share via the shared singleton. `sqliteDb` is protected on BaseDb,
-    // accessible from this subclass.
-    this.sqliteDb = SqliteDb.getInstance(opts.dbpath ?? "");
+    if (dbpath) {
+      this.sqliteDb = SqliteDb.getInstance(dbpath);
+    }
   }
 
   /**

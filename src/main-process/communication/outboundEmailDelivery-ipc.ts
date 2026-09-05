@@ -82,7 +82,7 @@ function resolveDbpath(override?: string): string {
 export function registerOutboundEmailDeliveryIpcHandlers(
   options: OutboundEmailDeliveryIpcOptions = {}
 ): void {
-  const dbpath = resolveDbpath(options.dbpath);
+  const dbpathForRequest = (): string => resolveDbpath(options.dbpath);
 
   // OUTBOUND_EMAIL_BATCH_GET — load batch + drafts + current revision +
   // findings summary so the review UI can render (§17, §18).
@@ -90,6 +90,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_GET,
     outboundEmailBatchGetInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const batch = await draftModel.readBatch(input.batchId);
       if (!batch) {
@@ -132,6 +133,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_DRAFT_UPDATE,
     outboundEmailDraftUpdateInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const draft = await draftModel.readDraft(input.draftId);
       if (!draft) {
@@ -200,6 +202,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_APPROVE,
     outboundEmailBatchApproveInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const batch = await draftModel.readBatch(input.batchId);
       if (!batch) {
@@ -268,6 +271,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_SEND,
     outboundEmailBatchSendInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       // §15.2 — wire the production worker starter (builds the v2 payload,
       // decrypts service credentials, forks taskCode.js) unless a caller
       // injected one (tests). Raw credentials cross to the worker over a
@@ -296,6 +300,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_DISCARD,
     outboundEmailBatchDiscardInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const authz = new OutboundEmailAuthorizationService(dbpath);
       await authz.invalidateOnRevisionChange(input.batchId, "batch_discarded");
@@ -309,6 +314,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_STATUS,
     outboundEmailBatchStatusInputSchema,
     async (input) => {
+      const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const deliveryModel = new OutboundEmailDeliveryModel(dbpath);
       const batch = await draftModel.readBatch(input.batchId);
