@@ -229,3 +229,133 @@ describe("OutboundEmailAuthorizationService.invalidateOnRevisionChange", () => {
     expect(read?.invalidationReason).toBe("content_edited");
   });
 });
+
+describe("OutboundEmailAuthorizationService.resolveDirectSendForTurn", () => {
+  /**
+   * This is the orchestrating seam the outbound-email tool gate calls (RC1,
+   * technical design §13.1 + §14.2). Given the trusted turn identity
+   * (conversationId + sourceUserMessageId) and the persisted intent decision
+   * id, it must locate the turn's draft_ready batch, create (or reuse) an
+   * explicit_user_instruction authorization, and return the
+   * {batchId, authorizationId, batchHash} triple the gate needs to allow a
+   * send and the delivery service needs to claim (§15.1 idempotency key).
+   */
+  it("creates a direct-send authorization and returns the claim triple for a send_now turn", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ batchHash: "a".repeat(64) })
+    );
+
+    const result = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.batchId).toBe(batchId);
+    expect(result!.authorizationId).toBeTypeOf("number");
+    expect(result!.batchHash).toBe("a".repeat(64));
+
+    // The batch is now direct_authorized — the status the claim transaction
+    // requires (§8.1 lifecycle).
+    const batch = await draftModel.readBatch(batchId);
+    expect(batch?.status).toBe("direct_authorized");
+    expect(batch?.authorizationId).toBe(result!.authorizationId);
+  });
+
+  it("reuses the existing active authorization instead of erroring when already authorized", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch()
+    );
+
+    // First call creates the authorization.
+    const first = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(first).not.toBeNull();
+
+    // Second call for the SAME turn must reuse the same authorization, not
+    // fail with authorization_already_active. This is the idempotent retry
+    // path: the model may re-call the send tool after the gate allows.
+    const second = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(second).not.toBeNull();
+    expect(second!.authorizationId).toBe(first!.authorizationId);
+    expect(second!.batchId).toBe(batchId);
+  });
+
+  it("returns null when no authorizable batch exists for the turn", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ status: "sent" }) // terminal — not authorizable
+    );
+
+    const result = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the intent mode is not send_now", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent({ mode: "review_first" }),
+      makeBatch()
+    );
+
+    const result = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("picks the newest authorizable batch when several exist for the turn", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ batchHash: "a".repeat(64) })
+    );
+    // A second, newer draft_ready batch for the SAME turn.
+    const newer = await draftModel.createBatch(
+      makeBatch({ batchHash: "b".repeat(64) })
+    );
+    // Point the newer batch at the same intent (seedIntentAndBatch wired the
+    // first batch's intentDecisionId; the newer one reuses the id too).
+    await draftModel.updateBatchStatus(newer.id, "draft_ready", {
+      intentDecisionId: intentId,
+    });
+
+    const result = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.batchId).toBe(newer.id);
+    expect(result!.batchHash).toBe("b".repeat(64));
+  });
+});
