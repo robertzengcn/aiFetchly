@@ -28,7 +28,9 @@ async function openChat(app: LaunchedApp): Promise<void> {
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
-test("conversation persists across a controlled restart (T-12)", async (_, testInfo) => {
+test("conversation persists across a controlled restart (T-12)", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
