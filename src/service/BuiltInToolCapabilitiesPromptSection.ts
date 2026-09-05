@@ -55,6 +55,7 @@ load them. When a request matches one of the capabilities below:
 | Import/list/delete knowledge-library documents; import a webpage/url/docs into the knowledge base | \`knowledge_library_list_documents\`, \`knowledge_library_import_attachment\`, \`knowledge_library_import_website\`, \`knowledge_library_delete_document\` | \`knowledge library import\` |
 | Browse/scrape search-engine result URLs; extract website contacts, then MUST call \`verify_contact_info\` before presenting/exporting emails or phones | \`scrape_urls_from_search_engine\`, \`extract_contact_info\`, \`verify_contact_info\`, \`read_url_content\` | \`scrape search extract verify validate email phone contact normalize\` |
 | Run a local shell command (needs confirmation). shell_execute is for executing commands the user asked for — do NOT use it as a substitute for file_write to create/export a data file (csv/xlsx/json) via echo/redirect, do NOT use it for image edits (use attach_local_images), and do NOT use it to read/write workspace files | \`shell_execute\` | \`shell command run\` |
+| Use the logged-in social browser for an account (open YouTube in a real browser, read/act on pages, click/fill, hand off logins/CAPTCHAs to the user) | \`browser_start_session\`, \`browser_observe\`, \`browser_navigate\`, \`browser_run_actions\`, \`browser_request_handoff\`, \`browser_get_status\` | \`managed browser social youtube login\` |
 
 If a capability you need is not listed and not exposed, search the catalog by
 keyword with \`tool_catalog_search\`. Prefer normal chat responses for simple
