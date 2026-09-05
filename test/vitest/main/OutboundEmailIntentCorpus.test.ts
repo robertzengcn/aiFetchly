@@ -111,7 +111,7 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
     // review_first is refused regardless of authorization presence.
     const withAuth = OutboundEmailToolGate.evaluate(
       d,
-      { batchId: 42, authorizationId: 1 },
+      { batchId: 42, authorizationId: 1, batchHash: "a".repeat(64) },
       42
     );
     expect(refusedCode(withAuth)).toBe("review_required");
@@ -125,7 +125,7 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
 
     const withAuth = OutboundEmailToolGate.evaluate(
       d,
-      { batchId: 42, authorizationId: 1 },
+      { batchId: 42, authorizationId: 1, batchHash: "a".repeat(64) },
       42
     );
     expect(refusedCode(withAuth)).toBe("draft_required");

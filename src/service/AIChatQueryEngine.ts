@@ -1199,6 +1199,10 @@ export class AIChatQueryEngine {
           // even when executed via the permission-resume path.
           sourceUserMessageId: matchedByToolId.sourceUserMessageId,
           intentDecisionId: matchedByToolId.intentDecisionId,
+          // Re-thread the gate-resolved outbound authorization (§14.2/§15.1)
+          // so the approved send claims the draft batch instead of silently
+          // falling to the legacy send path (RC4).
+          outboundAuthorization: matchedByToolId.outboundAuthorization,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.

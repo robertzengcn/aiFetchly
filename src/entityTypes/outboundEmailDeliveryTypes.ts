@@ -263,7 +263,17 @@ export type AuthorizedEmailWorkerEventSchema = z.infer<
 // ---------------------------------------------------------------------------
 
 export type OutboundEmailToolGateResult =
-  | { allowed: true; batchId: number; authorizationId: number }
+  | {
+      allowed: true;
+      batchId: number;
+      authorizationId: number;
+      /**
+       * The batch envelope hash the claim transaction (§15.1) uses as its
+       * idempotency-key component. Threaded from the resolved authorization so
+       * the send tool can claim without re-reading the batch.
+       */
+      batchHash: string;
+    }
   | {
       allowed: false;
       code:

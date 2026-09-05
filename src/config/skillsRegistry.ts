@@ -1794,7 +1794,72 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     confirmationPolicy: "request_scoped_action",
-    execute: async (args) => {
+    execute: async (args, context) => {
+      // Intent-aware delivery path (technical design §14.3/§15): when the
+      // tool gate (§14.2) resolved a request-scoped authorization for this
+      // turn, claim the draft batch via the delivery service (§15.1
+      // idempotency) instead of the legacy ad-hoc send. The authorization
+      // triple comes from trusted app state (context), NEVER from args
+      // (AD-003).
+      const outboundAuthorization = context?.outboundAuthorization;
+      if (outboundAuthorization) {
+        const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+        const { OutboundEmailDeliveryService } = await import(
+          "@/service/outboundEmail/OutboundEmailDeliveryService"
+        );
+        const { OutboundEmailWorkerStarter } = await import(
+          "@/service/outboundEmail/OutboundEmailWorkerStarter"
+        );
+        // §15.2 — wire the production worker starter (builds the v2 payload,
+        // decrypts service credentials, forks taskCode.js) exactly like the
+        // OUTBOUND_EMAIL_BATCH_SEND IPC handler does.
+        const workerStarter = new OutboundEmailWorkerStarter({
+          dbpath,
+        }).toWorkerStarter();
+        const delivery = new OutboundEmailDeliveryService({
+          dbpath,
+          workerStarter,
+        });
+        try {
+          const claim = await delivery.claim({
+            batchId: outboundAuthorization.batchId,
+            authorizationId: outboundAuthorization.authorizationId,
+            batchHash: outboundAuthorization.batchHash,
+          });
+          const claimed =
+            claim.status === "claimed" || claim.status === "already_processed";
+          return {
+            success: claimed,
+            result: {
+              status: claim.status,
+              send_attempt_id: claim.attemptId,
+              batch_id: outboundAuthorization.batchId,
+              ...(claim.status === "already_processed"
+                ? {
+                    note: "This batch was already claimed by an earlier send attempt; no duplicate send was started.",
+                  }
+                : {}),
+            },
+          };
+        } catch (err) {
+          console.error(
+            "[outbound-email-delivery] claim failed for batch " +
+              `${outboundAuthorization.batchId}:`,
+            err
+          );
+          return {
+            success: false,
+            result: {
+              status: "claim_failed",
+              batch_id: outboundAuthorization.batchId,
+              error:
+                err instanceof Error ? err.message : "Unknown claim failure",
+            },
+          };
+        }
+      }
+
+      // Legacy path (non-chat callers): unchanged behavior.
       const result = await startBulkEmailSendTask(args);
       return {
         success: result.success,
