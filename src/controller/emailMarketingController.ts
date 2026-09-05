@@ -433,16 +433,26 @@ export class EmailMarketingController {
           // Import files never carry inbound-receive credentials — preserve
           // the existing service's receivePassword so the update doesn't
           // wipe it (encryptCredentialsForStorage nulls absent values).
-          // Other receive fields survive as undefined via TypeORM's changed-
-          // column diffing; do NOT default them here — a default would
-          // silently rewrite existing receive config on every import update.
+          // Likewise preserve receiveProtocol when the row omits the
+          // column (hand-edited/truncated CSVs): defaulting to "imap" would
+          // silently flip a pop3 service. Other receive fields survive as
+          // undefined via TypeORM's changed-column diffing; do NOT default
+          // them here — a default would silently rewrite existing receive
+          // config on every import update.
           if (!entity.receivePassword || entity.receivePassword.length === 0) {
             entity.receivePassword = existing.receivePassword;
+          }
+          if (!entity.receiveProtocol) {
+            entity.receiveProtocol = existing.receiveProtocol ?? "imap";
           }
           // The SMTP password IS always overwritten by the imported value
           // (import is an explicit act; the file carries the password).
           await this.emailServiceModule.updateEmailService(existing.id, entity);
         } else {
+          // A created service always needs a valid protocol — default here,
+          // not in the mapper, so updates can distinguish "row omitted the
+          // column" from "row wants imap".
+          entity.receiveProtocol = entity.receiveProtocol ?? "imap";
           await this.emailServiceModule.createEmailService(entity);
         }
         imported++;
@@ -544,14 +554,18 @@ export class EmailMarketingController {
     entity.password = this.rowValueToString(row.password);
     // ssl defaults to 1 (secure) when absent/blank; invalid → NaN → row error.
     entity.ssl = this.parseImportSsl(this.rowValueToString(row.ssl));
-    // receiveProtocol defaults to "imap" when absent/blank.
+    // receiveProtocol: blank/absent is left unassigned (undefined) — the
+    // create branch below defaults it to "imap", while the update branch
+    // preserves the existing service's protocol. Read case-insensitively:
+    // CSV headers are lowercased by transformHeader (receiveprotocol), JSON
+    // rows carry the camelCase key (receiveProtocol).
     const protocolRaw = this.rowValueToString(
-      row.receiveProtocol
+      row.receiveProtocol ?? row.receiveprotocol
     ).toLowerCase();
-    entity.receiveProtocol =
-      protocolRaw.length === 0
-        ? "imap"
-        : (protocolRaw as EmailServiceEntity["receiveProtocol"]);
+    if (protocolRaw.length > 0) {
+      entity.receiveProtocol =
+        protocolRaw as EmailServiceEntity["receiveProtocol"];
+    }
     // id and create_time are read but intentionally ignored on write.
     return entity;
   }
