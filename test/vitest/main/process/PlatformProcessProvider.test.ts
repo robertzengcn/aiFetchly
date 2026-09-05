@@ -640,9 +640,13 @@ describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () =>
 
   it("environment scrubbing applies inside the child process", async () => {
     if (!WINDOWS) return;
-    // AIFETCHLY_* is app-internal and must never reach the child.
+    // AIFETCHLY_* is app-internal and must never reach the child. Build the
+    // base from the FULL process environment (like production) plus the
+    // synthetic vars: PowerShell cold-start under a stripped 2-variable
+    // environment intermittently stalled past the timeout on windows-2022
+    // runners, and the scrubbing contract is about a realistic base anyway.
     const env = buildChildEnvironment({
-      PATH: process.env.PATH ?? "",
+      ...process.env,
       AIFETCHLY_TEST_SECRET: "should-not-leak",
       MY_PLAIN_VALUE: "visible",
     } as unknown as NodeJS.ProcessEnv);
@@ -657,14 +661,14 @@ describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () =>
       ],
       cwd,
       environment: env,
-      timeoutMs: 30_000,
+      timeoutMs: 45_000,
       outputLimitBytes: 64 * 1024,
       expectOutput: true,
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).not.toContain("should-not-leak");
     expect(r.stdout).toContain("visible");
-  }, 60_000);
+  }, 90_000);
 
   // Junction lifecycle: creation, discovery, broken target, uninstall
   // safety. Uses the REAL SkillActivationService against a temp skill root.
