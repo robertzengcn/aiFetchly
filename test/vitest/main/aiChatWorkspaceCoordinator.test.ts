@@ -267,6 +267,9 @@ describe("AIChatCoordinator", () => {
         message: "AI features are disabled",
       }),
     });
+    // This test builds no Model (whose BaseDb constructor would create the
+    // singleton), so create + initialize it explicitly before use.
+    await SqliteDb.resetInstance(tmpDir);
     await SqliteDb.ensureInitialized();
     const result = await coordinator.startRun(request(2));
     expect(result.ok).toBe(false);
