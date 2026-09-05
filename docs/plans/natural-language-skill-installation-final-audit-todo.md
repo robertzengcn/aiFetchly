@@ -120,7 +120,7 @@ and §25.
 **Complete when:** The current commit passes the required Windows job with no
 skipped Windows cases.
 
-**DONE (2026-09-05):** Getting the gate green required four fixes, each
+**DONE (2026-09-05):** Getting the gate green required five fixes, each
 surfaced by the gate itself on the real runner:
 
 1. The vitest `tsc --noEmit` globalSetup spawned the extensionless POSIX
@@ -140,17 +140,22 @@ surfaced by the gate itself on the real runner:
    `async (_fixtures, testInfo)` in skillInstallationMatrix.test.ts — the
    restart-while-awaiting-secret flow had never executed. Fixed with the
    documented `{}` no-fixtures pattern (ef72be4c).
+5. The env-scrubbing live case was the one intermittent failure (timed
+   out at exactly 30 s in 2 of 3 runs): it spawned PowerShell from a
+   synthetic 2-variable base, and PS 5.1 cold-start under a stripped
+   environment intermittently stalls on windows-2022. Now built from the
+   full process environment plus the synthetic vars — matching the
+   production scrubbing contract — with a 45 s child timeout (2aa0d21d).
 
 **Run URLs (real `windows-2022`, 10.0.20348):**
 
-- Branch HEAD `ef72be4c`, all jobs green:
-  https://github.com/robertzengcn/aiFetchly/actions/runs/33950796605
-  (windows-shell-matrix: 46/46 tests, 0 skipped, tsc gate clean ~70 s. One
-  prior attempt on the same commit hit a PowerShell cold-start timeout in
-  the env-scrubbing case — runner flake, green on rerun.)
-- First-try clean pass on `7d498fdf` (provider code identical to HEAD;
-  the later commit only touched an E2E spec the Windows job never runs):
-  https://github.com/robertzengcn/aiFetchly/actions/runs/33933536587
+- Final code commit `2aa0d21d`, first-try pass after the flake fix:
+  https://github.com/robertzengcn/aiFetchly/actions/runs/33979107025
+  (windows-shell-matrix: 46/46 tests, 0 skipped, tsc gate clean.)
+- Earlier green evidence: `ef72be4c` run 33950796605 (green after one
+  rerun of the pre-fix env-scrubbing flake) and first-try pass on
+  `7d498fdf` run 33933536587 (provider code identical from 7d498fdf
+  onward; the intervening commits touched an E2E spec and this test only).
 
 **Cannot be silently skipped:** the job has no `if:` condition, no
 `continue-on-error`, the step is explicitly labelled BLOCKING, and the
@@ -272,3 +277,13 @@ evidence slots remain.
   1852/1852 tests after the ws alias fix)
 - PR #85 open against `dev`; `windows-shell-matrix` passed at HEAD —
   run URL recorded under item 3. All audit items closed.
+- Known non-branch CI red (out of audit scope): the CI workflow's
+  "Package smoke test" job dies with "The runner has received a shutdown
+  signal" ~5 min into Electron packaging on every attempt (4× on this
+  branch). It is repo-wide pre-existing: no CI run on any branch has
+  been fully green since 2026-08-27 — the `test` branch fails earlier at
+  "Lint and unit tests" (its own pre-existing debts), so package-smoke
+  had not executed anywhere in that window until this branch's lint fix
+  let it run. Its investigation belongs to the repo-wide CI backlog, not
+  this feature audit; the Windows gate (Test Suite workflow) is fully
+  green.
