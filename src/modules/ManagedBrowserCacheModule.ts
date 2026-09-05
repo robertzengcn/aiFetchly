@@ -152,7 +152,16 @@ export class ManagedBrowserCacheModule
 {
   private readonly scopeService: CacheScopeServiceLike;
   private readonly maintenance: CacheMaintenanceClient;
-  private readonly noticeSink: (notice: SafeBrowserChatNotice) => void;
+  private noticeSink: (notice: SafeBrowserChatNotice) => void;
+  /** Wired by the IPC layer: coarse cache-clear progress for the renderer. */
+  private progressSink:
+    | ((progress: {
+        readonly scope: "account" | "all";
+        readonly phase: "scanning" | "deleting" | "done" | "failed";
+        readonly approximateBytes: number;
+        readonly reasonCode: string | null;
+      }) => void)
+    | null = null;
   private readonly rename: (from: string, to: string) => Promise<void>;
   private readonly mkdir: (p: string) => Promise<void>;
   private readonly readdir: (p: string) => Promise<string[]>;
@@ -211,6 +220,23 @@ export class ManagedBrowserCacheModule
   /** Injectable clock for tests only. */
   public setClockForTests(now: () => number): void {
     this.now = now;
+  }
+
+  /** Wired by the IPC layer: sanitized cache notices to the renderer. */
+  public setNoticeSink(sink: (notice: SafeBrowserChatNotice) => void): void {
+    this.noticeSink = sink;
+  }
+
+  /** Wired by the IPC layer: coarse cache-clear progress to the renderer. */
+  public setProgressSink(
+    sink: (progress: {
+      readonly scope: "account" | "all";
+      readonly phase: "scanning" | "deleting" | "done" | "failed";
+      readonly approximateBytes: number;
+      readonly reasonCode: string | null;
+    }) => void
+  ): void {
+    this.progressSink = sink;
   }
 
   // -----------------------------------------------------------------------
@@ -297,6 +323,31 @@ export class ManagedBrowserCacheModule
     };
   }
 
+  /** Aggregate status across every scope (bounded to the first 100 scopes). */
+  public async getStatusForAllScopes(): Promise<SafeManagedBrowserCacheStatus> {
+    let approximateBytes = 0;
+    let activeCount = 0;
+    for (const { scopeToken, scopePath } of (await this.listScopePaths()).slice(
+      0,
+      100
+    )) {
+      if (this.activeScopes.has(scopeToken)) {
+        activeCount += 1;
+      }
+      const scan = await this.maintenance.scanScope({ scopePath });
+      if (scan.status === "ok") {
+        approximateBytes += scan.approximateBytes;
+      }
+    }
+    return {
+      scope: "all",
+      approximateBytes,
+      lastClearedAt: null,
+      active: activeCount > 0,
+      pendingClear: this.pendingClears.size > 0,
+    };
+  }
+
   // -----------------------------------------------------------------------
   // Clear orchestration (§13.8)
   // -----------------------------------------------------------------------
@@ -328,6 +379,7 @@ export class ManagedBrowserCacheModule
         reasonCode: "cancelled_by_user",
       };
     }
+    this.emitProgress(input.scope, "scanning", 0);
 
     if (input.scope === "account") {
       return this.clearAccountScope(input.accountId as number, input);
@@ -592,10 +644,12 @@ export class ManagedBrowserCacheModule
       };
     }
 
+    this.emitProgress(scope, "deleting", 0);
     const outcome = await this.maintenance.deleteQueuedScope({ queuePath });
     if (outcome.status === "error") {
       // The queue entry stays on disk: resumePendingDeletions() retries it.
       logCacheError("maintenance delete failed", undefined, outcome.reasonCode);
+      this.emitProgress(scope, "failed", 0, outcome.reasonCode);
       return {
         state: "cleared",
         scope,
@@ -605,6 +659,7 @@ export class ManagedBrowserCacheModule
       };
     }
 
+    this.emitProgress(scope, "done", outcome.approximateDeletedBytes);
     this.lastClearedAt.set(scopeToken, new Date(this.now()).toISOString());
     this.publishNotice("cache_clear_completed", "success");
     return {
@@ -737,8 +792,19 @@ export class ManagedBrowserCacheModule
   }
 
   // -----------------------------------------------------------------------
-  // Notices
+  // Notices + progress
   // -----------------------------------------------------------------------
+
+  private emitProgress(
+    scope: "account" | "all",
+    phase: "scanning" | "deleting" | "done" | "failed",
+    approximateBytes: number,
+    reasonCode: string | null = null
+  ): void {
+    if (this.progressSink) {
+      this.progressSink({ scope, phase, approximateBytes, reasonCode });
+    }
+  }
 
   private publishNotice(
     type: BrowserChatNoticeType,

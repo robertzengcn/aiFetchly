@@ -38,6 +38,7 @@ import { registerYandexMapsHandlers } from "@/main-process/communication/yandexM
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
+import { registerManagedBrowserIpcHandlers } from "@/main-process/communication/managed-browser-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
@@ -115,6 +116,7 @@ export function registerCommunicationIpcHandlers(
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
     registerAgentDefinitionIpcHandlers();
+    registerManagedBrowserIpcHandlers(win);
     registerPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();

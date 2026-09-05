@@ -593,6 +593,38 @@ export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
 export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
 export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
 
+// ==================== Managed Browser Channels (design §22) ====================
+// Session channels are AI-facing (registerAiValidatedHandler — USER_AI_ENABLED
+// is checked FIRST); settings/cache channels are management-only
+// (registerValidatedHandler). Event channels are main → renderer pushes.
+export const MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS =
+  "managed-browser:list-eligible-accounts";
+export const MANAGED_BROWSER_LIST_ACTIVE = "managed-browser:list-active";
+export const MANAGED_BROWSER_START = "managed-browser:start";
+export const MANAGED_BROWSER_STATUS = "managed-browser:status";
+export const MANAGED_BROWSER_HANDOFF = "managed-browser:handoff";
+export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
+  "managed-browser:verify-manual-login";
+export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
+export const MANAGED_BROWSER_STOP = "managed-browser:stop";
+export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
+export const MANAGED_BROWSER_EXTEND_HANDOFF = "managed-browser:extend-handoff";
+export const MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS =
+  "managed-browser:get-effective-settings";
+export const MANAGED_BROWSER_GET_CACHE_STATUS =
+  "managed-browser:get-cache-status";
+export const MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION =
+  "managed-browser:issue-clear-confirmation";
+export const MANAGED_BROWSER_CLEAR_CACHE = "managed-browser:clear-cache";
+// Event channels (main → renderer)
+export const MANAGED_BROWSER_STATUS_EVENT = "managed-browser:status-changed";
+export const MANAGED_BROWSER_PROGRESS_EVENT = "managed-browser:progress";
+export const MANAGED_BROWSER_APPROVAL_EVENT =
+  "managed-browser:approval-required";
+export const MANAGED_BROWSER_CHAT_NOTICE_EVENT = "managed-browser:chat-notice";
+export const MANAGED_BROWSER_CACHE_PROGRESS_EVENT =
+  "managed-browser:cache-progress";
+
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";
 export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";

@@ -499,6 +499,26 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // Managed Browser Channels (design §22)
+  MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+  MANAGED_BROWSER_LIST_ACTIVE,
+  MANAGED_BROWSER_START,
+  MANAGED_BROWSER_STATUS,
+  MANAGED_BROWSER_HANDOFF,
+  MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+  MANAGED_BROWSER_RESUME,
+  MANAGED_BROWSER_STOP,
+  MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_EXTEND_HANDOFF,
+  MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+  MANAGED_BROWSER_GET_CACHE_STATUS,
+  MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+  MANAGED_BROWSER_CLEAR_CACHE,
+  MANAGED_BROWSER_STATUS_EVENT,
+  MANAGED_BROWSER_PROGRESS_EVENT,
+  MANAGED_BROWSER_APPROVAL_EVENT,
+  MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -649,6 +669,12 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_PROGRESS,
       // Portable workspace memory sync summary (main -> renderer)
       AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -728,6 +754,12 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -769,6 +801,12 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -1242,6 +1280,21 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // Managed Browser Channels (design §22)
+      MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+      MANAGED_BROWSER_LIST_ACTIVE,
+      MANAGED_BROWSER_START,
+      MANAGED_BROWSER_STATUS,
+      MANAGED_BROWSER_HANDOFF,
+      MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+      MANAGED_BROWSER_RESUME,
+      MANAGED_BROWSER_STOP,
+      MANAGED_BROWSER_APPROVE,
+      MANAGED_BROWSER_EXTEND_HANDOFF,
+      MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+      MANAGED_BROWSER_GET_CACHE_STATUS,
+      MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+      MANAGED_BROWSER_CLEAR_CACHE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

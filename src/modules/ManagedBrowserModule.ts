@@ -59,9 +59,11 @@ import type {
 import type {
   BrowserLaunchPolicy,
   BrowserObservation,
+  EffectiveManagedBrowserSettings,
   ManagedBrowserHandoffReason,
   ManagedBrowserSessionState,
   ManagedBrowserErrorCode,
+  SafeBrowserChatNotice,
   SafeManagedBrowserStatus,
   WorkerBrowserStoragePolicy,
 } from "@/entityTypes/managedBrowserTypes";
@@ -120,6 +122,8 @@ interface ActiveSessionRecord {
   pageRevision: number;
   authenticated: boolean | null;
   handoffReason: ManagedBrowserHandoffReason | null;
+  handoffBaseAtEpochMs: number | null;
+  handoffExpiresAtEpochMs: number | null;
   lastErrorCode: ManagedBrowserErrorCode | null;
 }
 
@@ -205,6 +209,24 @@ export class ManagedBrowserModule {
 
   private readonly sessions = new Map<string, ActiveSessionRecord>();
 
+  /** Approval decisions keyed by requestId (consumed by the AI tool layer). */
+  private readonly approvalDecisions = new Map<
+    string,
+    {
+      readonly sessionId: string;
+      readonly decision: "approve" | "deny";
+      readonly recordedAtEpochMs: number;
+    }
+  >();
+  /** Wired by the IPC layer: pushes every safe status to the renderer. */
+  private externalStatusSink:
+    | ((status: SafeManagedBrowserStatus) => void)
+    | null = null;
+  /** Wired by the IPC layer: forwards sanitized chat notices to the renderer. */
+  private externalNoticeSink: ((notice: SafeBrowserChatNotice) => void) | null =
+    null;
+  private now: () => number = Date.now;
+
   constructor(deps: ManagedBrowserModuleDeps = {}) {
     this.settings = deps.settings ?? new ManagedBrowserSettingsModule();
     this.leaseService =
@@ -228,6 +250,21 @@ export class ManagedBrowserModule {
     this.cacheModule =
       deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
     this.resolveCachePolicy = deps.resolveCachePolicy;
+  }
+
+  /** Wired by the IPC layer: pushes every safe status to the renderer. */
+  public setStatusSink(sink: (status: SafeManagedBrowserStatus) => void): void {
+    this.externalStatusSink = sink;
+  }
+
+  /** Wired by the IPC layer: forwards sanitized chat notices to the renderer. */
+  public setNoticeSink(sink: (notice: SafeBrowserChatNotice) => void): void {
+    this.externalNoticeSink = sink;
+  }
+
+  /** Injectable clock for tests only. */
+  public setClockForTests(now: () => number): void {
+    this.now = now;
   }
 
   // -----------------------------------------------------------------------
@@ -339,6 +376,8 @@ export class ManagedBrowserModule {
         pageRevision: 0,
         authenticated: null,
         handoffReason: null,
+        handoffBaseAtEpochMs: null,
+        handoffExpiresAtEpochMs: null,
         lastErrorCode: null,
       };
       const client = this.workerClientFactory({
@@ -449,6 +488,11 @@ export class ManagedBrowserModule {
     return record ? this.toSafeStatus(record) : null;
   }
 
+  /** Effective settings for the renderer settings page (safe shape). */
+  public async getEffectiveSettingsForRenderer(): Promise<EffectiveManagedBrowserSettings> {
+    return this.settings.getEffectiveSettings();
+  }
+
   public getStatusByAccount(
     accountId: number
   ): SafeManagedBrowserStatus | null {
@@ -464,6 +508,109 @@ export class ManagedBrowserModule {
     return [...this.sessions.values()].map((record) =>
       this.toSafeStatus(record)
     );
+  }
+
+  // -----------------------------------------------------------------------
+  // Eligible accounts, handoff window, approvals (§13.2, §15)
+  // -----------------------------------------------------------------------
+
+  /** Accounts usable with the managed browser (pilot platforms only). */
+  public async listEligibleAccounts(): Promise<
+    ReadonlyArray<{
+      readonly accountId: number;
+      readonly platformId: number;
+      readonly accountLabel: string;
+    }>
+  > {
+    try {
+      // Lazy require avoids a module-load cycle with SocialAccountModule.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { SocialAccountModule: Sam } =
+        require("@/modules/socialAccountModule") as {
+          SocialAccountModule: new () => {
+            getAllSocialAccounts(): Promise<
+              Array<{
+                id: number;
+                social_type_id: number;
+                name: string;
+                user: string;
+              }>
+            >;
+          };
+        };
+      const accounts = await new Sam().getAllSocialAccounts();
+      return accounts
+        .filter((account) =>
+          MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.social_type_id)
+        )
+        .map((account) => ({
+          accountId: account.id,
+          platformId: account.social_type_id,
+          // Display name preferred; email avoided when a name exists (§8.4).
+          accountLabel: account.name || account.user || `#${account.id}`,
+        }));
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] eligible account listing failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Extend the handoff/manual-login window (FR-P0-013). The total window is
+   * capped by manualLoginHandoffMaxMs from when handoff started.
+   */
+  public async extendHandoff(
+    sessionId: string,
+    extendMinutes: number
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    if (
+      record.state !== "handoff" &&
+      record.state !== "user_login_in_progress"
+    ) {
+      throw new ManagedBrowserError("action_not_allowed");
+    }
+    if (record.handoffBaseAtEpochMs === null) {
+      record.handoffBaseAtEpochMs = this.now();
+    }
+    const cap =
+      record.handoffBaseAtEpochMs +
+      MANAGED_BROWSER_TIMEOUTS.manualLoginHandoffMaxMs;
+    const current = record.handoffExpiresAtEpochMs ?? this.now();
+    record.handoffExpiresAtEpochMs = Math.min(
+      current + extendMinutes * 60_000,
+      cap
+    );
+    this.pushStatus(record);
+    return this.toSafeStatus(record);
+  }
+
+  /** Record a user approval decision for a pending approval request. */
+  public recordApproval(input: {
+    readonly sessionId: string;
+    readonly requestId: string;
+    readonly decision: "approve" | "deny";
+  }): void {
+    this.requireSession(input.sessionId);
+    this.approvalDecisions.set(input.requestId, {
+      sessionId: input.sessionId,
+      decision: input.decision,
+      recordedAtEpochMs: this.now(),
+    });
+  }
+
+  /** Consume a recorded decision (single-use); null when none was recorded. */
+  public consumeApproval(requestId: string): "approve" | "deny" | null {
+    const entry = this.approvalDecisions.get(requestId);
+    if (!entry) {
+      return null;
+    }
+    this.approvalDecisions.delete(requestId);
+    return entry.decision;
   }
 
   // -----------------------------------------------------------------------
@@ -679,16 +826,23 @@ export class ManagedBrowserModule {
         record.state = event.state;
         record.handoffReason =
           event.state === "handoff" ? "user_requested" : null;
+        if (event.state === "handoff") {
+          this.enterHandoffWindow(record);
+        } else {
+          this.clearHandoffWindow(record);
+        }
         break;
       case "SESSION_READY":
         record.state = "ready";
         record.authenticated =
           event.assessment.state === "authenticated" ? true : null;
         record.pageRevision += 1;
+        this.clearHandoffWindow(record);
         break;
       case "LOGIN_REQUIRED":
         record.state = "user_login_in_progress";
         record.authenticated = false;
+        this.enterHandoffWindow(record);
         this.publishNotice(record, "login_required", "login-start", {
           accountLabel: record.accountLabel,
           platformLabel: record.platformLabel,
@@ -697,6 +851,7 @@ export class ManagedBrowserModule {
       case "HANDOFF_REQUIRED":
         record.state = "handoff";
         record.handoffReason = event.reason;
+        this.enterHandoffWindow(record);
         break;
       case "CHALLENGE_DETECTED":
         this.publishNotice(record, "challenge_detected", event.challengeId, {
@@ -793,7 +948,7 @@ export class ManagedBrowserModule {
     messageArgs: Readonly<Record<string, string | number | boolean>> = {},
     requiresUserAction = true
   ): void {
-    this.noticePublisher.publish({
+    const notice = this.noticePublisher.publish({
       sessionId: record.sessionId,
       conversationId: record.conversationId ?? "workspace",
       type,
@@ -801,10 +956,17 @@ export class ManagedBrowserModule {
       messageArgs,
       requiresUserAction,
     });
+    if (notice && this.externalNoticeSink) {
+      this.externalNoticeSink(notice);
+    }
   }
 
   private pushStatus(record: ActiveSessionRecord): void {
-    this.emitStatus(this.toSafeStatus(record));
+    const status = this.toSafeStatus(record);
+    this.emitStatus(status);
+    if (this.externalStatusSink) {
+      this.externalStatusSink(status);
+    }
   }
 
   private toSafeStatus(record: ActiveSessionRecord): SafeManagedBrowserStatus {
@@ -818,8 +980,26 @@ export class ManagedBrowserModule {
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,
+      handoffExpiresAtEpochMs: record.handoffExpiresAtEpochMs,
       lastErrorCode: record.lastErrorCode,
     };
+  }
+
+  /** Start (or restart) the handoff/manual-login window on a record. */
+  private enterHandoffWindow(record: ActiveSessionRecord): void {
+    if (record.handoffBaseAtEpochMs === null) {
+      record.handoffBaseAtEpochMs = this.now();
+    }
+    const cap =
+      record.handoffBaseAtEpochMs +
+      MANAGED_BROWSER_TIMEOUTS.manualLoginHandoffMaxMs;
+    const target = this.now() + MANAGED_BROWSER_TIMEOUTS.manualLoginHandoffMs;
+    record.handoffExpiresAtEpochMs = Math.min(target, cap);
+  }
+
+  private clearHandoffWindow(record: ActiveSessionRecord): void {
+    record.handoffBaseAtEpochMs = null;
+    record.handoffExpiresAtEpochMs = null;
   }
 
   /**
