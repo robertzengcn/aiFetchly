@@ -19,6 +19,7 @@ import {
   EmailServiceEntitydata,
   EmailServiceListdata,
   EmailSendParam,
+  EmailServiceImportResult,
 } from "@/entityTypes/emailmarketingType";
 //get email service list
 export async function getEmailServiceList(
@@ -66,13 +67,6 @@ export async function exportEmailServices(
   }
   return resp as string;
 }
-/** Result envelope for email service import (counts + per-row errors). */
-export interface EmailServiceImportResult {
-  imported: number;
-  skipped: number;
-  errors: string[];
-}
-
 // Import email services from a file chosen via the native open dialog (the
 // file path is picked in the main process; the renderer sends no data).
 // Resolves with the import summary; rejects (Error) on cancel/failure so the
