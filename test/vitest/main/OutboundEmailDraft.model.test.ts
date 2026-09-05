@@ -175,4 +175,48 @@ describe("OutboundEmailDraftModel", () => {
     const reloaded = await model.readBatch(batch.id);
     expect(reloaded?.batchHash).toBe("c".repeat(64));
   });
+
+  it("findLatestBatchForTurn returns the newest non-terminal batch for a conversation+turn", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    // An older batch for the SAME turn, already sent (terminal).
+    const oldBatch = await model.createBatch(buildBatch({ status: "sent" }));
+    // A newer draft_ready batch for the SAME turn — this is the one the gate
+    // should authorize when the user asks to send.
+    const newBatch = await model.createBatch(
+      buildBatch({ status: "draft_ready", batchHash: "d".repeat(64) })
+    );
+    expect(newBatch.id).not.toBe(oldBatch.id);
+
+    const found = await model.findLatestBatchForTurn("conv-1", "msg-1");
+    expect(found?.id).toBe(newBatch.id);
+    expect(found?.status).toBe("draft_ready");
+  });
+
+  it("findLatestBatchForTurn ignores batches for other conversations or turns", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await model.createBatch(
+      buildBatch({ status: "draft_ready", conversationId: "other-conv" })
+    );
+    await model.createBatch(
+      buildBatch({ status: "draft_ready", sourceUserMessageId: "other-msg" })
+    );
+
+    const found = await model.findLatestBatchForTurn("conv-1", "msg-1");
+    expect(found).toBeNull();
+  });
+
+  it("findLatestBatchForTurn skips terminal batches when only terminal batches exist", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await model.createBatch(buildBatch({ status: "discarded" }));
+    await model.createBatch(buildBatch({ status: "failed" }));
+
+    const found = await model.findLatestBatchForTurn("conv-1", "msg-1");
+    expect(found).toBeNull();
+  });
 });
