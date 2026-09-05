@@ -43,7 +43,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
   AIChatConversationTurnCoordinator.getInstance().resetForTesting();
@@ -79,7 +80,9 @@ function makeFakeEngine(): {
       stopActiveTurn(conversationId?: string): void {
         stopCalls.push(conversationId ?? "(all)");
       },
-      getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
+      getConversationRuntimeStatus(
+        conversationId: string
+      ): ChatV2RuntimeStatus {
         return engineStatus.get(conversationId) ?? "idle";
       },
     },
@@ -114,7 +117,10 @@ function fakeWindow(id: number): {
   };
 }
 
-function emit(sink: AIChatQueryEventSink, event: Parameters<AIChatQueryEventSink["emit"]>[0]): void {
+function emit(
+  sink: AIChatQueryEventSink,
+  event: Parameters<AIChatQueryEventSink["emit"]>[0]
+): void {
   sink.emit(event);
 }
 
@@ -223,9 +229,7 @@ describe("AIChatCoordinator", () => {
     turn.resolve();
 
     // Terminal detail event arrives, and only AFTER the durable transition.
-    await waitFor(() =>
-      win.details.some((d) => d.eventType === "complete")
-    );
+    await waitFor(() => win.details.some((d) => d.eventType === "complete"));
     const row = await runModel.getByRunId(runId);
     expect(row?.status).toBe("completed");
     expect(row?.finishedAt).not.toBeNull();
@@ -239,6 +243,11 @@ describe("AIChatCoordinator", () => {
     );
     expect(completedSummary?.unread).toBe(true);
     expect(completedSummary?.runtimeStatus).toBe("idle");
+
+    // The projection's generated title (first user message, design §8.6)
+    // rides the summaries so a locally-created sidebar row replaces its
+    // "New chat" fallback mid-session without a full bootstrap refresh.
+    await waitFor(() => win.summaries.some((s) => s.title === "hello 1"));
 
     // Live registry cleared after terminal.
     expect(coordinator.getLiveRuntime("v2-test-1")).toBeNull();
@@ -471,8 +480,11 @@ describe("summary event privacy (FR-022)", () => {
       }
     }
     const serialized = JSON.stringify(win.summaries);
+    // The generated conversation title IS derived from the first user message
+    // (design §8.6) and is sidebar-visible data every window already receives
+    // via the bootstrap projection — so the prompt body itself is not in the
+    // forbidden set, only assistant/tool/artifact RESULT bodies are.
     for (const secret of [
-      "SECRET-PROMPT-BODY",
       "SECRET-ASSISTANT-BODY",
       "SECRET-TOOL-RESULT",
       "SECRET-ARTIFACT",
