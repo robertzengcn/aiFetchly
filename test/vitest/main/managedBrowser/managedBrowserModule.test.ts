@@ -970,3 +970,113 @@ describe("ManagedBrowserModule cache coordinator wiring", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Progress / approval sinks + handoff-window expiry enforcement (§17, §13.2)
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule renderer sinks", () => {
+  it("forwards worker ACTION_PROGRESS through the progress sink", async () => {
+    const progressEvents: unknown[] = [];
+    const h = makeHarness();
+    h.module.setProgressSink((progress) => progressEvents.push(progress));
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "ACTION_PROGRESS",
+      phase: "acting",
+      completedSteps: 2,
+      totalSteps: 5,
+      messageCode: "step_click",
+    } as unknown as OutboundEvent);
+    expect(progressEvents).toEqual([
+      {
+        sessionId: status.sessionId,
+        phase: "acting",
+        completedSteps: 2,
+        totalSteps: 5,
+        messageCode: "step_click",
+      },
+    ]);
+  });
+
+  it("surfaces approval requests through the approval sink", async () => {
+    const approvals: unknown[] = [];
+    const h = makeHarness();
+    h.module.setApprovalSink((request) => approvals.push(request));
+    h.module.notifyApprovalRequired({
+      sessionId: "mb_x0000000000001",
+      riskClass: "consequential_write",
+      contentSummary: "Publish video",
+    });
+    expect(approvals).toEqual([
+      {
+        sessionId: "mb_x0000000000001",
+        riskClass: "consequential_write",
+        messageKey: "managedBrowser.approval.required",
+        contentSummary: "Publish video",
+      },
+    ]);
+  });
+});
+
+describe("handoff-window expiry enforcement (FR-P0-013)", () => {
+  it("stops the session as cancelled when the login window lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_expirysessn001"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "test",
+      });
+      expect(status.state).toBe("user_login_in_progress");
+
+      // The window is manualLoginHandoffMs (10 min). Advancing the fake
+      // timers moves both the timers AND the mocked Date.now (the module's
+      // injected clock) — no separate setSystemTime needed.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      await vi.waitFor(() => expect(h.module.getStatus(status.sessionId)).toBeNull());
+      expect(h.lease.releaseCalls.length).toBeGreaterThan(0);
+      // No crash notice: expiry is a graceful cancellation.
+      expect(noticeTypes(h.notices)).not.toContain("browser_crashed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the session when the window was extended before the original deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_expirysessn002"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "test",
+      });
+      // Extend by 10 minutes (capped by manualLoginHandoffMaxMs).
+      await h.module.extendHandoff(status.sessionId, 10);
+
+      // Advance past the ORIGINAL deadline (not the extended one).
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      expect(h.module.getStatus(status.sessionId)?.state).toBe(
+        "user_login_in_progress"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

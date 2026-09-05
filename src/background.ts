@@ -76,6 +76,8 @@ import { cleanupContactExtractionWorker } from "@/main-process/communication/con
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
+import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
+import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 import {
@@ -781,6 +783,17 @@ function initialize() {
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win, () => win);
 
+      // Managed-browser cache: retry leftover deletion-queue entries from a
+      // previous crash (design §13.8 — queue entries are crash-recognizable).
+      void getDefaultManagedBrowserCacheModule()
+        .resumePendingDeletions()
+        .catch((err: unknown) => {
+          log.warn(
+            "[startup] managed-browser cache recovery failed",
+            err instanceof Error ? err.message : String(err)
+          );
+        });
+
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
 
@@ -1068,6 +1081,17 @@ function initialize() {
       }
     } catch (err) {
       log.warn("[shutdown] managed-browser supervisor failed", err);
+    }
+
+    // Managed-browser cache: clear-on-exit preference (FR-CACHE-014).
+    // Runs AFTER the supervisor stopped sessions so scopes are released.
+    try {
+      const settings = await new ManagedBrowserSettingsModule().getEffectiveSettings();
+      if (settings.clearCacheOnExit) {
+        await getDefaultManagedBrowserCacheModule().queueAllForShutdown();
+      }
+    } catch (err) {
+      log.warn("[shutdown] managed-browser cache clear-on-exit failed", err);
     }
 
     // WS-4 R4.5: clean up the contact-extraction worker on app quit

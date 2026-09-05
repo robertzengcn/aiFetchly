@@ -225,6 +225,31 @@ export class ManagedBrowserModule {
   /** Wired by the IPC layer: forwards sanitized chat notices to the renderer. */
   private externalNoticeSink: ((notice: SafeBrowserChatNotice) => void) | null =
     null;
+  /** Wired by the IPC layer: coarse action progress to the renderer. */
+  private externalProgressSink:
+    | ((
+        progress: {
+          readonly sessionId: string;
+          readonly phase: string;
+          readonly completedSteps: number;
+          readonly totalSteps: number | null;
+          readonly messageCode: string;
+        }
+      ) => void)
+    | null = null;
+  /** Wired by the IPC layer: approval requests surfaced to the renderer. */
+  private externalApprovalSink:
+    | ((
+        request: {
+          readonly sessionId: string;
+          readonly riskClass: string;
+          readonly messageKey: string;
+          readonly contentSummary: string | null;
+        }
+      ) => void)
+    | null = null;
+  /** Handoff-window expiry timers per session (FR-P0-013 enforcement). */
+  private readonly handoffTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private now: () => number = Date.now;
 
   constructor(deps: ManagedBrowserModuleDeps = {}) {
@@ -260,6 +285,47 @@ export class ManagedBrowserModule {
   /** Wired by the IPC layer: forwards sanitized chat notices to the renderer. */
   public setNoticeSink(sink: (notice: SafeBrowserChatNotice) => void): void {
     this.externalNoticeSink = sink;
+  }
+
+  /** Wired by the IPC layer: coarse action progress to the renderer. */
+  public setProgressSink(
+    sink: (progress: {
+      readonly sessionId: string;
+      readonly phase: string;
+      readonly completedSteps: number;
+      readonly totalSteps: number | null;
+      readonly messageCode: string;
+    }) => void
+  ): void {
+    this.externalProgressSink = sink;
+  }
+
+  /** Wired by the IPC layer: approval requests to the renderer. */
+  public setApprovalSink(
+    sink: (request: {
+      readonly sessionId: string;
+      readonly riskClass: string;
+      readonly messageKey: string;
+      readonly contentSummary: string | null;
+    }) => void
+  ): void {
+    this.externalApprovalSink = sink;
+  }
+
+  /** Surface an approval request (called by the AI tool layer, §17). */
+  public notifyApprovalRequired(input: {
+    readonly sessionId: string;
+    readonly riskClass: string;
+    readonly contentSummary?: string | null;
+  }): void {
+    if (this.externalApprovalSink) {
+      this.externalApprovalSink({
+        sessionId: input.sessionId,
+        riskClass: input.riskClass,
+        messageKey: "managedBrowser.approval.required",
+        contentSummary: input.contentSummary ?? null,
+      });
+    }
   }
 
   /** Injectable clock for tests only. */
@@ -859,6 +925,18 @@ export class ManagedBrowserModule {
         });
         record.state = "challenge_detected";
         break;
+      case "ACTION_PROGRESS":
+        // Coarse progress only — counts + phase + message code (§14).
+        if (this.externalProgressSink) {
+          this.externalProgressSink({
+            sessionId: record.sessionId,
+            phase: event.phase,
+            completedSteps: event.completedSteps,
+            totalSteps: event.totalSteps,
+            messageCode: event.messageCode,
+          });
+        }
+        break;
       case "CACHE_OPENED":
         // Active-scope registry (§13.6): exactly one Chrome per cache scope.
         this.cacheModule.onCacheOpened({
@@ -899,6 +977,7 @@ export class ManagedBrowserModule {
     // Safety net: release any cache-scope claim even if CACHE_RELEASED was
     // never delivered (worker crash mid-session, §13.6).
     this.cacheModule.onSessionTerminal(sessionId);
+    this.clearHandoffTimer(sessionId);
     this.sessions.delete(sessionId);
   }
 
@@ -997,11 +1076,56 @@ export class ManagedBrowserModule {
       MANAGED_BROWSER_TIMEOUTS.manualLoginHandoffMaxMs;
     const target = this.now() + MANAGED_BROWSER_TIMEOUTS.manualLoginHandoffMs;
     record.handoffExpiresAtEpochMs = Math.min(target, cap);
+    this.scheduleHandoffExpiry(record);
+  }
+
+  /**
+   * FR-P0-013 enforcement: when the handoff/login window lapses while the
+   * session is still waiting on the user, stop the session (cancelled) and
+   * publish the localized notice.
+   */
+  private scheduleHandoffExpiry(record: ActiveSessionRecord): void {
+    this.clearHandoffTimer(record.sessionId);
+    const expiresAt = record.handoffExpiresAtEpochMs;
+    if (expiresAt === null) {
+      return;
+    }
+    const delay = Math.max(0, expiresAt - this.now());
+    const timer = setTimeout(() => {
+      this.handoffTimers.delete(record.sessionId);
+      const current = this.sessions.get(record.sessionId);
+      if (!current || current !== record) {
+        return;
+      }
+      if (
+        current.state !== "handoff" &&
+        current.state !== "user_login_in_progress"
+      ) {
+        return;
+      }
+      if (
+        current.handoffExpiresAtEpochMs !== null &&
+        this.now() < current.handoffExpiresAtEpochMs
+      ) {
+        return; // extended meanwhile — a fresh timer was scheduled
+      }
+      void this.stop(record.sessionId, "cancelled").catch(() => undefined);
+    }, delay);
+    this.handoffTimers.set(record.sessionId, timer);
+  }
+
+  private clearHandoffTimer(sessionId: string): void {
+    const timer = this.handoffTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.handoffTimers.delete(sessionId);
+    }
   }
 
   private clearHandoffWindow(record: ActiveSessionRecord): void {
     record.handoffBaseAtEpochMs = null;
     record.handoffExpiresAtEpochMs = null;
+    this.clearHandoffTimer(record.sessionId);
   }
 
   /**

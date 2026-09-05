@@ -20,6 +20,8 @@ vi.mock("@/service/AiFeatureGate", () => ({
 const browserModuleSpies = {
   setStatusSink: vi.fn(),
   setNoticeSink: vi.fn(),
+  setProgressSink: vi.fn(),
+  setApprovalSink: vi.fn(),
   listEligibleAccounts: vi.fn(async () => [
     { accountId: 101, platformId: 2, accountLabel: "My Channel" },
   ]),

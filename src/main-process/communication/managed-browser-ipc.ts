@@ -16,6 +16,8 @@ import {
   MANAGED_BROWSER_CLEAR_CACHE,
   MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_STATUS_EVENT,
+  MANAGED_BROWSER_PROGRESS_EVENT,
+  MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CHAT_NOTICE_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
@@ -89,6 +91,12 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   cacheModule.setNoticeSink(forwardNotice);
   cacheModule.setProgressSink((progress) =>
     sendToRenderer(win, MANAGED_BROWSER_CACHE_PROGRESS_EVENT, progress)
+  );
+  browserModule.setProgressSink((progress) =>
+    sendToRenderer(win, MANAGED_BROWSER_PROGRESS_EVENT, progress)
+  );
+  browserModule.setApprovalSink((request) =>
+    sendToRenderer(win, MANAGED_BROWSER_APPROVAL_EVENT, request)
   );
 
   // --- AI-facing session channels (USER_AI_ENABLED checked FIRST) -------

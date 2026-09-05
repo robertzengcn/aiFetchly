@@ -129,6 +129,12 @@ export interface BrowserModuleLike {
     sessionId: string,
     reason?: "user_stop" | "cancelled"
   ): Promise<SafeManagedBrowserStatus>;
+  /** Surface an approval request to the renderer (optional for fakes). */
+  notifyApprovalRequired?(input: {
+    sessionId: string;
+    riskClass: string;
+    contentSummary?: string | null;
+  }): void;
 }
 
 /** Prefix stamped on every observation-derived payload (§14). */
@@ -364,7 +370,11 @@ export class ManagedBrowserAiToolService {
     if (assessment.routing === "handoff") {
       await this.requireHandoff(parsed.data.session_id, assessment);
     }
-    if (assessment.requiresApproval && !context.skipPermissionCheck) {
+    this.browserModule.notifyApprovalRequired?.({
+        sessionId: parsed.data.session_id,
+        riskClass: assessment.riskClass,
+      });
+      if (assessment.requiresApproval && !context.skipPermissionCheck) {
       throw new ManagedBrowserAiToolError(
         "approval_required",
         assessment.riskClass,
