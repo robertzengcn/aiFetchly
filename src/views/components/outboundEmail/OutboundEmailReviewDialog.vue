@@ -320,6 +320,7 @@ async function onSend(): Promise<void> {
     } else {
       sendSuccess.value = true;
       emit("sent", props.batchId, result.attemptId);
+      emit("update:modelValue", false);
       await refreshStatus();
     }
   } catch (e) {

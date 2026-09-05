@@ -148,6 +148,11 @@ async function seedAuthorizedBatch(): Promise<{
 }
 
 describe("start_email_send_task authorized routing (RC4)", () => {
+  it("creates outbound drafts without a separate permission decision", () => {
+    const draftSkill = SkillRegistry.getSkill("draft_outbound_email_batch");
+    expect(draftSkill?.requiresConfirmation).toBe(false);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

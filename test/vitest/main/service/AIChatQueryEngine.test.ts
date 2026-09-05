@@ -872,6 +872,64 @@ describe("AIChatQueryEngine", () => {
       // The metadata-only role:tool message is present too.
       expect(serialized).toContain('"role":"tool"');
     });
+
+    it("preserves outbound intent context when continuing after draft approval", async () => {
+      let resumedInput: AIChatQueryLoopInput | undefined;
+      const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
+        resumedInput = input;
+        return {
+          type: "completed" as const,
+          conversationId: "v2-outbound",
+          assistantMessageId: "assistant-outbound",
+          fullContent: "done",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult;
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+
+      (
+        engine as unknown as {
+          pendingPermissions: Map<string, unknown>;
+        }
+      ).pendingPermissions.set("v2-outbound", {
+        conversationId: "v2-outbound",
+        assistantMessageId: "assistant-outbound",
+        conversationMessages: [
+          { role: "user", content: "yes, send it" },
+        ] as OpenAIChatMessage[],
+        abortController: new AbortController(),
+        request: { message: "yes, send it" },
+        openAITools: [],
+        nextRound: 2,
+        toolCallId: "draft-call",
+        toolName: "draft_outbound_email_batch",
+        toolArguments: { service_ids: [1] },
+        sourceUserMessageId: "user-confirmation-message",
+        intentDecisionId: 42,
+        planContext: undefined,
+        eventSink: { emit: vi.fn() },
+        toolCatalogState: undefined,
+      });
+
+      vi.mocked(SkillExecutor.execute).mockResolvedValue({
+        tool_call_id: "draft-call",
+        tool_name: "draft_outbound_email_batch",
+        success: true,
+        result: { success: true, batchId: 4, batchHash: "a".repeat(64) },
+        execution_time_ms: 5,
+      });
+
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "draft-call",
+        conversationId: "v2-outbound",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(resumedInput?.sourceUserMessageId).toBe(
+        "user-confirmation-message"
+      );
+      expect(resumedInput?.intentDecisionId).toBe(42);
+    });
   });
 });
 

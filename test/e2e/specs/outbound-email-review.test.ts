@@ -12,8 +12,8 @@
  *      ("Unexpected socket close") — neither a success nor a definite
  *      pre-acceptance rejection — and the pipeline must land on
  *      delivery_unknown and NEVER auto-retry it (FR-019).
- *   2. The fake AI calls draft_outbound_email_batch; the permission card gates
- *      it; "Allow once" runs the tool against the isolated per-test database.
+ *   2. The fake AI calls draft_outbound_email_batch, which prepares the
+ *      reviewable batch without a separate permission decision.
  *   3. The tool result renders the batch card; "Review" opens the review
  *      dialog (§18).
  *   4. Approve reruns preflight and creates the exact-draft authorization
@@ -129,15 +129,14 @@ async function seedDroppingSmtpService(
 
 /**
  * Full draft flow: open the chat, warm the conversation with a plain turn,
- * then make the fake AI call draft_outbound_email_batch (gated by the
- * permission card). Returns once the user has approved execution and the
- * follow-up turn ("Done.") completed, with the tool result rendered.
+ * then make the fake AI call draft_outbound_email_batch. Returns once the
+ * follow-up turn ("Done.") completes with the tool result rendered.
  */
 async function draftBatchViaTool(
   app: LaunchedApp,
   fakeAi: FakeOpenAiController,
   serviceId: number
-): Promise<void> {
+): Promise<number> {
   await openChat(app);
   await fakeAi.setScenario("stream-text");
   await sendUnique(app, "e2e-outbound-prep");
@@ -165,19 +164,17 @@ async function draftBatchViaTool(
   );
   await sendUnique(app, "e2e-outbound-draft");
 
-  // The permission card gates the automation-category tool before execution.
-  const card = app.mainWindow.getByTestId("ai-chat-permission-card");
-  await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card).toContainText("draft_outbound_email_batch", {
-    timeout: 15_000,
-  });
-  await app.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
-
-  // Tool executed -> the fake server answers the continuation with "Done."
+  // Draft preparation is non-sending, so it executes without a permission
+  // card. The fake server answers the continuation with "Done."
   await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
     "Done.",
     { timeout: 30_000 }
   );
+  const reviewAction = app.mainWindow.getByTestId("outbound-batch-review");
+  await expect(reviewAction).toBeVisible({ timeout: 15_000 });
+  const batchId = await reviewAction.getAttribute("data-batch-id");
+  expect(batchId, "review action did not expose its batch id").toMatch(/^\d+$/);
+  return Number(batchId);
 }
 
 test.describe("Outbound email review → approve → send (Electron integration)", () => {
@@ -221,7 +218,7 @@ test.describe("Outbound email review → approve → send (Electron integration)
     const smtp = await startDroppingSmtpServer();
     try {
       const serviceId = await seedDroppingSmtpService(aiApp, smtp.port);
-      await draftBatchViaTool(aiApp, fakeAi, serviceId);
+      const batchId = await draftBatchViaTool(aiApp, fakeAi, serviceId);
 
       // Open the review dialog from the batch card.
       await aiApp.mainWindow.getByTestId("outbound-batch-review").click();
@@ -245,27 +242,52 @@ test.describe("Outbound email review → approve → send (Electron integration)
       // and fails mid-connection ("Unexpected socket close") -> retry-unknown
       // -> delivery_unknown (§21).
       await sendBtn.click();
+      await expect(approveBtn).toBeHidden({ timeout: 15_000 });
 
-      // The send-queued success alert appears (attempt claimed + worker started).
+      // The send was claimed and the dialog closed.
       await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toBeVisible();
 
-      // Per-recipient progress row lands on Delivery Unknown with the explicit
-      // no-auto-retry note (FR-019 / §18).
-      const row = aiApp.mainWindow.locator(
-        '[data-testid^="outbound-progress-row-"]'
-      );
-      await expect(row.first()).toBeVisible({ timeout: 60_000 });
-      await expect(row.first()).toContainText("e2e-recipient@example.com");
-      await expect(row.first()).toContainText("Delivery Unknown", {
-        timeout: 60_000,
-      });
-      await expect(row.first()).toContainText(
-        "Status unknown — do not auto-retry."
-      );
-      // No retry control is offered for a delivery_unknown outcome (§18).
-      await expect(
-        row.first().locator('[data-testid^="outbound-progress-retry-"]')
-      ).toHaveCount(0);
+      // Poll the authoritative batch status because delivery progress is
+      // intentionally hidden with the closed dialog.
+      await expect
+        .poll(
+          async () =>
+            await aiApp.mainWindow.evaluate(async (id: number) => {
+              const api = (
+                window as unknown as {
+                  api: {
+                    invoke: (
+                      channel: string,
+                      data?: unknown
+                    ) => Promise<{
+                      status: boolean;
+                      data?: {
+                        batchStatus?: string;
+                        outcomes?: Array<{
+                          recipientAddress?: string;
+                          status?: string;
+                        }>;
+                      };
+                    }>;
+                  };
+                }
+              ).api;
+              const response = await api.invoke("outbound:email:batch:status", {
+                batchId: id,
+              });
+              return response.data;
+            }, batchId),
+          { timeout: 60_000 }
+        )
+        .toMatchObject({
+          batchStatus: "delivery_unknown",
+          outcomes: [
+            {
+              recipientAddress: "e2e-recipient@example.com",
+              status: "delivery_unknown",
+            },
+          ],
+        });
     } finally {
       await smtp.close();
     }

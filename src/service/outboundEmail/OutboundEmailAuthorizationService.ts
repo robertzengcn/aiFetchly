@@ -186,8 +186,8 @@ export class OutboundEmailAuthorizationService {
    * needs to allow the send and the delivery service needs to claim (§15.1).
    *
    * Returns null when the turn has no authorizable batch or the intent is not
-   * send_now — both map to a blocking gate code (draft_required /
-   * authorization_missing), so the send tool never executes.
+   * send_now. A missing batch maps to `draft_required`, so preparation can
+   * continue without asking the user to confirm an already-explicit send.
    *
    * Idempotent across retries: if an active authorization already exists for
    * the batch (the model re-called the send tool after the gate allowed),
