@@ -287,7 +287,7 @@ async function handleImport() {
         const importFailed = /import_failed/i.test(msg);
         importNotice.value = {
             show: true,
-            type: 'error',
+            type: cancelled ? 'info' : 'error',
             message: cancelled
                 ? t('common.import_cancelled')
                 : noRows

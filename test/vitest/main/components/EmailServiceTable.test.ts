@@ -257,6 +257,8 @@ describe("EmailServiceTable import", () => {
     await vi.waitFor(() => {
       const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
       expect(snackbar.exists()).toBe(true);
+      // Cancel is a benign outcome per the design spec — info, not error.
+      expect(snackbar.attributes("data-type")).toBe("info");
       expect(snackbar.attributes("data-message")).toContain("Import cancelled");
     });
   });
