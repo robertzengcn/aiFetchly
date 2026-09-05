@@ -14,6 +14,7 @@ import {
   MANAGED_BROWSER_GET_CACHE_STATUS,
   MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
   MANAGED_BROWSER_CLEAR_CACHE,
+  MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_STATUS_EVENT,
   MANAGED_BROWSER_CHAT_NOTICE_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
@@ -35,6 +36,7 @@ import {
   managedBrowserGetEffectiveSettingsInputSchema,
   managedBrowserGetCacheStatusInputSchema,
   managedBrowserClearCacheInputSchema,
+  managedBrowserUpdateSettingsInputSchema,
 } from "@/schemas/ipc/managedBrowser";
 import { getDefaultManagedBrowserModule } from "@/modules/ManagedBrowserModule";
 import {
@@ -42,6 +44,7 @@ import {
   ManagedBrowserCacheError,
 } from "@/modules/ManagedBrowserCacheModule";
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
+import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import type { SafeBrowserChatNotice } from "@/entityTypes/managedBrowserTypes";
 
 /**
@@ -160,6 +163,12 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   );
 
   // --- Management channels (NOT AI-gated; settings page) ----------------
+  registerValidatedHandler(
+    MANAGED_BROWSER_UPDATE_SETTINGS,
+    managedBrowserUpdateSettingsInputSchema,
+    async (input) => new ManagedBrowserSettingsModule().updatePreferences(input)
+  );
+
   registerValidatedHandler(
     MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
     managedBrowserGetEffectiveSettingsInputSchema,

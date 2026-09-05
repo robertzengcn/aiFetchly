@@ -14,9 +14,14 @@ import {
   MANAGED_BROWSER_GET_CACHE_STATUS,
   MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
   MANAGED_BROWSER_CLEAR_CACHE,
+  MANAGED_BROWSER_UPDATE_SETTINGS,
+  MANAGED_BROWSER_STATUS_EVENT,
+  MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import type {
   EffectiveManagedBrowserSettings,
+  SafeBrowserChatNotice,
   SafeManagedBrowserCacheClearResult,
   SafeManagedBrowserCacheStatus,
   SafeManagedBrowserStatus,
@@ -61,7 +66,9 @@ export async function getManagedBrowserStatus(
   return await windowInvoke(MANAGED_BROWSER_STATUS, { sessionId });
 }
 
-export async function requestHandoff(sessionId: string): Promise<SafeManagedBrowserStatus> {
+export async function requestHandoff(
+  sessionId: string
+): Promise<SafeManagedBrowserStatus> {
   return await windowInvoke(MANAGED_BROWSER_HANDOFF, { sessionId });
 }
 
@@ -108,6 +115,15 @@ export async function getEffectiveBrowserSettings(): Promise<EffectiveManagedBro
   return await windowInvoke(MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS, {});
 }
 
+export async function updateBrowserPreferences(patch: {
+  browserEnabled?: boolean;
+  cacheEnabled?: boolean;
+  cacheMaxSizeMb?: number;
+  clearCacheOnExit?: boolean;
+}): Promise<EffectiveManagedBrowserSettings> {
+  return await windowInvoke(MANAGED_BROWSER_UPDATE_SETTINGS, patch);
+}
+
 export async function getCacheStatus(input: {
   scope: "account" | "all";
   accountId?: number;
@@ -144,4 +160,51 @@ export async function clearCache(input: {
   confirmationId: string;
 }): Promise<SafeManagedBrowserCacheClearResult> {
   return await windowInvoke(MANAGED_BROWSER_CLEAR_CACHE, input);
+}
+
+// ---------------------------------------------------------------------------
+// Main → renderer event subscriptions (unsubscribe via the returned fn)
+// ---------------------------------------------------------------------------
+
+export function onManagedBrowserStatusChanged(
+  callback: (status: SafeManagedBrowserStatus) => void
+): () => void {
+  const handler = (status: unknown): void => {
+    callback(status as SafeManagedBrowserStatus);
+  };
+  window.api.receive(MANAGED_BROWSER_STATUS_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_STATUS_EVENT, handler);
+  };
+}
+
+export function onManagedBrowserChatNotice(
+  callback: (notice: SafeBrowserChatNotice) => void
+): () => void {
+  const handler = (notice: unknown): void => {
+    callback(notice as SafeBrowserChatNotice);
+  };
+  window.api.receive(MANAGED_BROWSER_CHAT_NOTICE_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_CHAT_NOTICE_EVENT, handler);
+  };
+}
+
+export interface ManagedBrowserCacheProgress {
+  readonly scope: "account" | "all";
+  readonly phase: "scanning" | "deleting" | "done" | "failed";
+  readonly approximateBytes: number;
+  readonly reasonCode: string | null;
+}
+
+export function onManagedBrowserCacheProgress(
+  callback: (progress: ManagedBrowserCacheProgress) => void
+): () => void {
+  const handler = (progress: unknown): void => {
+    callback(progress as ManagedBrowserCacheProgress);
+  };
+  window.api.receive(MANAGED_BROWSER_CACHE_PROGRESS_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_CACHE_PROGRESS_EVENT, handler);
+  };
 }

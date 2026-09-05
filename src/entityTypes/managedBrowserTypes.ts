@@ -215,6 +215,9 @@ export interface SafeManagedBrowserStatus {
   readonly sessionId: string;
   readonly accountId: number;
   readonly platformId: number;
+  /** Safe display labels (never emails when a name exists, §8.4). */
+  readonly accountLabel: string;
+  readonly platformLabel: string;
   readonly state: ManagedBrowserSessionState;
   readonly currentOrigin: string | null;
   readonly pageTitle: string | null;

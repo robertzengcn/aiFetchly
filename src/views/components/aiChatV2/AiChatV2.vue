@@ -187,6 +187,11 @@
         @edit-generated-image="onEditGeneratedImage"
       />
 
+      <!-- Managed-browser session card: shows the live social-browser
+           session (account, state, handoff controls) whenever one is
+           active. Renders nothing when no session is running. -->
+      <ManagedBrowserSessionCard />
+
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
            into the message flow (see handleApprovePlan et al.). -->
@@ -901,6 +906,7 @@ import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
+import ManagedBrowserSessionCard from "./ManagedBrowserSessionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";

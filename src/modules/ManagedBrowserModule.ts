@@ -974,6 +974,8 @@ export class ManagedBrowserModule {
       sessionId: record.sessionId,
       accountId: record.accountId,
       platformId: record.platformId,
+      accountLabel: record.accountLabel,
+      platformLabel: record.platformLabel,
       state: record.state,
       currentOrigin: record.currentOrigin,
       pageTitle: record.pageTitle,

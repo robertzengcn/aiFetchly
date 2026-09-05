@@ -616,6 +616,8 @@ export const MANAGED_BROWSER_GET_CACHE_STATUS =
 export const MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION =
   "managed-browser:issue-clear-confirmation";
 export const MANAGED_BROWSER_CLEAR_CACHE = "managed-browser:clear-cache";
+export const MANAGED_BROWSER_UPDATE_SETTINGS =
+  "managed-browser:update-settings";
 // Event channels (main → renderer)
 export const MANAGED_BROWSER_STATUS_EVENT = "managed-browser:status-changed";
 export const MANAGED_BROWSER_PROGRESS_EVENT = "managed-browser:progress";

@@ -229,6 +229,22 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       aiDescription: "Configure application-wide system settings",
     },
     {
+      routeName: "system_setting_managed_browser",
+      path: "/systemsetting/managed-browser",
+      titleKey: "route.managed_browser",
+      visible: false,
+      aiNavigable: true,
+      aiAliases: [
+        "managed browser settings",
+        "browser settings",
+        "browser cache settings",
+        "clear browser cache",
+        "social browser settings",
+      ],
+      aiDescription:
+        "Configure the managed social browser enablement and cache; clear the browser cache",
+    },
+    {
       routeName: "Searchform",
       path: "/search/form",
       titleKey: "route.search_scraper",

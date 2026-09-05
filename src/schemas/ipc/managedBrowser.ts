@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
+import { MANAGED_BROWSER_CACHE_DEFAULTS } from "@/config/managedBrowser";
 
 /**
  * Managed-browser IPC input schemas (technical design §22.1).
@@ -118,6 +119,24 @@ export const managedBrowserClearCacheInputSchema = lazySchema(() =>
       confirmationId: z.string().min(8).max(96),
     }),
   ])
+);
+
+export const managedBrowserUpdateSettingsInputSchema = lazySchema(() =>
+  z
+    .strictObject({
+      browserEnabled: z.boolean().optional(),
+      cacheEnabled: z.boolean().optional(),
+      cacheMaxSizeMb: z
+        .number()
+        .int()
+        .min(MANAGED_BROWSER_CACHE_DEFAULTS.minMaxSizeMb)
+        .max(MANAGED_BROWSER_CACHE_DEFAULTS.maxMaxSizeMb)
+        .optional(),
+      clearCacheOnExit: z.boolean().optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0, {
+      message: "at least one preference is required",
+    })
 );
 
 // ---------------------------------------------------------------------------

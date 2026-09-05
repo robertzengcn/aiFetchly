@@ -82,6 +82,13 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     routeNames: ["system_setting_ai_provider"],
   },
   {
+    surfaceId: "settings-managed-browser",
+    family: "settings",
+    template: "settings",
+    state: "shell",
+    routeNames: ["system_setting_managed_browser"],
+  },
+  {
     surfaceId: "settings-skills",
     family: "settings",
     template: "settings",
@@ -465,7 +472,7 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
 ];
 
 /** Total in-scope surface count (PRD acceptance criterion 3). */
-export const IN_SCOPE_SURFACE_COUNT = 50;
+export const IN_SCOPE_SURFACE_COUNT = 51;
 
 /** Look up the registry entry owning a route name. */
 export function findSurfaceByRouteName(

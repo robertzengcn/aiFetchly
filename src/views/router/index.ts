@@ -148,6 +148,27 @@ export const constantRoutes: RouteRecordRaw[] = [
         children: [],
       },
       {
+        path: "managed-browser",
+        name: "system_setting_managed_browser",
+        meta: {
+          title: "route.managed_browser",
+          icon: "mdi-monitor",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: [
+            "managed browser settings",
+            "browser settings",
+            "browser cache settings",
+            "social browser settings",
+          ],
+          aiDescription:
+            "Configure the managed social browser and its cache; clear browser cache",
+        },
+        component: () => import("@/views/pages/systemsetting/managed_browser.vue"),
+        children: [],
+      },
+      {
         path: "skills",
         name: "system_setting_skills",
         meta: {
