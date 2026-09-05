@@ -193,6 +193,32 @@ describe("OutboundEmailReviewDialog", () => {
     expect(wrapper.emitted("sent")).toBeTruthy();
   });
 
+  it("requests the dialog to close after a successful send", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="outbound-review-approve"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="outbound-review-send"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+  });
+
+  it("keeps the dialog open when the worker fails to start", async () => {
+    vi.mocked(sendOutboundEmailBatch).mockResolvedValue({
+      status: "worker_start_failed",
+      attemptId: 200,
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="outbound-review-approve"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="outbound-review-send"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+  });
+
   it("discards the batch and emits discarded", async () => {
     const wrapper = mountDialog();
     await flushPromises();

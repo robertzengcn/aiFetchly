@@ -37,6 +37,7 @@
         variant="flat"
         size="small"
         data-testid="outbound-batch-review"
+        :data-batch-id="batchId"
         @click="$emit('review-requested', batchId)"
       >
         <v-icon start size="small">mdi-eye-outline</v-icon>
