@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-service-list"
+      title-key="route.email_service"
+      content-width="full"
+    >
        
 <EmailServiceTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import { ref } from 'vue';
 import EmailServiceTable from '@/views/pages/emailservice/widgets/EmailServiceTable.vue'

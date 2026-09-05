@@ -159,6 +159,13 @@ jobs:
           set -euo pipefail
           yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-wix
 
+      - name: Build EXE for local testing
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-squirrel
+
       - name: Validate master Windows installers
         if: ${{ github.event_name == 'push' }}
         shell: pwsh
@@ -167,11 +174,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $msixFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msix)
           $msiFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msi)
+          $exeFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.exe |
+            Where-Object { $_.Name -notmatch 'uninstall' })
           if ($msixFiles.Count -eq 0) {
             throw "Master build did not produce an MSIX package."
           }
           if ($msiFiles.Count -eq 0) {
             throw "Master build did not produce an MSI package."
+          }
+          if ($exeFiles.Count -eq 0) {
+            throw "Master build did not produce an EXE package."
           }
 
       - name: Upload Windows installers
@@ -936,14 +948,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Windows Squirrel auto-update assets + installer
-          find windows-assets -type f \( -name 'RELEASES' -o -name '*.nupkg' -o -name '*.exe' \) -exec cp {} release-assets/ \;
+          # Windows Squirrel auto-update assets + installers
+          find windows-assets -type f \( \
+            -name 'RELEASES' -o -name '*.nupkg' -o -name '*.exe' -o -name '*.msi' \
+          \) -exec cp {} release-assets/ \;
           # macOS auto-update ZIP + DMG
           find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
           # Local-AI-runtime catalog + archives
           find runtime-assets -type f -exec cp {} release-assets/ \;
           echo "Collected release assets:"
           ls -la release-assets
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-release-checksums.js \
+            --root release-assets \
+            --output release-assets/SHA256SUMS.txt \
+            --notes-file release-notes.md \
+            --title "AiFetchly $VERSION" \
+            --preamble "Production build from workflow_dispatch. Review and publish manually on GitHub."
 
       - name: Create draft GitHub Release
         shell: bash
@@ -959,11 +984,12 @@ jobs:
             fi
             echo "Release $TAG exists as a draft; uploading assets (--clobber)."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file release-notes.md
           else
             gh release create "$TAG" release-assets/* \
               -R "$GITHUB_REPOSITORY" \
               --title "AiFetchly $VERSION" \
-              --generate-notes \
+              --notes-file release-notes.md \
               --draft
           fi
           echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."
@@ -971,12 +997,13 @@ jobs:
   # ===========================================================================
   # Draft GitHub Release on every push to master (PRD FR-9.5 variant).
   # The build jobs above run on push too: build-macos produces a signed
-  # ZIP/DMG and build-windows produces Store-mode MSIX + an MSI. This job
-  # attaches those to a DRAFT GitHub Release tagged v<version>. Drafts never
-  # reach update.electronjs.org, so this is purely for manual review before an
-  # official release is published. The automatic production release path stays
-  # with the manual workflow_dispatch build above; runtime archives are
-  # dispatch-only and are NOT attached here.
+  # ZIP/DMG and build-windows produces Store-mode MSIX plus WiX MSI and
+  # Squirrel Setup.exe. This job attaches those packages, SHA256SUMS.txt,
+  # and a checksum table in the notes to a DRAFT GitHub Release tagged
+  # v<version>. Drafts never reach update.electronjs.org, so this is purely
+  # for manual review before an official release is published. The automatic
+  # production release path stays with the manual workflow_dispatch build
+  # above; runtime archives are dispatch-only and are NOT attached here.
   # ===========================================================================
   draft-release-on-push:
     if: ${{ github.event_name == 'push' }}
@@ -990,6 +1017,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
 
       - name: Download Windows build
         uses: actions/download-artifact@v8
@@ -1008,10 +1040,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Windows push builds are Store-mode MSIX plus an MSI for local
-          # testing (no Squirrel RELEASES/nupkg, so the Squirrel validation
-          # from the production publish job is intentionally skipped here).
-          find windows-assets -type f \( -name '*.msix' -o -name '*.msi' \) -exec cp {} release-assets/ \;
+          # Windows push builds are Store-mode MSIX plus WiX MSI and Squirrel
+          # Setup.exe (with RELEASES / nupkg) for local testing and GitHub
+          # Releases downloads.
+          find windows-assets -type f \( \
+            -name '*.msix' -o -name '*.msi' -o -name '*.exe' \
+            -o -name 'RELEASES' -o -name '*.nupkg' \
+          \) -exec cp {} release-assets/ \;
           # macOS push builds produce the signed auto-update ZIP and a DMG.
           find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
           if [ -z "$(ls -A release-assets)" ]; then
@@ -1020,6 +1055,17 @@ jobs:
           fi
           echo "Collected release assets:"
           ls -la release-assets
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-release-checksums.js \
+            --root release-assets \
+            --output release-assets/SHA256SUMS.txt \
+            --notes-file release-notes.md \
+            --title "AiFetchly $VERSION" \
+            --preamble "Draft release built from a push to master. Review and publish manually on GitHub."
 
       - name: Create draft GitHub Release
         shell: bash
@@ -1035,11 +1081,12 @@ jobs:
             fi
             echo "Release $TAG exists as a draft; uploading assets (--clobber)."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file release-notes.md
           else
             gh release create "$TAG" release-assets/* \
               -R "$GITHUB_REPOSITORY" \
               --title "AiFetchly $VERSION" \
-              --notes "Draft release built from a push to master. Review and publish manually on GitHub." \
+              --notes-file release-notes.md \
               --draft
           fi
           echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."

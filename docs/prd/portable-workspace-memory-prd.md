@@ -1258,23 +1258,23 @@ The following decisions should be confirmed during engineering planning:
 
 ## 28. Launch Checklist
 
-- [ ] Product decisions in section 27 resolved and recorded.
-- [ ] File schema examples validated by parser tests.
-- [ ] Existing workspace-memory regression suite passes.
-- [ ] Workspace watcher worker remains database-free.
-- [ ] Cross-workspace and forged-scope security tests pass.
-- [ ] Atomic write and crash recovery tests pass.
-- [ ] Invalid-file last-valid-projection behavior verified.
-- [ ] Conflict UI and review-policy flows tested.
-- [ ] Git warning and no-auto-publish behavior verified.
-- [ ] `AGENTS.md` and `CLAUDE.md` managed edits preserve unrelated content.
-- [ ] All new UI strings translated into six languages.
-- [ ] Component test gate passes.
-- [ ] Critical Playwright flows pass.
-- [ ] Upgrade and rollback behavior verified with existing SQLite-only data.
-- [ ] Scoped memory-identity uniqueness migration and intentional-fork behavior verified.
-- [ ] Privacy review confirms no local-only fields are exported or telemetered.
-- [ ] Documentation for external agents is included in generated `memory/README.md`.
+- [x] Product decisions in section 27 resolved and recorded.
+- [x] File schema examples validated by parser tests.
+- [x] Existing workspace-memory regression suite passes.
+- [x] Workspace watcher worker remains database-free.
+- [x] Cross-workspace and forged-scope security tests pass.
+- [x] Atomic write and crash recovery tests pass.
+- [x] Invalid-file last-valid-projection behavior verified.
+- [x] Conflict UI and review-policy flows tested.
+- [x] Git warning and no-auto-publish behavior verified.
+- [x] `AGENTS.md` and `CLAUDE.md` managed edits preserve unrelated content.
+- [x] All new UI strings translated into six languages.
+- [x] Component test gate passes.
+- [x] Critical Playwright flows pass.
+- [x] Upgrade and rollback behavior verified with existing SQLite-only data.
+- [x] Scoped memory-identity uniqueness migration and intentional-fork behavior verified.
+- [x] Privacy review confirms no local-only fields are exported or telemetered.
+- [x] Documentation for external agents is included in generated `memory/README.md`.
 
 ## 29. Final Recommendation
 

@@ -82,6 +82,15 @@ vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
 
+const { applyAutoDreamFileMutations } = vi.hoisted(() => ({
+  applyAutoDreamFileMutations: vi.fn(),
+}));
+vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
+  PortableWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+    applyAutoDreamFileMutations,
+  })),
+}));
+
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 
 const WS = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -139,6 +148,22 @@ describe("AIWorkspaceAutoDreamService", () => {
     recoverStale.mockResolvedValue(0);
     listActive.mockResolvedValue([]);
     applyPlanAndCompleteRun.mockResolvedValue(undefined);
+    applyAutoDreamFileMutations.mockImplementation(
+      async (
+        _scope: unknown,
+        plan: {
+          ok: boolean;
+          create: unknown[];
+          update: unknown[];
+          archive: unknown[];
+        }
+      ) => ({
+        sqlitePlan: plan,
+        fileCreated: 0,
+        fileUpdated: 0,
+        fileArchived: 0,
+      })
+    );
     collect.mockResolvedValue({
       packets: [],
       chatConversationCount: 0,
@@ -385,5 +410,109 @@ describe("AIWorkspaceAutoDreamService", () => {
     // Create is scoped to the resolved workspaceKey, never a model-supplied other key.
     expect(arg.plan.create[0]!.workspaceKey).toBe(WS);
     expect(arg.plan.create[0]!.type).toBe("workflow");
+  });
+
+  it("packs workspace packets into multiple bounded batches (SMBW-007)", async () => {
+    // A tiny capability window forces the four packets into multiple batches.
+    const tinySvc = new AIWorkspaceAutoDreamService({
+      completeLightweight,
+      isAIEnabled: () => true,
+      isAutoDreamEnabled: async () => true,
+      getSmallModelCapability: async () => ({
+        available: true,
+        context_size: 8000,
+      }),
+    });
+    const big = (id: string) => ({
+      sourceKind: "chat_v2" as const,
+      sourceId: id,
+      updatedAt: iso(now()),
+      title: id,
+      messages: Array.from({ length: 5 }, (_unused, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: "x".repeat(2000),
+      })),
+      workspace: {
+        workspaceId: 1,
+        workspaceKey: WS,
+        workspaceRoot: "/p/a",
+        displayName: "a",
+      },
+    });
+    collect.mockResolvedValue({
+      packets: [big("c1"), big("c2"), big("c3"), big("c4")],
+      chatConversationCount: 4,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    completeChat.mockResolvedValue({
+      choices: [{ message: { content: "{}" } }],
+      model: "small-resolved",
+    });
+
+    await tinySvc.runNow({ force: true });
+    // Multiple batches ⇒ multiple lightweight calls.
+    expect(completeLightweight.mock.calls.length).toBeGreaterThan(1);
+    // Exactly one atomic apply with the merged plan.
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unprocessable workspace packet fails the run without a model call (SMBW-007)", async () => {
+    const tinySvc = new AIWorkspaceAutoDreamService({
+      completeLightweight,
+      isAIEnabled: () => true,
+      isAutoDreamEnabled: async () => true,
+      getSmallModelCapability: async () => ({
+        available: true,
+        context_size: 100, // too small for any useful packet
+      }),
+    });
+    collect.mockResolvedValue({
+      packets: [
+        {
+          sourceKind: "chat_v2" as const,
+          sourceId: "c-huge",
+          updatedAt: iso(now()),
+          title: "huge",
+          messages: [{ id: "m0", role: "user", content: "x".repeat(10_000) }],
+          workspace: {
+            workspaceId: 1,
+            workspaceKey: WS,
+            workspaceRoot: "/p/a",
+            displayName: "a",
+          },
+        },
+      ],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    getByRunId.mockResolvedValue({ ...runView, status: "failed" });
+
+    const r = await tinySvc.runNow({ force: true });
+    expect(r[0]!.status).toBe("failed");
+    expect(completeLightweight).not.toHaveBeenCalled();
+    expect(failRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("oversized_packet")
+    );
+    expect(applyPlanAndCompleteRun).not.toHaveBeenCalled();
+  });
+
+  it("passes conversationId through to the collector on a manual run", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "conv-x")],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    await svc(true, false).runNow({
+      force: true,
+      conversationId: "conv-x",
+    });
+    expect(collect).toHaveBeenCalledWith(
+      expect.objectContaining({ focusConversationId: "conv-x" })
+    );
   });
 });

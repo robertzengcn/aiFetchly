@@ -65,15 +65,21 @@ vi.mock("@/modules/WorkspaceModule", () => ({
   })),
 }));
 
+// The production singleton pulls portable-memory + config-manager graphs
+// (including CJS `validator`) that this IPC unit test does not exercise.
+vi.mock("@/service/workspaceWatch/WorkspaceWatchManagerSingleton", () => ({
+  markWorkspaceApproved: vi.fn(),
+}));
+
 // --- Imports (after mocks) --------------------------------------------------
 
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
+import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
 import {
   AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
   AIFETCHLY_WORKSPACE_TRUST_PREVIEW,
   AIFETCHLY_WORKSPACE_TRUST_SET,
-  AIFETCHLY_CONFIG_CHANGED,
 } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManager";
@@ -113,6 +119,7 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
   });
 
   afterEach(() => {
+    setApprovedWorkspaceAcquireHook(null);
     resetElectronMocks();
   });
 
@@ -139,6 +146,25 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
     expect(r.data).toEqual({ workspaceId: "42" });
   });
 
+  it("acquire invokes the approved-workspace hook with the resolved root", async () => {
+    const hook = vi.fn();
+    setApprovedWorkspaceAcquireHook(hook);
+    try {
+      resolverMocks.resolve.mockResolvedValue({
+        workspaceId: 42,
+        rootPath: "/tmp/workspaces/acme",
+      });
+      await mockIpcMain.callHandler(
+        AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
+        {},
+        { conversationId: "conv-1" }
+      );
+      expect(hook).toHaveBeenCalledWith("/tmp/workspaces/acme");
+    } finally {
+      setApprovedWorkspaceAcquireHook(null);
+    }
+  });
+
   it("acquire returns null when no approved workspace (CFG-02 fail-closed)", async () => {
     resolverMocks.resolve.mockResolvedValue(null);
     const r = (await mockIpcMain.callHandler(
@@ -159,15 +185,11 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
     // The renderer attempts to override the workspaceRoot. The zod schema
     // only accepts { conversationId, workspaceId } — workspaceRoot is
     // schema-stripped, and the manager MUST receive the resolver's value.
-    await mockIpcMain.callHandler(
-      AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
-      {},
-      {
-        conversationId: "conv-1",
-        workspaceId: "42",
-        workspaceRoot: "/attacker/controlled/path",
-      } as unknown as { conversationId: string }
-    );
+    await mockIpcMain.callHandler(AIFETCHLY_WORKSPACE_WATCH_ACQUIRE, {}, {
+      conversationId: "conv-1",
+      workspaceId: "42",
+      workspaceRoot: "/attacker/controlled/path",
+    } as unknown as { conversationId: string });
     const call = managerMocks.acquire.mock.calls[0][0];
     expect(call.workspaceRoot).toBe("/resolved/path");
     expect(call.workspaceRoot).not.toBe("/attacker/controlled/path");

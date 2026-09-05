@@ -17,9 +17,17 @@ const spies = vi.hoisted(() => ({
   mockUpdate: vi.fn(),
   mockArchive: vi.fn(),
   mockDelete: vi.fn(),
+  mockRunNow: vi.fn(),
 }));
 
-const { mockCreate, mockList, mockUpdate, mockArchive, mockDelete } = spies;
+const {
+  mockCreate,
+  mockList,
+  mockUpdate,
+  mockArchive,
+  mockDelete,
+  mockRunNow,
+} = spies;
 
 vi.mock("@/service/AIWorkspaceMemoryService", () => ({
   AIWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
@@ -29,6 +37,13 @@ vi.mock("@/service/AIWorkspaceMemoryService", () => ({
     archive: spies.mockArchive,
     delete: spies.mockDelete,
   })),
+}));
+
+vi.mock("@/service/AIAutoDreamFactory", () => ({
+  getSharedWorkspaceAutoDreamService: () => ({
+    runNow: spies.mockRunNow,
+    getStatus: vi.fn(),
+  }),
 }));
 
 // Controllable manual-memory toggle (default-on; set "false" to disable writes).
@@ -73,6 +88,7 @@ describe("ai-workspace-memory-ipc", () => {
     state.aiEnabled = "true";
     // Manual-memory toggle defaults to enabled (setting absent → enabled).
     mockGetSettingValue.mockResolvedValue(null);
+    mockRunNow.mockRejectedValue(new Error("Workspace auto-dream run skipped"));
     _resetAIWorkspaceMemorySingletonsForTesting();
     registerAIWorkspaceMemoryIpcHandlers();
   });
@@ -182,9 +198,30 @@ describe("ai-workspace-memory-ipc", () => {
       EVENT,
       JSON.stringify({ conversationId: "conv-1" })
     )) as { status: boolean };
-    // AI enabled, but the real service skips when there are no workspace-bound
-    // sources in the test DB → runNow throws "skipped" → denied.
+    // AI enabled, but the service skips when there are no workspace-bound
+    // sources → runNow throws "skipped" → denied.
     expect(r.status).toBe(false);
+    expect(mockRunNow).toHaveBeenCalled();
+  });
+
+  it("run-auto-dream forwards conversationId so the panel summarizes the open workspace", async () => {
+    mockRunNow.mockResolvedValue([
+      {
+        runId: "wrun-1",
+        status: "completed",
+        memoriesCreated: 1,
+      },
+    ]);
+    const r = (await handlers[AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ conversationId: "conv-1", force: true })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    expect(mockRunNow).toHaveBeenCalledWith({
+      force: true,
+      reason: "manual_ipc",
+      conversationId: "conv-1",
+    });
   });
 
   it("manual write handlers are denied when the manual-memory toggle is off", async () => {

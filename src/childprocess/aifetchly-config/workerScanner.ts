@@ -17,6 +17,7 @@ import type {
   WorkspaceConfigScanInput,
 } from "@/service/workspaceWatch/WorkspaceConfigScanner";
 import type { AIFetchlyConfigSnapshot } from "@/entityTypes/aifetchlyConfigTypes";
+import { PortableMemoryFileScanner } from "./PortableMemoryFileScanner";
 
 /**
  * Scan a workspace's `.aifetchly` (+ optional root AGENTS.md) into a typed
@@ -27,7 +28,15 @@ export async function scanWorkspace(
   input: WorkspaceConfigScanInput
 ): Promise<AIFetchlyConfigSnapshot> {
   const scanner = new WorkspaceConfigScanner();
-  return scanner.scan(input);
+  const snapshot = await scanner.scan(input);
+  // Portable-memory scan rides the same snapshot (design §12.4). The scanner
+  // is worker-only and bounded; failures surface as diagnostics + an
+  // incomplete snapshot rather than throwing.
+  const portable = await new PortableMemoryFileScanner().scan({
+    workspaceRoot: input.workspaceRoot,
+    sourceId: snapshot.sourceId,
+  });
+  return { ...snapshot, portableMemory: portable };
 }
 
 export type { WorkspaceConfigScanInput };

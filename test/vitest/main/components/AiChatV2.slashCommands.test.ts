@@ -6,11 +6,24 @@ import {
   streamChatV2Message,
   clearChatV2Conversation,
 } from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
 import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import { createGoal } from "@/views/api/aiChatGoal";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),

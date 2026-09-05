@@ -1,25 +1,15 @@
 <template>
-  <v-container fluid class="insights-page">
-    <header class="insights-page__header">
-      <div>
-        <h1 class="insights-page__title">
-          {{ t("insights.title") || "Insights" }}
-        </h1>
-        <p class="insights-page__subtitle">
-          {{
-            t("insights.subtitle") ||
-            "Review business signals, find prospects, and manage outreach from one workspace."
-          }}
-        </p>
-      </div>
-    </header>
-
-    <div class="insights-page__grid">
-      <v-card
+  <AppPageShell
+    page-id="insights-home"
+    title-key="insights.title"
+    description-key="insights.subtitle"
+    content-width="full"
+  >
+    <div class="landing-section">
+      <div
         v-for="item in insightItems"
         :key="item.path"
-        class="insight-card"
-        elevation="0"
+        class="landing-row"
         tabindex="0"
         role="button"
         :aria-label="item.title"
@@ -27,23 +17,22 @@
         @keydown.enter.prevent="goTo(item.path)"
         @keydown.space.prevent="goTo(item.path)"
       >
-        <div class="insight-card__icon">
-          <v-icon :icon="item.icon" size="28" />
-        </div>
-        <div class="insight-card__content">
-          <h2 class="insight-card__title">{{ item.title }}</h2>
-          <p class="insight-card__description">{{ item.description }}</p>
-        </div>
-        <v-icon class="insight-card__arrow" icon="mdi-arrow-right" size="22" />
-      </v-card>
+        <span class="row-icon" aria-hidden="true">
+          <v-icon :icon="item.icon" size="22" />
+        </span>
+        <span class="row-title">{{ item.title }}</span>
+        <span class="row-value">{{ item.description }}</span>
+        <v-icon class="row-arrow" icon="mdi-arrow-right" size="20" aria-hidden="true" />
+      </div>
     </div>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 interface InsightItem {
   title: string;
@@ -104,155 +93,97 @@ function goTo(path: string): void {
 </script>
 
 <style scoped>
-.insights-page {
-  min-height: calc(100vh - 92px);
-  padding: 32px;
-  background: #f7f8fa;
+.landing-section {
+  max-width: var(--app-width-wide);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-panel);
+  background: var(--app-surface);
+  overflow: hidden;
 }
 
-.insights-page__header {
-  max-width: 1120px;
-  margin: 0 auto 24px;
+.landing-row {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.insights-page__title {
-  margin: 0;
-  color: #172033;
-  font-size: 32px;
-  line-height: 1.2;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.insights-page__subtitle {
-  max-width: 620px;
-  margin: 8px 0 0;
-  color: #5f6b7a;
-  font-size: 15px;
-  line-height: 1.6;
-}
-
-.insights-page__grid {
-  max-width: 1120px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.insight-card {
-  min-height: 156px;
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 24px;
-  gap: 14px;
-  align-items: start;
-  padding: 20px;
-  border: 1px solid rgba(23, 32, 51, 0.08);
-  border-radius: 8px;
-  background: #ffffff;
+  align-items: center;
+  gap: var(--app-space-4);
+  padding: var(--app-space-4) var(--app-space-5);
+  border-bottom: 1px solid var(--app-border);
   cursor: pointer;
-  transition:
-    border-color 0.16s ease,
-    box-shadow 0.16s ease,
-    transform 0.16s ease;
+  transition: background-color var(--app-duration-short) ease;
 }
 
-.insight-card:hover,
-.insight-card:focus-visible {
-  border-color: rgba(var(--v-theme-primary), 0.45);
-  box-shadow: 0 10px 28px rgba(23, 32, 51, 0.1);
-  transform: translateY(-1px);
+.landing-row:last-child {
+  border-bottom: none;
+}
+
+.landing-row:hover,
+.landing-row:focus-visible {
+  background: var(--app-surface-variant);
+}
+
+.landing-row:focus {
   outline: none;
 }
 
-.insight-card__icon {
-  width: 44px;
-  height: 44px;
+.landing-row:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: -2px;
+}
+
+.row-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  color: rgb(var(--v-theme-primary));
-  background: rgba(var(--v-theme-primary), 0.1);
+  border-radius: var(--app-radius-control);
+  color: var(--app-accent);
+  background: var(--app-accent-soft);
 }
 
-.insight-card__content {
-  min-width: 0;
-}
-
-.insight-card__title {
-  margin: 0;
-  color: #172033;
-  font-size: 17px;
-  line-height: 1.35;
+.row-title {
+  flex-shrink: 0;
+  min-width: 220px;
+  color: var(--app-text);
+  font-size: 14px;
   font-weight: 650;
-  letter-spacing: 0;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.insight-card__description {
-  margin: 8px 0 0;
-  color: #667085;
-  font-size: 13px;
-  line-height: 1.55;
+.row-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--app-text-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
-.insight-card__arrow {
-  color: #7a8696;
-  margin-top: 2px;
+.row-arrow {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+  transition: color var(--app-duration-short) ease;
 }
 
-@media (max-width: 1100px) {
-  .insights-page__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.landing-row:hover .row-arrow,
+.landing-row:focus-visible .row-arrow {
+  color: var(--app-accent);
 }
 
 @media (max-width: 700px) {
-  .insights-page {
-    padding: 22px 16px;
+  .landing-row {
+    flex-wrap: wrap;
+    gap: var(--app-space-2);
+    padding: var(--app-space-3) var(--app-space-4);
   }
 
-  .insights-page__header {
-    margin-bottom: 18px;
+  .row-title {
+    min-width: 0;
   }
 
-  .insights-page__title {
-    font-size: 28px;
+  .row-value {
+    flex-basis: 100%;
+    padding-left: calc(36px + var(--app-space-2));
   }
-
-  .insights-page__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .insight-card {
-    min-height: 132px;
-    padding: 16px;
-  }
-}
-</style>
-
-<style>
-:root[theme="dark"] .insights-page {
-  background: #121212;
-}
-
-:root[theme="dark"] .insights-page__title,
-:root[theme="dark"] .insight-card__title {
-  color: #f4f6f8;
-}
-
-:root[theme="dark"] .insights-page__subtitle,
-:root[theme="dark"] .insight-card__description {
-  color: #a8b0bb;
-}
-
-:root[theme="dark"] .insight-card {
-  background: #1e1e1e;
-  border-color: rgba(255, 255, 255, 0.1);
 }
 </style>

@@ -4,6 +4,7 @@ import type {
 } from "@/entityTypes/aiUserMemoryTypes";
 import { isAIUserMemoryType } from "@/entityTypes/aiUserMemoryTypes";
 import type { AutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import { extractJsonObject } from "@/service/autoDreamJsonExtract";
 
 const MAX_TITLE_LEN = 200;
 const MAX_CONTENT_LEN = 8000;
@@ -61,8 +62,8 @@ export function buildAutoDreamSystemPrompt(): string {
 }
 
 export function buildAutoDreamUserPrompt(input: {
-  activeMemories: AIUserMemoryView[];
-  packets: AutoDreamSourcePacket[];
+  activeMemories: readonly AIUserMemoryView[];
+  packets: readonly AutoDreamSourcePacket[];
 }): string {
   const memLines = input.activeMemories.length
     ? input.activeMemories
@@ -105,10 +106,10 @@ export function buildAutoDreamUserPrompt(input: {
 
 export function parseAutoDreamModelOutput(
   raw: string,
-  packets: AutoDreamSourcePacket[],
-  existing: AIUserMemoryView[]
+  packets: readonly AutoDreamSourcePacket[],
+  existing: readonly AIUserMemoryView[]
 ): ParseResult {
-  const cleaned = stripCodeFence(raw).trim();
+  const cleaned = extractJsonObject(raw);
   if (!cleaned) {
     return { ok: false, create: [], update: [], archive: [], error: "empty" };
   }
@@ -166,8 +167,7 @@ function filterCreate(
     if (typeof sourceId !== "string" || !validSourceIds.has(sourceId)) continue;
     const confidence = clampConfidence(obj.confidence);
     const sourceMessageIds = readStringArray(obj.sourceMessageIds);
-    const reason =
-      typeof obj.reason === "string" ? obj.reason : "auto_dream";
+    const reason = typeof obj.reason === "string" ? obj.reason : "auto_dream";
     out.push({
       type,
       title: title.trim().slice(0, MAX_TITLE_LEN),
@@ -208,7 +208,8 @@ function filterUpdate(
       !isSecretLike(content)
     )
       entry.content = content.trim().slice(0, MAX_CONTENT_LEN);
-    if (confidence !== undefined) entry.confidence = clampConfidence(confidence);
+    if (confidence !== undefined)
+      entry.confidence = clampConfidence(confidence);
     out.push(entry);
   }
   return out;
@@ -271,17 +272,4 @@ const SECRET_PATTERNS: RegExp[] = [
 
 function isSecretLike(s: string): boolean {
   return SECRET_PATTERNS.some((re) => re.test(s));
-}
-
-function stripCodeFence(raw: string): string {
-  const s = raw.trim();
-  if (s.startsWith("```")) {
-    const end = s.lastIndexOf("```");
-    if (end > 3) {
-      const inner = s.slice(3, end);
-      const nl = inner.indexOf("\n");
-      return nl >= 0 ? inner.slice(nl + 1) : inner;
-    }
-  }
-  return s;
 }

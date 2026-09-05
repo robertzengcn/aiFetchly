@@ -18,7 +18,7 @@ test('start-puppeteer', async function () {
             
         const page = await browser.newPage();
         await page.evaluate(() => {
-            debugger;
+            // debugger removed
           });    
         // Navigate the page to a URL
         await page.goto('https://www.baidu.com');

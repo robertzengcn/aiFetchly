@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="yellowpages-editor"
+    title-key="route.create_yellow_pages_task"
+    content-width="form"
+  >
     <!-- Header -->
     <v-row class="mb-4">
       <v-col cols="12">
@@ -95,6 +99,14 @@
                         <v-icon size="small" class="mr-1">mdi-robot</v-icon>
                         {{ $t('yellowPages.ai_query_keywords') }}
                       </v-btn>
+                      <AIContentReportButton
+                        v-if="lastGeneratedKeywords.length > 0"
+                        :descriptor="keywordReportDescriptor"
+                        :reported="keywordReported"
+                        size="small"
+                        class="mt-1 ml-1"
+                        @report="keywordReportDialog = true"
+                      />
                     </template>
                   </v-textarea>
                   <!-- <div class="d-flex flex-wrap mt-2">
@@ -722,10 +734,18 @@
       icon="mdi-check-circle"
       :timeout="5000"
     />
-  </v-container>
+  <!-- AI Content Report dialog (PRD §8.2 keyword generation surface) -->
+  <AIContentReportDialog
+    v-model="keywordReportDialog"
+    :descriptor="keywordReportDescriptor"
+    :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+    @submitted="keywordReported = true"
+  />
+</AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -749,6 +769,10 @@ import { generateRelatedKeywords } from '@/views/api/search'
 import { windowInvoke } from '@/views/utils/apirequest'
 import { QUERY_USER_INFO } from '@/config/channellist'
 import type { UserInfoType } from '@/entityTypes/userType'
+import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue'
+import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue'
+import { buildKeywordSetDescriptor } from '@/views/components/aiContentReport/reportableOutput'
+import { AIFETCHLY_PRIVACY_POLICY_URL } from '@/config/appInfo'
 
 // Router
 const router = useRouter()
@@ -800,6 +824,16 @@ const useLocalBrowser = ref(false)
 const selectedAccounts = ref<SocialAccountListData[]>([])
 const proxyValue = ref<Array<ProxyEntity>>([])
 const proxytableshow = ref(false)
+
+// AI Content Report state (PRD §8.2 keyword generation).
+const lastGeneratedKeywords = ref<string[]>([])
+const keywordReportDialog = ref(false)
+const keywordReported = ref(false)
+const keywordReportDescriptor = computed(() =>
+  buildKeywordSetDescriptor(lastGeneratedKeywords.value, {
+    generatedAt: new Date().toISOString(),
+  })
+)
 
 // Scheduling variables
 const scheduleType = ref<'one-time' | 'recurring'>('one-time')
@@ -902,6 +936,8 @@ async function handleAiQueryKeywords() {
     }
     const generated = await generateRelatedKeywords(seedKeywords, 15, 'seo')
     const newKeywords = generated && generated.length > 0 ? generated : []
+    lastGeneratedKeywords.value = newKeywords
+    keywordReported.value = false
     const existing = raw ? raw.split(/[\n,]/).map((k) => k.trim()).filter(Boolean) : []
     const combined = [...new Set([...existing, ...newKeywords])]
     keywordsInput.value = combined.join(', ')

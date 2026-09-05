@@ -101,7 +101,8 @@ Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Chec
 
 ### Pending Todos
 
-None yet.
+- [Close AI chat workspace PRD gaps](./todos/pending/2026-08-25-close-ai-chat-workspace-prd-gaps.md) — close confirmed FR-040/042–045/047/050/052/055–057/059/062 defects and finish required E2E, accessibility, compatibility, and performance verification.
+- [Close workspace UI redesign audit gaps](./todos/pending/2026-08-27-close-workspace-ui-redesign-audit-gaps.md) — consolidated current audit findings across the chat workspace and all 50 inner-page surfaces, including implementation, integration, verification, and rollout blockers.
 
 ### Blockers/Concerns
 

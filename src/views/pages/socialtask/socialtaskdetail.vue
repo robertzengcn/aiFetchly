@@ -1,5 +1,10 @@
 <template>
-    <v-sheet class="mx-auto" rounded>
+    <AppPageShell
+      page-id="socialtask-edit"
+      title-key="route.edit_social_task"
+      content-width="form"
+    >
+      <v-sheet class="mx-auto" rounded>
         <v-form ref="form" @submit.prevent="onSubmit">
             <v-text-field
 v-model="socialtaskId" label="Id" type="input"
@@ -35,8 +40,11 @@ v-model="alert" border="start" variant="tonal" closable close-label="Close Alert
             </div>
         </v-form>
     </v-sheet>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted } from "vue";
 import {
     getSocialtaskinfo,

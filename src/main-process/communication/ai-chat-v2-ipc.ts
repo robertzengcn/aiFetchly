@@ -1,22 +1,37 @@
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { noInputSchema } from "@/schemas/ipc/_shared/common";
-import { z } from "zod";
-import { lazySchema } from "@/utils/lazySchema";
-
-const unknownInputSchema = lazySchema(() => z.unknown());
-
-/** Unwrap a handleX CommonMessage return: throw on status:false, return data on success. */
-async function unwrap<T>(
-  p: Promise<{ status: boolean; msg?: string; data?: T }>
-): Promise<T> {
-  const res = await p;
-  if (!res.status) throw new Error(res.msg || "Unknown error");
-  return res.data as T;
-}
-
-import { ipcMain as ipcMain } from "electron";
-import { log } from "@/modules/Logger";
+import { ipcMain } from "electron";
+import {
+  AIChatTurnQueueService,
+  AIChatTurnQueueError,
+  createSteeringPromoter,
+} from "@/service/AIChatTurnQueueService";
+import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import {
+  AI_CHAT_MESSAGE_QUEUE_ENABLED,
+  AI_CHAT_MESSAGE_STEERING_ENABLED,
+} from "@/config/usersetting";
+import {
+  aiChatPendingCreateInputSchema,
+  aiChatPendingListInputSchema,
+  aiChatPendingSteerInputSchema,
+  aiChatPendingCancelInputSchema,
+  aiChatPendingResumeInputSchema,
+} from "@/schemas/ipc/aiChatPendingMessage";
+import {
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+} from "@/config/channellist";
+import type { ZodType } from "zod/v4";
+import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
@@ -29,6 +44,10 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import {
+  getSharedLightweightCompletionService,
+  resetLightweightRuntime,
+} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
@@ -38,18 +57,11 @@ import {
   getSharedWorkspaceAutoDreamService,
   resetSharedWorkspaceAutoDreamService,
 } from "@/service/AIAutoDreamFactory";
-import {
-  getSharedLightweightCompletionService,
-  resetLightweightRuntime,
-} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
-import type {
-  AIChatQueryEvent,
-  AIChatQueryEventSink,
-} from "@/service/AIChatQueryEvents";
+import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -78,7 +90,6 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
-import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
@@ -101,6 +112,7 @@ import {
   GENERATED_IMAGE_REFERENCE_INVALID_CODE,
 } from "@/service/generatedImageReferenceNormalize";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 
 /** Cap for the user-confirmed batch reference set. Matches the batch tool's
  * MAX_BATCH_ITEMS so a confirmed set is never rejected downstream. */
@@ -154,14 +166,14 @@ function createQueryLoop(): AIChatQueryLoop {
             });
             if (decision.autoApprove) {
               context = { ...context, skipPermissionCheck: true };
-              log.info(
+              console.log(
                 `[ai-chat-v2] auto-approved tool "${name}" for conversation ${context.conversationId}: ${decision.reason}`
               );
             }
           }
         } catch (err) {
           // Non-fatal: fall back to normal permission flow
-          log.warn(
+          console.warn(
             "[ai-chat-v2] failed to evaluate tool approval mode, falling back to default:",
             err
           );
@@ -189,6 +201,13 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   if (queryEngine) {
     queryEngine.stopActiveTurn();
   }
+  if (queueService) {
+    // Rows stay durable in each database; only in-memory drain chains and
+    // event associations are dropped (message-queue design §16.2). The next
+    // database runs its own recovery on first use.
+    queueService = null;
+  }
+  queueServiceRecovered = false;
   queryEngine = null;
   compactAgent = null;
   queryEngineDbPath = null;
@@ -228,15 +247,15 @@ function getCompactAgent(): AIChatCompactAgentService {
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
-      // Real per-model context window so the auto-compact threshold matches
-      // the renderer badge denominator (hard-coded 128k would never trip for
-      // models with smaller windows).
-      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
       // Capability gate for full compact: absent metadata means the small
       // route is not eligible and compact goes to the normal model
       // (tech-design §16.1).
       getSmallModelCapability: () =>
         compactModelCatalog!.getSmallModelCapability(),
+      // Real per-model context window so the auto-compact threshold matches
+      // the renderer badge denominator (hard-coded 128k would never trip for
+      // models with smaller windows).
+      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
@@ -254,7 +273,8 @@ function getCompactAgent(): AIChatCompactAgentService {
   return compactAgent;
 }
 
-function getQueryEngine(): AIChatQueryEngine {
+/** Shared engine singleton — also used by the workspace coordinator. */
+export function getQueryEngine(): AIChatQueryEngine {
   const dbPath = getCurrentUserDbPath();
   if (queryEngine && queryEngineDbPath !== dbPath) {
     resetAiChatV2RuntimeForDatabaseSwitch();
@@ -265,10 +285,85 @@ function getQueryEngine(): AIChatQueryEngine {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+      // Turn mailboxes persist steering via the pending Module (design §10).
+      steeringPromoter: createSteeringPromoter(
+        new AIChatPendingMessageModule()
+      ),
     });
     queryEngineDbPath = dbPath;
   }
   return queryEngine;
+}
+
+// -------------------------------------------------------------------------
+// Pending-message queue service (message-queue design §9)
+// -------------------------------------------------------------------------
+
+let queueService: AIChatTurnQueueService | null = null;
+let queueServiceRecovered = false;
+
+function isQueueFeatureEnabled(): boolean {
+  return new Token().getValue(AI_CHAT_MESSAGE_QUEUE_ENABLED) !== "false";
+}
+
+function isSteeringFeatureEnabled(): boolean {
+  return (
+    isQueueFeatureEnabled() &&
+    new Token().getValue(AI_CHAT_MESSAGE_STEERING_ENABLED) !== "false"
+  );
+}
+
+/**
+ * Broadcaster-backed stream sink for queue-dispatched turns: reuses the
+ * shared createChatV2StreamSink mapping and fans it out to every live
+ * window, since queue turns start in the main process (design §14.2).
+ */
+function createBroadcastEventSink(): AIChatQueryEventSink {
+  const broadcaster = AIChatV2EventBroadcaster.getInstance();
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => broadcaster.emitStreamChunk(chunk),
+    sendComplete: (chunk) => broadcaster.emitStreamComplete(chunk),
+  });
+}
+
+function getQueueService(): AIChatTurnQueueService {
+  if (!queueService) {
+    const pendingModule = new AIChatPendingMessageModule();
+    queueService = new AIChatTurnQueueService({
+      engine: getQueryEngine(),
+      pendingModule,
+      eventSink: {
+        emit: (event) =>
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
+      },
+      streamSinkFactory: () => createBroadcastEventSink(),
+      tryAcquireLease: ({ conversationId }) =>
+        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
+          conversationId,
+          owner: "interactive",
+          ownerId: "pending-queue",
+        }),
+      isAiEnabled: () => canUseChat().ok,
+      isQueueEnabled: isQueueFeatureEnabled,
+      isSteeringEnabled: isSteeringFeatureEnabled,
+    });
+  }
+  return queueService;
+}
+
+/**
+ * Run startup/database-switch recovery exactly once per queue-service
+ * instance (design §16.1). Reconciliation only pauses/deduplicates durable
+ * rows — it never starts provider work.
+ */
+async function ensureQueueRecovered(): Promise<void> {
+  if (queueServiceRecovered) return;
+  queueServiceRecovered = true;
+  try {
+    await getQueueService().recoverOnStartup();
+  } catch (err) {
+    log.error("[ai-chat-v2] pending queue recovery failed:", err);
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -293,8 +388,8 @@ function getChatResolver(): AIProviderResolver {
 
 /**
  * Provider-aware Chat V2 availability gate. Exported so sibling AI-chat
- * handler files (e.g. generated-image export) enforce the SAME gate FIRST,
- * before parsing payloads or touching the filesystem.
+ * handler files (e.g. generated-image export, workspace coordinator) enforce
+ * the SAME gate FIRST, before parsing payloads or touching the filesystem.
  */
 export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
@@ -348,7 +443,7 @@ function sendChunk(
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
-  log.info(
+  console.log(
     `[ai-chat-v2] IPC complete event=${chunk.eventType} conv=${
       chunk.conversationId || "(none)"
     } message=${chunk.messageId || "(none)"} fullContentLen=${
@@ -366,205 +461,18 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
  * (start, complete, cancelled, error) since the engine emits these.
  */
 function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
-  let tokenLogCount = 0;
-  return {
-    emit: (e: AIChatQueryEvent) => {
-      switch (e.type) {
-        case "start":
-          sendChunk(event, {
-            eventType: "start",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-          });
-          break;
-        case "token":
-          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            log.info(
-              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
-            );
-          }
-          tokenLogCount += 1;
-          sendChunk(event, {
-            eventType: "token",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            contentDelta: e.contentDelta,
-            model: e.model,
-          });
-          break;
-        case "reasoning_delta":
-          // Log length only — never the reasoning text itself (SSR-3 / §14).
-          console.debug(
-            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
-          );
-          sendChunk(event, {
-            eventType: "reasoning_delta",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            reasoningDelta: e.reasoningDelta,
-            model: e.model,
-          });
-          break;
-        case "retry_connect":
-          sendChunk(event, {
-            eventType: "retry_connect",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            retryAttempt: e.retryAttempt,
-            retryMaxAttempts: e.retryMaxAttempts,
-            retryDelayMs: e.retryDelayMs,
-          });
-          break;
-        case "recovery_status":
-          sendChunk(event, {
-            eventType: "recovery_status",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            recoveryLayer: e.layer,
-            recoveryReason: e.reason,
-            recoveryAttempt: e.attempt,
-            recoveryMaxAttempts: e.maxAttempts,
-            recoveryDelayMs: e.delayMs,
-            recoveryElapsedMs: e.elapsedMs,
-            recoveryOriginalModel: e.originalModel,
-            recoveryCurrentModel: e.currentModel,
-            recoveryFallbackModel: e.fallbackModel,
-            recoveryMessage: e.message,
-          });
-          break;
-        case "tool_progress":
-          sendChunk(event, {
-            eventType: "tool_progress",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            phase: e.phase,
-            progressMessage: e.message,
-            progressFraction:
-              typeof e.progress === "number" ? e.progress : undefined,
-            partialCount: e.partialCount ?? undefined,
-            expectedCount: e.expectedCount ?? undefined,
-            progressTimestamp: e.timestamp,
-          });
-          break;
-        case "tool_call":
-          sendChunk(event, {
-            eventType: "tool_call",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            toolArguments: e.toolArguments,
-          });
-          break;
-        case "tool_result":
-          sendChunk(event, {
-            eventType: "tool_result",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            toolResult: e.toolResult,
-            replacesPermissionPromptForToolId:
-              e.replacesPermissionPromptForToolId,
-          });
-          break;
-        case "plan_blocked_tool":
-          sendChunk(event, {
-            eventType: "plan_blocked_tool" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            planBlockedToolName: e.planBlockedToolName,
-            planBlockedReason: e.planBlockedReason,
-          } as ChatV2StreamChunk);
-          break;
-        case "ask_user_question":
-          sendChunk(event, {
-            eventType: "ask_user_question" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            question: e.question,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_submitted":
-          sendChunk(event, {
-            eventType: "plan_submitted" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_state":
-          sendChunk(event, {
-            eventType: "plan_state" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            planState: e.planState,
-            autoEntered: e.autoEntered,
-          } as ChatV2StreamChunk);
-          break;
-        case "usage_update":
-          sendChunk(event, {
-            eventType: "usage_update",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            model: e.model,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "complete":
-          sendComplete(event, {
-            eventType: "complete",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-            images: e.images,
-            model: e.model,
-            finishReason: e.finishReason,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "cancelled":
-          sendComplete(event, {
-            eventType: "cancelled",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-          });
-          break;
-        case "error":
-          sendComplete(event, {
-            eventType: "error",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            errorMessage: e.errorMessage,
-            errorCode: e.errorCode,
-          });
-          break;
-      }
-    },
-  };
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => sendChunk(event, chunk),
+    sendComplete: (chunk) => sendComplete(event, chunk),
+  });
 }
 
 // -------------------------------------------------------------------------
 // Stream handler (thin — delegates to engine)
 // -------------------------------------------------------------------------
 
-function validateStreamRequest(
+/** Stream request validation shared with the workspace coordinator. */
+export function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
   const hasFiles =
@@ -705,7 +613,8 @@ function classifyAttachment(
   return null;
 }
 
-function normalizeChatV2UploadedFiles(
+/** Attachment normalization shared with the workspace coordinator. */
+export function normalizeChatV2UploadedFiles(
   input: unknown
 ): ChatV2UploadedAttachment[] {
   if (!Array.isArray(input)) return [];
@@ -782,6 +691,139 @@ function normalizeChatV2UploadedFiles(
 }
 
 //handleStream is the main function that handles the stream request
+/**
+ * Result of validating a chat request's generated-image fields.
+ *  - ok: the normalized fields (references possibly empty; the confirmed
+ *    batch staged into trusted main-process state when present) plus the
+ *    request with those fields replaced/stripped for engine consumption.
+ *  - !ok: a typed error to report on whichever surface the caller owns.
+ */
+type GeneratedImageValidationResult =
+  | {
+      ok: true;
+      request: ChatV2StreamRequest;
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+      errorCode?: string;
+    };
+
+/**
+ * Shared validation + trusted staging for generated-image request fields —
+ * used by BOTH the direct stream handler and the pending-message queue path
+ * (every renderer send now creates a pending row first, so the queue path
+ * must enforce the exact same contract):
+ *
+ *  1. uploaded image attachments + direct generated-image references share
+ *     one per-request budget (CHAT_IMAGE_LIMITS);
+ *  2. the user-confirmed batch reference set is normalized and STAGED into
+ *     ConfirmedBatchReferenceRegistry under the conversation id, then the
+ *     field is stripped so the stored request / engine / model never see it.
+ *
+ * Never trusts renderer-supplied shapes; rejects before any provider work.
+ */
+function validateAndStageGeneratedImageFields(
+  uploadedFiles: readonly { kind: string }[],
+  req: ChatV2StreamRequest
+): GeneratedImageValidationResult {
+  const uploadedImageCount = uploadedFiles.filter(
+    (file) => file.kind === "image"
+  ).length;
+
+  // Validate opaque generated-image references (never trust the renderer).
+  const normalizedReferences = normalizeGeneratedImageReferences(
+    req.generatedImageReferences,
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  );
+  if (!normalizedReferences.ok) {
+    return {
+      ok: false,
+      errorMessage: normalizedReferences.reason,
+      errorCode: normalizedReferences.errorCode,
+    };
+  }
+
+  // Combined image cap: uploaded image attachments + referenced generated
+  // images share one per-request budget.
+  if (
+    uploadedImageCount + normalizedReferences.references.length >
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  ) {
+    return {
+      ok: false,
+      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
+      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+    };
+  }
+
+  // User-confirmed batch reference set: normalized here and staged into
+  // trusted main-process state under this conversation's id. Staging runs
+  // AFTER every other validation so no earlier failure leaves a stale set
+  // behind, and the field is stripped from the request so the engine/model
+  // never see it.
+  const confirmedBatch = req.confirmedGeneratedImageBatch as
+    | { references?: unknown }
+    | undefined;
+  if (confirmedBatch !== undefined) {
+    const batchRecord =
+      typeof confirmedBatch === "object" &&
+      confirmedBatch !== null &&
+      !Array.isArray(confirmedBatch)
+        ? confirmedBatch
+        : undefined;
+    if (
+      !batchRecord ||
+      !Array.isArray(batchRecord.references) ||
+      typeof req.conversationId !== "string" ||
+      req.conversationId.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage:
+          "confirmedGeneratedImageBatch requires a conversationId and a non-empty references array",
+        errorCode: GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    const normalizedConfirmed = normalizeGeneratedImageReferences(
+      batchRecord.references,
+      CONFIRMED_BATCH_MAX_REFERENCES
+    );
+    if (
+      !normalizedConfirmed.ok ||
+      normalizedConfirmed.references.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage: normalizedConfirmed.ok
+          ? "confirmedGeneratedImageBatch.references must contain at least one reference"
+          : normalizedConfirmed.reason,
+        errorCode: normalizedConfirmed.ok
+          ? GENERATED_IMAGE_REFERENCE_INVALID_CODE
+          : normalizedConfirmed.errorCode ??
+            GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    getConfirmedBatchReferenceRegistry().stage(
+      req.conversationId,
+      normalizedConfirmed.references
+    );
+  }
+
+  return {
+    ok: true,
+    request: {
+      ...req,
+      generatedImageReferences:
+        normalizedReferences.references.length > 0
+          ? normalizedReferences.references
+          : undefined,
+      // Trusted channel only: never stored, forwarded, or model-visible.
+      confirmedGeneratedImageBatch: undefined,
+    },
+  };
+}
+
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // Chat availability gate FIRST, before parsing request data.
   const chatAccess = canUseChat();
@@ -821,112 +863,20 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
   // Normalize uploaded files
   const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
-  const uploadedImageCount = uploadedFiles.filter(
-    (file) => file.kind === "image"
-  ).length;
-
-  // Validate opaque generated-image references (never trust the renderer).
-  const normalizedReferences = normalizeGeneratedImageReferences(
-    req.generatedImageReferences,
-    CHAT_IMAGE_LIMITS.maxImagesPerRequest
-  );
-  if (!normalizedReferences.ok) {
+  const validated = validateAndStageGeneratedImageFields(uploadedFiles, req);
+  if (!validated.ok) {
     sendComplete(event, {
       eventType: "error",
-      conversationId: "",
-      errorMessage: normalizedReferences.reason,
-      errorCode: normalizedReferences.errorCode,
+      conversationId:
+        typeof req.conversationId === "string" ? req.conversationId : "",
+      errorMessage: validated.errorMessage,
+      ...(validated.errorCode ? { errorCode: validated.errorCode } : {}),
     });
     return;
   }
-
-  // Combined image cap: uploaded image attachments + referenced generated
-  // images share one per-request budget.
-  if (
-    uploadedImageCount + normalizedReferences.references.length >
-    CHAT_IMAGE_LIMITS.maxImagesPerRequest
-  ) {
-    sendComplete(event, {
-      eventType: "error",
-      conversationId: "",
-      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
-      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
-    });
-    return;
-  }
-
-  // User-confirmed batch reference set: normalized here and staged into
-  // trusted main-process state under this conversation's id. Staging runs
-  // AFTER every other validation so no earlier failure leaves a stale set
-  // behind, and the field is stripped from the request so the engine/model
-  // never sees it.
-  const confirmedBatch = req.confirmedGeneratedImageBatch;
-  let confirmedStageTarget: string | null = null;
-  let confirmedReferences: ChatV2GeneratedImageReference[] = [];
-  if (confirmedBatch !== undefined) {
-    const batchRecord =
-      typeof confirmedBatch === "object" &&
-      confirmedBatch !== null &&
-      !Array.isArray(confirmedBatch)
-        ? (confirmedBatch as { references?: unknown })
-        : undefined;
-    if (
-      !batchRecord ||
-      !Array.isArray(batchRecord.references) ||
-      typeof req.conversationId !== "string" ||
-      req.conversationId.length === 0
-    ) {
-      sendComplete(event, {
-        eventType: "error",
-        conversationId:
-          typeof req.conversationId === "string" ? req.conversationId : "",
-        errorMessage:
-          "confirmedGeneratedImageBatch requires a conversationId and a non-empty references array",
-        errorCode: GENERATED_IMAGE_REFERENCE_INVALID_CODE,
-      });
-      return;
-    }
-    const normalizedConfirmed = normalizeGeneratedImageReferences(
-      batchRecord.references,
-      CONFIRMED_BATCH_MAX_REFERENCES
-    );
-    if (
-      !normalizedConfirmed.ok ||
-      normalizedConfirmed.references.length === 0
-    ) {
-      sendComplete(event, {
-        eventType: "error",
-        conversationId: req.conversationId,
-        errorMessage: normalizedConfirmed.ok
-          ? "confirmedGeneratedImageBatch.references must contain at least one reference"
-          : normalizedConfirmed.reason,
-        errorCode: normalizedConfirmed.ok
-          ? GENERATED_IMAGE_REFERENCE_INVALID_CODE
-          : (normalizedConfirmed.errorCode ??
-            GENERATED_IMAGE_REFERENCE_INVALID_CODE),
-      });
-      return;
-    }
-    confirmedStageTarget = req.conversationId;
-    confirmedReferences = normalizedConfirmed.references;
-  }
-
-  if (confirmedStageTarget !== null && confirmedReferences.length > 0) {
-    getConfirmedBatchReferenceRegistry().stage(
-      confirmedStageTarget,
-      confirmedReferences
-    );
-  }
-
-  const processedReq = {
-    ...req,
+  const processedReq: ChatV2StreamRequest = {
+    ...validated.request,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
-    generatedImageReferences:
-      normalizedReferences.references.length > 0
-        ? normalizedReferences.references
-        : undefined,
-    // Trusted channel only: never forwarded to the engine or the model.
-    confirmedGeneratedImageBatch: undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });
@@ -1076,12 +1026,20 @@ async function handleHistory(
       tokensUsed: r.tokensUsed,
       metadata: parseMetadata(r.metadata),
     }));
+    let pendingMessages: AIChatPendingMessageView[] | undefined;
+    try {
+      pendingMessages = await getQueueService().list(conversationId);
+    } catch (err) {
+      // Pending listing must never break history rendering.
+      log.error("[ai-chat-v2] pending list failed:", err);
+    }
     return ok({
       conversationId,
       messages: views,
       totalMessages: views.length,
       runtimeStatus:
         getQueryEngine().getConversationRuntimeStatus(conversationId),
+      pendingMessages,
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -1105,6 +1063,13 @@ async function handleClearConversation(
     if (!conversationId) {
       return denied("conversationId is required");
     }
+    // Queue cascade FIRST (FR-44): stop the runtime, delete pending rows
+    // and their staged attachment bytes before the transcript goes away.
+    try {
+      await getQueueService().clearConversation(conversationId);
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearConversation failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
     // Cascade: clear any durable plan state for this conversation.
@@ -1112,7 +1077,7 @@ async function handleClearConversation(
       const planModule = new AIChatPlanModule();
       await planModule.clearConversationPlanState(conversationId);
     } catch (err) {
-      log.error("[ai-chat-v2] clearConversationPlanState failed:", err);
+      console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
     return ok({ deleted });
   } catch (err) {
@@ -1128,12 +1093,117 @@ async function handleClearAll(): Promise<
     return denied(chatAccess.message);
   }
   try {
+    try {
+      await getQueueService().clearAll();
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearAll failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));
   }
+}
+
+// -------------------------------------------------------------------------
+// Pending-message queue handlers (message-queue PRD §12)
+// -------------------------------------------------------------------------
+
+/**
+ * registerValidatedHandler-style wrapper that checks CHAT availability
+ * before parsing — the queue serves the same users the chat stream does
+ * (hosted subscription OR valid local provider), so canUseChat is the
+ * correct gate rather than the hosted-only USER_AI_ENABLED check.
+ */
+function registerChatValidatedHandler<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput>,
+  handler: (input: TInput) => Promise<TOutput>
+): void {
+  ipcMain.handle(channel, async (_event, raw) => {
+    const chatAccess = canUseChat();
+    if (!chatAccess.ok) {
+      return { status: false, msg: chatAccess.message, data: null };
+    }
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((issue) => issue.message).join("; ");
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+    try {
+      const data = await handler(parsed.data);
+      return { status: true, msg: "ok", data };
+    } catch (err) {
+      const msg =
+        err instanceof AIChatTurnQueueError
+          ? `[${err.code}] ${err.message}`
+          : err instanceof Error
+          ? err.message
+          : "Unknown error";
+      log.warn(`[${channel}] handler error: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+  });
+}
+
+async function handlePendingCreate(input: {
+  clientRequestId: string;
+  request: ChatV2StreamRequest;
+}): Promise<AIChatPendingCreateResult> {
+  void ensureQueueRecovered();
+  // Same generated-image contract as the direct stream handler (every send
+  // now queues first): validate reference shapes + combined image cap, stage
+  // the user-confirmed batch set into trusted main-process state, and strip
+  // the trusted field so neither the stored row nor the engine/model see it.
+  const uploadedFiles = normalizeChatV2UploadedFiles(
+    input.request.uploadedFiles
+  );
+  const validated = validateAndStageGeneratedImageFields(
+    uploadedFiles,
+    input.request
+  );
+  if (!validated.ok) {
+    throw new AIChatTurnQueueError("INVALID_REQUEST", validated.errorMessage);
+  }
+  return await getQueueService().submit({
+    clientRequestId: input.clientRequestId,
+    request: {
+      ...validated.request,
+      uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    },
+  });
+}
+
+async function handlePendingList(input: {
+  conversationId: string;
+}): Promise<AIChatPendingMessageView[]> {
+  void ensureQueueRecovered();
+  return await getQueueService().list(input.conversationId);
+}
+
+async function handlePendingSteer(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  void ensureQueueRecovered();
+  return await getQueueService().steer(input);
+}
+
+async function handlePendingCancel(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  return await getQueueService().cancel(input);
+}
+
+async function handlePendingResume(input: {
+  conversationId: string;
+}): Promise<{ resumed: number }> {
+  await getQueueService().resumeConversation(input.conversationId);
+  return { resumed: 1 };
 }
 
 // -------------------------------------------------------------------------
@@ -1180,20 +1250,15 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
-  // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
-  // the engine. Rejects malformed shapes and bounds free-text length.
-  const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
-    parsed.answers
-  );
-  if (!answersResult.success) {
-    return denied("answers payload is invalid");
+  if (!Array.isArray(parsed.answers)) {
+    return denied("answers must be an array");
   }
 
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: answersResult.data,
+    answers: parsed.answers,
   });
   return ok(result);
 }
@@ -1450,7 +1515,7 @@ function parseObjectPayload(data: unknown): Record<string, unknown> {
   return {};
 }
 
-function serializeHistoryTimestamp(timestamp: unknown): string {
+export function serializeHistoryTimestamp(timestamp: unknown): string {
   if (timestamp instanceof Date) {
     return timestamp.toISOString();
   }
@@ -1467,7 +1532,9 @@ function serializeHistoryTimestamp(timestamp: unknown): string {
   return new Date(0).toISOString();
 }
 
-function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
+export function parseMetadata(
+  raw?: string | null
+): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
@@ -1528,88 +1595,47 @@ async function handleReadPasteCache(
 }
 
 export function registerAiChatV2IpcHandlers(): void {
-  registerValidatedHandler(
+  ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleResumeToolAfterPermission(JSON.stringify(input ?? "{}")))
+    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
   );
-  registerValidatedHandler(AI_CHAT_V2_MODELS, noInputSchema, async () =>
-    unwrap(handleModels())
+  ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
+  ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
+    handleConversations(data as string)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_CONVERSATIONS,
-    unknownInputSchema,
-    async (input) => unwrap(handleConversations(JSON.stringify(input ?? {})))
+  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
+    handleHistory(_e as IpcEventLike, data)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_HISTORY,
-    unknownInputSchema,
-    async (input, event) =>
-      unwrap(handleHistory(event as IpcEventLike, JSON.stringify(input ?? {})))
+  ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
+    handleClearConversation(_e as IpcEventLike, data as string)
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_CLEAR_CONVERSATION,
-    unknownInputSchema,
-    async (input, event) =>
-      unwrap(
-        handleClearConversation(
-          event as IpcEventLike,
-          JSON.stringify(input ?? {})
-        )
-      )
+  ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
+  ipcMain.handle(AI_CHAT_V2_PLAN_STATE, async (_e, data: unknown) =>
+    handlePlanState((data as string) ?? "")
   );
-  registerValidatedHandler(AI_CHAT_V2_CLEAR_ALL, noInputSchema, async () =>
-    unwrap(handleClearAll())
+  ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
+    handleAnswerQuestion((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_PLAN_STATE,
-    unknownInputSchema,
-    async (input) => unwrap(handlePlanState(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
+    handleApprovePlan((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_ANSWER_QUESTION,
-    unknownInputSchema,
-    async (input) => unwrap(handleAnswerQuestion(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
+    handleRejectPlan((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_APPROVE_PLAN,
-    unknownInputSchema,
-    async (input) => unwrap(handleApprovePlan(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
+    handleRequestPlanChanges((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_REJECT_PLAN,
-    unknownInputSchema,
-    async (input) => unwrap(handleRejectPlan(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
+    handlePlanVersions((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_REQUEST_PLAN_CHANGES,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleRequestPlanChanges(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
+    handleCompactConversation((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_PLAN_VERSIONS,
-    unknownInputSchema,
-    async (input) => unwrap(handlePlanVersions(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleGetToolApprovalMode((data as string) ?? "")
   );
-  registerValidatedHandler(
-    AI_CHAT_V2_COMPACT_CONVERSATION,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleCompactConversation(JSON.stringify(input ?? "{}")))
-  );
-  registerValidatedHandler(
-    AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleGetToolApprovalMode(JSON.stringify(input ?? "{}")))
-  );
-  registerValidatedHandler(
-    AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
-    unknownInputSchema,
-    async (input) =>
-      unwrap(handleSetToolApprovalMode(JSON.stringify(input ?? "{}")))
+  ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
+    handleSetToolApprovalMode((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
     handleReadPasteCache(data)
@@ -1619,7 +1645,7 @@ export function registerAiChatV2IpcHandlers(): void {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
-      log.error("[ai-chat-v2] unhandled stream error:", err);
+      console.error("[ai-chat-v2] unhandled stream error:", err);
       void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {
@@ -1630,4 +1656,35 @@ export function registerAiChatV2IpcHandlers(): void {
     }
   });
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
+
+  // Pending-message queue (message-queue PRD §12). Handlers call the queue
+  // service only — never a Model or repository.
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CREATE,
+    aiChatPendingCreateInputSchema,
+    handlePendingCreate
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_LIST,
+    aiChatPendingListInputSchema,
+    handlePendingList
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_STEER,
+    aiChatPendingSteerInputSchema,
+    handlePendingSteer
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CANCEL,
+    aiChatPendingCancelInputSchema,
+    handlePendingCancel
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_RESUME,
+    aiChatPendingResumeInputSchema,
+    handlePendingResume
+  );
+  // Startup reconciliation (design §16.1): reconcile durable rows once the
+  // handlers exist; it only pauses/deduplicates — never dispatches.
+  void ensureQueueRecovered();
 }

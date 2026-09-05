@@ -50,8 +50,67 @@ const snapshotSchema: z.ZodType<AIFetchlyConfigSnapshot> = z.custom(
     typeof (val as { sourceId?: unknown }).sourceId === "string" &&
     Array.isArray((val as { files?: unknown }).files) &&
     Array.isArray((val as { instructions?: unknown }).instructions) &&
-    Array.isArray((val as { diagnostics?: unknown }).diagnostics)
+    Array.isArray((val as { diagnostics?: unknown }).diagnostics) &&
+    // Portable-memory payload (optional): when present it must satisfy the
+    // bounded schema below; absent is valid (pre-portable snapshots).
+    ((val as { portableMemory?: unknown }).portableMemory === undefined ||
+      portableMemorySchema.safeParse(
+        (val as { portableMemory?: unknown }).portableMemory
+      ).success)
 );
+
+/**
+ * Bounded shape for the portable-memory scan payload (design §12.5). The
+ * portable scan rides the snapshot, so its bounds are enforced inside the
+ * snapshot predicate: at most 1,000 drafts, each path/body bounded, SHA-256
+ * hashes, declared totals capped, diagnostics message-limited. A malformed
+ * portable payload fails the whole snapshot check → worker restart, never a
+ * partial apply.
+ */
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+
+const portableDraftSchema = z.object({
+  relativePath: z.string().min(1).max(1024),
+  fileName: z.string().min(1).max(255),
+  contentHash: sha256Schema.or(z.literal("")),
+  sizeBytes: z.number().int().min(0),
+  mtimeMs: z.number(),
+  rawFrontmatter: z.unknown(),
+  markdownBody: z.string().max(16 * 1024),
+  syntaxError: z.string().max(500).optional(),
+  isSymbolicLink: z.boolean(),
+});
+
+const portableDiagnosticSchema = z.object({
+  severity: z.string().max(20),
+  source: z.string().max(20),
+  sourceId: z.string().max(200),
+  filePath: z.string().max(1024),
+  code: z.string().max(80),
+  message: z.string().max(1000),
+  recoverable: z.boolean(),
+});
+
+export const portableMemorySchema = z.object({
+  schemaVersion: z.literal(1),
+  directoryPresent: z.boolean(),
+  complete: z.boolean(),
+  identity: z
+    .object({
+      relativePath: z.literal(".aifetchly/workspace.json"),
+      raw: z.unknown(),
+      contentHash: sha256Schema,
+      sizeBytes: z.number().int().min(0).max(8 * 1024),
+      mtimeMs: z.number(),
+    })
+    .optional(),
+  records: z.array(portableDraftSchema).max(1000),
+  seenRelativePaths: z.array(z.string().max(1024)).max(1100),
+  readmeHash: sha256Schema.optional(),
+  indexHash: sha256Schema.optional(),
+  totalBytes: z.number().int().min(0).max(16 * 1024 * 1024),
+  diagnostics: z.array(portableDiagnosticSchema).max(200),
+});
 
 const diffSchema: z.ZodType<AIFetchlyConfigDiff> = z.custom(
   (val): val is AIFetchlyConfigDiff =>

@@ -51,6 +51,11 @@ import {
   imageEditErrorCode,
 } from "@/service/AIChatErrorMapper";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
+import {
+  AIChatTurnControl,
+  type AIChatSteeringInstruction,
+  type AIChatSteeringReservation,
+} from "@/service/AIChatTurnControl";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -67,12 +72,14 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
   AIChatPlanLoopContext,
+  AIChatTurnTerminalEvent,
   AnswerPlanQuestionRequest,
   PendingPermissionTurn,
   PendingPlanQuestionTurn,
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
+import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import type {
   ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
@@ -338,6 +345,17 @@ export interface AIChatQueryEngineDeps {
    * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
    * beyond the executeTool guard. */
   toolFilter?: (toolName: string) => boolean;
+  /**
+   * Optional. Persists one steering instruction (atomic user-row insert +
+   * pending-row applied flip) when the turn's steering mailbox consumes it.
+   * Wired to AIChatPendingMessageModule.promoteSteeringToUserMessage by the
+   * interactive engine owner. When omitted, active turns expose no steering
+   * mailbox and reserveSteering always returns null.
+   */
+  steeringPromoter?: (input: {
+    readonly instruction: AIChatSteeringInstruction;
+    readonly boundary: import("@/entityTypes/aiChatV2Types").AIChatSafeBoundary;
+  }) => Promise<void>;
 }
 
 /**
@@ -349,6 +367,8 @@ interface ActiveTurnState {
   abortController: AbortController;
   assistantMessageId: string;
   eventSink: AIChatQueryEventSink;
+  /** Steering mailbox for this turn; absent when steering is unavailable. */
+  control?: AIChatTurnControl;
 }
 
 export class AIChatQueryEngine {
@@ -374,6 +394,8 @@ export class AIChatQueryEngine {
    * task-policy-approved tools (FR-16), narrowing the prompt-injection
    * surface beyond the executeToken guard. */
   private readonly toolFilter?: (toolName: string) => boolean;
+  /** Persists steering instructions consumed by active turns' mailboxes. */
+  private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -395,6 +417,7 @@ export class AIChatQueryEngine {
     this.generatedImageReferenceResolver =
       deps?.generatedImageReferenceResolver;
     this.toolFilter = deps?.toolFilter;
+    this.steeringPromoter = deps?.steeringPromoter;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -1024,7 +1047,236 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 3. Lifecycle hooks: SessionStart (once per conversation)
+    // 3-9. Run the turn (shared execution path; design §12.2)
+    // ------------------------------------------------------------------
+    const terminal = await this.runPersistedTurn({
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState,
+    });
+    if (terminal.type === "conversation_busy") {
+      // The legacy direct path cannot queue; surface a clear error instead of
+      // silently dropping the message. The queue service avoids this by
+      // checking engine status before dispatch.
+      eventSink.emit({
+        type: "error",
+        conversationId,
+        errorMessage:
+          "This conversation is still working on the previous message. Please wait for it to finish or stop it.",
+      });
+    }
+  }
+
+  /**
+   * Queue-dispatch entry point (design §12.1): run a turn for a user row the
+   * pending queue already persisted. Assembles context from the stored
+   * model-facing content, then delegates to the shared execution path and
+   * returns the narrow terminal classification the queue service acts on.
+   */
+  async submitPersistedUserMessage(input: {
+    readonly eventSink: AIChatQueryEventSink;
+    readonly request: ChatV2StreamRequest;
+    readonly savedUser: AIChatMessageEntity;
+    readonly modelContent: string;
+    readonly contentParts?:
+      | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
+      | undefined;
+    readonly assistantMessageId?: string;
+  }): Promise<AIChatTurnTerminalEvent> {
+    const { eventSink, request, savedUser, modelContent } = input;
+    const conversationId = savedUser.conversationId;
+    const planModule = new AIChatPlanModule();
+
+    let planState: AIChatPlanStateView | null = null;
+    try {
+      planState = await planModule.getPlanState(conversationId);
+    } catch {
+      // ignore lookup failures
+    }
+    const isPlanMode = request.mode === "plan" || isActivePlanState(planState);
+
+    const module = new AIChatV2Module();
+    let messages: OpenAIChatMessage[];
+    try {
+      const basePrompt =
+        request.systemPrompt ?? module.getDefaultSystemPrompt();
+      const assembled = await this.contextAssembler.assemble({
+        conversationId,
+        currentUserMessage: modelContent,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: isPlanMode ? "plan" : "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts: input.contentParts,
+      });
+      messages = [...assembled.messages];
+
+      // Proactive pre-turn compact (same gate as submitMessage §2).
+      const compactAgent = this.compactAgent;
+      if (compactAgent && assembled.tokenEstimate > 0) {
+        const contextWindow = await this.resolveContextWindowForModel(
+          request.model
+        );
+        const threshold = Math.floor(
+          AUTO_COMPACT_THRESHOLD_FRACTION * contextWindow
+        );
+        if (assembled.tokenEstimate >= threshold) {
+          log.info(
+            `[ai-chat-compact] pre-turn compact (queued) conv=${conversationId} estimate=${assembled.tokenEstimate} threshold=${threshold} window=${contextWindow}`
+          );
+          try {
+            const compacted = await compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "pre_turn_proactive",
+              promptTokens: assembled.tokenEstimate,
+              model: request.model,
+            });
+            if (compacted) {
+              const reassembled = await this.contextAssembler.assemble({
+                conversationId,
+                currentUserMessage: modelContent,
+                currentUserMessageId: savedUser.messageId,
+                baseSystemPrompt: basePrompt,
+                mode: isPlanMode ? "plan" : "chat",
+                model: request.model,
+                maxTokens: request.maxTokens,
+                planState,
+                currentUserContentParts: input.contentParts,
+              });
+              messages = [...reassembled.messages];
+            }
+          } catch (err) {
+            log.error(
+              "[ai-chat-compact] pre-turn compact failed (continuing with original context):",
+              err
+            );
+          }
+        }
+      }
+    } catch (err) {
+      log.error("[ai-chat-v2] persisted-turn assembly error:", err);
+      void redirectToLoginOnAuthExpired(err);
+      eventSink.emit({
+        type: "error",
+        conversationId,
+        errorMessage: userSafeError(err),
+      });
+      return { type: "failed", conversationId, assistantMessageId: "" };
+    }
+
+    const assistantMessageId =
+      input.assistantMessageId ??
+      `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return await this.runPersistedTurn({
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState: null,
+      scheduledContext: undefined,
+    });
+  }
+
+  /**
+   * Phase 1 of steering acceptance: synchronously reserve the running turn
+   * for one pending message. Returns null when the conversation has no
+   * steerable (running, mailbox-equipped) turn (design §10.3).
+   */
+  reserveSteering(
+    conversationId: string,
+    pendingMessageId: string
+  ): AIChatSteeringReservation | null {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry || !entry.control) return null;
+    return entry.control.reserve(pendingMessageId);
+  }
+
+  /**
+   * Drop an uncommitted steering reservation (the DB claim failed). No-op
+   * when the turn already closed.
+   */
+  cancelSteeringReservation(
+    conversationId: string,
+    reservation: AIChatSteeringReservation
+  ): void {
+    const entry = this.activeTurns.get(conversationId);
+    entry?.control?.cancelReservation(reservation.reservationId);
+  }
+
+  /**
+   * Phase 3 of steering acceptance: commit the DB-claimed instruction into
+   * the turn's mailbox. Returns false when the turn closed first — the
+   * caller must restore the row to queued.
+   */
+  commitSteering(
+    conversationId: string,
+    reservation: AIChatSteeringReservation,
+    instruction: AIChatSteeringInstruction
+  ): boolean {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry || !entry.control) return false;
+    if (entry.assistantMessageId !== reservation.targetAssistantMessageId) {
+      return false;
+    }
+    return entry.control.commit(reservation, instruction);
+  }
+
+  /**
+   * Shared turn execution (design §12.2): SessionStart hook, tool catalog,
+   * active-turn registration, start event, plan context, prompt hook, loop
+   * run, and result handling. Returns the terminal classification.
+   *
+   * CONVERSATION_BUSY (design §12.3): an active/pending turn already owns
+   * the conversation. The prior-turn REPLACEMENT behavior is removed — a
+   * late queue drain must never replace a newer turn; only explicit Stop
+   * aborts an active turn.
+   */
+  private async runPersistedTurn(input: {
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+    readonly messages: OpenAIChatMessage[];
+    readonly request: ChatV2StreamRequest;
+    readonly eventSink: AIChatQueryEventSink;
+    readonly isPlanMode: boolean;
+    readonly planState: AIChatPlanStateView | null;
+    readonly textApprovedPlanState: AIChatPlanStateView | null;
+    readonly scheduledContext?: AIChatScheduledTurnContext;
+  }): Promise<AIChatTurnTerminalEvent> {
+    const {
+      conversationId,
+      assistantMessageId,
+      messages,
+      request,
+      eventSink,
+      isPlanMode,
+      planState,
+      textApprovedPlanState,
+    } = input;
+    const module = new AIChatV2Module();
+    const planModule = new AIChatPlanModule();
+
+    // Busy gate (§12.3): never replace an in-flight turn.
+    if (
+      this.activeTurns.has(conversationId) ||
+      this.pendingPermissions.has(conversationId) ||
+      this.pendingPlanQuestions.has(conversationId)
+    ) {
+      return { type: "conversation_busy", conversationId };
+    }
+
+    // ------------------------------------------------------------------
+    // Lifecycle hooks: SessionStart (once per conversation)
     // ------------------------------------------------------------------
     if (!this.startedConversations.has(conversationId)) {
       this.startedConversations.add(conversationId);
@@ -1052,7 +1304,7 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 4. Resolve tools (skills + plan mode tools)
+    // Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
     const allToolFunctions = await SkillRegistry.getAllToolFunctions();
     // Scheduled (unattended) profiles scope the advertised catalog to
@@ -1100,25 +1352,25 @@ export class AIChatQueryEngine {
       : undefined;
 
     // ------------------------------------------------------------------
-    // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
-    //    the new turn. Cross-conversation turns are left alone so background
-    //    streaming can continue (concurrent-turns support).
+    // Register the turn. A steering mailbox is attached only when the engine
+    // has a steering promoter AND this is an interactive turn (scheduled
+    // turns are not steerable in v1).
     // ------------------------------------------------------------------
-    const prior = this.activeTurns.get(conversationId);
-    if (prior) {
-      prior.abortController.abort();
-    }
     const abortController = new AbortController();
+    const control = this.steeringPromoter
+      ? new AIChatTurnControl(async ({ instruction, boundary }) => {
+          await this.steeringPromoter!({ instruction, boundary });
+        }, assistantMessageId)
+      : undefined;
     this.activeTurns.set(conversationId, {
       abortController,
       assistantMessageId,
       eventSink,
+      ...(control ? { control } : {}),
     });
-    this.pendingPermissions.delete(conversationId);
-    this.pendingPlanQuestions.delete(conversationId);
 
     // ------------------------------------------------------------------
-    // 5. Emit start event
+    // Emit start event
     // ------------------------------------------------------------------
     eventSink.emit({
       type: "start",
@@ -1135,7 +1387,7 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 6. Build plan context if in plan mode
+    // Build plan context if in plan mode
     // ------------------------------------------------------------------
     const planContext: AIChatPlanLoopContext | undefined =
       isPlanMode && planState
@@ -1153,7 +1405,7 @@ export class AIChatQueryEngine {
         : undefined;
 
     // ------------------------------------------------------------------
-    // 8. UserPromptSubmit lifecycle hook
+    // UserPromptSubmit lifecycle hook
     // ------------------------------------------------------------------
     HookDispatcher.executeHooks({
       eventName: "UserPromptSubmit",
@@ -1171,7 +1423,7 @@ export class AIChatQueryEngine {
     });
 
     // ------------------------------------------------------------------
-    // 9. Run the loop
+    // Run the loop
     // ------------------------------------------------------------------
     const streamEventSink = this.createPersistingEventSink(module, eventSink);
     const loopInput: AIChatQueryLoopInput = {
@@ -1198,14 +1450,36 @@ export class AIChatQueryEngine {
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
+      ...(control ? { steeringControl: control } : {}),
     };
 
     try {
       const result = await this.loop.run(loopInput);
       await this.handleLoopResult(result, module, streamEventSink);
+      if (result.type === "paused_for_permission") {
+        return {
+          type: "paused_for_permission",
+          conversationId,
+          assistantMessageId,
+        };
+      }
+      if (result.type === "paused_for_plan_question") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId,
+          assistantMessageId,
+        };
+      }
+      return {
+        type: result.type,
+        conversationId,
+        assistantMessageId,
+      };
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
+      return { type: "failed", conversationId, assistantMessageId };
     } finally {
+      control?.close();
       // Clear this turn's map entry unless it was paused (permission/plan
       // question handlers move the entry into the pending maps themselves).
       // Only delete when the current entry still points at THIS turn AND
@@ -1698,6 +1972,10 @@ export class AIChatQueryEngine {
               ...buildReasoningMetadata(result.reasoningContent, result.model),
               generatedImages,
               recovery: result.recoveryMetadata,
+              ...(result.directionTransitions &&
+              result.directionTransitions.length > 0
+                ? { directionTransitions: result.directionTransitions }
+                : {}),
             },
           });
         }
@@ -1866,6 +2144,12 @@ export class AIChatQueryEngine {
         // Move the turn from activeTurns into pendingPermissions so the three
         // maps stay disjoint (a conversation is in exactly one of them). The
         // activeTurns entry is dropped; resuming re-adds it.
+        // The steering mailbox closes (design §12.4): committed-but-unapplied
+        // steering is paused by the queue service via the pause classification.
+        const pausedPermissionEntry = this.activeTurns.get(
+          result.pending.conversationId
+        );
+        pausedPermissionEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
         this.pendingPermissions.set(
           result.pending.conversationId,
@@ -1877,6 +2161,10 @@ export class AIChatQueryEngine {
         break;
       }
       case "paused_for_plan_question": {
+        const pausedPlanEntry = this.activeTurns.get(
+          result.pending.conversationId
+        );
+        pausedPlanEntry?.control?.close();
         this.activeTurns.delete(result.pending.conversationId);
         this.pendingPlanQuestions.set(
           result.pending.conversationId,

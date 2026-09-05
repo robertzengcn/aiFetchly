@@ -13,10 +13,25 @@ import { computed, defineComponent } from "vue";
 import type { PropType } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
+import type {
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   detachChatV2ConversationStreamListeners: vi.fn(),
@@ -520,6 +535,7 @@ async function selectReferences(
 describe("AiChatV2 generated-image editing wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     vi.mocked(streamChatV2Message).mockImplementation(
       async (
         _request: ChatV2StreamRequest,

@@ -1,36 +1,47 @@
 <template>
-  <div class="knowledge-library">
-    <!-- Header -->
-    <div class="knowledge-header">
-      <h1 class="knowledge-title">
-        <v-icon class="mr-2">mdi-book-open-variant</v-icon>
-        {{ t('route.knowledge_library') }}
-      </h1>
-      <div class="knowledge-actions">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-upload"
-          @click="showUploadDialog = true"
-        >
-          {{ t('knowledge.upload_document') }}
-        </v-btn>
-        <v-btn
-          color="success"
-          prepend-icon="mdi-web"
-          :loading="checkingEmbeddingRuntime"
-          @click="openWebsiteImportDialog"
-        >
-          {{ t('knowledge.import_website') }}
-        </v-btn>
-        <v-btn
-          color="info"
-          prepend-icon="mdi-cog"
-          @click="openSettingsDialog"
-        >
-          {{ t('knowledge.settings') }}
-        </v-btn>
-      </div>
-    </div>
+  <AppPageShell
+    page-id="knowledge-library"
+    title-key="route.knowledge_library"
+    content-width="full"
+  >
+    <!-- One primary action; website import and settings are infrequent →
+         overflow (IPR-004/006). -->
+    <template #primary-action>
+      <v-btn
+        color="primary"
+        prepend-icon="mdi-upload"
+        data-testid="knowledge-upload-primary"
+        @click="showUploadDialog = true"
+      >
+        {{ t('knowledge.upload_document') }}
+      </v-btn>
+    </template>
+    <template #overflow>
+      <v-menu location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <v-btn icon v-bind="menuProps" variant="text" data-testid="knowledge-overflow">
+            <v-icon>mdi-dots-horizontal</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" role="menu">
+          <v-list-item
+            role="menuitem"
+            :title="t('knowledge.import_website')"
+            prepend-icon="mdi-web"
+            :disabled="checkingEmbeddingRuntime"
+            data-testid="knowledge-overflow-import-website"
+            @click="openWebsiteImportDialog"
+          />
+          <v-list-item
+            role="menuitem"
+            :title="t('knowledge.settings')"
+            prepend-icon="mdi-cog"
+            data-testid="knowledge-overflow-settings"
+            @click="openSettingsDialog"
+          />
+        </v-list>
+      </v-menu>
+    </template>
 
     <!-- Status Snackbar (floating, non-intrusive) -->
     <v-snackbar
@@ -452,12 +463,13 @@
       </v-card>
     </v-dialog>
 
-  </div>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue';
 
 // Expose t function to template
 const { t } = useI18n();
@@ -1256,45 +1268,13 @@ defineExpose({
 </script>
 
 <style scoped>
-.knowledge-library {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  
-}
-
-.knowledge-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.knowledge-title {
-  display: flex;
-  align-items: center;
-  margin: 0;
-  color: #1976d2;
-  font-size: 1.5rem;
-  font-weight: 500;
-}
-
-.knowledge-actions {
-  display: flex;
-  gap: 12px;
-}
-
 .knowledge-content {
   flex: 1;
-  margin: 16px;
   overflow: hidden;
 }
 
 .knowledge-tabs {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .knowledge-tabs .v-tab {
@@ -1303,24 +1283,7 @@ defineExpose({
 }
 
 .knowledge-tabs .v-tab--selected {
-  color: #1976d2;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-  .knowledge-header {
-    flex-direction: column;
-    gap: 16px;
-    align-items: stretch;
-  }
-
-  .knowledge-actions {
-    justify-content: center;
-  }
-
-  .knowledge-content {
-    margin: 8px;
-  }
+  color: var(--app-accent);
 }
 
 /* Status snackbar styles */
@@ -1350,28 +1313,28 @@ defineExpose({
 }
 
 .v-window-item::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--app-surface-variant);
   border-radius: 4px;
 }
 
 .v-window-item::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--app-border-strong);
   border-radius: 4px;
 }
 
 .v-window-item::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: var(--app-text-muted);
 }
 
 /* Upload Dialog Styles */
 .upload-drop-zone {
-  border: 2px dashed #e0e0e0;
+  border: 2px dashed var(--app-border);
   border-radius: 12px;
   padding: 40px 20px;
   text-align: center;
   cursor: pointer;
   transition: all 0.3s ease;
-  background-color: #fafafa;
+  background-color: var(--app-surface);
   min-height: 200px;
   display: flex;
   align-items: center;
@@ -1379,19 +1342,19 @@ defineExpose({
 }
 
 .upload-drop-zone:hover {
-  border-color: #1976d2;
-  background-color: #f5f5f5;
+  border-color: var(--app-accent);
+  background-color: var(--app-surface-variant);
 }
 
 .upload-drop-zone.drag-over {
-  border-color: #1976d2;
-  background-color: #e3f2fd;
+  border-color: var(--app-accent);
+  background-color: var(--app-accent-soft);
   transform: scale(1.02);
 }
 
 .upload-drop-zone.has-files {
-  border-color: #4caf50;
-  background-color: #f1f8e9;
+  border-color: var(--app-success);
+  background-color: var(--app-success-soft);
 }
 
 .drop-zone-content {
@@ -1402,14 +1365,14 @@ defineExpose({
 }
 
 .selected-files {
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   padding: 16px;
-  background-color: #f9f9f9;
+  background-color: var(--app-surface);
 }
 
 .file-item {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .file-item:last-child {

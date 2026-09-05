@@ -21,6 +21,7 @@ async function main() {
     if (args.length > 0) {
       const command = args[0]
       
+/* eslint-disable no-case-declarations */
       switch (command) {
         case 'list':
           console.log('📋 Existing Platforms:')
@@ -68,3 +69,5 @@ if (require.main === module) {
   main()
 }
 
+
+/* eslint-enable no-case-declarations */

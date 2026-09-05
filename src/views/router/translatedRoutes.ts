@@ -10,7 +10,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
   return [
     {
       path: "/",
-      redirect: "/dashboard/home",
+      redirect: "/aiworkspace",
       name: "Dashboard",
       meta: {
         visible: false,

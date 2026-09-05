@@ -1,80 +1,42 @@
 <template>
-  <v-container fluid>
-    <!-- Header -->
-    <v-row class="mb-4">
-      <v-col cols="12">
-        <div class="d-flex align-center">
-          <v-btn
-            icon="mdi-arrow-left"
-            variant="text"
-            @click="goBack"
-            class="mr-4"
-          />
-          <div>
-            <h2 class="text-h4 font-weight-bold">
-              <v-icon class="mr-2">mdi-pencil</v-icon>
-              Edit Schedule
-            </h2>
-            <p class="text-subtitle-1 text-medium-emphasis">
-              {{ schedule?.name || 'Loading...' }}
-            </p>
-          </div>
-        </div>
-      </v-col>
-    </v-row>
+  <AppPageShell
+    page-id="schedule-edit"
+    title-key="schedule.edit_schedule"
+    content-width="form"
+    :busy="loading || submitting"
+  >
+    <!-- Objective title + record context (IPR-019); shared load states
+         replace the local spinner/error cards (IPR-043). -->
+    <template #context>
+      <button
+        type="button"
+        class="back-link"
+        data-testid="schedule-edit-back"
+        @click="goBack"
+      >
+        <v-icon icon="mdi-arrow-left" size="14" aria-hidden="true" />
+        {{ t('schedule.schedules') }}
+      </button>
+    </template>
+    <template #description>
+      <span>{{ schedule?.name || '' }}</span>
+    </template>
 
-    <!-- Loading State -->
-    <v-row v-if="loading && !schedule">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text class="text-center py-8">
-            <v-progress-circular
-              indeterminate
-              color="primary"
-              size="64"
-            />
-            <div class="text-h6 mt-4">Loading schedule...</div>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Error State -->
-    <v-row v-else-if="error">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text class="text-center py-8">
-            <v-icon size="64" color="error" class="mb-4">mdi-alert-circle</v-icon>
-            <div class="text-h6 text-error mb-2">Failed to load schedule</div>
-            <div class="text-body-2 text-medium-emphasis mb-4">{{ error }}</div>
-            <v-btn
-              color="primary"
-              @click="loadSchedule"
-            >
-              Retry
-            </v-btn>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Form -->
-    <v-row v-else-if="schedule">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text>
-            <ScheduleForm
-              :schedule="schedule"
-              :is-edit="true"
-              :loading="submitting"
-              :ai-message-task-data="aiMessageTask"
-              @submit="handleSubmit"
-              @cancel="goBack"
-            />
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+    <PageStateView
+      v-if="!schedule"
+      :load-state="editLoadState"
+      :skeleton-rows="6"
+      @retry="loadSchedule"
+    />
+    <ScheduleForm
+      v-else
+      :schedule="schedule"
+      :is-edit="true"
+      :loading="submitting"
+      :ai-message-task-data="aiMessageTask"
+      @submit="handleSubmit"
+      @cancel="goBack"
+    />
 
     <!-- Alert Dialog -->
     <v-dialog v-model="alertDialog.show" max-width="400">
@@ -97,13 +59,26 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ScheduleForm from './widgets/ScheduleForm.vue'
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue'
+import PageStateView from '@/views/components/pageTemplates/PageStateView.vue'
+import { useI18n } from 'vue-i18n'
+import { computed } from 'vue'
+import type { PageLoadState } from '@/views/types/uiConvergenceTypes'
+
+const { t } = useI18n()
+
+const editLoadState = computed<PageLoadState>(() => {
+  if (loading.value && !schedule.value) return { state: 'loading' };
+  if (error.value) return { state: 'error', messageKey: 'ui.state.errorBody', recoverable: true };
+  return { state: 'ready' };
+});
 import { getScheduleById, updateSchedule } from '@/views/api/schedule'
 import { getAiMessageTaskDetail } from '@/views/api/aiMessageTask'
 import { ScheduleUpdateRequest } from '@/entityTypes/schedule-type'

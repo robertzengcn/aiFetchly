@@ -6,7 +6,7 @@ import {
 import { randomUUID } from "node:crypto";
 import type { AIMemoryConsolidationRunView } from "@/entityTypes/aiUserMemoryTypes";
 
-export type CompleteMemoryRunInput = Omit<CompleteRunFields, "finishedAt">
+export type CompleteMemoryRunInput = Omit<CompleteRunFields, "finishedAt">;
 
 export class AIMemoryConsolidationRunModule extends BaseModule {
   private runModel: AIMemoryConsolidationRunModel;
@@ -20,11 +20,16 @@ export class AIMemoryConsolidationRunModule extends BaseModule {
     reviewedSince?: Date | null;
     reviewedThrough?: Date | null;
   }): Promise<AIMemoryConsolidationRunView> {
+    // SMBW-008: do NOT persist the candidate reviewedThrough at start. The
+    // watermark must commit only with the successful transaction
+    // (applyPlanAndCompleteRun / completeRun) so a failed or cancelled run
+    // never advances the cursor past unprocessed material. reviewedSince is
+    // safe to record (it is the prior cursor, not the candidate).
     const e = await this.runModel.createRunning({
       runId: `run-${randomUUID()}`,
       startedAt: new Date(),
       reviewedSince: input.reviewedSince ?? null,
-      reviewedThrough: input.reviewedThrough ?? null,
+      reviewedThrough: null,
     });
     return this.toView(e);
   }

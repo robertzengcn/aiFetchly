@@ -49,7 +49,7 @@ export function redactSecrets(input: string): string {
     });
   }
   // Bearer tokens in arbitrary positions: `Bearer ey...` -> `Bearer <redacted>`
-  out = out.replace(/\bBearer\s+[A-Za-z0-9._\-]{8,}/g, "Bearer <redacted>");
+  out = out.replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/g, "Bearer <redacted>");
   // JWT-shaped tokens (three base64 segments).
   out = out.replace(
     /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,

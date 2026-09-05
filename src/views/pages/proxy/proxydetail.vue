@@ -1,5 +1,22 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    :page-id="isEdit ? 'proxy-edit' : 'proxy-create'"
+    :title-key="isEdit ? 'route.edit_proxy' : 'route.add_proxy'"
+    content-width="form"
+  >
+    <!-- Objective title + context (IPR-019); the form owns its fields. -->
+    <template #context>
+      <button
+        type="button"
+        class="back-link"
+        data-testid="proxy-detail-back"
+        @click="router.go(-1)"
+      >
+        <v-icon icon="mdi-arrow-left" size="14" aria-hidden="true" />
+        {{ t('route.proxy_list') }}
+      </button>
+    </template>
+    <v-sheet class="mx-auto" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="proxyId"
@@ -77,6 +94,7 @@
       </div>
     </v-form>
   </v-sheet>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
@@ -86,6 +104,7 @@ import {
 
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import {ProxyEntity} from "@/entityTypes/proxyType";
 // import { saveSocialTask } from "@/views/api/socialtask";
 const $route = useRoute();

@@ -554,13 +554,11 @@ module.exports = {
               // continueOnError:true, which silently swallows osx-sign
               // failures and leaves the app unsigned.
               continueOnError: false,
-              // Our entitlements plist files already contain all required
-              // entitlements (com.apple.security.app-sandbox, network.client,
-              // files.user-selected.read-write, bookmarks.app-scope), so the
-              // preAutoEntitlements automation is not needed. Disabling it
-              // avoids a potential failure path where osx-sign cannot parse
-              // the team ID from the signing identity name.
-              preAutoEntitlements: false,
+              // Derive com.apple.application-identifier and
+              // com.apple.developer.team-identifier from the provisioning
+              // profile. App Store Connect requires these values in the
+              // signed app whenever the embedded profile contains them.
+              preAutoEntitlements: true,
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)
                   ? macStoreEntitlementsPath
@@ -678,7 +676,9 @@ module.exports = {
           },
         ]
       : []),
-    // Direct Windows distribution: WiX MSI, signed only for production.
+    // Direct Windows distribution: Squirrel EXE + WiX MSI.
+    // Store builds still include these makers so master can produce
+    // local-testing installers with --skip-package --targets after MSIX.
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
@@ -789,6 +789,27 @@ module.exports = {
             "alsa-lib",
           ],
         },
+      },
+    },
+    {
+      name: "@electron-forge/maker-squirrel",
+      platforms: ["win32"],
+      config: {
+        name: "aifetchly",
+        authors: "Robert Zeng",
+        description: "AI-powered marketing automation",
+        setupIcon: "./src/assets/images/icon.ico",
+        loadingGif: "./src/assets/images/installer-loading.gif",
+        setupExe: "AiFetchlySetup.exe",
+        // WiX already produces the MSI used for local testing and Store-adjacent
+        // direct downloads. Keep Squirrel focused on Setup.exe + nupkg/RELEASES.
+        noMsi: true,
+        ...(windowsSignConfig
+          ? {
+              certificateFile: windowsSignConfig.certificateFile,
+              certificatePassword: windowsSignConfig.certificatePassword,
+            }
+          : {}),
       },
     },
     {

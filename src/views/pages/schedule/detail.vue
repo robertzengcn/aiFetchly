@@ -1,151 +1,75 @@
 <template>
-  <v-container fluid>
-    <!-- Header -->
-    <v-row class="mb-4">
-      <v-col cols="12">
-        <div class="d-flex align-center justify-space-between">
-          <div class="d-flex align-center">
-            <v-btn
-              icon="mdi-arrow-left"
-              variant="text"
-              @click="goBack"
-              class="mr-4"
-            />
-            <div>
-              <h2 class="text-h4 font-weight-bold">
-                <v-icon class="mr-2">mdi-eye</v-icon>
-                {{ t('schedule.detail_title') }}
-              </h2>
-              <p class="text-subtitle-1 text-medium-emphasis">
-                {{ schedule?.name || t('schedule.detail_loading') }}
-              </p>
-            </div>
-          </div>
-          <div class="d-flex">
-            <v-btn
-              color="primary"
-              prepend-icon="mdi-pencil"
-              @click="editSchedule"
-              class="mr-2"
-            >
-              {{ t('schedule.detail_edit') }}
-            </v-btn>
-            <v-btn
-              color="success"
-              prepend-icon="mdi-play"
-              @click="runScheduleNow"
-              :loading="running"
-              :disabled="!schedule?.is_active"
-            >
-              {{ t('schedule.detail_run_now') }}
-            </v-btn>
-          </div>
-        </div>
-      </v-col>
-    </v-row>
+  <AppPageShell
+    page-id="schedule-detail"
+    title-key="schedule.detail_title"
+    content-width="wide"
+    :busy="loading || running"
+  >
+    <!-- Identity, authoritative status, primary action FIRST (IPR-026). -->
+    <template #context>
+      <button
+        type="button"
+        class="back-link"
+        data-testid="schedule-detail-back"
+        @click="goBack"
+      >
+        <v-icon icon="mdi-arrow-left" size="14" aria-hidden="true" />
+        {{ t('schedule.schedules') }}
+      </button>
+    </template>
+    <template #description>
+      <span>{{ schedule?.name || t('schedule.detail_loading') }}</span>
+    </template>
+    <template #status>
+      <ScheduleStatusBadge v-if="schedule" :status="schedule.status" />
+    </template>
+    <template #primary-action>
+      <v-btn
+        color="primary"
+        prepend-icon="mdi-play"
+        :loading="running"
+        :disabled="!schedule?.is_active"
+        data-testid="schedule-detail-run-now"
+        @click="runScheduleNow"
+      >
+        {{ t('schedule.detail_run_now') }}
+      </v-btn>
+    </template>
+    <template #overflow>
+      <v-menu location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <v-btn icon v-bind="menuProps" variant="text" data-testid="schedule-detail-overflow">
+            <v-icon>mdi-dots-horizontal</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" role="menu">
+          <v-list-item
+            role="menuitem"
+            :title="t('schedule.detail_edit')"
+            prepend-icon="mdi-pencil"
+            data-testid="schedule-detail-overflow-edit"
+            @click="editSchedule"
+          />
+        </v-list>
+      </v-menu>
+    </template>
 
-    <!-- Loading State -->
-    <v-row v-if="loading && !schedule">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text class="text-center py-8">
-            <v-progress-circular
-              indeterminate
-              color="primary"
-              size="64"
-            />
-            <div class="text-h6 mt-4">{{ t('schedule.detail_loading') }}</div>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+    <!-- Shared load states replace local spinner/error cards (IPR-043). -->
+    <PageStateView
+      v-if="!schedule"
+      :load-state="detailLoadState"
+      :skeleton-rows="7"
+      @retry="loadSchedule"
+    />
 
-    <!-- Error State -->
-    <v-row v-else-if="error">
-      <v-col cols="12">
-        <v-card>
-          <v-card-text class="text-center py-8">
-            <v-icon size="64" color="error" class="mb-4">mdi-alert-circle</v-icon>
-            <div class="text-h6 text-error mb-2">{{ t('schedule.detail_failed_to_load') }}</div>
-            <div class="text-body-2 text-medium-emphasis mb-4">{{ error }}</div>
-            <v-btn
-              color="primary"
-              @click="loadSchedule"
-            >
-              {{ t('schedule.detail_retry') }}
-            </v-btn>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- Schedule Details -->
-    <v-row v-else-if="schedule">
-      <!-- Basic Information -->
+    <template v-else>
+      <v-row>
+      <!-- Stable metadata as definition rows, never disabled inputs (IPR-027). -->
       <v-col cols="12" md="8">
-        <v-card class="mb-4">
-          <v-card-title class="d-flex align-center">
-            <v-icon class="mr-2">mdi-information</v-icon>
-            {{ t('schedule.detail_basic_information') }}
-          </v-card-title>
-          <v-card-text>
-            <v-row>
-              <v-col cols="12" md="6">
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_name') }}</div>
-                  <div class="text-body-1 font-weight-medium">{{ schedule.name }}</div>
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_description') }}</div>
-                  <div class="text-body-1">{{ schedule.description || t('schedule.detail_no_description') }}</div>
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_task_type') }}</div>
-                  <v-chip
-                    :color="getTaskTypeColor(schedule.task_type)"
-                    size="small"
-                    variant="outlined"
-                  >
-                    {{ getTaskTypeLabel(schedule.task_type) }}
-                  </v-chip>
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_task_id') }}</div>
-                  <div class="text-body-1 font-weight-medium">{{ schedule.task_id }}</div>
-                </div>
-              </v-col>
-              <v-col cols="12" md="6">
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_status') }}</div>
-                  <ScheduleStatusBadge :status="schedule.status" />
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_active') }}</div>
-                  <v-switch
-                    :model-value="schedule.is_active"
-                    :disabled="true"
-                    color="success"
-                    hide-details
-                  />
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_trigger_type') }}</div>
-                  <v-chip
-                    :color="getTriggerTypeColor(schedule.trigger_type)"
-                    size="small"
-                    variant="outlined"
-                  >
-                    {{ getTriggerTypeLabel(schedule.trigger_type) }}
-                  </v-chip>
-                </div>
-                <div class="mb-3">
-                  <div class="text-caption text-medium-emphasis">{{ t('schedule.detail_created') }}</div>
-                  <div class="text-body-1">{{ formatDateTime(schedule.created_at) }}</div>
-                </div>
-              </v-col>
-            </v-row>
-          </v-card-text>
-        </v-card>
+        <section class="detail-section">
+          <h3 class="detail-section-title">{{ t('schedule.detail_basic_information') }}</h3>
+          <DefinitionList :entries="basicInfoEntries" testid="schedule-detail-definitions" />
+        </section>
 
         <!-- AI Message Task Details -->
         <v-card v-if="schedule.task_type === TaskType.AI_MESSAGE && aiMessageTask" class="mb-4">
@@ -411,7 +335,8 @@
           </v-card-text>
         </v-card>
       </v-col>
-    </v-row>
+      </v-row>
+    </template>
 
     <!-- Alert Dialog -->
     <v-dialog v-model="alertDialog.show" max-width="400">
@@ -447,12 +372,16 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue'
+import PageStateView from '@/views/components/pageTemplates/PageStateView.vue'
+import DefinitionList, { type DefinitionEntry } from '@/views/components/pageTemplates/DefinitionList.vue'
+import type { PageLoadState } from '@/views/types/uiConvergenceTypes'
 import { useI18n } from 'vue-i18n'
 import ScheduleStatusBadge from './widgets/ScheduleStatusBadge.vue'
 import ExecutionHistoryTable from './widgets/ExecutionHistoryTable.vue'
@@ -478,6 +407,26 @@ const aiMessageTask = ref<Record<string, unknown> | null>(null)
 const loading = ref(false)
 const running = ref(false)
 const error = ref('')
+
+const detailLoadState = computed<PageLoadState>(() => {
+  if (loading.value && !schedule.value) return { state: 'loading' };
+  if (error.value) return { state: 'error', messageKey: 'ui.state.errorBody', recoverable: true };
+  return { state: 'ready' };
+});
+
+/** Stable metadata as definition rows (IPR-027). */
+const basicInfoEntries = computed<readonly DefinitionEntry[]>(() => {
+  if (!schedule.value) return [];
+  return [
+    { term: t('schedule.detail_name'), value: schedule.value.name },
+    { term: t('schedule.detail_description'), value: schedule.value.description || t('schedule.detail_no_description') },
+    { term: t('schedule.detail_task_type'), value: getTaskTypeLabel(schedule.value.task_type) },
+    { term: t('schedule.detail_task_id'), value: String(schedule.value.task_id), mono: true },
+    { term: t('schedule.detail_active'), value: schedule.value.is_active ? t('common.yes') : t('common.no') },
+    { term: t('schedule.detail_trigger_type'), value: getTriggerTypeLabel(schedule.value.trigger_type) },
+    { term: t('schedule.detail_created'), value: formatDateTime(schedule.value.created_at) },
+  ];
+});
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const executionHistory = ref<any[]>([])
 const loadingHistory = ref(false)
@@ -704,18 +653,6 @@ const getAlertIcon = (type: string) => {
 }
 
 // Utility functions
-const getTaskTypeColor = (taskType: TaskType): string => {
-  switch (taskType) {
-    case TaskType.SEARCH: return 'blue'
-    case TaskType.EMAIL_EXTRACT: return 'green'
-    case TaskType.BUCK_EMAIL: return 'orange'
-    case TaskType.YELLOW_PAGES: return 'pink'
-    case TaskType.GOOGLE_MAPS: return 'teal'
-    case TaskType.YANDEX_MAPS: return 'indigo'
-    case TaskType.AI_MESSAGE: return 'purple'
-    default: return 'grey'
-  }
-}
 
 const getTaskTypeLabel = (taskType: TaskType): string => {
   switch (taskType) {
@@ -730,14 +667,6 @@ const getTaskTypeLabel = (taskType: TaskType): string => {
   }
 }
 
-const getTriggerTypeColor = (triggerType: TriggerType): string => {
-  switch (triggerType) {
-    case TriggerType.CRON: return 'primary'
-    case TriggerType.DEPENDENCY: return 'secondary'
-    case TriggerType.MANUAL: return 'grey'
-    default: return 'grey'
-  }
-}
 
 const getTriggerTypeLabel = (triggerType: TriggerType): string => {
   switch (triggerType) {

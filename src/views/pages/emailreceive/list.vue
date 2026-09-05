@@ -1,5 +1,9 @@
 <template>
-  <div class="tables_page pa-4">
+  <AppPageShell
+    page-id="email-receive-list"
+    title-key="route.email_receive"
+    content-width="full"
+  >
     <div class="d-flex align-center mb-4">
       <h2>{{ t("emailReceive.messages_title") }}</h2>
     </div>
@@ -86,10 +90,11 @@
         <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
       </template>
     </v-data-table-server>
-  </div>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";

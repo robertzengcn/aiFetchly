@@ -221,15 +221,13 @@ describe("AIWorkspaceMemoryModule", () => {
   });
 
   it("lists active memories by default at the module boundary", async () => {
-    const list = vi
-      .fn()
-      .mockResolvedValue([
-        memoryRow({
-          memoryId: "wmem-active",
-          status: "active",
-          title: "Active",
-        }),
-      ]);
+    const list = vi.fn().mockResolvedValue([
+      memoryRow({
+        memoryId: "wmem-active",
+        status: "active",
+        title: "Active",
+      }),
+    ]);
     const mod = createModuleWithListMock(list);
 
     const results = await mod.listMemories(SCOPE_A, {});
@@ -507,5 +505,42 @@ describe("AIWorkspaceMemoryModule", () => {
     expect(await mod.getMemory(SCOPE_A, existing.memoryId)).toMatchObject({
       content: "a real workspace preference",
     });
+  });
+
+  it("applyPlanAndCompleteRun writes scopeId so listByScope can find the row", async () => {
+    const scoped: WorkspaceMemoryScope = {
+      ...SCOPE_A,
+      scopeId: "wscope-legacy-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    await mod.applyPlanAndCompleteRun({
+      scope: scoped,
+      runId: "run-ws-scope",
+      plan: {
+        ok: true,
+        create: [
+          {
+            workspaceKey: scoped.workspaceKey,
+            type: "workflow",
+            title: "Run tests with yarn testmain",
+            content: "Main-process tests are invoked via yarn testmain.",
+            confidence: 80,
+            sourceKind: "chat_v2",
+            sourceId: "v2-1",
+            reason: "explicit user instruction",
+          },
+        ],
+        update: [],
+        archive: [],
+      },
+      chatConversationsReviewed: 1,
+      agentTasksReviewed: 0,
+      model: "small",
+    });
+    const listed = await mod.listMemories(scoped, { status: "active" });
+    expect(listed.length).toBe(1);
+    expect(listed[0]?.title).toBe("Run tests with yarn testmain");
+    expect(listed[0]?.sourceKind).toBe("auto_dream");
   });
 });

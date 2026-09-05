@@ -74,6 +74,15 @@ describe("SkillRegistry", () => {
       expect(skill!.tier).toBe("main");
       expect(skill!.source).toBe("built-in");
     });
+
+    test("extract_contact_info requires verify_contact_info before presenting", () => {
+      const skill = SkillRegistry.getSkill("extract_contact_info");
+      expect(skill).not.toBeNull();
+      expect(skill!.description).toContain("MUST call verify_contact_info");
+      expect(skill!.description).not.toContain(
+        "Do not call verify_contact_info again"
+      );
+    });
   });
 
   describe("getAllToolFunctions", () => {
@@ -93,6 +102,7 @@ describe("SkillRegistry", () => {
       expect(names).toContain("extract_emails_from_urls");
       expect(names).toContain("generate_keywords");
       expect(names).toContain("extract_contact_info");
+      expect(names).toContain("verify_contact_info");
       expect(names).toContain("search_maps_businesses");
     });
 

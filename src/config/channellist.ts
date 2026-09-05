@@ -351,6 +351,14 @@ export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
  */
 export const AI_CHAT_V2_EXPORT_GENERATED_IMAGE =
   "ai-chat-v2:export-generated-image";
+
+// AI Chat V2 pending-message queue & steering (message-queue PRD §12)
+export const AI_CHAT_V2_PENDING_CREATE = "ai-chat-v2:pending-message-create";
+export const AI_CHAT_V2_PENDING_LIST = "ai-chat-v2:pending-message-list";
+export const AI_CHAT_V2_PENDING_STEER = "ai-chat-v2:pending-message-steer";
+export const AI_CHAT_V2_PENDING_CANCEL = "ai-chat-v2:pending-message-cancel";
+export const AI_CHAT_V2_PENDING_RESUME = "ai-chat-v2:pending-message-resume";
+export const AI_CHAT_V2_PENDING_EVENT = "ai-chat-v2:pending-message-event";
 export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
 export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
@@ -401,6 +409,31 @@ export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
   "ai-chat-v2:voice-model-download-progress";
 export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
   "ai-chat-v2:voice-model-cancel-download";
+
+// ==================== AI Chat Workspace Redesign Channels ====================
+// Redesigned three-region chat workspace (docs/prd/ai-chat-workspace-ui-redesign-*.md).
+// Invoke channels are request/response; event channels are main→renderer.
+export const AI_CHAT_WORKSPACE_BOOTSTRAP = "ai-chat-workspace:bootstrap";
+export const AI_CHAT_WORKSPACE_SELECT = "ai-chat-workspace:select";
+export const AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL =
+  "ai-chat-workspace:unsubscribe-detail";
+export const AI_CHAT_WORKSPACE_START_RUN = "ai-chat-workspace:start-run";
+export const AI_CHAT_WORKSPACE_CANCEL_RUN = "ai-chat-workspace:cancel-run";
+export const AI_CHAT_WORKSPACE_HISTORY_PAGE = "ai-chat-workspace:history-page";
+export const AI_CHAT_WORKSPACE_MARK_READ = "ai-chat-workspace:mark-read";
+export const AI_CHAT_WORKSPACE_RENAME = "ai-chat-workspace:rename";
+export const AI_CHAT_WORKSPACE_DELETE = "ai-chat-workspace:delete";
+export const AI_CHAT_WORKSPACE_DUPLICATE = "ai-chat-workspace:duplicate";
+export const AI_CHAT_WORKSPACE_EXPORT = "ai-chat-workspace:export";
+export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
+/** Main→Renderer: redacted sidebar projection updates (no content bodies). */
+export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
+  "ai-chat-workspace:summary-event";
+/** Main→Renderer: selected-conversation detailed run events. */
+export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
+/** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
+export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
+export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
@@ -629,6 +662,70 @@ export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
 
+// Portable workspace memory (Markdown files under .aifetchly/memory/)
+// Non-AI operations — available without an AI subscription (design §20.4).
+export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
+  "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
+  "ai:portable-workspace-memory:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CREATE =
+  "ai:portable-workspace-memory:create";
+export const AI_PORTABLE_WORKSPACE_MEMORY_UPDATE =
+  "ai:portable-workspace-memory:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE =
+  "ai:portable-workspace-memory:archive-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE =
+  "ai:portable-workspace-memory:delete-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
+  "ai:portable-workspace-memory:enable:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =
+  "ai:portable-workspace-memory:enable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW =
+  "ai:portable-workspace-memory:export:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT =
+  "ai:portable-workspace-memory:export";
+export const AI_PORTABLE_WORKSPACE_MEMORY_RESCAN =
+  "ai:portable-workspace-memory:rescan";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST =
+  "ai:portable-workspace-memory:diagnostics:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST =
+  "ai:portable-workspace-memory:conflicts:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE =
+  "ai:portable-workspace-memory:conflict:resolve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE =
+  "ai:portable-workspace-memory:policy:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE =
+  "ai:portable-workspace-memory:promote";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE =
+  "ai:portable-workspace-memory:privatize";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
+  "ai:portable-workspace-memory:review:approve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
+  "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST =
+  "ai:portable-workspace-memory:review:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION =
+  "ai:portable-workspace-memory:review:approve-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION =
+  "ai:portable-workspace-memory:review:reject-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE =
+  "ai:portable-workspace-memory:reveal-file";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
+  "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =
+  "ai:portable-workspace-memory:get-state";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
+  "ai:portable-workspace-memory:bridge:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =
+  "ai:portable-workspace-memory:bridge:apply";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE =
+  "ai:portable-workspace-memory:bridge:remove";
+export const AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE =
+  "ai:portable-workspace-memory:identity:regenerate";
+// Renderer push event (main → renderer): one summary per reconciliation.
+export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
+  "ai:portable-workspace-memory:changed";
+
 // Workspace Management Channels
 export const AI_WORKSPACE_SET = "ai-workspace:set";
 export const AI_WORKSPACE_GET = "ai-workspace:get";
@@ -684,3 +781,8 @@ export const DIAGNOSTICS_GET_STATUS = "diagnostics:get-status";
 export const DIAGNOSTICS_SET_DEBUG = "diagnostics:set-debug";
 export const DIAGNOSTICS_CLEAR_LOCAL = "diagnostics:clear-local";
 export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
+
+// ======== AI Content Reporting ========
+// Safety/support reporting for AI-generated output (Microsoft Store Policy
+// 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
+export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";

@@ -1,10 +1,16 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="search-task-detail"
+      title-key="route.search_task_detail"
+      content-width="full"
+    >
        
 <SearchDetailTable />
-    </div>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import SearchDetailTable from '@/views/pages/search/widgets/SearchDetailTable.vue'
 //const dialog = ref(false);

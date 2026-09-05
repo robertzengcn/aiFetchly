@@ -164,7 +164,13 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
         | undefined,
     };
     const runtime = AgentRuntimeRegistry.getRuntime();
-    const result = await runtime.runSync(request, getDefaultAgentRuntimeDeps());
+    // Propagate the execution-context signal so cancelling the outer job
+    // aborts the nested AgentRuntime instead of letting it burn model/tool
+    // resources invisibly (FR-37, technical design §17.3).
+    const result = await runtime.runSync(request, {
+      ...getDefaultAgentRuntimeDeps(),
+      signal: context.signal,
+    });
     return {
       success: result.status === "completed",
       result: {

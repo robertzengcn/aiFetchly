@@ -35,6 +35,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "create_schedule",
       "knowledge_library_import_attachment",
       "scrape_urls_from_search_engine",
+      "extract_contact_info",
+      "verify_contact_info",
       "shell_execute",
     ];
     for (const name of must) {
@@ -66,6 +68,12 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     // 'export those data to a csv file' bug (row-by-row echo >>).
     expect(s.toLowerCase()).toContain("not a shell echo");
     expect(s.toLowerCase()).toContain("row-by-row");
+  });
+
+  it("routes contact extraction to verify_contact_info before presenting results", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    expect(s).toContain("verify_contact_info");
+    expect(s).toContain("MUST call");
   });
 
   it("explicitly flags the email-reply tools as not auto-promoted", () => {

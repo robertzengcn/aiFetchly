@@ -15,14 +15,26 @@ import {
   exportGeneratedImage,
   streamChatV2Message,
 } from "@/views/api/aiChatV2";
-import type {
-  ChatV2GeneratedImageExportResult,
-} from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
+import type { ChatV2GeneratedImageExportResult } from "@/views/api/aiChatV2";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  detachChatV2ConversationStreamListeners: vi.fn(),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
@@ -53,6 +65,8 @@ vi.mock("@/views/api/aiChatV2Voice", () => ({
   AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT:
     "aifetchly:ai-chat-v2-voice-models-changed",
   cancelVoiceJob: vi.fn().mockResolvedValue({ ok: true }),
+  cancelVoiceModelDownload: vi.fn().mockResolvedValue(undefined),
+  downloadVoiceModel: vi.fn().mockResolvedValue(undefined),
   getVoiceSettings: vi.fn().mockResolvedValue({
     spokenResponsesEnabled: false,
     spokenResponsePolicy: "off",
@@ -64,6 +78,7 @@ vi.mock("@/views/api/aiChatV2Voice", () => ({
   listVoiceModels: vi.fn().mockResolvedValue([]),
   notifyVoiceModelsChanged: vi.fn(),
   onVoiceModelDownloadProgress: vi.fn().mockReturnValue(() => undefined),
+  setVoiceSettings: vi.fn(async (settings: unknown) => settings),
   synthesizeVoice: vi.fn(),
 }));
 
@@ -219,30 +234,29 @@ const SlotPassThrough = (name: string): ReturnType<typeof defineComponent> =>
     template: "<div><slot /></div>",
   });
 
-const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> =
-  {
-    VIcon: SlotPassThrough("VIcon"),
-    VChip: SlotPassThrough("VChip"),
-    VSpacer: SlotPassThrough("VSpacer"),
-    VCardTitle: SlotPassThrough("VCardTitle"),
-    VCardText: SlotPassThrough("VCardText"),
-    VCardActions: SlotPassThrough("VCardActions"),
-    VProgressLinear: SlotPassThrough("VProgressLinear"),
-    VProgressCircular: SlotPassThrough("VProgressCircular"),
-    VDivider: SlotPassThrough("VDivider"),
-    VAlert: SlotPassThrough("VAlert"),
-    VTooltip: SlotPassThrough("VTooltip"),
-    VTextField: SlotPassThrough("VTextField"),
-    VSheet: SlotPassThrough("VSheet"),
-    VList: SlotPassThrough("VList"),
-    VListItem: SlotPassThrough("VListItem"),
-    VListItemTitle: SlotPassThrough("VListItemTitle"),
-    VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
-    VDialog: DialogStub,
-    VSnackbar: SnackbarStub,
-    VBtn: ButtonStub,
-    VCard: CardStub,
-  };
+const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> = {
+  VIcon: SlotPassThrough("VIcon"),
+  VChip: SlotPassThrough("VChip"),
+  VSpacer: SlotPassThrough("VSpacer"),
+  VCardTitle: SlotPassThrough("VCardTitle"),
+  VCardText: SlotPassThrough("VCardText"),
+  VCardActions: SlotPassThrough("VCardActions"),
+  VProgressLinear: SlotPassThrough("VProgressLinear"),
+  VProgressCircular: SlotPassThrough("VProgressCircular"),
+  VDivider: SlotPassThrough("VDivider"),
+  VAlert: SlotPassThrough("VAlert"),
+  VTooltip: SlotPassThrough("VTooltip"),
+  VTextField: SlotPassThrough("VTextField"),
+  VSheet: SlotPassThrough("VSheet"),
+  VList: SlotPassThrough("VList"),
+  VListItem: SlotPassThrough("VListItem"),
+  VListItemTitle: SlotPassThrough("VListItemTitle"),
+  VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
+  VDialog: DialogStub,
+  VSnackbar: SnackbarStub,
+  VBtn: ButtonStub,
+  VCard: CardStub,
+};
 
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
@@ -333,9 +347,7 @@ function mountChat() {
  * data-testid survives stubbing via attribute fallthrough, so we can target
  * it precisely instead of matching any open snackbar.
  */
-function noticeToastText(
-  wrapper: ReturnType<typeof mountChat>
-): string {
+function noticeToastText(wrapper: ReturnType<typeof mountChat>): string {
   const toast = wrapper.find('[data-testid="ai-chat-generated-error-toast"]');
   return toast.exists() ? toast.text() : "";
 }
@@ -343,6 +355,7 @@ function noticeToastText(
 describe("AiChatV2 save-to-workspace wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     vi.mocked(streamChatV2Message).mockImplementation(
       async (
         _request: ChatV2StreamRequest,
@@ -368,8 +381,8 @@ describe("AiChatV2 save-to-workspace wiring", () => {
     await flushPromises();
 
     expect(exportGeneratedImage).toHaveBeenCalledTimes(1);
-    const [conversationId, reference] = vi.mocked(exportGeneratedImage).mock
-      .calls[0];
+    const [conversationId, reference] =
+      vi.mocked(exportGeneratedImage).mock.calls[0];
     expect(typeof conversationId).toBe("string");
     expect(conversationId.startsWith("v2-")).toBe(true);
     expect(reference).toEqual({ messageId: "m1", imageIndex: 0 });
@@ -413,9 +426,7 @@ describe("AiChatV2 save-to-workspace wiring", () => {
     await flushPromises();
 
     // Guidance toast shown; the workspace-required card flow opened.
-    expect(noticeToastText(wrapper)).toContain(
-      WORKSPACE_REQUIRED_TEXT
-    );
+    expect(noticeToastText(wrapper)).toContain(WORKSPACE_REQUIRED_TEXT);
     expect(
       wrapper.findComponent({ name: "WorkspaceRequiredCard" }).exists()
     ).toBe(true);
@@ -449,8 +460,6 @@ describe("AiChatV2 save-to-workspace wiring", () => {
     await flushPromises();
 
     expect(noticeToastText(wrapper)).toContain(SAVE_FAILED_TEXT);
-    expect(noticeToastText(wrapper)).toContain(
-      "generated_image_not_owned"
-    );
+    expect(noticeToastText(wrapper)).toContain("generated_image_not_owned");
   });
 });

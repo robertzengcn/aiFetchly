@@ -48,15 +48,31 @@
         :title="t('aiArtifacts.copy_html') || 'Copy HTML'"
         @click="emit('copy-html', artifact.id)"
       />
+      <AIContentReportButton
+        :descriptor="reportDescriptor"
+        :reported="reportSubmitted"
+        @report="reportDialogOpen = true"
+      />
+      <AIContentReportDialog
+        v-model="reportDialogOpen"
+        :descriptor="reportDescriptor"
+        :privacy-policy-url="AIFETCHLY_PRIVACY_POLICY_URL"
+        @submitted="reportSubmitted = true"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildArtifactDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+import { AIFETCHLY_PRIVACY_POLICY_URL } from "@/config/appInfo";
 
-defineProps<{
+const props = defineProps<{
   artifact: AIArtifactToolMetadata;
   disabled?: boolean;
 }>();
@@ -67,6 +83,12 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+const reportDialogOpen = ref(false);
+const reportSubmitted = ref(false);
+const reportDescriptor = computed(() =>
+  buildArtifactDescriptor(props.artifact)
+);
 </script>
 
 <style scoped>

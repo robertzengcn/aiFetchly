@@ -4,6 +4,7 @@ import { MCPToolService } from "@/service/MCPToolService";
 import {
   CONTACT_VERIFICATION_TOOL_DESCRIPTION,
   CONTACT_VERIFICATION_TOOL_PARAMETERS,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
 } from "@/schemas/contactVerification";
 
 // Static tool functions
@@ -282,7 +283,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
       "IMPORTANT: To avoid timeouts, call this tool in SMALL BATCHES of about 5 URLs or fewer per call; for a larger URL list, make multiple sequential calls instead of one large call. If a batch times out, contacts already collected are returned with partial: true — retry the remaining URLs in a smaller batch. " +
-      "POSTCONDITION: When extraction returns at least one email or phone, every returned contact already includes a Standard verification result (verification_performed: true). Do not call verify_contact_info again for results marked verification_performed: true unless the user explicitly requests re-verification.",
+      EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
       type: "object",
       properties: {

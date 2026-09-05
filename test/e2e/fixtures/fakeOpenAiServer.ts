@@ -38,26 +38,20 @@ export interface RedactedRequest {
   readonly roles: readonly string[];
   readonly stream: boolean;
   readonly toolNames: readonly string[];
-  /**
-   * SHA-256 of every `image_url` content-part URL in the request, in message
-   * then part order. Hashes (never base64/data URLs) let specs assert which
-   * images were attached and in which order without logging payloads.
-   */
-  readonly imagePartHashes: readonly string[];
   readonly clientDisconnected: boolean;
   readonly timestamp: number;
 }
 
-/** One scripted queue entry: either a tool call or a canned scenario response. */
+/** One scripted queue entry: a tool call, or a canned scenario response. */
 export interface ScriptedToolCall {
   readonly name?: string;
   readonly arguments?: string;
   /** When set, respond with this scenario instead of emitting a tool call
    * (used to script isolated batch-worker requests that must return images). */
   readonly scenario?: FakeAiScenarioName;
-  /** When set alongside `scenario: "stream-generated-image"`, override the
-   * base64 PNG payload served by that scenario (so each worker request can
-   * return a distinct image). Ignored for other scenarios. */
+  /** When set alongside scenario "stream-generated-image"(-delayed), override
+   * the base64 PNG payload served by that scenario so each worker request
+   * returns a distinct image. Ignored for other scenarios. */
   readonly imageB64?: string;
 }
 
@@ -69,10 +63,24 @@ export interface FakeOpenAiController {
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
   /**
+   * Configure MULTIPLE tool calls in one response (queue/steering E2E):
+   * the app's loop executes them sequentially, so steering committed while
+   * the stream is still open lands at the after_model boundary and skips
+   * every unstarted call. `delayMs` delays before the first tool-call delta
+   * so the test can click Steer mid-stream.
+   */
+  setToolCalls(
+    calls: ReadonlyArray<{ name: string; arguments: string }>,
+    delayMs?: number
+  ): Promise<void>;
+  /**
    * Replace the scripted tool-call queue. Each chat request (continuation or
    * not) consumes the next entry; when the queue is empty requests fall back
-   * to the active scenario / default follow-up. Lets a spec script a whole
-   * multi-step tool conversation (e.g. glob_files then attach_local_images).
+   * to the other configured tool call / active scenario. Lets a spec script a
+   * whole multi-round tool conversation (e.g. tool_catalog_search →
+   * process_artifact_batch → one streamed image per isolated batch worker →
+   * parent follow-up). Entries may carry a canned `scenario` (optionally with
+   * an `imageB64` payload override) instead of a tool call.
    */
   setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
@@ -120,24 +128,6 @@ function redactChatRequest(
   const toolNames = (Array.isArray(parsed.tools) ? parsed.tools : [])
     .map((t) => (t as { function?: { name?: string } })?.function?.name)
     .filter((n): n is string => typeof n === "string");
-  // Image parts are recorded as SHA-256 hashes only — never the data URLs.
-  const imagePartHashes: string[] = [];
-  for (const message of messages) {
-    const content = (message as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      const url = (part as { type?: string; image_url?: { url?: unknown } })
-        ?.image_url?.url;
-      if (
-        (part as { type?: unknown })?.type === "image_url" &&
-        typeof url === "string"
-      ) {
-        imagePartHashes.push(
-          crypto.createHash("sha256").update(url, "utf8").digest("hex")
-        );
-      }
-    }
-  }
   return {
     method: req.method ?? "GET",
     path: req.url ?? "/",
@@ -146,7 +136,6 @@ function redactChatRequest(
     roles,
     stream: parsed.stream === true,
     toolNames,
-    imagePartHashes,
     clientDisconnected,
     timestamp: Date.now(),
   };
@@ -155,11 +144,17 @@ function redactChatRequest(
 export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   const controlToken = crypto.randomBytes(8).toString("hex");
   let scenario: FakeAiScenarioName = "stream-text";
+  /** Optional tool call to emit on the next (non-continuation) chat request. */
+  let toolCallConfig: { name: string; arguments: string } | null = null;
+  /** Optional multi-call variant (queue/steering E2E). */
+  let toolCallsConfig: {
+    calls: ReadonlyArray<{ name: string; arguments: string }>;
+    delayMs: number;
+  } | null = null;
   /**
    * Scripted tool-call queue. Each chat request (continuation or not)
    * consumes the head entry; when empty, requests fall back to the default
-   * plan (follow-up completion for tool-result continuations, the active
-   * scenario otherwise).
+   * plan (configured tool call / follow-up completion / active scenario).
    */
   let toolCallQueue: ScriptedToolCall[] = [];
   /** Monotonic id for scripted tool calls (unique across rounds). */
@@ -206,6 +201,8 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
+        toolCallConfig = null;
+        toolCallsConfig = null;
         toolCallQueue = [];
         scriptedCallCounter = 0;
         res.writeHead(204);
@@ -217,13 +214,28 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           const parsed = JSON.parse(body) as {
             name?: string;
             arguments?: string;
+            calls?: ReadonlyArray<{ name: string; arguments?: string }>;
+            delayMs?: number;
           };
-          if (parsed.name) {
-            toolCallQueue = [
-              { name: parsed.name, arguments: parsed.arguments ?? "{}" },
-            ];
+          toolCallQueue = [];
+          if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
+            toolCallsConfig = {
+              calls: parsed.calls.map((call) => ({
+                name: call.name,
+                arguments: call.arguments ?? "{}",
+              })),
+              delayMs: parsed.delayMs ?? 0,
+            };
+            toolCallConfig = null;
+          } else if (parsed.name) {
+            toolCallConfig = {
+              name: parsed.name,
+              arguments: parsed.arguments ?? "{}",
+            };
+            toolCallsConfig = null;
           } else {
-            toolCallQueue = [];
+            toolCallConfig = null;
+            toolCallsConfig = null;
           }
         } catch {
           /* ignore */
@@ -234,21 +246,38 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       }
       if (req.method === "POST" && url === "/__e2e/tool-call-queue") {
         try {
-          const parsed = JSON.parse(body) as { calls?: unknown[] };
-          toolCallQueue = (Array.isArray(parsed.calls) ? parsed.calls : [])
-            .filter(
-              (c): c is ScriptedToolCall =>
-                !!c &&
-                typeof c === "object" &&
-                (typeof (c as ScriptedToolCall).name === "string" ||
-                  typeof (c as ScriptedToolCall).scenario === "string")
-            )
-            .map((c) => ({
-              name: c.name,
-              arguments: c.arguments ?? "{}",
-              ...(c.scenario ? { scenario: c.scenario } : {}),
-              ...(c.imageB64 ? { imageB64: c.imageB64 } : {}),
-            }));
+          const parsed = JSON.parse(body) as {
+            calls?: ReadonlyArray<{
+              name?: string;
+              arguments?: string;
+              scenario?: FakeAiScenarioName;
+              imageB64?: string;
+            }>;
+          };
+          if (Array.isArray(parsed.calls)) {
+            toolCallConfig = null;
+            toolCallsConfig = null;
+            toolCallQueue = parsed.calls
+              .filter(
+                (
+                  c
+                ): c is {
+                  name?: string;
+                  arguments?: string;
+                  scenario?: FakeAiScenarioName;
+                  imageB64?: string;
+                } =>
+                  !!c &&
+                  typeof c === "object" &&
+                  (typeof c.name === "string" || typeof c.scenario === "string")
+              )
+              .map((c) => ({
+                name: c.name,
+                arguments: c.arguments ?? "{}",
+                ...(c.scenario ? { scenario: c.scenario } : {}),
+                ...(c.imageB64 ? { imageB64: c.imageB64 } : {}),
+              }));
+          }
         } catch {
           /* ignore */
         }
@@ -294,10 +323,10 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       req.on("aborted", onClientGone);
       res.on("close", onClientGone);
       // Determine the effective plan for this request:
-      //  - the next scripted queue entry (continuation or not) -> emit that
-      //    tool_call so multi-step tool conversations can be scripted;
       //  - a tool-result continuation (app executed an approved tool + fed the
-      //    result back) -> short follow-up completion;
+      //    result back) -> short follow-up completion.
+      //  - else a configured tool call -> emit tool_calls so the app's approval
+      //    flow can gate execution.
       //  - else the active scenario.
       const isContinuation = hasToolResultMessage(rawBody);
       const scripted = toolCallQueue.length > 0 ? toolCallQueue[0] : undefined;
@@ -358,6 +387,38 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         };
       } else if (isContinuation) {
         plan = resolveScenario("tool-success-followup");
+      } else if (toolCallsConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            ...toolCallsConfig.calls.map((call, index) => ({
+              delayMs: index === 0 ? toolCallsConfig.delayMs : 0,
+              payload: toolCallChunk({
+                index,
+                id: `call_e2e_multi_${index}`,
+                name: call.name,
+                arguments: call.arguments,
+              }),
+            })),
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
+      } else if (toolCallConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            {
+              delayMs: 0,
+              payload: toolCallChunk({
+                index: 0,
+                id: "call_e2e_1",
+                name: toolCallConfig.name,
+                arguments: toolCallConfig.arguments,
+              }),
+            },
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
       } else {
         plan = resolveScenario(scenario);
       }
@@ -457,6 +518,16 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async setToolCalls(
+      calls: ReadonlyArray<{ name: string; arguments: string }>,
+      delayMs = 0
+    ): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls, delayMs }),
       });
     },
     async setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void> {

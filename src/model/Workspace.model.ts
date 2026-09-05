@@ -48,6 +48,25 @@ export class WorkspaceModel extends BaseDb {
   }
 
   /**
+   * Persisted stable workspace key for a conversation's newest binding
+   * (workspace redesign §8.2). Returns null when unbound or not yet
+   * backfilled — callers never guess a key from the raw path.
+   */
+  async findWorkspaceKeyForConversation(
+    conversationId: string
+  ): Promise<string | null> {
+    const entity = await this.repository.findOne({
+      where: { conversationId },
+      order: { createdAt: "DESC" },
+      select: {
+        id: true,
+        workspaceKey: true,
+      },
+    });
+    return entity?.workspaceKey ?? null;
+  }
+
+  /**
    * Find a workspace by its database ID.
    */
   async findById(id: number): Promise<WorkspaceRecord | null> {

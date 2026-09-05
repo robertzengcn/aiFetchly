@@ -157,7 +157,7 @@ export class BrowserManager {
         let executablePath: string | undefined;
         let isSystemBrowser = false;
         let isCachedBrowser = false;
-        let buildId = this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
+        const buildId = this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
 
         // 1. Check for local browser path from environment
         if (this.options.localBrowserPath && fs.existsSync(this.options.localBrowserPath)) {

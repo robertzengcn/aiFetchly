@@ -132,8 +132,8 @@ const redirectToLogin = async () => {
                     if (loginDone) {
                         isLoading.value = false;
                         showLoginUrl.value = false;
-                        router.push({ name: 'Dashboard' }).catch((err) => {
-                            console.warn('Navigation to Dashboard failed:', err);
+                        router.push({ name: 'AI_Chat_Workspace' }).catch((err) => {
+                            console.warn('Navigation to AI workspace failed:', err);
                         });
                         return;
                     }

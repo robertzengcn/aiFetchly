@@ -39,6 +39,7 @@ export function normalizeMessageId(
   const unfolded = value.replace(/[\r\n\t]+/g, " ").trim();
   if (!unfolded) return null;
   // Reject control characters (other than the spaces already handled).
+  // eslint-disable-next-line no-control-regex -- intentional: control-char detection is the purpose
   if (/[\x00-\x1f\x7f]/.test(unfolded)) return null;
 
   // Prefer an explicit <id@domain> token; take the first one.
@@ -56,6 +57,7 @@ export function normalizeMessageId(
   }
   token = token.trim();
   if (!token || token.length > MAX_ID_LENGTH) return null;
+  // eslint-disable-next-line no-control-regex -- intentional: control-char detection is the purpose
   if (/[\x00-\x1f\x7f]/.test(token)) return null;
   return token;
 }

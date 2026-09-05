@@ -102,7 +102,8 @@
     "uninstall-linux": "./installer-scripts/uninstall-linux.sh",
     "generate-platform": "ts-node src/scripts/generate-platform.ts",
     "test-platform": "ts-node src/scripts/test-platform.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "e2e:workspace": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
@@ -151,7 +152,7 @@
     "keytar": "^7.9.0",
     "libphonenumber-js": "^1.13.11",
     "lodash": "^4.17.23",
-    "mailparser": "^3.9.12",
+    "mailparser": "^3.9.16",
     "mammoth": "^1.11.0",
     "node-fetch": "^3.3.2",
     "node-machine-id": "^1.1.12",
@@ -164,7 +165,6 @@
     "picomatch": "^4.0.5",
     "pinia": "^2.1.7",
     "plist": "^3.1.0",
-    "protocol-registry": "^2.0.0",
     "puppeteer": "^25.8.0",
     "puppeteer-cluster": "^0.25.0",
     "puppeteer-core": "^25.8.0",

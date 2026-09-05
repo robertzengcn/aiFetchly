@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="settings-hooks"
+    title-key="route.hooks_management"
+    content-width="wide"
+  >
     <!-- Header -->
     <v-row align="center" class="mb-2">
       <v-col cols="6">
@@ -297,10 +301,11 @@
     </v-dialog>
 
     <NoticeSnackbar v-model="snackbar.show" :message="snackbar.message" :type="snackbar.type" />
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";

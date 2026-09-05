@@ -21,7 +21,15 @@ function composer(app: AppLike): import("@playwright/test").Locator {
 }
 
 async function openChat(app: AppLike): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // The chat workspace is the default landing route; the dock toggle only
+  // exists when the app landed elsewhere. Handle both.
+  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  try {
+    await toggle.waitFor({ state: "visible", timeout: 5_000 });
+    await toggle.click();
+  } catch {
+    /* already on the chat workspace */
+  }
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 

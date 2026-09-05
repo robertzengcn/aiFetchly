@@ -158,6 +158,19 @@ export interface WorkspaceWatchManagerOptions {
    * renderer-provided path).
    */
   readonly trustResolver: (workspaceId: string) => boolean;
+  /**
+   * Portable workspace-memory bridge (design §13.1): receives every trusted
+   * snapshot/changed event's portable-memory scan. The manager NEVER awaits
+   * synchronization inside its worker message handler — the callback is
+   * fire-and-forget and owns its own per-scope queue (coordinator). Optional
+   * so pre-portable tests can omit it.
+   */
+  readonly portableMemorySnapshotCallback?: (input: {
+    readonly workspaceId: string;
+    readonly workspaceRoot: string;
+    readonly approved: boolean;
+    readonly snapshot: AIFetchlyConfigSnapshot["portableMemory"];
+  }) => void;
   /** Defaults to child_process.fork. Tests inject a stub. */
   readonly fork?: ForkFn;
   /** Worker entry path. Defaults to the bundled WorkspaceConfigWatchWorker. */
@@ -251,6 +264,8 @@ export class WorkspaceWatchManager {
     e: WorkspaceWatchManagerEvent
   ) => void;
   private readonly trustResolver: (workspaceId: string) => boolean;
+  private readonly portableMemorySnapshotCallback?:
+    | NonNullable<WorkspaceWatchManagerOptions["portableMemorySnapshotCallback"]>;
   private readonly forkFn: ForkFn;
   private readonly workerEntry: string;
   private readonly restarter: WorkspaceWatchRestarter;
@@ -262,6 +277,7 @@ export class WorkspaceWatchManager {
     this.applySnapshotCallback = opts.applySnapshotCallback;
     this.configChangedEmitter = opts.configChangedEmitter;
     this.trustResolver = opts.trustResolver;
+    this.portableMemorySnapshotCallback = opts.portableMemorySnapshotCallback;
     this.forkFn = opts.fork ?? defaultUtilityFork;
     this.workerEntry = opts.workerEntry ?? defaultWorkerEntry();
     this.restarter = opts.restarter ?? new WorkspaceWatchRestarter();
@@ -544,6 +560,29 @@ export class WorkspaceWatchManager {
             `applySnapshotCallback threw for ${event.workspaceId}`,
             err
           );
+        }
+        // Portable memory (design §13.1): enqueue WITHOUT awaiting so worker
+        // event processing stays responsive; the coordinator serializes per
+        // scope and attaches its own error handling. Unapproved snapshots are
+        // still forwarded so the coordinator can clear state (§13.2).
+        if (
+          this.portableMemorySnapshotCallback &&
+          snapshot.portableMemory
+        ) {
+          try {
+            this.portableMemorySnapshotCallback({
+              workspaceId: event.workspaceId,
+              workspaceRoot: state.workspaceRoot,
+              approved,
+              snapshot: snapshot.portableMemory,
+            });
+          } catch (err) {
+            this.logger(
+              "error",
+              `portableMemorySnapshotCallback threw for ${event.workspaceId}`,
+              err
+            );
+          }
         }
         this.configChangedEmitter({
           type: "changed",

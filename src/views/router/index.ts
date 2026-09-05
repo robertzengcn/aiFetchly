@@ -5,8 +5,31 @@ import { RouteRecordRaw } from "vue-router";
 
 export const constantRoutes: RouteRecordRaw[] = [
   {
+    // Redesigned three-region AI chat workspace (full-window shell, not the
+    // legacy Layout drawer): sidebar + selected conversation + inspector.
+    path: "/aiworkspace",
+    name: "AI_Chat_Workspace",
+    meta: {
+      visible: true,
+      title: "route.ai_chat_workspace",
+      icon: "mdi-chat-processing-outline",
+      aiNavigable: true,
+      aiAliases: [
+        "chat workspace",
+        "ai workspace",
+        "workspace chat",
+        "chat home",
+        "full chat",
+      ],
+      aiDescription:
+        "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
+    },
+    component: () =>
+      import("@/views/components/aiChatWorkspace/AiChatWorkspaceShell.vue"),
+  },
+  {
     path: "/",
-    redirect: "/dashboard/home",
+    redirect: "/aiworkspace",
     name: "Dashboard",
     meta: {
       visible: true,
@@ -954,43 +977,47 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: true,
           title: "route.plugins",
           icon: "mdi-puzzle",
-        },
-      },
-    ],
-  },
-  {
-    path: "/community-plugins",
-    name: "CommunityPlugins",
-    redirect: "/community-plugins/list",
-    meta: {
-      visible: true,
-      title: "route.community_plugins",
-      icon: "mdi-storefront-outline",
-    },
-    component: Layout,
-    children: [
-      {
-        path: "list",
-        component: () => import("@/views/pages/communityPlugins/index.vue"),
-        name: "CommunityPluginsList",
-        meta: {
-          visible: true,
-          title: "route.community_plugins",
-          icon: "mdi-storefront-outline",
           aiNavigable: true,
           aiAliases: [
+            "plugins",
+            "plugin management",
             "community plugins",
             "plugin store",
             "plugin hub",
             "community plugin page",
             "browse plugins",
+            "discover plugins",
             "plugin marketplace page",
           ],
           aiDescription:
-            "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+            "Discover community plugins and manage installed plugins and sources",
         },
       },
     ],
+  },
+  {
+    // Legacy Community Plugins route — kept as an invisible, non-AI-navigable
+    // redirect to the canonical unified Plugin page so old bookmarks and
+    // name-based references resolve during the migration window (unified
+    // plugin page tech design §12.2 / TD-9). No Layout, no child.
+    path: "/community-plugins",
+    name: "CommunityPlugins",
+    redirect: { name: "PluginsManagement", query: { tab: "discover" } },
+    meta: {
+      visible: false,
+      aiNavigable: false,
+      title: "route.community_plugins",
+    },
+  },
+  {
+    path: "/community-plugins/list",
+    name: "CommunityPluginsList",
+    redirect: { name: "PluginsManagement", query: { tab: "discover" } },
+    meta: {
+      visible: false,
+      aiNavigable: false,
+      title: "route.community_plugins",
+    },
   },
   {
     path: "/socialaccount",

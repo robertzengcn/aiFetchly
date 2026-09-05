@@ -20,6 +20,12 @@ export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /**
+   * Loopback base URL of the FakePluginHub server. When set, the launch env
+   * carries VITE_PLUGIN_HUB_URL so the main-process community catalog and
+   * install pipeline target the deterministic hub fixture (UPD-GAP-05).
+   */
+  readonly hubBaseUrl?: string;
 }
 
 export interface NetworkViolation {
@@ -48,7 +54,8 @@ export interface LaunchedApp {
  */
 function buildSanitizedEnv(
   testRoot: E2ETestRoot,
-  fakeAiBaseUrl: string | undefined
+  fakeAiBaseUrl: string | undefined,
+  hubBaseUrl: string | undefined
 ): Record<string, string> {
   // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
   // EXACTLY (not as prefixes) so e.g. `CI` does not also pass `CI_REPOSITORY_URL`
@@ -116,6 +123,13 @@ function buildSanitizedEnv(
 
   // Explicit E2E contract.
   allowed[E2E_ENV.ENABLED] = "1";
+  // The local-AI-runtime catalog check would otherwise poll github.com in the
+  // main process mid-test (the network guard records any non-loopback fetch).
+  // Point it at the fake AI server's origin so the periodic check stays
+  // loopback-only; a 404 catalog is a benign, handled result.
+  allowed["AIFETCHLY_RUNTIME_CATALOG_URL"] = fakeAiBaseUrl
+    ? `${fakeAiBaseUrl.replace(/\/v1$/, "")}/__e2e/runtime-catalog`
+    : "http://127.0.0.1:1/local-ai-runtimes.json";
   allowed[E2E_ENV.ROOT] = testRoot.rootPath;
   allowed[E2E_ENV.STATE_FILE] = testRoot.stateFilePath;
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
@@ -126,6 +140,18 @@ function buildSanitizedEnv(
     allowed[E2E_ENV.AI_BASE_URL] = fakeAiBaseUrl;
     try {
       allowedOrigins.push(new URL(fakeAiBaseUrl).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (hubBaseUrl) {
+    // Set explicitly (never inherited from the host env): the main process
+    // resolves the Plugin Hub base from this variable at runtime, and the
+    // E2E bundle does not bake it in at build time. Also allowlist the
+    // origin for the network guard's configured-origins set.
+    allowed["VITE_PLUGIN_HUB_URL"] = hubBaseUrl;
+    try {
+      allowedOrigins.push(new URL(hubBaseUrl).origin);
     } catch {
       /* ignore */
     }
@@ -158,7 +184,11 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  const env = buildSanitizedEnv(
+    options.testRoot,
+    options.fakeAiBaseUrl,
+    options.hubBaseUrl
+  );
 
   const electronApp = await electronLauncher.launch({
     args: [

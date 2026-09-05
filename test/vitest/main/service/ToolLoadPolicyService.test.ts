@@ -506,6 +506,42 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes verify_contact_info for lead-research contact gathering", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "get computer wholesale in USA and get their contact method",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "extract contact info from these company websites",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info after plan approval using the original goal", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: [
+          "get computer wholesale in USA and get their contact method",
+        ],
+      })
+    ).toBe("contextual");
+  });
+
+  it("does not promote verify_contact_info on plan approval without contact intent", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
   it("does NOT promote verify_contact_info for generic email questions", () => {
     expect(
       classify("verify_contact_info", "builtin", {

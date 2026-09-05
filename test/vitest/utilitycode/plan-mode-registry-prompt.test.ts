@@ -153,4 +153,13 @@ describe("buildPlanModeSystemPrompt", () => {
     expect(prompt).toContain("AskUserQuestion");
     expect(prompt).toContain("SubmitPlanForApproval");
   });
+
+  it("requires a verify_contact_info step in contact extraction plans", () => {
+    const prompt = buildPlanModeSystemPrompt({
+      baseSystemPrompt: "Base.",
+      planState: null,
+    });
+    expect(prompt).toContain("verify_contact_info");
+    expect(prompt).toContain("extract_contact_info");
+  });
 });

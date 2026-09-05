@@ -7,6 +7,7 @@ import { MessageType } from '@/entityTypes/commonType';
 @Entity('ai_chat_messages')
 @Index(['conversationId', 'timestamp'])
 @Index(['role'])
+@Index('idx_aichatmsg_run', ['runId'])
 export class AIChatMessageEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
     id!: number;
@@ -52,6 +53,11 @@ export class AIChatMessageEntity extends AuditableEntity {
         enum: MessageType
     })
     messageType!: MessageType;
+
+    /** Run envelope association (redesign §8.4). Legacy rows stay null. */
+    @Order(10)
+    @Column('varchar', { length: 64, nullable: true })
+    runId?: string;
 }
 
 

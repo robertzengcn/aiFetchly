@@ -7,19 +7,23 @@
  *   fakeAi    — worker-scoped FakeOpenAI loopback server + controller.
  *   aiApp     — authenticated + local-enabled launch (requests hit fakeAi).
  *   disabledApp — authenticated + hosted-disabled launch (AI gate rejects).
+ *   fakeHub   — worker-scoped FakePluginHub loopback server + controller.
+ *   pluginsApp — authenticated launch whose Plugin Hub traffic hits fakeHub
+ *                (unified plugin page critical flow, UPD-GAP-05/06).
  */
 
 import { test as base, expect } from "@playwright/test";
-import {
-  createTemporaryRoot,
-  writeStateManifest,
-} from "./temporaryState";
+import { createTemporaryRoot, writeStateManifest } from "./temporaryState";
 import { launchAiFetchly, type LaunchedApp } from "./electronApp";
 import { closeApp } from "../support/processCleanup";
 import {
   startFakeOpenAiServer,
   type FakeOpenAiController,
 } from "./fakeOpenAiServer";
+import {
+  startFakePluginHubServer,
+  type FakePluginHubController,
+} from "./fakePluginHubServer";
 import type { E2ETestRoot } from "./types";
 
 export interface E2EFixtures {
@@ -28,6 +32,8 @@ export interface E2EFixtures {
   fakeAi: FakeOpenAiController;
   aiApp: LaunchedApp;
   disabledApp: LaunchedApp;
+  fakeHub: FakePluginHubController;
+  pluginsApp: LaunchedApp;
 }
 
 export const e2eTest = base.extend<E2EFixtures>({
@@ -85,6 +91,34 @@ export const e2eTest = base.extend<E2EFixtures>({
     const app = await launchAiFetchly({
       testRoot,
       fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    await use(app);
+    await closeApp(app);
+  },
+
+  // Worker-scoped: FakePluginHub serves the community catalog + fixture zip.
+  fakeHub: async ({}, use) => {
+    const fakeHub = await startFakePluginHubServer();
+    await use(fakeHub);
+    await fakeHub.stop();
+  },
+
+  // Authenticated launch with Plugin Hub traffic pinned to fakeHub. Plugin
+  // flows are non-AI-gated, so no AI provider state is needed; AI stays
+  // hosted-disabled with the (unused) provider URL pointed at the fake AI
+  // server for observability.
+  pluginsApp: async ({ testRoot, fakeAi, fakeHub }, use) => {
+    await fakeHub.reset();
+    writeStateManifest(testRoot, {
+      authState: "authenticated",
+      aiState: "hosted-disabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: testRoot.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      hubBaseUrl: fakeHub.baseUrl,
     });
     await use(app);
     await closeApp(app);

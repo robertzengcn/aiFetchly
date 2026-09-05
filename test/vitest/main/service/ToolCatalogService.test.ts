@@ -138,6 +138,8 @@ describe("ToolCatalogService.buildFromOpenAITools", () => {
     expect(hints).toContain("verify email");
     expect(hints).toContain("normalize phone");
     expect(hints).toContain("disposable email");
+    expect(hints).toContain("get contact");
+    expect(hints).toContain("contact method");
   });
 });
 

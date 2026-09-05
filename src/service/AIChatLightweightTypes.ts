@@ -111,6 +111,16 @@ export type AIChatLightweightRoute =
   | "provider_normal"
   | "normal_fallback";
 
+/**
+ * Why a completion was routed away from the small alias without a small
+ * attempt having failed. `capability_missing`: the workload requires
+ * discovered small-model capability metadata (valid `available: true` plus a
+ * positive-integer `context_size`) and the server did not provide it, so the
+ * request went directly to the provider-normal route (tech-design §8.4,
+ * §16.1). This is NOT a fallback and is not counted as one.
+ */
+export type AIChatLightweightRouteReason = "capability_missing";
+
 /** Input to the lightweight completion operation. Text-only, no tools. */
 export interface AIChatLightweightCompletionInput {
   readonly workload: AIChatLightweightWorkload;
@@ -125,6 +135,42 @@ export interface AIChatLightweightCompletionInput {
   readonly manual: boolean;
   /** Caller cancellation signal, propagated to fetch. */
   readonly signal?: AbortSignal;
+  /**
+   * Whether the router may exercise the profile's `normal_once` fallback for
+   * this single completion. Defaults to true (the router enforces at most one
+   * fallback per `complete()` call). A caller that issues MULTIPLE
+   * completions for one logical unit of work (e.g. full compact's map+merge)
+   * sets this `false` on the sub-requests and instead owns the single allowed
+   * fallback at its own orchestration boundary, so the whole logical unit
+   * performs at most one normal-model request (SMBW-004, tech-design §16.3).
+   */
+  readonly allowNormalFallback?: boolean;
+  /**
+   * Force the provider-normal route and skip the small attempt entirely.
+   * Used by full compact's one-time normal fallback restart: after a
+   * definitive small-route failure the whole compact is re-run with this
+   * flag so no further small request is made and no per-chunk fallback can
+   * fire — the logical compact performs at most one normal-model sequence
+   * (SMBW-004, tech-design §16.3). When true, `allowNormalFallback` is
+   * irrelevant because no small attempt occurs.
+   */
+  readonly forceNormalRoute?: boolean;
+  /**
+   * Whether the router may perform the safe same-route retry (rate_limit /
+   * server_error) for this completion. Defaults to true. A caller that will
+   * issue a domain-level JSON-repair request after a non-empty invalid
+   * response sets this `false` on the FIRST completion so the logical run
+   * (first completion + repair) never exceeds two model requests — the
+   * router does not retry the first request and then allow a third repair
+   * (SMBW-009, tech-design §9.4).
+   */
+  readonly allowSameRouteRetry?: boolean;
+  /**
+   * Set to true on a JSON-repair completion so the structured event records
+   * `repairAttempted: true` for the logical run (SMBW-009). The router itself
+   * does not perform domain repair — the caller marks the repair request.
+   */
+  readonly repairAttempted?: boolean;
 }
 
 /** Result of a lightweight completion operation. */
@@ -139,6 +185,9 @@ export interface AIChatLightweightCompletionResult {
   readonly fallbackAttempted: boolean;
   readonly fallbackReason?: AIChatLightweightFailureReason;
   readonly retryReason?: AIChatLightweightFailureReason;
+  /** Set when the route was chosen without a small attempt for a structural
+   * reason (e.g. capability metadata missing) — never a fallback. */
+  readonly routeReason?: AIChatLightweightRouteReason;
 }
 
 /**
@@ -159,11 +208,17 @@ export interface AIChatLightweightCompletionEvent {
   readonly providerKind: AIChatLightweightProviderKind;
   /** The selected route; absent on failed paths where no route completed. */
   readonly route?: AIChatLightweightRoute;
+  /** Structural route decision (e.g. `capability_missing`) — never a fallback. */
+  readonly routeReason?: AIChatLightweightRouteReason;
   readonly requestedAlias: "small" | null;
   readonly resolvedModel?: string;
   readonly contextWindow?: number;
   readonly inputTokenEstimate?: number;
+  /** Provider-reported output tokens (usage.completion_tokens) when present. */
   readonly outputTokens?: number;
+  /** Provider-reported input tokens (usage.prompt_tokens) when present
+   * (SMBW-013). */
+  readonly providerInputTokens?: number;
   readonly attemptCount: number;
   readonly repairAttempted: boolean;
   readonly fallbackAttempted: boolean;

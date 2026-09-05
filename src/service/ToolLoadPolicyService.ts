@@ -200,14 +200,22 @@ const EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
 
 /**
- * Contact verification intent (design §16.1). Requires a verification action
- * verb (verify|validate|check|clean|normalize|classify) within ~40 chars of a
- * contact noun (email|mail address|phone|telephone|mobile|contact). Generic
- * questions like "how does email work?" or "what is phone verification?" must
- * NOT match — they lack the action verb near the noun.
+ * Contact verification intent (design §16.1).
+ *
+ * Branch 1: a verification action verb (verify|validate|check|clean|normalize|
+ * classify) within ~40 chars of a contact noun. Generic questions like
+ * "how does email work?" or "what is phone verification?" must NOT match.
+ *
+ * Branch 2: a gather/extract verb near a contact noun ("get their contact
+ * method", "find emails and phones", "extract contact info"). Lead-research
+ * requests must promote the tool so plan execution can call it; otherwise it
+ * stays deferred after "Plan approved" and the model skips verification.
  */
 const VERIFY_CONTACT_INTENT_RE =
   /\b(?:verify|validate|check|clean|normalize|normalise|classify)\b[^.!?\n]{0,40}?\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b|\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b[^.!?\n]{0,40}?\b(?:verify|validate|check|clean|normalize|normalise|classify)\b/i;
+
+const GATHER_CONTACT_INTENT_RE =
+  /\b(?:get|find|extract|collect|gather|scrape|discover)\b[^.!?\n]{0,80}?\b(?:emails?|e-mails?|phones?|telephone|mobile|contacts?|contact\s+(?:info|information|method|details|list))\b/i;
 
 /**
  * Short follow-ups that should inherit intent from recent prior user messages
@@ -215,6 +223,15 @@ const VERIFY_CONTACT_INTENT_RE =
  */
 const CONTINUATION_MESSAGE_RE =
   /^(continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)\.?$/i;
+
+/**
+ * Plan-approval / begin-execution turns are not short "continue" replies, but
+ * they should still inherit contextual tool promotion from the original goal.
+ * Without this, specialized tools stay deferred after "Plan approved. Please
+ * begin executing the plan now."
+ */
+const PLAN_EXECUTION_MESSAGE_RE =
+  /\bplan approved\b|\bbegin executing\b|\bexecute the plan\b|\bstart executing\b/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -371,7 +388,11 @@ export class ToolLoadPolicyService {
   private intentMessages(context: ToolCatalogRuntimeContext): string[] {
     const current = context.currentUserMessage ?? "";
     const recent = context.recentUserMessages ?? [];
-    if (CONTINUATION_MESSAGE_RE.test(current.trim()) && recent.length > 0) {
+    if (
+      (CONTINUATION_MESSAGE_RE.test(current.trim()) ||
+        PLAN_EXECUTION_MESSAGE_RE.test(current)) &&
+      recent.length > 0
+    ) {
       return [current, ...recent];
     }
     return [current];
@@ -427,6 +448,9 @@ export class ToolLoadPolicyService {
   }
 
   private hasVerifyContactIntent(message: string): boolean {
-    return VERIFY_CONTACT_INTENT_RE.test(message);
+    return (
+      VERIFY_CONTACT_INTENT_RE.test(message) ||
+      GATHER_CONTACT_INTENT_RE.test(message)
+    );
   }
 }

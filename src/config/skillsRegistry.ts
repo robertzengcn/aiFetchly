@@ -72,6 +72,7 @@ import { verifyContactInfoForAi } from "@/service/ContactVerificationAiTools";
 import {
   CONTACT_VERIFICATION_TOOL_DESCRIPTION,
   CONTACT_VERIFICATION_TOOL_PARAMETERS,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
 } from "@/schemas/contactVerification";
 
 // ---------------------------------------------------------------------------
@@ -856,7 +857,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
       "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch. " +
-      "POSTCONDITION: If extraction succeeds and returns at least one email address or phone number, every returned contact already includes a Standard verification result (verification_performed: true) — present, export, save, or use those verified classifications rather than re-running verification. Do not call verify_contact_info again for results marked verification_performed: true unless the user explicitly requests re-verification.",
+      EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
       type: "object",
       properties: {

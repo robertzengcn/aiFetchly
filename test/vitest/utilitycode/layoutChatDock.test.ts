@@ -32,7 +32,11 @@ describe("layout AI chat V2 dock", () => {
   it("keeps chat V2 mounted while toggling dock visibility", async () => {
     const source = await readLayout();
 
-    expect(source).toContain("<AiChatV2 v-show=\"v2ChatPanelOpen\" />");
-    expect(source).not.toContain("<AiChatV2 v-if=\"v2ChatPanelOpen\" />");
+    // Assert the INTENT (mount with v-show, never v-if) without depending
+    // on attribute formatting: extract the <AiChatV2 …> element block.
+    const element = /<AiChatV2[\s\S]*?\/>/.exec(source)?.[0] ?? "";
+    expect(element).not.toBe("");
+    expect(element).toContain('v-show="v2ChatPanelOpen"');
+    expect(element).not.toContain('v-if="v2ChatPanelOpen"');
   });
 });

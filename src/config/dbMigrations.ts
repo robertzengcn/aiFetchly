@@ -1,4 +1,5 @@
 import type { MigrationInterface } from "typeorm";
+import { PortableWorkspaceMemory1700000000000 } from "@/migrations/1700000000000-portable-workspace-memory";
 
 /**
  * WS-3 (R3.1): registered schema migrations (TypeORM MigrationInterface classes).
@@ -14,4 +15,6 @@ import type { MigrationInterface } from "typeorm";
  * To add a migration: generate it under src/migrations/, import the class here,
  * and append it to the array. Never edit a shipped migration — add a new one.
  */
-export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [];
+export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [
+  PortableWorkspaceMemory1700000000000,
+];
