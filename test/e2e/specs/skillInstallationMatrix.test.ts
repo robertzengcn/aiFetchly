@@ -25,7 +25,10 @@ import * as path from "path";
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
-import { writeStateManifest, createTemporaryRoot } from "../fixtures/temporaryState";
+import {
+  writeStateManifest,
+  createTemporaryRoot,
+} from "../fixtures/temporaryState";
 import { launchAiFetchly } from "../fixtures/electronApp";
 import { closeApp } from "../support/processCleanup";
 import type { LaunchedApp } from "../fixtures/electronApp";
@@ -59,9 +62,10 @@ async function invoke<T>(
         }
       ).api;
       if (!api?.invoke) return null;
-      const resp = (await api.invoke(c, p)) as
-        | { status: boolean; data: T }
-        | null;
+      const resp = (await api.invoke(c, p)) as {
+        status: boolean;
+        data: T;
+      } | null;
       return resp?.status ? (resp.data as T) : null;
     },
     { channel, payload }
@@ -202,7 +206,10 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     });
   });
 
-  test("restart while awaiting a secret resumes the SAME session (FR-15 case 7)", async (_fixtures, testInfo) => {
+  // First test arg must be a destructuring pattern; `{}` = no fixtures used
+  // (Playwright's documented form when only testInfo is needed).
+  // eslint-disable-next-line no-empty-pattern
+  test("restart while awaiting a secret resumes the SAME session (FR-15 case 7)", async ({}, testInfo) => {
     const fakeAi = await startFakeOpenAiServer();
     const root = createTemporaryRoot({
       testId: testInfo.titlePath.join(" "),
@@ -285,7 +292,9 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     root.remove();
   });
 
-  test("cancel before activation removes staging (case 4)", async ({ aiApp }) => {
+  test("cancel before activation removes staging (case 4)", async ({
+    aiApp,
+  }) => {
     const app = aiApp;
     const fixture = makeSecretFixture(app.testRoot.rootPath);
     const prepared = await prepareToAwaitingApproval(app, fixture);
@@ -458,11 +467,9 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
       }
     );
     // Terminal behavior: ready (or a typed hold) — never an invocation.
-    expect([
-      "ready",
-      "installing_dependencies",
-      "awaiting_secret",
-    ]).toContain(approved?.state);
+    expect(["ready", "installing_dependencies", "awaiting_secret"]).toContain(
+      approved?.state
+    );
 
     await assertCleanTeardown(app, {
       expectedExternalOrigins: ["https://github.com"],
