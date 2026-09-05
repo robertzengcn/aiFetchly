@@ -34,7 +34,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, provide, ref } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
 import AppCenterRouteHost from "@/views/components/appShell/AppCenterRouteHost.vue";
@@ -51,7 +51,6 @@ import {
   setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
 
-const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const shell = useAppShellStore();
@@ -68,19 +67,27 @@ const redesignDefault = ref(false);
  * selected conversation's main-process run.
  */
 async function openConversation(conversationId: string): Promise<void> {
-  if (route.name !== "AI_Chat_Workspace") {
-    await router.push({ name: "AI_Chat_Workspace" });
-  }
+  await ensureChatRoute();
   if (chatWorkspace.selectedConversationId !== conversationId) {
     await selectedStore.loadSelection(conversationId);
   }
 }
 
 async function createChat(): Promise<string> {
-  if (route.name !== "AI_Chat_Workspace") {
-    await router.push({ name: "AI_Chat_Workspace" });
-  }
+  await ensureChatRoute();
   return createAndSelectWorkspaceChat();
+}
+
+/**
+ * Route to the chat center unconditionally. During a pending lazy navigation
+ * (e.g. Plugins was clicked and its chunk is still loading) the reactive
+ * route still names the PREVIOUS route, so an "already there?" check would
+ * skip the push and strand the user on the departing page (FR-SHELL-010).
+ * vue-router resolves same-location pushes as a harmless duplicated
+ * navigation failure instead of throwing.
+ */
+async function ensureChatRoute(): Promise<void> {
+  await router.push({ name: "AI_Chat_Workspace" });
 }
 
 provide(CHAT_WORKSPACE_SELECTION_KEY, { openConversation, createChat });

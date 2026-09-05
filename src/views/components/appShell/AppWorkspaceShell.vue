@@ -13,7 +13,13 @@
       data-testid="app-shell-nav-backdrop"
       @click="shell.toggleNavigation()"
     />
-    <aside v-if="shell.mode !== 'narrow' || shell.navigationOpen" class="app-shell-left">
+    <aside
+      v-if="shell.mode !== 'narrow' || shell.navigationOpen"
+      ref="navigationRegion"
+      class="app-shell-left"
+      data-testid="app-shell-navigation"
+      @keydown="onNavigationKeydown"
+    >
       <slot name="navigation" />
     </aside>
 
@@ -26,16 +32,91 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { useAppShellStore } from "@/views/store/appShell";
 import { useResponsiveShell } from "@/views/composables/useResponsiveShell";
 import AppInspectorHost from "./AppInspectorHost.vue";
 
 const shell = useAppShellStore();
 const shellRoot = ref<HTMLElement | null>(null);
+const navigationRegion = ref<HTMLElement | null>(null);
 
 // Measure the shell's own box — the application workspace, not the screen.
 useResponsiveShell(() => shellRoot.value);
+
+// ---------------------------------------------------------------------------
+// Narrow drawer focus management (design §13): the navigation overlay traps
+// Tab focus while open and restores focus to the opening control on close.
+// ---------------------------------------------------------------------------
+let focusOrigin: HTMLElement | null = null;
+
+function focusableElements(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  // The drawer region only renders visible content while open, so the
+  // selector alone defines the focus cycle (offsetParent is unusable in
+  // non-layout environments like happy-dom).
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      [
+        "button:not([disabled])",
+        "[href]",
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(", ")
+    )
+  );
+}
+
+const drawerOpen = () => shell.mode === "narrow" && shell.navigationOpen;
+watch(
+  () => shell.mode === "narrow" && shell.navigationOpen,
+  (open) => {
+    if (open) {
+      // Remember the opening control; <body> carries nothing to restore.
+      const active = document.activeElement;
+      focusOrigin =
+        active instanceof HTMLElement && active !== document.body
+          ? active
+          : null;
+      void nextTick(() => {
+        focusableElements(navigationRegion.value)[0]?.focus();
+      });
+    } else if (focusOrigin) {
+      focusOrigin.focus();
+      focusOrigin = null;
+    }
+  }
+);
+
+function onNavigationKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && drawerOpen()) {
+    event.preventDefault();
+    shell.toggleNavigation();
+    return;
+  }
+  if (event.key !== "Tab" || !drawerOpen()) return;
+  const items = focusableElements(navigationRegion.value);
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const region = navigationRegion.value;
+  const active = document.activeElement;
+  const focusInsideRegion =
+    active instanceof HTMLElement && region?.contains(active) === true;
+  // Treat "focus outside the drawer" as sitting on the edge: Tab wraps back
+  // to the first element, Shift+Tab wraps to the last — a true trap.
+  const atFirst = !focusInsideRegion || active === first;
+  const atLast = !focusInsideRegion || active === last;
+  if (event.shiftKey && atFirst) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && atLast) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 </script>
 
 <style scoped>

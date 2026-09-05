@@ -214,6 +214,7 @@
             <button
               type="button"
               class="conversation-row"
+              :data-testid="`workspace-conversation-${conversation.conversationId}`"
               data-nav-row="conversation"
               role="treeitem"
               :aria-level="1"
