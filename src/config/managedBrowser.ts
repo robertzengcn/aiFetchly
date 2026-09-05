@@ -246,6 +246,26 @@ export const MANAGED_BROWSER_CACHE_DEFAULTS = {
   scanMaxEntries: 200_000,
   scanMaxDepth: 12,
   scanMaxWallTimeMs: 20_000,
+  /** Cap of scope summaries returned by SCAN_ALL (truncation flag beyond). */
+  scanAllMaxScopes: 4_096,
+} as const;
+
+/** Maintenance-worker request timeouts (design §13.9) — one per operation. */
+export const MANAGED_BROWSER_CACHE_MAINTENANCE_TIMEOUTS = {
+  /** Fork + WORKER_READY handshake. */
+  workerStartMs: 10_000,
+  /** Single-scope bounded scan. */
+  scanScopeMs: 30_000,
+  /** Whole-managed-root bounded scan. */
+  scanAllMs: 40_000,
+  /** Bounded recursive delete of one deletion-queue entry. */
+  deleteQueuedScopeMs: 120_000,
+  /** Eviction planning (bounded scan + policy). */
+  planEvictionMs: 40_000,
+  /** Eviction-plan cancellation. */
+  cancelBeforeDeleteMs: 10_000,
+  /** Graceful SHUTDOWN → SHUTDOWN_ACK window. */
+  shutdownMs: 10_000,
 } as const;
 
 /** Clamp a user-supplied cache maximum (MiB) into the accepted range. */

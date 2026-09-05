@@ -963,6 +963,10 @@ module.exports = {
             config: "vite.managedBrowserWorker.config.mjs",
           },
           {
+            entry: "src/childprocess/managed-browser-cache/index.ts",
+            config: "vite.managedBrowserCacheWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/PythonRuntimeWorker.ts",
             config: "vite.pythonRuntimeWorker.config.mjs",
           },

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { log } from "@/modules/Logger";
+import { getDefaultManagedBrowserCacheWorkerClient } from "@/service/ManagedBrowserCacheWorkerClient";
 import {
   getDefaultManagedBrowserCacheScopeService,
   isValidCacheScopeToken,
@@ -774,8 +775,8 @@ function logCacheError(
 }
 
 /**
- * Placeholder maintenance client used until the worker client lands. It
- * reports every operation as unavailable, so clears surface
+ * Fallback maintenance client for contexts without a utility process (unit
+ * tests). It reports every operation as unavailable, so clears surface
  * `cache_maintenance_pending` (the deletion queue still holds the data) and
  * scans report 0 bytes — never a false success.
  */
@@ -795,10 +796,15 @@ function createUnavailableMaintenanceClient(): CacheMaintenanceClient {
 
 let defaultCacheModule: ManagedBrowserCacheModule | null = null;
 
-/** Process singleton; the real maintenance client is attached in the worker commit. */
+/**
+ * Process singleton wired to the shared maintenance worker client
+ * (design §13.9): fork-on-demand, retryable crash, deletion queue preserved.
+ */
 export function getDefaultManagedBrowserCacheModule(): ManagedBrowserCacheModule {
   if (!defaultCacheModule) {
-    defaultCacheModule = new ManagedBrowserCacheModule();
+    defaultCacheModule = new ManagedBrowserCacheModule({
+      maintenance: getDefaultManagedBrowserCacheWorkerClient(),
+    });
   }
   return defaultCacheModule;
 }
