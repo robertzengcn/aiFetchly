@@ -24,6 +24,7 @@ export { resolveShellInterpreter } from "@/service/process/ShellInterpreterResol
 export type { ResolvedInterpreter } from "@/service/process/ShellInterpreterResolver";
 export { PosixProcessProvider } from "@/service/process/PosixProcessProvider";
 export { WindowsProcessProvider } from "@/service/process/WindowsProcessProvider";
+export { withUtf8OutputEncoding } from "@/service/process/WindowsProcessProvider";
 
 let cached: PlatformProcessProvider | null = null;
 

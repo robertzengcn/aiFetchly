@@ -20,6 +20,7 @@ import {
   getPlatformProcessProvider,
   normalizeProcessLineEndings,
   resolveShellInterpreter,
+  withUtf8OutputEncoding,
 } from "@/service/process";
 
 const POSIX = process.platform !== "win32";
@@ -123,6 +124,80 @@ describe("resolveShellInterpreter", () => {
     } else {
       expect(r.args).toEqual(["-c"]);
     }
+  });
+});
+
+describe("withUtf8OutputEncoding (PRD §16.2 unicode round-trip)", () => {
+  const baseInvocation = {
+    executable: "powershell.exe",
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Write-Output '你好世界 🎬'",
+    ],
+    cwd: "/tmp",
+    environment: {},
+    timeoutMs: 30_000,
+    outputLimitBytes: 1_000_000,
+  };
+
+  it("prepends the UTF-8 console-encoding preamble to PowerShell -Command", () => {
+    const prepared = withUtf8OutputEncoding(baseInvocation);
+    expect(prepared.args).toHaveLength(5);
+    expect(prepared.args[4]).toMatch(
+      /^try\{\[Console\]::OutputEncoding=\[System\.Text\.UTF8Encoding\]::new\(\$false\)\}catch\{\};/i
+    );
+    expect(prepared.args[4]?.endsWith("Write-Output '你好世界 🎬'")).toBe(true);
+    // The original invocation is never mutated (immutability contract).
+    expect(baseInvocation.args[4]).toBe("Write-Output '你好世界 🎬'");
+  });
+
+  it("matches pwsh and full Windows paths, with or without .exe", () => {
+    for (const executable of [
+      "pwsh.exe",
+      "pwsh",
+      "powershell",
+      "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    ]) {
+      const prepared = withUtf8OutputEncoding({
+        ...baseInvocation,
+        executable,
+      });
+      expect(prepared.args[4]).toMatch(/\[Console\]::OutputEncoding/);
+    }
+  });
+
+  it("leaves non-PowerShell executables untouched", () => {
+    for (const executable of [
+      "cmd.exe",
+      "ffmpeg",
+      "git",
+      "C:\\tools\\ws.exe",
+    ]) {
+      const invocation = {
+        ...baseInvocation,
+        executable,
+        args: ["/d", "/s", "/c", "echo hi"],
+      };
+      expect(withUtf8OutputEncoding(invocation)).toBe(invocation);
+    }
+  });
+
+  it("leaves PowerShell invocations without -Command untouched", () => {
+    const invocation = {
+      ...baseInvocation,
+      args: ["-NoLogo", "-File", "script.ps1"],
+    };
+    expect(withUtf8OutputEncoding(invocation)).toBe(invocation);
+    // -EncodedCommand must not be mistaken for -Command (substring-safe).
+    const encoded = {
+      ...baseInvocation,
+      args: ["-EncodedCommand", "AAAAAA"],
+    };
+    expect(withUtf8OutputEncoding(encoded)).toBe(encoded);
   });
 });
 
@@ -601,7 +676,10 @@ describe("WindowsProcessProvider full matrix (PRD §16.4 / design §7.4)", () =>
     const fs = await import("fs");
     const path = await import("path");
     const external = fs.mkdtempSync(path.join(cwd, "junction-ext-"));
-    fs.writeFileSync(path.join(external, "SKILL.md"), "---\nname: junction-skill\ndescription: x\n---\nbody");
+    fs.writeFileSync(
+      path.join(external, "SKILL.md"),
+      "---\nname: junction-skill\ndescription: x\n---\nbody"
+    );
     const skillRoot = fs.mkdtempSync(path.join(cwd, "junction-root-"));
     const service = new SkillActivationService(skillRoot);
 
