@@ -146,6 +146,7 @@ const ComposerStub = defineComponent({
     "isStreaming",
     "conversationId",
     "voiceEnabled",
+    "draftKey",
     "selectedGeneratedImages",
     "generatedImageReferenceLimit",
     "generatedImageFocusSignal",
@@ -164,8 +165,7 @@ const HeaderStub = defineComponent({
   template: '<header data-testid="conversation-header-stub"><slot /></header>',
 });
 
-function mountSurface() {
-  const pinia = createPinia();
+function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -762,5 +762,91 @@ describe("AiChatCenterSurface workspace chooser states (FR-WS-002/007)", () => {
     expect(
       wrapper.find('[data-testid="workspace-required-stub"]').exists()
     ).toBe(true);
+  });
+});
+
+describe("AiChatCenterSurface durable drafts (FR-COMP-011)", () => {
+  it("binds the per-conversation draft key to the composer", async () => {
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    await flushPromises();
+    // No conversation selected → pending sentinel key.
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    expect(composer.props("draftKey")).toBe("__pending_conversation__");
+
+    chatWorkspace.setSelected("conv-9");
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "AiChatV2Composer" }).props("draftKey")
+    ).toBe("conv-9");
+  });
+
+  it("restores the generated-image tray after the surface unmounts and remounts", async () => {
+    // One pinia across both mounts — the app-scoped store outlives the route.
+    const pinia = createPinia();
+    const first = mountSurface(pinia);
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    first
+      .findComponent({ name: "AiChatWorkspaceTranscript" })
+      .vm.$emit("use-generated-image", { messageId: "m1", imageIndex: 0 });
+    await flushPromises();
+    const composer = first.findComponent({ name: "AiChatV2Composer" });
+    expect(composer.props("selectedGeneratedImages")).toHaveLength(1);
+    first.unmount();
+
+    const second = mountSurface(pinia);
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    const restored = second.findComponent({ name: "AiChatV2Composer" });
+    expect(restored.props("selectedGeneratedImages")).toHaveLength(1);
+    expect(
+      (
+        restored.props("selectedGeneratedImages") as {
+          reference: { messageId: string; imageIndex: number };
+        }[]
+      ).map((v) => v.reference)
+    ).toEqual([{ messageId: "m1", imageIndex: 0 }]);
+  });
+
+  it("clears the composer draft through the accepted-send rule only", async () => {
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-1",
+      status: "running",
+      acceptedAt: "",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    const onAccepted = vi.fn();
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "hello", [], { onAccepted });
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(onAccepted).toHaveBeenCalledTimes(1); // run accepted → draft clears
+  });
+
+  it("keeps the composer draft when the send fails (no run id)", async () => {
+    startChatRunMock.mockRejectedValue(new Error("start failed"));
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    const onAccepted = vi.fn();
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("send", "hello", [], { onAccepted });
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(onAccepted).not.toHaveBeenCalled(); // failed send keeps the draft
   });
 });

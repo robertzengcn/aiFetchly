@@ -352,6 +352,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useComposerDraftStore } from "@/views/store/composerDrafts";
 import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
 import AiChatV2AtMentionSuggestions from "./AiChatV2AtMentionSuggestions.vue";
 import { listSlashCommands, onAifetchlyConfigChanged } from "@/views/api/slashCommands";
@@ -434,6 +435,14 @@ const props = defineProps<{
    * just for suggestions (design §9.1).
    */
   conversationId?: string | null;
+  /**
+   * Durable per-conversation draft key (FR-COMP-011). When provided (the
+   * chat-center shell), typed text, selected files, and pasted-text blocks
+   * are mirrored into the app-scoped composerDrafts store so a center-route
+   * round trip or conversation switch restores them. Without a key (legacy
+   * dock) the composer keeps component-local state.
+   */
+  draftKey?: string | null;
   /**
    * Conversation-scoped generated-image references selected in the composer
    * tray. The parent owns this state; the composer only renders it and emits
@@ -530,6 +539,55 @@ function resetPastedState(): void {
   pastedContentsById.value = {};
   pastedChips.value = [];
   nextPasteId = 1;
+}
+
+// --- Durable per-conversation draft (FR-COMP-011) --------------------------
+// With a draftKey (chat-center shell) the draft survives route changes: the
+// state above mirrors into the app-scoped store, which outlives the route-
+// mounted component. The store is only touched when a key is provided so
+// pinia-less legacy mounts are unaffected.
+const draftStore = props.draftKey ? useComposerDraftStore() : null;
+
+function clearStoredDraft(): void {
+  if (draftStore && props.draftKey) {
+    draftStore.clearDraft(props.draftKey);
+  }
+}
+
+function loadDraftFromStore(): void {
+  if (!draftStore || !props.draftKey) return;
+  const saved = draftStore.getDraft(props.draftKey);
+  draft.value = saved?.text ?? "";
+  selectedFiles.value = saved ? [...saved.files] : [];
+  pastedContentsById.value = saved ? { ...saved.pastedContents } : {};
+  pastedChips.value = saved
+    ? saved.pastedChips.map((chip) => ({ ...chip }))
+    : [];
+  nextPasteId = pastedChips.value.reduce(
+    (max, chip) => Math.max(max, chip.id),
+    0
+  ) + 1;
+}
+
+if (draftStore) {
+  loadDraftFromStore();
+  watch(
+    [draft, selectedFiles, pastedContentsById, pastedChips],
+    () => {
+      if (!props.draftKey) return;
+      draftStore.updateComposerState(
+        props.draftKey,
+        draft.value,
+        selectedFiles.value,
+        pastedContentsById.value,
+        pastedChips.value
+      );
+    },
+    { deep: true }
+  );
+  // Conversation switch: restore the target conversation's draft (the echo
+  // write-back below persists the restored values under the new key).
+  watch(() => props.draftKey, () => loadDraftFromStore());
 }
 
 // --- Local voice input (push-to-talk; PRD §7.1/§7.2) ---
@@ -1170,6 +1228,7 @@ const onSend = (): void => {
       draft.value = "";
       selectedFiles.value = [];
       resetPastedState();
+      clearStoredDraft(); // FR-COMP-011: clear only on the accepted send
       closeSlash();
     },
   });

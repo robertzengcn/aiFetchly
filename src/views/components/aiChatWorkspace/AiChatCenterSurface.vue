@@ -173,6 +173,7 @@
       :voice-playback-error="voice.playbackError.value"
       :voice-speaking="voice.speaking.value"
       :voice-chat-ready="voice.chatReady.value"
+      :draft-key="composerDraftKey"
       :selected-generated-images="selectedGeneratedImageViews"
       :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
       :generated-image-focus-signal="composerFocusSignal"
@@ -414,6 +415,10 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import {
+  composerDraftKeyFor,
+  useComposerDraftStore,
+} from "@/views/store/composerDrafts";
+import {
   useSelectedConversationStore,
   type PermissionActionTexts,
 } from "@/views/store/selectedConversation";
@@ -575,67 +580,38 @@ function onDenyPermission(message: ChatV2MessageView): void {
   selectedStore.denyToolPermission(message, permissionTexts.value);
 }
 
-// --- Generated-image reference drafts (composer tray, legacy parity) ----------
-// Per-conversation selected image references. This surface stays mounted
-// across conversation switches, so a Map keyed by conversation id keeps each
-// conversation's tray selection and restores it when the user switches back.
-interface GeneratedImageDraftState {
-  readonly references: readonly ChatV2GeneratedImageReference[];
-}
-type GeneratedImageDraftMap = Map<string, GeneratedImageDraftState>;
-
-/** Stored selections per conversation (bounded, legacy parity). */
-const GENERATED_IMAGE_DRAFT_CAP = 50;
+// --- Durable per-conversation drafts (FR-COMP-011, legacy parity) -----------
+// Draft ownership lives in the app-scoped composerDrafts store so unsent
+// state — typed text, attachments, pasted blocks, and the generated-image
+// reference tray — survives center-route round trips (this surface unmounts)
+// and conversation switches. The tray clears only when its turn completes.
 /** Max references forwarded in a single request (composer contract). */
 const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
-const DRAFT_KEY_PENDING = "__pending_conversation__";
 /**
  * Reference-only sends (no typed text) still need a message for the model —
  * the legacy surface forwards the same deterministic fallback prompt.
  */
 const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
 
-const generatedImageDrafts = ref<GeneratedImageDraftMap>(new Map());
+const composerDrafts = useComposerDraftStore();
+/** Store key for the selected conversation (pending sentinel when null). */
+const composerDraftKey = computed(() => composerDraftKeyFor(conversationId.value));
+
 const composerFocusSignal = ref(0);
 /** Draft key whose selection is cleared once its turn completes (see below). */
 const pendingDraftClearKey = ref<string | null>(null);
 const generatedImageNotice = ref<string | null>(null);
-
-function draftKeyFor(conversationId: string | null): string {
-  return conversationId ?? DRAFT_KEY_PENDING;
-}
 
 const sameGeneratedImageRef = (
   a: ChatV2GeneratedImageReference,
   b: ChatV2GeneratedImageReference
 ): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
 
-function setGeneratedImageDraft(
-  key: string,
-  references: readonly ChatV2GeneratedImageReference[]
-): void {
-  const nextMap: GeneratedImageDraftMap = new Map(generatedImageDrafts.value);
-  if (references.length === 0) {
-    nextMap.delete(key);
-  } else if (nextMap.size < GENERATED_IMAGE_DRAFT_CAP || nextMap.has(key)) {
-    nextMap.set(key, { references });
-  }
-  generatedImageDrafts.value = nextMap;
-}
-
-function getGeneratedImageDraft(
-  conversationId: string | null
-): ChatV2GeneratedImageReference[] {
-  return [
-    ...(generatedImageDrafts.value.get(draftKeyFor(conversationId))
-      ?.references ?? []),
-  ];
-}
-
 /** References attached to the composer tray for the SELECTED conversation. */
-const activeGeneratedImageRefs = computed(() =>
-  getGeneratedImageDraft(conversationId.value)
-);
+const activeGeneratedImageRefs = computed(() => [
+  ...(composerDrafts.getDraft(composerDraftKey.value)
+    ?.generatedImageReferences ?? []),
+]);
 
 /** Resolve tray chips against the mounted message window (thumb + name). */
 function resolveGeneratedImageViewModel(
@@ -660,45 +636,46 @@ const selectedGeneratedImageViews = computed(() =>
 /** "Use as reference" tile action: toggle the image in the tray. */
 function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
   generatedImageNotice.value = null;
-  const key = draftKeyFor(conversationId.value);
-  const current = getGeneratedImageDraft(conversationId.value);
+  const key = composerDraftKey.value;
+  const current = activeGeneratedImageRefs.value;
   if (current.some((r) => sameGeneratedImageRef(r, reference))) {
-    setGeneratedImageDraft(
+    composerDrafts.setGeneratedImageReferences(
       key,
       current.filter((r) => !sameGeneratedImageRef(r, reference))
     );
     return;
   }
-  setGeneratedImageDraft(key, [...current, reference]);
+  composerDrafts.setGeneratedImageReferences(key, [...current, reference]);
 }
 
 /** "Edit" tile action: exactly this image becomes the tray selection. */
 function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
   generatedImageNotice.value = null;
-  setGeneratedImageDraft(draftKeyFor(conversationId.value), [reference]);
+  composerDrafts.setGeneratedImageReferences(composerDraftKey.value, [
+    reference,
+  ]);
   composerFocusSignal.value += 1;
 }
 
 function onRemoveGeneratedImage(
   reference: ChatV2GeneratedImageReference
 ): void {
-  const key = draftKeyFor(conversationId.value);
-  setGeneratedImageDraft(
-    key,
-    getGeneratedImageDraft(conversationId.value).filter(
+  composerDrafts.setGeneratedImageReferences(
+    composerDraftKey.value,
+    activeGeneratedImageRefs.value.filter(
       (r) => !sameGeneratedImageRef(r, reference)
     )
   );
 }
 
 function onClearGeneratedImages(): void {
-  setGeneratedImageDraft(draftKeyFor(conversationId.value), []);
+  composerDrafts.setGeneratedImageReferences(composerDraftKey.value, []);
 }
 
 function onReorderGeneratedImages(
   references: ChatV2GeneratedImageReference[]
 ): void {
-  setGeneratedImageDraft(draftKeyFor(conversationId.value), references);
+  composerDrafts.setGeneratedImageReferences(composerDraftKey.value, references);
 }
 
 /**
@@ -715,7 +692,7 @@ watch(
     if (!key) return;
     pendingDraftClearKey.value = null;
     if (status === "idle") {
-      setGeneratedImageDraft(key, []);
+      composerDrafts.setGeneratedImageReferences(key, []);
     }
   }
 );
@@ -870,8 +847,13 @@ async function encodeFile(file: File): Promise<{
 async function onComposerSend(
   text: string,
   files: File[],
-  options?: { fromVoice?: boolean }
+  options?: {
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
+  }
 ): Promise<void> {
+  void options?.pastedContents; // send-time paste bodies ride the composer's message text
   // Generated-image preflight: explicit tray selections only (the legacy
   // ambiguity/inference offer is not part of the shell surface).
   const generatedImageReferences = activeGeneratedImageRefs.value;
@@ -902,7 +884,7 @@ async function onComposerSend(
   }
   voice.beginAssistantResponse(options?.fromVoice === true);
   if (generatedImageReferences.length > 0) {
-    pendingDraftClearKey.value = draftKeyFor(conversationId.value);
+    pendingDraftClearKey.value = composerDraftKey.value;
   }
   await selectedStore.sendMessage(messageText, {
     model: selectedModel.value,
@@ -912,6 +894,12 @@ async function onComposerSend(
     generatedImageReferences:
       generatedImageReferences.length > 0 ? generatedImageReferences : undefined,
   });
+  // Accepted-send rule (composer contract): the draft (text/files/pasted)
+  // clears only when the run was actually accepted — a run id means the
+  // coordinator took the request; failures keep the draft for retry.
+  if (selectedStore.activeRunId) {
+    options?.onAccepted?.();
+  }
 }
 
 // --- Conversation actions ----------------------------------------------------
