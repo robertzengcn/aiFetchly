@@ -803,6 +803,43 @@ export class ManagedBrowserModule {
     );
   }
 
+  /**
+   * GAP-12: privileged page-context script execution. ALWAYS requires an
+   * explicit user approval at the tool layer (privileged_script class) —
+   * this method only transports the approved request to the worker.
+   */
+  public async evaluateScript(
+    sessionId: string,
+    input: { readonly source: string; readonly timeoutMs: number }
+  ): Promise<{
+    readonly ok: boolean;
+    readonly resultSummary: string | null;
+    readonly resultBytes: number;
+    readonly truncated: boolean;
+  }> {
+    const record = this.requireSession(sessionId);
+    this.guard(record, "RUN_ACTIONS");
+    const message = await this.requestWorker(
+      record,
+      {
+        type: "EVALUATE_SCRIPT",
+        source: input.source,
+        timeoutMs: input.timeoutMs,
+      },
+      input.timeoutMs + MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+      (m) => m.type === "EVALUATE_SCRIPT_RESULT"
+    );
+    if (message.type !== "EVALUATE_SCRIPT_RESULT") {
+      throw new ManagedBrowserError("internal_error");
+    }
+    return {
+      ok: message.ok,
+      resultSummary: message.resultSummary,
+      resultBytes: message.resultBytes,
+      truncated: message.truncated,
+    };
+  }
+
   public async captureScreenshot(
     sessionId: string
   ): Promise<{ mimeType: string; base64: string }> {

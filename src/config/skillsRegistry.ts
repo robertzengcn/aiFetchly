@@ -3546,6 +3546,50 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "browser_evaluate_script",
+      description:
+        "PRIVILEGED: run exact page-context JavaScript in the managed browser (read the " +
+        "DOM, compute something the structured actions cannot). Runs ONLY inside the web " +
+        "page sandbox — no Node, filesystem, or Electron access. ALWAYS requires explicit " +
+        "user approval showing the COMPLETE source. The result is secret-redacted and " +
+        "size-budgeted; all element references are invalidated afterwards.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+          source: {
+            type: "string",
+            description:
+              "Complete JavaScript source to evaluate in the page. Keep it read-only unless the user explicitly approved writes.",
+          },
+          purpose: {
+            type: "string",
+            description: "Short human-readable purpose shown in the approval.",
+          },
+          timeout_ms: {
+            type: "number",
+            description: "Execution window in ms (100-10000, default 5000).",
+          },
+          page_revision: {
+            type: "number",
+            description: "Current page revision (from the latest observation).",
+          },
+        },
+        required: ["session_id", "source", "purpose", "page_revision"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "browser",
+      execute: async (args, context) =>
+        wrap(
+          (a, c) => getDefaultManagedBrowserAiToolService().evaluateScript(a, c),
+          args,
+          context
+        ),
+    },
+    {
       name: "browser_stop_session",
       description:
         "Stop the managed browser session and release the account lease. Safe to call when done.",

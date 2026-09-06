@@ -105,6 +105,17 @@ export const browserStopSessionToolSchema = lazySchema(() =>
   })
 );
 
+export const browserEvaluateScriptToolSchema = lazySchema(() =>
+  z.strictObject({
+    session_id: sessionIdSchema,
+    /** Exact page-context JavaScript. NEVER executed as Node. */
+    source: z.string().min(1).max(20_000),
+    purpose: z.string().min(1).max(300),
+    timeout_ms: z.number().int().min(100).max(10_000).optional(),
+    page_revision: z.number().int().positive(),
+  })
+);
+
 export type BrowserStartSessionToolInput = z.infer<
   ReturnType<typeof browserStartSessionToolSchema>
 >;

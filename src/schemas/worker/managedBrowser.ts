@@ -393,6 +393,19 @@ const stopSessionMessageSchema = z.strictObject({
   reason: z.enum(["user_stop", "cancelled", "shutdown", "error"]),
 });
 
+const evaluateScriptMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("EVALUATE_SCRIPT"),
+  /** Exact page-context source. Runs as PAGE JavaScript ONLY — never Node. */
+  source: z.string().min(1).max(20_000),
+  /** Bounded execution window. */
+  timeoutMs: z
+    .number()
+    .int()
+    .min(100)
+    .max(MANAGED_BROWSER_ACTION_LIMITS.programWallTimeMs),
+});
+
 export const managedBrowserInboundSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     startSessionMessageSchema,
@@ -404,6 +417,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
     stopSessionMessageSchema,
+    evaluateScriptMessageSchema,
   ])
 );
 
@@ -604,6 +618,16 @@ const sessionStoppedMessageSchema = z.strictObject({
   reasonCode: z.string().min(1).max(64).nullable(),
 });
 
+const evaluateScriptResultMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("EVALUATE_SCRIPT_RESULT"),
+  ok: z.boolean(),
+  /** Redacted, budgeted JSON summary of the script result. */
+  resultSummary: z.string().max(4_096).nullable(),
+  resultBytes: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
+
 const workerErrorMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("WORKER_ERROR"),
@@ -640,6 +664,7 @@ export const managedBrowserOutboundSchema = lazySchema(() =>
     challengeDetectedMessageSchema,
     refreshedCookiesMessageSchema,
     sessionStoppedMessageSchema,
+    evaluateScriptResultMessageSchema,
     workerErrorMessageSchema,
     cacheOpenedMessageSchema,
     cacheReleasedMessageSchema,

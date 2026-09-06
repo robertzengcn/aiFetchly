@@ -1,3 +1,5 @@
+import * as crypto from "node:crypto";
+import { log } from "@/modules/Logger";
 import { isAiEnabled } from "@/service/AiFeatureGate";
 import {
   getDefaultManagedBrowserModule,
@@ -20,6 +22,7 @@ import {
   browserNavigateToolSchema,
   browserRunActionsToolSchema,
   browserCaptureScreenshotToolSchema,
+  browserEvaluateScriptToolSchema,
   browserRequestHandoffToolSchema,
   browserResumeAfterHandoffToolSchema,
   browserClearCacheToolSchema,
@@ -120,6 +123,15 @@ export interface BrowserModuleLike {
   captureScreenshot(
     sessionId: string
   ): Promise<{ mimeType: string; base64: string }>;
+  evaluateScript(
+    sessionId: string,
+    input: { source: string; timeoutMs: number }
+  ): Promise<{
+    ok: boolean;
+    resultSummary: string | null;
+    resultBytes: number;
+    truncated: boolean;
+  }>;
   requestHandoff(
     sessionId: string,
     reason?: string
@@ -485,6 +497,71 @@ export class ManagedBrowserAiToolService {
             }
           : null,
       } as unknown as Record<string, unknown>;
+    } catch (error) {
+      this.wrapModuleError(error);
+    }
+  }
+
+  /**
+   * GAP-12: privileged page-context script. ALWAYS confirm — the model can
+   * never lower this. The approval prompt shows the COMPLETE source; the
+   * audit trail records the sha256 + byte size, never the source itself.
+   */
+  public async evaluateScript(
+    args: Record<string, unknown>,
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    this.ensureAiEnabled();
+    const parsed = browserEvaluateScriptToolSchema().safeParse(args);
+    if (!parsed.success) {
+      throw new ManagedBrowserAiToolError(
+        "invalid_tool_arguments",
+        undefined,
+        formatZodValidationError("browser_evaluate_script", parsed.error)
+      );
+    }
+    this.ensureSession(parsed.data.session_id);
+    // privileged_script: no permission mode may skip this confirmation.
+    const assessment = this.classifier.classify({
+      actionType: "run_actions",
+      modelAssertedRiskClass: "privileged_script",
+    });
+    if (assessment.riskClass !== "privileged_script") {
+      throw new ManagedBrowserAiToolError("action_not_allowed");
+    }
+    if (!context.skipPermissionCheck) {
+      this.browserModule.notifyApprovalRequired?.({
+        sessionId: parsed.data.session_id,
+        requestId: context.toolCallId,
+        riskClass: "privileged_script",
+        contentSummary: `evaluate_script (${parsed.data.source.length} chars, purpose: ${parsed.data.purpose})`,
+      });
+      throw new ManagedBrowserAiToolError(
+        "approval_required",
+        "privileged_script",
+        "script_requires_explicit_approval"
+      );
+    }
+    const sourceHash = crypto
+      .createHash("sha256")
+      .update(parsed.data.source)
+      .digest("hex");
+    log.info(
+      `[ManagedBrowserTools] evaluate_script approved: sha256=${sourceHash.slice(0, 16)} bytes=${parsed.data.source.length}`
+    );
+    try {
+      const result = await this.browserModule.evaluateScript(
+        parsed.data.session_id,
+        {
+          source: parsed.data.source,
+          timeoutMs: parsed.data.timeout_ms ?? 5_000,
+        }
+      );
+      return {
+        ...result,
+        contentNotice: UNTRUSTED_CONTENT_NOTICE,
+        sourceHash,
+      };
     } catch (error) {
       this.wrapModuleError(error);
     }

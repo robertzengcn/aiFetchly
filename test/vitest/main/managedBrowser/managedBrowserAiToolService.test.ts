@@ -79,6 +79,12 @@ function makeModule(
       mimeType: "image/jpeg",
       base64: "x".repeat(64),
     })),
+    evaluateScript: vi.fn(async () => ({
+      ok: true,
+      resultSummary: "{\"n\":1}",
+      resultBytes: 7,
+      truncated: false,
+    })),
     requestHandoff: vi.fn(async () => status({ state: "handoff" })),
     resumeAfterHandoff: vi.fn(async () => status()),
     stop: vi.fn(async () => status({ state: "stopped" })),
@@ -407,5 +413,58 @@ describe("clear cache", () => {
       })
     );
     expect(err.code).toBe("approval_required");
+  });
+});
+
+
+describe("GAP-12 privileged page-context script", () => {
+  const ARGS = {
+    session_id: SESSION_ID,
+    source: "document.querySelectorAll('a').length",
+    purpose: "count links",
+    page_revision: 2,
+  };
+
+  it("ALWAYS requires approval — no permission mode may skip it", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    const err = await errorOf(service.evaluateScript(ARGS, CTX));
+    expect(err.code).toBe("approval_required");
+    expect(err.riskClass).toBe("privileged_script");
+    expect(module.evaluateScript).not.toHaveBeenCalled();
+    // The approval request shows the source size + purpose for review.
+    expect(module.notifyApprovalRequired).toHaveBeenCalledWith(
+      expect.objectContaining({
+        riskClass: "privileged_script",
+        contentSummary: expect.stringContaining("count links"),
+      })
+    );
+  });
+
+  it("executes with consent and returns redacted, budgeted results", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    const result = await service.evaluateScript(ARGS, {
+      ...CTX,
+      skipPermissionCheck: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(module.evaluateScript).toHaveBeenCalledWith(SESSION_ID, {
+      source: ARGS.source,
+      timeoutMs: 5000,
+    });
+    expect(String(result.sourceHash)).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.contentNotice).toContain("untrusted_page_content");
+  });
+
+  it("rejects oversized or malformed model arguments", async () => {
+    const service = makeService({});
+    const err = await errorOf(
+      service.evaluateScript(
+        { ...ARGS, source: "x".repeat(20_001) },
+        CTX
+      )
+    );
+    expect(err.code).toBe("invalid_tool_arguments");
   });
 });

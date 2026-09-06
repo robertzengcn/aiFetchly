@@ -42,7 +42,11 @@ import type {
 import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
 import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
-import { toSafeErrorMessage } from "@/childprocess/managed-browser/ResultSanitizer";
+import {
+  redactSecrets,
+  toSafeErrorMessage,
+  truncateText,
+} from "@/childprocess/managed-browser/ResultSanitizer";
 
 /**
  * Managed-browser worker session (technical design §4 worker column).
@@ -449,6 +453,72 @@ export class WorkerSession {
       this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
     } finally {
       this.currentRunActionsAbort = null;
+    }
+  }
+
+  /**
+   * GAP-12 (design §16): privileged page-context script execution.
+   * The source runs as PAGE JavaScript ONLY (page.evaluate) — Node,
+   * Electron, filesystem, and Puppeteer APIs are structurally
+   * unreachable. Bounded window, redacted + budgeted result, and every
+   * reference invalidated afterwards (the script may mutate the DOM).
+   */
+  public async evaluateScript(
+    requestId: string,
+    source: string,
+    timeoutMs: number
+  ): Promise<void> {
+    const page = this.requirePage(requestId);
+    if (!page) {
+      return;
+    }
+    const state = this.runtime.getState();
+    if (state !== "ready" && state !== "running") {
+      this.emitError(
+        requestId,
+        "action_not_allowed",
+        "script requires a ready session"
+      );
+      return;
+    }
+    const startedAt = this.now();
+    try {
+      const result = await Promise.race([
+        page.evaluate<unknown>(source),
+        new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), timeoutMs).unref?.()
+        ),
+      ]);
+      if (result === null && this.now() - startedAt >= timeoutMs) {
+        this.send({
+          ...this.base(requestId),
+          type: "EVALUATE_SCRIPT_RESULT",
+          ok: false,
+          resultSummary: null,
+          resultBytes: 0,
+          truncated: false,
+        });
+        return;
+      }
+      const redacted = redactSecrets(result);
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(redacted) ?? "null";
+      } catch {
+        serialized = "[unserializable]";
+      }
+      const budget = truncateText(serialized, 4_096);
+      this.registry.reset(this.registry.currentRevision + 1);
+      this.send({
+        ...this.base(requestId),
+        type: "EVALUATE_SCRIPT_RESULT",
+        ok: true,
+        resultSummary: budget.text,
+        resultBytes: serialized.length,
+        truncated: budget.truncated,
+      });
+    } catch (error) {
+      this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
     }
   }
 

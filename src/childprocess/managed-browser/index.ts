@@ -191,6 +191,13 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
+      case "EVALUATE_SCRIPT":
+        await session.evaluateScript(
+          message.requestId,
+          message.source,
+          message.timeoutMs
+        );
+        return;
       case "STOP_SESSION":
         await session.stop(message.requestId, message.reason);
         await gracefulExit(message.reason);

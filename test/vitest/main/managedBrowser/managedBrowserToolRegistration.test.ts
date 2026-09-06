@@ -19,6 +19,7 @@ const MANAGED_BROWSER_TOOLS = [
   "browser_resume_after_handoff",
   "browser_stop_session",
   "browser_clear_cache",
+  "browser_evaluate_script",
 ] as const;
 
 function getTool(name: string) {
@@ -43,7 +44,7 @@ function getTool(name: string) {
 }
 
 describe("managed-browser tool registration", () => {
-  it("registers all ten tools with the automation permission category", () => {
+  it("registers all eleven tools with the automation permission category", () => {
     for (const name of MANAGED_BROWSER_TOOLS) {
       const tool = getTool(name);
       expect(tool, name).toBeDefined();
