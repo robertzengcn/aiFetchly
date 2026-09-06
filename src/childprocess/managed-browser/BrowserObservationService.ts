@@ -43,6 +43,8 @@ export const INTERACTIVE_ELEMENTS_SELECTOR = [
 ].join(", ");
 
 export interface CollectedElementRecord {
+  /** Ordinal stamped on the element in the same collection pass. */
+  readonly obsId: string;
   readonly tag: string;
   readonly role: string;
   readonly name: string;
@@ -55,13 +57,30 @@ export interface CollectedElementRecord {
   readonly visible: boolean;
 }
 
-/** In-page collector: runs inside the page context; returns JSON records. */
+/**
+ * In-page collector: runs inside the page context; returns JSON records.
+ *
+ * GAP-02 fix: the SAME pass stamps every collected element with a
+ * `data-mb-obs` ordinal (stale stamps from earlier passes are stripped
+ * first). Handles are then queried by that stamp, so records and handles
+ * share one stable identity — filtering records to visible elements can
+ * never shift the positional pairing.
+ */
+export const OBS_ELEMENT_STAMP_ATTRIBUTE = "data-mb-obs";
+
+/** Selector that returns exactly the stamped (currently collected) set. */
+export const OBS_STAMPED_SELECTOR = `[${OBS_ELEMENT_STAMP_ATTRIBUTE}]`;
+
 export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   const selector = ${JSON.stringify(INTERACTIVE_ELEMENTS_SELECTOR)};
+  // Strip stamps from earlier passes first: an element that left the
+  // selector set must not be picked up by the stamped-handle query.
+  document.querySelectorAll('[${OBS_ELEMENT_STAMP_ATTRIBUTE}]').forEach(el => el.removeAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}'));
   const els = Array.from(document.querySelectorAll(selector)).slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements * 2});
   const out = [];
-  for (const el of els) {
+  els.forEach((el, obsIndex) => {
     const htmlEl = el;
+    htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
     const style = window.getComputedStyle(htmlEl);
     const visible = style.display !== 'none'
       && style.visibility !== 'hidden'
@@ -87,6 +106,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       try { hrefOrigin = new URL(htmlEl.href).origin; } catch (e) { hrefOrigin = null; }
     }
     out.push({
+      obsId: String(obsIndex),
       tag: htmlEl.tagName.toLowerCase(),
       role,
       name,
@@ -101,6 +121,37 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   }
   return out;
 })()`;
+
+/**
+ * Read an element's LIVE role/name using the SAME extraction rules as the
+ * collector (keep both in sync). Used by the action executor to revalidate
+ * the target immediately before execution (GAP-01/03): the main process
+ * attests the expected fingerprint from the latest observation; the live
+ * descriptor must still match it.
+ */
+export const READ_ELEMENT_DESCRIPTOR_SCRIPT = `((el) => {
+  const htmlEl = el;
+  const role = htmlEl.getAttribute('role')
+    || (htmlEl.tagName === 'A' ? 'link'
+      : htmlEl.tagName === 'BUTTON' ? 'button'
+      : htmlEl.tagName === 'SELECT' ? 'combobox'
+      : htmlEl.tagName === 'TEXTAREA' || htmlEl.tagName === 'INPUT' ? 'textbox'
+      : 'generic');
+  let name = htmlEl.getAttribute('aria-label')
+    || (htmlEl.labels && htmlEl.labels[0] ? htmlEl.labels[0].innerText : '')
+    || htmlEl.innerText
+    || htmlEl.getAttribute('placeholder')
+    || htmlEl.getAttribute('title')
+    || htmlEl.getAttribute('value')
+    || '';
+  name = name.replace(/\\s+/g, ' ').trim().slice(0, 200);
+  return { role, name };
+})()`;
+
+export interface LiveElementDescriptor {
+  readonly role: string;
+  readonly name: string;
+}
 
 export interface ObservationPageLike {
   url(): string;
@@ -173,8 +224,11 @@ export async function buildObservation(
     }
   }
 
+  // Handles come from the SAME stamped pass, in the same document order as
+  // `records` (visible + hidden). Pair by the record's FULL-array position —
+  // filtering to visible can never shift the pairing (GAP-02).
   const handles = await input.page
-    .$$(INTERACTIVE_ELEMENTS_SELECTOR)
+    .$$(OBS_STAMPED_SELECTOR)
     .catch(() => [] as readonly DisposableElement[]);
 
   const visible = records.filter((r) => r.visible).slice(
@@ -185,11 +239,10 @@ export async function buildObservation(
     records.filter((r) => r.visible).length > visible.length;
 
   const elements: BrowserElementSummary[] = [];
-  let pairIndex = 0;
   for (const record of visible) {
     const shaped = shapeElementRecord(record);
-    const handle = handles[pairIndex];
-    pairIndex++;
+    const handle =
+      record.obsId != null ? handles[Number(record.obsId)] : undefined;
     if (handle) {
       const ref = input.registry.register({
         element: handle,

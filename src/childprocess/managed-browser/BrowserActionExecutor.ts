@@ -17,6 +17,10 @@ import {
   isSensitiveInputType,
   redactSecrets,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import {
+  READ_ELEMENT_DESCRIPTOR_SCRIPT,
+  type LiveElementDescriptor,
+} from "@/childprocess/managed-browser/BrowserObservationService";
 
 /**
  * Browser action executor (technical design §15.2).
@@ -220,8 +224,7 @@ export class BrowserActionExecutor {
           return await this.doNavigate(action.url, options);
         case "click":
           return await this.withElement(
-            action.ref,
-            action.pageRevision,
+            action,
             options,
             async (entry) => {
               await entry.element.scrollIntoView();
@@ -231,8 +234,7 @@ export class BrowserActionExecutor {
           );
         case "fill":
           return await this.withElement(
-            action.ref,
-            action.pageRevision,
+            action,
             options,
             async (entry) => {
               const inputType = await this.probeInputType(entry.element);
@@ -254,8 +256,7 @@ export class BrowserActionExecutor {
           );
         case "select":
           return await this.withElement(
-            action.ref,
-            action.pageRevision,
+            action,
             options,
             async (entry) => {
               await entry.element.scrollIntoView();
@@ -399,8 +400,10 @@ export class BrowserActionExecutor {
   }
 
   private async withElement(
-    ref: string,
-    pageRevision: number,
+    action: Extract<
+      BrowserAction,
+      { type: "click" | "fill" | "select" }
+    >,
     options: ExecuteProgramOptions,
     fn: (entry: ReferenceEntry<ExecutorElementHandle>) => Promise<{
       success: boolean;
@@ -415,7 +418,7 @@ export class BrowserActionExecutor {
     effectUnknown?: boolean;
     stopCode?: StopCode;
   }> {
-    const lookup = options.registry.lookup(ref, pageRevision);
+    const lookup = options.registry.lookup(action.ref, action.pageRevision);
     if (lookup.status === "stale_revision") {
       return {
         success: false,
@@ -429,6 +432,28 @@ export class BrowserActionExecutor {
         success: false,
         errorCode: "stale_page_reference",
         elementFound: false,
+      };
+    }
+    // GAP-01/03: revalidate the LIVE element against the expected
+    // fingerprint (main-process-attested from the latest observation)
+    // immediately before execution. Fail closed on any mismatch.
+    const expected = {
+      role: action.expectedRole ?? lookup.entry.role,
+      name: action.expectedName ?? lookup.entry.name,
+    };
+    const live = await lookup.entry.element
+      .evaluate<LiveElementDescriptor | null>(READ_ELEMENT_DESCRIPTOR_SCRIPT)
+      .catch(() => null);
+    if (
+      !live ||
+      live.role !== expected.role ||
+      live.name !== expected.name
+    ) {
+      return {
+        success: false,
+        errorCode: "stale_page_reference",
+        elementFound: true,
+        stopCode: "stale_page_reference",
       };
     }
     const result = await fn(lookup.entry);

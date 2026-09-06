@@ -42,6 +42,8 @@ function makeModule(
 ): BrowserModuleLike {
   return {
     start: vi.fn(async () => status()),
+    getLastObservation: vi.fn(() => null),
+    notifyApprovalRequired: vi.fn(),
     getStatus: vi.fn((sessionId: string) =>
       sessionId === SESSION_ID ? status() : null
     ),
@@ -270,6 +272,101 @@ describe("sanitized results", () => {
     expect(result.captured).toBe(true);
     expect(result.mimeType).toBe("image/jpeg");
     expect(String(JSON.stringify(result)).includes("base64")).toBe(false);
+  });
+});
+
+describe("GAP-01 resolved-target approval", () => {
+  const OBSERVATION = {
+    sessionId: SESSION_ID,
+    pageRevision: 4,
+    url: "https://www.youtube.com/upload",
+    origin: "https://www.youtube.com",
+    title: "Upload",
+    state: "ready",
+    elements: [
+      { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+      { ref: "e_title", role: "textbox", name: "Title", disabled: false },
+    ],
+    visibleText: "",
+    notices: [],
+    truncated: false,
+  };
+
+  function moduleWithObservation() {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => OBSERVATION
+    );
+    return module;
+  }
+
+  it("requires approval when the RESOLVED target is consequential (opaque ref)", async () => {
+    const module = moduleWithObservation();
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 4,
+          program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+        },
+        CTX
+      )
+    );
+    expect(err.code).toBe("approval_required");
+    expect(err.riskClass).toBe("consequential_write");
+    expect(module.runActions).not.toHaveBeenCalled();
+    // The renderer approval request carries the resolved target name.
+    expect(module.notifyApprovalRequired).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: SESSION_ID,
+        riskClass: "consequential_write",
+        contentSummary: expect.stringContaining("Publish"),
+      })
+    );
+  });
+
+  it("attests expected fingerprints and executes once consent was granted", async () => {
+    const module = moduleWithObservation();
+    const service = makeService({ module });
+    const result = await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 4,
+        program: { actions: [{ type: "click", ref: "e_title", pageRevision: 4 }] },
+      },
+      { ...CTX, skipPermissionCheck: true }
+    );
+    expect(result.effect).toBe("known");
+    expect(module.runActions).toHaveBeenCalledWith(SESSION_ID, {
+      actions: [
+        {
+          type: "click",
+          ref: "e_title",
+          pageRevision: 4,
+          expectedRole: "textbox",
+          expectedName: "Title",
+        },
+      ],
+    });
+  });
+
+  it("a full-access grant still cannot bypass consequential approval", async () => {
+    const module = moduleWithObservation();
+    const service = makeService({ module });
+    // skipPermissionCheck ONLY arrives from a real permission grant for the
+    // exact approved program; absent it, even session-level consent fails.
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 4,
+          program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+        },
+        CTX
+      )
+    );
+    expect(err.code).toBe("approval_required");
   });
 });
 

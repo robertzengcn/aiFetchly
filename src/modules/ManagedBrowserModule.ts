@@ -125,6 +125,8 @@ interface ActiveSessionRecord {
   handoffBaseAtEpochMs: number | null;
   handoffExpiresAtEpochMs: number | null;
   lastErrorCode: ManagedBrowserErrorCode | null;
+  /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
+  lastObservation: BrowserObservation | null;
 }
 
 interface AccountLookupResult {
@@ -445,6 +447,7 @@ export class ManagedBrowserModule {
         handoffBaseAtEpochMs: null,
         handoffExpiresAtEpochMs: null,
         lastErrorCode: null,
+        lastObservation: null,
       };
       const client = this.workerClientFactory({
         sessionId,
@@ -696,7 +699,20 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("internal_error");
     }
     record.pageRevision = message.observation.pageRevision;
+    // Cache the sanitized observation so risk classification can resolve
+    // element refs to their role/name descriptors (GAP-01).
+    record.lastObservation = message.observation;
     return message.observation;
+  }
+
+  /**
+   * Latest sanitized observation for a live session (null when none was
+   * taken). Used by the AI tool layer to resolve ref → target descriptor.
+   */
+  public getLastObservation(
+    sessionId: string
+  ): BrowserObservation | null {
+    return this.sessions.get(sessionId)?.lastObservation ?? null;
   }
 
   public async runActions(

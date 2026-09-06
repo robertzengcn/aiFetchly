@@ -135,6 +135,10 @@ export interface BrowserModuleLike {
     riskClass: string;
     contentSummary?: string | null;
   }): void;
+  /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
+  getLastObservation?(sessionId: string): {
+    elements: ReadonlyArray<{ ref: string; role: string; name: string }>;
+  } | null;
 }
 
 /** Prefix stamped on every observation-derived payload (§14). */
@@ -357,30 +361,79 @@ export class ManagedBrowserAiToolService {
     const program = parsed.data.program as BrowserActionProgram;
 
     // Risk gate over the whole program (§15.4).
-    // Programs carry opaque element REFS (not names), so name-based
-    // consequential detection is not possible here; the registry-level
-    // confirmation for browser_run_actions is the security floor for that
-    // gap, and URL/type signals are still classified below.
+    // GAP-01: resolve every element ref against the LATEST sanitized
+    // observation (role/name descriptors) and classify the RESOLVED
+    // targets — not just action types. The model cannot smuggle a
+    // consequential control through an opaque ref.
+    const observation =
+      this.browserModule.getLastObservation?.(parsed.data.session_id) ?? null;
+    const descriptorFor = (
+      ref: string
+    ): { readonly role: string; readonly name: string } | null => {
+      const element = observation?.elements.find((e) => e.ref === ref);
+      return element ? { role: element.role, name: element.name } : null;
+    };
     const assessment = this.classifier.classifyProgram(
-      program.actions.map((action) => ({
-        type: action.type,
-        url: action.type === "navigate" ? action.url : null,
-      }))
+      program.actions.map((action) => {
+        if (
+          (action.type === "click" ||
+            action.type === "fill" ||
+            action.type === "select") &&
+          "ref" in action
+        ) {
+          const descriptor = descriptorFor(action.ref);
+          return {
+            type: action.type,
+            targetRole: descriptor?.role ?? null,
+            targetName: descriptor?.name ?? null,
+            url: null,
+          };
+        }
+        return {
+          type: action.type,
+          url: action.type === "navigate" ? action.url : null,
+        };
+      })
     );
     if (assessment.routing === "handoff") {
       await this.requireHandoff(parsed.data.session_id, assessment);
     }
-    this.browserModule.notifyApprovalRequired?.({
+    if (assessment.requiresApproval && !context.skipPermissionCheck) {
+      this.browserModule.notifyApprovalRequired?.({
         sessionId: parsed.data.session_id,
         riskClass: assessment.riskClass,
+        contentSummary: buildApprovalSummary(program, descriptorFor),
       });
-      if (assessment.requiresApproval && !context.skipPermissionCheck) {
       throw new ManagedBrowserAiToolError(
         "approval_required",
         assessment.riskClass,
         assessment.reasonCode
       );
     }
+
+    // Attach main-process-attested expected fingerprints so the worker
+    // revalidates each target immediately before execution (GAP-01/03).
+    const augmentedProgram: BrowserActionProgram = {
+      ...program,
+      actions: program.actions.map((action) => {
+        if (
+          (action.type === "click" ||
+            action.type === "fill" ||
+            action.type === "select") &&
+          "ref" in action
+        ) {
+          const descriptor = descriptorFor(action.ref);
+          if (descriptor) {
+            return {
+              ...action,
+              expectedRole: descriptor.role,
+              expectedName: descriptor.name,
+            };
+          }
+        }
+        return action;
+      }),
+    };
 
     // Rate-limited progress: at most one event per ~5 steps.
     const total = program.actions.length;
@@ -402,7 +455,7 @@ export class ManagedBrowserAiToolService {
     try {
       const result = await this.browserModule.runActions(
         parsed.data.session_id,
-        program
+        augmentedProgram
       );
       emit(total - 1);
       if (result.type !== "ACTION_RESULT") {
@@ -548,6 +601,29 @@ export class ManagedBrowserAiToolService {
       this.wrapModuleError(error);
     }
   }
+}
+
+/**
+ * Human-readable approval preview: action kinds + resolved target names +
+ * the program intent. Never page content beyond the sanitized names.
+ */
+function buildApprovalSummary(
+  program: BrowserActionProgram,
+  descriptorFor: (ref: string) => { readonly role: string; readonly name: string } | null
+): string {
+  const parts: string[] = [];
+  for (const action of program.actions.slice(0, 5)) {
+    if ((action.type === "click" || action.type === "fill" || action.type === "select") && "ref" in action) {
+      const descriptor = descriptorFor(action.ref);
+      parts.push(`${action.type} "${descriptor?.name ?? action.ref}"`);
+    } else if (action.type === "navigate") {
+      parts.push(`navigate ${action.url}`);
+    } else {
+      parts.push(action.type);
+    }
+  }
+  const intent = program.intent ? ` (intent: ${program.intent})` : "";
+  return `${parts.join(", ")}${intent}`;
 }
 
 let defaultAiToolService: ManagedBrowserAiToolService | null = null;

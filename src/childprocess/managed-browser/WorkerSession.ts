@@ -57,9 +57,21 @@ import { toSafeErrorMessage } from "@/childprocess/managed-browser/ResultSanitiz
  */
 
 // Structural Puppeteer types (kept local so tests can fake them).
+
+/** Structural Puppeteer Frame: enough to identify the MAIN frame. */
+export interface PuppeteerFrameLike {
+  /** Main frame returns null; sub-frames return their parent. */
+  parentFrame?(): PuppeteerFrameLike | null;
+}
+
 export interface PuppeteerPageLike
   extends ObservationPageLike,
     ExecutorPageLike {
+  /** Main-frame + sub-frame navigation events (used to invalidate refs). */
+  on(
+    event: "framenavigated",
+    listener: (frame: PuppeteerFrameLike) => void
+  ): unknown;
   screenshot(options?: {
     type?: "jpeg" | "png";
     quality?: number;
@@ -199,6 +211,7 @@ export class WorkerSession {
 
       const pages = await browser.pages();
       this.page = pages[0] ?? (await browser.newPage());
+      this.watchPageNavigations(this.page);
       if (
         proxy &&
         proxy.mode !== "direct" &&
@@ -600,6 +613,25 @@ export class WorkerSession {
   // -----------------------------------------------------------------------
   // Internals
   // -----------------------------------------------------------------------
+
+  /**
+   * GAP-03: renderer-driven navigations (redirects, reloads, link clicks,
+   * SPA route changes that replace the document) invalidate every element
+   * reference. Programmatic goto already resets the registry in the
+   * executor; this watcher covers everything the model did NOT navigate.
+   */
+  private watchPageNavigations(page: PuppeteerPageLike): void {
+    try {
+      page.on("framenavigated", (frame) => {
+        if (frame.parentFrame?.() != null) {
+          return; // sub-frame swap: refs are main-frame scoped
+        }
+        this.registry.reset(this.registry.currentRevision + 1);
+      });
+    } catch {
+      // Structural fakes without the event — nothing to watch.
+    }
+  }
 
   private async buildObservation(
     page: PuppeteerPageLike

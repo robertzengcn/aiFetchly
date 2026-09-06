@@ -27,6 +27,8 @@ class FakeHandle implements ExecutorElementHandle {
   public clicked = false;
   public typed: string | null = null;
   public disposed = false;
+  /** LIVE role/name returned by the descriptor revalidation script. */
+  public liveDescriptor: { role: string; name: string } | null = null;
 
   constructor(
     public readonly inputType: string | null = "text",
@@ -51,6 +53,10 @@ class FakeHandle implements ExecutorElementHandle {
   }
   async evaluate<T>(script: unknown): Promise<T> {
     const source = String(script);
+    if (source.includes("aria-label")) {
+      // Live-descriptor read (executor revalidation, GAP-01/03).
+      return (this.liveDescriptor ?? { role: "", name: "" }) as T;
+    }
     if (source.includes("type')") || source.includes("getAttribute('type')")) {
       return this.inputType as T;
     }
@@ -118,6 +124,7 @@ function visibleRecord(
   overrides: Partial<CollectedElementRecord> = {}
 ): CollectedElementRecord {
   return {
+    obsId: "0",
     tag: "button",
     role: "button",
     name: "Like",
@@ -130,6 +137,20 @@ function visibleRecord(
     visible: true,
     ...overrides,
   };
+}
+
+/** Register an element whose LIVE descriptor matches its record. */
+function registerElement(
+  registry: PageReferenceRegistry<FakeHandle>,
+  role: string,
+  name: string,
+  inputType: string | null = "text",
+  extractValue: unknown = null
+): { ref: string; handle: FakeHandle } {
+  const handle = new FakeHandle(inputType, extractValue);
+  handle.liveDescriptor = { role, name };
+  const ref = registry.register({ element: handle, role, name });
+  return { ref, handle };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,12 +347,7 @@ function setupExecutor() {
 describe("BrowserActionExecutor", () => {
   it("clicks a current-revision reference with trusted events", async () => {
     const { page, registry, executor, navigation } = setupExecutor();
-    const handle = new FakeHandle();
-    const ref = registry.register({
-      element: handle,
-      role: "button",
-      name: "Like",
-    });
+    const { ref, handle } = registerElement(registry, "button", "Like");
     const outcome = await executor.executeProgram(
       { actions: [{ type: "click", ref, pageRevision: 1 }] },
       { page, registry, navigation, shouldCancel: () => false }
@@ -360,12 +376,12 @@ describe("BrowserActionExecutor", () => {
 
   it("never fills password fields — forces handoff instead", async () => {
     const { page, registry, executor, navigation } = setupExecutor();
-    const handle = new FakeHandle("password");
-    const ref = registry.register({
-      element: handle,
-      role: "textbox",
-      name: "Password",
-    });
+    const { ref, handle } = registerElement(
+      registry,
+      "textbox",
+      "Password",
+      "password"
+    );
     const outcome = await executor.executeProgram(
       { actions: [{ type: "fill", ref, pageRevision: 1, value: "stolen" }] },
       { page, registry, navigation, shouldCancel: () => false }
@@ -457,15 +473,10 @@ describe("BrowserActionExecutor", () => {
 
   it("redacts secrets in extracted values", async () => {
     const { page, registry, executor, navigation } = setupExecutor();
-    const handle = new FakeHandle("text", {
+    const { ref } = registerElement(registry, "textbox", "T", "text", {
       tag: "div",
       text: "token=CANARY-abcdef0123456789abcdef0123456789",
       href: null,
-    });
-    const ref = registry.register({
-      element: handle,
-      role: "textbox",
-      name: "T",
     });
     const outcome = await executor.executeProgram(
       { actions: [{ type: "extract", refs: [ref] }] },
@@ -490,5 +501,125 @@ describe("validateProgramLimits", () => {
     expect(
       validateProgramLimits({ actions: [{ type: "press_key", key: "a" }] }).ok
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP-01..03: stamped pairing, live revalidation, expected fingerprints
+// ---------------------------------------------------------------------------
+
+describe("GAP-02 stamped single-pass pairing", () => {
+  it("binds each visible record to its OWN handle even with hidden elements first", async () => {
+    const page = new FakePage();
+    // Hidden element FIRST shifts nothing: stamps pair by full-array index.
+    page.collectedRecords = [
+      visibleRecord({ obsId: "0", role: "button", name: "Hidden", visible: false }),
+      visibleRecord({ obsId: "1", tag: "textbox", role: "textbox", name: "Search" }),
+      visibleRecord({ obsId: "2", role: "button", name: "Like" }),
+    ];
+    const hiddenHandle = new FakeHandle();
+    const searchHandle = new FakeHandle();
+    const likeHandle = new FakeHandle();
+    page.handles = [hiddenHandle, searchHandle, likeHandle];
+    const registry = new PageReferenceRegistry<FakeHandle>(1);
+    const observation = await buildObservation({
+      page,
+      sessionId: "mb_gap002",
+      registry,
+      state: "ready",
+    });
+    expect(observation.elements.map((e) => e.name)).toEqual([
+      "Search",
+      "Like",
+    ]);
+    // The "Search" ref must operate on the SEARCH handle — not the hidden one.
+    const searchRef = observation.elements[0].ref;
+    const lookup = registry.lookup(searchRef);
+    if (lookup.status !== "ok") {
+      throw new Error("unreachable");
+    }
+    expect(lookup.entry.element).toBe(searchHandle);
+    expect(lookup.entry.element).not.toBe(hiddenHandle);
+    const likeLookup = registry.lookup(observation.elements[1].ref);
+    if (likeLookup.status !== "ok") {
+      throw new Error("unreachable");
+    }
+    expect(likeLookup.entry.element).toBe(likeHandle);
+  });
+});
+
+describe("GAP-01/03 live-descriptor revalidation", () => {
+  it("stops as stale when the live element no longer matches the registry fingerprint", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "button", "Like");
+    // The page mutated: the same element is now labeled Share.
+    handle.liveDescriptor = { role: "button", name: "Share" };
+    const outcome = await executor.executeProgram(
+      { actions: [{ type: "click", ref, pageRevision: 1 }] },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("stale_page_reference");
+    expect(outcome.results[0].errorCode).toBe("stale_page_reference");
+    expect(outcome.results[0].elementFound).toBe(true);
+    expect(handle.clicked).toBe(false);
+  });
+
+  it("stops as stale when the live element misses the MAIN-ATTESTED expected fingerprint", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "button", "Like");
+    // Live DOM still says Like — but main attested the target as Publish,
+    // so the model is clicking something other than what was approved.
+    handle.liveDescriptor = { role: "button", name: "Like" };
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          {
+            type: "click",
+            ref,
+            pageRevision: 1,
+            expectedRole: "button",
+            expectedName: "Publish",
+          },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("stale_page_reference");
+    expect(handle.clicked).toBe(false);
+  });
+
+  it("executes when the live descriptor matches the attested fingerprint", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "button", "Publish");
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          {
+            type: "click",
+            ref,
+            pageRevision: 1,
+            expectedRole: "button",
+            expectedName: "Publish",
+          },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(handle.clicked).toBe(true);
+  });
+
+  it("fails closed when the descriptor read itself errors (detached element)", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const handle = new FakeHandle();
+    handle.evaluate = async <T,>(): Promise<T> => {
+      throw new Error("detached");
+    };
+    const ref = registry.register({ element: handle, role: "button", name: "Like" });
+    const outcome = await executor.executeProgram(
+      { actions: [{ type: "click", ref, pageRevision: 1 }] },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("stale_page_reference");
   });
 });

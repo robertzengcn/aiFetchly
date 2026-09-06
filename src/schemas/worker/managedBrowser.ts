@@ -254,17 +254,41 @@ export const browserActionSchema = z.discriminatedUnion("type", [
     type: z.literal("click"),
     ref: elementRefSchema,
     pageRevision: z.number().int().positive(),
+    /**
+     * Main-process-attested target fingerprint (resolved from the latest
+     * observation, NEVER model-authored). The worker revalidates the LIVE
+     * element against it immediately before execution — a mismatch stops
+     * the program as stale_page_reference (GAP-01/03).
+     */
+    expectedRole: z.string().min(1).max(48).optional(),
+    expectedName: z.string().max(200).optional(),
   }),
   z.strictObject({
     type: z.literal("fill"),
     ref: elementRefSchema,
     pageRevision: z.number().int().positive(),
+    /**
+     * Main-process-attested target fingerprint (resolved from the latest
+     * observation, NEVER model-authored). The worker revalidates the LIVE
+     * element against it immediately before execution — a mismatch stops
+     * the program as stale_page_reference (GAP-01/03).
+     */
+    expectedRole: z.string().min(1).max(48).optional(),
+    expectedName: z.string().max(200).optional(),
     value: z.string().max(4096),
   }),
   z.strictObject({
     type: z.literal("select"),
     ref: elementRefSchema,
     pageRevision: z.number().int().positive(),
+    /**
+     * Main-process-attested target fingerprint (resolved from the latest
+     * observation, NEVER model-authored). The worker revalidates the LIVE
+     * element against it immediately before execution — a mismatch stops
+     * the program as stale_page_reference (GAP-01/03).
+     */
+    expectedRole: z.string().min(1).max(48).optional(),
+    expectedName: z.string().max(200).optional(),
     values: z.array(z.string().max(512)).min(1).max(32),
   }),
   z.strictObject({
