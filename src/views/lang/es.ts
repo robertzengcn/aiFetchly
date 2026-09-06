@@ -2451,6 +2451,9 @@ export default {
     voice: {
       microphone: "Entrada de voz",
       start_recording: "Comenzar grabación",
+      settings_unavailable: "Entrada de voz no disponible: abre los ajustes",
+      busy: "La entrada de voz no está disponible durante la ejecución actual",
+      settings_load_failed: "No se pudo cargar la configuración de voz.",
       stop_recording: "Detener grabación",
       recording: "Grabando...",
       transcribing: "Transcribiendo...",

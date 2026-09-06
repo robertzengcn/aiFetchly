@@ -68,6 +68,8 @@ function formatBytes(bytes: number): string {
  */
 export interface AiChatVoiceState {
   readonly inputEnabled: Readonly<Ref<boolean>>;
+  /** FR-VOICE-005: recoverable settings-load failure (mic stays visible). */
+  readonly settingsUnavailable: Readonly<Ref<boolean>>;
   readonly autoSend: Readonly<Ref<boolean>>;
   readonly maxRecordingMs: Readonly<Ref<number>>;
   readonly ttsMode: Readonly<Ref<AiChatVoiceTtsMode>>;
@@ -144,6 +146,12 @@ export function useAiChatVoice(options: {
   });
 
   const inputEnabled = ref(false);
+  /**
+   * FR-VOICE-005: settings failed to LOAD (recoverable). The policy state is
+   * unknown — the microphone must stay visible in a disabled/setup state
+   * with a settings action instead of silently disappearing.
+   */
+  const settingsUnavailable = ref(false);
   const autoSend = ref(false);
   const maxRecordingMs = ref<number>(DEFAULT_MAX_RECORDING_MS);
   const ttsMode = ref<AiChatVoiceTtsMode>("disabled");
@@ -274,6 +282,7 @@ export function useAiChatVoice(options: {
       applySettings(loadedSettings);
       status.value = runtime;
       localRuntimeStatus.value = localRuntime;
+      settingsUnavailable.value = false;
       if (
         runtime.sttState !== "missing_model" &&
         runtime.sttState !== "unavailable"
@@ -282,7 +291,10 @@ export function useAiChatVoice(options: {
       }
     } catch {
       // Settings load failure: voice actions show unavailable/setup state;
-      // typed chat remains usable (design §11.4).
+      // typed chat remains usable (design §11.4). settingsUnavailable keeps
+      // the microphone VISIBLE as a recoverable setup state (FR-VOICE-005)
+      // instead of silently removing the capability.
+      settingsUnavailable.value = true;
       inputEnabled.value = false;
       autoSend.value = false;
       maxRecordingMs.value = DEFAULT_MAX_RECORDING_MS;
@@ -531,6 +543,7 @@ export function useAiChatVoice(options: {
 
   return {
     inputEnabled,
+    settingsUnavailable,
     autoSend,
     maxRecordingMs,
     ttsMode,

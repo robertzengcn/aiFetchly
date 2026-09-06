@@ -173,6 +173,7 @@
       :voice-playback-error="voice.playbackError.value"
       :voice-speaking="voice.speaking.value"
       :voice-chat-ready="voice.chatReady.value"
+      :voice-settings-unavailable="voice.settingsUnavailable.value"
       :draft-key="composerDraftKey"
       :selected-generated-images="selectedGeneratedImageViews"
       :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"

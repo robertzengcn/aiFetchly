@@ -146,6 +146,7 @@ const ComposerStub = defineComponent({
     "isStreaming",
     "conversationId",
     "voiceEnabled",
+    "voiceSettingsUnavailable",
     "draftKey",
     "selectedGeneratedImages",
     "generatedImageReferenceLimit",
@@ -848,5 +849,43 @@ describe("AiChatCenterSurface durable drafts (FR-COMP-011)", () => {
 
     expect(startChatRunMock).toHaveBeenCalledTimes(1);
     expect(onAccepted).not.toHaveBeenCalled(); // failed send keeps the draft
+  });
+
+  it("forwards recoverable voice-settings failure to the composer (FR-VOICE-005)", async () => {
+    getVoiceSettingsMock.mockRejectedValue(new Error("settings ipc failed"));
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    expect(
+      wrapper
+        .findComponent({ name: "AiChatV2Composer" })
+        .props("voiceSettingsUnavailable")
+    ).toBe(true);
+
+    // A later successful load clears the recoverable state.
+    getVoiceSettingsMock.mockResolvedValue({
+      inputMode: "disabled",
+      ttsMode: "disabled",
+      autoSendTranscript: false,
+      sttLanguage: "auto",
+      ttsLanguage: "auto",
+      sttModelId: "stt",
+      ttsModelId: "tts",
+      ttsSpeed: 1,
+      maxRecordingMs: 60000,
+    });
+    getVoiceStatusMock.mockResolvedValue({
+      sttState: "ready",
+      ttsState: "ready",
+    });
+    // The composable reloads on the voice-settings-changed event; drive the
+    // surface's settings reload via a fresh mount instead.
+    const second = mountSurface();
+    await flushPromises();
+    expect(
+      second
+        .findComponent({ name: "AiChatV2Composer" })
+        .props("voiceSettingsUnavailable")
+    ).toBe(false);
   });
 });

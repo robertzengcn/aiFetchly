@@ -163,17 +163,24 @@
       @click="onTextareaCursor"
       @paste="onPaste"
     >
-      <template v-if="voiceEnabled" #append-inner>
+      <!--
+        FR-VOICE-001/005: the microphone stays VISIBLE whenever voice input is
+        enabled by policy OR merely recoverable-unavailable (settings failed to
+        load) — a recoverable capability is never silently removed. The label
+        always states WHY recording is currently impossible (FR-VOICE-003).
+      -->
+      <template v-if="voiceEnabled || voiceSettingsUnavailable" #append-inner>
         <v-btn
           icon
           size="small"
           variant="text"
           class="v2-composer__voice-button"
           :color="isRecording ? 'error' : undefined"
-          :disabled="isStreaming || isProcessing || isTranscribing"
+          :disabled="micDisabled"
           :loading="isTranscribing"
-          :title="t('aiChatV2.voice.microphone') || 'Voice input'"
-          :aria-label="isRecording ? (t('aiChatV2.voice.stop_recording') || 'Stop recording') : (t('aiChatV2.voice.start_recording') || 'Start recording')"
+          :title="micTitle"
+          :aria-label="micTitle"
+          data-testid="ai-chat-microphone"
           @click.stop="onMicClick"
         >
           <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
@@ -206,6 +213,39 @@
       </div>
     </v-slide-y-reverse-transition>
 
+    <v-slide-y-reverse-transition>
+      <!--
+        FR-VOICE-005: recoverable settings-load failure keeps a visible
+        settings path — never a silently absent capability.
+      -->
+      <div
+        v-if="voiceSettingsUnavailable"
+        class="v2-composer__notice v2-composer__notice--voice"
+        role="status"
+        aria-live="polite"
+        data-testid="voice-settings-unavailable-notice"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">
+          mdi-microphone-off
+        </v-icon>
+        <span class="v2-composer__notice-text">
+          {{
+            t("aiChatV2.voice.settings_load_failed") ||
+            "Voice settings couldn't be loaded."
+          }}
+        </span>
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          data-testid="voice-settings-open-button"
+          @click="$emit('open-voice-settings')"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+        </v-btn>
+      </div>
+    </v-slide-y-reverse-transition>
     <v-slide-y-reverse-transition>
       <div v-if="showVoiceModelNotice" class="v2-composer__notice v2-composer__notice--voice">
         <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
@@ -428,6 +468,12 @@ const props = defineProps<{
    */
   voiceChatReady?: boolean;
   /**
+   * FR-VOICE-005: voice settings failed to LOAD (recoverable). The policy
+   * state is unknown rather than off, so the microphone must stay visible in
+   * a disabled/setup state with a settings action instead of disappearing.
+   */
+  voiceSettingsUnavailable?: boolean;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -604,6 +650,40 @@ const voiceAvailabilityNotice = computed(() =>
       "Local voice runtime is unavailable."
     : t("aiChatV2.voice.model_missing") || "Voice model is not installed.",
 );
+
+/**
+ * FR-VOICE-003: the microphone distinguishes ready, recording, transcribing,
+ * busy, and setup-required states. Busy covers an active run; setup covers a
+ * recoverable settings-load failure.
+ */
+const micBusy = computed(() => props.isStreaming || props.isProcessing);
+const micDisabled = computed(
+  () =>
+    isTranscribing.value ||
+    micBusy.value ||
+    props.voiceSettingsUnavailable === true
+);
+const micTitle = computed(() => {
+  if (isRecording.value) {
+    return t("aiChatV2.voice.stop_recording") || "Stop recording";
+  }
+  if (isTranscribing.value) {
+    return t("aiChatV2.voice.transcribing") || "Transcribing…";
+  }
+  if (props.voiceSettingsUnavailable === true) {
+    return (
+      t("aiChatV2.voice.settings_unavailable") ||
+      "Voice input unavailable — open settings"
+    );
+  }
+  if (micBusy.value) {
+    return (
+      t("aiChatV2.voice.busy") ||
+      "Voice input is unavailable during the current run"
+    );
+  }
+  return t("aiChatV2.voice.start_recording") || "Start recording";
+});
 
 function appendTranscript(text: string): void {
   const clean = text.trim();

@@ -2395,6 +2395,9 @@ export default {
     voice: {
       microphone: "音声入力",
       start_recording: "録音を開始",
+      settings_unavailable: "音声入力は利用できません——設定を開いてください",
+      busy: "現在の実行中は音声入力を利用できません",
+      settings_load_failed: "音声設定を読み込めませんでした。",
       stop_recording: "録音を停止",
       recording: "録音中...",
       transcribing: "文字起こし中...",

@@ -2440,6 +2440,9 @@ export default {
     voice: {
       microphone: "Spracheingabe",
       start_recording: "Aufnahme starten",
+      settings_unavailable: "Spracheingabe nicht verfügbar – Einstellungen öffnen",
+      busy: "Die Spracheingabe ist während des aktuellen Vorgangs nicht verfügbar",
+      settings_load_failed: "Spracheinstellungen konnten nicht geladen werden.",
       stop_recording: "Aufnahme stoppen",
       recording: "Aufnahme...",
       transcribing: "Transkription...",

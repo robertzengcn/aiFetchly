@@ -2431,6 +2431,9 @@ export default {
     voice: {
       microphone: "Saisie vocale",
       start_recording: "Commencer l'enregistrement",
+      settings_unavailable: "Saisie vocale indisponible — ouvrir les paramètres",
+      busy: "La saisie vocale est indisponible pendant l’exécution en cours",
+      settings_load_failed: "Impossible de charger les paramètres vocaux.",
       stop_recording: "Arrêter l'enregistrement",
       recording: "Enregistrement...",
       transcribing: "Transcription...",

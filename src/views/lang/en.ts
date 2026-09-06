@@ -2432,6 +2432,9 @@ export default {
     voice: {
       microphone: "Voice input",
       start_recording: "Start recording",
+      settings_unavailable: "Voice input unavailable — open settings",
+      busy: "Voice input is unavailable during the current run",
+      settings_load_failed: "Voice settings couldn't be loaded.",
       stop_recording: "Stop recording",
       recording: "Recording...",
       transcribing: "Transcribing...",
