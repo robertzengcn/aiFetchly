@@ -623,3 +623,58 @@ describe("GAP-01/03 live-descriptor revalidation", () => {
     expect(outcome.stopCode).toBe("stale_page_reference");
   });
 });
+
+describe("GAP-04 observation payload scrubbing", () => {
+  it("redacts planted secrets in visible text, titles, and labels", async () => {
+    const page = new FakePage();
+    page.title = "Settings — token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12";
+    page.innerText =
+      "Your access token is eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.endpoint " +
+      "session_id: CANARYdeadbeefdeadbeefdeadbeef and " +
+      "api_key=\"sk-ABCDEFGHIJKLMNOP1234567890\" plus plain words.";
+    page.collectedRecords = [
+      visibleRecord({
+        obsId: "0",
+        role: "button",
+        name: "Copy token CANARY-abcdef0123456789abcdef0123456789",
+      }),
+    ];
+    page.handles = [new FakeHandle()];
+    const observation = await buildObservation({
+      page,
+      sessionId: "mb_gap004",
+      registry: new PageReferenceRegistry<FakeHandle>(1),
+      state: "ready",
+    });
+    const serialized = JSON.stringify(observation);
+    for (const canary of [
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+      "CANARYdeadbeefdeadbeefdeadbeef",
+      "sk-ABCDEFGHIJKLMNOP1234567890",
+      "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12",
+      "CANARY-abcdef0123456789abcdef0123456789",
+    ]) {
+      expect(serialized.includes(canary), canary).toBe(false);
+    }
+    expect(observation.title).toContain("[redacted]");
+    expect(observation.visibleText).toContain("[redacted]");
+    expect(observation.elements[0].name).toContain("[redacted]");
+  });
+
+  it("keeps ordinary prose intact", async () => {
+    const page = new FakePage();
+    page.innerText = "Like Dislike Share Subscribe to the channel today";
+    page.collectedRecords = [
+      visibleRecord({ obsId: "0", role: "button", name: "Subscribe" }),
+    ];
+    page.handles = [new FakeHandle()];
+    const observation = await buildObservation({
+      page,
+      sessionId: "mb_gap004b",
+      registry: new PageReferenceRegistry<FakeHandle>(1),
+      state: "ready",
+    });
+    expect(observation.visibleText).toContain("Subscribe to the channel");
+    expect(observation.elements[0].name).toBe("Subscribe");
+  });
+});

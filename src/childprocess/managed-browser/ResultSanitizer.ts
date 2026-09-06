@@ -77,6 +77,43 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
   return value;
 }
 
+/**
+ * Inline secret scrubbing for FREE-FORM text (visible text, titles, labels).
+ * Whole-string checks miss secrets embedded in prose — "Your token is
+ * eyJhbGci..." must never reach the renderer or LLM. Two passes:
+ *   1. key=value / key: value pairs with secret-ish keys
+ *   2. whitespace-delimited tokens that are secret-shaped
+ * (GAP-04: sanitize the complete observation payload.)
+ */
+const INLINE_KEY_VALUE_SECRET =
+  /\b(cookie|cookies|token|tokens?|access[_-]?token|refresh[_-]?token|password|passwd|secret|api[_-]?key|apikey|authorization|credential|session[_-]?id|otp|recovery[_-]?code)\b(\s*[:=]\s*)("[^"]{8,}"|'[^']{8,}'|[^\s"']{8,})/gi;
+
+export function redactSecretsInText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Pass 1: secret-shaped key=value / key: value pairs → key=[redacted].
+  let out = text.replace(
+    INLINE_KEY_VALUE_SECRET,
+    (_match, key: string, separator: string) =>
+      `${key}${separator}${REDACTED_MARKER}`
+  );
+  // Pass 2: standalone secret-shaped tokens (bare or punctuation-wrapped).
+  const tokens = out.split(/(\s+)/);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.trim().length === 0) {
+      continue;
+    }
+    // Strip sentence punctuation for the shape check, keep the marker swap.
+    const bare = token.replace(/^[("'\[]+|[)"'\],.;:!?]+$/g, "");
+    if (bare.length >= 16 && isLikelySecretValue(bare)) {
+      tokens[i] = token.replace(bare, REDACTED_MARKER);
+    }
+  }
+  return tokens.join("");
+}
+
 /** Truncate text to a budget, flagging truncation. */
 export function truncateText(
   text: string,

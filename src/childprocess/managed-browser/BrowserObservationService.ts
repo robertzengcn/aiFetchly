@@ -9,6 +9,7 @@ import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageRefere
 import {
   budgetName,
   isSensitiveInputType,
+  redactSecretsInText,
   summarizeInputValue,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -177,7 +178,9 @@ export function shapeElementRecord(
 } {
   return {
     role: record.role || "generic",
-    name: budgetName(record.name || ""),
+    // Accessible names are page-authored: scrub secret-shaped content
+    // BEFORE budgeting (GAP-04).
+    name: budgetName(redactSecretsInText(record.name || "")),
     disabled: record.disabled,
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
@@ -271,15 +274,19 @@ export async function buildObservation(
     notices.push({ code: "sensitive_field_visible" });
   }
 
+  // Final payload scrub (GAP-04): free-form page text is the leak surface —
+  // planted canaries, rendered tokens, key=value pairs in prose.
+  const safeTitle = redactSecretsInText(title);
+  const safeText = redactSecretsInText(textBudget.text);
   return {
     sessionId: input.sessionId,
     pageRevision: input.registry.currentRevision,
     url,
     origin: extractOrigin(input.page.url()) ?? url,
-    title: truncateText(title, 300).text,
+    title: truncateText(safeTitle, 300).text,
     state: input.state,
     elements,
-    visibleText: textBudget.text,
+    visibleText: safeText,
     notices,
     truncated: truncatedElements || textBudget.truncated,
   };
