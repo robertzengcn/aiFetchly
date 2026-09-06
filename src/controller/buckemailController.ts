@@ -5,10 +5,12 @@ import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
 import { EmailServiceApi } from "@/api/emailServiceApi";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
+import { OutboundEmailSendLogModule } from "@/modules/OutboundEmailSendLogModule";
 import { SortBy } from "@/entityTypes/commonType";
 import {
   BuckEmailListType,
   EmailMarketingSendLogListDisplay,
+  UnifiedSendLogEntry,
 } from "@/entityTypes/buckemailType";
 import { getStatusName } from "@/modules/lib/function";
 
@@ -18,12 +20,14 @@ export class BuckemailController {
   private emailserviceAPI: EmailServiceApi;
   private buckEmailTaskMoudule: BuckEmailTaskModule;
   private emailMarketingSendlogModule: EmailMarketingSendLogModule;
+  private unifiedSendLogModule: OutboundEmailSendLogModule;
   constructor() {
     this.emailtemAPI = new EmailMarketingTemplateApi();
     this.emailfilterAPI = new EmailMarketingFilterApi();
     this.buckEmailTaskMoudule = new BuckEmailTaskModule();
     this.emailserviceAPI = new EmailServiceApi();
     this.emailMarketingSendlogModule = new EmailMarketingSendLogModule();
+    this.unifiedSendLogModule = new OutboundEmailSendLogModule();
   }
 
   //get buck email task list
@@ -110,5 +114,26 @@ export class BuckemailController {
       total: res.total,
     };
     return result;
+  }
+  //get unified send log (legacy + authorized outbound)
+  public async getUnifiedSendLog(
+    page: number,
+    size: number,
+    where?: string,
+    sort?: SortBy
+  ): Promise<{
+    records: Array<UnifiedSendLogEntry>;
+    total: number;
+  }> {
+    const res = await this.unifiedSendLogModule.getUnifiedSendLog(
+      page,
+      size,
+      where,
+      sort
+    );
+    return {
+      records: res.records,
+      total: res.total,
+    };
   }
 }

@@ -14,7 +14,10 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
-import { EmailMarketingSendLogModel, SendStatus } from "@/model/emailMarketingSendLog.model";
+import {
+  EmailMarketingSendLogModel,
+  SendStatus,
+} from "@/model/emailMarketingSendLog.model";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-buckemail-controller");
 
@@ -45,8 +48,9 @@ vi.mock("@/modules/token", () => ({
   },
 }));
 vi.mock("@/config/usersetting", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("@/config/usersetting")>();
+  const original = await importOriginal<
+    typeof import("@/config/usersetting")
+  >();
   return {
     ...original,
     Token: class {
@@ -128,6 +132,66 @@ describe("BuckemailController.getBuckEmailSendLog", () => {
     const controller = new BuckemailController();
     const res = await controller.getBuckEmailSendLog(8888, 0, 100);
 
+    expect(res.total).toBe(0);
+    expect(res.records).toHaveLength(0);
+  });
+});
+
+describe("BuckemailController.getUnifiedSendLog", () => {
+  it("surfaces legacy send-log rows in the unified timeline", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await seedSendLogRow(
+      7001,
+      SendStatus.Success,
+      "alice@example.com",
+      "Unified Alice"
+    );
+    await seedSendLogRow(
+      7002,
+      SendStatus.Failure,
+      "bob@example.com",
+      "Unified Bob"
+    );
+
+    const controller = new BuckemailController();
+    const res = await controller.getUnifiedSendLog(0, 100);
+
+    expect(res.total).toBe(2);
+    expect(res.records).toHaveLength(2);
+
+    const alice = res.records.find((r) => r.receiver === "alice@example.com");
+    expect(alice?.source).toBe("legacy");
+    expect(alice?.status).toBe("Success");
+    expect(alice?.title).toBe("Unified Alice");
+    expect(alice?.taskId).toBe(7001);
+
+    const bob = res.records.find((r) => r.receiver === "bob@example.com");
+    expect(bob?.source).toBe("legacy");
+    expect(bob?.status).toBe("Failure");
+    expect(bob?.taskId).toBe(7002);
+  });
+
+  it("applies the where filter to the unified timeline", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await seedSendLogRow(1, SendStatus.Success, "alice@x.com", "Match");
+    await seedSendLogRow(1, SendStatus.Success, "bob@x.com", "No Match");
+
+    const controller = new BuckemailController();
+    const res = await controller.getUnifiedSendLog(0, 100, "alice");
+    expect(res.total).toBe(1);
+    expect(res.records[0].receiver).toBe("alice@x.com");
+  });
+
+  it("returns empty when no rows exist in either source", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const controller = new BuckemailController();
+    const res = await controller.getUnifiedSendLog(0, 100);
     expect(res.total).toBe(0);
     expect(res.records).toHaveLength(0);
   });
