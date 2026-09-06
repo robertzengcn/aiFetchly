@@ -15,7 +15,11 @@ import { z } from "zod";
 export type SkillInstallationId = string;
 export type SkillInstallationSessionId = string;
 
-export type PortableSkillKind = "prompt" | "executable" | "plugin" | "ambiguous";
+export type PortableSkillKind =
+  | "prompt"
+  | "executable"
+  | "plugin"
+  | "ambiguous";
 
 export type SkillActivationMode =
   | "managed-copy"
@@ -193,9 +197,13 @@ export interface SafePlanView {
     readonly description: string;
   }[];
   readonly dependencies: readonly {
+    /** Plan item id (e.g. "dep:ffmpeg") — the approveDependency target. */
+    readonly id: string;
     readonly name: string;
     readonly status: string;
     readonly installMethod?: string;
+    /** Whether the typed installer may need OS elevation (winget/apt/brew). */
+    readonly requiresElevation?: boolean;
   }[];
   readonly credentials: readonly string[];
   readonly mode: string;
@@ -276,7 +284,9 @@ export function rejectSecretShaped(value: unknown, path: string[]): string[] {
     return [];
   }
   if (Array.isArray(value)) {
-    return value.flatMap((item, i) => rejectSecretShaped(item, [...path, String(i)]));
+    return value.flatMap((item, i) =>
+      rejectSecretShaped(item, [...path, String(i)])
+    );
   }
   if (typeof value === "object" && value !== null) {
     return Object.entries(value).flatMap(([key, child]) => {
@@ -350,7 +360,15 @@ export const SkillInstallCancelArgsSchema = z.object({
   sessionId: SkillSessionIdSchema,
 });
 
-export type SkillInstallPrepareArgs = z.infer<typeof SkillInstallPrepareArgsSchema>;
-export type SkillInstallApproveArgs = z.infer<typeof SkillInstallApproveArgsSchema>;
-export type SkillInstallStatusArgs = z.infer<typeof SkillInstallStatusArgsSchema>;
-export type SkillInstallCancelArgs = z.infer<typeof SkillInstallCancelArgsSchema>;
+export type SkillInstallPrepareArgs = z.infer<
+  typeof SkillInstallPrepareArgsSchema
+>;
+export type SkillInstallApproveArgs = z.infer<
+  typeof SkillInstallApproveArgsSchema
+>;
+export type SkillInstallStatusArgs = z.infer<
+  typeof SkillInstallStatusArgsSchema
+>;
+export type SkillInstallCancelArgs = z.infer<
+  typeof SkillInstallCancelArgsSchema
+>;

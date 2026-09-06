@@ -12,15 +12,19 @@ import en from "@/views/lang/en";
 
 vi.mock("@/views/api/skillInstallation", () => ({
   approveSkillInstall: vi.fn(),
+  approveSkillInstallDependency: vi.fn(),
   cancelSkillInstall: vi.fn(),
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
-  getSkillInstallApprovalToken: vi.fn().mockResolvedValue("test-approval-token"),
+  getSkillInstallApprovalToken: vi
+    .fn()
+    .mockResolvedValue("test-approval-token"),
   onSkillInstallProgress: vi.fn(() => () => undefined),
 }));
 
 import {
   approveSkillInstall,
+  approveSkillInstallDependency,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
   submitSkillInstallSecret,
@@ -60,7 +64,7 @@ function mountCard(snapshot: InstallSnapshot) {
         VCardText: { template: "<div><slot /></div>" },
         VBtn: {
           template:
-            '<button :data-testid="$attrs[\'data-testid\']" @click="$emit(\'click\')"><slot /></button>',
+            "<button :data-testid=\"$attrs['data-testid']\" @click=\"$emit('click')\"><slot /></button>",
           props: ["loading", "disabled"],
         },
         VIcon: true,
@@ -126,9 +130,9 @@ describe("SkillInstallCard", () => {
         safeSummary: "credentials: ELEVENLABS_API_KEY",
       })
     );
-    expect(
-      awaiting.find('[data-testid="skill-install-secret"]').exists()
-    ).toBe(true);
+    expect(awaiting.find('[data-testid="skill-install-secret"]').exists()).toBe(
+      true
+    );
     expect(awaiting.text()).toContain("Never paste API keys");
 
     const notAwaiting = mountCard(makeSnapshot());
@@ -165,7 +169,10 @@ describe("SkillInstallCard", () => {
     });
     // The value is cleared immediately after submission.
     expect(
-      (wrapper.find('input[label="ELEVENLABS_API_KEY"]').element as HTMLInputElement).value
+      (
+        wrapper.find('input[label="ELEVENLABS_API_KEY"]')
+          .element as HTMLInputElement
+      ).value
     ).toBe("");
     expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
       state: "verifying",
@@ -205,8 +212,8 @@ describe("SkillInstallCard", () => {
             },
           ],
           dependencies: [
-            { name: "ffmpeg", status: "satisfied" },
-            { name: "ffprobe", status: "missing" },
+            { id: "dep:ffmpeg", name: "ffmpeg", status: "satisfied" },
+            { id: "dep:ffprobe", name: "ffprobe", status: "missing" },
           ],
           credentials: ["ELEVENLABS_API_KEY"],
           mode: "managed-copy",
@@ -226,7 +233,9 @@ describe("SkillInstallCard", () => {
     expect(wrapper.find('[data-testid="skill-install-plan"]').exists()).toBe(
       true
     );
-    const skillRows = wrapper.findAll('[data-testid="skill-install-plan-skill"]');
+    const skillRows = wrapper.findAll(
+      '[data-testid="skill-install-plan-skill"]'
+    );
     expect(skillRows).toHaveLength(1);
     expect(skillRows[0].text()).toContain("video-use");
     expect(skillRows[0].text()).toContain("prompt");
@@ -354,7 +363,8 @@ describe("SkillInstallCard", () => {
     // Failed submission does NOT discard what the user typed.
     expect(
       (
-        wrapper.find('input[label="ELEVENLABS_API_KEY"]').element as HTMLInputElement
+        wrapper.find('input[label="ELEVENLABS_API_KEY"]')
+          .element as HTMLInputElement
       ).value
     ).toBe("sk-keep-me-on-failure-123");
     expect(wrapper.emitted("failed")?.[0]?.[0]).toBeTruthy();
@@ -368,5 +378,114 @@ describe("SkillInstallCard", () => {
       true
     );
     expect(wrapper.text()).toContain("will not run until you ask");
+  });
+
+  // --- Typed dependency approval (PRD §18 / FR-14, installing_dependencies)
+  const depSnapshot = makeSnapshot({
+    state: "installing_dependencies",
+    nextAction: "approve-dependency",
+    safePlan: {
+      source: "/tmp/video-use",
+      revision: "abc123def456",
+      skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+      dependencies: [
+        {
+          id: "dep:ffmpeg",
+          name: "ffmpeg",
+          status: "missing",
+          installMethod: "apt: ffmpeg (ffmpeg binary)",
+          requiresElevation: true,
+        },
+        { id: "dep:git", name: "git", status: "satisfied" },
+      ],
+      credentials: [],
+      mode: "managed-copy",
+      commands: [],
+      warnings: [],
+    },
+  });
+
+  it("renders one Install/Decline pair per MISSING dependency in installing_dependencies", () => {
+    const wrapper = mountCard(depSnapshot);
+    expect(wrapper.find('[data-testid="skill-install-deps"]').exists()).toBe(
+      true
+    );
+    const rows = wrapper.findAll('[data-testid="skill-install-dep-row"]');
+    expect(rows).toHaveLength(1); // satisfied git is not rendered
+    expect(
+      wrapper.find('[data-testid="skill-install-dep-approve-ffmpeg"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="skill-install-dep-decline-ffmpeg"]').exists()
+    ).toBe(true);
+    // Install method + elevation hint are visible for informed consent.
+    expect(wrapper.text()).toContain("apt: ffmpeg");
+    expect(wrapper.text()).toContain("elevated permissions");
+    // The typed-installer-only promise is stated (no repository commands).
+    expect(wrapper.text()).toContain("never executed");
+  });
+
+  it("install flows through the token-bound dependency channel and emits the snapshot", async () => {
+    const updated = makeSnapshot({ state: "ready", nextAction: "ready" });
+    // Re-prime the token mock: an earlier test leaves a persistent null.
+    vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(
+      "test-approval-token"
+    );
+    vi.mocked(approveSkillInstallDependency).mockResolvedValue(updated);
+    const wrapper = mountCard(depSnapshot);
+    await wrapper
+      .find('[data-testid="skill-install-dep-approve-ffmpeg"]')
+      .trigger("click");
+    await flushPromises();
+    expect(approveSkillInstallDependency).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: "rev-1",
+      approvalToken: "test-approval-token",
+    });
+    expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
+      state: "ready",
+    });
+  });
+
+  it("decline sends approve:false for that dependency (rollback path)", async () => {
+    const cancelled = makeSnapshot({
+      state: "cancelled",
+      nextAction: "resume",
+    });
+    vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(
+      "test-approval-token"
+    );
+    vi.mocked(approveSkillInstallDependency).mockResolvedValue(cancelled);
+    const wrapper = mountCard(depSnapshot);
+    await wrapper
+      .find('[data-testid="skill-install-dep-decline-ffmpeg"]')
+      .trigger("click");
+    await flushPromises();
+    expect(approveSkillInstallDependency).toHaveBeenCalledWith(
+      expect.objectContaining({ dependencyId: "dep:ffmpeg", approve: false })
+    );
+    expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
+      state: "cancelled",
+    });
+  });
+
+  it("dependency approval failure emits failed without updating the snapshot", async () => {
+    vi.mocked(approveSkillInstallDependency).mockResolvedValue(null);
+    const wrapper = mountCard(depSnapshot);
+    await wrapper
+      .find('[data-testid="skill-install-dep-approve-ffmpeg"]')
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("failed")).toBeTruthy();
+    expect(wrapper.emitted("updated")).toBeUndefined();
+  });
+
+  it("hides the dependency section outside installing_dependencies", () => {
+    const wrapper = mountCard(makeSnapshot()); // awaiting_approval
+    expect(wrapper.find('[data-testid="skill-install-deps"]').exists()).toBe(
+      false
+    );
   });
 });

@@ -166,6 +166,63 @@
         </div>
       </div>
 
+      <!-- Typed dependency approval (installing_dependencies / PRD §18):
+           one control per MISSING plan dependency. Approve runs the
+           catalog-validated system installer; decline rolls the activation
+           back and cancels. Token binding is identical to plan approval. -->
+      <div
+        v-if="snapshot?.state === 'installing_dependencies' && missingDependencies.length > 0"
+        data-testid="skill-install-deps"
+        class="mt-2"
+      >
+        <div class="text-caption text-medium-emphasis mb-1">
+          {{ t("skillInstall.dependency.hint") }}
+        </div>
+        <div
+          v-for="dep in missingDependencies"
+          :key="dep.id"
+          class="d-flex align-center ga-2 mb-1"
+          data-testid="skill-install-dep-row"
+        >
+          <div class="flex-grow-1">
+            <strong>{{ dep.name }}</strong>
+            <div class="text-caption text-medium-emphasis">
+              {{ dep.installMethod }}
+              <v-chip
+                v-if="dep.requiresElevation"
+                size="x-small"
+                variant="tonal"
+                class="ml-1"
+              >
+                {{ t("skillInstall.dependency.elevation") }}
+              </v-chip>
+            </div>
+          </div>
+          <v-btn
+            size="x-small"
+            color="primary"
+            variant="flat"
+            :loading="busy"
+            :data-testid="`skill-install-dep-approve-${dep.name}`"
+            @click="onApproveDependency(dep.id, true)"
+          >
+            {{ t("skillInstall.dependency.install") }}
+          </v-btn>
+          <v-btn
+            size="x-small"
+            variant="outlined"
+            :loading="busy"
+            :data-testid="`skill-install-dep-decline-${dep.name}`"
+            @click="onApproveDependency(dep.id, false)"
+          >
+            {{ t("skillInstall.dependency.decline") }}
+          </v-btn>
+        </div>
+        <div class="text-caption text-medium-emphasis mt-1">
+          {{ t("skillInstall.dependency.typedHint") }}
+        </div>
+      </div>
+
       <!-- Secure credential input (awaiting_secret) -->
       <div
         v-if="snapshot?.state === 'awaiting_secret'"
@@ -241,6 +298,7 @@ import { useI18n } from "vue-i18n";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import {
   approveSkillInstall,
+  approveSkillInstallDependency,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
   getSkillInstallStatus,
@@ -348,6 +406,12 @@ const stateLabel = computed(() => {
 /** Structured plan fields when the snapshot carries a safePlan (TODO 8). */
 const safePlan = computed(() => snapshotView.value?.safePlan ?? null);
 
+/** Missing plan dependencies — the approveDependency targets (PRD §18). */
+const missingDependencies = computed(
+  () =>
+    safePlan.value?.dependencies.filter((d) => d.status !== "satisfied") ?? []
+);
+
 /** The environment variable name from the safe summary, when surfaced. */
 const secretVariableName = computed(() => {
   const match = snapshotView.value?.safeSummary?.match(/[A-Z][A-Z0-9_]{4,}/);
@@ -370,6 +434,40 @@ async function onApprove(approve: boolean): Promise<void> {
       sessionId: snapshotView.value.sessionId,
       planRevision: snapshotView.value.planRevision ?? "",
       approve,
+      approvalToken,
+    });
+    if (snapshot) {
+      emit("updated", snapshot);
+    } else {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** Approve or decline ONE missing dependency (PRD §18 / FR-14). */
+async function onApproveDependency(
+  dependencyId: string,
+  approve: boolean
+): Promise<void> {
+  busy.value = true;
+  try {
+    // Same opaque-token binding as the plan approval (review D1): the
+    // model can report the missing dependency but never approve the
+    // system-level install itself.
+    const approvalToken = await getSkillInstallApprovalToken(
+      snapshotView.value.sessionId
+    );
+    if (!approvalToken) {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+      return;
+    }
+    const snapshot = await approveSkillInstallDependency({
+      sessionId: snapshotView.value.sessionId,
+      dependencyId,
+      approve,
+      planRevision: snapshotView.value.planRevision ?? "",
       approvalToken,
     });
     if (snapshot) {

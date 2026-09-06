@@ -3125,21 +3125,33 @@ export default {
     installFailed: "Error al instalar",
   },
   skillInstall: {
-  planCommands: "Comandos que se ejecutarán",
-        highRiskHint: "Los comandos de alto riesgo se muestran para revisión pero nunca se ejecutan automáticamente: debes ejecutarlos tú mismo.",
-planCredentials: "Credenciales requeridas",
-diagnostics: "Diagnóstico",
-  title: "Instalación de habilidad",
-  reviewHint: "Revisa el plan (origen, dependencias, credenciales, ubicación) antes de ejecutarlo.",
-  approve: "Aprobar",
-  reject: "Rechazar",
-  submitSecret: "Guardar de forma segura",
-  secretHint: "Introduce el valor de {name}. Se guarda con cifrado del sistema operativo.",
-  secretNeverInChat: "Nunca pegues claves API en el chat; se rechazan allí.",
-  retry: "Reintentar",
-  cancel: "Cancelar instalación",
-  ready: "Listo. La habilidad está instalada y no se ejecutará hasta que la pidas.",
-  cancelled: "Instalación cancelada.",
+    planCommands: "Comandos que se ejecutarán",
+    highRiskHint:
+      "Los comandos de alto riesgo se muestran para revisión pero nunca se ejecutan automáticamente: debes ejecutarlos tú mismo.",
+    planCredentials: "Credenciales requeridas",
+    diagnostics: "Diagnóstico",
+    title: "Instalación de habilidad",
+    reviewHint:
+      "Revisa el plan (origen, dependencias, credenciales, ubicación) antes de ejecutarlo.",
+    approve: "Aprobar",
+    reject: "Rechazar",
+    submitSecret: "Guardar de forma segura",
+    secretHint:
+      "Introduce el valor de {name}. Se guarda con cifrado del sistema operativo.",
+    secretNeverInChat: "Nunca pegues claves API en el chat; se rechazan allí.",
+    retry: "Reintentar",
+    cancel: "Cancelar instalación",
+    ready:
+      "Listo. La habilidad está instalada y no se ejecutará hasta que la pidas.",
+    cancelled: "Instalación cancelada.",
+    dependency: {
+      hint: "Faltan algunas dependencias. Aprueba para instalarlas con el instalador administrado, o rechaza para revertir esta instalación.",
+      install: "Instalar",
+      decline: "Rechazar",
+      typedHint:
+        "Solo se usa el catálogo administrado de paquetes; nunca se ejecutan comandos del repositorio.",
+      elevation: "Puede requerir permisos elevados",
+    },
     errors: {
       actionFailed: "La acción de instalación falló. Inténtalo de nuevo.",
       secretFailed: "No se pudo guardar la credencial. NO se guardó.",
@@ -3162,6 +3174,7 @@ diagnostics: "Diagnóstico",
     },
   },
   skillSlash: {
-      notFound: "Ninguna habilidad de prompt instalada coincide con '{name}'. Usa /skills para listarlas.",
-    },
+    notFound:
+      "Ninguna habilidad de prompt instalada coincide con '{name}'. Usa /skills para listarlas.",
+  },
 };

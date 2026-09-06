@@ -365,6 +365,11 @@ export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
 // dedicated secure channel — the value never travels through chat or tool JSON.
 export const SKILL_INSTALL_PREPARE = "skill-install:prepare";
 export const SKILL_INSTALL_APPROVE = "skill-install:approve";
+// Typed dependency-install approval (PRD §18): renderer-only, token-gated
+// like APPROVE; installation runs through the catalog-validated system
+// dependency module, never repository shell text.
+export const SKILL_INSTALL_APPROVE_DEPENDENCY =
+  "skill-install:approve-dependency";
 export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
 export const SKILL_INSTALL_STATUS = "skill-install:status";
 export const SKILL_INSTALL_CANCEL = "skill-install:cancel";

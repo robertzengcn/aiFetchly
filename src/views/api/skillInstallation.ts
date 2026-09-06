@@ -8,6 +8,7 @@ import {
   SKILL_INSTALL_PROGRESS,
   SKILL_INSTALL_APPROVAL_TOKEN,
   SKILL_INSTALL_APPROVE,
+  SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_PREPARE,
   SKILL_INSTALL_STATUS,
@@ -52,6 +53,23 @@ export async function approveSkillInstall(input: {
   selectedSkillIds?: readonly string[];
 }): Promise<InstallSnapshot | null> {
   const resp = await windowInvoke(SKILL_INSTALL_APPROVE, input);
+  return (resp as InstallSnapshot | null) ?? null;
+}
+
+/**
+ * Approve or decline the typed installation of ONE missing plan dependency
+ * (PRD §18 / FR-14) while the session holds at installing_dependencies.
+ * Same token + plan-revision binding as the plan approval; the install runs
+ * through the catalog-validated system dependency module.
+ */
+export async function approveSkillInstallDependency(input: {
+  sessionId: string;
+  dependencyId: string;
+  approve: boolean;
+  planRevision: string;
+  approvalToken: string;
+}): Promise<InstallSnapshot | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_APPROVE_DEPENDENCY, input);
   return (resp as InstallSnapshot | null) ?? null;
 }
 

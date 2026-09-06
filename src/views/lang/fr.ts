@@ -3109,24 +3109,38 @@ export default {
     installFailed: "Échec de l'installation",
   },
   skillInstall: {
-  planCommands: "Commandes qui seront exécutées",
-        highRiskHint: "Les commandes à haut risque sont affichées pour examen mais jamais exécutées automatiquement — vous devez les exécuter vous-même.",
-planCredentials: "Identifiants requis",
-diagnostics: "Diagnostic",
-  title: "Installation de compétence",
-  reviewHint: "Vérifiez le plan (source, dépendances, identifiants, emplacement) avant de l'exécuter.",
-  approve: "Approuver",
-  reject: "Rejeter",
-  submitSecret: "Enregistrer en sécurité",
-  secretHint: "Saisissez la valeur de {name}. Elle est stockée avec le chiffrement du système d'exploitation.",
-  secretNeverInChat: "Ne collez jamais de clés API dans le chat — elles y sont refusées.",
-  retry: "Réessayer",
-  cancel: "Annuler l'installation",
-  ready: "Prêt. La compétence est installée et ne s'exécutera pas avant votre demande.",
-  cancelled: "Installation annulée.",
+    planCommands: "Commandes qui seront exécutées",
+    highRiskHint:
+      "Les commandes à haut risque sont affichées pour examen mais jamais exécutées automatiquement — vous devez les exécuter vous-même.",
+    planCredentials: "Identifiants requis",
+    diagnostics: "Diagnostic",
+    title: "Installation de compétence",
+    reviewHint:
+      "Vérifiez le plan (source, dépendances, identifiants, emplacement) avant de l'exécuter.",
+    approve: "Approuver",
+    reject: "Rejeter",
+    submitSecret: "Enregistrer en sécurité",
+    secretHint:
+      "Saisissez la valeur de {name}. Elle est stockée avec le chiffrement du système d'exploitation.",
+    secretNeverInChat:
+      "Ne collez jamais de clés API dans le chat — elles y sont refusées.",
+    retry: "Réessayer",
+    cancel: "Annuler l'installation",
+    ready:
+      "Prêt. La compétence est installée et ne s'exécutera pas avant votre demande.",
+    cancelled: "Installation annulée.",
+    dependency: {
+      hint: "Certaines dépendances manquent. Approuvez pour les installer avec le programme d'installation géré, ou refusez pour annuler cette installation.",
+      install: "Installer",
+      decline: "Refuser",
+      typedHint:
+        "Seul le catalogue de paquets géré est utilisé ; les commandes du dépôt ne sont jamais exécutées.",
+      elevation: "Peut nécessiter des permissions élevées",
+    },
     errors: {
       actionFailed: "L'action d'installation a échoué. Réessayez.",
-      secretFailed: "Échec de l'enregistrement de l'identifiant. Il n'a PAS été enregistré.",
+      secretFailed:
+        "Échec de l'enregistrement de l'identifiant. Il n'a PAS été enregistré.",
     },
     state: {
       requested: "Demandée",
@@ -3146,6 +3160,7 @@ diagnostics: "Diagnostic",
     },
   },
   skillSlash: {
-      notFound: "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
-    },
+    notFound:
+      "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
+  },
 };

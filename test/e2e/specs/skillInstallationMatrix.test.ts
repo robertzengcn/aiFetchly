@@ -41,6 +41,15 @@ interface InstallSnapshot {
   planRevision: string | null;
   safeSummary: string;
   errorCode?: string;
+  safePlan?: {
+    dependencies?: {
+      id: string;
+      name: string;
+      status: string;
+      installMethod?: string;
+      requiresElevation?: boolean;
+    }[];
+  };
 }
 
 interface SecretSubmitResult {
@@ -504,4 +513,90 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
       expectedExternalOrigins: ["https://github.com"],
     });
   });
+
+  test("missing dependency holds at approve-dependency; decline rolls back and cancels (case 3, FR-14)", async ({
+    aiApp,
+  }) => {
+    const app = aiApp;
+    const fixture = makeDependencyFixture(app.testRoot.rootPath);
+    const prepared = await prepareToAwaitingApproval(app, fixture);
+    expect(prepared?.state).toBe("awaiting_approval");
+
+    // No credential declared on this fixture → approve runs activation and
+    // verification; a missing ffmpeg holds at installing_dependencies.
+    const activated = await approve(app, prepared as InstallSnapshot);
+    if (activated?.state === "ready") {
+      // ffmpeg is present on this host (e.g. a dev workstation) — the
+      // dependency hold is unreachable. The CI runner (the release gate)
+      // has no ffmpeg, so the full path always runs there.
+      test.info().annotations.push({
+        type: "skip",
+        description:
+          "ffmpeg present on this host — dependency hold not reachable",
+      });
+      return;
+    }
+    expect(activated?.state).toBe("installing_dependencies");
+    expect(activated?.nextAction).toBe("approve-dependency");
+    // Non-null after the state assertions (file idiom: `as` after expect).
+    const held = activated as InstallSnapshot;
+    // The hold exposes the targetable typed-dependency id for the card.
+    const dep = held.safePlan?.dependencies?.find((d) => d.id === "dep:ffmpeg");
+    expect(dep).toMatchObject({ name: "ffmpeg", status: "missing" });
+
+    // The activated skill exists BEFORE the decline (rollback precondition).
+    const activationDir = path.join(
+      app.testRoot.rootPath,
+      ".aifetchly",
+      "skills",
+      "video-use-dep"
+    );
+    expect(fs.existsSync(activationDir)).toBe(true);
+
+    // Decline through the renderer channel with the same approval token.
+    const token = await approvalToken(app, held.sessionId);
+    const declined = await invoke<InstallSnapshot>(
+      app,
+      "skill-install:approve-dependency",
+      {
+        sessionId: held.sessionId,
+        dependencyId: "dep:ffmpeg",
+        approve: false,
+        planRevision: held.planRevision,
+        approvalToken: token,
+      }
+    );
+    expect(declined?.state).toBe("cancelled");
+
+    // Rollback evidence: the activated directory is gone and the fixture
+    // source survives.
+    await expect
+      .poll(() => fs.existsSync(activationDir), { timeout: 10_000 })
+      .toBe(false);
+    expect(fs.existsSync(path.join(fixture, "SKILL.md"))).toBe(true);
+    const status = await invoke<InstallSnapshot>(app, "skill-install:status", {
+      sessionId: held.sessionId,
+    });
+    expect(status?.state).toBe("cancelled");
+
+    await assertCleanTeardown(app, {
+      expectedExternalOrigins: ["https://github.com"],
+    });
+  });
 });
+
+/** Fixture that declares ONLY a missing system dependency (no credential). */
+function makeDependencyFixture(root: string): string {
+  const dir = path.join(root, "fixtures", "video-use-dep");
+  fs.mkdirSync(path.join(dir, "helpers"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    "---\nname: video-use-dep\ndescription: Dependency fixture\n---\n\n# Usage\n\nUse ffmpeg via helpers/."
+  );
+  fs.writeFileSync(
+    path.join(dir, "install.md"),
+    "# Install\n\nRequires ffmpeg on PATH.\n"
+  );
+  fs.writeFileSync(path.join(dir, "helpers", "cut.py"), "# helper\n");
+  return dir;
+}

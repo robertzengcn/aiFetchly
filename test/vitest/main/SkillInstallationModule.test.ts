@@ -10,8 +10,37 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { SqliteDb } from "@/config/SqliteDb";
-import { SkillInstallationModule } from "@/modules/SkillInstallationModule";
+import {
+  SkillInstallationModule,
+  setTypedDependencyInstallerForTests,
+} from "@/modules/SkillInstallationModule";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
+
+// Stateful detectAll seam: force every plan dependency to "missing" so the
+// installing_dependencies hold is DETERMINISTIC regardless of whether the
+// host happens to have ffmpeg. Defaults to the real implementation, so all
+// other tests in this file are unaffected.
+vi.mock("@/service/SkillDependencyOrchestrator", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/service/SkillDependencyOrchestrator")
+  >();
+  let forceMissing = false;
+  return {
+    ...actual,
+    detectAll: (
+      items: readonly import("@/entityTypes/skillInstallationTypes").DependencyPlanItem[],
+      cwd: string
+    ) =>
+      forceMissing
+        ? Promise.resolve(
+            items.map((i) => ({ ...i, currentStatus: "missing" as const }))
+          )
+        : actual.detectAll(items, cwd),
+    __setForceDependencyMissing: (value: boolean) => {
+      forceMissing = value;
+    },
+  };
+});
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-skill-install-module");
 
@@ -39,7 +68,7 @@ function makeVideoUseFixture(): string {
   // A real local Git repository: commit + resolved revision provenance.
   execSync("git init -q", { cwd: repo });
   execSync("git add -A", { cwd: repo });
-  execSync('git -c user.email=t@t -c user.name=t commit -q -m init', {
+  execSync("git -c user.email=t@t -c user.name=t commit -q -m init", {
     cwd: repo,
   });
   return repo;
@@ -110,7 +139,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       planRevision: "deadbeefdeadbeef",
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     expect(stale.errorCode).toBe("PLAN_REVISION_MISMATCH");
 
     // 3. unknown session ids fail before mutation.
@@ -125,7 +154,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       planRevision: prepared.planRevision as string,
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     if (approved.state === "awaiting_secret") {
       expect(approved.nextAction).toBe("provide-secret-securely");
       approved = await module.resumeAfterSecret(prepared.sessionId);
@@ -162,7 +191,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       planRevision: prepared.planRevision as string,
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     if (approved.state === "awaiting_secret") {
       approved = await module.resumeAfterSecret(prepared.sessionId);
     }
@@ -199,7 +228,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       planRevision: prepared.planRevision as string,
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     // install.md declares ELEVENLABS_API_KEY= → deterministic pause.
     expect(approved.state).toBe("awaiting_secret");
     expect(approved.nextAction).toBe("provide-secret-securely");
@@ -208,9 +237,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     expect(approved.installationId).not.toBeNull();
     // Nothing activated while the secret is outstanding.
     expect(
-      fs.existsSync(
-        path.join(configHome, ".aifetchly", "skills", "video-use")
-      )
+      fs.existsSync(path.join(configHome, ".aifetchly", "skills", "video-use"))
     ).toBe(false);
     expect(
       getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
@@ -270,9 +297,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     );
     setDependencyCatalogForTests(catalog);
     try {
-      const popplerItems = detectDependencyProposals([
-        "requires ffmpeg",
-      ]);
+      const popplerItems = detectDependencyProposals(["requires ffmpeg"]);
       // ffmpeg now missing from THIS catalog → fallback probes still work.
       const ff = popplerItems.find((i) => i.name === "ffmpeg");
       expect(ff?.probes.map((p) => p.command)).toContain("ffmpeg -version");
@@ -393,7 +418,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
         sessionId: prepared.sessionId,
         planRevision: prepared.planRevision as string,
         approve: true,
-        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+        approvalToken:
+          (await module.getApprovalToken(prepared.sessionId)) ?? "",
       });
       if (failed.state === "awaiting_secret") {
         failed = await module.resumeAfterSecret(prepared.sessionId);
@@ -403,7 +429,9 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       // The half-installed activation is gone and the skill is NOT
       // registered for discovery.
       expect(
-        fs.existsSync(path.join(configHome, ".aifetchly", "skills", "video-use"))
+        fs.existsSync(
+          path.join(configHome, ".aifetchly", "skills", "video-use")
+        )
       ).toBe(false);
       expect(
         getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
@@ -436,10 +464,15 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     const second = await module.approve(args);
     expect(["ready", "installing_dependencies"]).toContain(second.state);
     expect(second.installationId).toBe(firstInstallation);
-    const activation = path.join(configHome, ".aifetchly", "skills", "video-use");
-    const count = fs.readdirSync(path.dirname(activation)).filter(
-      (n) => n === "video-use"
-    ).length;
+    const activation = path.join(
+      configHome,
+      ".aifetchly",
+      "skills",
+      "video-use"
+    );
+    const count = fs
+      .readdirSync(path.dirname(activation))
+      .filter((n) => n === "video-use").length;
     expect(count).toBe(1);
   }, 120_000);
 
@@ -523,7 +556,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       planRevision: prepared.planRevision as string,
       approve: false,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     expect(cancelled.state).toBe("cancelled");
   }, 120_000);
 
@@ -557,8 +590,194 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     });
     expect(parsed.success).toBe(false);
     if (parsed.success) return;
-    expect(
-      parsed.error.issues.some((i) => i.message.includes("secret"))
-    ).toBe(true);
+    expect(parsed.error.issues.some((i) => i.message.includes("secret"))).toBe(
+      true
+    );
   });
+});
+
+describe("approveDependency — typed dependency approval (PRD §18 / FR-14)", () => {
+  let setForceMissing: (value: boolean) => void = () => undefined;
+
+  beforeEach(async () => {
+    const mod = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencyMissing: (value: boolean) => void;
+    };
+    setForceMissing = mod.__setForceDependencyMissing;
+    setForceMissing(true);
+  });
+  afterEach(async () => {
+    setForceMissing(false);
+    setTypedDependencyInstallerForTests(null);
+  });
+
+  /** Drive a fresh session to the deterministic installing_dependencies hold. */
+  async function driveToHold(
+    module: SkillInstallationModule,
+    conversationId: string
+  ): Promise<{ sessionId: string; planRevision: string; token: string }> {
+    const prepared = await module.prepare({
+      conversationId,
+      source: fixtureRoot,
+    });
+    let snapshot = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (snapshot.state === "awaiting_secret") {
+      snapshot = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(snapshot.state).toBe("installing_dependencies");
+    expect(snapshot.nextAction).toBe("approve-dependency");
+    return {
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      token: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    };
+  }
+
+  it("the hold surfaces per-dependency ids for the approval card", async () => {
+    const module = new SkillInstallationModule();
+    const held = await driveToHold(module, "conv-dep-hold");
+    const status = await module.getStatus(held.sessionId);
+    const deps = status.safePlan?.dependencies ?? [];
+    expect(deps.length).toBeGreaterThan(0);
+    const ffmpeg = deps.find((d) => d.name === "ffmpeg");
+    expect(ffmpeg?.id).toBe("dep:ffmpeg");
+    expect(ffmpeg?.status).toBe("missing");
+    expect(ffmpeg?.requiresElevation).toBe(true);
+    expect(ffmpeg?.installMethod).toMatch(/apt|brew|winget|ffmpeg/);
+  }, 120_000);
+
+  it("a model-originated approve (no token) and stale revisions are rejected", async () => {
+    const module = new SkillInstallationModule();
+    const held = await driveToHold(module, "conv-dep-gates");
+    const noToken = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: held.planRevision,
+    });
+    expect(noToken.errorCode).toBe("APPROVAL_REQUIRED");
+    const wrongToken = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: held.planRevision,
+      approvalToken: "not-the-token",
+    });
+    expect(wrongToken.errorCode).toBe("APPROVAL_REQUIRED");
+    const stale = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: "deadbeef",
+      approvalToken: held.token,
+    });
+    expect(stale.errorCode).toBe("PLAN_REVISION_MISMATCH");
+    const unknown = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:not-in-plan",
+      approve: true,
+      planRevision: held.planRevision,
+      approvalToken: held.token,
+    });
+    expect(unknown.errorCode).toBe("DEPENDENCY_NOT_IN_PLAN");
+    // None of the rejected calls moved the session.
+    expect((await module.getStatus(held.sessionId)).state).toBe(
+      "installing_dependencies"
+    );
+  }, 120_000);
+
+  it("approve installs through the TYPED installer, re-probes, and reaches ready (FR-14/FR-17)", async () => {
+    const installerCalls: {
+      dependencyId: string;
+      conversationId: string;
+      skillName: string;
+    }[] = [];
+    setTypedDependencyInstallerForTests(async (input) => {
+      installerCalls.push(input);
+      // The typed install succeeded — flip the probe seam to satisfied so
+      // the re-verification pass sees a healthy dependency.
+      setForceMissing(false);
+      return { ok: true, message: "installed: apt ffmpeg" };
+    });
+    const module = new SkillInstallationModule();
+    const held = await driveToHold(module, "conv-dep-install");
+    const snapshot = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: held.planRevision,
+      approvalToken: held.token,
+    });
+    // Exactly ONE typed install for the approved dependency, carrying the
+    // catalog id (dep: prefix stripped), conversation, and skill name.
+    expect(installerCalls).toHaveLength(1);
+    expect(installerCalls[0]).toMatchObject({
+      dependencyId: "ffmpeg",
+      conversationId: "conv-dep-install",
+      skillName: "video-use",
+    });
+    expect(snapshot.state).toBe("ready");
+    expect(snapshot.nextAction).toBe("ready");
+    expect(snapshot.safePlan?.dependencies).toBeDefined();
+    for (const dep of snapshot.safePlan?.dependencies ?? []) {
+      expect(dep.status).toBe("satisfied");
+    }
+    expect(
+      getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+    ).not.toBeNull();
+  }, 120_000);
+
+  it("a failed typed install keeps the session recoverable at installing_dependencies", async () => {
+    setTypedDependencyInstallerForTests(async () => ({
+      ok: false,
+      message: "installation_failed: apt unavailable",
+    }));
+    const module = new SkillInstallationModule();
+    const held = await driveToHold(module, "conv-dep-fail");
+    const snapshot = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: true,
+      planRevision: held.planRevision,
+      approvalToken: held.token,
+    });
+    expect(snapshot.state).toBe("installing_dependencies");
+    expect(snapshot.nextAction).toBe("approve-dependency");
+    expect(snapshot.recoverable).toBe(true);
+    expect(snapshot.safeSummary).toContain("installation_failed");
+  }, 120_000);
+
+  it("declining rolls the activation back, unregisters, and cancels (§10.1)", async () => {
+    const module = new SkillInstallationModule();
+    const held = await driveToHold(module, "conv-dep-decline");
+    const statusBefore = await module.getStatus(held.sessionId);
+    const activationRoot =
+      getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+        ?.canonicalRoot ?? "";
+    expect(activationRoot).not.toBe("");
+    void statusBefore;
+
+    const snapshot = await module.approveDependency({
+      sessionId: held.sessionId,
+      dependencyId: "dep:ffmpeg",
+      approve: false,
+      planRevision: held.planRevision,
+      approvalToken: held.token,
+    });
+    expect(snapshot.state).toBe("cancelled");
+    // Rollback evidence: the catalog entry is gone and the activated
+    // directory no longer exists.
+    expect(
+      getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+    ).toBeNull();
+    expect(fs.existsSync(activationRoot)).toBe(false);
+    expect((await module.getStatus(held.sessionId)).state).toBe("cancelled");
+  }, 120_000);
 });

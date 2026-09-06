@@ -53,6 +53,49 @@ export function isSkillInstallerEnabled(): boolean {
   return raw === "true" || raw === "1";
 }
 
+/**
+ * Catalog-validated typed dependency installer used by approveDependency
+ * (FR-14 / §18.3): delegates to SystemDependencyModule — package-manager
+ * backed, pre/post-probed, and audit-logged. Repository-supplied shell text
+ * is NEVER executed on this path. Dynamic import keeps the module-load
+ * graph free of BaseModule construction side effects.
+ */
+export type TypedDependencyInstaller = (input: {
+  readonly dependencyId: string;
+  readonly conversationId: string;
+  readonly skillName: string;
+}) => Promise<{ readonly ok: boolean; readonly message: string }>;
+
+async function defaultTypedDependencyInstaller(input: {
+  dependencyId: string;
+  conversationId: string;
+  skillName: string;
+}): Promise<{ ok: boolean; message: string }> {
+  const { SystemDependencyModule } = await import(
+    "@/modules/SystemDependencyModule"
+  );
+  const result = await new SystemDependencyModule().install({
+    dependency_id: input.dependencyId,
+    reason: `skill installation: ${input.skillName}`,
+    conversation_id: input.conversationId,
+    skill_name: input.skillName,
+  });
+  const ok =
+    result.install_status === "installed" ||
+    result.install_status === "already_installed";
+  return { ok, message: `${result.install_status}: ${result.details ?? ""}` };
+}
+
+let typedDependencyInstaller: TypedDependencyInstaller =
+  defaultTypedDependencyInstaller;
+
+/** Test seam: substitute or restore the typed dependency installer. */
+export function setTypedDependencyInstallerForTests(
+  installer: TypedDependencyInstaller | null
+): void {
+  typedDependencyInstaller = installer ?? defaultTypedDependencyInstaller;
+}
+
 const STATE_TO_NEXT_ACTION: Record<
   SkillInstallationState,
   SkillInstallNextAction
@@ -401,12 +444,7 @@ export class SkillInstallationModule extends BaseModule {
     // installation services — the typed installer owns acquisition and
     // approval, never a parallel plugin/executable runtime.
     if (selected[0].kind === "plugin") {
-      return this.routeToPluginService(
-        input.sessionId,
-        plan,
-        events,
-        sessions
-      );
+      return this.routeToPluginService(input.sessionId, plan, events, sessions);
     }
     if (selected[0].kind === "executable") {
       return this.routeToExecutableService(
@@ -566,6 +604,235 @@ export class SkillInstallationModule extends BaseModule {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // approveDependency — typed dependency install approval (PRD §18, FR-14)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Approve or decline the typed installation of ONE missing plan
+   * dependency while the session holds at `installing_dependencies`.
+   *
+   * Security invariants (same strength as `approve`):
+   *   - the renderer-only approval token must match (a model-originated
+   *     call can never supply it — review D1);
+   *   - the request is bound to the plan revision the user saw;
+   *   - installation goes ONLY through the catalog-validated
+   *     SystemDependencyModule (package managers) — repository-supplied
+   *     shell text is never executed here (§18.3);
+   *   - after any install attempt EVERY plan dependency is re-probed
+   *     (multi-probe rule) and `ready` requires all probes to pass.
+   *
+   * Declining a required dependency rolls the already-completed activation
+   * back and cancels the session (§10.1: cancelling after activation begins
+   * invokes rollback) — the install can never verify ready without it.
+   */
+  async approveDependency(input: {
+    sessionId: string;
+    dependencyId: string;
+    approve: boolean;
+    planRevision: string;
+    approvalToken?: string;
+  }): Promise<InstallSnapshot> {
+    const { sessions, events, installations } = await this.getModels();
+    const session = await sessions.findBySessionId(input.sessionId);
+    if (!session) {
+      return this.errorSnapshot(
+        "failed",
+        "INSTALL_SESSION_REQUIRED",
+        "Unknown installation session.",
+        input.sessionId
+      );
+    }
+    if (session.state !== "installing_dependencies") {
+      return this.snapshotFromEntity(session);
+    }
+    if (session.approvalToken) {
+      if (
+        input.approvalToken === undefined ||
+        input.approvalToken !== session.approvalToken
+      ) {
+        return this.errorSnapshot(
+          session.state,
+          "APPROVAL_REQUIRED",
+          "Dependency installation must be approved from the user's install card.",
+          input.sessionId
+        );
+      }
+    }
+    if (session.planRevision !== input.planRevision) {
+      return this.errorSnapshot(
+        session.state,
+        "PLAN_REVISION_MISMATCH",
+        "The installation plan changed since it was shown; review and approve again.",
+        input.sessionId
+      );
+    }
+    const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
+    const dependency = plan.dependencies.find(
+      (d) => d.id === input.dependencyId
+    );
+    if (!dependency || dependency.currentStatus === "satisfied") {
+      return this.errorSnapshot(
+        session.state,
+        "DEPENDENCY_NOT_IN_PLAN",
+        "That dependency is not part of this installation plan.",
+        input.sessionId
+      );
+    }
+
+    if (!input.approve) {
+      return this.declineDependency(
+        sessions,
+        events,
+        installations,
+        session,
+        dependency.name
+      );
+    }
+
+    await this.appendEvent(
+      events,
+      input.sessionId,
+      "dependency-install-started",
+      "installing_dependencies",
+      "installing_dependencies",
+      dependency.name
+    );
+    const installOutcome = await typedDependencyInstaller({
+      dependencyId: dependency.id.replace(/^dep:/, ""),
+      conversationId: session.conversationId,
+      skillName: plan.discoveredSkills[0]?.name ?? "unknown-skill",
+    });
+
+    // Re-probe EVERY plan dependency — an install may satisfy companions
+    // (ffprobe ships with ffmpeg) and must not mask other missing items.
+    const probeCwd =
+      plan.source.acquiredRoot && fs.existsSync(plan.source.acquiredRoot)
+        ? plan.source.acquiredRoot
+        : process.cwd();
+    const rechecked = await detectAll(plan.dependencies, probeCwd);
+    const updatedPlan: SkillInstallPlan = { ...plan, dependencies: rechecked };
+    await sessions.savePlan(
+      input.sessionId,
+      session.planRevision,
+      JSON.stringify(updatedPlan)
+    );
+
+    if (rechecked.every((d) => d.currentStatus === "satisfied")) {
+      await this.transition(sessions, events, input.sessionId, "verifying");
+      await this.transition(sessions, events, input.sessionId, "ready");
+      await this.appendEvent(
+        events,
+        input.sessionId,
+        "installation-ready",
+        "verifying",
+        "ready",
+        `dependency ${dependency.name} installed and verified`
+      );
+      const ready = await sessions.findBySessionId(input.sessionId);
+      return this.snapshotFromEntity(ready ?? session, updatedPlan);
+    }
+
+    await this.appendEvent(
+      events,
+      input.sessionId,
+      installOutcome.ok
+        ? "dependency-install-retryable"
+        : "dependency-install-failed",
+      "installing_dependencies",
+      "installing_dependencies",
+      `${dependency.name}: ${installOutcome.message}`
+    );
+    const held = await sessions.findBySessionId(input.sessionId);
+    const heldSnapshot = this.snapshotFromEntity(held ?? session, updatedPlan);
+    if (!installOutcome.ok) {
+      // Surface the typed-installer failure on the card's summary line so
+      // the hold is actionable (retry / decline), not a silent status.
+      return {
+        ...heldSnapshot,
+        safeSummary: `${heldSnapshot.safeSummary}; ${dependency.name}: ${installOutcome.message}`,
+      };
+    }
+    return heldSnapshot;
+  }
+
+  /**
+   * Decline path: the activation already happened, so a required
+   * dependency that will not be installed can never verify ready — roll
+   * the activation back (restoring any prior healthy version), unregister
+   * the catalog entry, mark the installation row cancelled, and cancel the
+   * session. A rollback failure surfaces `rollback_required` with the
+   * recovery detail instead of silently dropping the activation.
+   */
+  private async declineDependency(
+    sessions: SkillInstallationSessionModel,
+    events: SkillInstallationEventModel,
+    installations: SkillInstallationModel,
+    session: SkillInstallationSessionEntity,
+    dependencyName: string
+  ): Promise<InstallSnapshot> {
+    let rollbackDetail = "";
+    if (session.installationId) {
+      const entity = await installations.findByInstallationId(
+        session.installationId
+      );
+      if (entity) {
+        const metadata = JSON.parse(entity.metadataJson ?? "{}") as {
+          backupPath?: string | null;
+        };
+        const rolled = new SkillActivationService().rollback(
+          entity.activationPath,
+          metadata.backupPath ?? null
+        );
+        getDefaultPromptSkillCatalog().remove(
+          `prompt:user:${session.installationId}`
+        );
+        entity.status = "cancelled";
+        entity.enabled = false;
+        try {
+          await installations.save(entity);
+        } catch {
+          /* best-effort row update — the session state below governs */
+        }
+        if (!rolled.ok) rollbackDetail = rolled.message;
+      }
+    }
+    new SkillSourceAcquisitionService().removeSession(session.sessionId);
+    if (rollbackDetail) {
+      await this.transition(
+        sessions,
+        events,
+        session.sessionId,
+        "rollback_required"
+      );
+      await this.appendEvent(
+        events,
+        session.sessionId,
+        "rollback-failed",
+        "installing_dependencies",
+        "rollback_required",
+        rollbackDetail
+      );
+      return this.errorSnapshot(
+        "rollback_required",
+        "ROLLBACK_FAILED",
+        `Dependency '${dependencyName}' declined, but restoring the previous activation failed: ${rollbackDetail}`,
+        session.sessionId
+      );
+    }
+    await this.appendEvent(
+      events,
+      session.sessionId,
+      "dependency-declined",
+      "installing_dependencies",
+      "cancelled",
+      dependencyName
+    );
+    await this.transition(sessions, events, session.sessionId, "cancelled");
+    const cancelled = await sessions.findBySessionId(session.sessionId);
+    return this.snapshotFromEntity(cancelled ?? session);
+  }
+
   /**
    * Resume after a secret was submitted through the secure channel. The
    * secret VALUE never enters this module — the credential service stores
@@ -607,7 +874,10 @@ export class SkillInstallationModule extends BaseModule {
     sessionId: string,
     commandId: string
   ): Promise<
-    | { ok: true; result: import("@/service/SkillApprovedCommandRunner").ApprovedCommandRunResult }
+    | {
+        ok: true;
+        result: import("@/service/SkillApprovedCommandRunner").ApprovedCommandRunResult;
+      }
     | { ok: false; message: string }
   > {
     const { sessions, events } = await this.getModels();
@@ -1230,9 +1500,7 @@ export class SkillInstallationModule extends BaseModule {
   }
 
   /** Test seam: capture progress events instead of broadcasting. */
-  setProgressSinkForTests(
-    sink: SkillInstallationProgressSink | null
-  ): void {
+  setProgressSinkForTests(sink: SkillInstallationProgressSink | null): void {
     this.progressSink = sink;
   }
 
@@ -1269,10 +1537,14 @@ export class SkillInstallationModule extends BaseModule {
         description: skill.description,
       })),
       dependencies: plan.dependencies.map((d) => ({
+        id: d.id,
         name: d.name,
         status: d.currentStatus,
         ...(d.installMethod !== undefined
           ? { installMethod: d.installMethod }
+          : {}),
+        ...(d.requiresElevation !== undefined
+          ? { requiresElevation: d.requiresElevation }
           : {}),
       })),
       credentials: plan.credentials.map((c) => c.environmentVariable),

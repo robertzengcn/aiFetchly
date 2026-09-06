@@ -19,6 +19,7 @@ import {
   PROMPT_SKILL_INVOKE,
   SKILL_INSTALL_APPROVAL_TOKEN,
   SKILL_INSTALL_APPROVE,
+  SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_DISABLE,
   SKILL_INSTALL_ENABLE,
@@ -80,6 +81,16 @@ const approveSchema = z.object({
   selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
 });
 
+/** FR-14 typed dependency approval: token + revision + ONE plan item id. */
+const approveDependencySchema = z.object({
+  sessionId: SkillSessionIdSchema,
+  dependencyId: z.string().min(3).max(100),
+  approve: z.boolean(),
+  planRevision: z.string().min(1),
+  /** Same opaque token as the plan approval (review D1 binding). */
+  approvalToken: z.string().min(16).max(128),
+});
+
 const sessionSchema = z.object({ sessionId: z.string().min(1) });
 
 /**
@@ -113,8 +124,10 @@ function decode<T>(
 
 export function registerSkillInstallationIpcHandlers(): void {
   ipcMain.handle(SKILL_INSTALL_PREPARE, async (_event, data: unknown) => {
-    if (!isAiEnabled()) return denied("AI functionality is only available to subscribers.");
-    if (!isSkillInstallerEnabled()) return denied("The skill installer is disabled.");
+    if (!isAiEnabled())
+      return denied("AI functionality is only available to subscribers.");
+    if (!isSkillInstallerEnabled())
+      return denied("The skill installer is disabled.");
     const decoded = decode(prepareSchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {
@@ -126,7 +139,9 @@ export function registerSkillInstallationIpcHandlers(): void {
         ...(decoded.value.subdirectory !== undefined
           ? { subdirectory: decoded.value.subdirectory }
           : {}),
-        ...(decoded.value.mode !== undefined ? { mode: decoded.value.mode } : {}),
+        ...(decoded.value.mode !== undefined
+          ? { mode: decoded.value.mode }
+          : {}),
         ...(decoded.value.constraints !== undefined
           ? { constraints: decoded.value.constraints }
           : {}),
@@ -138,7 +153,8 @@ export function registerSkillInstallationIpcHandlers(): void {
   });
 
   ipcMain.handle(SKILL_INSTALL_APPROVE, async (_event, data: unknown) => {
-    if (!isAiEnabled()) return denied("AI functionality is only available to subscribers.");
+    if (!isAiEnabled())
+      return denied("AI functionality is only available to subscribers.");
     const decoded = decode(approveSchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {
@@ -157,6 +173,37 @@ export function registerSkillInstallationIpcHandlers(): void {
       return denied(err instanceof Error ? err.message : "Approve failed.");
     }
   });
+
+  // Typed dependency-install approval (PRD §18 / FR-14): same token and
+  // plan-revision binding as APPROVE. The install itself runs through the
+  // catalog-validated SystemDependencyModule — repository shell text is
+  // never executed on this channel.
+  ipcMain.handle(
+    SKILL_INSTALL_APPROVE_DEPENDENCY,
+    async (_event, data: unknown) => {
+      if (!isAiEnabled())
+        return denied("AI functionality is only available to subscribers.");
+      if (!isSkillInstallerEnabled())
+        return denied("The skill installer is disabled.");
+      const decoded = decode(approveDependencySchema, data);
+      if (!decoded.ok) return denied(decoded.message);
+      try {
+        const module = new SkillInstallationModule();
+        const snapshot = await module.approveDependency({
+          sessionId: decoded.value.sessionId,
+          dependencyId: decoded.value.dependencyId,
+          approve: decoded.value.approve,
+          planRevision: decoded.value.planRevision,
+          approvalToken: decoded.value.approvalToken,
+        });
+        return ok(snapshot);
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "Dependency approval failed."
+        );
+      }
+    }
+  );
 
   // Renderer-only approval-token channel (review D1): the token binds
   // approval to the install card. On the preload bridge but NOT a
@@ -235,7 +282,9 @@ export function registerSkillInstallationIpcHandlers(): void {
         snapshot,
       });
     } catch (err) {
-      return denied(err instanceof Error ? err.message : "Storing the credential failed.");
+      return denied(
+        err instanceof Error ? err.message : "Storing the credential failed."
+      );
     }
   });
 }
@@ -248,7 +297,8 @@ const uninstallSchema = z.object({
 
 export function registerSkillInstallationLifecycleIpcHandlers(): void {
   ipcMain.handle(SKILL_INSTALL_UPDATE, async (_event, data: unknown) => {
-    if (!isAiEnabled()) return denied("AI functionality is only available to subscribers.");
+    if (!isAiEnabled())
+      return denied("AI functionality is only available to subscribers.");
     const decoded = decode(installationSchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {
@@ -279,7 +329,9 @@ export function registerSkillInstallationLifecycleIpcHandlers(): void {
     if (!decoded.ok) return denied(decoded.message);
     try {
       return ok(
-        await new SkillInstallationModule().disable(decoded.value.installationId)
+        await new SkillInstallationModule().disable(
+          decoded.value.installationId
+        )
       );
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Disable failed.");
@@ -343,23 +395,22 @@ export function registerPromptSkillInvokeIpcHandler(): void {
         .resolve(decoded.value.conversationId)
         .then((r) => (r.ok ? r.context : null))
         .catch(() => null);
-      const outcome =
-        await getDefaultPromptSkillInvocationService().invoke(
-          {
-            skill: decoded.value.skill,
-            ...(decoded.value.arguments !== undefined
-              ? { arguments: decoded.value.arguments }
-              : {}),
-          },
-          {
-            conversationId: decoded.value.conversationId,
-            conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
-            ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
-              ? { workspaceId: scope.workspaceId }
-              : {}),
-            invocationSource: "explicit",
-          }
-        );
+      const outcome = await getDefaultPromptSkillInvocationService().invoke(
+        {
+          skill: decoded.value.skill,
+          ...(decoded.value.arguments !== undefined
+            ? { arguments: decoded.value.arguments }
+            : {}),
+        },
+        {
+          conversationId: decoded.value.conversationId,
+          conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
+          ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
+            ? { workspaceId: scope.workspaceId }
+            : {}),
+          invocationSource: "explicit",
+        }
+      );
       if (!outcome.ok) {
         return denied(outcome.result.message);
       }
@@ -384,29 +435,26 @@ const runCommandSchema = z.object({
 // TODO 5 / FR-16: renderer-only execution of one APPROVED plan command.
 // The model never supplies the command — only the persisted template id.
 export function registerSkillInstallRunCommandIpcHandler(): void {
-  ipcMain.handle(
-    SKILL_INSTALL_RUN_COMMAND,
-    async (_event, data: unknown) => {
-      const decoded = decode(runCommandSchema, data);
-      if (!decoded.ok) return denied(decoded.message);
-      try {
-        const module = new SkillInstallationModule();
-        // Token binding (review D3): identical to the approve gate.
-        const token = await module.getApprovalToken(decoded.value.sessionId);
-        if (token === null || token !== decoded.value.approvalToken) {
-          return denied("Invalid approval token for this session.");
-        }
-        const outcome = await module.runApprovedCommand(
-          decoded.value.sessionId,
-          decoded.value.commandId
-        );
-        if (!outcome.ok) return denied(outcome.message);
-        return ok(outcome.result);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Command execution failed."
-        );
+  ipcMain.handle(SKILL_INSTALL_RUN_COMMAND, async (_event, data: unknown) => {
+    const decoded = decode(runCommandSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const module = new SkillInstallationModule();
+      // Token binding (review D3): identical to the approve gate.
+      const token = await module.getApprovalToken(decoded.value.sessionId);
+      if (token === null || token !== decoded.value.approvalToken) {
+        return denied("Invalid approval token for this session.");
       }
+      const outcome = await module.runApprovedCommand(
+        decoded.value.sessionId,
+        decoded.value.commandId
+      );
+      if (!outcome.ok) return denied(outcome.message);
+      return ok(outcome.result);
+    } catch (err) {
+      return denied(
+        err instanceof Error ? err.message : "Command execution failed."
+      );
     }
-  );
+  });
 }

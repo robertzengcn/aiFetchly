@@ -3094,21 +3094,34 @@ export default {
     installFailed: "Install failed",
   },
   skillInstall: {
-  planCommands: "Commands that will run",
-        highRiskHint: "High-risk commands are shown for review but never run automatically — you must run them yourself.",
-planCredentials: "Credentials required",
-diagnostics: "Diagnostics",
-  title: "Skill installation",
-  reviewHint: "Review the plan (source, dependencies, credentials, location) before it runs.",
-  approve: "Approve",
-  reject: "Reject",
-  submitSecret: "Save securely",
-  secretHint: "Enter the {name} value. It is stored with OS-backed encryption.",
-  secretNeverInChat: "Never paste API keys into the chat — they are rejected there.",
-  retry: "Retry",
-  cancel: "Cancel installation",
-  ready: "Ready. The skill is installed and will not run until you ask for it.",
-  cancelled: "Installation cancelled.",
+    planCommands: "Commands that will run",
+    highRiskHint:
+      "High-risk commands are shown for review but never run automatically — you must run them yourself.",
+    planCredentials: "Credentials required",
+    diagnostics: "Diagnostics",
+    title: "Skill installation",
+    reviewHint:
+      "Review the plan (source, dependencies, credentials, location) before it runs.",
+    approve: "Approve",
+    reject: "Reject",
+    submitSecret: "Save securely",
+    secretHint:
+      "Enter the {name} value. It is stored with OS-backed encryption.",
+    secretNeverInChat:
+      "Never paste API keys into the chat — they are rejected there.",
+    retry: "Retry",
+    cancel: "Cancel installation",
+    ready:
+      "Ready. The skill is installed and will not run until you ask for it.",
+    cancelled: "Installation cancelled.",
+    dependency: {
+      hint: "Some dependencies are missing. Approve to install them with the managed installer, or decline to roll this installation back.",
+      install: "Install",
+      decline: "Decline",
+      typedHint:
+        "Only the managed package catalog is used — commands from the repository are never executed.",
+      elevation: "May need elevated permissions",
+    },
     errors: {
       actionFailed: "The installation action failed. Try again.",
       secretFailed: "Storing the credential failed. It was NOT saved.",
@@ -3131,6 +3144,7 @@ diagnostics: "Diagnostics",
     },
   },
   skillSlash: {
-      notFound: "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
-    },
+    notFound:
+      "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
+  },
 };

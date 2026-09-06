@@ -3062,21 +3062,32 @@ export default {
     installFailed: "インストールに失敗しました",
   },
   skillInstall: {
-  planCommands: "実行されるコマンド",
-        highRiskHint: "高リスクのコマンドは確認用に表示されるだけで自動実行されません。ご自身で実行してください。",
-planCredentials: "必要な認証情報",
-diagnostics: "診断情報",
-  title: "スキルのインストール",
-  reviewHint: "実行前にプラン（ソース、依存関係、認証情報、場所）を確認してください。",
-  approve: "承認",
-  reject: "却下",
-  submitSecret: "安全に保存",
-  secretHint: "{name} の値を入力してください。OS 暗号化で保存されます。",
-  secretNeverInChat: "API キーをチャットに貼り付けないでください。チャットでは拒否されます。",
-  retry: "再試行",
-  cancel: "インストールをキャンセル",
-  ready: "準備完了。スキルはインストール済みで、依頼するまで実行されません。",
-  cancelled: "インストールはキャンセルされました。",
+    planCommands: "実行されるコマンド",
+    highRiskHint:
+      "高リスクのコマンドは確認用に表示されるだけで自動実行されません。ご自身で実行してください。",
+    planCredentials: "必要な認証情報",
+    diagnostics: "診断情報",
+    title: "スキルのインストール",
+    reviewHint:
+      "実行前にプラン（ソース、依存関係、認証情報、場所）を確認してください。",
+    approve: "承認",
+    reject: "却下",
+    submitSecret: "安全に保存",
+    secretHint: "{name} の値を入力してください。OS 暗号化で保存されます。",
+    secretNeverInChat:
+      "API キーをチャットに貼り付けないでください。チャットでは拒否されます。",
+    retry: "再試行",
+    cancel: "インストールをキャンセル",
+    ready: "準備完了。スキルはインストール済みで、依頼するまで実行されません。",
+    cancelled: "インストールはキャンセルされました。",
+    dependency: {
+      hint: "一部の依存関係が不足しています。承認すると管理インストーラーでインストールし、拒否するとこのインストールをロールバックします。",
+      install: "インストール",
+      decline: "拒否",
+      typedHint:
+        "管理パッケージカタログのみを使用します。リポジトリのコマンドは決して実行されません。",
+      elevation: "昇格された権限が必要な場合があります",
+    },
     errors: {
       actionFailed: "インストール操作に失敗しました。再試行してください。",
       secretFailed: "認証情報の保存に失敗しました。保存されていません。",
@@ -3099,6 +3110,7 @@ diagnostics: "診断情報",
     },
   },
   skillSlash: {
-      notFound: "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
-    },
+    notFound:
+      "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
+  },
 };

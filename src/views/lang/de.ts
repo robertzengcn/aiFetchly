@@ -3122,24 +3122,39 @@ export default {
     installFailed: "Installation fehlgeschlagen",
   },
   skillInstall: {
-  planCommands: "Befehle, die ausgeführt werden",
-        highRiskHint: "Risikoreiche Befehle werden zur Prüfung angezeigt, aber nie automatisch ausgeführt — Sie müssen sie selbst ausführen.",
-planCredentials: "Erforderliche Zugangsdaten",
-diagnostics: "Diagnose",
-  title: "Fähigkeitsinstallation",
-  reviewHint: "Prüfen Sie den Plan (Quelle, Abhängigkeiten, Zugangsdaten, Speicherort), bevor er ausgeführt wird.",
-  approve: "Genehmigen",
-  reject: "Ablehnen",
-  submitSecret: "Sicher speichern",
-  secretHint: "Geben Sie den Wert für {name} ein. Er wird mit Betriebssystem-Verschlüsselung gespeichert.",
-  secretNeverInChat: "Fügen Sie API-Schlüssel niemals in den Chat ein — sie werden dort abgelehnt.",
-  retry: "Erneut versuchen",
-  cancel: "Installation abbrechen",
-  ready: "Bereit. Die Fähigkeit ist installiert und läuft erst, wenn Sie sie anfordern.",
-  cancelled: "Installation abgebrochen.",
+    planCommands: "Befehle, die ausgeführt werden",
+    highRiskHint:
+      "Risikoreiche Befehle werden zur Prüfung angezeigt, aber nie automatisch ausgeführt — Sie müssen sie selbst ausführen.",
+    planCredentials: "Erforderliche Zugangsdaten",
+    diagnostics: "Diagnose",
+    title: "Fähigkeitsinstallation",
+    reviewHint:
+      "Prüfen Sie den Plan (Quelle, Abhängigkeiten, Zugangsdaten, Speicherort), bevor er ausgeführt wird.",
+    approve: "Genehmigen",
+    reject: "Ablehnen",
+    submitSecret: "Sicher speichern",
+    secretHint:
+      "Geben Sie den Wert für {name} ein. Er wird mit Betriebssystem-Verschlüsselung gespeichert.",
+    secretNeverInChat:
+      "Fügen Sie API-Schlüssel niemals in den Chat ein — sie werden dort abgelehnt.",
+    retry: "Erneut versuchen",
+    cancel: "Installation abbrechen",
+    ready:
+      "Bereit. Die Fähigkeit ist installiert und läuft erst, wenn Sie sie anfordern.",
+    cancelled: "Installation abgebrochen.",
+    dependency: {
+      hint: "Einige Abhängigkeiten fehlen. Genehmigen Sie die Installation über den verwalteten Installer, oder lehnen Sie ab, um diese Installation zurückzunehmen.",
+      install: "Installieren",
+      decline: "Ablehnen",
+      typedHint:
+        "Es wird nur der verwaltete Paketkatalog verwendet — Befehle aus dem Repository werden nie ausgeführt.",
+      elevation: "Erfordert möglicherweise erhöhte Berechtigungen",
+    },
     errors: {
-      actionFailed: "Die Installationsaktion ist fehlgeschlagen. Versuchen Sie es erneut.",
-      secretFailed: "Speichern der Zugangsdaten fehlgeschlagen. Sie wurden NICHT gespeichert.",
+      actionFailed:
+        "Die Installationsaktion ist fehlgeschlagen. Versuchen Sie es erneut.",
+      secretFailed:
+        "Speichern der Zugangsdaten fehlgeschlagen. Sie wurden NICHT gespeichert.",
     },
     state: {
       requested: "Angefordert",
@@ -3159,6 +3174,7 @@ diagnostics: "Diagnose",
     },
   },
   skillSlash: {
-      notFound: "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",
-    },
+    notFound:
+      "Keine installierte Prompt-Fähigkeit passt zu '{name}'. Verwenden Sie /skills zum Auflisten.",
+  },
 };
