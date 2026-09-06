@@ -37,8 +37,9 @@ export class BuckemailController {
       size,
       sort
     );
+    const total = await this.buckEmailTaskMoudule.countBuckEmailTasks();
     const data: Array<BuckEmailListType> = [];
-    Taskentity.forEach(async (element) => {
+    for (const element of Taskentity) {
       let status = "unkonw";
       if (element.status) {
         status = getStatusName(element.status);
@@ -46,22 +47,18 @@ export class BuckemailController {
       const btype = await this.buckEmailTaskMoudule.getBuckEmailTypeName(
         element.type
       );
-      let id = 0;
-      if (element.id) {
-        id = element.id;
-      }
+      const id = element.id ?? 0;
       const item: BuckEmailListType = {
         TaskId: id,
         Status: status,
         RecordTime: element.record_time,
         Type: btype,
       };
-
       data.push(item);
-    });
+    }
     const result = {
       records: data,
-      total: Taskentity.length,
+      total,
     };
     return result;
   }
@@ -89,26 +86,25 @@ export class BuckemailController {
       sort
     );
     const data: Array<EmailMarketingSendLogListDisplay> = [];
-    res.records.forEach(async (element) => {
+    for (const element of res.records) {
       let status = "unkonw";
-      if (element.status) {
+      // Failure rows have status 0 (SendStatus.Failure) — a truthiness check
+      // would misclassify them as unknown, so compare against null explicitly.
+      if (element.status !== undefined && element.status !== null) {
         status = await this.emailMarketingSendlogModule.getStatusName(
           element.status
         );
       }
-      let elementID = 0;
-      if (element.id) {
-        elementID = element.id;
-      }
+      const elementID = element.id ?? 0;
       const item: EmailMarketingSendLogListDisplay = {
         id: elementID,
-        status: status,
+        status,
         receiver: element.receiver,
         title: element.title,
         record_time: element.record_time,
       };
       data.push(item);
-    });
+    }
     const result = {
       records: data,
       total: res.total,
