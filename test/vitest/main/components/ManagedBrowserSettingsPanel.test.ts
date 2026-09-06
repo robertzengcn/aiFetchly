@@ -26,6 +26,8 @@ const apiMocks = vi.hoisted(() => ({
   getEffectiveBrowserSettings: vi.fn(async (): Promise<unknown> => null),
   updateBrowserPreferences: vi.fn(async (patch: unknown): Promise<unknown> => patch),
   getCacheStatus: vi.fn(async (): Promise<unknown> => null),
+  listActiveSessions: vi.fn(async (): Promise<unknown[]> => []),
+  stopManagedBrowser: vi.fn(async (): Promise<unknown> => null),
   issueClearConfirmation: vi.fn(async (): Promise<unknown> => ({
     confirmationId: "conf-1234-abcd",
   })),
@@ -150,6 +152,8 @@ beforeEach(() => {
       pendingClear: false,
     })
   );
+  apiMocks.listActiveSessions.mockImplementation(async () => []);
+  apiMocks.stopManagedBrowser.mockImplementation(async () => null);
   apiMocks.clearCache.mockImplementation(async () => ({
     state: "cleared" as const,
     scope: "all" as const,
@@ -283,5 +287,118 @@ describe("ManagedBrowserSettingsPanel", () => {
     expect(
       wrapper.find("[data-testid='mb-settings-disabled-note']").text()
     ).toContain("The managed browser is turned off.");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// GAP-09: disabling with an active session requires an explicit decision
+// ---------------------------------------------------------------------------
+
+describe("GAP-09 active-session gating on disable", () => {
+  it("disables directly when no session is active", async () => {
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.getEffectiveBrowserSettings).toHaveBeenCalled()
+    );
+    await wrapper
+      .find("[data-testid='mb-toggle-browser']")
+      .setValue(false as never);
+    await vi.waitFor(() =>
+      expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
+        browserEnabled: false,
+      })
+    );
+    expect(
+      wrapper.find("[data-testid='mb-active-session-dialog']").exists()
+    ).toBe(false);
+  });
+
+  it("asks finish/stop/cancel when a session is active; cancel restores", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [
+      { sessionId: "mb_live0000000001", state: "ready" },
+    ]);
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.getEffectiveBrowserSettings).toHaveBeenCalled()
+    );
+    await wrapper
+      .find("[data-testid='mb-toggle-browser']")
+      .setValue(false as never);
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-active-session-dialog']").exists()
+      ).toBe(true)
+    );
+    expect(apiMocks.updateBrowserPreferences).not.toHaveBeenCalled();
+
+    await wrapper.find("[data-testid='mb-active-cancel']").trigger("click");
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-active-session-dialog']").exists()
+      ).toBe(false)
+    );
+    expect(apiMocks.updateBrowserPreferences).not.toHaveBeenCalled();
+    expect(apiMocks.stopManagedBrowser).not.toHaveBeenCalled();
+  });
+
+  it("finish stops the session gracefully, then persists the disable", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [
+      { sessionId: "mb_live0000000001", state: "handoff" },
+    ]);
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.getEffectiveBrowserSettings).toHaveBeenCalled()
+    );
+    await wrapper
+      .find("[data-testid='mb-toggle-browser']")
+      .setValue(false as never);
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-active-session-dialog']").exists()
+      ).toBe(true)
+    );
+    await wrapper.find("[data-testid='mb-active-finish']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.stopManagedBrowser).toHaveBeenCalledWith(
+        "mb_live0000000001",
+        "user_stop"
+      )
+    );
+    await vi.waitFor(() =>
+      expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
+        browserEnabled: false,
+      })
+    );
+  });
+
+  it("stop-now stops with cancelled and persists the disable", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [
+      { sessionId: "mb_live0000000001", state: "running" },
+    ]);
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.getEffectiveBrowserSettings).toHaveBeenCalled()
+    );
+    await wrapper
+      .find("[data-testid='mb-toggle-browser']")
+      .setValue(false as never);
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-active-session-dialog']").exists()
+      ).toBe(true)
+    );
+    await wrapper.find("[data-testid='mb-active-stop']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.stopManagedBrowser).toHaveBeenCalledWith(
+        "mb_live0000000001",
+        "cancelled"
+      )
+    );
+    await vi.waitFor(() =>
+      expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
+        browserEnabled: false,
+      })
+    );
   });
 });

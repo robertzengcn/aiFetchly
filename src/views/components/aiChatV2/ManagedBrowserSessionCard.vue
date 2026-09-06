@@ -89,6 +89,75 @@
       </v-btn>
     </div>
 
+    <div
+      v-if="progressLine"
+      class="mb-session-card__progress"
+      data-testid="mb-session-progress"
+    >
+      <v-icon size="x-small" aria-hidden="true">mdi-progress-clock</v-icon>
+      {{ progressLine }}
+      <span
+        v-if="elapsedLabel"
+        class="mb-session-card__elapsed"
+        data-testid="mb-session-elapsed"
+      >
+        · {{ elapsedLabel }}
+      </span>
+    </div>
+
+    <ul
+      v-if="recentNotices.length > 0"
+      class="mb-session-card__notices"
+      data-testid="mb-session-notices"
+    >
+      <li
+        v-for="notice in recentNotices"
+        :key="notice.eventId"
+        :class="`mb-session-card__notice--${notice.severity}`"
+      >
+        {{ t(`managedBrowser.notices.${notice.type}`) || notice.type }}
+      </li>
+    </ul>
+
+    <v-dialog
+      :model-value="approvalRequest !== null"
+      max-width="440"
+      persistent
+    >
+      <v-card v-if="approvalRequest" data-testid="mb-approval-dialog">
+        <v-card-title>
+          {{ t("managedBrowser.approval.title") }}
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-2">
+            {{ t("managedBrowser.approval.body") }}
+          </p>
+          <p class="text-body-2 mb-0">
+            <strong>{{ approvalRequest.contentSummary }}</strong>
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-btn
+            data-testid="mb-approval-allow"
+            color="primary"
+            :disabled="busy"
+            @click="onApprovalDecision('approve')"
+          >
+            {{ t("managedBrowser.approval.allow") }}
+          </v-btn>
+          <v-spacer />
+          <v-btn
+            data-testid="mb-approval-deny"
+            variant="text"
+            :disabled="busy"
+            @click="onApprovalDecision('deny')"
+          >
+            {{ t("managedBrowser.approval.deny") }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <ManagedBrowserHandoffDialog
       :model-value="handoffDialogOpen"
       :status="status"
@@ -106,8 +175,12 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import ManagedBrowserHandoffDialog from "@/views/components/aiChatV2/ManagedBrowserHandoffDialog.vue";
 import {
+  approveBrowserAction,
   extendHandoff,
   listActiveSessions,
+  onManagedBrowserApprovalRequired,
+  onManagedBrowserChatNotice,
+  onManagedBrowserProgress,
   onManagedBrowserStatusChanged,
   requestHandoff,
   resumeAfterHandoff,
@@ -131,7 +204,28 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+const recentNotices = ref<
+  Array<{
+    readonly eventId: string;
+    readonly type: string;
+    readonly severity: string;
+  }>
+>([]);
+const progressLine = ref<string | null>(null);
+const approvalRequest = ref<{
+  readonly sessionId: string;
+  readonly requestId: string;
+  readonly riskClass: string;
+  readonly contentSummary: string | null;
+} | null>(null);
+/** First-seen timestamp for the local elapsed display (GAP-08). */
+const firstSeenAt = ref<number | null>(null);
+const nowTick = ref(Date.now());
 let unsubscribeStatus: (() => void) | null = null;
+let unsubscribeNotices: (() => void) | null = null;
+let unsubscribeProgress: (() => void) | null = null;
+let unsubscribeApprovals: (() => void) | null = null;
+let elapsedTicker: ReturnType<typeof setInterval> | null = null;
 
 const stateIsHandoffLike = computed(() => {
   const state = status.value?.state;
@@ -179,6 +273,9 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!next || TERMINAL_STATES.has(next.state)) {
     status.value = null;
     handoffDialogOpen.value = false;
+    approvalRequest.value = null;
+    progressLine.value = null;
+    firstSeenAt.value = null;
     return;
   }
   status.value = next;
@@ -271,20 +368,100 @@ function onCancelTask(): void {
   });
 }
 
+const elapsedLabel = computed(() => {
+  const started = firstSeenAt.value;
+  if (started === null) {
+    return null;
+  }
+  const seconds = Math.max(0, Math.floor((nowTick.value - started) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+});
+
+async function onApprovalDecision(
+  decision: "approve" | "deny"
+): Promise<void> {
+  const request = approvalRequest.value;
+  if (!request || !status.value) {
+    return;
+  }
+  busy.value = true;
+  try {
+    await approveBrowserAction({
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      decision,
+    });
+  } catch (error) {
+    console.error("[ManagedBrowserSessionCard] approval failed:", error);
+  } finally {
+    approvalRequest.value = null;
+    busy.value = false;
+  }
+}
+
 onMounted(() => {
   void listActiveSessions()
     .then((sessions) => {
       applyStatus(sessions.length > 0 ? sessions[0] : null);
+      if (sessions.length > 0 && firstSeenAt.value === null) {
+        firstSeenAt.value = Date.now();
+      }
     })
     .catch(() => undefined);
   unsubscribeStatus = onManagedBrowserStatusChanged((next) => {
+    if (next && firstSeenAt.value === null) {
+      firstSeenAt.value = Date.now();
+    }
     applyStatus(next);
   });
+  // GAP-08: structured chat notices — latest three, localized.
+  unsubscribeNotices = onManagedBrowserChatNotice((notice) => {
+    recentNotices.value = [
+      ...recentNotices.value.filter((n) => n.eventId !== notice.eventId),
+      {
+        eventId: notice.eventId,
+        type: notice.type,
+        severity: notice.severity,
+      },
+    ].slice(-3);
+  });
+  // GAP-08: coarse action progress (module ACTION_PROGRESS forwarding).
+  unsubscribeProgress = onManagedBrowserProgress((progress) => {
+    if (progress.totalSteps != null && progress.totalSteps > 0) {
+      progressLine.value = `${progress.messageCode} (${progress.completedSteps}/${progress.totalSteps})`;
+    } else {
+      progressLine.value = progress.messageCode;
+    }
+  });  // GAP-08: just-in-time approval dialog for consequential actions.
+  unsubscribeApprovals = onManagedBrowserApprovalRequired((request) => {
+    if (
+      status.value &&
+      (request.sessionId === status.value.sessionId || !status.value)
+    ) {
+      approvalRequest.value = request;
+    }
+  });
+  if (elapsedTicker === null) {
+    elapsedTicker = setInterval(() => {
+      nowTick.value = Date.now();
+    }, 1_000);
+  }
 });
 
 onBeforeUnmount(() => {
   unsubscribeStatus?.();
   unsubscribeStatus = null;
+  unsubscribeNotices?.();
+  unsubscribeNotices = null;
+  unsubscribeProgress?.();
+  unsubscribeProgress = null;
+  unsubscribeApprovals?.();
+  unsubscribeApprovals = null;
+  if (elapsedTicker !== null) {
+    clearInterval(elapsedTicker);
+    elapsedTicker = null;
+  }
 });
 </script>
 
@@ -368,6 +545,40 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   font-size: 0.8rem;
+  color: #c62828;
+}
+
+.mb-session-card__progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.mb-session-card__elapsed {
+  color: rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.mb-session-card__notices {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mb-session-card__notice--info {
+  color: #546e7a;
+}
+.mb-session-card__notice--success {
+  color: #2e7d32;
+}
+.mb-session-card__notice--warning {
+  color: #9a6700;
+}
+.mb-session-card__notice--error {
   color: #c62828;
 }
 

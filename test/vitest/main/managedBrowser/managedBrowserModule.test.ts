@@ -1009,12 +1009,14 @@ describe("ManagedBrowserModule renderer sinks", () => {
     h.module.setApprovalSink((request) => approvals.push(request));
     h.module.notifyApprovalRequired({
       sessionId: "mb_x0000000000001",
+      requestId: "call-1",
       riskClass: "consequential_write",
       contentSummary: "Publish video",
     });
     expect(approvals).toEqual([
       {
         sessionId: "mb_x0000000000001",
+        requestId: "call-1",
         riskClass: "consequential_write",
         messageKey: "managedBrowser.approval.required",
         contentSummary: "Publish video",

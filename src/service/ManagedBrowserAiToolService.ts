@@ -132,6 +132,7 @@ export interface BrowserModuleLike {
   /** Surface an approval request to the renderer (optional for fakes). */
   notifyApprovalRequired?(input: {
     sessionId: string;
+    requestId: string;
     riskClass: string;
     contentSummary?: string | null;
   }): void;
@@ -401,6 +402,7 @@ export class ManagedBrowserAiToolService {
     if (assessment.requiresApproval && !context.skipPermissionCheck) {
       this.browserModule.notifyApprovalRequired?.({
         sessionId: parsed.data.session_id,
+        requestId: context.toolCallId,
         riskClass: assessment.riskClass,
         contentSummary: buildApprovalSummary(program, descriptorFor),
       });

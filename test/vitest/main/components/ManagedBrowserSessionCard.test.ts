@@ -17,6 +17,18 @@ const apiMocks = vi.hoisted(() => ({
   onManagedBrowserStatusChanged: vi.fn(
     (_cb: (s: unknown) => void): (() => void) => () => undefined
   ),
+  onManagedBrowserChatNotice: vi.fn(
+    (_cb: (n: unknown) => void): (() => void) => () => undefined
+  ),
+  onManagedBrowserProgress: vi.fn(
+    (_cb: (p: unknown) => void): (() => void) => () => undefined
+  ),
+  onManagedBrowserApprovalRequired: vi.fn(
+    (_cb: (r: unknown) => void): (() => void) => () => undefined
+  ),
+  approveBrowserAction: vi.fn(async (): Promise<unknown> => ({
+    recorded: true,
+  })),
   requestHandoff: vi.fn(async (): Promise<unknown> => null),
   resumeAfterHandoff: vi.fn(async (): Promise<unknown> => null),
   extendHandoff: vi.fn(async (): Promise<unknown> => null),
@@ -66,6 +78,12 @@ const i18n = createI18n({
           stop: "Stop browser",
         },
         errors: { worker_exited: "Browser process ended unexpectedly" },
+        notices: {
+          login_required: "Login needed",
+          login_verified: "Login verified",
+          task_resuming: "Resuming the task",
+          browser_crashed: "The browser session ended unexpectedly",
+        },
       },
     },
   },
@@ -299,5 +317,100 @@ describe("ManagedBrowserSessionCard", () => {
     await nextTick();
     wrapper.unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// GAP-08: notices, approval dialog, progress, elapsed
+// ---------------------------------------------------------------------------
+
+describe("GAP-08 chat wiring", () => {
+  function captureCallback(
+    mock: ReturnType<typeof vi.fn>
+  ): (payload: unknown) => void {
+    return mock.mock.calls[mock.mock.calls.length - 1][0] as (
+      payload: unknown
+    ) => void;
+  }
+
+  it("renders the latest three localized chat notices", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true)
+    );
+    const push = captureCallback(apiMocks.onManagedBrowserChatNotice);
+    for (const [id, type] of [
+      ["evt-1", "login_required"],
+      ["evt-2", "login_verified"],
+      ["evt-3", "task_resuming"],
+      ["evt-4", "browser_crashed"],
+    ] as const) {
+      push({ eventId: id, type, severity: "info" });
+    }
+    await nextTick();
+    const items = wrapper.findAll("[data-testid='mb-session-notices'] li");
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.text())).not.toContain("login_required");
+    expect(items.map((i) => i.text())).toContain("Resuming the task");
+  });
+
+  it("opens the just-in-time approval dialog and records the decision", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true)
+    );
+    captureCallback(apiMocks.onManagedBrowserApprovalRequired)({
+      sessionId: "mb_test000000001",
+      requestId: "call-9",
+      riskClass: "consequential_write",
+      messageKey: "managedBrowser.approval.required",
+      contentSummary: 'click "Publish video"',
+    });
+    await nextTick();
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-approval-dialog']").exists()
+      ).toBe(true)
+    );
+    expect(wrapper.text()).toContain("Publish video");
+    await wrapper.find("[data-testid='mb-approval-allow']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.approveBrowserAction).toHaveBeenCalledWith({
+        sessionId: "mb_test000000001",
+        requestId: "call-9",
+        decision: "approve",
+      })
+    );
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-approval-dialog']").exists()
+      ).toBe(false)
+    );
+  });
+
+  it("shows the coarse progress line with step counts", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true)
+    );
+    captureCallback(apiMocks.onManagedBrowserProgress)({
+      sessionId: "mb_test000000001",
+      phase: "acting",
+      completedSteps: 2,
+      totalSteps: 5,
+      messageCode: "step_click",
+    });
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-progress']").text()).toContain(
+        "step_click (2/5)"
+      )
+    );
+    expect(
+      wrapper.find("[data-testid='mb-session-elapsed']").exists()
+    ).toBe(true);
   });
 });

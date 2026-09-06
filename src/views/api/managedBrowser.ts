@@ -17,6 +17,8 @@ import {
   MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_STATUS_EVENT,
   MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_PROGRESS_EVENT,
+  MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import type {
@@ -195,6 +197,46 @@ export interface ManagedBrowserCacheProgress {
   readonly phase: "scanning" | "deleting" | "done" | "failed";
   readonly approximateBytes: number;
   readonly reasonCode: string | null;
+}
+
+export interface ManagedBrowserActionProgress {
+  readonly sessionId: string;
+  readonly phase: string;
+  readonly completedSteps: number;
+  readonly totalSteps: number | null;
+  readonly messageCode: string;
+}
+
+export function onManagedBrowserProgress(
+  callback: (progress: ManagedBrowserActionProgress) => void
+): () => void {
+  const handler = (progress: unknown): void => {
+    callback(progress as ManagedBrowserActionProgress);
+  };
+  window.api.receive(MANAGED_BROWSER_PROGRESS_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_PROGRESS_EVENT, handler);
+  };
+}
+
+export interface ManagedBrowserApprovalRequest {
+  readonly sessionId: string;
+  readonly requestId: string;
+  readonly riskClass: string;
+  readonly messageKey: string;
+  readonly contentSummary: string | null;
+}
+
+export function onManagedBrowserApprovalRequired(
+  callback: (request: ManagedBrowserApprovalRequest) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as ManagedBrowserApprovalRequest);
+  };
+  window.api.receive(MANAGED_BROWSER_APPROVAL_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_APPROVAL_EVENT, handler);
+  };
 }
 
 export function onManagedBrowserCacheProgress(

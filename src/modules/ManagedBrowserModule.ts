@@ -247,6 +247,7 @@ export class ManagedBrowserModule {
     | ((
         request: {
           readonly sessionId: string;
+          readonly requestId: string;
           readonly riskClass: string;
           readonly messageKey: string;
           readonly contentSummary: string | null;
@@ -309,6 +310,7 @@ export class ManagedBrowserModule {
   public setApprovalSink(
     sink: (request: {
       readonly sessionId: string;
+      readonly requestId: string;
       readonly riskClass: string;
       readonly messageKey: string;
       readonly contentSummary: string | null;
@@ -320,12 +322,14 @@ export class ManagedBrowserModule {
   /** Surface an approval request (called by the AI tool layer, §17). */
   public notifyApprovalRequired(input: {
     readonly sessionId: string;
+    readonly requestId: string;
     readonly riskClass: string;
     readonly contentSummary?: string | null;
   }): void {
     if (this.externalApprovalSink) {
       this.externalApprovalSink({
         sessionId: input.sessionId,
+        requestId: input.requestId,
         riskClass: input.riskClass,
         messageKey: "managedBrowser.approval.required",
         contentSummary: input.contentSummary ?? null,

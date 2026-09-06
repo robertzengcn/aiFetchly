@@ -95,6 +95,48 @@
       {{ t("managedBrowser.settings.clear_preserves_logins") }}
     </p>
 
+    <v-dialog
+      :model-value="activeSessionDialog"
+      max-width="440"
+      persistent
+    >
+      <v-card data-testid="mb-active-session-dialog">
+        <v-card-title>
+          {{ t("managedBrowser.settings.active_session_title") }}
+        </v-card-title>
+        <v-card-text>
+          {{ t("managedBrowser.settings.active_session_body") }}
+        </v-card-text>
+        <v-card-actions>
+          <v-btn
+            data-testid="mb-active-finish"
+            color="primary"
+            :disabled="stoppingSessions"
+            @click="onDisableDecision('finish')"
+          >
+            {{ t("managedBrowser.settings.active_finish") }}
+          </v-btn>
+          <v-btn
+            data-testid="mb-active-stop"
+            variant="text"
+            :disabled="stoppingSessions"
+            @click="onDisableDecision('stop')"
+          >
+            {{ t("managedBrowser.settings.active_stop_now") }}
+          </v-btn>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            data-testid="mb-active-cancel"
+            :disabled="stoppingSessions"
+            @click="onDisableDecision('cancel')"
+          >
+            {{ t("common.cancel") || "Cancel" }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="confirmDialog" max-width="440">
       <v-card data-testid="mb-clear-confirm-dialog">
         <v-card-title>
@@ -138,6 +180,8 @@ import { useI18n } from "vue-i18n";
 import {
   clearCache,
   getCacheStatus,
+  listActiveSessions,
+  stopManagedBrowser,
   getEffectiveBrowserSettings,
   issueClearConfirmation,
   onManagedBrowserCacheProgress,
@@ -164,6 +208,8 @@ const clearCacheOnExit = ref(false);
 const loading = ref(false);
 const clearInProgress = ref(false);
 const confirmDialog = ref(false);
+const activeSessionDialog = ref(false);
+const stoppingSessions = ref(false);
 let pendingConfirmationId: string | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 
@@ -220,7 +266,55 @@ async function persist(patch: {
 
 function onToggleBrowser(value: boolean | null): void {
   if (value !== null) {
-    void persist({ browserEnabled: value });
+    if (value) {
+      void persist({ browserEnabled: true });
+      return;
+    }
+    // GAP-09 (FR-SETTING-004): disabling while a session is live requires
+    // an explicit stop-or-finish decision — never a silent policy change.
+    void maybeAskBeforeDisable();
+  }
+}
+
+async function maybeAskBeforeDisable(): Promise<void> {
+  try {
+    const sessions = await listActiveSessions();
+    if (sessions.length === 0) {
+      await persist({ browserEnabled: false });
+      return;
+    }
+    activeSessionDialog.value = true;
+  } catch (error) {
+    console.error(
+      "[ManagedBrowserSettingsPanel] active-session check failed:",
+      error
+    );
+    // Fail safe: do not disable when the state is unknown.
+    await reload();
+  }
+}
+
+async function onDisableDecision(
+  decision: "finish" | "stop" | "cancel"
+): Promise<void> {
+  if (decision === "cancel") {
+    activeSessionDialog.value = false;
+    await reload(); // restore the persisted (still-enabled) toggle
+    return;
+  }
+  stoppingSessions.value = true;
+  try {
+    const sessions = await listActiveSessions();
+    for (const session of sessions) {
+      await stopManagedBrowser(
+        session.sessionId,
+        decision === "finish" ? "user_stop" : "cancelled"
+      ).catch(() => undefined);
+    }
+    await persist({ browserEnabled: false });
+  } finally {
+    stoppingSessions.value = false;
+    activeSessionDialog.value = false;
   }
 }
 
