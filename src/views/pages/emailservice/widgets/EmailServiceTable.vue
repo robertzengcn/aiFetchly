@@ -20,6 +20,14 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             >
                 {{ t('common.export') }}
             </v-btn>
+
+            <v-btn
+                class="btn ml-3" variant="outlined" prepend-icon="mdi-format-list-bulleted"
+                data-testid="email-service-send-log-btn"
+                @click="goToSendLog"
+            >
+                {{ CapitalizeFirstLetter(t('route.bulk_email_task_list')) }}
+            </v-btn>
         </div>
 
     </div>
@@ -189,6 +197,12 @@ function createService() {
     console.log("create email Service")
     router.push({
         name: 'Email_Marketing_Service_Create'
+    });
+}
+
+function goToSendLog() {
+    router.push({
+        name: 'BUCK_Email_TASK_LIST'
     });
 }
 
