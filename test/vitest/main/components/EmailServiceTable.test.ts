@@ -49,6 +49,7 @@ const i18n = createI18n({
       },
       route: {
         bulk_email_task_list: "Email Task List",
+        email_send_log: "Email Send Log",
       },
     },
   },
@@ -186,7 +187,7 @@ describe("EmailServiceTable send log navigation", () => {
     ).toBe(true);
   });
 
-  it("navigates to the bulk email task list when clicked", async () => {
+  it("navigates to the unified email send log page when clicked", async () => {
     const wrapper = mountTable();
 
     await wrapper
@@ -194,7 +195,7 @@ describe("EmailServiceTable send log navigation", () => {
       .trigger("click");
 
     expect(routerMocks.push).toHaveBeenCalledWith({
-      name: "BUCK_Email_TASK_LIST",
+      name: "UNIFIED_EMAIL_SEND_LOG",
     });
   });
 });

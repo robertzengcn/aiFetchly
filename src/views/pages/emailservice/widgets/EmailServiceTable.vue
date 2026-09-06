@@ -22,11 +22,11 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             </v-btn>
 
             <v-btn
-                class="btn ml-3" variant="outlined" prepend-icon="mdi-format-list-bulleted"
+                class="btn ml-3" variant="outlined" prepend-icon="mdi-file-document-multiple"
                 data-testid="email-service-send-log-btn"
                 @click="goToSendLog"
             >
-                {{ CapitalizeFirstLetter(t('route.bulk_email_task_list')) }}
+                {{ CapitalizeFirstLetter(t('route.email_send_log')) }}
             </v-btn>
         </div>
 
@@ -202,7 +202,7 @@ function createService() {
 
 function goToSendLog() {
     router.push({
-        name: 'BUCK_Email_TASK_LIST'
+        name: 'UNIFIED_EMAIL_SEND_LOG'
     });
 }
 
