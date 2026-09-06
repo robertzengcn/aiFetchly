@@ -91,6 +91,8 @@ export interface PuppeteerContextLike {
 }
 
 export interface PuppeteerBrowserLike {
+  /** Chrome process crash/close notification (GAP-06 containment). */
+  on(event: "disconnected", listener: () => void): unknown;
   newPage(): Promise<PuppeteerPageLike>;
   pages(): Promise<PuppeteerPageLike[]>;
   close(): Promise<void>;
@@ -147,6 +149,9 @@ export class WorkerSession {
   private disposed = false;
   private disposePromise: Promise<void> | null = null;
   private sequence = 0;
+  /** GAP-05: redirect storms emit ONE challenge — dedupe by kind+origin. */
+  private lastChallengeKey: string | null = null;
+  private lastChallengeAtEpochMs = 0;
 
   constructor(deps: WorkerSessionDeps) {
     this.sessionId = deps.sessionId;
@@ -208,6 +213,9 @@ export class WorkerSession {
           : envRecord(),
       });
       this.browser = browser;
+      browser.on("disconnected", () => {
+        void this.handleChromeDisconnected();
+      });
 
       const pages = await browser.pages();
       this.page = pages[0] ?? (await browser.newPage());
@@ -417,6 +425,15 @@ export class WorkerSession {
         results: [...outcome.results],
         observation: null,
       });
+      // GAP-05: challenges appearing after an ordinary action must stop
+      // further automation — detect AFTER every action program, before the
+      // runtime returns to ready.
+      if (
+        outcome.stopCode !== "handoff_required" &&
+        (await this.detectAndReportChallenge())
+      ) {
+        return;
+      }
       if (outcome.stopCode === "handoff_required") {
         this.runtime.transition("handoff");
         this.send({
@@ -615,6 +632,82 @@ export class WorkerSession {
   // -----------------------------------------------------------------------
 
   /**
+   * GAP-05: run the adapter's challenge probe on the current page. A NEW
+   * challenge (kind+origin key differs from the last report, or the dedupe
+   * window lapsed) emits CHALLENGE_DETECTED + enters same-context handoff
+   * and invalidates every reference; a repeat within the window (redirect
+   * storm) stays silent so the user sees ONE notice.
+   */
+  private async detectAndReportChallenge(): Promise<boolean> {
+    const page = this.page;
+    if (!page) {
+      return false;
+    }
+    const detection = await this.adapter
+      .detectChallenge(page)
+      .catch(() => null);
+    if (!detection) {
+      return false;
+    }
+    const origin = extractPageOrigin(page.url());
+    const key = `${detection.kind}|${origin}`;
+    if (
+      key === this.lastChallengeKey &&
+      this.now() - this.lastChallengeAtEpochMs < 30_000
+    ) {
+      return true; // still challenged — no duplicate event
+    }
+    this.lastChallengeKey = key;
+    this.lastChallengeAtEpochMs = this.now();
+    const challengeId = `ch_${crypto.randomUUID().slice(0, 12)}`;
+    this.registry.reset(this.registry.currentRevision + 1);
+    this.runtime.transition("challenge_detected");
+    this.send({
+      ...this.base(`evt-challenge-${challengeId}`),
+      type: "CHALLENGE_DETECTED",
+      challengeId,
+      origin,
+      kind: detection.kind,
+      flowClassification: detection.flow,
+      evidenceCodes: [...detection.evidenceCodes],
+      providerInputAvailable: false,
+    });
+    this.runtime.transition("handoff");
+    this.send({
+      ...this.base(`evt-challenge-handoff-${challengeId}`),
+      type: "HANDOFF_REQUIRED",
+      reason: "captcha_sensitive_flow",
+      challenge: {
+        challengeId,
+        kind: detection.kind,
+        evidenceCodes: [...detection.evidenceCodes],
+      },
+    });
+    return true;
+  }
+
+  /**
+   * GAP-06: Chrome crashed or was closed outside our control. Report the
+   * sanitized terminal state and dispose — the main process converges
+   * through the supervisor's terminal path with verified orphan cleanup.
+   */
+  private async handleChromeDisconnected(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.disposePromise = this.doDispose("chrome_disconnected");
+    await this.disposePromise;
+    this.runtime.transition("failed");
+    this.send({
+      ...this.base(`evt-chrome-disconnected-${this.sessionNonce}`),
+      type: "SESSION_STOPPED",
+      terminalState: "failed",
+      reasonCode: "chrome_disconnected",
+    });
+  }
+
+  /**
    * GAP-03: renderer-driven navigations (redirects, reloads, link clicks,
    * SPA route changes that replace the document) invalidate every element
    * reference. Programmatic goto already resets the registry in the
@@ -783,6 +876,14 @@ async function defaultLaunchBrowser(
     defaultViewport: options.defaultViewport,
     env: options.env,
   })) as unknown as PuppeteerBrowserLike;
+}
+
+function extractPageOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
 }
 
 function envRecord(): Record<string, string> {

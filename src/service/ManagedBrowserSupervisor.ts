@@ -84,6 +84,18 @@ export class ManagedBrowserSupervisor {
       return;
     }
     entry.terminated = true;
+    // GAP-06: unexpected exits must attempt VERIFIED orphan-Chrome cleanup
+    // BEFORE the record is discarded — a crashed worker can otherwise leave
+    // an authenticated Chrome running. The browserPid comes from the
+    // client's validated SESSION_READY identity (checked against the
+    // executable descriptor, nonce, and launch-time window when captured);
+    // graceful causes closed Chrome inside the worker's dispose path.
+    if (isUnexpectedExitCause(cause)) {
+      const identity = entry.init.client.processIdentity;
+      if (identity && identity.browserPid > 0) {
+        killProcessTree(identity.browserPid);
+      }
+    }
     this.unregister(sessionId);
     try {
       entry.init.releaseLease();
@@ -114,7 +126,9 @@ export class ManagedBrowserSupervisor {
       actual.executableVersion === expected.executableVersion &&
       actual.executableSha256 === expected.executableSha256 &&
       actual.workerPid === expected.workerPid &&
-      actual.browserPid === expected.browserPid
+      actual.browserPid === expected.browserPid &&
+      // GAP-06: launch-time window — clock drift tolerance only.
+      Math.abs(actual.launchedAtEpochMs - expected.launchedAtEpochMs) <= 5_000
     );
   }
 
@@ -235,6 +249,26 @@ function killProcessTree(pid: number): void {
   }
   signal("SIGTERM");
   setTimeout(() => signal("SIGKILL"), 1_000).unref?.();
+}
+
+/**
+ * Exit causes that mean the worker/Chrome died WITHOUT closing Chrome —
+ * orphan cleanup is required. Graceful stops (user stop, cancellation,
+ * shutdown, completed) and in-worker protocol enforcement closed Chrome in
+ * the worker's dispose path.
+ */
+function isUnexpectedExitCause(cause: string): boolean {
+  if (cause === "user_stop" || cause === "cancelled" || cause === "shutdown") {
+    return false;
+  }
+  return (
+    cause.startsWith("exit:") ||
+    cause === "worker_unresponsive" ||
+    cause === "worker_protocol_violation" ||
+    cause === "worker_exited" ||
+    cause === "chrome_disconnected" ||
+    cause === "worker_start_timeout"
+  );
 }
 
 let defaultSupervisor: ManagedBrowserSupervisor | null = null;

@@ -51,6 +51,7 @@ import {
   type ManagedBrowserCacheCoordinator,
 } from "@/modules/ManagedBrowserCacheModule";
 import { normalizedCookieArraySchema } from "@/schemas/accountCookies";
+import { decideCaptchaResolution } from "@/service/CaptchaResolutionPolicy";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
 import type {
   BrowserActionProgram,
@@ -127,6 +128,8 @@ interface ActiveSessionRecord {
   lastErrorCode: ManagedBrowserErrorCode | null;
   /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
   lastObservation: BrowserObservation | null;
+  /** Challenge ids that consumed their single resolution attempt (§18.3). */
+  readonly challengeAttempts: Set<string>;
 }
 
 interface AccountLookupResult {
@@ -448,6 +451,7 @@ export class ManagedBrowserModule {
         handoffExpiresAtEpochMs: null,
         lastErrorCode: null,
         lastObservation: null,
+        challengeAttempts: new Set<string>(),
       };
       const client = this.workerClientFactory({
         sessionId,
@@ -940,6 +944,33 @@ export class ManagedBrowserModule {
           platformLabel: record.platformLabel,
         });
         record.state = "challenge_detected";
+        // GAP-05: the RESOLUTION POLICY runs here, in the trusted main
+        // process (§18.3) — never in the worker, never from page data.
+        // P0 ships with providers disabled, so the ladder resolves to
+        // manual_handoff for every challenge; blocked decisions stop the
+        // session outright.
+        record.challengeAttempts.add(event.challengeId);
+        const decision = decideCaptchaResolution({
+          sessionId: record.sessionId,
+          challengeId: event.challengeId,
+          origin: event.origin,
+          platformId: record.platformId,
+          challengeType: event.kind,
+          flow: event.flowClassification,
+          currentActionRisk: "read",
+          providerInputAvailable: event.providerInputAvailable,
+          providerConfig: {
+            enabled: false,
+            tokenPresent: false,
+            disclosureVersionAccepted: null,
+            authorizedDomains: [],
+            nonLoginChallengesAllowed: false,
+          },
+          attemptedChallengeIds: record.challengeAttempts,
+        });
+        if (decision.mode === "blocked") {
+          record.lastErrorCode = "challenge_resolution_failed";
+        }
         break;
       case "ACTION_PROGRESS":
         // Coarse progress only — counts + phase + message code (§14).
@@ -953,6 +984,15 @@ export class ManagedBrowserModule {
           });
         }
         break;
+      case "SESSION_STOPPED":
+        // GAP-06: an unsolicited terminal report (e.g. Chrome crashed and
+        // the worker sent SESSION_STOPPED failed) converges through the
+        // supervisor's single terminal path.
+        this.supervisor.handleTerminal(
+          record.sessionId,
+          event.reasonCode ?? "chrome_disconnected"
+        );
+        return;
       case "CACHE_OPENED":
         // Active-scope registry (§13.6): exactly one Chrome per cache scope.
         this.cacheModule.onCacheOpened({

@@ -1080,3 +1080,43 @@ describe("handoff-window expiry enforcement (FR-P0-013)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// GAP-05: challenge policy wiring; GAP-06: unsolicited terminal
+// ---------------------------------------------------------------------------
+
+describe("GAP-05 challenge resolution policy", () => {
+  it("CHALLENGE_DETECTED publishes the notice and applies the policy (manual handoff)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({ accountId: ACCOUNT_ID, purpose: "t" });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CHALLENGE_DETECTED",
+      challengeId: "ch_abc123def456",
+      origin: "https://www.youtube.com",
+      kind: "captcha_image",
+      flowClassification: "login",
+      evidenceCodes: ["recaptcha_frame"],
+      providerInputAvailable: false,
+    } as unknown as OutboundEvent);
+    expect(noticeTypes(h.notices)).toContain("challenge_detected");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe(
+      "challenge_detected"
+    );
+  });
+});
+
+describe("GAP-06 unsolicited terminal", () => {
+  it("worker SESSION_STOPPED(failed) converges through the supervisor terminal path", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({ accountId: ACCOUNT_ID, purpose: "t" });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "SESSION_STOPPED",
+      terminalState: "failed",
+      reasonCode: "chrome_disconnected",
+    } as unknown as OutboundEvent);
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
+    expect(h.lease.releaseCalls).toHaveLength(1);
+  });
+});

@@ -136,3 +136,81 @@ describe("ManagedBrowserSupervisor", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// GAP-06: unexpected-exit orphan cleanup + launch-time identity window
+// ---------------------------------------------------------------------------
+
+describe("GAP-06 crash containment", () => {
+  // Typed via the MockInstance the spy returns (vi.spyOn overloads make
+  // ReturnType<typeof vi.spyOn> unusable with generic args).
+  let killSpy: { mockRestore(): void };
+
+  beforeEach(() => {
+    killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((() => true) as typeof process.kill);
+  });
+  afterEach(() => {
+    killSpy.mockRestore();
+  });
+
+  it("handleTerminal kills the recorded Chrome tree on an unexpected exit", () => {
+    const supervisor = new ManagedBrowserSupervisor();
+    const { client } = fakeClient({ processIdentity: identity({ browserPid: 4242 }) });
+    supervisor.register({
+      sessionId: "mb_super0001",
+      accountId: 42,
+      client,
+      releaseLease: () => undefined,
+      onTerminal: () => undefined,
+    });
+    supervisor.handleTerminal("mb_super0001", "exit:1");
+    expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(supervisor.listSessions()).toHaveLength(0);
+  });
+
+  it("graceful stops never attempt orphan cleanup (Chrome closed in-worker)", () => {
+    const supervisor = new ManagedBrowserSupervisor();
+    const { client } = fakeClient({ processIdentity: identity({ browserPid: 4242 }) });
+    supervisor.register({
+      sessionId: "mb_super0001",
+      accountId: 42,
+      client,
+      releaseLease: () => undefined,
+      onTerminal: () => undefined,
+    });
+    supervisor.handleTerminal("mb_super0001", "user_stop");
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("chrome_disconnected exits also attempt cleanup", () => {
+    const supervisor = new ManagedBrowserSupervisor();
+    const { client } = fakeClient({ processIdentity: identity({ browserPid: 5555 }) });
+    supervisor.register({
+      sessionId: "mb_super0001",
+      accountId: 42,
+      client,
+      releaseLease: () => undefined,
+      onTerminal: () => undefined,
+    });
+    supervisor.handleTerminal("mb_super0001", "chrome_disconnected");
+    expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
+  });
+
+  it("verifyProcessIdentity enforces the launch-time window", () => {
+    const base = identity();
+    expect(
+      ManagedBrowserSupervisor.verifyProcessIdentity(
+        identity({ launchedAtEpochMs: base.launchedAtEpochMs + 2_000 }),
+        base
+      )
+    ).toBe(true);
+    expect(
+      ManagedBrowserSupervisor.verifyProcessIdentity(
+        identity({ launchedAtEpochMs: base.launchedAtEpochMs + 60_000 }),
+        base
+      )
+    ).toBe(false);
+  });
+});
