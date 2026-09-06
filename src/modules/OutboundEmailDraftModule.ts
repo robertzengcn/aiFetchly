@@ -1,5 +1,8 @@
 import { BaseModule } from "@/modules/baseModule";
-import { OutboundEmailDraftModel, type AppendRevisionInput } from "@/model/OutboundEmailDraft.model";
+import {
+  OutboundEmailDraftModel,
+  type AppendRevisionInput,
+} from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailAuditLogModel } from "@/model/OutboundEmailAuditLog.model";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
@@ -104,6 +107,14 @@ export class OutboundEmailDraftModule extends BaseModule {
   ): Promise<OutboundEmailDraftRevisionEntity | null> {
     await this.ensureConnection();
     return await this.draftModel.readRevision(id);
+  }
+
+  /** The current (highest revision number) revision for a draft. */
+  async readCurrentRevision(
+    draftId: number
+  ): Promise<OutboundEmailDraftRevisionEntity | null> {
+    await this.ensureConnection();
+    return await this.draftModel.readCurrentRevision(draftId);
   }
 
   async appendRevision(

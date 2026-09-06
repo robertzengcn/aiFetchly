@@ -111,4 +111,26 @@ export class OutboundEmailDeliveryModule extends BaseModule {
     await this.ensureConnection();
     return await this.deliveryModel.listOutcomesByBatch(batchId);
   }
+
+  /**
+   * Recent delivery outcomes across ALL batches, paginated. Backs the
+   * unified send-log view's authorized-send half. Returns {records, total}.
+   */
+  async listOutcomesRecent(
+    page: number,
+    limit: number,
+    where?: string,
+    sort?: { key: string; order: string }
+  ): Promise<{
+    records: OutboundEmailDeliveryOutcomeEntity[];
+    total: number;
+  }> {
+    await this.ensureConnection();
+    return await this.deliveryModel.listOutcomesRecent(
+      page,
+      limit,
+      where,
+      sort
+    );
+  }
 }
