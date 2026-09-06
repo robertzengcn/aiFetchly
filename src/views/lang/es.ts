@@ -1230,7 +1230,8 @@ export default {
     edit: "Editar",
     save: "Guardar",
     cancel: "Cancelar",
-    approval_invalidated: "Las ediciones invalidan la aprobación previa. Re-apruebe antes de enviar.",
+    approval_invalidated:
+      "Las ediciones invalidan la aprobación previa. Re-apruebe antes de enviar.",
     preflight_blocked: "No se puede aprobar: hallazgos bloqueantes.",
     send_success: "Lote en cola para envío.",
     send_failed: "Falló el envío del lote.",
@@ -1313,6 +1314,9 @@ export default {
     title: "Título",
     content: "Contenido",
     record_time: "Hora de registro",
+    source: "Origen",
+    source_legacy: "Tarea masiva",
+    source_authorized: "Autorizado por IA",
   },
   socialaccount: {
     create_account: "Crear cuenta de herramienta",

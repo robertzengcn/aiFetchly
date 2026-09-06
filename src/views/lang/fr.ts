@@ -1219,7 +1219,8 @@ export default {
     edit: "Modifier",
     save: "Enregistrer",
     cancel: "Annuler",
-    approval_invalidated: "Les modifications invalident l'approbation précédente. Ré-approuvez avant l'envoi.",
+    approval_invalidated:
+      "Les modifications invalident l'approbation précédente. Ré-approuvez avant l'envoi.",
     preflight_blocked: "Impossible d'approuver : problèmes bloquants.",
     send_success: "Lot en file d'attente pour envoi.",
     send_failed: "Échec de l'envoi du lot.",
@@ -1300,6 +1301,9 @@ export default {
     title: "title",
     content: "content",
     record_time: "record time",
+    source: "source",
+    source_legacy: "Tâche en masse",
+    source_authorized: "Autorisé par IA",
   },
   socialaccount: {
     create_account: "Créer un compte d’outil",

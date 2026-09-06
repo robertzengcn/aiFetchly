@@ -1208,7 +1208,8 @@ export default {
     edit: "編集",
     save: "保存",
     cancel: "キャンセル",
-    approval_invalidated: "編集すると以前の承認が無効になります。送信前に再承認してください。",
+    approval_invalidated:
+      "編集すると以前の承認が無効になります。送信前に再承認してください。",
     preflight_blocked: "ブロック要件があるため承認できません。",
     send_success: "バッチが配信キューに入りました。",
     send_failed: "バッチ送信に失敗しました。",
@@ -1288,6 +1289,9 @@ export default {
     title: "タイトル",
     content: "内容",
     record_time: "記録時間",
+    source: "送信元",
+    source_legacy: "一括タスク",
+    source_authorized: "AI認証",
   },
   socialaccount: {
     create_account: "ツールアカウントを作成",

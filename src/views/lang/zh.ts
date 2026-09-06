@@ -1260,6 +1260,9 @@ export default {
     title: "标题",
     content: "内容",
     record_time: "记录时间",
+    source: "来源",
+    source_legacy: "批量任务",
+    source_authorized: "AI授权",
   },
   socialaccount: {
     create_account: "创建工具账户",

@@ -643,6 +643,28 @@ export const constantRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: "buckemailtask/sendlog/",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/emailSendTaskLog/unifiedList.vue"
+          ),
+        name: "UNIFIED_EMAIL_SEND_LOG",
+        meta: {
+          visible: true,
+          title: "route.email_send_log",
+          icon: "mdi-file-document-multiple",
+          aiNavigable: true,
+          aiAliases: [
+            "email send log",
+            "send log",
+            "email log",
+            "unified send log",
+          ],
+          aiDescription:
+            "Review all email send log entries — legacy bulk-task sends and AI-authorized outbound sends in one timeline",
+        },
+      },
+      {
         path: "form",
         component: () =>
           import(

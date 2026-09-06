@@ -1229,7 +1229,8 @@ export default {
     edit: "Edit",
     save: "Save",
     cancel: "Cancel",
-    approval_invalidated: "Edits invalidate prior approval. Re-approve before sending.",
+    approval_invalidated:
+      "Edits invalidate prior approval. Re-approve before sending.",
     preflight_blocked: "Cannot approve: blocking findings.",
     send_success: "Batch queued for delivery.",
     send_failed: "Batch send failed.",
@@ -1310,6 +1311,9 @@ export default {
     title: "title",
     content: "content",
     record_time: "record time",
+    source: "source",
+    source_legacy: "Legacy",
+    source_authorized: "Authorized",
   },
   socialaccount: {
     create_account: "Create Tool Account",

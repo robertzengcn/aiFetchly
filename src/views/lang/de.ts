@@ -1226,7 +1226,8 @@ export default {
     edit: "Bearbeiten",
     save: "Speichern",
     cancel: "Abbrechen",
-    approval_invalidated: "Bearbeitungen machen die vorherige Genehmigung ungültig. Vor dem Senden erneut genehmigen.",
+    approval_invalidated:
+      "Bearbeitungen machen die vorherige Genehmigung ungültig. Vor dem Senden erneut genehmigen.",
     preflight_blocked: "Genehmigung nicht möglich: blockierende Befunde.",
     send_success: "Stapel in Versandwarteschlange.",
     send_failed: "Stapelsenden fehlgeschlagen.",
@@ -1307,6 +1308,9 @@ export default {
     title: "Titel",
     content: "Inhalt",
     record_time: "Erfassungszeit",
+    source: "Quelle",
+    source_legacy: "Massenaufgabe",
+    source_authorized: "KI-autorisiert",
   },
   socialaccount: {
     create_account: "Werkzeugkonto erstellen",

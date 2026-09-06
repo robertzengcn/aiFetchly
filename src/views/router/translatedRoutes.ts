@@ -444,6 +444,19 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           },
         },
         {
+          path: "buckemailtask/sendlog/",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/emailSendTaskLog/unifiedList.vue"
+            ),
+          name: "UNIFIED_EMAIL_SEND_LOG",
+          meta: {
+            visible: true,
+            title: computed(() => t("router.email_send_log")),
+            icon: "mdi-file-document-multiple",
+          },
+        },
+        {
           path: "form",
           component: () =>
             import(
