@@ -3,7 +3,10 @@ import type { OutboundEmailToolGateResult } from "@/entityTypes/outboundEmailDel
 /**
  * Blocked-gate code subset (the allowed branch is excluded by definition).
  */
-type BlockedCode = Exclude<OutboundEmailToolGateResult, { allowed: true }>["code"];
+type BlockedCode = Exclude<
+  OutboundEmailToolGateResult,
+  { allowed: true }
+>["code"];
 
 /**
  * Actionable, model-facing reason text for a blocked outbound-email send
@@ -34,8 +37,10 @@ export function explainOutboundGateBlock(
     case "draft_required":
       return (
         `Outbound send blocked: no reviewed draft is ready for this turn${batchRef}. ` +
-        "Call draft_outbound_email_batch first to create a reviewable batch, " +
-        "then send after the user confirms."
+        "Call draft_outbound_email_batch first to create a reviewable batch. " +
+        "After drafting, call start_email_send_task only if the user explicitly " +
+        "asked to send without review or send directly. Otherwise do NOT send — " +
+        "present the draft and wait for the user to click Review."
       );
     case "review_required":
       return (
@@ -74,9 +79,7 @@ export function explainOutboundGateBlock(
       // case above, this branch forces a compile error (BlockedCode is a
       // finite union) and a safe runtime fallback.
       const _exhaustive: never = code;
-      return (
-        `Outbound send blocked${batchRef} (${_exhaustive}). Do not retry the send tool.`
-      );
+      return `Outbound send blocked${batchRef} (${_exhaustive}). Do not retry the send tool.`;
     }
   }
 }

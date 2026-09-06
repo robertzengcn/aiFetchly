@@ -11,6 +11,8 @@ import {
   authorizedOutboundEnvelopeSchema,
   authorizedEmailWorkerPayloadV2Schema,
   authorizedEmailWorkerEventSchema,
+  isExplicitSkipReviewReason,
+  allowsOutboundDirectSendAuthorization,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 describe("outboundEmailDeliveryTypes schemas", () => {
@@ -28,6 +30,7 @@ describe("outboundEmailDeliveryTypes schemas", () => {
   it("accepts all intent reason codes and rejects unknown ones", () => {
     for (const code of [
       "explicit_send_instruction",
+      "explicit_skip_review",
       "explicit_review_instruction",
       "explicit_do_not_send",
       "conflicting_instruction",
@@ -40,6 +43,24 @@ describe("outboundEmailDeliveryTypes schemas", () => {
     expect(() =>
       outboundEmailIntentReasonCodeSchema.parse("model_decided")
     ).toThrow();
+  });
+
+  it("treats only explicit_skip_review as a Review waiver", () => {
+    expect(isExplicitSkipReviewReason("explicit_skip_review")).toBe(true);
+    expect(isExplicitSkipReviewReason("explicit_send_instruction")).toBe(false);
+    expect(isExplicitSkipReviewReason("contextual_affirmation")).toBe(false);
+  });
+
+  it("allows direct-send authorization for skip-review and chat confirmation only", () => {
+    expect(allowsOutboundDirectSendAuthorization("explicit_skip_review")).toBe(
+      true
+    );
+    expect(
+      allowsOutboundDirectSendAuthorization("contextual_affirmation")
+    ).toBe(true);
+    expect(
+      allowsOutboundDirectSendAuthorization("explicit_send_instruction")
+    ).toBe(false);
   });
 
   it("accepts the full batch lifecycle statuses", () => {
@@ -90,6 +111,13 @@ describe("outboundEmailDeliveryTypes schemas", () => {
       category: "send",
     });
     expect(ok.success).toBe(true);
+    const skipReview = outboundEmailIntentEvidenceSchema.safeParse({
+      start: 0,
+      end: 14,
+      normalizedPhrase: "without review",
+      category: "skip_review",
+    });
+    expect(skipReview.success).toBe(true);
     const badOrder = outboundEmailIntentEvidenceSchema.safeParse({
       start: 5,
       end: 2,

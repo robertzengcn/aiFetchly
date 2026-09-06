@@ -14,6 +14,8 @@ describe("explainOutboundGateBlock", () => {
     const reason = explainOutboundGateBlock("draft_required", null);
     expect(reason).toContain("draft_outbound_email_batch");
     expect(reason).not.toContain("batch 42");
+    expect(reason.toLowerCase()).toContain("do not");
+    expect(reason).toContain("start_email_send_task");
   });
 
   it("references the batch id when present for draft_required", () => {

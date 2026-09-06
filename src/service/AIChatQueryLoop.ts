@@ -54,7 +54,10 @@ import {
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
 import { OutboundEmailToolGate } from "@/service/outboundEmail/OutboundEmailToolGate";
-import type { OutboundEmailToolGateResult } from "@/entityTypes/outboundEmailDeliveryTypes";
+import {
+  allowsOutboundDirectSendAuthorization,
+  type OutboundEmailToolGateResult,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
@@ -2569,12 +2572,12 @@ export class AIChatQueryLoop {
   /**
    * Evaluate the outbound-email delivery gate for the current turn (technical
    * design §14.2). Loads the persisted intent decision threaded into the loop
-   * input by the query engine, resolves the request-scoped authorization from
-   * trusted turn state (§13.1, AD-003 — never from tool arguments), then asks
-   * {@link OutboundEmailToolGate} whether the send tool may proceed. When the
-   * intent is `send_now` and a draft_ready batch exists for the turn, an
-   * `explicit_user_instruction` authorization is created (or reused on retry)
-   * and the gate returns `allowed:true` with the claim triple.
+   * input by the query engine. Ordinary `send_now` only looks up an already-
+   * persisted authorization (Review approval) — auto-creating one is what let
+   * the model send in the same turn as the draft. The exception is
+   * `explicit_skip_review` or `contextual_affirmation`: the user waived
+   * Review or confirmed the presented draft in chat, so a direct-send
+   * authorization is created after a draft exists.
    *
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
@@ -2601,30 +2604,41 @@ export class AIChatQueryLoop {
         return OutboundEmailToolGate.evaluate(null, null, null);
       }
 
-      // Resolve the request-scoped authorization for this turn. For a
-      // send_now intent this creates/reuses an explicit_user_instruction
-      // authorization against the turn's latest draft_ready batch; for other
-      // modes it returns null and the gate blocks (draft_only/review_first).
       // Resolve the DB path from the Token service (matching the draft tool
       // and outbound IPC layer): passing no dbpath would make the models fall
       // back to the os.tmpdir() test database, flipping SqliteDb.getInstance
       // to a different path and destroying the live connection mid-conversation.
       const dbpath = new Token().getValue(USERSDBPATH) ?? "";
-      const auth =
-        intentDecision.mode === "send_now"
-          ? await new OutboundEmailAuthorizationService(
-              dbpath
-            ).resolveDirectSendForTurn({
-              conversationId: input.conversationId,
-              sourceUserMessageId: input.sourceUserMessageId,
-              intentDecisionId: input.intentDecisionId,
-            })
-          : null;
+      const authService = new OutboundEmailAuthorizationService(dbpath);
+
+      if (
+        intentDecision.mode === "send_now" &&
+        allowsOutboundDirectSendAuthorization(intentDecision.reasonCode)
+      ) {
+        const auth = await authService.resolveDirectSendForTurn({
+          conversationId: input.conversationId,
+          sourceUserMessageId: input.sourceUserMessageId,
+          intentDecisionId: intentDecision.id,
+          inheritConversationDraft: true,
+        });
+        if (auth) {
+          return OutboundEmailToolGate.evaluate(
+            intentDecision,
+            auth,
+            auth.batchId
+          );
+        }
+      }
+
+      const lookup = await authService.lookupTurnAuthorization({
+        conversationId: input.conversationId,
+        sourceUserMessageId: input.sourceUserMessageId,
+      });
 
       return OutboundEmailToolGate.evaluate(
         intentDecision,
-        auth,
-        auth?.batchId ?? null
+        lookup.authorization,
+        lookup.batchId
       );
     } catch (err) {
       console.error("[outbound-email-intent] gate lookup failed:", err);

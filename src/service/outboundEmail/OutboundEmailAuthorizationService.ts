@@ -47,6 +47,29 @@ export interface ResolveDirectSendForTurnInput {
   readonly conversationId: string;
   readonly sourceUserMessageId: string;
   readonly intentDecisionId: number;
+  /**
+   * When true, if this turn has no authorizable batch, inherit the latest
+   * authorizable batch in the conversation. Used for chat confirmation
+   * (`contextual_affirmation`) and skip-review follow-ups ("send it
+   * directly without review") of a previously presented draft.
+   */
+  readonly inheritConversationDraft?: boolean;
+}
+
+export interface LookupTurnAuthorizationInput {
+  readonly conversationId: string;
+  readonly sourceUserMessageId: string;
+}
+
+/**
+ * Existing-authorization lookup for the outbound-email tool gate. Unlike
+ * {@link OutboundEmailAuthorizationService.resolveDirectSendForTurn}, this
+ * never creates an `explicit_user_instruction` authorization. A draft without
+ * a user Review approval must stay blocked as `review_required`.
+ */
+export interface LookedUpTurnAuthorization {
+  readonly batchId: number | null;
+  readonly authorization: ResolvedDirectSend | null;
 }
 
 /**
@@ -177,13 +200,50 @@ export class OutboundEmailAuthorizationService {
   }
 
   /**
+   * Look up an already-persisted authorization for this turn's latest
+   * authorizable batch. Does not create one. The send-tool gate uses this so
+   * a `send_now` intent cannot auto-send LLM-composed content before the
+   * user clicks Review.
+   */
+  async lookupTurnAuthorization(
+    input: LookupTurnAuthorizationInput
+  ): Promise<LookedUpTurnAuthorization> {
+    const batch = await this.draftModel.findLatestBatchForTurn(
+      input.conversationId,
+      input.sourceUserMessageId
+    );
+    if (!batch) {
+      return { batchId: null, authorization: null };
+    }
+
+    const batchHash = batch.batchHash;
+    if (!batchHash) {
+      return { batchId: batch.id, authorization: null };
+    }
+
+    const existing = await this.authorizationModel.findActiveByBatch(batch.id);
+    if (!existing) {
+      return { batchId: batch.id, authorization: null };
+    }
+
+    return {
+      batchId: batch.id,
+      authorization: {
+        batchId: batch.id,
+        authorizationId: existing.id,
+        batchHash,
+      },
+    };
+  }
+
+  /**
    * Orchestrate direct-send authorization for a turn (technical design §13.1 +
-   * §14.2). This is the single seam the outbound-email tool gate calls: given
-   * the trusted turn identity (conversationId + sourceUserMessageId) and the
-   * persisted intent decision id, it locates the turn's latest authorizable
-   * batch, creates (or reuses) an `explicit_user_instruction` authorization,
-   * and returns the {batchId, authorizationId, batchHash} triple the gate
-   * needs to allow the send and the delivery service needs to claim (§15.1).
+   * §14.2). Given the trusted turn identity and the persisted intent decision
+   * id, it locates the turn's latest authorizable batch, creates (or reuses)
+   * an `explicit_user_instruction` authorization, and returns the claim
+   * triple. Ordinary send-tool gating must NOT call this — it would skip
+   * Review. The query loop may call it only for `explicit_skip_review` or
+   * `contextual_affirmation` (chat "yes, send it" after a presented draft).
    *
    * Returns null when the turn has no authorizable batch or the intent is not
    * send_now. A missing batch maps to `draft_required`, so preparation can
@@ -201,10 +261,15 @@ export class OutboundEmailAuthorizationService {
     // Find the turn's latest non-terminal batch. Returns null when only
     // terminal batches exist (sent/failed/discarded) or the turn has no
     // batch at all — a stale turn never authorizes a second send (AD-009).
-    const batch = await this.draftModel.findLatestBatchForTurn(
+    let batch = await this.draftModel.findLatestBatchForTurn(
       input.conversationId,
       input.sourceUserMessageId
     );
+    if (!batch && input.inheritConversationDraft) {
+      batch = await this.draftModel.findLatestAuthorizableBatchForConversation(
+        input.conversationId
+      );
+    }
     if (!batch) {
       return null;
     }

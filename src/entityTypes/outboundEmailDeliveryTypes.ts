@@ -27,6 +27,7 @@ export type OutboundEmailDeliveryMode = z.infer<
 
 export const outboundEmailIntentReasonCodeSchema = z.enum([
   "explicit_send_instruction",
+  "explicit_skip_review",
   "explicit_review_instruction",
   "explicit_do_not_send",
   "conflicting_instruction",
@@ -37,6 +38,32 @@ export const outboundEmailIntentReasonCodeSchema = z.enum([
 export type OutboundEmailIntentReasonCode = z.infer<
   typeof outboundEmailIntentReasonCodeSchema
 >;
+
+/**
+ * True only when the user explicitly waived Review (e.g. "without review",
+ * "send directly"). Ordinary `send_now` (`explicit_send_instruction`) still
+ * requires the Review UI before delivery.
+ */
+export function isExplicitSkipReviewReason(
+  reasonCode: OutboundEmailIntentReasonCode
+): boolean {
+  return reasonCode === "explicit_skip_review";
+}
+
+/**
+ * True when trusted app code may create a direct-send authorization without
+ * the Review UI. Covers an explicit Review waiver AND a chat confirmation
+ * ("yes, send it") after the assistant presented the draft. A model-supplied
+ * tool argument must never be used for this.
+ */
+export function allowsOutboundDirectSendAuthorization(
+  reasonCode: OutboundEmailIntentReasonCode
+): boolean {
+  return (
+    reasonCode === "explicit_skip_review" ||
+    reasonCode === "contextual_affirmation"
+  );
+}
 
 export const outboundEmailBatchStatusSchema = z.enum([
   "drafting",
@@ -124,7 +151,13 @@ export const outboundEmailIntentEvidenceSchema = z
     start: z.number().int().nonnegative(),
     end: z.number().int().nonnegative(),
     normalizedPhrase: z.string(),
-    category: z.enum(["send", "review", "negation", "affirmation"]),
+    category: z.enum([
+      "send",
+      "review",
+      "negation",
+      "affirmation",
+      "skip_review",
+    ]),
   })
   .refine((e) => e.end >= e.start, {
     message: "evidence end offset must be >= start offset",

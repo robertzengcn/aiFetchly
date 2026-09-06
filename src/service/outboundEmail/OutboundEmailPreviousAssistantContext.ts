@@ -1,7 +1,6 @@
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
-import type {
-  ResolveOutboundEmailIntentInput,
-} from "@/entityTypes/outboundEmailDeliveryTypes";
+import { MessageType } from "@/entityTypes/commonType";
+import type { ResolveOutboundEmailIntentInput } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
  * Pure helper that finds the immediately preceding assistant message for a
@@ -57,7 +56,7 @@ export function findPrecedingAssistantContext(
   // messages are skipped.
   for (let i = currentIndex - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === "assistant") {
+    if (isAssistantProseMessage(m)) {
       return {
         previousAssistantMessageId: m.messageId,
         previousAssistantText: m.content,
@@ -94,4 +93,20 @@ export function buildResolverInput(
     previousAssistantMessageId: prior.previousAssistantMessageId,
     previousAssistantText: prior.previousAssistantText,
   };
+}
+
+function isAssistantProseMessage(m: AIChatMessageEntity): boolean {
+  if (m.role !== "assistant") {
+    return false;
+  }
+  const type = m.messageType as string;
+  if (
+    type === MessageType.TOOL_CALL ||
+    type === "tool_call" ||
+    type === MessageType.TOOL_RESULT ||
+    type === "tool_result"
+  ) {
+    return false;
+  }
+  return typeof m.content === "string" && m.content.trim().length > 0;
 }

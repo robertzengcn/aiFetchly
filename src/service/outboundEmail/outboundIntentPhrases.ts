@@ -53,6 +53,11 @@ export const SEND_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
     "send a test email to",
     "send an email to",
     "send a email",
+    "send it to",
+    "send directly",
+    "send it directly",
+    "send them directly",
+    "send without review",
   ],
   zh: [
     "立即发送",
@@ -114,6 +119,152 @@ export const SEND_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
     "メールを送って",
     "直ちに送信",
     "送信を開始して",
+  ],
+};
+
+/**
+ * Phrases asserting the user wants to compose/write an email. These are NOT
+ * send instructions on their own ("write an email" drafts). They authorize
+ * send_now only when combined with {@link SKIP_REVIEW_PHRASES}.
+ */
+export const COMPOSE_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "create a test email",
+    "create an email",
+    "create a test email to",
+    "create an email to",
+    "write a test email",
+    "write an email",
+    "write a test email to",
+    "write an email to",
+    "compose a test email",
+    "compose an email",
+  ],
+  zh: [
+    "写一封测试邮件",
+    "写一封邮件",
+    "写测试邮件",
+    "写封测试邮件",
+    "写封邮件",
+    "创建一封测试邮件",
+    "创建测试邮件",
+  ],
+  es: [
+    "escribe un correo de prueba",
+    "escribe un email de prueba",
+    "escribe un correo",
+    "escribe un email",
+    "redacta un correo",
+  ],
+  fr: [
+    "écris un e-mail de test",
+    "ecris un e-mail de test",
+    "écris un email de test",
+    "ecris un email de test",
+    "écris un e-mail",
+    "ecris un email",
+    "rédige un e-mail",
+  ],
+  de: [
+    "schreibe eine test-email",
+    "schreibe eine test-e-mail",
+    "schreibe eine e-mail",
+    "schreibe eine email",
+    "verfasse eine e-mail",
+  ],
+  ja: [
+    "テストメールを書いて",
+    "テストメールを書いてください",
+    "メールを書いて",
+    "メールを書いてください",
+    "メールを作成して",
+  ],
+};
+
+/**
+ * Phrases asserting the user explicitly waived Review before send.
+ * Leading-space latin forms (" directly") match "send it to bob directly"
+ * without matching the substring inside "indirectly". Skip-review alone
+ * never authorizes a send — it must combine with a send or compose phrase.
+ */
+export const SKIP_REVIEW_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "without review",
+    "without a review",
+    "skip review",
+    "skip the review",
+    "no review needed",
+    "no need to review",
+    "don't review",
+    "do not review",
+    "dont review",
+    "send directly",
+    "send it directly",
+    "send them directly",
+    "send without review",
+    "directly without review",
+    "directly, without review",
+    " directly",
+  ],
+  zh: [
+    "无需审核",
+    "不用审核",
+    "不需要审核",
+    "跳过审核",
+    "无需审阅",
+    "不用审阅",
+    "不用预览",
+    "无需预览",
+    "跳过预览",
+    "不用检查",
+    "直接发送",
+    "直接发出去",
+    "直接",
+  ],
+  es: [
+    "sin revisión",
+    "sin revision",
+    "sin revisar",
+    "omite la revisión",
+    "omite la revision",
+    "envía directamente",
+    "envia directamente",
+    "enviar directamente",
+    "envíalo directamente",
+    "envialo directamente",
+    " directamente",
+  ],
+  fr: [
+    "sans révision",
+    "sans revision",
+    "sans relecture",
+    "sans vérifier",
+    "sans verifier",
+    "envoie directement",
+    "envoyer directement",
+    "envoie-le directement",
+    " directement",
+  ],
+  de: [
+    "ohne prüfung",
+    "ohne review",
+    "ohne überprüfung",
+    "überspringe die prüfung",
+    "ueberspringe die pruefung",
+    "direkt senden",
+    "sende direkt",
+    "ohne zu prüfen senden",
+    " direkt",
+  ],
+  ja: [
+    "確認なし",
+    "レビューなし",
+    "確認せずに",
+    "レビューせず",
+    "確認をスキップ",
+    "直接送信",
+    "確認なしで送信",
+    "直接",
   ],
 };
 
@@ -327,7 +478,10 @@ export const AFFIRMATION_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
   en: [
     "yes",
     "yes, send it",
+    "yes, please send it",
+    "yes please send it",
     "yes send",
+    "please send it",
     "confirmed",
     "confirm",
     "go ahead",
@@ -424,6 +578,21 @@ export const CONFIRMATION_QUESTION_MARKERS: Record<
     "should i send",
     "do you want me to send",
     "ready to send",
+    // After review_required, the model presents the draft and asks the user
+    // to approve. Those phrasings must count as a send-confirmation question
+    // so "yes, send it" authorizes delivery (chat confirmation, not a tool
+    // argument). Do NOT add bare "review" — "The drafts are ready for your
+    // review." must remain a non-question.
+    "review and approve",
+    "please review and approve",
+    "click review",
+    'click "review"',
+    "explicit approval",
+    "approve this draft",
+    "approve the draft",
+    "before it can be sent",
+    "requires your explicit approval",
+    "requires you to click",
   ],
   zh: [
     "发送吗",

@@ -6,7 +6,10 @@ import {
 import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 import type { ResolveOutboundEmailIntentInput } from "@/entityTypes/outboundEmailDeliveryTypes";
 
-function input(text: string, overrides: Partial<ResolveOutboundEmailIntentInput> = {}): ResolveOutboundEmailIntentInput {
+function input(
+  text: string,
+  overrides: Partial<ResolveOutboundEmailIntentInput> = {}
+): ResolveOutboundEmailIntentInput {
   return {
     conversationId: "conv-1",
     sourceUserMessageId: "msg-1",
@@ -19,7 +22,9 @@ function input(text: string, overrides: Partial<ResolveOutboundEmailIntentInput>
 
 describe("OutboundEmailIntentResolver (deterministic, technical design §9.2)", () => {
   it("detects an explicit send instruction", () => {
-    const d = OutboundEmailIntentResolver.resolve(input("please send these emails now"));
+    const d = OutboundEmailIntentResolver.resolve(
+      input("please send these emails now")
+    );
     expect(d.mode).toBe("send_now");
     expect(d.reasonCode).toBe("explicit_send_instruction");
     expect(d.confidence).toBeGreaterThanOrEqual(0.9);
@@ -76,6 +81,89 @@ describe("OutboundEmailIntentResolver (deterministic, technical design §9.2)", 
     expect(d.evidence).toHaveLength(0);
   });
 
+  it("detects an explicit skip-review send (write email without review)", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input(
+        "please write a test email to 1093968009@qq.com directly, without review"
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+    expect(d.evidence.some((e) => e.category === "skip_review")).toBe(true);
+  });
+
+  it("does not treat skip-review alone as a send", () => {
+    const d = OutboundEmailIntentResolver.resolve(input("without review"));
+    expect(d.mode).not.toBe("send_now");
+  });
+
+  it("does not treat write-an-email alone as a send", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("please write a test email to 1093968009@qq.com")
+    );
+    expect(d.mode).toBe("draft_only");
+  });
+
+  it("keeps ordinary send phrasing as explicit_send_instruction", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("please send a test email to 1093968009@qq.com")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_send_instruction");
+  });
+
+  it("treats create-and-send-to-address-directly as skip-review send_now", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input(
+        "please create a test email and send it to 1093968009@qq.com directly"
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+  });
+
+  it("treats send-it-directly-without-review as skip-review send_now", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("please send it directly without review")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+  });
+
+  it("does not treat 'indirectly' as a Review waiver", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("please send these emails indirectly")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_send_instruction");
+  });
+
+  it("review still wins over skip-review (AD-002)", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("send a test email without review but let me review first")
+    );
+    expect(d.mode).toBe("review_first");
+  });
+
+  it("detects skip-review send instructions in all six supported languages", () => {
+    const cases: Array<[string, string]> = [
+      ["en", "send a test email without review"],
+      ["zh", "请直接发送测试邮件，无需审核"],
+      ["es", "envía estos correos sin revisión"],
+      ["fr", "envoie ces e-mails sans révision"],
+      ["de", "sende diese E-Mails ohne Prüfung"],
+      ["ja", "これらのメールを送信して確認なし"],
+    ];
+    for (const [lang, text] of cases) {
+      const d = OutboundEmailIntentResolver.resolve(input(text));
+      expect(
+        d.mode,
+        `language ${lang} skip-review should resolve send_now`
+      ).toBe("send_now");
+      expect(d.reasonCode, `language ${lang}`).toBe("explicit_skip_review");
+    }
+  });
+
   it("detects send instructions in all six supported languages", () => {
     const cases: Array<[string, string]> = [
       ["en", "send these emails now"],
@@ -87,7 +175,9 @@ describe("OutboundEmailIntentResolver (deterministic, technical design §9.2)", 
     ];
     for (const [lang, text] of cases) {
       const d = OutboundEmailIntentResolver.resolve(input(text));
-      expect(d.mode, `language ${lang} should resolve send_now`).toBe("send_now");
+      expect(d.mode, `language ${lang} should resolve send_now`).toBe(
+        "send_now"
+      );
       expect(d.reasonCode).toBe("explicit_send_instruction");
     }
   });
@@ -103,7 +193,9 @@ describe("OutboundEmailIntentResolver (deterministic, technical design §9.2)", 
     ];
     for (const [lang, text] of cases) {
       const d = OutboundEmailIntentResolver.resolve(input(text));
-      expect(d.mode, `language ${lang} should resolve review_first`).toBe("review_first");
+      expect(d.mode, `language ${lang} should resolve review_first`).toBe(
+        "review_first"
+      );
     }
   });
 

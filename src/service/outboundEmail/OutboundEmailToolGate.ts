@@ -23,11 +23,12 @@ export class OutboundEmailToolGate {
    * @param intentDecision the persisted intent for this turn's user message,
    *   or null when no trusted decision exists.
    * @param authorization Present when a valid, unexpired request-scoped
-   *   authorization exists for the target batch. Resolved by the caller
-   *   (the query loop, via `OutboundEmailAuthorizationService.resolveDirectSendForTurn`)
-   *   from the turn's intent + draft batch — never from tool arguments. When
+   *   authorization already exists for the target batch (user Review approval
+   *   or a previously created authorization). Looked up by the caller — never
+   *   created for the send tool, and never taken from tool arguments. When
    *   null, a `send_now` intent with no batch is blocked as `draft_required`;
-   *   a known batch without authorization is `authorization_missing`.
+   *   a known batch without authorization is `review_required` so the model
+   *   cannot send LLM-composed content before the user clicks Review.
    * @param batchId the target batch id when one exists, else null.
    */
   static evaluate(
@@ -56,11 +57,11 @@ export class OutboundEmailToolGate {
         if (!authorization && batchId == null) {
           return { allowed: false, code: "draft_required", batchId };
         }
-        // A send_now intent still needs a durable, request-scoped
-        // authorization before anything goes out (AD-001, AD-009). The caller
-        // resolves it from trusted turn state; when none exists, block.
+        // A draft exists, but the user has not approved this exact envelope
+        // set. Saying "send" is not approval of LLM-written subject/body —
+        // wait for the Review UI (exact_draft_approval) before allowing.
         if (!authorization) {
-          return { allowed: false, code: "authorization_missing", batchId };
+          return { allowed: false, code: "review_required", batchId };
         }
         return {
           allowed: true,

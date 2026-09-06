@@ -101,6 +101,29 @@ export class OutboundEmailDraftModel extends BaseDb {
     });
   }
 
+  /**
+   * Latest authorizable batch in the conversation, regardless of which user
+   * message created it. Used when the user confirms a previously presented
+   * draft ("yes, send it") on a new turn that has no batch of its own.
+   */
+  async findLatestAuthorizableBatchForConversation(
+    conversationId: string
+  ): Promise<OutboundEmailDraftBatchEntity | null> {
+    const authorizable = [
+      "draft_ready",
+      "direct_authorized",
+      "review_authorized",
+      "awaiting_review",
+    ] as const;
+    return await this.batchRepo.findOne({
+      where: {
+        conversationId,
+        status: In(authorizable),
+      },
+      order: { id: "DESC" },
+    });
+  }
+
   /** Advance the batch's envelope-set hash pointer (post-preflight). */
   async updateBatchHash(id: number, batchHash: string): Promise<void> {
     await this.batchRepo.update(id, { batchHash });

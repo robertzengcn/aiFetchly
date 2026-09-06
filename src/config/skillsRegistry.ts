@@ -1721,9 +1721,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Send NEW outbound marketing emails to external contacts/customers. " +
       "This is the tool for new mail, not inbox replies (do NOT use send_email_reply). " +
-      "Requires confirmation. Provide service_ids from list_email_services plus either " +
-      "template_ids or email_subject and email_html_content. Provide exactly one of " +
-      "emails (direct recipients) or email_search_task_id. For different content per " +
+      "After drafting, call this again if the user explicitly asked to send " +
+      "without review / send directly, OR if the user has now confirmed in " +
+      'chat (e.g. "yes, send it"). Do NOT re-draft a batch the user already ' +
+      "confirmed. Otherwise stop and wait for the user to click Review and " +
+      "approve the content. Calling this before a draft exists, or before " +
+      "that approval when review is required, is rejected. Provide " +
+      "service_ids from list_email_services plus either template_ids or " +
+      "email_subject and email_html_content. Provide exactly one of emails " +
+      "(direct recipients) or email_search_task_id. For different content per " +
       "recipient, call once per address with that email in emails. " +
       "Returns immediately with task_id once sending has started in the background; " +
       "do not wait on this call for SMTP delivery. Check the email send log for results.",

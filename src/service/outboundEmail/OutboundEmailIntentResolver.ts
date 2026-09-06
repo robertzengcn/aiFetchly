@@ -13,6 +13,8 @@ import {
 } from "@/service/outboundEmail/outboundReliabilityVersions";
 import {
   SEND_PHRASES,
+  COMPOSE_PHRASES,
+  SKIP_REVIEW_PHRASES,
   REVIEW_PHRASES,
   NEGATION_PHRASES,
   AFFIRMATION_PHRASES,
@@ -48,6 +50,12 @@ export class OutboundEmailIntentResolver {
     const negation = findEvidence(normalized, NEGATION_PHRASES, "negation");
     const review = findEvidence(normalized, REVIEW_PHRASES, "review");
     const send = findEvidence(normalized, SEND_PHRASES, "send");
+    const compose = findEvidence(normalized, COMPOSE_PHRASES, "send");
+    const skipReview = findEvidence(
+      normalized,
+      SKIP_REVIEW_PHRASES,
+      "skip_review"
+    );
     const affirmation = findEvidence(
       normalized,
       AFFIRMATION_PHRASES,
@@ -68,9 +76,18 @@ export class OutboundEmailIntentResolver {
     // overlapping matches so one negated sentence is not misread as a
     // conflict between two separate instructions.
     const effectiveSend = send.filter((s) => !overlapsAny(s, negation));
-    const effectiveReview = review.filter((r) => !overlapsAny(r, negation));
+    const effectiveCompose = compose.filter((c) => !overlapsAny(c, negation));
+    const effectiveSkipReview = skipReview.filter(
+      (s) => !overlapsAny(s, negation)
+    );
+    // Absorb "review" spans that sit inside skip-review wording
+    // ("without review") so they are not misread as a Review request.
+    const effectiveReview = review.filter(
+      (r) => !overlapsAny(r, negation) && !overlapsAny(r, skipReview)
+    );
 
-    // Stage 7: precedence — negation > review > send > affirmation > ambiguous.
+    // Stage 7: precedence — negation > review > skip-review+send/compose >
+    // send > affirmation > ambiguous.
     let mode: OutboundEmailDeliveryMode;
     let reasonCode: OutboundEmailIntentReasonCode;
     let evidence: OutboundEmailIntentEvidence[];
@@ -97,7 +114,8 @@ export class OutboundEmailIntentResolver {
       confidence = 0.99;
     } else if (effectiveReview.length > 0) {
       if (effectiveSend.length > 0) {
-        // "Send X but let me review first" → review wins (AD-002).
+        // "Send X but let me review first" → review wins (AD-002),
+        // including "send without review but let me review first".
         mode = "review_first";
         reasonCode = "conflicting_instruction";
         evidence = [...effectiveReview, ...effectiveSend.slice(0, 1)];
@@ -108,6 +126,20 @@ export class OutboundEmailIntentResolver {
         evidence = effectiveReview;
         confidence = 0.95;
       }
+    } else if (
+      effectiveSkipReview.length > 0 &&
+      (effectiveSend.length > 0 || effectiveCompose.length > 0)
+    ) {
+      // Explicit waiver of Review plus a send/compose instruction.
+      // Skip-review alone does not authorize a send.
+      mode = "send_now";
+      reasonCode = "explicit_skip_review";
+      evidence = [
+        ...effectiveSkipReview,
+        ...effectiveSend.slice(0, 1),
+        ...effectiveCompose.slice(0, 1),
+      ];
+      confidence = 0.99;
     } else if (effectiveSend.length > 0) {
       mode = "send_now";
       reasonCode = "explicit_send_instruction";
