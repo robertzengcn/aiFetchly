@@ -77,6 +77,7 @@ import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
+import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
@@ -793,6 +794,10 @@ function initialize() {
             err instanceof Error ? err.message : String(err)
           );
         });
+
+      // Managed-browser cache: enforce the configured limits on a bounded
+      // cadence — one startup pass, then at most once per 24h (GAP-10).
+      getDefaultManagedBrowserCacheMaintenanceScheduler().start();
 
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);

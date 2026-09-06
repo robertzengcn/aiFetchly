@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { log } from "@/modules/Logger";
+import { MANAGED_BROWSER_CACHE_DEFAULTS } from "@/config/managedBrowser";
 import { getDefaultManagedBrowserCacheWorkerClient } from "@/service/ManagedBrowserCacheWorkerClient";
 import {
   getDefaultManagedBrowserCacheScopeService,
@@ -64,6 +65,22 @@ export interface CacheMaintenanceClient {
     readonly queuePath: string;
   }): Promise<CacheDeleteOutcome>;
   shutdown(): Promise<void>;
+  /** Two-phase eviction planning (§13.9); optional for fakes. */
+  planEviction?(input: {
+    readonly managedRoot: string;
+    readonly maxTotalBytes: number;
+    readonly perScopeTargetBytes: number;
+    readonly inactiveRetentionDays: number;
+    readonly activeScopeTokens: readonly string[];
+  }): Promise<
+    | {
+        status: "ok";
+        planId: string;
+        plannedBytes: number;
+        entries: ReadonlyArray<{ scopeToken: string }>;
+      }
+    | { status: "error"; reasonCode: string }
+  >;
 }
 
 /** Scope service surface consumed by this module. */
@@ -739,6 +756,59 @@ export class ManagedBrowserCacheModule
         }
       }
     }
+  }
+
+  /**
+   * GAP-10: enforce the configured cache limits — plan an LRU-inactive
+   * eviction with the maintenance worker and execute the renames for every
+   * inactive scope in the plan (active scopes are excluded by the worker).
+   * Returns aggregate planning info (byte counts only, never paths).
+   */
+  public async enforceEvictionLimits(settings: {
+    readonly cacheMaxBytes: number;
+  }): Promise<{ plannedScopes: number; plannedBytes: number; skipped: boolean }> {
+    const plan = this.maintenance.planEviction;
+    if (!plan) {
+      return { plannedScopes: 0, plannedBytes: 0, skipped: true };
+    }
+    const roots = await this.listManagedRoots();
+    if (roots.length === 0) {
+      return { plannedScopes: 0, plannedBytes: 0, skipped: false };
+    }
+    const { managedRoot } = roots[0];
+    const activeScopeTokens = [...this.activeScopes.keys()];
+    const decision = await plan({
+      managedRoot,
+      maxTotalBytes: settings.cacheMaxBytes,
+      perScopeTargetBytes:
+        MANAGED_BROWSER_CACHE_DEFAULTS.perAccountTargetBytes,
+      inactiveRetentionDays:
+        MANAGED_BROWSER_CACHE_DEFAULTS.inactiveRetentionDays,
+      activeScopeTokens,
+    });
+    if (decision.status !== "ok") {
+      logCacheError(
+        "eviction planning failed",
+        undefined,
+        decision.reasonCode
+      );
+      return { plannedScopes: 0, plannedBytes: 0, skipped: false };
+    }
+    const scopePaths = await this.listScopePaths();
+    let executed = 0;
+    for (const entry of decision.entries) {
+      const match = scopePaths.find((s) => s.scopeToken === entry.scopeToken);
+      if (!match) {
+        continue; // vanished between plan and execute — fine
+      }
+      await this.clearScopeAtPath(match.scopePath, entry.scopeToken, "account");
+      executed++;
+    }
+    return {
+      plannedScopes: executed,
+      plannedBytes: decision.plannedBytes,
+      skipped: false,
+    };
   }
 
   public async shutdownMaintenance(): Promise<void> {

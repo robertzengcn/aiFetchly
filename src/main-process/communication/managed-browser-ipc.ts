@@ -100,7 +100,10 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   );
 
   // --- AI-facing session channels (USER_AI_ENABLED checked FIRST) -------
-  registerAiValidatedHandler(
+  // Eligible-account listing is a management READ (also used by the
+  // settings page) — not AI execution — so it stays ungated; the actual
+  // START channel above carries the AI gate.
+  registerValidatedHandler(
     MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
     listEligibleAccountsInputSchema,
     async () => browserModule.listEligibleAccounts()

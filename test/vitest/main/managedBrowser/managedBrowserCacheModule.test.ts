@@ -75,6 +75,25 @@ class FakeScopeService {
 }
 
 class FakeMaintenance {
+  public planEviction:
+    | ((
+        input: {
+          managedRoot: string;
+          maxTotalBytes: number;
+          perScopeTargetBytes: number;
+          inactiveRetentionDays: number;
+          activeScopeTokens: readonly string[];
+        }
+      ) => Promise<
+        | {
+            status: "ok";
+            planId: string;
+            plannedBytes: number;
+            entries: ReadonlyArray<{ scopeToken: string }>;
+          }
+        | { status: "error"; reasonCode: string }
+      >)
+    | undefined = undefined;
   public readonly scanCalls: string[] = [];
   public readonly deleteCalls: string[] = [];
   public nextDelete: CacheDeleteOutcome = {
@@ -666,5 +685,67 @@ describe("queue helpers", () => {
     };
     await h.module.resumePendingDeletions();
     expect(await listDeleting(h)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP-10: enforceEvictionLimits
+// ---------------------------------------------------------------------------
+
+describe("enforceEvictionLimits (GAP-10)", () => {
+  it("executes the worker plan for inactive scopes and reports byte counts", async () => {
+    const h = makeHarness();
+    const overLimitToken = tokenFor(201);
+    await seedScope(h, 201);
+    await seedScope(h, 202);
+    h.module.onCacheOpened({
+      sessionId: "mb_session0000001",
+      accountId: 202,
+      scopeToken: tokenFor(202),
+      namespace: "chrome-120-linux-x64-schema-1",
+    });
+    h.maintenance.planEviction = async () => ({
+      status: "ok" as const,
+      planId: "plan-abc123def456",
+      plannedBytes: 64,
+      entries: [{ scopeToken: overLimitToken }],
+    });
+    const outcome = await h.module.enforceEvictionLimits({
+      cacheMaxBytes: 100,
+    });
+    expect(outcome).toEqual({
+      plannedScopes: 1,
+      plannedBytes: 64,
+      skipped: false,
+    });
+    // The planned scope's directory was renamed into the deletion queue and
+    // deleted; the ACTIVE scope is untouched.
+    const deleting = await listDeleting(h);
+    expect(deleting).toEqual([]);
+    expect(await pathExists(path.join(h.managedRoot, overLimitToken))).toBe(
+      false
+    );
+    expect(await pathExists(path.join(h.managedRoot, tokenFor(202)))).toBe(
+      true
+    );
+  });
+
+  it("skips cleanly when the maintenance client cannot plan", async () => {
+    const h = makeHarness();
+    const outcome = await h.module.enforceEvictionLimits({
+      cacheMaxBytes: 100,
+    });
+    expect(outcome.skipped).toBe(true);
+  });
+
+  it("surfaces planning failures without throwing", async () => {
+    const h = makeHarness();
+    h.maintenance.planEviction = async () => ({
+      status: "error" as const,
+      reasonCode: "cache_scan_failed",
+    });
+    await expect(
+      h.module.enforceEvictionLimits({ cacheMaxBytes: 100 })
+    ).resolves.toEqual({ plannedScopes: 0, plannedBytes: 0, skipped: false });
   });
 });

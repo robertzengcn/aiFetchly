@@ -95,6 +95,43 @@
       {{ t("managedBrowser.settings.clear_preserves_logins") }}
     </p>
 
+    <div
+      v-if="cacheProgressLine"
+      class="text-caption mt-1"
+      data-testid="mb-cache-progress"
+    >
+      {{ cacheProgressLine }}
+    </div>
+
+    <v-divider class="my-4" />
+
+    <div class="d-flex align-center ga-3 flex-wrap">
+      <select
+        v-model="selectedAccountId"
+        class="managed-browser-settings__account-select"
+        data-testid="mb-clear-account-select"
+        :aria-label="t('managedBrowser.settings.clear_account_label')"
+      >
+        <option
+          v-for="account in accounts"
+          :key="account.accountId"
+          :value="account.accountId"
+        >
+          {{ account.accountLabel }}
+        </option>
+      </select>
+      <v-spacer />
+      <v-btn
+        size="small"
+        variant="tonal"
+        data-testid="mb-btn-clear-account"
+        :disabled="loading || selectedAccountId === null || clearInProgress"
+        @click="onRequestClearSelected"
+      >
+        {{ t("managedBrowser.settings.clear_selected") }}
+      </v-btn>
+    </div>
+
     <v-dialog
       :model-value="activeSessionDialog"
       max-width="440"
@@ -181,6 +218,7 @@ import {
   clearCache,
   getCacheStatus,
   listActiveSessions,
+  listEligibleAccounts,
   stopManagedBrowser,
   getEffectiveBrowserSettings,
   issueClearConfirmation,
@@ -210,6 +248,13 @@ const clearInProgress = ref(false);
 const confirmDialog = ref(false);
 const activeSessionDialog = ref(false);
 const stoppingSessions = ref(false);
+const accounts = ref<
+  Array<{ readonly accountId: number; readonly accountLabel: string }>
+>([]);
+const selectedAccountId = ref<number | null>(null);
+const cacheProgressLine = ref<string | null>(null);
+let pendingAccountConfirmation: { accountId: number; id: string } | null =
+  null;
 let pendingConfirmationId: string | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 
@@ -239,10 +284,40 @@ async function reload(): Promise<void> {
     cacheEnabled.value = effective.cacheEnabled;
     clearCacheOnExit.value = effective.clearCacheOnExit;
     cacheStatus.value = cache;
+    // GAP-10: eligible accounts for per-account clearing (ungated read).
+    accounts.value = await listEligibleAccounts().catch(() => []);
+    if (
+      selectedAccountId.value === null ||
+      !accounts.value.some((a) => a.accountId === selectedAccountId.value)
+    ) {
+      selectedAccountId.value =
+        accounts.value.length > 0 ? accounts.value[0].accountId : null;
+    }
   } catch (error) {
     console.error("[ManagedBrowserSettingsPanel] load failed:", error);
   } finally {
     loading.value = false;
+  }
+}
+
+/** GAP-10: per-account clear — same two-step confirmation as all-scopes. */
+async function onRequestClearSelected(): Promise<void> {
+  const accountId = selectedAccountId.value;
+  if (accountId === null) {
+    return;
+  }
+  try {
+    const issued = await issueClearConfirmation({
+      scope: "account",
+      accountId,
+    });
+    pendingAccountConfirmation = { accountId, id: issued.confirmationId };
+    confirmDialog.value = true;
+  } catch (error) {
+    console.error(
+      "[ManagedBrowserSettingsPanel] account confirmation failed:",
+      error
+    );
   }
 }
 
@@ -349,16 +424,27 @@ async function onConfirmClear(): Promise<void> {
     return;
   }
   clearInProgress.value = true;
+  const accountPending = pendingAccountConfirmation;
   try {
-    await clearCache({
-      scope: "all",
-      activeSessionDecision: "skip_active",
-      confirmationId,
-    });
+    if (accountPending && accountPending.id === confirmationId) {
+      await clearCache({
+        scope: "account",
+        accountId: accountPending.accountId,
+        activeSessionDecision: "defer",
+        confirmationId,
+      });
+    } else {
+      await clearCache({
+        scope: "all",
+        activeSessionDecision: "skip_active",
+        confirmationId,
+      });
+    }
   } catch (error) {
     console.error("[ManagedBrowserSettingsPanel] clear failed:", error);
   } finally {
     pendingConfirmationId = null;
+    pendingAccountConfirmation = null;
     clearInProgress.value = false;
     confirmDialog.value = false;
     await reload();
@@ -367,8 +453,18 @@ async function onConfirmClear(): Promise<void> {
 
 onMounted(() => {
   void reload();
-  unsubscribeProgress = onManagedBrowserCacheProgress(() => {
-    // Coarse progress events; refresh the size when a pass completes.
+  unsubscribeProgress = onManagedBrowserCacheProgress((progress) => {
+    // GAP-10: render the coarse phase; refresh the size on completion.
+    cacheProgressLine.value =
+      t(`managedBrowser.settings.cache_phase_${progress.phase}`) ||
+      progress.phase;
+    if (progress.phase === "done" || progress.phase === "failed") {
+      void getCacheStatus({ scope: "all" })
+        .then((status) => {
+          cacheStatus.value = status;
+        })
+        .catch(() => undefined);
+    }
   });
 });
 

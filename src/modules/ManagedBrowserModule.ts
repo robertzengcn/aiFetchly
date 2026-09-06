@@ -42,6 +42,7 @@ import {
   type ExecutableResolutionResult,
 } from "@/childprocess/managed-browser/BrowserExecutableResolver";
 import { buildDefaultLaunchPolicy } from "@/childprocess/managed-browser/BrowserFingerprintPolicy";
+import { evaluateNavigationTarget } from "@/childprocess/managed-browser/NavigationPolicy";
 import {
   assertCommandAllowed,
   type ManagedBrowserCommandType,
@@ -132,9 +133,27 @@ interface ActiveSessionRecord {
   readonly challengeAttempts: Set<string>;
 }
 
+/**
+ * Resolved proxy for a session (GAP-11): direct, an authenticated
+ * http(s) proxy, or "unresolvable" when the account HAS proxies but none
+ * usable — which must FAIL the start, never silently fall back to direct.
+ */
+export type ResolvedSessionProxy =
+  | { readonly mode: "direct" }
+  | {
+      readonly mode: "http" | "https";
+      readonly host: string;
+      readonly port: number;
+      readonly username?: string;
+      readonly password?: string;
+    }
+  | { readonly mode: "unresolvable"; readonly reasonCode: string };
+
 interface AccountLookupResult {
   readonly platformId: number;
   readonly accountLabel: string;
+  /** Account proxy resolution (GAP-11); absent = direct. */
+  readonly proxy?: ResolvedSessionProxy;
 }
 
 interface SessionServiceLike {
@@ -382,6 +401,15 @@ export class ManagedBrowserModule {
       );
     }
 
+    // 4b. GAP-11: an unresolvable account proxy FAILS the start before any
+    // resource work — the session must never silently fall back to direct.
+    if (account.proxy?.mode === "unresolvable") {
+      throw new ManagedBrowserError(
+        "proxy_unavailable",
+        account.proxy.reasonCode
+      );
+    }
+
     // 5. Account lease (exclusive; global limit).
     const sessionId = `${MANAGED_BROWSER_SESSION_ID_PREFIX}${uuidv4()
       .replace(/-/g, "")
@@ -505,6 +533,20 @@ export class ManagedBrowserModule {
         matchesAllowedDomain(cookie.domain, manifest.allowedDomainSuffixes)
       );
       let startCookies: NormalizedCookie[] = allowedCookies;
+      const sessionProxy =
+        account.proxy && account.proxy.mode !== "direct"
+          ? {
+              mode: account.proxy.mode,
+              host: account.proxy.host,
+              port: account.proxy.port,
+              ...(account.proxy.username
+                ? { username: account.proxy.username }
+                : {}),
+              ...(account.proxy.password
+                ? { password: account.proxy.password }
+                : {}),
+            }
+          : ({ mode: "direct" } as const);
       const reply = await client.request(
         {
           type: "START_SESSION",
@@ -512,7 +554,7 @@ export class ManagedBrowserModule {
           launchPolicy: toWorkerLaunchPolicy(buildDefaultLaunchPolicy()),
           storagePolicy: { temporaryProfilePath, persistentCache },
           platform: toWorkerPlatform(manifest),
-          proxy: { mode: "direct" },
+          proxy: sessionProxy,
           cookies: startCookies,
         },
         START_SESSION_TIMEOUT_MS,
@@ -529,6 +571,30 @@ export class ManagedBrowserModule {
       // which also pushes status. The accept predicate above already
       // restricts the reply to non-heartbeat event types.
       this.handleWorkerEvent(record, reply as OutboundEvent);
+      // GAP-11: navigate to the requested start URL AFTER authentication
+      // verification, validated against the platform allowlist first.
+      if (reply.type === "SESSION_READY" && input.requestedStartUrl) {
+        const navDecision = evaluateNavigationTarget(input.requestedStartUrl, {
+          allowedOrigins: [...manifest.allowedDomainSuffixes],
+        });
+        if (navDecision.allowed) {
+          await this.requestWorker(
+            record,
+            {
+              type: "RUN_ACTIONS",
+              program: {
+                actions: [{ type: "navigate", url: input.requestedStartUrl }],
+              },
+            },
+            MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
+            (m) => m.type === "ACTION_RESULT" || m.type === "HANDOFF_REQUIRED"
+          ).catch(() => undefined);
+        } else {
+          log.warn(
+            "[ManagedBrowserModule] requested start URL rejected by navigation policy"
+          );
+        }
+      }
       return this.toSafeStatus(record);
     } catch (error) {
       // Any failure after lease acquisition enters the same cleanup path.
@@ -1241,6 +1307,7 @@ export class ManagedBrowserModule {
       return {
         platformId: resp.data.social_type_id,
         accountLabel: resp.data.name || resp.data.user,
+        proxy: await resolveAccountProxy(accountId),
       };
     } catch (error) {
       log.warn(
@@ -1372,6 +1439,72 @@ function toWorkerLaunchPolicy(policy: BrowserLaunchPolicy): {
     enabledStealthEvasions: [...policy.enabledStealthEvasions],
     extraArgs: [...policy.extraArgs],
   };
+}
+
+/**
+ * Resolve the account's proxy (GAP-11): the FIRST usable http(s) proxy
+ * wins; an account whose proxies exist but are none-usable marks the
+ * session unresolvable (fail-closed, never silent direct).
+ */
+async function resolveAccountProxy(
+  accountId: number
+): Promise<ResolvedSessionProxy> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { SocialAccountModule: Sam } =
+      require("@/modules/socialAccountModule") as {
+        SocialAccountModule: new () => {
+          getAllSocialAccounts(): Promise<
+            Array<{
+              id: number;
+              proxy?: Array<{
+                host: string;
+                port: string;
+                user?: string | null;
+                pass?: string | null;
+                protocol?: string | null;
+              }>;
+            }>
+          >;
+        };
+      };
+    const accounts = await new Sam().getAllSocialAccounts();
+    const account = accounts.find((a) => a.id === accountId);
+    const proxies = account?.proxy ?? [];
+    if (proxies.length === 0) {
+      return { mode: "direct" };
+    }
+    for (const proxy of proxies) {
+      const protocol = (proxy.protocol ?? "http").toLowerCase();
+      const port = Number(proxy.port);
+      if (
+        (protocol === "http" || protocol === "https") &&
+        proxy.host &&
+        Number.isInteger(port) &&
+        port > 0 &&
+        port <= 65535
+      ) {
+        return {
+          mode: protocol,
+          host: proxy.host,
+          port,
+          ...(proxy.user ? { username: proxy.user } : {}),
+          ...(proxy.pass ? { password: proxy.pass } : {}),
+        };
+      }
+    }
+    return {
+      mode: "unresolvable",
+      reasonCode: "proxy_protocol_unsupported",
+    };
+  } catch (error) {
+    log.warn(
+      `[ManagedBrowserModule] proxy resolution failed: ${
+        error instanceof Error ? error.name : "unknown"
+      }`
+    );
+    return { mode: "direct" };
+  }
 }
 
 /** Default AI entitlement check (Token + USER_AI_ENABLED). */

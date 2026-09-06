@@ -1122,3 +1122,115 @@ describe("GAP-06 unsolicited terminal", () => {
     expect(h.lease.releaseCalls).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GAP-11: proxy resolution + requested start URL
+// ---------------------------------------------------------------------------
+
+describe("GAP-11 proxy resolution", () => {
+  it("fails the start when the account proxy exists but is unresolvable (never silent direct)", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({
+        platformId: 2,
+        accountLabel: "My Channel",
+        proxy: { mode: "unresolvable", reasonCode: "proxy_protocol_unsupported" },
+      }),
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "proxy_unavailable",
+      reasonCode: "proxy_protocol_unsupported",
+    });
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("sends the resolved http proxy to the worker (credentials only in the private payload)", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({
+        platformId: 2,
+        accountLabel: "My Channel",
+        proxy: {
+          mode: "http",
+          host: "proxy.example",
+          port: 8080,
+          username: "u1",
+          password: "p1",
+        },
+      }),
+    });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.proxy).toEqual({
+      mode: "http",
+      host: "proxy.example",
+      port: 8080,
+      username: "u1",
+      password: "p1",
+    });
+  });
+
+  it("defaults to direct when the lookup provides no proxy", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.proxy).toEqual({ mode: "direct" });
+  });
+});
+
+describe("GAP-11 requested start URL", () => {
+  it("navigates to the allowed URL after authentication verification", async () => {
+    const h = makeHarness();
+    await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://www.youtube.com/feed/history",
+    });
+    const navigate = h.clients[0].sent.find(
+      (m) => m.type === "RUN_ACTIONS"
+    );
+    expect(navigate).toBeDefined();
+    if (!navigate || navigate.type !== "RUN_ACTIONS") {
+      throw new Error("unreachable");
+    }
+    expect(navigate.program.actions[0]).toMatchObject({
+      type: "navigate",
+      url: "https://www.youtube.com/feed/history",
+    });
+  });
+
+  it("ignores a requested URL outside the platform allowlist", async () => {
+    const h = makeHarness();
+    await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://evil.example/path",
+    });
+    expect(
+      h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
+    ).toBeUndefined();
+  });
+
+  it("skips navigation when the session needs manual login first", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://www.youtube.com/feed/history",
+    });
+    expect(status.state).toBe("user_login_in_progress");
+    expect(
+      h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
+    ).toBeUndefined();
+  });
+});
