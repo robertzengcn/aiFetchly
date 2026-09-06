@@ -2977,6 +2977,16 @@ export default {
     notSet: "No workspace set",
     selectFolder: "Select folder",
     changeFolder: "Change folder",
+    chooseAction: "Choose workspace",
+    chooseHint: "Pick a folder so AI file tools can read and write files.",
+    loading: "Loading workspace…",
+    statusApproved: "Approved",
+    statusPending: "Pending approval",
+    statusRevoked: "Access revoked",
+    loadFailed: "Couldn't load the workspace.",
+    retry: "Retry",
+    pathUnavailable: "Workspace folder is not accessible right now.",
+    busyReason: "Available after current run",
     approve: "Approve workspace",
     revoke: "Revoke workspace",
     rootPath: "Root path",
@@ -3034,7 +3044,8 @@ export default {
   portableMemory: {
     banner: "Portable memory",
     enable: "Enable portable memory",
-    disabledHint: "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
+    disabledHint:
+      "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
     gitState: "Git",
     pendingReview: "Pending review",
     rejected: "Rejected",
@@ -3044,13 +3055,16 @@ export default {
     loadingPreview: "Loading preview…",
     plannedFiles: "Files that will be created",
     existingRecords: "Existing memory files detected",
-    identityInvalid: "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
+    identityInvalid:
+      "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
     visibility: "Sharing mode",
     visibilityLocal: "Local only",
     visibilityLocalHint: "Files stay on this machine; usually ignored in Git.",
     visibilityTeam: "Team shareable",
-    visibilityTeamHint: "Files may be committed to Git for teammates and other agents.",
-    teamWarning: "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
+    visibilityTeamHint:
+      "Files may be committed to Git for teammates and other agents.",
+    teamWarning:
+      "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
     importPolicy: "External change review",
     policyReviewNew: "Review new records",
     policyAutomatic: "Import automatically",
@@ -3060,7 +3074,8 @@ export default {
     exportActive: "Export active memories",
     exportAll: "Export active and archived",
     bridges: "Agent instruction bridges",
-    bridgesHint: "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
+    bridgesHint:
+      "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
     enableConfirm: "Enable",
     bridgeAction: {
       create: "will be created",
@@ -3074,8 +3089,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — team",
     regenerateIdentity: "Regenerate identity",
-    regenerateIdentityWarning: "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
-    regenerateGitWarning: "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
+    regenerateIdentityWarning:
+      "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
+    regenerateGitWarning:
+      "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
     regenerateConfirm: "Regenerate",
     sync: {
       synced: "Synced",
@@ -3106,7 +3123,8 @@ export default {
     conflictTitle: "Resolve conflict",
     loadingConflict: "Loading conflict…",
     noConflict: "No conflict found.",
-    conflictWarning: "The memory file was edited externally between your read and save. Choose a version to keep.",
+    conflictWarning:
+      "The memory file was edited externally between your read and save. Choose a version to keep.",
     aiFetchlyVersion: "AiFetchly projection",
     fileVersion: "Current file",
     fileAbsent: "(file absent)",
@@ -3278,7 +3296,8 @@ export default {
       delete: "Delete chat",
       export: "Export conversation",
       duplicate: "Duplicate conversation",
-      deleteConfirm: "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
+      deleteConfirm:
+        "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
     },
     runStrip: {
       goal: "Goal: {objective}",
@@ -3304,7 +3323,8 @@ export default {
     },
     artifacts: {
       selectConversation: "Select a conversation to see its generated outputs.",
-      empty: "Generated reports and pages appear here. Ask for an HTML report to create one.",
+      empty:
+        "Generated reports and pages appear here. Ask for an HTML report to create one.",
     },
     activity: {
       goal: "Goal",
@@ -3346,7 +3366,7 @@ export default {
       runningTool: "Running {tool}",
       legacyReceipt: "Previous tool activity",
       artifactCreated: "HTML report created — open it in Artifacts",
-        openArtifact: "Open",
+      openArtifact: "Open",
       imagesGenerated: "Images generated",
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",

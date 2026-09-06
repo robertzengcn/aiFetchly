@@ -128,6 +128,12 @@ const i18n = createI18n({
         inspector: { context: "Context" },
       },
       workspaceMemory: { panelTitle: "Workspace memory" },
+      workspace: {
+        loadFailed: "Couldn't load the workspace.",
+        retry: "Retry",
+        pathUnavailable: "Workspace folder is not accessible right now.",
+        busyReason: "Available after current run",
+      },
       aiChatV2: { voice: {} },
     },
   },
@@ -184,7 +190,7 @@ function mountSurface() {
         AiChatRunStrip: true,
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
-          props: ["workspace", "memoryCount"],
+          props: ["workspace", "memoryCount", "loading", "busy"],
           template:
             '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
         }),
@@ -666,5 +672,95 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
     expect(trayReferences(wrapper)).toEqual([
       { messageId: "m1", imageIndex: 0 },
     ]);
+  });
+});
+
+describe("AiChatCenterSurface workspace chooser states (FR-WS-002/007)", () => {
+  /** Untyped stub accessor: the stub's props/emits are asserted dynamically. */
+  function badgeStub(wrapper: ReturnType<typeof mountSurface>) {
+    return wrapper.findComponent({ name: "WorkspaceBadge" }) as unknown as {
+      props: (name: string) => unknown;
+      vm: { $emit: (event: string, ...args: unknown[]) => void };
+    };
+  }
+
+  it("sanitizes refresh failures and retries through the composable", async () => {
+    getWorkspaceMock.mockRejectedValue(
+      new Error("ENOENT: /home/robertzeng/secret-path/db.sqlite")
+    );
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    const notice = wrapper.find('[data-testid="workspace-load-error"]');
+    expect(notice.exists()).toBe(true);
+    // Localized generic message — the raw exception never reaches the DOM.
+    expect(notice.text()).toContain("Couldn't load the workspace.");
+    expect(wrapper.text()).not.toContain("secret-path");
+    expect(wrapper.text()).not.toContain("ENOENT");
+
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(1);
+    await wrapper.get('[data-testid="workspace-retry"]').trigger("click");
+    await flushPromises();
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+    // Still failing: the sanitized notice stays actionable.
+    expect(wrapper.find('[data-testid="workspace-load-error"]').exists()).toBe(
+      true
+    );
+  });
+
+  it("shows an unavailable-path notice with retry when the approved root cannot be watched", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    acquireWorkspaceWatchMock.mockResolvedValue(null); // resolver miss
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    const notice = wrapper.find('[data-testid="workspace-path-unavailable"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toContain(
+      "Workspace folder is not accessible right now."
+    );
+
+    await wrapper.get('[data-testid="workspace-path-retry"]').trigger("click");
+    await flushPromises();
+    expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes busy to the badge and blocks setup while a run is active (FR-WS-007)", async () => {
+    getWorkspaceMock.mockResolvedValue(null);
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    const selected = useSelectedConversationStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Safe state: not busy, request opens the setup card.
+    expect(badgeStub(wrapper).props("busy")).toBe(false);
+    badgeStub(wrapper).vm.$emit("request-set-workspace");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-required-stub"]').exists()
+    ).toBe(true);
+
+    // Busy state: badge disabled and the setup gate refuses to open a second
+    // flow (the already-open card from the safe state stays as-is).
+    selected.streamStatus = "streaming";
+    await flushPromises();
+    expect(badgeStub(wrapper).props("busy")).toBe(true);
+    badgeStub(wrapper).vm.$emit("request-set-workspace");
+    await flushPromises();
+    // No crash, no duplicate surfaces: exactly one setup card region.
+    expect(
+      wrapper.find('[data-testid="workspace-required-stub"]').exists()
+    ).toBe(true);
   });
 });

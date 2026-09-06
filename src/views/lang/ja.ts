@@ -2589,7 +2589,8 @@ export default {
       batchConfirmBody:
         "選択した各画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
       send: "送信",
-      progressSummary: "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
+      progressSummary:
+        "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "この画像参照は無効になりました。画像を再度選択してください。",
@@ -2939,6 +2940,17 @@ export default {
     notSet: "ワークスペース未設定",
     selectFolder: "フォルダを選択",
     changeFolder: "フォルダを変更",
+    chooseAction: "ワークスペースを選択",
+    chooseHint:
+      "AI ファイルツールが読み書きできるよう、フォルダを選択してください。",
+    loading: "ワークスペースを読み込み中…",
+    statusApproved: "承認済み",
+    statusPending: "承認待ち",
+    statusRevoked: "アクセス取り消し済み",
+    loadFailed: "ワークスペースを読み込めませんでした。",
+    retry: "再試行",
+    pathUnavailable: "ワークスペースフォルダに現在アクセスできません。",
+    busyReason: "現在の実行が終わった後に利用できます",
     approve: "ワークスペースを承認",
     revoke: "ワークスペースを取り消し",
     rootPath: "ルートパス",
@@ -2999,7 +3011,8 @@ export default {
   portableMemory: {
     banner: "ポータブルメモリ",
     enable: "ポータブルメモリを有効化",
-    disabledHint: "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
+    disabledHint:
+      "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
     gitState: "Git",
     pendingReview: "レビュー待ち",
     rejected: "拒否済み",
@@ -3009,13 +3022,17 @@ export default {
     loadingPreview: "プレビューを読み込み中…",
     plannedFiles: "作成されるファイル",
     existingRecords: "既存のメモリファイルを検出",
-    identityInvalid: "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
+    identityInvalid:
+      "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
     visibility: "共有モード",
     visibilityLocal: "ローカルのみ",
-    visibilityLocalHint: "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
+    visibilityLocalHint:
+      "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
     visibilityTeam: "チーム共有可",
-    visibilityTeamHint: "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
-    teamWarning: "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
+    visibilityTeamHint:
+      "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
+    teamWarning:
+      "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
     importPolicy: "外部変更のレビュー",
     policyReviewNew: "新規レコードをレビュー",
     policyAutomatic: "自動的にインポート",
@@ -3025,7 +3042,8 @@ export default {
     exportActive: "アクティブなメモリをエクスポート",
     exportAll: "アクティブとアーカイブ済みをエクスポート",
     bridges: "エージェント指示ブリッジ",
-    bridgesHint: "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
+    bridgesHint:
+      "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
     enableConfirm: "有効化",
     bridgeAction: {
       create: "作成されます",
@@ -3039,8 +3057,10 @@ export default {
     storagePortableLocal: "ポータブル — ローカル",
     storagePortableTeam: "ポータブル — チーム",
     regenerateIdentity: "IDを再生成",
-    regenerateIdentityWarning: "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
-    regenerateGitWarning: "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
+    regenerateIdentityWarning:
+      "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
+    regenerateGitWarning:
+      "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
     regenerateConfirm: "再生成",
     sync: {
       synced: "同期済み",
@@ -3071,7 +3091,8 @@ export default {
     conflictTitle: "競合を解決",
     loadingConflict: "競合を読み込み中…",
     noConflict: "競合が見つかりません。",
-    conflictWarning: "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
+    conflictWarning:
+      "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
     aiFetchlyVersion: "AiFetchly プロジェクション",
     fileVersion: "現在のファイル",
     fileAbsent: "(ファイル不在)",
@@ -3245,7 +3266,8 @@ export default {
       delete: "チャットを削除",
       export: "会話をエクスポート",
       duplicate: "会話を複製",
-      deleteConfirm: "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
+      deleteConfirm:
+        "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
     },
     runStrip: {
       goal: "ゴール：{objective}",
@@ -3271,7 +3293,8 @@ export default {
     },
     artifacts: {
       selectConversation: "会話を選択すると生成物が表示されます。",
-      empty: "生成されたレポートやページはここに表示されます。HTML レポートを依頼すると作成されます。",
+      empty:
+        "生成されたレポートやページはここに表示されます。HTML レポートを依頼すると作成されます。",
     },
     activity: {
       goal: "ゴール",
@@ -3313,7 +3336,7 @@ export default {
       runningTool: "{tool} を実行中",
       legacyReceipt: "以前のツール活動",
       artifactCreated: "HTML レポートを作成しました — アーティファクトで開く",
-        openArtifact: "開く",
+      openArtifact: "開く",
       imagesGenerated: "画像を生成しました",
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",

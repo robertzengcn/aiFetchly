@@ -2984,6 +2984,18 @@ export default {
     notSet: "Aucun espace défini",
     selectFolder: "Choisir un dossier",
     changeFolder: "Changer de dossier",
+    chooseAction: "Choisir un espace de travail",
+    chooseHint:
+      "Choisissez un dossier pour que les outils de fichiers de l'IA puissent lire et écrire.",
+    loading: "Chargement de l'espace de travail…",
+    statusApproved: "Approuvé",
+    statusPending: "Approbation en attente",
+    statusRevoked: "Accès révoqué",
+    loadFailed: "Impossible de charger l'espace de travail.",
+    retry: "Réessayer",
+    pathUnavailable:
+      "Le dossier de l'espace de travail est inaccessible pour le moment.",
+    busyReason: "Disponible après l'exécution en cours",
     approve: "Approuver l'espace",
     revoke: "Révoquer l'espace",
     rootPath: "Chemin racine",
@@ -3044,7 +3056,8 @@ export default {
   portableMemory: {
     banner: "Mémoire portable",
     enable: "Activer la mémoire portable",
-    disabledHint: "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
+    disabledHint:
+      "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
     gitState: "Git",
     pendingReview: "En attente de revue",
     rejected: "Rejetée",
@@ -3054,13 +3067,17 @@ export default {
     loadingPreview: "Chargement de l'aperçu…",
     plannedFiles: "Fichiers qui seront créés",
     existingRecords: "Fichiers de mémoire existants détectés",
-    identityInvalid: "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
+    identityInvalid:
+      "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
     visibility: "Mode de partage",
     visibilityLocal: "Local uniquement",
-    visibilityLocalHint: "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
+    visibilityLocalHint:
+      "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
     visibilityTeam: "Partageable avec l'équipe",
-    visibilityTeamHint: "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
-    teamWarning: "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
+    visibilityTeamHint:
+      "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
+    teamWarning:
+      "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
     importPolicy: "Revue des changements externes",
     policyReviewNew: "Examiner les nouveaux enregistrements",
     policyAutomatic: "Importer automatiquement",
@@ -3070,7 +3087,8 @@ export default {
     exportActive: "Exporter les mémoires actives",
     exportAll: "Exporter actives et archivées",
     bridges: "Ponts d'instructions pour agents",
-    bridgesHint: "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
+    bridgesHint:
+      "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
     enableConfirm: "Activer",
     bridgeAction: {
       create: "sera créé",
@@ -3084,8 +3102,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — équipe",
     regenerateIdentity: "Régénérer l'identité",
-    regenerateIdentityWarning: "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
-    regenerateGitWarning: "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
+    regenerateIdentityWarning:
+      "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
+    regenerateGitWarning:
+      "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
     regenerateConfirm: "Régénérer",
     sync: {
       synced: "Synchronisé",
@@ -3111,12 +3131,14 @@ export default {
     revealFile: "Révéler le fichier",
     diagnosticsTitle: "Diagnostics de la mémoire portable",
     loadingDiagnostics: "Chargement des diagnostics…",
-    noDiagnostics: "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
+    noDiagnostics:
+      "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
     notRecoverable: "non récupérable",
     conflictTitle: "Résoudre le conflit",
     loadingConflict: "Chargement du conflit…",
     noConflict: "Aucun conflit trouvé.",
-    conflictWarning: "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
+    conflictWarning:
+      "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
     aiFetchlyVersion: "Projection AiFetchly",
     fileVersion: "Fichier actuel",
     fileAbsent: "(fichier absent)",
@@ -3293,7 +3315,8 @@ export default {
       delete: "Supprimer la discussion",
       export: "Exporter la conversation",
       duplicate: "Dupliquer la conversation",
-      deleteConfirm: "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
+      deleteConfirm:
+        "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
     },
     runStrip: {
       goal: "Objectif : {objective}",
@@ -3318,8 +3341,10 @@ export default {
       resize: "Redimensionner l'inspecteur",
     },
     artifacts: {
-      selectConversation: "Sélectionnez une conversation pour voir ses contenus générés.",
-      empty: "Les rapports et pages générés apparaissent ici. Demandez un rapport HTML pour en créer un.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir ses contenus générés.",
+      empty:
+        "Les rapports et pages générés apparaissent ici. Demandez un rapport HTML pour en créer un.",
     },
     activity: {
       goal: "Objectif",
@@ -3332,7 +3357,8 @@ export default {
       nextRun: "Prochaine exécution",
       execution: "Exécution",
       runs: "Exécutions",
-      selectConversation: "Sélectionnez une conversation pour voir ses exécutions.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir ses exécutions.",
       empty: "Aucune activité pour le moment",
       owner: {
         interactive: "Discussion",
@@ -3342,14 +3368,16 @@ export default {
       },
     },
     context: {
-      selectConversation: "Sélectionnez une conversation pour voir son contexte.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir son contexte.",
       workspace: "Espace de travail",
       noWorkspace: "Aucun espace de travail n'est lié à cette discussion.",
       usage: "Utilisation du contexte",
       used: "Utilisé",
       tokens: "jetons",
       attachmentsSection: "Contexte joint",
-      noAttachments: "Cette conversation n'a pas encore de pièces jointes ni de mentions.",
+      noAttachments:
+        "Cette conversation n'a pas encore de pièces jointes ni de mentions.",
       atMention: "Fichier mentionné",
       compact: "Compresser la conversation",
       trusted: "Approuvé",
@@ -3361,7 +3389,7 @@ export default {
       runningTool: "Exécution de {tool}",
       legacyReceipt: "Activité d'outils précédente",
       artifactCreated: "Rapport HTML créé — ouvrez-le dans Artefacts",
-        openArtifact: "Ouvrir",
+      openArtifact: "Ouvrir",
       imagesGenerated: "Images générées",
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
@@ -3493,7 +3521,8 @@ export default {
       emptyTitle: "Rien ici pour le moment",
       emptyBody: "Commencez par créer votre premier enregistrement.",
       noResultsTitle: "Aucun enregistrement correspondant",
-      noResultsBody: "Des enregistrements peuvent être masqués par les filtres actuels.",
+      noResultsBody:
+        "Des enregistrements peuvent être masqués par les filtres actuels.",
       clearFilters: "Effacer les filtres",
       errorTitle: "Une erreur est survenue",
       errorBody: "L'opération a échoué. Réessayez.",

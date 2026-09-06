@@ -36,6 +36,11 @@ export interface ConversationWorkspaceState {
   readonly trustCardVisible: Readonly<Ref<boolean>>;
   /** Watch token for the approved workspace (slash-config filter key). */
   readonly watchId: Readonly<Ref<string | null>>;
+  /**
+   * FR-WS-002 "unavailable path": the approved workspace's root could not be
+   * watched (deleted/externally inaccessible). Recoverable via retry.
+   */
+  readonly pathUnavailable: Readonly<Ref<boolean>>;
   refresh(): Promise<void>;
   refreshMemoryCount(): Promise<void>;
   requestSetup(): void;
@@ -61,6 +66,7 @@ export function useConversationWorkspace(
   const memoryCount = ref(0);
 
   const watchId = ref<string | null>(null);
+  const pathUnavailable = ref(false);
   /** Conversation the active watch belongs to — releases must target it even
    * after the active conversation changed (classic-chat parity fix). */
   let watchedConversationId: string | null = null;
@@ -176,11 +182,17 @@ export function useConversationWorkspace(
     // Release any previous watch first (covers workspace switch).
     await releaseWatch();
     workspaceHasAgents.value = false;
+    pathUnavailable.value = false;
     try {
       const result = await acquireWorkspaceWatch({ conversationId: id });
       if (!result) {
         // No approved workspace / resolver miss — fail closed, no watch.
         watchId.value = null;
+        // An APPROVED workspace whose root cannot be resolved is the FR-WS-002
+        // "unavailable path" state (folder deleted or externally inaccessible).
+        if (workspace.value?.approvalState === "approved") {
+          pathUnavailable.value = true;
+        }
         return;
       }
       watchId.value = result.workspaceId;
@@ -200,6 +212,7 @@ export function useConversationWorkspace(
         err
       );
       watchId.value = null;
+      pathUnavailable.value = true;
     }
   }
 
@@ -240,6 +253,7 @@ export function useConversationWorkspace(
   async function dispose(): Promise<void> {
     await releaseWatch();
     workspaceHasAgents.value = false;
+    pathUnavailable.value = false;
   }
 
   // Conversation changes release the previous watch and refresh the badge.
@@ -271,6 +285,7 @@ export function useConversationWorkspace(
     memoryCount,
     trustCardVisible,
     watchId,
+    pathUnavailable,
     refresh,
     refreshMemoryCount,
     requestSetup,

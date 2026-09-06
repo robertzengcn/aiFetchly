@@ -2996,6 +2996,18 @@ export default {
     notSet: "Kein Arbeitsbereich festgelegt",
     selectFolder: "Ordner wählen",
     changeFolder: "Ordner wechseln",
+    chooseAction: "Arbeitsbereich wählen",
+    chooseHint:
+      "Wähle einen Ordner, damit KI-Dateiwerkzeuge lesen und schreiben können.",
+    loading: "Arbeitsbereich wird geladen…",
+    statusApproved: "Genehmigt",
+    statusPending: "Genehmigung ausstehend",
+    statusRevoked: "Zugriff widerrufen",
+    loadFailed: "Arbeitsbereich konnte nicht geladen werden.",
+    retry: "Erneut versuchen",
+    pathUnavailable:
+      "Der Ordner des Arbeitsbereichs ist derzeit nicht erreichbar.",
+    busyReason: "Verfügbar nach dem aktuellen Vorgang",
     approve: "Arbeitsbereich genehmigen",
     revoke: "Arbeitsbereich widerrufen",
     rootPath: "Stammpfad",
@@ -3057,7 +3069,8 @@ export default {
   portableMemory: {
     banner: "Portable Speicher",
     enable: "Portablen Speicher aktivieren",
-    disabledHint: "Erinnerungen werden privat in AiFetchly gespeichert. Aktiviere den portablen Speicher, um Projektkontext mit anderen Agenten zu teilen.",
+    disabledHint:
+      "Erinnerungen werden privat in AiFetchly gespeichert. Aktiviere den portablen Speicher, um Projektkontext mit anderen Agenten zu teilen.",
     gitState: "Git",
     pendingReview: "Ausstehende Prüfung",
     rejected: "Abgelehnt",
@@ -3067,13 +3080,17 @@ export default {
     loadingPreview: "Vorschau wird geladen…",
     plannedFiles: "Dateien, die erstellt werden",
     existingRecords: "Vorhandene Speicherdateien erkannt",
-    identityInvalid: "Die Identitätsdatei des Arbeitsbereichs ist ungültig. Korrigiere oder entferne zuerst .aifetchly/workspace.json.",
+    identityInvalid:
+      "Die Identitätsdatei des Arbeitsbereichs ist ungültig. Korrigiere oder entferne zuerst .aifetchly/workspace.json.",
     visibility: "Freigabemodus",
     visibilityLocal: "Nur lokal",
-    visibilityLocalHint: "Dateien bleiben auf diesem Rechner; in Git meist ignoriert.",
+    visibilityLocalHint:
+      "Dateien bleiben auf diesem Rechner; in Git meist ignoriert.",
     visibilityTeam: "Team-freigabefähig",
-    visibilityTeamHint: "Dateien können für Teammitglieder und andere Agenten in Git committet werden.",
-    teamWarning: "Committete Erinnerungen bleiben auch nach späterer Löschung in der Git-Historie. Prüfe Diffs vor dem Commit. Der Secret-Filter reduziert das Risiko, erkennt aber nicht jeden sensiblen Wert.",
+    visibilityTeamHint:
+      "Dateien können für Teammitglieder und andere Agenten in Git committet werden.",
+    teamWarning:
+      "Committete Erinnerungen bleiben auch nach späterer Löschung in der Git-Historie. Prüfe Diffs vor dem Commit. Der Secret-Filter reduziert das Risiko, erkennt aber nicht jeden sensiblen Wert.",
     importPolicy: "Prüfung externer Änderungen",
     policyReviewNew: "Neue Einträge prüfen",
     policyAutomatic: "Automatisch importieren",
@@ -3083,7 +3100,8 @@ export default {
     exportActive: "Aktive Erinnerungen exportieren",
     exportAll: "Aktive und archivierte exportieren",
     bridges: "Agenten-Instruktionsbrücken",
-    bridgesHint: "Optionale verwaltete Blöcke, die Agenten wie Claude Code und Codex anweisen, den Speicherindex zu lesen.",
+    bridgesHint:
+      "Optionale verwaltete Blöcke, die Agenten wie Claude Code und Codex anweisen, den Speicherindex zu lesen.",
     enableConfirm: "Aktivieren",
     bridgeAction: {
       create: "wird erstellt",
@@ -3097,8 +3115,10 @@ export default {
     storagePortableLocal: "Portabel — lokal",
     storagePortableTeam: "Portabel — Team",
     regenerateIdentity: "Identität regenerieren",
-    regenerateIdentityWarning: "Das Regenerieren der Arbeitsbereich-Identität erstellt eine neue portable UUID für einen absichtlichen Fork. Record-IDs bleiben unter Scoped-Uniqueness erhalten. Original und Fork koexistieren ohne gemeinsame Mutation.",
-    regenerateGitWarning: "Die aktuelle Identität wird von Git verfolgt. Regenerieren ändert die committete Identität für alle Klone; koordiniere mit deinem Team.",
+    regenerateIdentityWarning:
+      "Das Regenerieren der Arbeitsbereich-Identität erstellt eine neue portable UUID für einen absichtlichen Fork. Record-IDs bleiben unter Scoped-Uniqueness erhalten. Original und Fork koexistieren ohne gemeinsame Mutation.",
+    regenerateGitWarning:
+      "Die aktuelle Identität wird von Git verfolgt. Regenerieren ändert die committete Identität für alle Klone; koordiniere mit deinem Team.",
     regenerateConfirm: "Regenerieren",
     sync: {
       synced: "Synchronisiert",
@@ -3124,12 +3144,14 @@ export default {
     revealFile: "Datei anzeigen",
     diagnosticsTitle: "Portable-Speicher-Diagnose",
     loadingDiagnostics: "Diagnose wird geladen…",
-    noDiagnostics: "Keine Diagnosen. Alle portablen Speicherdateien sind gültig.",
+    noDiagnostics:
+      "Keine Diagnosen. Alle portablen Speicherdateien sind gültig.",
     notRecoverable: "nicht behebbar",
     conflictTitle: "Konflikt lösen",
     loadingConflict: "Konflikt wird geladen…",
     noConflict: "Kein Konflikt gefunden.",
-    conflictWarning: "Die Datei wurde zwischen deinem Lesen und Speichern extern bearbeitet. Wähle eine zu behaltende Version.",
+    conflictWarning:
+      "Die Datei wurde zwischen deinem Lesen und Speichern extern bearbeitet. Wähle eine zu behaltende Version.",
     aiFetchlyVersion: "AiFetchly-Projektion",
     fileVersion: "Aktuelle Datei",
     fileAbsent: "(Datei fehlt)",
@@ -3305,7 +3327,8 @@ export default {
       clearConfirm: "Alle Nachrichten dieser Unterhaltung löschen?",
       export: "Unterhaltung exportieren",
       duplicate: "Unterhaltung duplizieren",
-      deleteConfirm: "Diese Unterhaltung löschen? Alle Nachrichten und generierten Artefakte werden entfernt. Dies kann nicht rückgängig gemacht werden.",
+      deleteConfirm:
+        "Diese Unterhaltung löschen? Alle Nachrichten und generierten Artefakte werden entfernt. Dies kann nicht rückgängig gemacht werden.",
       delete: "Chat löschen",
     },
     runStrip: {
@@ -3331,8 +3354,10 @@ export default {
       resize: "Inspektor skalieren",
     },
     artifacts: {
-      selectConversation: "Wähle eine Unterhaltung, um ihre generierten Inhalte zu sehen.",
-      empty: "Generierte Berichte und Seiten erscheinen hier. Fordere einen HTML-Bericht an, um einen zu erstellen.",
+      selectConversation:
+        "Wähle eine Unterhaltung, um ihre generierten Inhalte zu sehen.",
+      empty:
+        "Generierte Berichte und Seiten erscheinen hier. Fordere einen HTML-Bericht an, um einen zu erstellen.",
     },
     activity: {
       goal: "Ziel",
@@ -3345,7 +3370,8 @@ export default {
       nextRun: "Nächste Ausführung",
       execution: "Ausführung",
       runs: "Ausführungen",
-      selectConversation: "Wähle eine Unterhaltung, um ihre Ausführungen zu sehen.",
+      selectConversation:
+        "Wähle eine Unterhaltung, um ihre Ausführungen zu sehen.",
       empty: "Noch keine Aktivität",
       owner: {
         interactive: "Chat",
@@ -3362,7 +3388,8 @@ export default {
       used: "Genutzt",
       tokens: "Token",
       attachmentsSection: "Angehängter Kontext",
-      noAttachments: "Diese Unterhaltung hat noch keine Anhänge oder Erwähnungen.",
+      noAttachments:
+        "Diese Unterhaltung hat noch keine Anhänge oder Erwähnungen.",
       atMention: "Erwähnte Datei",
       compact: "Unterhaltung komprimieren",
       trusted: "Vertraut",
@@ -3374,7 +3401,7 @@ export default {
       runningTool: "{tool} wird ausgeführt",
       legacyReceipt: "Frühere Werkzeugaktivität",
       artifactCreated: "HTML-Bericht erstellt — in Artefakte öffnen",
-        openArtifact: "Öffnen",
+      openArtifact: "Öffnen",
       imagesGenerated: "Bilder generiert",
       filesChanged: "Dateien geändert — siehe Aktivität",
       permissionNeeded: "Berechtigungsentscheidung erforderlich",
@@ -3401,7 +3428,8 @@ export default {
       answerReview: "Deine Antworten",
       changeFeedbackPrompt: "Was soll an diesem Plan geändert werden?",
       moreActions: "Weitere Aktionen",
-      discardConfirm: "Diesen Plan verwerfen? Dies kann nicht rückgängig gemacht werden.",
+      discardConfirm:
+        "Diesen Plan verwerfen? Dies kann nicht rückgängig gemacht werden.",
       discard: "Plan verwerfen",
       submitError: "Senden fehlgeschlagen. Bitte erneut versuchen.",
       customAnswer: "Benutzerdefinierte Antwort (optional)",
@@ -3506,7 +3534,8 @@ export default {
       emptyTitle: "Noch nichts hier",
       emptyBody: "Lege deinen ersten Eintrag an, um zu starten.",
       noResultsTitle: "Keine passenden Einträge",
-      noResultsBody: "Einträge sind möglicherweise durch die aktuellen Filter ausgeblendet.",
+      noResultsBody:
+        "Einträge sind möglicherweise durch die aktuellen Filter ausgeblendet.",
       clearFilters: "Filter zurücksetzen",
       errorTitle: "Etwas ist schiefgelaufen",
       errorBody: "Der Vorgang ist fehlgeschlagen. Versuche es erneut.",

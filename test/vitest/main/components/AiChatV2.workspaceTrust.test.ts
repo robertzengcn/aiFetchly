@@ -176,7 +176,9 @@ async function mountChatWithActiveWorkspace(): Promise<
 > {
   const wrapper = mountChat();
   await flushPromises();
-  await wrapper.find(".workspace-badge--unset").trigger("click");
+  // FR-WS-003: drive the explicit Choose workspace action (the unset badge
+  // container is no longer the click target).
+  await wrapper.find('[data-testid="workspace-badge-choose"]').trigger("click");
   await flushPromises();
   return wrapper;
 }

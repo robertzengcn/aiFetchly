@@ -24,15 +24,55 @@
         <WorkspaceBadge
           :workspace="conversationWorkspace.workspace.value"
           :memory-count="conversationWorkspace.memoryCount.value"
+          :loading="conversationWorkspace.loading.value"
+          :busy="workspaceChangesBlocked"
           @request-set-workspace="onRequestWorkspaceSetup"
           @request-open-memory="openWorkspaceMemory"
         />
+        <!-- Refresh failure: sanitized localized message + retry (FR-WS-002
+             error state). The raw exception never reaches the DOM. -->
         <p
           v-if="conversationWorkspace.errorMessage.value"
           class="chat-center__workspace-error"
-          role="status"
+          role="alert"
+          data-testid="workspace-load-error"
         >
-          {{ conversationWorkspace.errorMessage.value }}
+          <v-icon size="x-small" color="warning" class="mr-1">
+            mdi-alert-circle-outline
+          </v-icon>
+          {{ t("workspace.loadFailed") || "Couldn't load the workspace." }}
+          <button
+            type="button"
+            class="chat-center__workspace-retry"
+            data-testid="workspace-retry"
+            @click="conversationWorkspace.refresh()"
+          >
+            {{ t("workspace.retry") || "Retry" }}
+          </button>
+        </p>
+        <!-- Approved workspace whose root could not be resolved (deleted /
+             inaccessible) — recoverable via retry (FR-WS-002). -->
+        <p
+          v-if="conversationWorkspace.pathUnavailable.value"
+          class="chat-center__workspace-error"
+          role="status"
+          data-testid="workspace-path-unavailable"
+        >
+          <v-icon size="x-small" color="warning" class="mr-1">
+            mdi-folder-remove-outline
+          </v-icon>
+          {{
+            t("workspace.pathUnavailable") ||
+            "Workspace folder is not accessible right now."
+          }}
+          <button
+            type="button"
+            class="chat-center__workspace-retry"
+            data-testid="workspace-path-retry"
+            @click="conversationWorkspace.refresh()"
+          >
+            {{ t("workspace.retry") || "Retry" }}
+          </button>
         </p>
         <WorkspaceRequiredCard
           v-if="conversationWorkspace.setupOpen.value && conversationId"
@@ -422,8 +462,16 @@ function openWorkspaceMemory(): void {
   showWorkspaceMemory.value = true;
 }
 
+/**
+ * FR-WS-007: while a workspace-backed tool may be running, changing the
+ * workspace is unsafe (approvals and watches are bound to the current root).
+ * Entry points are disabled with a visible localized reason instead.
+ */
+const workspaceChangesBlocked = computed(() => selectedStore.isBusy);
+
 /** Workspace setup needs a conversation id first (classic-chat parity). */
 function onRequestWorkspaceSetup(): void {
+  if (workspaceChangesBlocked.value) return; // FR-WS-007 safety gate
   if (!conversationId.value) {
     void onNewChat();
   }
@@ -1138,7 +1186,26 @@ onUnmounted(() => {
 .chat-center__workspace-error {
   margin: 0;
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
   color: rgb(var(--v-theme-error));
+}
+
+.chat-center__workspace-retry {
+  margin-left: 6px;
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-center__workspace-retry:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
 }
 
 .chat-center__messages {

@@ -2644,7 +2644,8 @@ export default {
       moveUp: "Subir",
       moveDown: "Bajar",
       referenceTrayTitle: "Imágenes de referencia",
-      limitReached: "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
+      limitReached:
+        "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
       batchOffer:
         "Se seleccionaron más de 3 imágenes. ¿Prefieres procesarlas como un lote de ediciones independientes?",
       batchConfirmTitle: "¿Procesar como lote?",
@@ -3004,6 +3005,18 @@ export default {
     notSet: "Sin espacio de trabajo",
     selectFolder: "Seleccionar carpeta",
     changeFolder: "Cambiar carpeta",
+    chooseAction: "Elegir espacio de trabajo",
+    chooseHint:
+      "Elige una carpeta para que las herramientas de archivos de IA puedan leer y escribir.",
+    loading: "Cargando espacio de trabajo…",
+    statusApproved: "Aprobado",
+    statusPending: "Pendiente de aprobación",
+    statusRevoked: "Acceso revocado",
+    loadFailed: "No se pudo cargar el espacio de trabajo.",
+    retry: "Reintentar",
+    pathUnavailable:
+      "La carpeta del espacio de trabajo no está accesible ahora mismo.",
+    busyReason: "Disponible cuando termine la ejecución actual",
     approve: "Aprobar espacio de trabajo",
     revoke: "Revocar espacio de trabajo",
     rootPath: "Ruta raíz",
@@ -3063,7 +3076,8 @@ export default {
   portableMemory: {
     banner: "Memoria portátil",
     enable: "Activar memoria portátil",
-    disabledHint: "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
+    disabledHint:
+      "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
     gitState: "Git",
     pendingReview: "Pendiente de revisión",
     rejected: "Rechazada",
@@ -3073,13 +3087,17 @@ export default {
     loadingPreview: "Cargando vista previa…",
     plannedFiles: "Archivos que se crearán",
     existingRecords: "Archivos de memoria existentes detectados",
-    identityInvalid: "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
+    identityInvalid:
+      "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
     visibility: "Modo de uso compartido",
     visibilityLocal: "Solo local",
-    visibilityLocalHint: "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
+    visibilityLocalHint:
+      "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
     visibilityTeam: "Compartible con el equipo",
-    visibilityTeamHint: "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
-    teamWarning: "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
+    visibilityTeamHint:
+      "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
+    teamWarning:
+      "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
     importPolicy: "Revisión de cambios externos",
     policyReviewNew: "Revisar registros nuevos",
     policyAutomatic: "Importar automáticamente",
@@ -3089,7 +3107,8 @@ export default {
     exportActive: "Exportar memorias activas",
     exportAll: "Exportar activas y archivadas",
     bridges: "Puentes de instrucciones para agentes",
-    bridgesHint: "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
+    bridgesHint:
+      "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
     enableConfirm: "Activar",
     bridgeAction: {
       create: "se creará",
@@ -3103,8 +3122,10 @@ export default {
     storagePortableLocal: "Portátil — local",
     storagePortableTeam: "Portátil — equipo",
     regenerateIdentity: "Regenerar identidad",
-    regenerateIdentityWarning: "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
-    regenerateGitWarning: "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
+    regenerateIdentityWarning:
+      "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
+    regenerateGitWarning:
+      "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
     regenerateConfirm: "Regenerar",
     sync: {
       synced: "Sincronizado",
@@ -3130,12 +3151,14 @@ export default {
     revealFile: "Mostrar archivo",
     diagnosticsTitle: "Diagnósticos de memoria portátil",
     loadingDiagnostics: "Cargando diagnósticos…",
-    noDiagnostics: "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
+    noDiagnostics:
+      "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
     notRecoverable: "no recuperable",
     conflictTitle: "Resolver conflicto",
     loadingConflict: "Cargando conflicto…",
     noConflict: "No se encontró conflicto.",
-    conflictWarning: "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
+    conflictWarning:
+      "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
     aiFetchlyVersion: "Proyección de AiFetchly",
     fileVersion: "Archivo actual",
     fileAbsent: "(archivo ausente)",
@@ -3308,7 +3331,8 @@ export default {
       clearConfirm: "¿Borrar todos los mensajes de esta conversación?",
       export: "Exportar conversación",
       duplicate: "Duplicar conversación",
-      deleteConfirm: "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
+      deleteConfirm:
+        "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
       delete: "Eliminar chat",
     },
     runStrip: {
@@ -3334,8 +3358,10 @@ export default {
       resize: "Cambiar tamaño del inspector",
     },
     artifacts: {
-      selectConversation: "Selecciona una conversación para ver sus resultados generados.",
-      empty: "Los informes y páginas generados aparecen aquí. Pide un informe HTML para crear uno.",
+      selectConversation:
+        "Selecciona una conversación para ver sus resultados generados.",
+      empty:
+        "Los informes y páginas generados aparecen aquí. Pide un informe HTML para crear uno.",
     },
     activity: {
       goal: "Objetivo",
@@ -3348,7 +3374,8 @@ export default {
       nextRun: "Próxima ejecución",
       execution: "Ejecución",
       runs: "Ejecuciones",
-      selectConversation: "Selecciona una conversación para ver sus ejecuciones.",
+      selectConversation:
+        "Selecciona una conversación para ver sus ejecuciones.",
       empty: "Aún no hay actividad",
       owner: {
         interactive: "Chat",
@@ -3377,7 +3404,7 @@ export default {
       runningTool: "Ejecutando {tool}",
       legacyReceipt: "Actividad de herramientas anterior",
       artifactCreated: "Informe HTML creado — ábrelo en Artefactos",
-        openArtifact: "Abrir",
+      openArtifact: "Abrir",
       imagesGenerated: "Imágenes generadas",
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
@@ -3508,7 +3535,8 @@ export default {
       emptyTitle: "Aún no hay nada aquí",
       emptyBody: "Comienza creando tu primer registro.",
       noResultsTitle: "No hay registros coincidentes",
-      noResultsBody: "Los registros pueden estar ocultos por los filtros actuales.",
+      noResultsBody:
+        "Los registros pueden estar ocultos por los filtros actuales.",
       clearFilters: "Borrar filtros",
       errorTitle: "Algo salió mal",
       errorBody: "La operación falló. Inténtalo de nuevo.",
