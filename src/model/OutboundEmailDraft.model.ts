@@ -209,6 +209,40 @@ export class OutboundEmailDraftModel extends BaseDb {
   }
 
   /**
+   * Batch-read the current (highest revisionNumber) revision for each given
+   * draftId in a single query. Returns a Map keyed by draftId for O(1) lookup.
+   *
+   * Used by the unified send-log view to join up to PAGE_FETCH_CAP outcomes to
+   * their subjects without N+1 sequential reads (one per draft). One query
+   * fetches all revisions for the requested draft set ordered by
+   * revisionNumber DESC; we keep the first (highest) row per draftId.
+   */
+  async readCurrentRevisions(
+    draftIds: readonly number[]
+  ): Promise<Map<number, OutboundEmailDraftRevisionEntity>> {
+    const result = new Map<number, OutboundEmailDraftRevisionEntity>();
+    const uniqueIds = [...new Set(draftIds)].filter(
+      (id) => Number.isFinite(id) && id > 0
+    );
+    if (uniqueIds.length === 0) {
+      return result;
+    }
+    const revisions = await this.revisionRepo
+      .createQueryBuilder("rev")
+      .where("rev.draftId IN (:...ids)", { ids: uniqueIds })
+      .orderBy("rev.revisionNumber", "DESC")
+      .getMany();
+    // Revisions are ordered by revisionNumber DESC, so the first row seen for
+    // any draftId is its current (highest) revision.
+    for (const rev of revisions) {
+      if (!result.has(rev.draftId)) {
+        result.set(rev.draftId, rev);
+      }
+    }
+    return result;
+  }
+
+  /**
    * Append a new revision to a draft and advance the draft's pointer
    * atomically (technical design §7.4 / §10.4). Revisions are immutable; an
    * edit is always a new row. The `(draftId, revisionNumber)` unique index

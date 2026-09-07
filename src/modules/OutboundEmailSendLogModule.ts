@@ -155,13 +155,18 @@ export class OutboundEmailSendLogModule extends BaseModule {
       where
     );
 
+    if (records.length === 0) {
+      return [];
+    }
+
+    // Batch the revision join: one query for all draftIds instead of one per
+    // outcome (N+1 → 1). The map is keyed by draftId for O(1) lookup.
+    const draftIds = records.map((r) => r.draftId);
+    const revisions = await this.draftModule.readCurrentRevisions(draftIds);
+
     const entries: UnifiedSendLogEntry[] = [];
     for (const outcome of records) {
-      // Join the revision for the subject/title. The outcome pins an exact
-      // revisionId, but the draft's current revision is the user-facing subject.
-      const revision = await this.draftModule.readCurrentRevision(
-        outcome.draftId
-      );
+      const revision = revisions.get(outcome.draftId);
       const title = revision?.subject ?? "";
       const recordTime =
         outcome.completedAt?.toISOString() ??

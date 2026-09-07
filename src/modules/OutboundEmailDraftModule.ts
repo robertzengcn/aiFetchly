@@ -117,6 +117,18 @@ export class OutboundEmailDraftModule extends BaseModule {
     return await this.draftModel.readCurrentRevision(draftId);
   }
 
+  /**
+   * Batch-read the current revision for many drafts in one query. Returns a
+   * Map keyed by draftId. Used by the unified send-log view to avoid N+1
+   * sequential reads when joining up to PAGE_FETCH_CAP outcomes to subjects.
+   */
+  async readCurrentRevisions(
+    draftIds: readonly number[]
+  ): Promise<Map<number, OutboundEmailDraftRevisionEntity>> {
+    await this.ensureConnection();
+    return await this.draftModel.readCurrentRevisions(draftIds);
+  }
+
   async appendRevision(
     input: AppendRevisionInput
   ): Promise<OutboundEmailDraftRevisionEntity> {
