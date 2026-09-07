@@ -68,6 +68,18 @@ export interface PuppeteerFrameLike {
   parentFrame?(): PuppeteerFrameLike | null;
 }
 
+export interface PuppeteerDialogLike {
+  dismiss(): Promise<void>;
+}
+
+export interface PuppeteerPopupLike {
+  close(): Promise<void>;
+}
+
+export interface PuppeteerDownloadLike {
+  cancel(): Promise<void>;
+}
+
 export interface PuppeteerPageLike
   extends ObservationPageLike,
     ExecutorPageLike {
@@ -75,6 +87,13 @@ export interface PuppeteerPageLike
   on(
     event: "framenavigated",
     listener: (frame: PuppeteerFrameLike) => void
+  ): unknown;
+  /** Browser-created states (GAP-13): deny-by-default policies. */
+  on(event: "dialog", listener: (dialog: PuppeteerDialogLike) => void): unknown;
+  on(event: "popup", listener: (popup: PuppeteerPopupLike) => void): unknown;
+  on(
+    event: "download",
+    listener: (download: PuppeteerDownloadLike) => void
   ): unknown;
   screenshot(options?: {
     type?: "jpeg" | "png";
@@ -793,6 +812,30 @@ export class WorkerSession {
       });
     } catch {
       // Structural fakes without the event — nothing to watch.
+    }
+    // GAP-13: browser-created states are DENY-by-default — JS dialogs are
+    // dismissed without interaction, popups are closed, downloads are
+    // cancelled. The AI never silently accepts a prompt it did not open.
+    try {
+      page.on("dialog", (dialog) => {
+        void dialog.dismiss().catch(() => undefined);
+      });
+    } catch {
+      /* structural fake */
+    }
+    try {
+      page.on("popup", (popup) => {
+        void popup.close().catch(() => undefined);
+      });
+    } catch {
+      /* structural fake */
+    }
+    try {
+      page.on("download", (download) => {
+        void download.cancel().catch(() => undefined);
+      });
+    } catch {
+      /* structural fake */
     }
   }
 

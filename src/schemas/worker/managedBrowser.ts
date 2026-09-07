@@ -245,7 +245,57 @@ const elementRefSchema = z
   .max(32)
   .regex(/^e_[A-Za-z0-9]+$/, "element ref must be an opaque e_ token");
 
-export const browserActionSchema = z.discriminatedUnion("type", [
+/** Recursive action tree node (P0 leaf actions + bounded if/repeat). */
+export interface BrowserActionIf {
+  type: "if";
+  condition:
+    | "element"
+    | "navigation"
+    | "url"
+    | "text"
+    | "networkidle";
+  ref?: string;
+  url?: string;
+  text?: string;
+  then: BrowserAction[];
+  else?: BrowserAction[];
+}
+
+export interface BrowserActionRepeat {
+  type: "repeat";
+  condition:
+    | "element"
+    | "navigation"
+    | "url"
+    | "text"
+    | "networkidle";
+  ref?: string;
+  url?: string;
+  text?: string;
+  maxIterations: number;
+  body: BrowserAction[];
+}
+
+/** Leaf actions (P0 flat set) — the schema-validated wire shapes. */
+export type BrowserLeafAction = z.infer<typeof leafBrowserActionSchema>;
+
+export type BrowserAction = BrowserLeafAction | BrowserActionIf | BrowserActionRepeat;
+
+export type BrowserActionProgram = {
+  actions: BrowserAction[];
+  intent?: string;
+};
+
+/** Shared semantic condition (wait_for / if / repeat). */
+const semanticConditionSchema = z.enum([
+  "element",
+  "navigation",
+  "url",
+  "text",
+  "networkidle",
+]);
+
+export const leafBrowserActionSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("navigate"),
     url: z.string().url().max(2048),
@@ -302,7 +352,7 @@ export const browserActionSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("wait_for"),
-    condition: z.enum(["element", "navigation", "url", "text", "networkidle"]),
+    condition: semanticConditionSchema,
     ref: elementRefSchema.optional(),
     url: z.string().max(2048).optional(),
     text: z.string().max(256).optional(),
@@ -321,6 +371,54 @@ export const browserActionSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+const compositeBrowserActionSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("if"),
+    condition: semanticConditionSchema,
+    ref: elementRefSchema.optional(),
+    url: z.string().max(2048).optional(),
+    text: z.string().max(256).optional(),
+    /** Nested program (bounded by maxNestedDepth). */
+    then: z.array(z.lazy(() => browserActionSchema)).min(1).max(10),
+    else: z.array(z.lazy(() => browserActionSchema)).min(1).max(10).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("repeat"),
+    condition: semanticConditionSchema,
+    ref: elementRefSchema.optional(),
+    url: z.string().max(2048).optional(),
+    text: z.string().max(256).optional(),
+    /** Loop while the condition HOLDS (checked before each iteration). */
+    maxIterations: z
+      .number()
+      .int()
+      .min(1)
+      .max(MANAGED_BROWSER_ACTION_LIMITS.hardMaxRepeatIterations),
+    body: z.array(z.lazy(() => browserActionSchema)).min(1).max(10),
+  }),
+]);
+
+/**
+ * Recursive validated action tree (leaves + bounded composites). The union
+ * is assembled from both groups' option lists; the cast is the standard zod
+ * pattern for merging discriminated unions (v3 has no built-in merge).
+ */
+export const browserActionSchema = (
+  z.discriminatedUnion as unknown as (
+    key: string,
+    options: readonly z.ZodTypeAny[]
+  ) => z.ZodTypeAny
+)("type", [
+  ...(
+    leafBrowserActionSchema as unknown as { options: readonly z.ZodTypeAny[] }
+  ).options,
+  ...(
+    compositeBrowserActionSchema as unknown as {
+      options: readonly z.ZodTypeAny[];
+    }
+  ).options,
+]) as unknown as z.ZodType<BrowserAction>;
+
 export const browserActionProgramSchema = z.strictObject({
   actions: z
     .array(browserActionSchema)
@@ -330,8 +428,7 @@ export const browserActionProgramSchema = z.strictObject({
   intent: z.string().max(300).optional(),
 });
 
-export type BrowserAction = z.infer<typeof browserActionSchema>;
-export type BrowserActionProgram = z.infer<typeof browserActionProgramSchema>;
+
 
 // ---------------------------------------------------------------------------
 // Inbound union (main → worker)

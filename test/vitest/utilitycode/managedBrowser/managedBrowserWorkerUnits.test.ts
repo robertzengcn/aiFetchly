@@ -678,3 +678,117 @@ describe("GAP-04 observation payload scrubbing", () => {
     expect(observation.elements[0].name).toBe("Subscribe");
   });
 });
+
+// ---------------------------------------------------------------------------
+// GAP-13: conditional/repeat composites + browser-created states
+// ---------------------------------------------------------------------------
+
+describe("GAP-13 composite programs", () => {
+  it("if executes the matched branch and shares step results", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          {
+            type: "if",
+            condition: "text",
+            text: "Like",
+            then: [{ type: "press_key", key: "l" }],
+            else: [{ type: "press_key", key: "e" }],
+          },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(page.pressedKeys).toEqual(["l"]); // FakePage text contains "Like"
+  });
+
+  it("if executes the else branch when the condition fails", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          {
+            type: "if",
+            condition: "text",
+            text: "never-present",
+            then: [{ type: "press_key", key: "l" }],
+            else: [{ type: "press_key", key: "e" }],
+          },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(page.pressedKeys).toEqual(["e"]);
+  });
+
+  it("repeat loops while the condition holds, respecting the iteration cap", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    // The repeat guard calls the needle-includes script; make it hold for
+    // the first TWO checks, then fail.
+    let checks = 0;
+    const originalEvaluate = page.evaluate.bind(page);
+    page.evaluate = async <T>(script: unknown, ...args: unknown[]): Promise<T> => {
+      const source = String(script);
+      if (source.includes("includes(needle)")) {
+        checks += 1;
+        return (checks <= 2) as T;
+      }
+      return originalEvaluate(script, ...args) as Promise<T>;
+    };
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          {
+            type: "repeat",
+            condition: "text",
+            text: "keep going",
+            maxIterations: 10,
+            body: [{ type: "press_key", key: "x" }],
+          },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    // 2 iterations ran before the condition failed.
+    expect(page.pressedKeys).toEqual(["x", "x"]);
+  });
+
+  it("rejects programs nesting deeper than the depth bound", () => {
+    const deep = {
+      type: "if",
+      condition: "text",
+      text: "x",
+      then: [] as unknown[],
+    } as unknown as Record<string, unknown>;
+    let node = deep;
+    for (let i = 0; i < 6; i++) {
+      const next = { ...deep, then: [] as unknown[] };
+      (node.then as unknown[]).push(next);
+      node = next;
+    }
+    (node.then as unknown[]).push({ type: "press_key", key: "k" });
+    const result = validateProgramLimits({
+      actions: [deep as never],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("flatten-counts repeat worst cases against the total-step limit", () => {
+    const result = validateProgramLimits({
+      actions: [
+        {
+          type: "repeat",
+          condition: "navigation",
+          maxIterations: 50,
+          body: [{ type: "press_key", key: "k" }, { type: "scroll", direction: "down", amount: 10 }],
+        },
+      ] as never,
+    });
+    // 1 guard + 50*2 = 101 steps > 100 limit.
+    expect(result.ok).toBe(false);
+  });
+});
