@@ -22,11 +22,17 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
                 {{ item.status }}
             </v-chip>
         </template>
+        <template v-slot:item.actions="{ item }">
+            <v-icon size="small" class="mr-2" color="primary" @click="openDetail(item.source, item.id)">
+                mdi-file-document-outline
+            </v-icon>
+        </template>
     </v-data-table-server>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
+import { useRouter } from 'vue-router'
 import { getUnifiedEmailSendLog } from '@/views/api/buckemail'
 import { ref, computed } from 'vue'
 import { SearchResult } from '@/views/api/types'
@@ -35,6 +41,7 @@ import { UnifiedSendLogEntry } from "@/entityTypes/buckemailType"
 import { Header } from "@/entityTypes/commonType"
 
 const { t } = useI18n({ inheritLocale: true });
+const router = useRouter();
 const selected = ref<Array<UnifiedSendLogEntry>>([]);
 
 const computedHeaders = computed(() => headers.value);
@@ -104,6 +111,12 @@ const headers = computed<Array<Header>>(() => [
         sortable: false,
         key: 'record_time',
     },
+    {
+        title: CapitalizeFirstLetter(t("emailtasksendlog.actions")),
+        align: 'start',
+        sortable: false,
+        key: 'actions',
+    },
 ]);
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<UnifiedSendLogEntry>>([]);
@@ -131,6 +144,18 @@ function loadItems({ page, itemsPerPage, sortBy }: DataTableOptions) {
             console.error(error);
             loading.value = false
         })
+}
+
+/**
+ * Open the detail page for one row. The row's stable identity is the
+ * (source, id) pair — each send-log half has its own id space, so both
+ * params are required by the detail route.
+ */
+function openDetail(source: string, id: number): void {
+    router.push({
+        name: "UNIFIED_EMAIL_SEND_LOG_DETAIL",
+        params: { source, id: String(id) },
+    });
 }
 
 function sourceLabel(source: string): string {

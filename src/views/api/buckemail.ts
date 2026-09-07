@@ -11,6 +11,7 @@ import {
   BUCKEMAILTASKLIST,
   BUCKEMAILTASKSENDLOG,
   UNIFIED_EMAIL_SEND_LOG,
+  UNIFIED_EMAIL_SEND_LOG_DETAIL,
 } from "@/config/channellist";
 import { SearchResult } from "@/views/api/types";
 import { ItemSearchparam } from "@/entityTypes/commonType";
@@ -19,6 +20,7 @@ import {
   BuckEmailTasklogQueryType,
   EmailMarketingSendLogListDisplay,
   UnifiedSendLogEntry,
+  UnifiedSendLogDetailEntry,
 } from "@/entityTypes/buckemailType";
 
 export async function buckEmailsend(data: EmailMarketingsubdata) {
@@ -80,4 +82,21 @@ export async function getUnifiedEmailSendLog(
     total: resp.num,
   };
   return resdata;
+}
+
+//get one unified send-log row's detail, keyed by the (source, id) pair
+export async function getUnifiedEmailSendLogDetail(
+  source: "legacy" | "authorized",
+  id: number
+): Promise<UnifiedSendLogDetailEntry> {
+  const resp = await windowInvoke(UNIFIED_EMAIL_SEND_LOG_DETAIL, {
+    source,
+    id,
+  });
+
+  if (!resp) {
+    throw new Error("unknow error");
+  }
+
+  return resp;
 }

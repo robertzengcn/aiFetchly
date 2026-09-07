@@ -665,6 +665,19 @@ export const constantRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: "buckemailtask/sendlog/detail/:source/:id(\\d+)",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/emailSendTaskLog/detail.vue"
+          ),
+        name: "UNIFIED_EMAIL_SEND_LOG_DETAIL",
+        meta: {
+          visible: false,
+          title: "route.email_send_log_detail",
+          icon: "mdi-file-document-outline",
+        },
+      },
+      {
         path: "form",
         component: () =>
           import(
