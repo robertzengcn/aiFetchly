@@ -20,6 +20,12 @@ export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /**
+   * E2E-only (FR-WIN-007/009): launch with the deterministic initial window
+   * MAXIMIZED, mirroring a user whose saved choice was maximized. Normal
+   * bounds stay the deterministic 1280x800 so restoring down works.
+   */
+  readonly initialMaximized?: boolean;
 }
 
 export interface NetworkViolation {
@@ -48,7 +54,8 @@ export interface LaunchedApp {
  */
 function buildSanitizedEnv(
   testRoot: E2ETestRoot,
-  fakeAiBaseUrl: string | undefined
+  fakeAiBaseUrl: string | undefined,
+  initialMaximized: boolean | undefined
 ): Record<string, string> {
   // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
   // EXACTLY (not as prefixes) so e.g. `CI` does not also pass `CI_REPOSITORY_URL`
@@ -121,6 +128,10 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
+  // E2E-only deterministic maximized startup (FR-WIN-007/009).
+  if (initialMaximized) {
+    allowed.AIFETCHLY_E2E_INITIAL_MAXIMIZED = "1";
+  }
   const allowedOrigins = [RENDERER_ORIGIN];
   if (fakeAiBaseUrl) {
     allowed[E2E_ENV.AI_BASE_URL] = fakeAiBaseUrl;
@@ -148,7 +159,11 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  const env = buildSanitizedEnv(
+    options.testRoot,
+    options.fakeAiBaseUrl,
+    options.initialMaximized
+  );
 
   const electronApp = await electronLauncher.launch({
     args: [

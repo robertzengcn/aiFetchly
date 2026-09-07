@@ -17,6 +17,17 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
+  // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
+  // self-contained — one command from a clean checkout starts the renderer,
+  // runs the suite, and shuts everything down. Playwright owns the vite dev
+  // server lifecycle (readiness = HTTP 200 on the renderer origin) and
+  // reuses an already-running server locally for tight inner loops.
+  webServer: {
+    command: "yarn dev:renderer --port 5173 --strictPort --host 127.0.0.1",
+    url: "http://127.0.0.1:5173",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
   use: {
     trace: "retain-on-failure",
   },

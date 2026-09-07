@@ -19,9 +19,7 @@ const secondary: ElectronDisplayLike = {
   workArea: { x: 1920, y: 0, width: 1920, height: 1080 },
 };
 
-function makeScreen(
-  displays: ElectronDisplayLike[] = [primary]
-): ScreenLike {
+function makeScreen(displays: ElectronDisplayLike[] = [primary]): ScreenLike {
   return {
     getAllDisplays: () => displays,
     getPrimaryDisplay: () => displays[0] ?? primary,
@@ -71,9 +69,12 @@ class FakeWindow implements MainWindowLike {
   }
 }
 
-function makeWindow(
-  bounds?: { x: number; y: number; width: number; height: number }
-): FakeWindow {
+function makeWindow(bounds?: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): FakeWindow {
   return new FakeWindow(bounds);
 }
 
@@ -151,6 +152,29 @@ describe("MainWindowStateService.resolveInitialState (design §14.4/§14.7)", ()
       height: 800,
     });
   });
+
+  it("E2E mode honors the deterministic maximized-launch env (FR-WIN-007/009)", () => {
+    process.env.AIFETCHLY_E2E_INITIAL_MAXIMIZED = "1";
+    try {
+      const service = new MainWindowStateService({
+        store: makeStore(),
+        screen: makeScreen(),
+        e2e: true,
+      });
+      const state = service.resolveInitialState();
+      // Mirrors a user whose saved choice was maximized: launch maximized
+      // while KEEPING the deterministic restore-down bounds.
+      expect(state.maximized).toBe(true);
+      expect(state.normalBounds).toEqual({
+        x: 320,
+        y: 140,
+        width: 1280,
+        height: 800,
+      });
+    } finally {
+      delete process.env.AIFETCHLY_E2E_INITIAL_MAXIMIZED;
+    }
+  });
 });
 
 describe("MainWindowStateService persistence (design §14.4/§17.4)", () => {
@@ -181,7 +205,12 @@ describe("MainWindowStateService persistence (design §14.4/§17.4)", () => {
       maximized: boolean;
     };
     expect(saved.version).toBe(1);
-    expect(saved.normalBounds).toEqual({ x: 10, y: 20, width: 1000, height: 600 });
+    expect(saved.normalBounds).toEqual({
+      x: 10,
+      y: 20,
+      width: 1000,
+      height: 600,
+    });
     expect(saved.maximized).toBe(false);
   });
 

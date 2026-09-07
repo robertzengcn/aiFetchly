@@ -170,4 +170,53 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     await expect(page.getByTestId("workspace-tree")).toBeHidden();
     expect((await activeFocus(page)).testid).toBe("app-shell-nav-toggle");
   });
+
+  test("keyboard reaches the workspace chooser and voice controls", async ({
+    shellApp,
+  }) => {
+    const page = shellApp.mainWindow;
+    await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByTestId("workspace-new-chat").focus();
+    await page.keyboard.press("Enter");
+    const textarea = page
+      .getByTestId("ai-chat-composer")
+      .locator(COMPOSER_INPUT);
+    await expect(textarea).toBeVisible({ timeout: 10_000 });
+
+    // --- Workspace chooser via keyboard (FR-QUAL-005) ----------------------
+    // The unset badge's explicit Choose action is focusable + operable by
+    // keyboard; opening the picker card is observable without choosing.
+    const choose = page.getByTestId("workspace-badge-choose");
+    await expect(choose).toBeVisible({ timeout: 10_000 });
+    await choose.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("workspace-required").first()).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // The card's Cancel is keyboard-operable and keeps state unchanged.
+    const card = page.getByTestId("workspace-required").first();
+    await card.getByRole("button", { name: /cancel/i }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("workspace-required")).toBeHidden();
+    await expect(page.getByTestId("workspace-badge-choose")).toBeVisible();
+
+    // --- Voice controls via keyboard (FR-QUAL-005) -------------------------
+    // The spoken-response toggle is focusable and keyboard-operable. In the
+    // E2E environment the voice runtime is not installed, so enabling must
+    // NOT silently flip the pressed state — the designed outcome routes to
+    // the voice settings surface (FR-VOICE-005), which is exactly what
+    // Enter produces from the keyboard alone.
+    const spokenToggle = page.getByTestId("spoken-response-toggle");
+    await expect(spokenToggle).toBeVisible();
+    const pressedBefore = await spokenToggle.getAttribute("aria-pressed");
+    expect(pressedBefore).toBe("false");
+    await spokenToggle.focus();
+    await page.keyboard.press("Enter");
+    // Enter routed to the voice settings surface (the composer unmounted).
+    await expect(
+      page.getByRole("checkbox", { name: /enable voice input/i })
+    ).toBeVisible({ timeout: 10_000 });
+  });
 });

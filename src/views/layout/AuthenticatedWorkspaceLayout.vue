@@ -136,8 +136,9 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  /* PRD §16.4: pointer/touch targets are at least 40x40px. */
+  width: 40px;
+  height: 40px;
   border: none;
   border-radius: 6px;
   background: var(--app-shell, rgba(255, 255, 255, 0.9));

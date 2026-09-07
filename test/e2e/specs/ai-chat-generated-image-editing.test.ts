@@ -344,7 +344,10 @@ async function createConversationWithStreamedTurn(
   await expect(
     app.mainWindow.getByTestId("workspace-transcript")
   ).toContainText(STREAM_TEXT_FINAL, { timeout: 30_000 });
-  await expect(app.mainWindow.getByTestId("ai-chat-send")).toBeEnabled({
+  // The accepted-send rule (FR-COMP-011) clears the draft when the run is
+  // accepted, so an EMPTY composer correctly disables Send afterwards. The
+  // turn-complete signal is the stop control disappearing instead.
+  await expect(app.mainWindow.getByTestId("ai-chat-stop")).toBeHidden({
     timeout: 30_000,
   });
 }

@@ -104,7 +104,10 @@ export class MainWindowStateService {
     if (this.e2e) {
       return {
         normalBounds: computeInitialBounds(primary),
-        maximized: false,
+        // E2E-only deterministic maximized startup (FR-WIN-007/009): mirrors
+        // a user whose saved choice was maximized while keeping the
+        // deterministic restore-down bounds.
+        maximized: process.env.AIFETCHLY_E2E_INITIAL_MAXIMIZED === "1",
         source: "default",
       };
     }

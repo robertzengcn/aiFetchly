@@ -1,5 +1,12 @@
 <template>
-  <v-card class="workspace-required-card" elevation="2" rounded border>
+  <v-card
+    class="workspace-required-card"
+    elevation="2"
+    rounded
+    border
+    data-testid="workspace-required"
+    :data-conversation-id="conversationId"
+  >
     <v-card-item>
       <div class="workspace-required-card__header">
         <v-icon size="small" color="primary">mdi-folder-plus-outline</v-icon>
