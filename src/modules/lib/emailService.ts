@@ -3,6 +3,10 @@ import {
   EmailRequestData,
   EmailServiceEntitydata,
 } from "@/entityTypes/emailmarketingType";
+import {
+  createOutboundSmtpTransporter,
+  smtpErrorMessage,
+} from "@/modules/lib/smtpTransport";
 
 export class EmailService {
   private transporter: nodemailer.Transporter;
@@ -10,15 +14,7 @@ export class EmailService {
 
   constructor(param: EmailServiceEntitydata) {
     this.emailSender = param.from;
-    this.transporter = nodemailer.createTransport({
-      host: param.host,
-      port: Number(param.port) || 0,
-      secure: param.ssl === 1,
-      auth: {
-        user: param.from,
-        pass: param.password,
-      },
-    } as nodemailer.TransportOptions);
+    this.transporter = createOutboundSmtpTransporter(param);
   }
 
   public async sendEmail(
@@ -33,19 +29,12 @@ export class EmailService {
       text: param.Content,
     };
 
-    await new Promise<void>((resolve) => {
-      this.transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-          console.error("Error:", error);
-          errorCallback?.(error.message);
-          resolve();
-          return;
-        }
-
-        console.log("Email sent:", info.response);
-        successCallback?.();
-        resolve();
-      });
-    });
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      console.log("Email sent:", info.response);
+      successCallback?.();
+    } catch (error: unknown) {
+      errorCallback?.(smtpErrorMessage(error));
+    }
   }
 }

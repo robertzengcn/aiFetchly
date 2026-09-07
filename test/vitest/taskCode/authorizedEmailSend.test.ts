@@ -310,6 +310,35 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
     expect(failures[0]?.retrySafety).toBe("safe");
   });
 
+  it("classifies SMTP 535 Invalid login as a safe smtp_rejected failure", async () => {
+    const envelope = makeEnvelope({ draftId: 1 });
+    const payload = makePayload([envelope], [makeService(1, "s@x.com")]);
+
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const worker = new EmailSend(() => ({
+      send: () =>
+        Promise.reject(
+          new Error(
+            "Invalid login: 535 5.7.8 Error: authentication failed: (reason unavailable)"
+          )
+        ),
+      close: () => undefined,
+    }));
+    await worker.sendAuthorizedEnvelopes(payload, (e) => events.push(e));
+
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorCode).toBe("smtp_rejected");
+    expect(failures[0]?.retrySafety).toBe("safe");
+  });
+
   it("emits typed failure events with retry safety when SMTP rejects", async () => {
     const envelope = makeEnvelope({ draftId: 1 });
     const payload = makePayload([envelope], [makeService(1, "s@x.com")]);

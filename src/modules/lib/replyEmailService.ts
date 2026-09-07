@@ -1,5 +1,12 @@
 import nodemailer from "nodemailer";
-import type { EmailServiceEntitydata, EmailSendResult } from "@/entityTypes/emailmarketingType";
+import type {
+  EmailServiceEntitydata,
+  EmailSendResult,
+} from "@/entityTypes/emailmarketingType";
+import {
+  createOutboundSmtpTransporter,
+  smtpErrorMessage,
+} from "@/modules/lib/smtpTransport";
 
 /** Reply payload with thread-tracking headers preserved where available. */
 export interface ReplyEmailRequestData {
@@ -24,12 +31,7 @@ export class ReplyEmailService {
 
   constructor(param: EmailServiceEntitydata) {
     this.emailSender = param.from;
-    this.transporter = nodemailer.createTransport({
-      host: param.host,
-      port: Number(param.port) || 0,
-      secure: param.ssl === 1,
-      auth: { user: param.from, pass: param.password },
-    } as nodemailer.TransportOptions);
+    this.transporter = createOutboundSmtpTransporter(param);
   }
 
   async sendReplyEmail(data: ReplyEmailRequestData): Promise<EmailSendResult> {
@@ -50,27 +52,24 @@ export class ReplyEmailService {
       mailOptions.references = data.references;
     }
 
-    return new Promise<EmailSendResult>((resolve) => {
-      this.transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-          resolve({
-            receiver: data.receiver,
-            status: false,
-            title: subject,
-            content: data.text,
-            info: error.message,
-          });
-          return;
-        }
-        resolve({
-          receiver: data.receiver,
-          status: true,
-          title: subject,
-          content: data.text,
-          info: typeof info === "object" && info ? info.messageId : undefined,
-        });
-      });
-    });
+    try {
+      const info = await this.transporter.sendMail(mailOptions);
+      return {
+        receiver: data.receiver,
+        status: true,
+        title: subject,
+        content: data.text,
+        info: typeof info === "object" && info ? info.messageId : undefined,
+      };
+    } catch (error: unknown) {
+      return {
+        receiver: data.receiver,
+        status: false,
+        title: subject,
+        content: data.text,
+        info: smtpErrorMessage(error),
+      };
+    }
   }
 }
 
