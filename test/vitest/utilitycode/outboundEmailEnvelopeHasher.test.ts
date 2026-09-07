@@ -114,7 +114,8 @@ describe("OutboundEmailEnvelopeHasher", () => {
     });
 
     it("produces a stable, documented digest for a known input", () => {
-      // Snapshots guard against accidental canonicalization drift.
+      // Hardcoded SHA-256 of the canonical form (design §11). A change here
+      // means canonicalization drifted; do not regenerate blindly.
       const single = envelope({
         recipientAddress: "a@example.com",
         senderAddress: "s@example.com",
@@ -126,11 +127,12 @@ describe("OutboundEmailEnvelopeHasher", () => {
         ...single,
         draftId: 7,
       };
-      const hash = OutboundEmailEnvelopeHasher.hashBatch([env]);
-      expect(hash).toMatchSnapshot();
-      expect(
-        OutboundEmailEnvelopeHasher.hashEnvelope(single)
-      ).toMatchSnapshot();
+      expect(OutboundEmailEnvelopeHasher.hashBatch([env])).toBe(
+        "10a8d00bd593f796aeed7821bcd17c76107a43e30032f21ad2477fdfb105b6d6"
+      );
+      expect(OutboundEmailEnvelopeHasher.hashEnvelope(single)).toBe(
+        "2761bdce2dae20d61a794575aa2a46482a568cdd0f96e75530238d9f8b20a2ec"
+      );
     });
   });
 });
