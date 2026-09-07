@@ -39,10 +39,24 @@ const selected = ref<Array<UnifiedSendLogEntry>>([]);
 
 const computedHeaders = computed(() => headers.value);
 
+type SortItem = { key: string; order: string };
+
+/**
+ * Payload emitted by v-data-table-server's `update:options` event. Typed to
+ * avoid implicit any on the loadItems destructured parameter (CLAUDE.md: no
+ * any). page/itemsPerPage are 1-based in Vuetify; FakeAPI.fetch converts to
+ * 0-based for the API. sortBy is an array (multi-sort) — we take the first.
+ */
+type DataTableOptions = {
+    page: number;
+    itemsPerPage: number;
+    sortBy: SortItem[];
+};
+
 type Fetchparam = {
     page: number,
     itemsPerPage: number,
-    sortBy?: { key: string, order: string },
+    sortBy?: SortItem,
     search: string
 }
 
@@ -97,12 +111,12 @@ const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: DataTableOptions) {
     loading.value = true
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: Array.isArray(sortBy) ? sortBy[0] : sortBy,
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
