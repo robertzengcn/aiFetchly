@@ -11,6 +11,7 @@ import {
   SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_PREPARE,
+  SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
 } from "@/config/channellist";
@@ -169,4 +170,38 @@ export function onSkillInstallProgress(
   return () => {
     windowRemoveAllListeners(SKILL_INSTALL_PROGRESS);
   };
+}
+
+/**
+ * Result of running ONE approved command template (FR-16): previews are
+ * truncated server-side; injectedEnvNames carries variable NAMES only —
+ * secret values never cross this boundary.
+ */
+export interface ApprovedCommandRunView {
+  readonly ok: boolean;
+  readonly commandId: string;
+  readonly exitCode: number | null;
+  readonly stdoutPreview: string;
+  readonly stderrPreview: string;
+  readonly timedOut: boolean;
+  readonly injectedEnvNames: readonly string[];
+  readonly errorCode?: string;
+  readonly message?: string;
+}
+
+/**
+ * Run one APPROVED plan command from the persisted template (FR-06/FR-16).
+ * The caller supplies only the template id — the main process revalidates
+ * the persisted executable/args against the approved revision, injects
+ * declared credentials directly into the child environment, and returns
+ * redacted previews. The model can never substitute command text: it has no
+ * channel that accepts one.
+ */
+export async function runApprovedSkillInstallCommand(input: {
+  sessionId: string;
+  commandId: string;
+  approvalToken: string;
+}): Promise<ApprovedCommandRunView | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_RUN_COMMAND, input);
+  return (resp as ApprovedCommandRunView | null) ?? null;
 }

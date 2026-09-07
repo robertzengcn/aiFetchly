@@ -223,6 +223,76 @@
         </div>
       </div>
 
+      <!-- Approved command execution (FR-06/FR-16): per-command controls
+           shown on APPROVED sessions in hold/failure states. The caller
+           supplies only the persisted template id — the main process
+           revalidates executable/args and injects declared credentials
+           directly into the child environment. The model has no channel
+           that accepts command text. -->
+      <div
+        v-if="commandSectionVisible && safePlan?.commands?.length"
+        data-testid="skill-install-run-commands"
+        class="mt-2"
+      >
+        <div class="text-caption text-medium-emphasis mb-1">
+          {{ t("skillInstall.command.sectionHint") }}
+        </div>
+        <div
+          v-for="cmd in safePlan.commands"
+          :key="cmd.id"
+          class="mb-2"
+          data-testid="skill-install-run-command-row"
+        >
+          <div class="d-flex align-center ga-2">
+            <code class="text-caption flex-grow-1">
+              {{ cmd.executable }} {{ cmd.args.join(" ") }}
+            </code>
+            <v-chip
+              size="x-small"
+              :color="cmd.riskLevel === 'high' ? 'warning' : 'default'"
+              variant="tonal"
+            >
+              {{ cmd.riskLevel }}
+            </v-chip>
+            <v-btn
+              size="x-small"
+              variant="outlined"
+              :loading="busy"
+              :data-testid="`skill-install-run-${cmd.id}`"
+              @click="onRunCommand(cmd.id)"
+            >
+              {{ t("skillInstall.command.run") }}
+            </v-btn>
+          </div>
+          <div
+            v-if="cmd.environmentNames.length > 0"
+            class="text-caption text-medium-emphasis"
+          >
+            {{ t("skillInstall.command.envVars", { names: cmd.environmentNames.join(", ") }) }}
+          </div>
+          <div
+            v-if="commandResults[cmd.id]"
+            class="text-caption mt-1"
+            :class="commandResults[cmd.id]?.ok ? 'text-success' : 'text-error'"
+            :data-testid="`skill-install-run-result-${cmd.id}`"
+          >
+            {{ commandResults[cmd.id]?.ok
+              ? t("skillInstall.command.resultOk", { code: commandResults[cmd.id]?.exitCode ?? "n/a" })
+              : t("skillInstall.command.resultFailed", { message: commandResults[cmd.id]?.message ?? commandResults[cmd.id]?.errorCode ?? "" }) }}
+            <span v-if="(commandResults[cmd.id]?.injectedEnvNames.length ?? 0) > 0">
+              {{ t("skillInstall.command.injected", { names: commandResults[cmd.id]?.injectedEnvNames.join(", ") }) }}
+            </span>
+            <details
+              v-if="commandResults[cmd.id]?.stdoutPreview || commandResults[cmd.id]?.stderrPreview"
+            >
+              <summary>{{ t("skillInstall.command.output") }}</summary>
+              <pre>{{ commandResults[cmd.id]?.stdoutPreview }}</pre>
+              <pre class="text-error">{{ commandResults[cmd.id]?.stderrPreview }}</pre>
+            </details>
+          </div>
+        </div>
+      </div>
+
       <!-- Secure credential input (awaiting_secret) -->
       <div
         v-if="snapshot?.state === 'awaiting_secret'"
@@ -303,7 +373,9 @@ import {
   getSkillInstallApprovalToken,
   getSkillInstallStatus,
   onSkillInstallProgress,
+  runApprovedSkillInstallCommand,
   submitSkillInstallSecret,
+  type ApprovedCommandRunView,
 } from "@/views/api/skillInstallation";
 
 const props = defineProps<{
@@ -412,6 +484,23 @@ const missingDependencies = computed(
     safePlan.value?.dependencies.filter((d) => d.status !== "satisfied") ?? []
 );
 
+/**
+ * Approved-command run controls appear only on APPROVED sessions in
+ * hold/failure states (the runner rejects unapproved sessions anyway) —
+ * never during review, and never after a terminal state.
+ */
+const commandSectionVisible = computed(() =>
+  [
+    "awaiting_secret",
+    "installing_dependencies",
+    "failed",
+    "rollback_required",
+  ].includes(snapshotView.value?.state ?? "")
+);
+
+/** Per-command-id results from manual runs (previews are redacted). */
+const commandResults = ref<Record<string, ApprovedCommandRunView>>({});
+
 /** The environment variable name from the safe summary, when surfaced. */
 const secretVariableName = computed(() => {
   const match = snapshotView.value?.safeSummary?.match(/[A-Z][A-Z0-9_]{4,}/);
@@ -472,6 +561,35 @@ async function onApproveDependency(
     });
     if (snapshot) {
       emit("updated", snapshot);
+    } else {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** Run ONE approved command template by id (FR-06/FR-16). */
+async function onRunCommand(commandId: string): Promise<void> {
+  busy.value = true;
+  try {
+    // Token-bound like every other mutation on this card (review D3): run
+    // execution is authorized at the same strength as approve.
+    const approvalToken = await getSkillInstallApprovalToken(
+      snapshotView.value.sessionId
+    );
+    if (!approvalToken) {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+      return;
+    }
+    const result = await runApprovedSkillInstallCommand({
+      sessionId: snapshotView.value.sessionId,
+      commandId,
+      approvalToken,
+    });
+    if (result) {
+      // Immutable update: never mutate the previous results object.
+      commandResults.value = { ...commandResults.value, [commandId]: result };
     } else {
       emit("failed", t("skillInstall.errors.actionFailed"));
     }

@@ -3152,6 +3152,16 @@ export default {
         "Solo se usa el catálogo administrado de paquetes; nunca se ejecutan comandos del repositorio.",
       elevation: "Puede requerir permisos elevados",
     },
+    command: {
+      sectionHint:
+        "Comandos de instalación aprobados: ejecútalos tú mismo cuando sea necesario. El asistente no puede ejecutarlos ni modificarlos.",
+      run: "Ejecutar",
+      envVars: "Inyecta (desde el almacenamiento seguro): {names}",
+      injected: "Inyectado: {names}",
+      resultOk: "Código de salida {code}.",
+      resultFailed: "Error: {message}",
+      output: "Salida",
+    },
     errors: {
       actionFailed: "La acción de instalación falló. Inténtalo de nuevo.",
       secretFailed: "No se pudo guardar la credencial. NO se guardó.",

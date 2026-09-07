@@ -494,6 +494,66 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     }
   }, 60_000);
 
+  it("runApprovedCommand executes a persisted template and audits the run (FR-16)", async () => {
+    const module = new SkillInstallationModule();
+    // Fixture whose install.md proposes ONE safe runnable command.
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cmd-fixture-"));
+    fs.writeFileSync(
+      path.join(repo, "SKILL.md"),
+      "---\nname: cmd-skill\ndescription: Command fixture\n---\n\n# Usage\n\nPrint version."
+    );
+    fs.writeFileSync(
+      path.join(repo, "install.md"),
+      "# Install\n\nnode --version\n"
+    );
+    try {
+      const prepared = await module.prepare({
+        conversationId: "conv-run-cmd",
+        source: repo,
+      });
+      const status = await module.getStatus(prepared.sessionId);
+      const template = status.safePlan?.commands?.find(
+        (c) => c.executable === "node"
+      );
+      expect(template).toBeDefined();
+      const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+      let approved = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: token,
+      });
+      if (approved.state === "awaiting_secret") {
+        approved = await module.resumeAfterSecret(prepared.sessionId);
+      }
+      expect(["ready", "installing_dependencies"]).toContain(approved.state);
+
+      // The run succeeds and never throws on the NOT-NULL event columns
+      // (regression: command-executed previously wrote undefined states).
+      const run = await module.runApprovedCommand(
+        prepared.sessionId,
+        template?.id ?? ""
+      );
+      expect(run.ok).toBe(true);
+      if (!run.ok) return;
+      expect(run.result.ok).toBe(true);
+      expect(run.result.exitCode).toBe(0);
+      expect(run.result.stdoutPreview).toMatch(/v\d+\.\d+/);
+
+      // Unknown template ids are refused — command text cannot be smuggled.
+      const bogus = await module.runApprovedCommand(
+        prepared.sessionId,
+        "cmd:evil"
+      );
+      expect(bogus.ok).toBe(true); // module-level call resolves…
+      if (!bogus.ok) return;
+      expect(bogus.result.ok).toBe(false);
+      expect(bogus.result.errorCode).toBe("COMMAND_NOT_FOUND");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it("cancelling an approved session revokes command authorization (review D3)", async () => {
     const module = new SkillInstallationModule();
     const prepared = await module.prepare({

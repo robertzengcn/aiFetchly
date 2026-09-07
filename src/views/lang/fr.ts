@@ -3137,6 +3137,16 @@ export default {
         "Seul le catalogue de paquets géré est utilisé ; les commandes du dépôt ne sont jamais exécutées.",
       elevation: "Peut nécessiter des permissions élevées",
     },
+    command: {
+      sectionHint:
+        "Commandes d'installation approuvées : exécutez-les vous-même si nécessaire. L'assistant ne peut ni les exécuter ni les modifier.",
+      run: "Exécuter",
+      envVars: "Injecte (depuis le stockage sécurisé) : {names}",
+      injected: "Injecté : {names}",
+      resultOk: "Code de sortie {code}.",
+      resultFailed: "Échec : {message}",
+      output: "Sortie",
+    },
     errors: {
       actionFailed: "L'action d'installation a échoué. Réessayez.",
       secretFailed:

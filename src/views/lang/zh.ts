@@ -2993,6 +2993,16 @@ export default {
       typedHint: "仅使用托管软件包目录——绝不执行来自仓库的命令。",
       elevation: "可能需要管理员权限",
     },
+    command: {
+      sectionHint:
+        "已批准的安装命令——需要时由你自行运行。助手无法运行或修改它们。",
+      run: "运行",
+      envVars: "注入（来自安全存储）：{names}",
+      injected: "已注入：{names}",
+      resultOk: "退出码 {code}。",
+      resultFailed: "失败：{message}",
+      output: "输出",
+    },
     errors: {
       actionFailed: "安装操作失败。请重试。",
       secretFailed: "保存凭据失败。凭据未被保存。",

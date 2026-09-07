@@ -909,8 +909,10 @@ export class SkillInstallationModule extends BaseModule {
       events,
       sessionId,
       result.ok ? "command-executed" : "command-failed",
-      undefined,
-      undefined,
+      // The event table requires non-null states; a command run is not a
+      // transition, so record the session's current state for both sides.
+      session.state,
+      session.state,
       // Audit records names + outcome only — never secret values or raw
       // output (both may embed credentials).
       `${commandId}: ok=${result.ok} exit=${result.exitCode ?? "n/a"} ` +
@@ -1555,6 +1557,9 @@ export class SkillInstallationModule extends BaseModule {
         args: c.args,
         riskLevel: c.riskLevel,
         rationale: c.rationale,
+        // Declared env-var NAMES only — values live in the secure store and
+        // are injected directly into the child process by the runner.
+        environmentNames: c.environmentNames,
       })),
       warnings: plan.warnings.map((w) => w.message),
     };

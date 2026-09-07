@@ -3150,6 +3150,16 @@ export default {
         "Es wird nur der verwaltete Paketkatalog verwendet — Befehle aus dem Repository werden nie ausgeführt.",
       elevation: "Erfordert möglicherweise erhöhte Berechtigungen",
     },
+    command: {
+      sectionHint:
+        "Genehmigte Setup-Befehle — führen Sie sie bei Bedarf selbst aus. Der Assistent kann sie weder ausführen noch ändern.",
+      run: "Ausführen",
+      envVars: "Injiziert (aus dem sicheren Speicher): {names}",
+      injected: "Injiziert: {names}",
+      resultOk: "Exit-Code {code}.",
+      resultFailed: "Fehlgeschlagen: {message}",
+      output: "Ausgabe",
+    },
     errors: {
       actionFailed:
         "Die Installationsaktion ist fehlgeschlagen. Versuchen Sie es erneut.",

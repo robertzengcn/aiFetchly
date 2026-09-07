@@ -3122,6 +3122,16 @@ export default {
         "Only the managed package catalog is used — commands from the repository are never executed.",
       elevation: "May need elevated permissions",
     },
+    command: {
+      sectionHint:
+        "Approved setup commands — run them yourself when needed. The assistant cannot run or alter them.",
+      run: "Run",
+      envVars: "Injects (from secure storage): {names}",
+      injected: "Injected: {names}",
+      resultOk: "Exit {code}.",
+      resultFailed: "Failed: {message}",
+      output: "Output",
+    },
     errors: {
       actionFailed: "The installation action failed. Try again.",
       secretFailed: "Storing the credential failed. It was NOT saved.",

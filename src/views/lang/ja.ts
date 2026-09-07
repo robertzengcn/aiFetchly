@@ -3088,6 +3088,16 @@ export default {
         "管理パッケージカタログのみを使用します。リポジトリのコマンドは決して実行されません。",
       elevation: "昇格された権限が必要な場合があります",
     },
+    command: {
+      sectionHint:
+        "承認済みのセットアップコマンドです。必要なときにご自身で実行してください。アシスタントは実行も変更もできません。",
+      run: "実行",
+      envVars: "注入（セキュアストレージから）：{names}",
+      injected: "注入済み：{names}",
+      resultOk: "終了コード {code}。",
+      resultFailed: "失敗：{message}",
+      output: "出力",
+    },
     errors: {
       actionFailed: "インストール操作に失敗しました。再試行してください。",
       secretFailed: "認証情報の保存に失敗しました。保存されていません。",

@@ -14,6 +14,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   approveSkillInstall: vi.fn(),
   approveSkillInstallDependency: vi.fn(),
   cancelSkillInstall: vi.fn(),
+  runApprovedSkillInstallCommand: vi.fn(),
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
   getSkillInstallApprovalToken: vi
@@ -27,6 +28,7 @@ import {
   approveSkillInstallDependency,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
+  runApprovedSkillInstallCommand,
   submitSkillInstallSecret,
 } from "@/views/api/skillInstallation";
 
@@ -224,6 +226,7 @@ describe("SkillInstallCard", () => {
               args: ["install", "-r", "requirements.txt"],
               riskLevel: "low",
               rationale: "Proposed by repository instructions",
+              environmentNames: [],
             },
           ],
           warnings: [],
@@ -268,6 +271,7 @@ describe("SkillInstallCard", () => {
               args: ["install", "-r", "requirements.txt"],
               riskLevel: "low",
               rationale: "Proposed by repository instructions",
+              environmentNames: [],
             },
             {
               id: "cmd:sudo",
@@ -275,6 +279,7 @@ describe("SkillInstallCard", () => {
               args: ["apt", "install", "ffmpeg"],
               riskLevel: "high",
               rationale: "Privilege escalation detected",
+              environmentNames: [],
             },
           ],
           warnings: [],
@@ -487,5 +492,118 @@ describe("SkillInstallCard", () => {
     expect(wrapper.find('[data-testid="skill-install-deps"]').exists()).toBe(
       false
     );
+  });
+
+  // --- Approved command execution (FR-06/FR-16) ---
+  const commandSnapshot = makeSnapshot({
+    state: "installing_dependencies",
+    nextAction: "approve-dependency",
+    safePlan: {
+      source: "/tmp/video-use",
+      revision: "abc123def456",
+      skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+      dependencies: [],
+      credentials: ["ELEVENLABS_API_KEY"],
+      mode: "managed-copy",
+      commands: [
+        {
+          id: "cmd:setup",
+          executable: "python",
+          args: ["-m", "pip", "install", "-r", "requirements.txt"],
+          riskLevel: "medium",
+          rationale: "install helper deps",
+          environmentNames: ["ELEVENLABS_API_KEY"],
+        },
+      ],
+      warnings: [],
+    },
+  });
+
+  it("renders per-command run controls with args, risk, and env NAMES", () => {
+    const wrapper = mountCard(commandSnapshot);
+    expect(
+      wrapper.find('[data-testid="skill-install-run-commands"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="skill-install-run-cmd:setup"]').exists()
+    ).toBe(true);
+    expect(wrapper.text()).toContain(
+      "python -m pip install -r requirements.txt"
+    );
+    expect(wrapper.text()).toContain("medium");
+    // Env-var NAMES surface for informed consent; values never do.
+    expect(wrapper.text()).toContain("ELEVENLABS_API_KEY");
+    expect(wrapper.text()).not.toMatch(/sk-[a-zA-Z0-9]{10,}/);
+  });
+
+  it("run sends only the template id + token, then shows the redacted result", async () => {
+    vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(
+      "test-approval-token"
+    );
+    vi.mocked(runApprovedSkillInstallCommand).mockResolvedValue({
+      ok: true,
+      commandId: "cmd:setup",
+      exitCode: 0,
+      stdoutPreview: "installed 3 packages",
+      stderrPreview: "",
+      timedOut: false,
+      injectedEnvNames: ["ELEVENLABS_API_KEY"],
+    });
+    const wrapper = mountCard(commandSnapshot);
+    await wrapper
+      .find('[data-testid="skill-install-run-cmd:setup"]')
+      .trigger("click");
+    await flushPromises();
+    // The renderer cannot substitute command text — id + token only.
+    expect(runApprovedSkillInstallCommand).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      commandId: "cmd:setup",
+      approvalToken: "test-approval-token",
+    });
+    expect(
+      wrapper
+        .find('[data-testid="skill-install-run-result-cmd:setup"]')
+        .exists()
+    ).toBe(true);
+    expect(wrapper.text()).toContain("Exit 0");
+    expect(wrapper.text()).toContain("Injected: ELEVENLABS_API_KEY");
+    expect(wrapper.text()).toContain("installed 3 packages");
+  });
+
+  it("a failed run shows the failure without a snapshot update", async () => {
+    vi.mocked(getSkillInstallApprovalToken).mockResolvedValue(
+      "test-approval-token"
+    );
+    vi.mocked(runApprovedSkillInstallCommand).mockResolvedValue({
+      ok: false,
+      commandId: "cmd:setup",
+      exitCode: 1,
+      stdoutPreview: "",
+      stderrPreview: "pip: not found",
+      timedOut: false,
+      injectedEnvNames: [],
+      errorCode: "COMMAND_FAILED",
+    });
+    const wrapper = mountCard(commandSnapshot);
+    await wrapper
+      .find('[data-testid="skill-install-run-cmd:setup"]')
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Failed");
+    expect(wrapper.text()).toContain("pip: not found");
+    expect(wrapper.emitted("updated")).toBeUndefined();
+  });
+
+  it("hides run controls during review and in terminal states", () => {
+    const review = mountCard(makeSnapshot()); // awaiting_approval
+    expect(
+      review.find('[data-testid="skill-install-run-commands"]').exists()
+    ).toBe(false);
+    const ready = mountCard(
+      makeSnapshot({ state: "ready", nextAction: "ready" })
+    );
+    expect(
+      ready.find('[data-testid="skill-install-run-commands"]').exists()
+    ).toBe(false);
   });
 });

@@ -49,7 +49,27 @@ interface InstallSnapshot {
       installMethod?: string;
       requiresElevation?: boolean;
     }[];
+    commands?: {
+      id: string;
+      executable: string;
+      args: string[];
+      riskLevel: string;
+      rationale: string;
+      environmentNames: string[];
+    }[];
   };
+}
+
+interface CommandRunResult {
+  ok: boolean;
+  commandId: string;
+  exitCode: number | null;
+  stdoutPreview: string;
+  stderrPreview: string;
+  timedOut: boolean;
+  injectedEnvNames: string[];
+  errorCode?: string;
+  message?: string;
 }
 
 interface SecretSubmitResult {
@@ -598,5 +618,89 @@ function makeDependencyFixture(root: string): string {
     "# Install\n\nRequires ffmpeg on PATH.\n"
   );
   fs.writeFileSync(path.join(dir, "helpers", "cut.py"), "# helper\n");
+  return dir;
+}
+
+test("approved command execution is renderer-driven and template-bound (FR-16)", async ({
+  aiApp,
+}) => {
+  const app = aiApp;
+  const fixture = makeCommandFixture(app.testRoot.rootPath);
+  const prepared = await prepareToAwaitingApproval(app, fixture);
+  expect(prepared?.state).toBe("awaiting_approval");
+  const held = prepared as InstallSnapshot;
+
+  // The proposed command became a persisted, reviewed template.
+  const template = held.safePlan?.commands?.find(
+    (c) => c.executable === "node"
+  );
+  expect(template).toBeDefined();
+  expect(template?.args.join(" ")).toContain("--version");
+
+  // Approve the plan (token-bound, renderer gesture) — no credentials on
+  // this fixture, so the session runs through to ready or a dependency hold.
+  const approved = await approve(app, held);
+  expect(["ready", "installing_dependencies"]).toContain(approved?.state);
+
+  // Run the approved template through the renderer channel: the caller
+  // supplies ONLY the template id — never command text.
+  const token = await approvalToken(app, held.sessionId);
+  const run = await invoke<CommandRunResult>(
+    app,
+    "skill-install:run-command",
+    {
+      sessionId: held.sessionId,
+      commandId: template?.id,
+      approvalToken: token,
+    }
+  );
+  expect(run?.ok).toBe(true);
+  expect(run?.exitCode).toBe(0);
+  expect(run?.stdoutPreview).toMatch(/v\d+\.\d+/);
+
+  // Text substitution is impossible: an id that is not a persisted
+  // template is refused outright, and the channel schema has no field
+  // that accepts command text at all.
+  const bogus = await invoke<CommandRunResult>(
+    app,
+    "skill-install:run-command",
+    {
+      sessionId: held.sessionId,
+      commandId: "cmd:rm -rf /",
+      approvalToken: token,
+    }
+  );
+  expect(bogus?.ok).toBe(false);
+  expect(bogus?.errorCode).toBe("COMMAND_NOT_FOUND");
+
+  // A wrong token is refused before anything executes.
+  const wrongToken = await invoke<CommandRunResult>(
+    app,
+    "skill-install:run-command",
+    {
+      sessionId: held.sessionId,
+      commandId: template?.id,
+      approvalToken: "definitely-not-the-token",
+    }
+  );
+  expect(wrongToken).toBeNull();
+
+  await assertCleanTeardown(app, {
+    expectedExternalOrigins: ["https://github.com"],
+  });
+});
+
+/** Fixture proposing one safe, deterministic command (no credential). */
+function makeCommandFixture(root: string): string {
+  const dir = path.join(root, "fixtures", "video-use-cmd");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    "---\nname: video-use-cmd\ndescription: Command fixture\n---\n\n# Usage\n\nPrint the runtime version."
+  );
+  fs.writeFileSync(
+    path.join(dir, "install.md"),
+    "# Install\n\nRun the following to verify the runtime:\n\nnode --version\n"
+  );
   return dir;
 }
