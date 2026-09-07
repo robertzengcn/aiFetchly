@@ -3277,6 +3277,7 @@ function managedBrowserToolWrapper(
     conversationId: string;
     toolCallId: string;
     skipPermissionCheck?: boolean;
+    signal?: AbortSignal;
     emitProgress?: (event: {
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
       message: string;
@@ -3292,6 +3293,7 @@ function managedBrowserToolWrapper(
     toolCallId: context.toolCallId,
     skipPermissionCheck: context.skipPermissionCheck,
     emitProgress: context.emitProgress,
+    signal: context.signal,
   })
     .then((result) => ({ success: true, result }))
     .catch((error: unknown) => {

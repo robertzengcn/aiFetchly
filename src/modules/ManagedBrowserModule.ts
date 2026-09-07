@@ -804,6 +804,26 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * GAP-14: propagate job/conversation cancellation to the ACTIVE worker
+   * request. The worker aborts the in-flight program between actions and
+   * returns an outcome whose effect reflects uncertainty (cancelled
+   * consequential steps keep effect=unknown).
+   */
+  public async cancelActiveRequest(sessionId: string): Promise<void> {
+    const record = this.sessions.get(sessionId);
+    if (!record || !record.client) {
+      return;
+    }
+    await record.client
+      .request(
+        { type: "CANCEL_REQUEST", targetRequestId: null },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+  }
+
+  /**
    * GAP-12: privileged page-context script execution. ALWAYS requires an
    * explicit user approval at the tool layer (privileged_script class) —
    * this method only transports the approved request to the worker.

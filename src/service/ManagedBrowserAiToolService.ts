@@ -77,6 +77,8 @@ export interface BrowserToolExecutionContext {
   readonly toolCallId: string;
   /** Caller already obtained user consent (permission-prompt grant). */
   readonly skipPermissionCheck?: boolean;
+  /** Abort signal from the query loop / ToolJobRegistry (GAP-14). */
+  readonly signal?: AbortSignal;
   /** Rate-limited progress sink wired by the query loop. */
   readonly emitProgress?: (event: {
     phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
@@ -152,6 +154,8 @@ export interface BrowserModuleLike {
   getLastObservation?(sessionId: string): {
     elements: ReadonlyArray<{ ref: string; role: string; name: string }>;
   } | null;
+  /** Cancel the active worker request (GAP-14). */
+  cancelActiveRequest?(sessionId: string): Promise<void>;
 }
 
 /** Prefix stamped on every observation-derived payload (§14). */
@@ -353,7 +357,7 @@ export class ManagedBrowserAiToolService {
       const after = this.browserModule.getStatus(parsed.data.session_id);
       return { navigated: true, status: after };
     } catch (error) {
-      this.wrapModuleError(error);
+      return this.wrapModuleError(error);
     }
   }
 
@@ -466,6 +470,16 @@ export class ManagedBrowserAiToolService {
     };
     emit(0);
 
+    // GAP-14: cancellation of the tool call (timeout, job cancel, or
+    // conversation teardown) propagates to the ACTIVE worker program —
+    // the worker stops between actions and reports effect=unknown when a
+    // consequential step may have landed.
+    const onAbort = (): void => {
+      void this.browserModule.cancelActiveRequest?.(
+        parsed.data.session_id
+      );
+    };
+    context.signal?.addEventListener("abort", onAbort);
     try {
       const result = await this.browserModule.runActions(
         parsed.data.session_id,
@@ -498,7 +512,9 @@ export class ManagedBrowserAiToolService {
           : null,
       } as unknown as Record<string, unknown>;
     } catch (error) {
-      this.wrapModuleError(error);
+      return this.wrapModuleError(error);
+    } finally {
+      context.signal?.removeEventListener("abort", onAbort);
     }
   }
 

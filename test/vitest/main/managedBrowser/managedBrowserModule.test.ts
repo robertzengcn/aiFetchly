@@ -226,6 +226,8 @@ class FakeWorkerClient {
           } as unknown as ManagedBrowserOutboundMessage),
         BEGIN_HANDOFF: () =>
           stateChangedReply(deps.sessionId, "handoff", "user_requested"),
+        CANCEL_REQUEST: () =>
+          stateChangedReply(deps.sessionId, "running", "cancelled"),
         RESUME_HANDOFF: () =>
           stateChangedReply(deps.sessionId, "ready", "resumed"),
         ...script,
@@ -1232,5 +1234,34 @@ describe("GAP-11 requested start URL", () => {
     expect(
       h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
     ).toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// GAP-14: cancellation propagation
+// ---------------------------------------------------------------------------
+
+describe("GAP-14 cancellation propagation", () => {
+  it("cancelActiveRequest sends CANCEL_REQUEST to the live session", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    await h.module.cancelActiveRequest(status.sessionId);
+    const cancel = h.clients[0].sent.find((m) => m.type === "CANCEL_REQUEST");
+    expect(cancel).toBeDefined();
+    if (!cancel || cancel.type !== "CANCEL_REQUEST") {
+      throw new Error("unreachable");
+    }
+    expect(cancel.targetRequestId).toBeNull();
+  });
+
+  it("is a safe no-op for unknown sessions", async () => {
+    const h = makeHarness();
+    await expect(
+      h.module.cancelActiveRequest("mb_missing0000001")
+    ).resolves.toBeUndefined();
   });
 });

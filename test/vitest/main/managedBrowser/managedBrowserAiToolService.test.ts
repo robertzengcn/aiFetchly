@@ -44,6 +44,7 @@ function makeModule(
     start: vi.fn(async () => status()),
     getLastObservation: vi.fn(() => null),
     notifyApprovalRequired: vi.fn(),
+    cancelActiveRequest: vi.fn(async (): Promise<void> => undefined),
     getStatus: vi.fn((sessionId: string) =>
       sessionId === SESSION_ID ? status() : null
     ),
@@ -466,5 +467,41 @@ describe("GAP-12 privileged page-context script", () => {
       )
     );
     expect(err.code).toBe("invalid_tool_arguments");
+  });
+});
+
+
+describe("GAP-14 abort propagation", () => {
+  it("an aborted tool signal cancels the active worker program", async () => {
+    const module = makeModule();
+    const controller = new AbortController();
+    const service = makeService({ module });
+    const promise = service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 1,
+        program: { actions: [{ type: "scroll", direction: "down", amount: 10 }] },
+      },
+      { ...CTX, skipPermissionCheck: true, signal: controller.signal }
+    );
+    controller.abort();
+    await promise;
+    expect(module.cancelActiveRequest).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("removes the listener after completion (no leak across calls)", async () => {
+    const module = makeModule();
+    const controller = new AbortController();
+    const service = makeService({ module });
+    await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 1,
+        program: { actions: [{ type: "scroll", direction: "up", amount: 10 }] },
+      },
+      { ...CTX, skipPermissionCheck: true, signal: controller.signal }
+    );
+    controller.abort(); // after completion — must NOT trigger a cancel
+    expect(module.cancelActiveRequest).not.toHaveBeenCalled();
   });
 });
