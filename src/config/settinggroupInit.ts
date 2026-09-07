@@ -62,6 +62,26 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         description: "managed-browser-cache-clear-on-exit-description",
         type: "toggle",
       },
+      {
+        // CAPTCHA provider gates (GAP-15): every gate defaults DENY. The
+        // token + master toggle reuse the existing 2captcha rows above.
+        key: "managed-browser-2captcha-disclosure",
+        value: "0",
+        description: "managed-browser-2captcha-disclosure-description",
+        type: "toggle",
+      },
+      {
+        key: "managed-browser-2captcha-domains",
+        value: "",
+        description: "managed-browser-2captcha-domains-description",
+        type: "input",
+      },
+      {
+        key: "managed-browser-2captcha-non-login",
+        value: "0",
+        description: "managed-browser-2captcha-non-login-description",
+        type: "toggle",
+      },
     ],
   },
   {

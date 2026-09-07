@@ -53,6 +53,7 @@ import {
 } from "@/modules/ManagedBrowserCacheModule";
 import { normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import { decideCaptchaResolution } from "@/service/CaptchaResolutionPolicy";
+import { getDefaultCaptchaProviderService } from "@/service/CaptchaProviderService";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
 import type {
   BrowserActionProgram,
@@ -1334,6 +1335,71 @@ export class ManagedBrowserModule {
         }`
       );
       return { enabled: false as const, reasonCode: "cache_unavailable" };
+    }
+  }
+
+  /**
+   * GAP-15: policy ladder + gated provider attempt for one challenge. The
+   * provider is only consulted when the ladder authorizes it; ANY refusal
+   * or failure keeps the browser in the manual handoff it is already in.
+   * The solved token is NOT auto-applied (page-side application is the
+   * remaining Phase-C.5 worker piece) — the attempt result is surfaced on
+   * the safe status and the session stays in handoff for confirmation.
+   */
+  private async runChallengePolicy(
+    record: ActiveSessionRecord,
+    event: Extract<
+      ManagedBrowserOutboundMessage,
+      { type: "CHALLENGE_DETECTED" }
+    >
+  ): Promise<void> {
+    try {
+      const provider = getDefaultCaptchaProviderService();
+      const config = await provider.getConfig();
+      const decision = decideCaptchaResolution({
+        sessionId: record.sessionId,
+        challengeId: event.challengeId,
+        origin: event.origin,
+        platformId: record.platformId,
+        challengeType: event.kind,
+        flow: event.flowClassification,
+        currentActionRisk: "read",
+        providerInputAvailable: event.providerInputAvailable,
+        providerConfig: {
+          enabled: config.enabled,
+          tokenPresent: config.tokenPresent,
+          disclosureVersionAccepted: config.disclosureVersionAccepted,
+          authorizedDomains: config.authorizedDomains,
+          nonLoginChallengesAllowed: config.nonLoginChallengesAllowed,
+        },
+        attemptedChallengeIds: record.challengeAttempts,
+      });
+      if (decision.mode === "blocked") {
+        record.lastErrorCode = "challenge_resolution_failed";
+        return;
+      }
+      if (decision.mode === "provider") {
+        const outcome = await provider.attemptSolve({
+          challengeId: event.challengeId,
+          origin: event.origin,
+          siteKey: "",
+          pageUrl: record.currentOrigin ?? event.origin,
+          flow: event.flowClassification,
+          currentActionRisk: "read",
+        });
+        log.info(
+          `[ManagedBrowserModule] provider attempt: ${
+            outcome.status
+          } (${"reasonCode" in outcome ? outcome.reasonCode : "solved"})`
+        );
+      }
+      // manual_handoff: nothing to do — the session is already in handoff.
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] challenge policy failed: ${
+          error instanceof Error ? error.name : "unknown"
+        }`
+      );
     }
   }
 
