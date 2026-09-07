@@ -196,3 +196,43 @@ describe("BuckemailController.getUnifiedSendLog", () => {
     expect(res.records).toHaveLength(0);
   });
 });
+
+describe("BuckemailController.getUnifiedSendLogDetail", () => {
+  it("returns the full legacy row for (legacy, id)", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const model = new EmailMarketingSendLogModel(tmpDir);
+    const entity = new EmailMarketingSendLogEntity();
+    entity.task_id = 6001;
+    entity.status = SendStatus.Success;
+    entity.receiver = "legacy-detail@x.com";
+    entity.title = "Legacy Detail";
+    entity.content = "controller legacy body";
+    entity.log = "controller smtp log";
+    entity.record_time = "2026-01-01T00:00:00.000Z";
+    const id = await model.create(entity);
+
+    const controller = new BuckemailController();
+    const detail = await controller.getUnifiedSendLogDetail("legacy", id);
+
+    expect(detail.id).toBe(id);
+    expect(detail.source).toBe("legacy");
+    expect(detail.status).toBe("Success");
+    expect(detail.receiver).toBe("legacy-detail@x.com");
+    expect(detail.content).toBe("controller legacy body");
+    expect(detail.log).toBe("controller smtp log");
+    expect(detail.taskId).toBe(6001);
+  });
+
+  it("throws when the row does not exist", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    await seedSendLogRow(1, SendStatus.Success, "a@x.com", "T");
+
+    const controller = new BuckemailController();
+    await expect(
+      controller.getUnifiedSendLogDetail("legacy", 999999)
+    ).rejects.toThrow("send log record not found");
+  });
+});

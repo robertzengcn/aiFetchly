@@ -11,6 +11,7 @@ import {
   BuckEmailListType,
   EmailMarketingSendLogListDisplay,
   UnifiedSendLogEntry,
+  UnifiedSendLogDetailEntry,
 } from "@/entityTypes/buckemailType";
 import { getStatusName } from "@/modules/lib/function";
 
@@ -135,5 +136,13 @@ export class BuckemailController {
       records: res.records,
       total: res.total,
     };
+  }
+
+  //get one unified send-log row's detail, keyed by the (source, id) pair
+  public async getUnifiedSendLogDetail(
+    source: "legacy" | "authorized",
+    id: number
+  ): Promise<UnifiedSendLogDetailEntry> {
+    return await this.unifiedSendLogModule.getUnifiedSendLogDetail(source, id);
   }
 }

@@ -52,6 +52,16 @@ describe("preload invoke allowlist", () => {
     expect(preloadInvokeWhitelistSource()).toContain("UNIFIED_EMAIL_SEND_LOG");
   });
 
+  it("allows UNIFIED_EMAIL_SEND_LOG_DETAIL (detail view read via invoke)", () => {
+    // Same bug class as UNIFIED_EMAIL_SEND_LOG above: the detail channel is
+    // registered in buckEmail-ipc.ts and invoked by the detail page via
+    // windowInvoke — a missing allowlist entry silently returns undefined
+    // and windowInvoke throws "unknow error". This pins it.
+    expect(preloadInvokeWhitelistSource()).toContain(
+      "UNIFIED_EMAIL_SEND_LOG_DETAIL"
+    );
+  });
+
   it("allows USER_INFO_UPDATED on the receive allowlist (FR-7 broadcast)", () => {
     // USER_INFO_UPDATED is a main->renderer push channel, allowlisted in the
     // `receive` method body (and removeAllListeners), not `invoke`.

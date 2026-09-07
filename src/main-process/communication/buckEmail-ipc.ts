@@ -11,6 +11,7 @@ import {
   BUCKEMAILTASKLIST,
   BUCKEMAILTASKSENDLOG,
   UNIFIED_EMAIL_SEND_LOG,
+  UNIFIED_EMAIL_SEND_LOG_DETAIL,
 } from "@/config/channellist";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
@@ -19,6 +20,7 @@ import {
   buckEmailTaskListInputSchema,
   buckEmailTaskSendLogInputSchema,
   unifiedEmailSendLogInputSchema,
+  unifiedEmailSendLogDetailInputSchema,
 } from "@/schemas/ipc/buckEmail";
 /**
  * buck send email ipc
@@ -172,6 +174,16 @@ export function registerBuckEmailIpcHandlers() {
         records: res.records,
         num: res.total,
       };
+    }
+  );
+  //get one unified send-log row's detail (legacy content/log or authorized
+  //revision-pinned body + provider envelope)
+  registerValidatedHandler(
+    UNIFIED_EMAIL_SEND_LOG_DETAIL,
+    unifiedEmailSendLogDetailInputSchema,
+    async (input) => {
+      const buckemailCon = new BuckemailController();
+      return await buckemailCon.getUnifiedSendLogDetail(input.source, input.id);
     }
   );
 }

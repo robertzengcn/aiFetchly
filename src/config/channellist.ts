@@ -74,6 +74,8 @@ export const SENDTESTEMAIL = "send:test:email";
 export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
 export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
 export const UNIFIED_EMAIL_SEND_LOG = "buck:email:sendlog:unified";
+export const UNIFIED_EMAIL_SEND_LOG_DETAIL =
+  "buck:email:sendlog:unified:detail";
 
 // ======== Email receive + AI auto-reply ========
 export const EMAIL_RECEIVE_SYNC = "email:receive:sync";

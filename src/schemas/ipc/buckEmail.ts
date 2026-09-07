@@ -53,3 +53,21 @@ export const unifiedEmailSendLogInputSchema = lazySchema(() =>
 export type UnifiedEmailSendLogInput = z.infer<
   ReturnType<typeof unifiedEmailSendLogInputSchema>
 >;
+
+/**
+ * IPC input schema: UNIFIED_EMAIL_SEND_LOG_DETAIL
+ *
+ * Detail lookup for one unified send-log row. The row's stable identity is
+ * the (source, id) pair — id alone is not globally unique across the two
+ * halves (legacy emailmarketing_send_log vs authorized delivery outcomes).
+ */
+export const unifiedEmailSendLogDetailInputSchema = lazySchema(() =>
+  z.strictObject({
+    source: z.enum(["legacy", "authorized"]),
+    id: z.number().int().positive(),
+  })
+);
+
+export type UnifiedEmailSendLogDetailInput = z.infer<
+  ReturnType<typeof unifiedEmailSendLogDetailInputSchema>
+>;
