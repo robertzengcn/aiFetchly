@@ -22,6 +22,9 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
                 {{ item.status }}
             </v-chip>
         </template>
+        <template v-slot:item.record_time="{ item }">
+            <span data-testid="record-time-cell">{{ formatRecordTime(item.record_time) }}</span>
+        </template>
         <template v-slot:item.actions="{ item }">
             <v-icon size="small" class="mr-2" color="primary" @click="openDetail(item.source, item.id)">
                 mdi-file-document-outline
@@ -36,7 +39,7 @@ import { useRouter } from 'vue-router'
 import { getUnifiedEmailSendLog } from '@/views/api/buckemail'
 import { ref, computed } from 'vue'
 import { SearchResult } from '@/views/api/types'
-import { CapitalizeFirstLetter } from "@/views/utils/function"
+import { CapitalizeFirstLetter, formatRecordTime } from "@/views/utils/function"
 import { UnifiedSendLogEntry } from "@/entityTypes/buckemailType"
 import { Header } from "@/entityTypes/commonType"
 

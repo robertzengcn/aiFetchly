@@ -190,6 +190,25 @@ describe("SendLogDetail (unified send-log detail page)", () => {
     expect(wrapper.text()).toContain("Send log record not found");
   });
 
+  it("renders record_time in the user's local timezone", async () => {
+    apiMocks.getUnifiedEmailSendLogDetail.mockResolvedValue({
+      ...AUTHORIZED_DETAIL,
+      record_time: "2026-09-02T00:00:00.000Z",
+    });
+    const { wrapper } = await mountDetail("authorized", "12");
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLogDetail).toHaveBeenCalled();
+    });
+    await vi.dynamicImportSettled();
+
+    // The record-time value renders through the shared local-time formatter,
+    // not the raw UTC ISO string.
+    expect(wrapper.text()).toContain(
+      new Date("2026-09-02T00:00:00.000Z").toLocaleString()
+    );
+    expect(wrapper.text()).not.toContain("2026-09-02T00:00:00.000Z");
+  });
+
   it("shows an error alert for an invalid source param (route guard)", async () => {
     // An invalid source must not reach the API.
     const { wrapper } = await mountDetail("bogus", "11");

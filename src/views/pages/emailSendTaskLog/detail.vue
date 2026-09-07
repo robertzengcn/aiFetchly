@@ -36,7 +36,7 @@
             <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.title") }}</div>
             <div>{{ detail.title || "—" }}</div>
             <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.record_time") }}</div>
-            <div>{{ formatDate(detail.record_time) }}</div>
+            <div>{{ formatRecordTime(detail.record_time) }}</div>
           </v-col>
           <v-col cols="12" md="6">
             <!-- Authorized half: provider envelope + ids -->
@@ -46,9 +46,9 @@
               <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.actor") }}</div>
               <div>{{ detail.actor || "—" }}</div>
               <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.submitted_at") }}</div>
-              <div>{{ formatDate(detail.submittedAt) }}</div>
+              <div>{{ formatRecordTime(detail.submittedAt) }}</div>
               <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.completed_at") }}</div>
-              <div>{{ formatDate(detail.completedAt) }}</div>
+              <div>{{ formatRecordTime(detail.completedAt) }}</div>
             </template>
             <!-- Legacy half: task link -->
             <template v-else>
@@ -114,6 +114,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { getUnifiedEmailSendLogDetail } from "@/views/api/buckemail";
+import { formatRecordTime } from "@/views/utils/function";
 import type { UnifiedSendLogDetailEntry } from "@/entityTypes/buckemailType";
 
 const { t } = useI18n({ inheritLocale: true });
@@ -176,14 +177,5 @@ function statusColor(status: string): string {
     return "warning";
   }
   return "default";
-}
-
-function formatDate(iso: string | undefined): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
 }
 </script>

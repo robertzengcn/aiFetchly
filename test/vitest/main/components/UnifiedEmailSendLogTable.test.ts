@@ -79,12 +79,10 @@ const stubs = {
     ],
     emits: ["update:options", "update:modelValue"],
     template: `<div data-testid="v-data-table-server">
-      <slot
-        v-for="(item, i) in items"
-        :key="i"
-        name="item.actions"
-        :item="item"
-      />
+      <template v-for="(item, i) in items" :key="i">
+        <slot name="item.record_time" :item="item" />
+        <slot name="item.actions" :item="item" />
+      </template>
     </div>`,
   },
   VChip: {
@@ -99,6 +97,10 @@ const stubs = {
   },
 };
 
+// Mixed record_time shapes exactly as the two data sources deliver them:
+//   - legacy half:     local-naive "YYYY-MM-DD HH:mm:ss" (emailmarketing_send_log)
+//   - authorized half: UTC ISO (outbound_email_delivery_outcome toISOString)
+// Both must DISPLAY in the user's local timezone via a shared formatter.
 const SAMPLE_ROWS: UnifiedSendLogEntry[] = [
   {
     id: 1,
@@ -106,7 +108,7 @@ const SAMPLE_ROWS: UnifiedSendLogEntry[] = [
     status: "Success",
     receiver: "alice@example.com",
     title: "Welcome Alice",
-    record_time: "2026-09-01T00:00:00.000Z",
+    record_time: "2026-09-01 08:30:00",
     taskId: 1001,
   },
   {
@@ -206,6 +208,46 @@ describe("UnifiedEmailSendLogTable", () => {
     const table = wrapper.findComponent({ name: "VDataTableServer" });
     const headers = table.props("headers") as Array<{ key: string }>;
     expect(headers.some((h) => h.key === "actions")).toBe(true);
+  });
+
+  it("renders record_time in the user's local timezone for both row shapes", async () => {
+    const { wrapper } = mountTable();
+    wrapper
+      .findComponent({ name: "VDataTableServer" })
+      .vm.$emit("update:options", { page: 1, itemsPerPage: 10, sortBy: [] });
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLog).toHaveBeenCalledTimes(1);
+    });
+    await vi.dynamicImportSettled();
+
+    // One formatted cell per row, in row order (legacy then authorized).
+    const cells = wrapper.findAll('[data-testid="record-time-cell"]');
+    expect(cells).toHaveLength(2);
+    expect(cells[0].text()).toBe(
+      new Date("2026-09-01 08:30:00").toLocaleString()
+    );
+    expect(cells[1].text()).toBe(
+      new Date("2026-09-02T00:00:00.000Z").toLocaleString()
+    );
+  });
+
+  it("shows a placeholder for a row without record_time", async () => {
+    apiMocks.getUnifiedEmailSendLog.mockResolvedValue({
+      data: [{ ...SAMPLE_ROWS[0], record_time: undefined }],
+      total: 1,
+    });
+    const { wrapper } = mountTable();
+    wrapper
+      .findComponent({ name: "VDataTableServer" })
+      .vm.$emit("update:options", { page: 1, itemsPerPage: 10, sortBy: [] });
+    await vi.waitFor(() => {
+      expect(apiMocks.getUnifiedEmailSendLog).toHaveBeenCalledTimes(1);
+    });
+    await vi.dynamicImportSettled();
+
+    const cells = wrapper.findAll('[data-testid="record-time-cell"]');
+    expect(cells).toHaveLength(1);
+    expect(cells[0].text()).toBe("—");
   });
 
   it("navigates to the detail route with (source, id) params on row action", async () => {
