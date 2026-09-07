@@ -3,7 +3,10 @@ import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModu
 import { OutboundEmailDeliveryModule } from "@/modules/OutboundEmailDeliveryModule";
 import { OutboundEmailDraftModule } from "@/modules/OutboundEmailDraftModule";
 import type { SortBy } from "@/entityTypes/commonType";
-import type { UnifiedSendLogEntry } from "@/entityTypes/buckemailType";
+import type {
+  UnifiedSendLogEntry,
+  UnifiedSendLogDetailEntry,
+} from "@/entityTypes/buckemailType";
 import type { OutboundEmailRecipientOutcomeStatus } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
@@ -118,6 +121,71 @@ export class OutboundEmailSendLogModule extends BaseModule {
     const start = Math.max(0, page);
     const records = merged.slice(start, start + limit);
     return { records, total };
+  }
+
+  /**
+   * Detail payload for one unified send-log row, keyed by the (source, id)
+   * pair — `id` alone is not globally unique across the two halves.
+   *
+   *  - legacy: the full emailmarketing_send_log row (content, log, task_id)
+   *  - authorized: the delivery outcome joined to the revision pinned by
+   *    outcome.revisionId — the exact revision that was sent, not the draft's
+   *    current one — so the displayed body matches what left the app.
+   */
+  async getUnifiedSendLogDetail(
+    source: "legacy" | "authorized",
+    id: number
+  ): Promise<UnifiedSendLogDetailEntry> {
+    await this.ensureConnection();
+    if (source === "legacy") {
+      const row = await this.legacyModule.readItem(id);
+      if (!row) {
+        throw new Error("send log record not found");
+      }
+      return {
+        id: row.id ?? 0,
+        source: "legacy",
+        status:
+          row.status !== undefined && row.status !== null
+            ? this.legacyModule.getStatusName(row.status)
+            : "Unknown",
+        receiver: row.receiver ?? "",
+        title: row.title ?? "",
+        record_time: row.record_time,
+        content: row.content,
+        log: row.log,
+        taskId: row.task_id,
+      };
+    }
+
+    const outcome = await this.deliveryModule.readOutcome(id);
+    if (!outcome) {
+      throw new Error("send log record not found");
+    }
+    // Join the EXACT revision sent — the outcome pins revisionId.
+    const revision = await this.draftModule.readRevision(outcome.revisionId);
+    return {
+      id: outcome.id,
+      source: "authorized",
+      status: authorizedStatusLabel(outcome.status),
+      receiver: outcome.recipientAddress,
+      title: revision?.subject ?? "",
+      record_time:
+        outcome.completedAt?.toISOString() ??
+        outcome.submittedAt?.toISOString() ??
+        undefined,
+      sender: revision?.senderAddress,
+      actor: revision?.actor,
+      bodyText: revision?.bodyText,
+      providerMessageId: outcome.providerMessageId ?? undefined,
+      errorCode: outcome.errorCode ?? undefined,
+      submittedAt: outcome.submittedAt?.toISOString(),
+      completedAt: outcome.completedAt?.toISOString(),
+      batchId: outcome.batchId,
+      draftId: outcome.draftId,
+      revisionId: outcome.revisionId,
+      attemptId: outcome.sendAttemptId,
+    };
   }
 
   private async fetchLegacyHalf(

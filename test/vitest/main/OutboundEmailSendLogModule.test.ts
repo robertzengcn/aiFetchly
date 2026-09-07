@@ -70,13 +70,13 @@ import { OutboundEmailSendLogModule } from "@/modules/OutboundEmailSendLogModule
 
 const HASH = "a".repeat(64);
 
-/** Seed a legacy send-log row (emailmarketing_send_log). */
+/** Seed a legacy send-log row (emailmarketing_send_log). Returns its id. */
 async function seedLegacyRow(
   taskId: number,
   status: SendStatus,
   receiver: string,
   title: string
-): Promise<void> {
+): Promise<number> {
   const model = new EmailMarketingSendLogModel(tmpDir);
   const entity = new EmailMarketingSendLogEntity();
   entity.task_id = taskId;
@@ -86,12 +86,13 @@ async function seedLegacyRow(
   entity.content = "";
   entity.log = "";
   entity.record_time = new Date().toISOString();
-  await model.create(entity);
+  return await model.create(entity);
 }
 
 /**
  * Seed an authorized delivery outcome, fully wired to a draft batch + draft +
- * revision so the aggregator's title-join resolves a real subject.
+ * revision so the aggregator's title-join resolves a real subject. Returns the
+ * ids the detail tests need to address the row and its revisions.
  */
 async function seedAuthorizedOutcome(
   recipient: string,
@@ -104,7 +105,7 @@ async function seedAuthorizedOutcome(
     | "failed"
     | "delivery_unknown",
   completedAt: Date | null
-): Promise<void> {
+): Promise<{ outcomeId: number; draftId: number; revisionId: number }> {
   const draftModel = new OutboundEmailDraftModel(tmpDir);
   const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
 
@@ -157,13 +158,13 @@ async function seedAuthorizedOutcome(
   revision.knowledgeSourcesJson = null;
   revision.generationMetadataJson = null;
   revision.validationFindingsJson = null;
-  await draftModel.createRevision(revision);
+  const savedRevision = await draftModel.createRevision(revision);
 
   const outcome = new OutboundEmailDeliveryOutcomeEntity();
   outcome.sendAttemptId = 1;
   outcome.batchId = savedBatch.id;
   outcome.draftId = savedDraft.id;
-  outcome.revisionId = 1;
+  outcome.revisionId = savedRevision.id;
   outcome.envelopeHash = HASH;
   outcome.recipientAddress = recipient;
   outcome.status = status;
@@ -171,7 +172,12 @@ async function seedAuthorizedOutcome(
   outcome.errorCode = null;
   outcome.submittedAt = null;
   outcome.completedAt = completedAt;
-  await deliveryModel.createOutcome(outcome);
+  const savedOutcome = await deliveryModel.createOutcome(outcome);
+  return {
+    outcomeId: savedOutcome.id,
+    draftId: savedDraft.id,
+    revisionId: savedRevision.id,
+  };
 }
 
 describe("OutboundEmailSendLogModule.getUnifiedSendLog", () => {
@@ -316,5 +322,203 @@ describe("OutboundEmailSendLogModule.getUnifiedSendLog", () => {
     const pending = records.find((r) => r.receiver === "pending@x.com");
     expect(failed?.status).toBe("Failure");
     expect(pending?.status).toBe("Pending");
+  });
+});
+
+describe("OutboundEmailSendLogModule.getUnifiedSendLogDetail", () => {
+  it("returns the full legacy row (content, log, taskId, status label)", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    // Seed with distinct content/log values to prove the detail carries them.
+    const model = new EmailMarketingSendLogModel(tmpDir);
+    const entity = new EmailMarketingSendLogEntity();
+    entity.task_id = 77;
+    entity.status = SendStatus.Success;
+    entity.receiver = "legacy@x.com";
+    entity.title = "Legacy Detail";
+    entity.content = "full legacy body";
+    entity.log = "smtp transcript";
+    entity.record_time = "2026-01-01T00:00:00.000Z";
+    const legacyId = await model.create(entity);
+
+    const module = new OutboundEmailSendLogModule();
+    const detail = await module.getUnifiedSendLogDetail("legacy", legacyId);
+
+    expect(detail.id).toBe(legacyId);
+    expect(detail.source).toBe("legacy");
+    expect(detail.status).toBe("Success");
+    expect(detail.receiver).toBe("legacy@x.com");
+    expect(detail.title).toBe("Legacy Detail");
+    expect(detail.record_time).toBe("2026-01-01T00:00:00.000Z");
+    expect(detail.content).toBe("full legacy body");
+    expect(detail.log).toBe("smtp transcript");
+    expect(detail.taskId).toBe(77);
+    // Authorized-half fields must stay unset on a legacy row.
+    expect(detail.bodyText).toBeUndefined();
+    expect(detail.sender).toBeUndefined();
+  });
+
+  it("returns the authorized outcome joined to the pinned revision", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const completedAt = new Date("2026-02-03T04:05:06.000Z");
+    const seeded = await seedAuthorizedOutcome(
+      "auth@x.com",
+      "Authorized Detail",
+      "sent",
+      completedAt
+    );
+
+    const module = new OutboundEmailSendLogModule();
+    const detail = await module.getUnifiedSendLogDetail(
+      "authorized",
+      seeded.outcomeId
+    );
+
+    expect(detail.id).toBe(seeded.outcomeId);
+    expect(detail.source).toBe("authorized");
+    expect(detail.status).toBe("Success");
+    expect(detail.receiver).toBe("auth@x.com");
+    expect(detail.title).toBe("Authorized Detail");
+    expect(detail.sender).toBe("sender@example.com");
+    expect(detail.actor).toBe("ai");
+    expect(detail.bodyText).toBe("body");
+    expect(detail.completedAt).toBe("2026-02-03T04:05:06.000Z");
+    expect(detail.batchId).toBeTypeOf("number");
+    expect(detail.draftId).toBe(seeded.draftId);
+    expect(detail.revisionId).toBe(seeded.revisionId);
+    expect(detail.attemptId).toBeTypeOf("number");
+    // Legacy-half fields must stay unset on an authorized row.
+    expect(detail.content).toBeUndefined();
+    expect(detail.log).toBeUndefined();
+  });
+
+  it("throws for an unknown legacy id", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    await seedLegacyRow(1, SendStatus.Success, "a@x.com", "T");
+
+    const module = new OutboundEmailSendLogModule();
+    await expect(
+      module.getUnifiedSendLogDetail("legacy", 999999)
+    ).rejects.toThrow("send log record not found");
+  });
+
+  it("throws for an unknown authorized id", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    await seedAuthorizedOutcome("a@x.com", "T", "sent", new Date());
+
+    const module = new OutboundEmailSendLogModule();
+    await expect(
+      module.getUnifiedSendLogDetail("authorized", 999999)
+    ).rejects.toThrow("send log record not found");
+  });
+
+  it("joins the revision pinned by revisionId even when the draft has moved on", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+
+    // Draft with revision 1 (the one actually sent).
+    const batch = new OutboundEmailDraftBatchEntity();
+    batch.conversationId = "conv-pin";
+    batch.sourceUserMessageId = "msg-pin";
+    batch.intentDecisionId = 1;
+    batch.status = "sent";
+    batch.recipientSourceType = "direct";
+    batch.recipientSourceId = null;
+    batch.recipientCount = 1;
+    batch.validRecipientCount = 1;
+    batch.emailServiceIdsJson = "[1]";
+    batch.batchHash = HASH;
+    batch.policyVersion = null;
+    batch.validationVersion = null;
+    batch.authorizationId = null;
+    batch.legacyTaskId = null;
+    batch.sendAttemptId = null;
+    batch.lastErrorCode = null;
+    batch.authorizedAt = null;
+    batch.queuedAt = null;
+    batch.completedAt = null;
+    const savedBatch = await draftModel.createBatch(batch);
+
+    const draft = new OutboundEmailDraftEntity();
+    draft.batchId = savedBatch.id;
+    draft.recipientAddress = "pin@x.com";
+    draft.recipientDisplayName = null;
+    draft.recipientSourceRef = null;
+    draft.status = "sent";
+    draft.currentRevisionId = null;
+    draft.revisionNumber = 2;
+    draft.contentHash = HASH;
+    draft.lastErrorCode = null;
+    const savedDraft = await draftModel.createDraft(draft);
+
+    // Revision 1 — the one the outcome pins (what was actually sent).
+    const rev1 = new OutboundEmailDraftRevisionEntity();
+    rev1.draftId = savedDraft.id;
+    rev1.revisionNumber = 1;
+    rev1.actor = "ai";
+    rev1.emailServiceId = 1;
+    rev1.senderAddress = "pin-sender@x.com";
+    rev1.recipientAddress = "pin@x.com";
+    rev1.subject = "Sent Revision";
+    rev1.bodyText = "sent body";
+    rev1.bodyHtml = null;
+    rev1.contentHash = HASH;
+    rev1.personalizationEvidenceJson = null;
+    rev1.knowledgeSourcesJson = null;
+    rev1.generationMetadataJson = null;
+    rev1.validationFindingsJson = null;
+    const savedRev1 = await draftModel.createRevision(rev1);
+
+    // Revision 2 — a LATER edit; the current revision, NOT what was sent.
+    const rev2 = new OutboundEmailDraftRevisionEntity();
+    rev2.draftId = savedDraft.id;
+    rev2.revisionNumber = 2;
+    rev2.actor = "user";
+    rev2.emailServiceId = 1;
+    rev2.senderAddress = "pin-sender@x.com";
+    rev2.recipientAddress = "pin@x.com";
+    rev2.subject = "Edited Later";
+    rev2.bodyText = "edited body";
+    rev2.bodyHtml = null;
+    rev2.contentHash = "b".repeat(64);
+    rev2.personalizationEvidenceJson = null;
+    rev2.knowledgeSourcesJson = null;
+    rev2.generationMetadataJson = null;
+    rev2.validationFindingsJson = null;
+    const savedRev2 = await draftModel.createRevision(rev2);
+
+    const outcome = new OutboundEmailDeliveryOutcomeEntity();
+    outcome.sendAttemptId = 1;
+    outcome.batchId = savedBatch.id;
+    outcome.draftId = savedDraft.id;
+    outcome.revisionId = savedRev1.id; // pins revision 1
+    outcome.envelopeHash = HASH;
+    outcome.recipientAddress = "pin@x.com";
+    outcome.status = "sent";
+    outcome.providerMessageId = null;
+    outcome.errorCode = null;
+    outcome.submittedAt = null;
+    outcome.completedAt = new Date();
+    const savedOutcome = await deliveryModel.createOutcome(outcome);
+
+    const module = new OutboundEmailSendLogModule();
+    const detail = await module.getUnifiedSendLogDetail(
+      "authorized",
+      savedOutcome.id
+    );
+
+    // The pinned revision's content is shown — not the draft's current edit.
+    expect(detail.title).toBe("Sent Revision");
+    expect(detail.bodyText).toBe("sent body");
+    expect(detail.revisionId).toBe(savedRev1.id);
+    expect(detail.revisionId).not.toBe(savedRev2.id);
   });
 });

@@ -133,4 +133,12 @@ export class OutboundEmailDeliveryModule extends BaseModule {
       sort
     );
   }
+
+  /** One delivery outcome by row id — backs the unified send-log detail view. */
+  async readOutcome(
+    id: number
+  ): Promise<OutboundEmailDeliveryOutcomeEntity | null> {
+    await this.ensureConnection();
+    return await this.deliveryModel.readOutcome(id);
+  }
 }
