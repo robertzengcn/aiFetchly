@@ -102,6 +102,17 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   /**
+   * One delivery outcome by row id — backs the unified send-log detail view's
+   * authorized half (the revision join uses the outcome's pinned revisionId,
+   * i.e. the exact revision that was sent).
+   */
+  async readOutcome(
+    id: number
+  ): Promise<OutboundEmailDeliveryOutcomeEntity | null> {
+    return await this.outcomeRepo.findOne({ where: { id } });
+  }
+
+  /**
    * Recent delivery outcomes across ALL batches (no batch_id filter), paginated.
    * Backs the unified send-log view's authorized-send half. Mirrors the legacy
    * send-log model's where/sort contract: where matches recipientAddress; sort

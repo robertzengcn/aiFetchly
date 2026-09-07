@@ -192,3 +192,38 @@ describe("OutboundEmailDeliveryModel.listOutcomesRecent", () => {
     expect(records).toHaveLength(0);
   });
 });
+
+describe("OutboundEmailDeliveryModel.readOutcome", () => {
+  it("reads one outcome by row id", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const model = new OutboundEmailDeliveryModel(tmpDir);
+
+    await seedOutcome(model, "a@example.com", "sent");
+    const targetId = await seedOutcome(
+      model,
+      "target@example.com",
+      "failed",
+      new Date("2026-01-02T03:04:05.000Z")
+    );
+
+    const outcome = await model.readOutcome(targetId);
+    expect(outcome).not.toBeNull();
+    expect(outcome?.id).toBe(targetId);
+    expect(outcome?.recipientAddress).toBe("target@example.com");
+    expect(outcome?.status).toBe("failed");
+    expect(outcome?.completedAt?.toISOString()).toBe(
+      "2026-01-02T03:04:05.000Z"
+    );
+  });
+
+  it("returns null for an unknown id", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const model = new OutboundEmailDeliveryModel(tmpDir);
+
+    await seedOutcome(model, "a@example.com", "sent");
+
+    expect(await model.readOutcome(999999)).toBeNull();
+  });
+});

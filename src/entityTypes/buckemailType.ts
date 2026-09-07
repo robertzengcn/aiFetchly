@@ -48,3 +48,40 @@ export interface EmailMarketingSendLogDetailDisplay {
   content: string;
   record_time?: string;
 }
+
+/**
+ * Detail payload for one row of the unified send-log view, keyed by the
+ * (source, id) pair (each half has its own id space). Optional fields are
+ * populated only on the half that owns them:
+ *
+ *  - legacy:    content, log, taskId
+ *  - authorized: sender, actor, bodyText, providerMessageId, errorCode,
+ *                submittedAt, completedAt, batchId, draftId, revisionId, attemptId
+ *
+ * bodyHtml is deliberately NOT included: the detail view is diagnostic and
+ * renders stored email content as plain text only (never v-html).
+ */
+export interface UnifiedSendLogDetailEntry {
+  id: number;
+  source: "legacy" | "authorized";
+  status: string;
+  receiver: string;
+  title: string;
+  record_time?: string;
+  // legacy half
+  content?: string;
+  log?: string;
+  taskId?: number;
+  // authorized half
+  sender?: string;
+  actor?: string;
+  bodyText?: string;
+  providerMessageId?: string;
+  errorCode?: string;
+  submittedAt?: string;
+  completedAt?: string;
+  batchId?: number;
+  draftId?: number;
+  revisionId?: number;
+  attemptId?: number;
+}
