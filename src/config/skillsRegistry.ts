@@ -33,6 +33,7 @@ import {
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
+import { normalizeEmailServiceIds } from "@/service/outboundEmail/resolveOutboundSender";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 import {
@@ -1677,21 +1678,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         not_duplicate:
           (args as { not_duplicate?: boolean }).not_duplicate ?? true,
       });
-      // Resolve the frozen envelope sender from the first selected service
-      // (AD-005/AD-006: sender selection completes BEFORE hashing — the worker
-      // sends with exactly this address, never the credential row's login).
-      // Model args never supply it directly (AD-003).
-      const serviceIds = (args as { service_ids?: number[] }).service_ids ?? [];
-      let senderAddress = "";
-      if (serviceIds.length > 0) {
-        const { EmailServiceModel } = await import(
-          "@/model/EmailService.model"
-        );
-        const emailService = await new EmailServiceModel(dbpath).read(
-          serviceIds[0]
-        );
-        senderAddress = (emailService?.from ?? "").trim();
-      }
+      // Sender is resolved from the selected SMTP service inside generateBatch
+      // (AD-005/AD-006). Coerce service_ids so a single id or numeric strings
+      // still bind a real From address instead of storing an empty sender.
+      const serviceIds = normalizeEmailServiceIds(
+        (args as { service_ids?: unknown }).service_ids
+      );
       const result = await service.generateBatch({
         conversationId: context.conversationId,
         sourceUserMessageId: context.sourceUserMessageId ?? "",
@@ -1699,7 +1691,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         recipientSourceType: resolved.recipientSource,
         recipients: resolved.recipients,
         serviceIds,
-        senderAddress,
+        senderAddress: "",
         subject: (args as { email_subject?: string }).email_subject ?? "",
         // The model supplies an HTML body; store it as `bodyHtml` and derive a
         // plain-text fallback so markup never leaks into the text body at send

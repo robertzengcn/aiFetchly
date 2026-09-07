@@ -1,6 +1,11 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
+import { EmailServiceModel } from "@/model/EmailService.model";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
+import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
+import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { SqliteDb } from "@/config/SqliteDb";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
 import path from "node:path";
@@ -175,4 +180,133 @@ describe("OutboundEmailDraftService.generateBatch", () => {
     const firstReloaded = await model.readRevision(firstRevision!.id);
     expect(firstReloaded!.subject).toBe("V1");
   });
+
+  it("binds the SMTP from-address when generateBatch is given an empty sender", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService("bound-sender@example.com");
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    const result = await service.generateBatch({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: 1,
+      recipientSourceType: "direct",
+      recipients: recipients(),
+      serviceIds: [serviceId],
+      senderAddress: "",
+      subject: "Hello",
+      bodyText: "Hi",
+      bodyHtml: null,
+    });
+    expect(result.success).toBe(true);
+    const model = new OutboundEmailDraftModel(tmpDir);
+    const drafts = await model.listDraftsByBatch(result.batchId!);
+    const revision = await model.readCurrentRevision(drafts[0].id);
+    expect(revision?.senderAddress).toBe("bound-sender@example.com");
+    expect(revision?.emailServiceId).toBe(serviceId);
+  });
+
+  it("returns sender_address_missing when no SMTP from-address can be resolved", async () => {
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    await SqliteDb.ensureInitialized();
+    const result = await service.generateBatch({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: 1,
+      recipientSourceType: "direct",
+      recipients: recipients(),
+      serviceIds: [],
+      senderAddress: "",
+      subject: "Hello",
+      bodyText: "Hi",
+      bodyHtml: null,
+    });
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("sender_address_missing");
+  });
+
+  it("fillMissingSenders appends a revision with the SMTP from-address", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService("repair-sender@example.com");
+    const batchId = await seedEmptySenderBatch(serviceId);
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    const filled = await service.fillMissingSenders(batchId);
+    expect(filled.changed).toBe(true);
+    expect(filled.batchHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const model = new OutboundEmailDraftModel(tmpDir);
+    const drafts = await model.listDraftsByBatch(batchId);
+    const revision = await model.readCurrentRevision(drafts[0].id);
+    expect(revision?.senderAddress).toBe("repair-sender@example.com");
+    expect(revision?.revisionNumber).toBe(2);
+  });
 });
+
+async function seedSmtpService(from: string): Promise<number> {
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.name = "Test SMTP";
+  entity.from = from;
+  entity.password = "pass";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  return await model.create(entity);
+}
+
+async function seedEmptySenderBatch(emailServiceId: number): Promise<number> {
+  const model = new OutboundEmailDraftModel(tmpDir);
+  const batchEntity = new OutboundEmailDraftBatchEntity();
+  batchEntity.conversationId = "conv-empty-sender";
+  batchEntity.sourceUserMessageId = "msg-empty-sender";
+  batchEntity.intentDecisionId = 1;
+  batchEntity.status = "draft_ready";
+  batchEntity.recipientSourceType = "direct";
+  batchEntity.recipientCount = 1;
+  batchEntity.validRecipientCount = 1;
+  batchEntity.emailServiceIdsJson = JSON.stringify([emailServiceId]);
+  const batch = await model.createBatch(batchEntity);
+
+  const draftEntity = new OutboundEmailDraftEntity();
+  draftEntity.batchId = batch.id;
+  draftEntity.recipientAddress = "alice@example.com";
+  draftEntity.status = "draft";
+  draftEntity.revisionNumber = 0;
+  const draft = await model.createDraft(draftEntity);
+
+  const envelope = {
+    version: 1 as const,
+    draftId: draft.id,
+    emailServiceId,
+    senderAddress: "",
+    recipientAddress: draft.recipientAddress,
+    subject: "Hello",
+    bodyText: "Hi",
+    bodyHtml: null,
+  };
+  const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+  await model.appendRevision({
+    draftId: draft.id,
+    actor: "ai",
+    emailServiceId,
+    senderAddress: "",
+    recipientAddress: draft.recipientAddress,
+    subject: "Hello",
+    bodyText: "Hi",
+    bodyHtml: null,
+    contentHash,
+  });
+  await model.updateBatchHash(
+    batch.id,
+    OutboundEmailEnvelopeHasher.hashBatch([envelope])
+  );
+  return batch.id;
+}

@@ -22,6 +22,7 @@ import {
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { OutboundEmailDeliveryService } from "@/service/outboundEmail/OutboundEmailDeliveryService";
 import { OutboundEmailWorkerStarter } from "@/service/outboundEmail/OutboundEmailWorkerStarter";
+import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model";
 import { OutboundEmailPreflightService } from "@/service/outboundEmail/OutboundEmailPreflightService";
@@ -96,6 +97,13 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       if (!batch) {
         throw new Error("batch_not_found");
       }
+      // Complete AD-006 sender selection if the frozen envelope From was
+      // never bound, so the review dialog shows the real sender and Approve
+      // is not blocked by sender_address_missing.
+      const filled = await new OutboundEmailDraftService(dbpath, {
+        aiEnabledOverride: true,
+      }).fillMissingSenders(input.batchId);
+      const batchHash = filled.batchHash ?? batch.batchHash;
       const drafts = await draftModel.listDraftsByBatch(input.batchId);
       const views = await Promise.all(
         drafts.map(async (draft) => {
@@ -118,7 +126,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
         batch: {
           id: batch.id,
           status: batch.status,
-          batchHash: batch.batchHash,
+          batchHash,
           conversationId: batch.conversationId,
           recipientCount: batch.recipientCount,
         },
@@ -208,9 +216,21 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       if (!batch) {
         throw new Error("batch_not_found");
       }
+      const originalHash = batch.batchHash;
+      // Fill a missing frozen sender before preflight so an older empty-From
+      // draft (shown in the review dialog after GET hydration, or opened
+      // against a stale hash) can still be approved.
+      const filled = await new OutboundEmailDraftService(dbpath, {
+        aiEnabledOverride: true,
+      }).fillMissingSenders(input.batchId);
+      const currentHash = filled.batchHash ?? originalHash;
       // Defense-in-depth: the caller's reviewed hash must match the persisted
-      // batch hash before we authorize.
-      if (batch.batchHash !== input.batchHash) {
+      // batch hash before we authorize. After sender hydration the hash
+      // changes; accept the pre-fill hash the dialog loaded as well.
+      if (
+        currentHash !== input.batchHash &&
+        originalHash !== input.batchHash
+      ) {
         throw new Error("batch_hash_mismatch");
       }
 
@@ -250,7 +270,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       const authz = new OutboundEmailAuthorizationService(dbpath);
       const approval = await authz.createReviewApproval({
         batchId: input.batchId,
-        batchHash: input.batchHash,
+        batchHash: currentHash ?? input.batchHash,
         sourceUserMessageId: batch.sourceUserMessageId,
       });
       if (!approval.success) {

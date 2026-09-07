@@ -91,6 +91,7 @@ describe("OutboundEmailRecipientDraft", () => {
     expect(wrapper.text()).toContain("Alice");
     expect(wrapper.text()).toContain("alice@example.com");
     expect(wrapper.text()).toContain("Hello Alice");
+    expect(wrapper.text()).toContain("sender@example.com");
   });
 
   it("shows the edit button and emits edit-requested when not in edit mode", async () => {

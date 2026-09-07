@@ -13,6 +13,18 @@ import {
   OUTBOUND_POLICY_VERSION,
   OUTBOUND_VALIDATION_VERSION,
 } from "@/service/outboundEmail/outboundReliabilityVersions";
+import {
+  normalizeEmailServiceIds,
+  resolveOutboundSender,
+} from "@/service/outboundEmail/resolveOutboundSender";
+
+/** Batch statuses whose envelope is not yet authorized — safe to fill sender. */
+const SENDER_FILLABLE_STATUSES = new Set([
+  "drafting",
+  "draft_ready",
+  "preflight_failed",
+  "awaiting_review",
+]);
 
 /**
  * Draft generation + personalization for the intent-aware outbound-email
@@ -72,6 +84,7 @@ const SOURCE_TYPE = "recipient_record";
 
 export class OutboundEmailDraftService {
   private readonly draftModel: OutboundEmailDraftModel;
+  private readonly dbpath: string;
   private readonly aiEnabledOverride?: boolean;
 
   constructor(
@@ -85,7 +98,8 @@ export class OutboundEmailDraftService {
         ? { dbpath: options, ...legacyOptions }
         : options;
     this.aiEnabledOverride = opts.aiEnabledOverride;
-    this.draftModel = new OutboundEmailDraftModel(opts.dbpath ?? "");
+    this.dbpath = opts.dbpath ?? "";
+    this.draftModel = new OutboundEmailDraftModel(this.dbpath);
   }
 
   // -- AI entitlement gate ------------------------------------------------
@@ -162,6 +176,15 @@ export class OutboundEmailDraftService {
 
     await this.draftModel.ensureConnection();
 
+    // AD-006: sender selection completes before hashing. An empty caller
+    // value is resolved from the selected / first active SMTP service so
+    // review can never present a blank From that preflight then blocks.
+    const bound = await this.bindSender(input);
+    if (!bound) {
+      return { success: false, code: "sender_address_missing" };
+    }
+    const { emailServiceId, senderAddress } = bound;
+
     // §7.2 batch row.
     const batch = await this.draftModel.createBatch(
       Object.assign(new OutboundEmailDraftBatchEntity(), {
@@ -173,7 +196,9 @@ export class OutboundEmailDraftService {
         recipientSourceId: input.recipientSourceId ?? null,
         recipientCount: materialized.length,
         validRecipientCount: materialized.length,
-        emailServiceIdsJson: JSON.stringify([...input.serviceIds]),
+        emailServiceIdsJson: JSON.stringify(
+          input.serviceIds.length > 0 ? [...input.serviceIds] : [emailServiceId]
+        ),
         policyVersion: OUTBOUND_POLICY_VERSION,
         validationVersion: OUTBOUND_VALIDATION_VERSION,
       })
@@ -210,8 +235,8 @@ export class OutboundEmailDraftService {
       const envelope: BatchEnvelopeEntry = {
         version: 1,
         draftId: draft.id,
-        emailServiceId: input.serviceIds[0],
-        senderAddress: input.senderAddress,
+        emailServiceId,
+        senderAddress,
         recipientAddress: r.address,
         subject: input.subject,
         bodyText: input.bodyText,
@@ -225,8 +250,8 @@ export class OutboundEmailDraftService {
       await this.draftModel.appendRevision({
         draftId: draft.id,
         actor: "ai",
-        emailServiceId: input.serviceIds[0],
-        senderAddress: input.senderAddress,
+        emailServiceId,
+        senderAddress,
         recipientAddress: r.address,
         subject: input.subject,
         bodyText: input.bodyText,
@@ -247,6 +272,150 @@ export class OutboundEmailDraftService {
       draftCount: materialized.length,
       batchHash,
     };
+  }
+
+  /**
+   * Repair drafts whose frozen envelope sender was never bound (empty From in
+   * the review dialog). Completes AD-006 sender selection, appends a new
+   * revision, and recomputes the batch hash. No-op once the batch is
+   * authorized or already has a sender. Safe to call from GET and APPROVE.
+   */
+  async fillMissingSenders(batchId: number): Promise<{
+    changed: boolean;
+    originalBatchHash: string | null;
+    batchHash: string | null;
+  }> {
+    const batch = await this.draftModel.readBatch(batchId);
+    if (!batch || !SENDER_FILLABLE_STATUSES.has(batch.status)) {
+      return {
+        changed: false,
+        originalBatchHash: batch?.batchHash ?? null,
+        batchHash: batch?.batchHash ?? null,
+      };
+    }
+
+    const originalBatchHash = batch.batchHash;
+    const batchServiceIds = parseServiceIdsJson(batch.emailServiceIdsJson);
+    const drafts = await this.draftModel.listDraftsByBatch(batchId);
+    let changed = false;
+
+    for (const draft of drafts) {
+      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      if (!revision) {
+        continue;
+      }
+      if (revision.senderAddress && revision.senderAddress.trim().length > 0) {
+        continue;
+      }
+
+      const resolved = await resolveOutboundSender({
+        dbpath: this.dbpath,
+        preferredServiceId: revision.emailServiceId,
+        serviceIds: batchServiceIds,
+      });
+      if (!resolved) {
+        continue;
+      }
+
+      const envelope: BatchEnvelopeEntry = {
+        version: 1,
+        draftId: draft.id,
+        emailServiceId: resolved.emailServiceId,
+        senderAddress: resolved.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+      };
+      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+      await this.draftModel.appendRevision({
+        draftId: draft.id,
+        actor: "ai",
+        emailServiceId: resolved.emailServiceId,
+        senderAddress: resolved.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        contentHash,
+        personalizationEvidenceJson: revision.personalizationEvidenceJson,
+        knowledgeSourcesJson: revision.knowledgeSourcesJson,
+        generationMetadataJson: revision.generationMetadataJson,
+      });
+      changed = true;
+    }
+
+    if (!changed) {
+      return {
+        changed: false,
+        originalBatchHash,
+        batchHash: originalBatchHash,
+      };
+    }
+
+    const batchHash = await this.recomputeBatchHash(batchId);
+    return { changed: true, originalBatchHash, batchHash };
+  }
+
+  /**
+   * Prefer an explicit caller-supplied sender (tests / already-resolved
+   * tools). Otherwise resolve from the selected SMTP service, then the first
+   * active service. Fail closed when nothing is configured.
+   */
+  private async bindSender(
+    input: GenerateBatchInput
+  ): Promise<{ emailServiceId: number; senderAddress: string } | null> {
+    const trimmed = (input.senderAddress ?? "").trim();
+    const serviceIds = [...input.serviceIds];
+    if (trimmed.length > 0) {
+      const emailServiceId = serviceIds[0];
+      if (typeof emailServiceId === "number" && emailServiceId > 0) {
+        return { emailServiceId, senderAddress: trimmed };
+      }
+    }
+    return await resolveOutboundSender({
+      dbpath: this.dbpath,
+      preferredServiceId: serviceIds[0] ?? null,
+      serviceIds,
+    });
+  }
+
+  private async recomputeBatchHash(batchId: number): Promise<string | null> {
+    const drafts = await this.draftModel.listDraftsByBatch(batchId);
+    const envelopes: BatchEnvelopeEntry[] = [];
+    for (const draft of drafts) {
+      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      if (!revision) {
+        continue;
+      }
+      envelopes.push({
+        version: 1,
+        draftId: draft.id,
+        emailServiceId: revision.emailServiceId,
+        senderAddress: revision.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+      });
+    }
+    if (envelopes.length === 0) {
+      return null;
+    }
+    const batchHash = OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+    await this.draftModel.updateBatchHash(batchId, batchHash);
+    return batchHash;
+  }
+}
+
+function parseServiceIdsJson(json: string | null | undefined): number[] {
+  if (!json) {
+    return [];
+  }
+  try {
+    return normalizeEmailServiceIds(JSON.parse(json) as unknown);
+  } catch {
+    return [];
   }
 }
 
