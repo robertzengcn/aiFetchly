@@ -37,6 +37,7 @@ import {
 } from "@/modules/SkillInstallationModule";
 import {
   SkillSessionIdSchema,
+  rejectCredentialedSource,
   rejectSecretShaped,
 } from "@/entityTypes/skillInstallationTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
@@ -52,25 +53,28 @@ function isAiEnabled(): boolean {
   return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
-const prepareSchema = z.object({
-  conversationId: z.string().min(1),
-  source: z.string().min(1),
-  ref: z.string().max(200).optional(),
-  subdirectory: z.string().max(500).optional(),
-  mode: z.enum(["managed-copy", "linked"]).optional(),
-  // FR-31 parity with the model tool schema: constraints run the deep
-  // secret-shape validator — a pasted API key is a schema error here too
-  // (found by the E2E matrix).
-  constraints: z
-    .array(z.string().max(2_000))
-    .max(20)
-    .superRefine((entries, ctx) => {
-      for (const problem of rejectSecretShaped(entries, ["constraints"])) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
-      }
-    })
-    .optional(),
-});
+const prepareSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    source: z.string().min(1),
+    ref: z.string().max(200).optional(),
+    subdirectory: z.string().max(500).optional(),
+    mode: z.enum(["managed-copy", "linked"]).optional(),
+    constraints: z.array(z.string().max(2_000)).max(20).optional(),
+  })
+  .strict()
+  .superRefine((args, ctx) => {
+    // FR-31/NFR-03 parity with the model tool schema: EVERY ordinary
+    // field runs the deep secret-shape validator, and credentialed
+    // source URLs are rejected before normalization or persistence.
+    const credentialed = rejectCredentialedSource(args.source);
+    if (credentialed) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: credentialed });
+    }
+    for (const problem of rejectSecretShaped(args, [])) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }
+  });
 
 const approveSchema = z.object({
   sessionId: SkillSessionIdSchema,

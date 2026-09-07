@@ -14,6 +14,7 @@ import {
   SkillInstallationModule,
   setTypedDependencyInstallerForTests,
 } from "@/modules/SkillInstallationModule";
+import { SkillInstallPrepareArgsSchema } from "@/entityTypes/skillInstallationTypes";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 
 // Stateful detectAll seam: force every plan dependency to "missing" so the
@@ -840,4 +841,76 @@ describe("approveDependency — typed dependency approval (PRD §18 / FR-14)", (
     expect(fs.existsSync(activationRoot)).toBe(false);
     expect((await module.getStatus(held.sessionId)).state).toBe("cancelled");
   }, 120_000);
+});
+
+describe("ordinary-argument and source-URL secret bypasses are closed (FR-16/31, NFR-03)", () => {
+  function rejects(args: unknown): boolean {
+    return !SkillInstallPrepareArgsSchema.safeParse(args).success;
+  }
+
+  it("rejects credentialed source URLs in every remote form", () => {
+    expect(rejects({ source: "https://user:pass@github.com/a/b" })).toBe(true);
+    expect(
+      rejects({
+        source: "https://ghp_abcdefghijklmnopqrstuvwxyz@github.com/a/b",
+      })
+    ).toBe(true);
+    expect(rejects({ source: "ssh://user:secret@host/repo.git" })).toBe(true);
+    expect(rejects({ source: "user:pass@host:repo.git" })).toBe(true);
+    // The git@ scp form WITHOUT a password stays valid (SSH agent flow).
+    expect(rejects({ source: "git@github.com:owner/repo.git" })).toBe(false);
+  });
+
+  it("rejects secret-shaped values in ref, subdirectory, and nested fields", () => {
+    expect(
+      rejects({
+        source: "https://github.com/a/b",
+        ref: "sk-abcdefghijklmnop1234",
+      })
+    ).toBe(true);
+    expect(
+      rejects({
+        source: "https://github.com/a/b",
+        subdirectory: "ghp_abcdefghijklmnopqrstuvwxyz",
+      })
+    ).toBe(true);
+    expect(
+      rejects({
+        source: "https://github.com/a/b",
+        constraints: ["ok", "nested ghp_abcdefghijklmnopqrstuvwxyz here"],
+      })
+    ).toBe(true);
+  });
+
+  it("rejects unknown top-level fields instead of stripping them", () => {
+    expect(
+      rejects({ source: "https://github.com/a/b", apiKey: "anything" })
+    ).toBe(true);
+    expect(rejects({ source: "https://github.com/a/b", token: "x" })).toBe(
+      true
+    );
+  });
+
+  it("clean sources still parse", () => {
+    expect(rejects({ source: "https://github.com/a/b" })).toBe(false);
+    expect(
+      rejects({ source: "https://example.com/repo.git", ref: "v1.0.0" })
+    ).toBe(false);
+    expect(rejects({ source: "/tmp/some/local-dir" })).toBe(false);
+  });
+
+  it("normalization redacts any userinfo that reaches it (defense in depth)", async () => {
+    const { redactSourceCredentials, normalizeSkillSource } = await import(
+      "@/service/SkillSourceAcquisitionService"
+    );
+    expect(redactSourceCredentials("https://user:pass@example.com/x")).toBe(
+      "https://example.com/x"
+    );
+    expect(redactSourceCredentials("ssh://tok@host/repo.git")).toBe(
+      "ssh://host/repo.git"
+    );
+    // The canonical URI NEVER carries userinfo, even for legacy inputs.
+    const legacy = normalizeSkillSource("https://user:pw@example.com/repo.git");
+    expect(legacy?.canonicalUri).toBe("https://example.com/repo");
+  });
 });

@@ -311,6 +311,30 @@ export const secretFreeRecord = z
   });
 
 /**
+ * FR-16/NFR-03: credentialed source URLs never enter normalization,
+ * persistence, logging, or process arguments. Credentials belong to Git
+ * credential helpers / SSH agents, never URL rewriting (PRD §11.2).
+ *
+ * Rejected: http(s)/ssh URLs with userinfo (`scheme://user[:pass]@host`)
+ * — including bare-token forms like `https://x-access-token@github.com/…`
+ * — and scp-style remotes carrying a password (`user:pass@host:path`).
+ * Allowed: clean https URLs, `git@host:owner/repo` scp syntax (standard
+ * SSH, no password), local paths, and archives.
+ */
+export function rejectCredentialedSource(source: string): string | null {
+  const trimmed = source.trim();
+  // scheme://user[:pass]@host — any userinfo in an absolute URL.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/@\s]+@[^@\s]+/.test(trimmed)) {
+    return "Source URLs may not embed credentials (user:password@). Use Git credential helpers or SSH keys instead.";
+  }
+  // scp-style with a password: user:pass@host:path (git@host:path is fine).
+  if (/^[^/@\s:]+:[^\s]+@[^\s]+:/.test(trimmed)) {
+    return "Source URLs may not embed credentials (user:password@). Use Git credential helpers or SSH keys instead.";
+  }
+  return null;
+}
+
+/**
  * Session/installation ids are app-generated opaque tokens (UUID hex or
  * `update-<hex>-<ts>` shapes). A strict charset at every schema boundary
  * keeps model/renderer-supplied ids from ever reaching path joins or
@@ -325,43 +349,55 @@ export const SkillSessionIdSchema = z
     "Session ids may only contain letters, digits, ':', '_' and '-'."
   );
 
-export const SkillInstallPrepareArgsSchema = z.object({
-  source: z.string().min(1, "A repository URL or local path is required"),
-  ref: z.string().max(200).optional(),
-  subdirectory: z.string().max(500).optional(),
-  mode: z.enum(["managed-copy", "linked"]).optional(),
-  /**
-   * Non-secret user constraints from the request (e.g. "read install.md
-   * first", "wire up ffmpeg", "wait for footage after install"). Each entry
-   * runs through the deep secret-shape validator above (FR-31) — an API key
-   * pasted into ordinary tool arguments is a schema error.
-   */
-  constraints: z
-    .array(z.string().max(2_000))
-    .max(20)
-    .superRefine((entries, ctx) => {
-      for (const problem of rejectSecretShaped(entries, ["constraints"])) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
-      }
-    })
-    .optional(),
-  sessionId: SkillSessionIdSchema.optional(),
-});
+export const SkillInstallPrepareArgsSchema = z
+  .object({
+    source: z.string().min(1, "A repository URL or local path is required"),
+    ref: z.string().max(200).optional(),
+    subdirectory: z.string().max(500).optional(),
+    mode: z.enum(["managed-copy", "linked"]).optional(),
+    /**
+     * Non-secret user constraints from the request (e.g. "read install.md
+     * first", "wire up ffmpeg", "wait for footage after install"). Each entry
+     * runs through the deep secret-shape validator above (FR-31) — an API key
+     * pasted into ordinary tool arguments is a schema error.
+     */
+    constraints: z.array(z.string().max(2_000)).max(20).optional(),
+    sessionId: SkillSessionIdSchema.optional(),
+  })
+  .strict()
+  .superRefine((args, ctx) => {
+    // FR-31/NFR-03: EVERY ordinary field is checked, not just constraints —
+    // a pasted key in source, ref, or subdirectory is a schema error, and
+    // a credentialed URL never reaches normalization or persistence.
+    const credentialed = rejectCredentialedSource(args.source);
+    if (credentialed) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: credentialed });
+    }
+    for (const problem of rejectSecretShaped(args, [])) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+    }
+  });
 
-export const SkillInstallApproveArgsSchema = z.object({
-  sessionId: SkillSessionIdSchema,
-  planRevision: z.string().min(1),
-  approve: z.boolean(),
-  selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
-});
+export const SkillInstallApproveArgsSchema = z
+  .object({
+    sessionId: SkillSessionIdSchema,
+    planRevision: z.string().min(1),
+    approve: z.boolean(),
+    selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
+  })
+  .strict();
 
-export const SkillInstallStatusArgsSchema = z.object({
-  sessionId: SkillSessionIdSchema,
-});
+export const SkillInstallStatusArgsSchema = z
+  .object({
+    sessionId: SkillSessionIdSchema,
+  })
+  .strict();
 
-export const SkillInstallCancelArgsSchema = z.object({
-  sessionId: SkillSessionIdSchema,
-});
+export const SkillInstallCancelArgsSchema = z
+  .object({
+    sessionId: SkillSessionIdSchema,
+  })
+  .strict();
 
 export type SkillInstallPrepareArgs = z.infer<
   typeof SkillInstallPrepareArgsSchema

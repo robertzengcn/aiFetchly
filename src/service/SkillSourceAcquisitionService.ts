@@ -56,6 +56,21 @@ export type AcquisitionResult =
       readonly message: string;
     };
 
+/**
+ * Defense-in-depth redaction (NFR-03): strip URL userinfo from any remote
+ * URI before it becomes canonicalUri — the canonical form flows into
+ * provenance rows, safe plan summaries, and diagnostics. The schema
+ * boundary already REJECTS credentialed sources; this guarantees nothing
+ * credential-shaped persists if one ever slips past (or arrives from a
+ * legacy stored session).
+ */
+export function redactSourceCredentials(uri: string): string {
+  return uri.replace(
+    /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@:\s]+(?::[^/@\s]*)?@/,
+    "$1"
+  );
+}
+
 /** Normalize a user-supplied source string into a descriptor. */
 export function normalizeSkillSource(
   raw: string
@@ -73,10 +88,13 @@ export function normalizeSkillSource(
     };
   }
   if (/^git@|^ssh:\/\/|^git:\/\//.test(trimmed)) {
-    return { kind: "git", canonicalUri: trimmed };
+    return { kind: "git", canonicalUri: redactSourceCredentials(trimmed) };
   }
   if (/^https:\/\/[^\s]+\.git$/i.test(trimmed)) {
-    return { kind: "git", canonicalUri: trimmed.replace(/\.git$/i, "") };
+    return {
+      kind: "git",
+      canonicalUri: redactSourceCredentials(trimmed.replace(/\.git$/i, "")),
+    };
   }
   // Local references — absolute or explicitly relative paths.
   if (
@@ -195,8 +213,9 @@ export class SkillSourceAcquisitionService {
       return {
         ok: true,
         source: {
-          sourceId: sha256Hex(`${descriptor.kind}:${descriptor.canonicalUri}`)
-            .slice(0, 16),
+          sourceId: sha256Hex(
+            `${descriptor.kind}:${descriptor.canonicalUri}`
+          ).slice(0, 16),
           canonicalUri: descriptor.canonicalUri,
           resolvedRevision,
           acquiredRoot: target,
@@ -317,4 +336,3 @@ export class SkillSourceAcquisitionService {
     return hashTree(stagingRoot);
   }
 }
-
