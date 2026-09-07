@@ -158,10 +158,14 @@ export function registerBuckEmailIpcHandlers() {
       const sortby = Array.isArray(input.sortby)
         ? input.sortby[0]
         : input.sortby;
+      // The frontend (UnifiedEmailSendLogTable) sends the search-box value as
+      // `search`; the legacy task-keyed table sends `where`. Accept either so
+      // the search box actually filters instead of being silently dropped.
+      const where = input.search ?? input.where;
       const res = await buckemailCon.getUnifiedSendLog(
         input.page ?? 0,
         input.size ?? 100,
-        input.where,
+        where,
         sortby
       );
       return {
