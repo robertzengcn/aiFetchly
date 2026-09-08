@@ -29,9 +29,11 @@ const apiMocks = vi.hoisted(() => ({
   getCacheStatus: vi.fn(async (): Promise<unknown> => null),
   listActiveSessions: vi.fn(async (): Promise<unknown[]> => []),
   stopManagedBrowser: vi.fn(async (): Promise<unknown> => null),
-  issueClearConfirmation: vi.fn(async (): Promise<unknown> => ({
-    confirmationId: "conf-1234-abcd",
-  })),
+  issueClearConfirmation: vi.fn(
+    async (_input?: unknown): Promise<unknown> => ({
+      confirmationId: "conf-1234-abcd",
+    })
+  ),
   clearCache: vi.fn(async (): Promise<unknown> => null),
   onManagedBrowserCacheProgress: vi.fn((): (() => void) => () => undefined),
 }));
@@ -406,10 +408,11 @@ describe("TODO-MSB-005 selected-account clear", () => {
     apiMocks.listEligibleAccounts.mockImplementation(async () => [
       { accountId: 101, platformId: 2, accountLabel: "My Channel" },
     ]);
-    apiMocks.issueClearConfirmation.mockImplementation(async (input: { scope: string }) =>
-      input.scope === "account"
-        ? { confirmationId: "conf-acct-001" }
-        : { confirmationId: "conf-all-001" }
+    apiMocks.issueClearConfirmation.mockImplementation(
+      async (input?: { scope?: string }) =>
+        input?.scope === "account"
+          ? { confirmationId: "conf-acct-001" }
+          : { confirmationId: "conf-all-001" }
     );
     const wrapper = mountPanel();
     await vi.waitFor(() =>
