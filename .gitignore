@@ -120,6 +120,7 @@ hyperframes-search-engine-scraping-video/renders/aifetchly-search-engine-scrapin
 .vscode/pinned-files.json
 
 # Gstack skill - binaries and deps (teammates run ./setup after clone)
+.claude/skills/gstack/
 .claude/skills/gstack/node_modules/
 .claude/skills/gstack/browse/dist/
 .claude/skills/gstack/design/dist/
