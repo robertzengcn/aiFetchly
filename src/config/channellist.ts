@@ -373,6 +373,9 @@ export const SKILL_INSTALL_APPROVE_DEPENDENCY =
 export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
 export const SKILL_INSTALL_STATUS = "skill-install:status";
 export const SKILL_INSTALL_CANCEL = "skill-install:cancel";
+// Typed retry (FR-20/§10.1): re-run a failed install from the recorded
+// canonical source, enforcing the three-same-cause stop rule.
+export const SKILL_INSTALL_RETRY = "skill-install:retry";
 export const SKILL_INSTALL_PROGRESS = "skill-install:progress";
 // Lifecycle management surface for the skill management UI (PRD §22.3).
 export const SKILL_INSTALL_UPDATE = "skill-install:update";

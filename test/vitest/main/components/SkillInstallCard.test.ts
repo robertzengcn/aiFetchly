@@ -14,6 +14,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   approveSkillInstall: vi.fn(),
   approveSkillInstallDependency: vi.fn(),
   cancelSkillInstall: vi.fn(),
+  retrySkillInstall: vi.fn(),
   runApprovedSkillInstallCommand: vi.fn(),
   submitSkillInstallSecret: vi.fn(),
   getSkillInstallStatus: vi.fn(),
@@ -28,6 +29,7 @@ import {
   approveSkillInstallDependency,
   cancelSkillInstall,
   getSkillInstallApprovalToken,
+  retrySkillInstall,
   runApprovedSkillInstallCommand,
   submitSkillInstallSecret,
 } from "@/views/api/skillInstallation";
@@ -592,6 +594,36 @@ describe("SkillInstallCard", () => {
     expect(wrapper.text()).toContain("Failed");
     expect(wrapper.text()).toContain("pip: not found");
     expect(wrapper.emitted("updated")).toBeUndefined();
+  });
+
+  it("failed-state Retry calls the typed retry and swaps in the new session", async () => {
+    const fresh = makeSnapshot({
+      sessionId: "sess-2",
+      state: "awaiting_approval",
+      nextAction: "review-plan",
+      planRevision: "rev-2",
+    });
+    vi.mocked(retrySkillInstall).mockResolvedValue(fresh);
+    const wrapper = mountCard(
+      makeSnapshot({ state: "failed", nextAction: "retry" })
+    );
+    await wrapper.find('[data-testid="skill-install-retry"]').trigger("click");
+    await flushPromises();
+    expect(retrySkillInstall).toHaveBeenCalledWith("sess-1");
+    expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
+      sessionId: "sess-2",
+      state: "awaiting_approval",
+    });
+  });
+
+  it("retry failure emits failed (e.g. three-same-cause stop rule)", async () => {
+    vi.mocked(retrySkillInstall).mockResolvedValue(null);
+    const wrapper = mountCard(
+      makeSnapshot({ state: "failed", nextAction: "retry" })
+    );
+    await wrapper.find('[data-testid="skill-install-retry"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("failed")).toBeTruthy();
   });
 
   it("hides run controls during review and in terminal states", () => {

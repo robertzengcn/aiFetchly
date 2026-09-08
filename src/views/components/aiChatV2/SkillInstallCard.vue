@@ -336,7 +336,7 @@
         class="mt-2 d-flex ga-2"
         data-testid="skill-install-failed"
       >
-        <v-btn size="small" variant="outlined" :loading="busy" data-testid="skill-install-retry" @click="onRefresh">
+        <v-btn size="small" variant="outlined" :loading="busy" data-testid="skill-install-retry" @click="onRetry">
           {{ t("skillInstall.retry") }}
         </v-btn>
         <v-btn size="small" variant="text" data-testid="skill-install-cancel" @click="onCancel">
@@ -373,6 +373,7 @@ import {
   getSkillInstallApprovalToken,
   getSkillInstallStatus,
   onSkillInstallProgress,
+  retrySkillInstall,
   runApprovedSkillInstallCommand,
   submitSkillInstallSecret,
   type ApprovedCommandRunView,
@@ -629,10 +630,24 @@ async function onCancel(): Promise<void> {
   }
 }
 
-async function onRefresh(): Promise<void> {
-  await refreshSnapshot();
-  if (localSnapshot.value) {
-    emit("updated", localSnapshot.value);
+/**
+ * Typed retry (FR-20): re-run the failed installation from the recorded
+ * canonical source. A refused retry (three-same-cause stop rule) surfaces
+ * the typed error through the failed event; success swaps in the new
+ * session's snapshot.
+ */
+async function onRetry(): Promise<void> {
+  busy.value = true;
+  try {
+    const snapshot = await retrySkillInstall(snapshotView.value.sessionId);
+    if (snapshot) {
+      localSnapshot.value = snapshot;
+      emit("updated", snapshot);
+    } else {
+      emit("failed", t("skillInstall.errors.actionFailed"));
+    }
+  } finally {
+    busy.value = false;
   }
 }
 </script>

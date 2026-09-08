@@ -11,6 +11,7 @@ import { Order } from "./order.decorator";
 @Entity("skill_installation_sessions")
 @Index("idx_skill_inst_sess_conv", ["conversationId"])
 @Index("idx_skill_inst_sess_state", ["state"])
+@Index("idx_skill_inst_sess_canonical", ["canonicalUri"])
 @Index("uq_skill_inst_sess_id", ["sessionId"], { unique: true })
 export class SkillInstallationSessionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
@@ -71,4 +72,36 @@ export class SkillInstallationSessionEntity extends AuditableEntity {
   @Order(12)
   @Column("varchar", { length: 64, nullable: true })
   approvalToken?: string;
+
+  /**
+   * Normalized source identity persisted AT CREATION (FR-02/NFR-01): an
+   * acquiring session has no plan JSON yet, so idempotent resume and the
+   * transactional active-session claim must not depend on planJson.
+   */
+  @Order(13)
+  @Column("varchar", { length: 500, nullable: true })
+  canonicalUri?: string;
+
+  /**
+   * Mutation lease (design §14.1): the owner token of the process currently
+   * mutating this session, with an absolute expiry (epoch ms). An active
+   * session whose lease has expired is stale — a fresh claim may take over
+   * safely (the previous owner crashed mid-mutation).
+   */
+  @Order(14)
+  @Column("varchar", { length: 64, nullable: true })
+  leaseOwner?: string;
+
+  @Order(15)
+  @Column("bigint", { nullable: true })
+  leaseExpiresAt?: string | null;
+
+  /**
+   * Normalized failure cause of the LAST failure (FR-20/§10.1): the
+   * three-same-cause stop rule compares against this; a DIFFERENT cause
+   * resets the retryCount streak.
+   */
+  @Order(16)
+  @Column("varchar", { length: 64, nullable: true })
+  lastFailureCause?: string;
 }

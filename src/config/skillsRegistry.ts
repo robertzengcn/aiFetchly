@@ -2152,7 +2152,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         installationId: {
           type: "string",
-          description: "Installation id from a prior skill_install_status/approve result.",
+          description:
+            "Installation id from a prior skill_install_status/approve result.",
         },
       },
       required: ["installationId"],
@@ -2170,9 +2171,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       }
       const installationId = String(args.installationId ?? "");
       if (!installationId) {
-        return { success: false, result: { error: "installationId is required." } };
+        return {
+          success: false,
+          result: { error: "installationId is required." },
+        };
       }
-      const snapshot = await new SkillInstallationModule().update(installationId);
+      const snapshot = await new SkillInstallationModule().update(
+        installationId
+      );
       return { success: snapshot.state !== "failed", result: { ...snapshot } };
     },
   },
@@ -2202,7 +2208,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       );
       const installationId = String(args.installationId ?? "");
       if (!installationId) {
-        return { success: false, result: { error: "installationId is required." } };
+        return {
+          success: false,
+          result: { error: "installationId is required." },
+        };
       }
       const report = await new SkillInstallationModule().repair(installationId);
       return { success: report.ok, result: { ...report } };
@@ -2277,6 +2286,49 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const snapshot = await module.cancel(parsed.data.sessionId);
       return {
         success: snapshot.state === "cancelled",
+        result: { ...snapshot },
+      };
+    },
+  },
+  {
+    name: "skill_install_retry",
+    description:
+      "Retry a failed installation from its recorded source (FR-20). Runs a fresh " +
+      "attempt for the same canonical source and returns the new session snapshot. " +
+      "Automatic retries stop after three failures with the same cause — then the user " +
+      "must review the failure or change the source.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "The FAILED session id whose source should be retried.",
+        },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallCancelArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallCancelArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.retry(parsed.data.sessionId);
+      return {
+        success: !snapshot.errorCode,
         result: { ...snapshot },
       };
     },

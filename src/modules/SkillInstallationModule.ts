@@ -96,6 +96,33 @@ export function setTypedDependencyInstallerForTests(
   typedDependencyInstaller = installer ?? defaultTypedDependencyInstaller;
 }
 
+/**
+ * Mutation lease (design §14.1, NFR-01): a session holds its lease for this
+ * long between heartbeats; an active session whose lease expired is stale
+ * and a fresh claim may take it over (the owner crashed mid-mutation).
+ */
+const SESSION_LEASE_TTL_MS = 10 * 60_000;
+/**
+ * FR-20 / §10.1: three repeated failures with the SAME normalized cause
+ * stop automatic retries and require user direction.
+ */
+const MAX_SAME_CAUSE_FAILURES = 3;
+
+/**
+ * Single-writer claim lock: better-sqlite3 shares one connection, so two
+ * concurrent prepares would interleave their claim transactions into a
+ * nested-transaction error. Serializing the (short) claim section — read
+ * active → take over stale → insert — keeps the DB transaction meaningful
+ * while preventing interleaving. Long work (acquisition, activation) runs
+ * OUTSIDE the lock; the mutation lease covers cross-claim staleness.
+ */
+let sessionClaimLock: Promise<unknown> = Promise.resolve();
+function withClaimLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = sessionClaimLock.then(fn, fn);
+  sessionClaimLock = run.catch(() => undefined);
+  return run;
+}
+
 const STATE_TO_NEXT_ACTION: Record<
   SkillInstallationState,
   SkillInstallNextAction
@@ -253,15 +280,56 @@ export class SkillInstallationModule extends BaseModule {
     const approvalToken = crypto.randomBytes(24).toString("hex");
     const acquisition = new SkillSourceAcquisitionService();
 
-    const created = await sessions.create({
-      sessionId,
-      installationId,
-      approvalToken,
-      conversationId: request.conversationId,
-      state: "acquiring",
-      planRevision: "none",
-      stateRevision: 0,
-    } as SkillInstallationSessionEntity);
+    // Transactional claim (FR-02/NFR-01): exactly one active session per
+    // canonical source survives concurrent prepares, and the canonical URI
+    // is persisted AT CREATION so an acquiring session (no plan JSON yet)
+    // is still discoverable. The mutation lease carries owner + expiry; a
+    // prior session's same-cause failure streak rides along so the
+    // three-failure stop rule spans retries.
+    const prior = await sessions.findLatestByCanonicalUri(
+      descriptor.canonicalUri
+    );
+    const now = Date.now();
+    const claim = await withClaimLock(() =>
+      sessions.claimOrCreateSession(
+        {
+          sessionId,
+          installationId,
+          approvalToken,
+          conversationId: request.conversationId,
+          state: "acquiring",
+          planRevision: "none",
+          stateRevision: 0,
+          canonicalUri: descriptor.canonicalUri,
+          leaseOwner: `${process.pid}-${crypto.randomBytes(6).toString("hex")}`,
+          leaseExpiresAt: String(now + SESSION_LEASE_TTL_MS),
+          ...(prior
+            ? {
+                retryCount: prior.retryCount,
+                ...(prior.lastFailureCause
+                  ? { lastFailureCause: prior.lastFailureCause }
+                  : {}),
+              }
+            : {}),
+        } as SkillInstallationSessionEntity,
+        { nowMs: now }
+      )
+    );
+    if (!claim.created) {
+      // A live active session exists — resume it (never a second checkout).
+      return this.snapshotFromEntity(claim.session);
+    }
+    const created = claim.session;
+    for (const staleId of claim.staleTakenOver) {
+      await this.appendEvent(
+        events,
+        staleId,
+        "lease-takeover",
+        "acquiring",
+        "failed",
+        "stale mutation lease taken over by a new prepare"
+      );
+    }
     await this.appendEvent(
       events,
       sessionId,
@@ -270,6 +338,9 @@ export class SkillInstallationModule extends BaseModule {
       "acquiring"
     );
 
+    // Heartbeat before the long acquisition so a slow clone does not look
+    // abandoned mid-flight (the lease refreshes again at activation).
+    await sessions.heartbeatLease(sessionId, SESSION_LEASE_TTL_MS, Date.now());
     const acquired = await acquisition.acquire(sessionId, descriptor);
     if (!acquired.ok) {
       await this.fail(
@@ -980,6 +1051,72 @@ export class SkillInstallationModule extends BaseModule {
     return this.snapshotFromEntity(cancelled ?? session);
   }
 
+  /**
+   * Typed retry (FR-20 / §10.1): re-run a failed (or rollback_required)
+   * installation from the recorded canonical source. The three-failure
+   * stop rule is enforced across retries — the same-cause streak is
+   * inherited by each new session, and the third consecutive failure with
+   * the same normalized cause refuses further automatic retries.
+   */
+  async retry(sessionId: string): Promise<InstallSnapshot> {
+    const { sessions, events } = await this.getModels();
+    const session = await sessions.findBySessionId(sessionId);
+    if (!session) {
+      return this.errorSnapshot(
+        "failed",
+        "INSTALL_SESSION_REQUIRED",
+        "Unknown installation session.",
+        sessionId
+      );
+    }
+    if (!["failed", "rollback_required"].includes(session.state)) {
+      return this.snapshotFromEntity(session);
+    }
+    if ((session.retryCount ?? 0) >= MAX_SAME_CAUSE_FAILURES) {
+      await this.appendEvent(
+        events,
+        sessionId,
+        "retry-refused",
+        session.state,
+        session.state,
+        `same-cause failure streak ${session.retryCount} for ${session.lastFailureCause}`
+      );
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_RETRY_LIMIT_EXCEEDED",
+        `This installation failed ${
+          session.retryCount
+        } times with the same cause (${
+          session.lastFailureCause ?? "unknown"
+        }). Automatic retries are stopped — review the failure or change the source before trying again.`,
+        sessionId
+      );
+    }
+    const source = session.canonicalUri;
+    if (!source) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_REQUIRED",
+        "The failed session predates canonical-source persistence; start a new install instead.",
+        sessionId
+      );
+    }
+    await this.appendEvent(
+      events,
+      sessionId,
+      "retry-requested",
+      session.state,
+      session.state,
+      `retry after ${session.retryCount} same-cause failure(s)`
+    );
+    // A failed session is not active, so prepare claims a FRESH session for
+    // the same canonical source and inherits the failure streak.
+    return this.prepare({
+      conversationId: session.conversationId,
+      source,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // lifecycle: update / repair / disable / uninstall (PRD §24, FR-19)
   // -------------------------------------------------------------------------
@@ -1227,6 +1364,9 @@ export class SkillInstallationModule extends BaseModule {
     session: SkillInstallationSessionEntity
   ): Promise<InstallSnapshot> {
     const { sessions, events, installations } = await this.getModels();
+    // Refresh the mutation lease before the (potentially slow) activation so
+    // a concurrent prepare cannot take the session over mid-copy.
+    await sessions.heartbeatLease(sessionId, SESSION_LEASE_TTL_MS, Date.now());
     await this.transition(sessions, events, sessionId, "activating");
 
     const activation = new SkillActivationService();
@@ -1455,6 +1595,15 @@ export class SkillInstallationModule extends BaseModule {
     current.approved = false;
     current.failureCode = code;
     current.failureDetail = message.replace(/https?:\/\/[^\s]+/g, "[source]");
+    // FR-20 / §10.1 same-cause streak: the THIRD consecutive failure with
+    // the same normalized cause exhausts automatic retries (see retry()).
+    // A DIFFERENT cause restarts the count.
+    if (current.lastFailureCause === code) {
+      current.retryCount = (current.retryCount ?? 0) + 1;
+    } else {
+      current.retryCount = 1;
+      current.lastFailureCause = code;
+    }
     await sessions.create(current);
     await this.appendEvent(
       events,

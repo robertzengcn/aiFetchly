@@ -914,3 +914,139 @@ describe("ordinary-argument and source-URL secret bypasses are closed (FR-16/31,
     expect(legacy?.canonicalUri).toBe("https://example.com/repo");
   });
 });
+
+describe("transactional idempotency, mutation leases, retry limits (FR-02/FR-20/NFR-01)", () => {
+  it("two CONCURRENT prepares for the same source yield ONE active session", async () => {
+    const module = new SkillInstallationModule();
+    const [a, b] = await Promise.all([
+      module.prepare({ conversationId: "conv-race-1", source: fixtureRoot }),
+      module.prepare({ conversationId: "conv-race-2", source: fixtureRoot }),
+    ]);
+    // The loser resumes the winner's session — never a second checkout.
+    expect(a.sessionId).toBe(b.sessionId);
+    // The loser may observe a mid-flight state (that IS the resume
+    // behavior); the settled session is the winner's pipeline result.
+    const settled = await module.getStatus(a.sessionId);
+    expect(settled.state).toBe("awaiting_approval");
+    // Exactly ONE session row exists for the canonical source — the loser's
+    // pre-built entity was never inserted.
+    const { SkillInstallationSessionModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const sessions = new SkillInstallationSessionModel(tmpDir);
+    const rows = await sessions["repository"].find({
+      where: { canonicalUri: fixtureRoot },
+    });
+    expect(rows).toHaveLength(1);
+  }, 120_000);
+
+  it("the acquiring session is discoverable by canonical URI BEFORE any plan exists", async () => {
+    const { SkillInstallationSessionModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const sessions = new SkillInstallationSessionModel(tmpDir);
+    // A bare acquiring row (no planJson) — the pre-fix lookup could not see it.
+    await sessions.create({
+      sessionId: "sess-acquiring-only",
+      conversationId: "c",
+      state: "acquiring",
+      planRevision: "none",
+      stateRevision: 0,
+      canonicalUri: fixtureRoot,
+    } as never);
+    const found = await sessions.findActiveByCanonicalUri(fixtureRoot);
+    expect(found.map((s) => s.sessionId)).toContain("sess-acquiring-only");
+  }, 60_000);
+
+  it("an expired lease is taken over safely; a live lease resumes", async () => {
+    const { SkillInstallationSessionModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const sessions = new SkillInstallationSessionModel(tmpDir);
+    const now = Date.now();
+    // Stale: expired 5 minutes ago.
+    await sessions.create({
+      sessionId: "sess-stale",
+      conversationId: "c",
+      state: "acquiring",
+      planRevision: "none",
+      stateRevision: 0,
+      canonicalUri: fixtureRoot,
+      leaseOwner: "old-owner",
+      leaseExpiresAt: String(now - 5 * 60_000),
+    } as never);
+    // Live: expires in 10 minutes.
+    await sessions.create({
+      sessionId: "sess-live",
+      conversationId: "c",
+      state: "inspecting",
+      planRevision: "none",
+      stateRevision: 0,
+      canonicalUri: "/another/canonical/source",
+      leaseOwner: "new-owner",
+      leaseExpiresAt: String(now + 10 * 60_000),
+    } as never);
+
+    const staleClaim = await sessions.claimOrCreateSession(
+      {
+        sessionId: "sess-fresh-1",
+        conversationId: "c",
+        state: "acquiring",
+        planRevision: "none",
+        stateRevision: 0,
+        canonicalUri: fixtureRoot,
+      } as never,
+      { nowMs: now }
+    );
+    expect(staleClaim.created).toBe(true);
+    expect(staleClaim.staleTakenOver).toContain("sess-stale");
+    const takenRow = await sessions.findBySessionId("sess-stale");
+    expect(takenRow?.state).toBe("failed");
+    expect(takenRow?.failureCode).toBe("LEASE_STALE");
+
+    const liveClaim = await sessions.claimOrCreateSession(
+      {
+        sessionId: "sess-fresh-2",
+        conversationId: "c",
+        state: "acquiring",
+        planRevision: "none",
+        stateRevision: 0,
+        canonicalUri: "/another/canonical/source",
+      } as never,
+      { nowMs: now }
+    );
+    expect(liveClaim.created).toBe(false);
+    expect(liveClaim.session.sessionId).toBe("sess-live");
+  }, 60_000);
+
+  it("retry re-runs from the recorded source and stops after three same-cause failures", async () => {
+    const module = new SkillInstallationModule();
+    // Fail deterministically: a source that cannot be acquired.
+    const badSource = path.join(os.tmpdir(), "definitely-missing-source-dir");
+    const first = await module.prepare({
+      conversationId: "conv-retry",
+      source: badSource,
+    });
+    expect(first.state).toBe("failed");
+    expect(first.errorCode).toBe("SOURCE_ACQUISITION_FAILED");
+
+    // First failure of this cause -> streak 1 -> retry allowed.
+    const second = await module.retry(first.sessionId);
+    expect(second.state).toBe("failed");
+    const third = await module.retry(second.sessionId);
+    expect(third.state).toBe("failed");
+    // Streak now 3 -> the stop rule refuses the next automatic retry.
+    const refused = await module.retry(third.sessionId);
+    expect(refused.errorCode).toBe("INSTALL_RETRY_LIMIT_EXCEEDED");
+    expect(refused.safeSummary).toContain("same cause");
+
+    // Each retry created exactly ONE session per attempt — all for the same
+    // canonical source, never two active at once.
+    const { SkillInstallationSessionModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const sessions = new SkillInstallationSessionModel(tmpDir);
+    const active = await sessions.findActiveByCanonicalUri(badSource);
+    expect(active).toHaveLength(0); // all failed (terminal)
+  }, 120_000);
+});

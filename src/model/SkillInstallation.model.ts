@@ -94,18 +94,102 @@ export class SkillInstallationSessionModel extends BaseDb {
     return this.repository.findOneBy({ sessionId });
   }
 
+  /**
+   * Most recent session (any state) for a canonical source — a new session
+   * inherits its same-cause failure streak so the FR-20 three-failure stop
+   * rule spans retries across session rows. Ordered by the monotonic row id:
+   * updatedAt has second precision and retries within the same second would
+   * make "latest" ambiguous.
+   */
+  async findLatestByCanonicalUri(
+    canonicalUri: string
+  ): Promise<SkillInstallationSessionEntity | null> {
+    return this.repository.findOne({
+      where: { canonicalUri },
+      order: { id: "DESC" },
+    });
+  }
+
   async findActiveByCanonicalUri(
     canonicalUri: string
   ): Promise<SkillInstallationSessionEntity[]> {
-    // Active = not terminal. Plan JSON carries the canonicalUri; a simple
-    // LIKE keeps this on one index-free scan of a small table.
+    // Active = not terminal. The canonicalUri column (persisted AT CREATION,
+    // FR-02/NFR-01) makes this an indexed exact match — an acquiring session
+    // with no plan JSON is still found.
     return this.repository
       .createQueryBuilder("s")
       .where("s.state NOT IN (:...terminal)", {
         terminal: ["ready", "failed", "cancelled", "rollback_required"],
       })
-      .andWhere("s.planJson LIKE :uri", { uri: `%"${canonicalUri}"%` })
+      .andWhere("s.canonicalUri = :uri", { uri: canonicalUri })
       .getMany();
+  }
+
+  /**
+   * Transactional active-session claim (FR-02/NFR-01): inside ONE SQLite
+   * transaction, (1) fail active sessions whose mutation lease has expired
+   * (stale owner — crashed mid-mutation), then (2) return the remaining
+   * live active session, or insert the new entity when none exists. Two
+   * concurrent prepares for the same source therefore yield exactly one
+   * active session and one acquisition pipeline.
+   */
+  async claimOrCreateSession(
+    entity: SkillInstallationSessionEntity,
+    options: { readonly nowMs: number }
+  ): Promise<{
+    readonly created: boolean;
+    readonly session: SkillInstallationSessionEntity;
+    readonly staleTakenOver: readonly string[];
+  }> {
+    return this.repository.manager.transaction(async (em) => {
+      const repo = em.getRepository(SkillInstallationSessionEntity);
+      const staleTakenOver: string[] = [];
+      const active = await repo
+        .createQueryBuilder("s")
+        .where("s.state NOT IN (:...terminal)", {
+          terminal: ["ready", "failed", "cancelled", "rollback_required"],
+        })
+        .andWhere("s.canonicalUri = :uri", { uri: entity.canonicalUri })
+        .getMany();
+      const live = active.filter((s) => {
+        const expires = s.leaseExpiresAt ? Number(s.leaseExpiresAt) : null;
+        const stale = expires !== null && expires < options.nowMs;
+        if (stale) staleTakenOver.push(s.sessionId);
+        return !stale;
+      });
+      for (const stale of active) {
+        if (!live.includes(stale)) {
+          stale.state = "failed";
+          stale.failureCode = "LEASE_STALE";
+          stale.failureDetail =
+            "The previous installation attempt stopped responding; its mutation lease expired and a new attempt took over.";
+          await repo.save(stale);
+        }
+      }
+      if (live.length > 0) {
+        return { created: false, session: live[0], staleTakenOver };
+      }
+      return {
+        created: true,
+        session: await repo.save(entity),
+        staleTakenOver,
+      };
+    });
+  }
+
+  /**
+   * Extend the mutation lease (heartbeat): long acquisitions and activations
+   * call this so another prepare cannot take the session over mid-work.
+   */
+  async heartbeatLease(
+    sessionId: string,
+    extendMs: number,
+    nowMs: number
+  ): Promise<void> {
+    await this.repository.update(
+      { sessionId },
+      { leaseExpiresAt: String(nowMs + extendMs) }
+    );
   }
 
   /**

@@ -11,6 +11,7 @@ import {
   SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
   SKILL_INSTALL_PREPARE,
+  SKILL_INSTALL_RETRY,
   SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
@@ -101,6 +102,18 @@ export async function cancelSkillInstall(
   sessionId: string
 ): Promise<InstallSnapshot | null> {
   const resp = await windowInvoke(SKILL_INSTALL_CANCEL, { sessionId });
+  return (resp as InstallSnapshot | null) ?? null;
+}
+
+/**
+ * Typed retry (FR-20 / §10.1): re-run a failed installation from the
+ * recorded canonical source. The main process enforces the three-same-cause
+ * stop rule; the returned snapshot (or error) tells the UI the outcome.
+ */
+export async function retrySkillInstall(
+  sessionId: string
+): Promise<InstallSnapshot | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_RETRY, { sessionId });
   return (resp as InstallSnapshot | null) ?? null;
 }
 

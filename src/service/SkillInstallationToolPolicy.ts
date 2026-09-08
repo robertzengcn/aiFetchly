@@ -22,6 +22,9 @@ export const INSTALLER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "skill_install_approve",
   "skill_install_status",
   "skill_install_cancel",
+  "skill_install_update",
+  "skill_install_repair",
+  "skill_install_retry",
 ]);
 
 export interface ToolPolicyInput {
@@ -71,7 +74,14 @@ export function evaluateSkillInstallationToolPolicy(
     const query = String(
       input.toolArguments.query ?? input.toolArguments.search ?? ""
     ).toLowerCase();
-    if (target && query && (query.includes("git") || query.includes("clone") || query.includes("file") || query.includes("shell"))) {
+    if (
+      target &&
+      query &&
+      (query.includes("git") ||
+        query.includes("clone") ||
+        query.includes("file") ||
+        query.includes("shell"))
+    ) {
       return blocked();
     }
     if (/\b(?:git|clone|shell|file\s*read|glob)\b/.test(query)) {
@@ -86,7 +96,11 @@ export function evaluateSkillInstallationToolPolicy(
     const command = String(input.toolArguments.command ?? "");
     if (SHELL_INSTALL_RE.test(command)) {
       // If the command references the recognized install target, block.
-      if (!target || command.toLowerCase().includes(target) || /\bclone\b/i.test(command)) {
+      if (
+        !target ||
+        command.toLowerCase().includes(target) ||
+        /\bclone\b/i.test(command)
+      ) {
         return blocked();
       }
     }

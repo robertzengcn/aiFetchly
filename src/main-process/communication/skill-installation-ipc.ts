@@ -21,6 +21,7 @@ import {
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
+  SKILL_INSTALL_RETRY,
   SKILL_INSTALL_DISABLE,
   SKILL_INSTALL_ENABLE,
   SKILL_INSTALL_PREPARE,
@@ -250,6 +251,19 @@ export function registerSkillInstallationIpcHandlers(): void {
       return ok(await module.cancel(decoded.value.sessionId));
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Cancel failed.");
+    }
+  });
+
+  // Typed retry (FR-20/§10.1): a pure installation lifecycle action — no AI
+  // gate needed, mirroring CANCEL.
+  ipcMain.handle(SKILL_INSTALL_RETRY, async (_event, data: unknown) => {
+    const decoded = decode(sessionSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const module = new SkillInstallationModule();
+      return ok(await module.retry(decoded.value.sessionId));
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Retry failed.");
     }
   });
 
