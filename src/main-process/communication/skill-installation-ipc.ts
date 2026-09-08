@@ -84,6 +84,8 @@ const approveSchema = z.object({
   /** Opaque token from the renderer approval card (review D1). */
   approvalToken: z.string().min(16).max(128),
   selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
+  /** FR-29: bind the call to the calling conversation when known. */
+  conversationId: z.string().min(1).max(100).optional(),
 });
 
 /** FR-14 typed dependency approval: token + revision + ONE plan item id. */
@@ -94,9 +96,15 @@ const approveDependencySchema = z.object({
   planRevision: z.string().min(1),
   /** Same opaque token as the plan approval (review D1 binding). */
   approvalToken: z.string().min(16).max(128),
+  /** FR-29: bind the call to the calling conversation when known. */
+  conversationId: z.string().min(1).max(100).optional(),
 });
 
-const sessionSchema = z.object({ sessionId: z.string().min(1) });
+const sessionSchema = z.object({
+  sessionId: z.string().min(1),
+  /** FR-29: bind lifecycle calls to the calling conversation when known. */
+  conversationId: z.string().min(1).max(100).optional(),
+});
 
 /**
  * SUBMIT_SECRET: validated separately from the chat/tool schemas. The value
@@ -172,6 +180,9 @@ export function registerSkillInstallationIpcHandlers(): void {
         ...(decoded.value.selectedSkillIds !== undefined
           ? { selectedSkillIds: decoded.value.selectedSkillIds }
           : {}),
+        ...(decoded.value.conversationId !== undefined
+          ? { conversationId: decoded.value.conversationId }
+          : {}),
       });
       return ok(snapshot);
     } catch (err) {
@@ -200,6 +211,9 @@ export function registerSkillInstallationIpcHandlers(): void {
           approve: decoded.value.approve,
           planRevision: decoded.value.planRevision,
           approvalToken: decoded.value.approvalToken,
+          ...(decoded.value.conversationId !== undefined
+            ? { conversationId: decoded.value.conversationId }
+            : {}),
         });
         return ok(snapshot);
       } catch (err) {
@@ -237,7 +251,12 @@ export function registerSkillInstallationIpcHandlers(): void {
     if (!decoded.ok) return denied(decoded.message);
     try {
       const module = new SkillInstallationModule();
-      return ok(await module.getStatus(decoded.value.sessionId));
+      return ok(
+        await module.getStatus(
+          decoded.value.sessionId,
+          decoded.value.conversationId
+        )
+      );
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Status failed.");
     }
@@ -248,7 +267,12 @@ export function registerSkillInstallationIpcHandlers(): void {
     if (!decoded.ok) return denied(decoded.message);
     try {
       const module = new SkillInstallationModule();
-      return ok(await module.cancel(decoded.value.sessionId));
+      return ok(
+        await module.cancel(
+          decoded.value.sessionId,
+          decoded.value.conversationId
+        )
+      );
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Cancel failed.");
     }
@@ -261,7 +285,12 @@ export function registerSkillInstallationIpcHandlers(): void {
     if (!decoded.ok) return denied(decoded.message);
     try {
       const module = new SkillInstallationModule();
-      return ok(await module.retry(decoded.value.sessionId));
+      return ok(
+        await module.retry(
+          decoded.value.sessionId,
+          decoded.value.conversationId
+        )
+      );
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Retry failed.");
     }

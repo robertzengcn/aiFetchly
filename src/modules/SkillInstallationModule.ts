@@ -427,6 +427,8 @@ export class SkillInstallationModule extends BaseModule {
     /** Renderer-only opaque token; the model can never supply it. */
     approvalToken?: string;
     selectedSkillIds?: readonly string[];
+    /** FR-29: calling conversation — cross-conversation use is rejected. */
+    conversationId?: string;
   }): Promise<InstallSnapshot> {
     const { sessions, events } = await this.getModels();
     const session = await sessions.findBySessionId(input.sessionId);
@@ -435,6 +437,14 @@ export class SkillInstallationModule extends BaseModule {
         "failed",
         "INSTALL_SESSION_REQUIRED",
         "Unknown installation session.",
+        input.sessionId
+      );
+    }
+    if (this.conversationMismatch(session, input.conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
         input.sessionId
       );
     }
@@ -703,6 +713,8 @@ export class SkillInstallationModule extends BaseModule {
     approve: boolean;
     planRevision: string;
     approvalToken?: string;
+    /** FR-29: calling conversation — cross-conversation use is rejected. */
+    conversationId?: string;
   }): Promise<InstallSnapshot> {
     const { sessions, events, installations } = await this.getModels();
     const session = await sessions.findBySessionId(input.sessionId);
@@ -711,6 +723,14 @@ export class SkillInstallationModule extends BaseModule {
         "failed",
         "INSTALL_SESSION_REQUIRED",
         "Unknown installation session.",
+        input.sessionId
+      );
+    }
+    if (this.conversationMismatch(session, input.conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
         input.sessionId
       );
     }
@@ -909,7 +929,10 @@ export class SkillInstallationModule extends BaseModule {
    * secret VALUE never enters this module — the credential service stores
    * it; this only advances the state machine.
    */
-  async resumeAfterSecret(sessionId: string): Promise<InstallSnapshot> {
+  async resumeAfterSecret(
+    sessionId: string,
+    conversationId?: string
+  ): Promise<InstallSnapshot> {
     const { sessions } = await this.getModels();
     const session = await sessions.findBySessionId(sessionId);
     if (!session) {
@@ -917,6 +940,14 @@ export class SkillInstallationModule extends BaseModule {
         "failed",
         "INSTALL_SESSION_REQUIRED",
         "Unknown installation session.",
+        sessionId
+      );
+    }
+    if (this.conversationMismatch(session, conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
         sessionId
       );
     }
@@ -1003,7 +1034,10 @@ export class SkillInstallationModule extends BaseModule {
     return session?.approvalToken ?? null;
   }
 
-  async getStatus(sessionId: string): Promise<InstallSnapshot> {
+  async getStatus(
+    sessionId: string,
+    conversationId?: string
+  ): Promise<InstallSnapshot> {
     const { sessions } = await this.getModels();
     const session = await sessions.findBySessionId(sessionId);
     if (!session) {
@@ -1014,13 +1048,24 @@ export class SkillInstallationModule extends BaseModule {
         sessionId
       );
     }
+    if (this.conversationMismatch(session, conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
+        sessionId
+      );
+    }
     const plan = session.planJson
       ? (JSON.parse(session.planJson) as SkillInstallPlan)
       : null;
     return this.snapshotFromEntity(session, plan ?? undefined);
   }
 
-  async cancel(sessionId: string): Promise<InstallSnapshot> {
+  async cancel(
+    sessionId: string,
+    conversationId?: string
+  ): Promise<InstallSnapshot> {
     const { sessions, events } = await this.getModels();
     const session = await sessions.findBySessionId(sessionId);
     if (!session) {
@@ -1028,6 +1073,14 @@ export class SkillInstallationModule extends BaseModule {
         "failed",
         "INSTALL_SESSION_REQUIRED",
         "Unknown installation session.",
+        sessionId
+      );
+    }
+    if (this.conversationMismatch(session, conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
         sessionId
       );
     }
@@ -1058,7 +1111,10 @@ export class SkillInstallationModule extends BaseModule {
    * inherited by each new session, and the third consecutive failure with
    * the same normalized cause refuses further automatic retries.
    */
-  async retry(sessionId: string): Promise<InstallSnapshot> {
+  async retry(
+    sessionId: string,
+    conversationId?: string
+  ): Promise<InstallSnapshot> {
     const { sessions, events } = await this.getModels();
     const session = await sessions.findBySessionId(sessionId);
     if (!session) {
@@ -1066,6 +1122,14 @@ export class SkillInstallationModule extends BaseModule {
         "failed",
         "INSTALL_SESSION_REQUIRED",
         "Unknown installation session.",
+        sessionId
+      );
+    }
+    if (this.conversationMismatch(session, conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
         sessionId
       );
     }
@@ -1653,6 +1717,22 @@ export class SkillInstallationModule extends BaseModule {
   /** Test seam: capture progress events instead of broadcasting. */
   setProgressSinkForTests(sink: SkillInstallationProgressSink | null): void {
     this.progressSink = sink;
+  }
+
+  /**
+   * FR-29 conversation binding: when the caller identifies its conversation
+   * (model tools always do, from their execution context), a session that
+   * belongs to a DIFFERENT conversation is rejected with a stable error and
+   * NO state change. Omitted conversationId (management UI paths that are
+   * not conversation-scoped) keeps prior behavior.
+   */
+  private conversationMismatch(
+    session: SkillInstallationSessionEntity,
+    conversationId: string | undefined
+  ): boolean {
+    return (
+      conversationId !== undefined && session.conversationId !== conversationId
+    );
   }
 
   private snapshotFromEntity(

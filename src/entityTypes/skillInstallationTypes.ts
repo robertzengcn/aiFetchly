@@ -260,6 +260,7 @@ export type SkillInstallErrorCode =
   | "ACTIVATION_VERIFICATION_FAILED"
   | "REGISTRY_RELOAD_FAILED"
   | "INSTALL_SESSION_REQUIRED"
+  | "INSTALL_SESSION_CONVERSATION_MISMATCH"
   | "INSTALL_SECRET_CHANNEL_REQUIRED"
   | "INSTALL_GENERIC_TOOL_FALLBACK_BLOCKED"
   | "INSTALL_TOOL_LOAD_RETRY_EXHAUSTED"
@@ -384,18 +385,28 @@ export const SkillInstallApproveArgsSchema = z
     planRevision: z.string().min(1),
     approve: z.boolean(),
     selectedSkillIds: z.array(z.string().max(200)).max(100).optional(),
+    /**
+     * FR-29: the calling conversation. When present, a session created in a
+     * DIFFERENT conversation is rejected with a stable error code — model
+     * tools always supply it from their execution context.
+     */
+    conversationId: z.string().min(1).max(100).optional(),
   })
   .strict();
 
 export const SkillInstallStatusArgsSchema = z
   .object({
     sessionId: SkillSessionIdSchema,
+    /** FR-29 calling-conversation binding (see ApproveArgsSchema). */
+    conversationId: z.string().min(1).max(100).optional(),
   })
   .strict();
 
 export const SkillInstallCancelArgsSchema = z
   .object({
     sessionId: SkillSessionIdSchema,
+    /** FR-29 calling-conversation binding (see ApproveArgsSchema). */
+    conversationId: z.string().min(1).max(100).optional(),
   })
   .strict();
 

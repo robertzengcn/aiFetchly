@@ -1050,3 +1050,97 @@ describe("transactional idempotency, mutation leases, retry limits (FR-02/FR-20/
     expect(active).toHaveLength(0); // all failed (terminal)
   }, 120_000);
 });
+
+describe("conversation/session correlation on lifecycle calls (FR-29)", () => {
+  it("a session from conversation A is rejected for conversation B without state changes", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-owner",
+      source: fixtureRoot,
+    });
+    expect(prepared.state).toBe("awaiting_approval");
+
+    // status / cancel / retry from ANOTHER conversation → typed mismatch.
+    for (const [label, call] of [
+      ["status", () => module.getStatus(prepared.sessionId, "conv-other")],
+      ["cancel", () => module.cancel(prepared.sessionId, "conv-other")],
+      ["retry", () => module.retry(prepared.sessionId, "conv-other")],
+      [
+        "approve",
+        async () =>
+          module.approve({
+            sessionId: prepared.sessionId,
+            planRevision: prepared.planRevision as string,
+            approve: true,
+            approvalToken:
+              (await module.getApprovalToken(prepared.sessionId)) ?? "",
+            conversationId: "conv-other",
+          }),
+      ],
+    ] as const) {
+      const snapshot = await call();
+      expect(snapshot.errorCode, label).toBe(
+        "INSTALL_SESSION_CONVERSATION_MISMATCH"
+      );
+    }
+
+    // NO state change: the session is still awaiting approval for its owner.
+    const after = await module.getStatus(prepared.sessionId);
+    expect(after.state).toBe("awaiting_approval");
+
+    // The owner's conversation (or an omitted binding) still works.
+    const ownerStatus = await module.getStatus(
+      prepared.sessionId,
+      "conv-owner"
+    );
+    expect(ownerStatus.errorCode).toBeUndefined();
+    const unboundStatus = await module.getStatus(prepared.sessionId);
+    expect(unboundStatus.errorCode).toBeUndefined();
+  }, 120_000);
+
+  it("dependency approval honors the same conversation binding", async () => {
+    const module = new SkillInstallationModule();
+    const orchestrator = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as { __setForceDependencyMissing: (v: boolean) => void };
+    orchestrator.__setForceDependencyMissing(true);
+    try {
+      const prepared = await module.prepare({
+        conversationId: "conv-dep-owner",
+        source: fixtureRoot,
+      });
+      let snapshot = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken:
+          (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
+      if (snapshot.state === "awaiting_secret") {
+        snapshot = await module.resumeAfterSecret(prepared.sessionId);
+      }
+      expect(snapshot.state).toBe("installing_dependencies");
+      const dep = snapshot.safePlan?.dependencies?.find(
+        (d) => d.status === "missing"
+      );
+      expect(dep).toBeDefined();
+
+      const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+      const foreign = await module.approveDependency({
+        sessionId: prepared.sessionId,
+        dependencyId: dep?.id ?? "",
+        approve: true,
+        planRevision: snapshot.planRevision ?? "",
+        approvalToken: token,
+        conversationId: "conv-other",
+      });
+      expect(foreign.errorCode).toBe("INSTALL_SESSION_CONVERSATION_MISMATCH");
+      // Still holding — no install was attempted from the foreign call.
+      expect((await module.getStatus(prepared.sessionId)).state).toBe(
+        "installing_dependencies"
+      );
+    } finally {
+      orchestrator.__setForceDependencyMissing(false);
+    }
+  }, 120_000);
+});

@@ -2110,7 +2110,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: true,
     permissionCategory: "filesystem",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { SkillInstallApproveArgsSchema } = await import(
         "@/entityTypes/skillInstallationTypes"
       );
@@ -2137,6 +2137,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         ...(parsed.data.selectedSkillIds !== undefined
           ? { selectedSkillIds: parsed.data.selectedSkillIds }
           : {}),
+        // FR-29: the model's execution context binds the call to its
+        // conversation; a session from another conversation is rejected.
+        conversationId: context.conversationId,
       });
       return { success: snapshot.state !== "failed", result: { ...snapshot } };
     },
@@ -2233,7 +2236,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { SkillInstallStatusArgsSchema } = await import(
         "@/entityTypes/skillInstallationTypes"
       );
@@ -2248,7 +2251,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         };
       }
       const module = new SkillInstallationModule();
-      const snapshot = await module.getStatus(parsed.data.sessionId);
+      const snapshot = await module.getStatus(
+        parsed.data.sessionId,
+        context.conversationId
+      );
       return { success: true, result: { ...snapshot } };
     },
   },
@@ -2268,7 +2274,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "filesystem",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { SkillInstallCancelArgsSchema } = await import(
         "@/entityTypes/skillInstallationTypes"
       );
@@ -2283,7 +2289,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         };
       }
       const module = new SkillInstallationModule();
-      const snapshot = await module.cancel(parsed.data.sessionId);
+      const snapshot = await module.cancel(
+        parsed.data.sessionId,
+        context.conversationId
+      );
       return {
         success: snapshot.state === "cancelled",
         result: { ...snapshot },
@@ -2311,7 +2320,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "filesystem",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { SkillInstallCancelArgsSchema } = await import(
         "@/entityTypes/skillInstallationTypes"
       );
@@ -2326,7 +2335,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         };
       }
       const module = new SkillInstallationModule();
-      const snapshot = await module.retry(parsed.data.sessionId);
+      const snapshot = await module.retry(
+        parsed.data.sessionId,
+        context.conversationId
+      );
       return {
         success: !snapshot.errorCode,
         result: { ...snapshot },

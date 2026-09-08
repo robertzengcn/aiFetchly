@@ -53,6 +53,8 @@ export async function approveSkillInstall(input: {
   /** Opaque token from the renderer approval card (review D1). */
   approvalToken: string;
   selectedSkillIds?: readonly string[];
+  /** FR-29: bind the call to the calling conversation when known. */
+  conversationId?: string;
 }): Promise<InstallSnapshot | null> {
   const resp = await windowInvoke(SKILL_INSTALL_APPROVE, input);
   return (resp as InstallSnapshot | null) ?? null;
@@ -70,6 +72,8 @@ export async function approveSkillInstallDependency(input: {
   approve: boolean;
   planRevision: string;
   approvalToken: string;
+  /** FR-29: bind the call to the calling conversation when known. */
+  conversationId?: string;
 }): Promise<InstallSnapshot | null> {
   const resp = await windowInvoke(SKILL_INSTALL_APPROVE_DEPENDENCY, input);
   return (resp as InstallSnapshot | null) ?? null;
@@ -99,9 +103,15 @@ export async function getSkillInstallStatus(
 }
 
 export async function cancelSkillInstall(
-  sessionId: string
+  sessionId: string,
+  options?: { conversationId?: string }
 ): Promise<InstallSnapshot | null> {
-  const resp = await windowInvoke(SKILL_INSTALL_CANCEL, { sessionId });
+  const resp = await windowInvoke(SKILL_INSTALL_CANCEL, {
+    sessionId,
+    ...(options?.conversationId
+      ? { conversationId: options.conversationId }
+      : {}),
+  });
   return (resp as InstallSnapshot | null) ?? null;
 }
 
@@ -111,9 +121,15 @@ export async function cancelSkillInstall(
  * stop rule; the returned snapshot (or error) tells the UI the outcome.
  */
 export async function retrySkillInstall(
-  sessionId: string
+  sessionId: string,
+  options?: { conversationId?: string }
 ): Promise<InstallSnapshot | null> {
-  const resp = await windowInvoke(SKILL_INSTALL_RETRY, { sessionId });
+  const resp = await windowInvoke(SKILL_INSTALL_RETRY, {
+    sessionId,
+    ...(options?.conversationId
+      ? { conversationId: options.conversationId }
+      : {}),
+  });
   return (resp as InstallSnapshot | null) ?? null;
 }
 

@@ -199,7 +199,7 @@ describe("SkillInstallCard", () => {
     const wrapper = mountCard(makeSnapshot({ state: "failed" }));
     await wrapper.find('[data-testid="skill-install-cancel"]').trigger("click");
     await flushPromises();
-    expect(cancelSkillInstall).toHaveBeenCalledWith("sess-1");
+    expect(cancelSkillInstall).toHaveBeenCalledWith("sess-1", {});
   });
 
   it("renders structured plan fields when the snapshot carries safePlan (TODO 8)", () => {
@@ -609,7 +609,7 @@ describe("SkillInstallCard", () => {
     );
     await wrapper.find('[data-testid="skill-install-retry"]').trigger("click");
     await flushPromises();
-    expect(retrySkillInstall).toHaveBeenCalledWith("sess-1");
+    expect(retrySkillInstall).toHaveBeenCalledWith("sess-1", {});
     expect(wrapper.emitted("updated")?.[0]?.[0]).toMatchObject({
       sessionId: "sess-2",
       state: "awaiting_approval",

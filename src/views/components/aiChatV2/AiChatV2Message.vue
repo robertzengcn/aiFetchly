@@ -88,6 +88,7 @@
           <SkillInstallCard
             v-if="isSkillInstallResult"
             :snapshot="installSnapshot"
+            :conversation-id="message.conversationId"
             @updated="(s: import('@/entityTypes/skillInstallationTypes').InstallSnapshot) => (localInstallSnapshot = s)"
           />
           <AiArtifactCard

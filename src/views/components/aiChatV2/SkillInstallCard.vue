@@ -382,6 +382,8 @@ import {
 const props = defineProps<{
   /** Latest installation snapshot from the installer (tool result / IPC). */
   snapshot: InstallSnapshot;
+  /** FR-29: binds lifecycle calls to this conversation when provided. */
+  conversationId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -525,6 +527,9 @@ async function onApprove(approve: boolean): Promise<void> {
       planRevision: snapshotView.value.planRevision ?? "",
       approve,
       approvalToken,
+      ...(props.conversationId
+        ? { conversationId: props.conversationId }
+        : {}),
     });
     if (snapshot) {
       emit("updated", snapshot);
@@ -559,6 +564,9 @@ async function onApproveDependency(
       approve,
       planRevision: snapshotView.value.planRevision ?? "",
       approvalToken,
+      ...(props.conversationId
+        ? { conversationId: props.conversationId }
+        : {}),
     });
     if (snapshot) {
       emit("updated", snapshot);
@@ -623,7 +631,11 @@ async function onSubmitSecret(): Promise<void> {
 async function onCancel(): Promise<void> {
   busy.value = true;
   try {
-    const snapshot = await cancelSkillInstall(snapshotView.value.sessionId);
+    const snapshot = await cancelSkillInstall(snapshotView.value.sessionId, {
+      ...(props.conversationId
+        ? { conversationId: props.conversationId }
+        : {}),
+    });
     if (snapshot) emit("updated", snapshot);
   } finally {
     busy.value = false;
@@ -639,7 +651,11 @@ async function onCancel(): Promise<void> {
 async function onRetry(): Promise<void> {
   busy.value = true;
   try {
-    const snapshot = await retrySkillInstall(snapshotView.value.sessionId);
+    const snapshot = await retrySkillInstall(snapshotView.value.sessionId, {
+      ...(props.conversationId
+        ? { conversationId: props.conversationId }
+        : {}),
+    });
     if (snapshot) {
       localSnapshot.value = snapshot;
       emit("updated", snapshot);

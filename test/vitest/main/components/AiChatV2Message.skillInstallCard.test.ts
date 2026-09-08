@@ -128,6 +128,9 @@ describe("AiChatV2Message skill install card", () => {
       planRevision: "rev-9",
       approve: true,
       approvalToken: "test-approval-token",
+      // FR-29: the host passes the message's conversation id so the
+      // lifecycle call is bound to its owning conversation.
+      conversationId: "c1",
     });
     // The message-level card now reflects the ready state locally.
     const updated = wrapper.findComponent(SkillInstallCard);
