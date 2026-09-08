@@ -6,6 +6,10 @@ import { USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import {
+  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+  normalizeGeneratedImageReferences,
+} from "@/service/generatedImageReferenceNormalize";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
@@ -85,6 +89,11 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+/**
+ * Per-request image budget shared by generated-image references and uploaded
+ * image attachments (PRD §12.4 — mirrors the composer tray limit).
+ */
+const MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST = 3;
 /** Shared model catalog for auto-compact context-window lookups. The catalog
  * caches the /api/ai/v1/models response in-process, so the lookup is free
  * after the first fetch. Provider-level state — not DB-bound. */
@@ -329,16 +338,18 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
 
 /** Stream request validation shared with the workspace coordinator. */
 export function validateStreamRequest(
-  req: Partial<ChatV2StreamRequest>
+  req: Partial<ChatV2StreamRequest>,
+  generatedImageReferenceCount = 0
 ): string | null {
   const hasFiles =
     Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
+  const hasReferences = generatedImageReferenceCount > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    if (!hasFiles) {
+    if (!hasFiles && !hasReferences) {
       return "Message must be a non-empty string";
     }
   }
@@ -566,7 +577,48 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     return;
   }
 
-  const validationError = validateStreamRequest(req);
+  // Normalize uploaded files
+  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
+
+  // Generated-image reference boundary (PRD §12.4): validate opaque
+  // references at the IPC edge — dedupe first-wins, strip extra fields,
+  // reject malformed entries with a bounded machine code the renderer can
+  // localize. Uploaded images share the same per-request image budget.
+  const normalizedReferences = normalizeGeneratedImageReferences(
+    req.generatedImageReferences,
+    MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST
+  );
+  if (!normalizedReferences.ok) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId: req.conversationId ?? "",
+      errorMessage: normalizedReferences.reason,
+      errorCode: normalizedReferences.errorCode,
+    });
+    return;
+  }
+  const imageUploadCount = uploadedFiles.filter(
+    (file) => file.kind === "image"
+  ).length;
+  if (
+    normalizedReferences.references.length + imageUploadCount >
+    MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST
+  ) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId: req.conversationId ?? "",
+      errorMessage: `Too many images for one request: at most ${MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST} combined uploads and references.`,
+      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+    });
+    return;
+  }
+
+  // Valid references count as sendable content (a reference-only turn is a
+  // legitimate edit request even with blank text).
+  const validationError = validateStreamRequest(
+    req,
+    normalizedReferences.references.length
+  );
   if (validationError) {
     sendComplete(event, {
       eventType: "error",
@@ -579,11 +631,13 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
 
-  // Normalize uploaded files
-  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
   const processedReq = {
     ...req,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    generatedImageReferences:
+      normalizedReferences.references.length > 0
+        ? normalizedReferences.references
+        : undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });
