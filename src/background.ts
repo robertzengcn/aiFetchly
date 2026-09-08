@@ -78,6 +78,30 @@ import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
 import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
+import * as os from "node:os";
+import * as fsMod from "node:fs";
+import * as pathMod from "node:path";
+
+/** Best-effort removal of aifetchly-managed-browser-* temp profiles >24h old. */
+async function sweepStaleManagedBrowserProfiles(): Promise<void> {
+  const dir = os.tmpdir();
+  const entries = await fsMod.promises.readdir(dir).catch(() => [] as string[]);
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const entry of entries) {
+    if (!entry.startsWith("aifetchly-managed-browser-")) {
+      continue;
+    }
+    const target = pathMod.join(dir, entry);
+    try {
+      const stat = await fsMod.promises.stat(target);
+      if (stat.mtimeMs < cutoff) {
+        await fsMod.promises.rm(target, { recursive: true, force: true });
+      }
+    } catch {
+      /* raced or unreadable — next sweep retries */
+    }
+  }
+}
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
@@ -798,6 +822,11 @@ function initialize() {
       // Managed-browser cache: enforce the configured limits on a bounded
       // cadence — one startup pass, then at most once per 24h (GAP-10).
       getDefaultManagedBrowserCacheMaintenanceScheduler().start();
+
+      // Managed-browser: sweep stale session temp profiles left behind by
+      // crashed workers (a start-timeout kill can orphan the profile dir in
+      // the OS temp dir; anything older than a day is definitively dead).
+      void sweepStaleManagedBrowserProfiles().catch(() => undefined);
 
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);

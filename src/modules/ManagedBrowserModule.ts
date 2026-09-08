@@ -729,6 +729,10 @@ export class ManagedBrowserModule {
       current + extendMinutes * 60_000,
       cap
     );
+    // Re-arm the enforcement timer for the NEW deadline — the old timer
+    // would otherwise see the extended expiry, return, and leave the
+    // session permanently unenforced (review finding).
+    this.scheduleHandoffExpiry(record);
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
@@ -740,11 +744,40 @@ export class ManagedBrowserModule {
     readonly decision: "approve" | "deny";
   }): void {
     this.requireSession(input.sessionId);
+    if (this.approvalDecisions.size >= 100) {
+      // Bounded registry: drop the oldest recorded decision.
+      const oldest = this.approvalDecisions.keys().next().value;
+      if (oldest !== undefined) {
+        this.approvalDecisions.delete(oldest);
+      }
+    }
     this.approvalDecisions.set(input.requestId, {
       sessionId: input.sessionId,
       decision: input.decision,
       recordedAtEpochMs: this.now(),
     });
+  }
+
+  /**
+   * Consume the single outstanding APPROVE decision for a session (the
+   * one-click approval dialog authorizes the model's retry). Returns
+   * "deny" when the user denied (still consumed), null when no decision
+   * was recorded. Single-use by construction.
+   */
+  public consumeApprovalForSession(
+    sessionId: string
+  ): "approve" | "deny" | null {
+    for (const [requestId, entry] of this.approvalDecisions) {
+      if (entry.sessionId === sessionId) {
+        this.approvalDecisions.delete(requestId);
+        // Stale decisions (>10 min) never authorize a new program.
+        if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
+          return null;
+        }
+        return entry.decision;
+      }
+    }
+    return null;
   }
 
   /** Consume a recorded decision (single-use); null when none was recorded. */
@@ -946,12 +979,18 @@ export class ManagedBrowserModule {
   ): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
     this.guard(record, "RESUME_HANDOFF");
-    await this.requestWorker(
+    const message = await this.requestWorker(
       record,
       { type: "RESUME_HANDOFF" },
       MANAGED_BROWSER_TIMEOUTS.initialVerificationMs,
       (m) => m.type === "SESSION_STATE_CHANGED" || m.type === "HANDOFF_REQUIRED"
     );
+    // Apply the reply like every other command path — otherwise the record
+    // stays "handoff" and guard() rejects all subsequent commands against
+    // a worker that is actually ready (review finding).
+    if (message.type === "SESSION_STATE_CHANGED") {
+      record.state = message.state;
+    }
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
@@ -1078,27 +1117,10 @@ export class ManagedBrowserModule {
         // manual_handoff for every challenge; blocked decisions stop the
         // session outright.
         record.challengeAttempts.add(event.challengeId);
-        const decision = decideCaptchaResolution({
-          sessionId: record.sessionId,
-          challengeId: event.challengeId,
-          origin: event.origin,
-          platformId: record.platformId,
-          challengeType: event.kind,
-          flow: event.flowClassification,
-          currentActionRisk: "read",
-          providerInputAvailable: event.providerInputAvailable,
-          providerConfig: {
-            enabled: false,
-            tokenPresent: false,
-            disclosureVersionAccepted: null,
-            authorizedDomains: [],
-            nonLoginChallengesAllowed: false,
-          },
-          attemptedChallengeIds: record.challengeAttempts,
-        });
-        if (decision.mode === "blocked") {
-          record.lastErrorCode = "challenge_resolution_failed";
-        }
+        // GAP-15: the real gate configuration drives the policy ladder;
+        // every refusal/failure keeps the manual handoff. Fire-and-forget:
+        // the policy never blocks the event loop on a provider call.
+        void this.runChallengePolicy(record, event);
         break;
       case "ACTION_PROGRESS":
         // Coarse progress only — counts + phase + message code (§14).
@@ -1157,7 +1179,12 @@ export class ManagedBrowserModule {
         accountLabel: record.accountLabel,
       });
     }
-    this.pushStatus(record);
+    try {
+      this.pushStatus(record);
+    } catch {
+      // A throwing renderer sink must never prevent the record cleanup
+      // below (review finding: zombie session records).
+    }
     // Safety net: release any cache-scope claim even if CACHE_RELEASED was
     // never delivered (worker crash mid-session, §13.6).
     this.cacheModule.onSessionTerminal(sessionId);
@@ -1626,7 +1653,12 @@ async function resolveAccountProxy(
         error instanceof Error ? error.name : "unknown"
       }`
     );
-    return { mode: "direct" };
+    // GAP-11 fail-closed: an account whose proxy state is UNREADABLE must
+    // never silently fall back to a direct (real-IP) connection.
+    return {
+      mode: "unresolvable",
+      reasonCode: "proxy_resolution_failed",
+    };
   }
 }
 

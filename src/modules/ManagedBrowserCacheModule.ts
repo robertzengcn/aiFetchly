@@ -372,6 +372,12 @@ export class ManagedBrowserCacheModule
   public issueClearConfirmation(
     request: CacheClearConfirmationRequest
   ): string {
+    // Sweep expired-but-unconsumed ids so the registry stays bounded.
+    for (const [id, entry] of this.confirmations) {
+      if (this.now() - entry.issuedAt > CLEAR_CONFIRMATION_TTL_MS) {
+        this.confirmations.delete(id);
+      }
+    }
     const confirmationId = this.randomId();
     this.confirmations.set(confirmationId, {
       scope: request.scope,
@@ -573,6 +579,11 @@ export class ManagedBrowserCacheModule
     this.pendingClears.delete(scopeToken);
     void (async () => {
       try {
+        // A session may have re-opened this scope between release and the
+        // deferred rename — never move a live cache out from under Chrome.
+        if (this.activeScopes.has(scopeToken)) {
+          return;
+        }
         // The token maps back to at least one known account via the registry
         // history is NOT guaranteed, so re-derive from the token itself is
         // impossible — but the deferred path was captured at defer time.

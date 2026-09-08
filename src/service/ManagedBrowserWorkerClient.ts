@@ -312,6 +312,9 @@ export class ManagedBrowserWorkerClient {
       return;
     }
     const message = validated.data as ManagedBrowserOutboundMessage;
+    // A valid message redeems the budget: only CONSECUTIVE malformed
+    // messages may trip the protocol violation, not lifetime accumulation.
+    this.malformedCount = 0;
 
     if (message.sessionId !== this.sessionId) {
       return; // foreign session — fail closed

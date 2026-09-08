@@ -235,8 +235,13 @@ class FakeWorkerClient {
     );
   }
 
+  public failStart = false;
+  public failStop = false;
+
   public async start(): Promise<void> {
-    /* fake worker boots instantly */
+    if (this.failStart) {
+      throw new Error("worker_start_timeout");
+    }
   }
 
   public async request(
@@ -251,6 +256,9 @@ class FakeWorkerClient {
   }
 
   public async stop(): Promise<string> {
+    if (this.failStop) {
+      throw new Error("stop_failed");
+    }
     return "user_stop";
   }
 
@@ -1263,5 +1271,140 @@ describe("GAP-14 cancellation propagation", () => {
     await expect(
       h.module.cancelActiveRequest("mb_missing0000001")
     ).resolves.toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// /review fixes: handoff re-arm, resume state, start/stop failure convergence
+// ---------------------------------------------------------------------------
+
+describe("review fixes (2026-09-08)", () => {
+  it("extending the handoff window RE-ARMS expiry — the extended deadline is enforced", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_rearm000000001"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "t",
+      });
+      await h.module.extendHandoff(status.sessionId, 30); // 10 -> 40 min
+      // Advance past BOTH the original (10m) and one full extension window.
+      await vi.advanceTimersByTimeAsync(41 * 60 * 1000);
+      await vi.waitFor(() =>
+        expect(h.module.getStatus(status.sessionId)).toBeNull()
+      );
+      expect(noticeTypes(h.notices)).not.toContain("browser_crashed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumeAfterHandoff applies the ready state so subsequent commands are allowed", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => sessionReadyReply("mb_resumefix0001"),
+        BEGIN_HANDOFF: () =>
+          stateChangedReply("mb_resumefix0001", "handoff", "user_requested"),
+        RESUME_HANDOFF: () =>
+          stateChangedReply("mb_resumefix0001", "ready", "handoff_resumed"),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    expect(status.state).toBe("ready");
+    await h.module.requestHandoff(status.sessionId);
+    expect(h.module.getStatus(status.sessionId)?.state).toBe("handoff");
+    const resumed = await h.module.resumeAfterHandoff(status.sessionId);
+    expect(resumed.state).toBe("ready");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
+    // observe() must now pass the state guard (previously action_not_allowed).
+    const observation = await h.module.observe(status.sessionId);
+    expect(observation.origin).toBe("https://www.youtube.com");
+  });
+
+  it("start failure AFTER supervisor registration still releases everything", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    void status;
+    // Second start on the same harness with a failing worker client.
+    h.lease.next = { status: "granted", leaseToken: "lease-2" };
+    const failing = makeHarness({
+      nextLease: { status: "granted", leaseToken: "lease-3" },
+    });
+    void failing;
+    // Direct: flip the existing client to fail on a NEW session.
+    const h2 = makeHarness();
+    const originalFactory = h2.clients;
+    void originalFactory;
+    // Simplest deterministic path: craft a module whose factory's client fails.
+    const notices2: SafeBrowserChatNotice[] = [];
+    const statuses2: SafeManagedBrowserStatus[] = [];
+    const clients2: FakeWorkerClient[] = [];
+    const module2 = new ManagedBrowserModule({
+      settings: {
+        getEffectiveSettings: async () => ({
+          browserEnabled: true,
+          cacheEnabled: true,
+          cacheMaxBytes: 1,
+          clearCacheOnExit: false,
+          disabledReasonCode: null,
+        }),
+      } as unknown as import("@/modules/ManagedBrowserSettingsModule").ManagedBrowserSettingsModule,
+      leaseService: h.lease as unknown as import("@/service/ManagedBrowserLeaseService").ManagedBrowserLeaseService,
+      supervisor: h.supervisor as unknown as import("@/service/ManagedBrowserSupervisor").ManagedBrowserSupervisor,
+      noticeSink: (n) => notices2.push(n),
+      emitStatus: (st) => statuses2.push(st),
+      accountLookup: async () => ({ platformId: 2, accountLabel: "L" }),
+      sessionService: {
+        getDecryptedSnapshot: async () => ({ cookies: [], status: "valid" }),
+        getOrCreatePartition: async () => "/p",
+        persistSnapshot: async () => undefined,
+      },
+      workerClientFactory: (deps) => {
+        const client = new FakeWorkerClient(deps);
+        client.failStart = true;
+        clients2.push(client);
+        return client as unknown as ManagedBrowserWorkerClient;
+      },
+      executableResolver: {
+        resolve: () => ({ descriptor: DESCRIPTOR }),
+      },
+      isAiEnabled: () => true,
+      mkdtemp: async () => "/tmp/mb-x",
+      cacheModule: h.cache,
+      resolveCachePolicy: () => ({ enabled: false, reasonCode: "t" }),
+    });
+    h.lease.next = { status: "granted", leaseToken: "lease-9" };
+    await expect(
+      module2.start({ accountId: ACCOUNT_ID, purpose: "t" })
+    ).rejects.toMatchObject({ code: "worker_start_timeout" });
+    expect(h.lease.releaseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(module2.listActiveSessions()).toHaveLength(0);
+    expect(h.supervisor.terminalCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("stop() failure still converges through the terminal path", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    h.clients[0].failStop = true;
+    await expect(
+      h.module.stop(status.sessionId, "user_stop")
+    ).rejects.toBeTruthy();
+    expect(h.lease.releaseCalls).toHaveLength(1);
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
   });
 });

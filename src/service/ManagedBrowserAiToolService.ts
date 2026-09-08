@@ -156,6 +156,8 @@ export interface BrowserModuleLike {
   } | null;
   /** Cancel the active worker request (GAP-14). */
   cancelActiveRequest?(sessionId: string): Promise<void>;
+  /** Consume the single outstanding approval decision (GAP-01). */
+  consumeApprovalForSession?(sessionId: string): "approve" | "deny" | null;
 }
 
 /** Prefix stamped on every observation-derived payload (§14). */
@@ -416,17 +418,28 @@ export class ManagedBrowserAiToolService {
       await this.requireHandoff(parsed.data.session_id, assessment);
     }
     if (assessment.requiresApproval && !context.skipPermissionCheck) {
-      this.browserModule.notifyApprovalRequired?.({
-        sessionId: parsed.data.session_id,
-        requestId: context.toolCallId,
-        riskClass: assessment.riskClass,
-        contentSummary: buildApprovalSummary(program, descriptorFor),
-      });
-      throw new ManagedBrowserAiToolError(
-        "approval_required",
-        assessment.riskClass,
-        assessment.reasonCode
-      );
+      // The one-click approval dialog records an APPROVE for the session;
+      // consuming it here authorizes exactly ONE retry (single-use, 10-min
+      // freshness) without a second interruption.
+      const priorDecision =
+        this.browserModule.consumeApprovalForSession?.(
+          parsed.data.session_id
+        ) ?? null;
+      if (priorDecision !== "approve") {
+        this.browserModule.notifyApprovalRequired?.({
+          sessionId: parsed.data.session_id,
+          requestId: context.toolCallId,
+          riskClass: assessment.riskClass,
+          contentSummary: buildApprovalSummary(program, descriptorFor),
+        });
+        throw new ManagedBrowserAiToolError(
+          "approval_required",
+          assessment.riskClass,
+          priorDecision === "deny"
+            ? "approval_denied"
+            : assessment.reasonCode
+        );
+      }
     }
 
     // Attach main-process-attested expected fingerprints so the worker
@@ -550,7 +563,7 @@ export class ManagedBrowserAiToolService {
         sessionId: parsed.data.session_id,
         requestId: context.toolCallId,
         riskClass: "privileged_script",
-        contentSummary: `evaluate_script (${parsed.data.source.length} chars, purpose: ${parsed.data.purpose})`,
+        contentSummary: `evaluate_script (${parsed.data.source.length} chars, purpose: ${parsed.data.purpose.slice(0, 120)})`,
       });
       throw new ManagedBrowserAiToolError(
         "approval_required",
