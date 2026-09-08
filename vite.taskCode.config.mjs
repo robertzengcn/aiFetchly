@@ -6,6 +6,7 @@ import ClosePlugin from './vite-plugin-close.js'
 
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
+import { ZOD_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 
 //import commonjs from '@rollup/plugin-commonjs';
 //import copy from 'rollup-plugin-copy'
@@ -121,6 +122,7 @@ export default ({ mode }) => {
         // NOT alias electron-store to the ContactExtractionWorker shim.
         ssr: {
             noExternal: [
+                ...ZOD_SSR_NO_EXTERNAL,
                 // Token / settings store
                 'electron-store',
                 'conf',

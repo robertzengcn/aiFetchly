@@ -43,6 +43,18 @@ describe("OutboundEmailToolGate", () => {
     });
   });
 
+  it("requires user review for send_now once a draft exists but has no approval", () => {
+    // LLM-composed content is not sendable just because the user said
+    // "send". A draft without an approval must wait for the Review click.
+    expect(OutboundEmailToolGate.evaluate(intent("send_now"), null, 7)).toEqual(
+      {
+        allowed: false,
+        code: "review_required",
+        batchId: 7,
+      }
+    );
+  });
+
   it("allows a send_now intent with a valid authorization (Phase 3 shape)", () => {
     const result = OutboundEmailToolGate.evaluate(
       intent("send_now"),

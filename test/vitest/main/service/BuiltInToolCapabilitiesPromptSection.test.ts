@@ -79,8 +79,10 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
   it("routes new marketing/outbound mail to start_email_send_task, not send_email_reply", () => {
     const s = buildBuiltInToolCapabilitiesSection();
     expect(s).toContain("start_email_send_task");
+    expect(s).toContain("draft_outbound_email_batch");
     expect(s).toContain("list_email_services");
     expect(s.toLowerCase()).toContain("outbound");
+    expect(s.toLowerCase()).toContain("wait for the user to click review");
     expect(s.toLowerCase()).toContain("marketing");
     // The model previously treated an empty IMAP inbox list as "cannot send".
     expect(s.toLowerCase()).toContain("empty inbox");

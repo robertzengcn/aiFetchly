@@ -163,6 +163,70 @@ describe("OutboundEmailDraftModel", () => {
     expect(firstReloaded?.revisionNumber).toBe(1);
   });
 
+  it("readCurrentRevisions batch-reads the highest revision per draft in one query", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    // Draft A: two revisions (current = revision 2, subject "A2"). Use
+    // appendRevision so revisionNumber auto-increments — createRevision would
+    // collide on the (draftId, revisionNumber) unique index.
+    const batchA = await model.createBatch(buildBatch());
+    const draftA = await model.createDraft(buildDraft(batchA.id));
+    await model.appendRevision({
+      draftId: draftA.id,
+      actor: "ai",
+      emailServiceId: 1,
+      senderAddress: "sender@example.com",
+      recipientAddress: "a@example.com",
+      subject: "A1",
+      bodyText: "Hi",
+      bodyHtml: null,
+      contentHash: "a".repeat(64),
+    });
+    await model.appendRevision({
+      draftId: draftA.id,
+      actor: "user",
+      emailServiceId: 1,
+      senderAddress: "sender@example.com",
+      recipientAddress: "a@example.com",
+      subject: "A2",
+      bodyText: "Hi",
+      bodyHtml: null,
+      contentHash: "b".repeat(64),
+    });
+
+    // Draft B: one revision (current = revision 1, subject "B1").
+    const batchB = await model.createBatch(buildBatch());
+    const draftB = await model.createDraft(
+      buildDraft(batchB.id, { recipientAddress: "b@example.com" })
+    );
+    await model.appendRevision({
+      draftId: draftB.id,
+      actor: "ai",
+      emailServiceId: 1,
+      senderAddress: "sender@example.com",
+      recipientAddress: "b@example.com",
+      subject: "B1",
+      bodyText: "Hi",
+      bodyHtml: null,
+      contentHash: "c".repeat(64),
+    });
+
+    // Batch-read both current revisions in a single query.
+    const map = await model.readCurrentRevisions([draftA.id, draftB.id]);
+
+    expect(map.size).toBe(2);
+    expect(map.get(draftA.id)?.subject).toBe("A2");
+    expect(map.get(draftB.id)?.subject).toBe("B1");
+  });
+
+  it("readCurrentRevisions returns an empty map for no draftIds", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const map = await model.readCurrentRevisions([]);
+    expect(map.size).toBe(0);
+  });
+
   it("recomputes the batch hash pointer", async () => {
     const model = new OutboundEmailDraftModel(tmpDir);
     await SqliteDb.ensureInitialized();
@@ -218,5 +282,33 @@ describe("OutboundEmailDraftModel", () => {
 
     const found = await model.findLatestBatchForTurn("conv-1", "msg-1");
     expect(found).toBeNull();
+  });
+
+  it("findLatestAuthorizableBatchForConversation returns the newest draft across turns", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await model.createBatch(
+      buildBatch({
+        status: "draft_ready",
+        sourceUserMessageId: "msg-1",
+        batchHash: "a".repeat(64),
+      })
+    );
+    const newer = await model.createBatch(
+      buildBatch({
+        status: "draft_ready",
+        sourceUserMessageId: "msg-2",
+        batchHash: "b".repeat(64),
+      })
+    );
+
+    const found = await model.findLatestAuthorizableBatchForConversation(
+      "conv-1"
+    );
+    expect(found?.id).toBe(newer.id);
+    expect(
+      await model.findLatestAuthorizableBatchForConversation("other-conv")
+    ).toBeNull();
   });
 });

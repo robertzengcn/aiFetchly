@@ -47,6 +47,11 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
+import { EmailServiceModel } from "@/model/EmailService.model";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
+import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
+import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { OutboundEmailIntentModel } from "@/model/OutboundEmailIntent.model";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import {
@@ -340,6 +345,49 @@ describe("outbound email delivery IPC", () => {
     expect(result.data.outcomes).toHaveLength(1);
   });
 
+  it("BATCH_GET fills an empty frozen sender from the SMTP service", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService("ipc-sender@example.com");
+    const seeded = await seedEmptySenderBatch(serviceId);
+
+    const result = (await invoke(OUTBOUND_EMAIL_BATCH_GET, {
+      batchId: seeded.batchId,
+    })) as {
+      status: boolean;
+      data: {
+        batch: { batchHash: string | null };
+        drafts: Array<{ senderAddress: string | null }>;
+      };
+    };
+
+    expect(result.status).toBe(true);
+    expect(result.data.drafts[0].senderAddress).toBe("ipc-sender@example.com");
+    expect(result.data.batch.batchHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.data.batch.batchHash).not.toBe(seeded.batchHash);
+  });
+
+  it("BATCH_APPROVE succeeds after filling a missing sender", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService("approve-sender@example.com");
+    const seeded = await seedEmptySenderBatch(serviceId);
+
+    const result = (await invoke(OUTBOUND_EMAIL_BATCH_APPROVE, {
+      batchId: seeded.batchId,
+      batchHash: seeded.batchHash,
+    })) as {
+      status: boolean;
+      msg?: string;
+      data?: { authorizationId: number; batchHash: string };
+    };
+
+    expect(result.status).toBe(true);
+    expect(result.data?.authorizationId).toBeTypeOf("number");
+    expect(result.data?.batchHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.data?.batchHash).not.toBe(seeded.batchHash);
+  });
+
   it("broadcastOutboundEmailProgress pushes the event to every window on the progress channel", () => {
     const sendSpy = mockedIpc._sendSpy;
     const event = {
@@ -356,3 +404,65 @@ describe("outbound email delivery IPC", () => {
     expect(sendSpy).toHaveBeenCalledWith(OUTBOUND_EMAIL_BATCH_PROGRESS, event);
   });
 });
+
+async function seedSmtpService(from: string): Promise<number> {
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.name = "IPC Test SMTP";
+  entity.from = from;
+  entity.password = "pass";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  return await model.create(entity);
+}
+
+async function seedEmptySenderBatch(
+  emailServiceId: number
+): Promise<{ batchId: number; batchHash: string }> {
+  const model = new OutboundEmailDraftModel(tmpDir);
+  const batchEntity = new OutboundEmailDraftBatchEntity();
+  batchEntity.conversationId = "conv-ipc-empty-sender";
+  batchEntity.sourceUserMessageId = "msg-ipc-empty-sender";
+  batchEntity.intentDecisionId = 1;
+  batchEntity.status = "draft_ready";
+  batchEntity.recipientSourceType = "direct";
+  batchEntity.recipientCount = 1;
+  batchEntity.validRecipientCount = 1;
+  batchEntity.emailServiceIdsJson = JSON.stringify([emailServiceId]);
+  const batch = await model.createBatch(batchEntity);
+
+  const draftEntity = new OutboundEmailDraftEntity();
+  draftEntity.batchId = batch.id;
+  draftEntity.recipientAddress = "alice@example.com";
+  draftEntity.status = "draft";
+  draftEntity.revisionNumber = 0;
+  const draft = await model.createDraft(draftEntity);
+
+  const envelope = {
+    version: 1 as const,
+    draftId: draft.id,
+    emailServiceId,
+    senderAddress: "",
+    recipientAddress: draft.recipientAddress,
+    subject: "Hello",
+    bodyText: "Hi",
+    bodyHtml: null,
+  };
+  const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+  await model.appendRevision({
+    draftId: draft.id,
+    actor: "ai",
+    emailServiceId,
+    senderAddress: "",
+    recipientAddress: draft.recipientAddress,
+    subject: "Hello",
+    bodyText: "Hi",
+    bodyHtml: null,
+    contentHash,
+  });
+  const batchHash = OutboundEmailEnvelopeHasher.hashBatch([envelope]);
+  await model.updateBatchHash(batch.id, batchHash);
+  return { batchId: batch.id, batchHash };
+}

@@ -358,4 +358,130 @@ describe("OutboundEmailAuthorizationService.resolveDirectSendForTurn", () => {
     expect(result!.batchId).toBe(newer.id);
     expect(result!.batchHash).toBe("b".repeat(64));
   });
+
+  it("inherits the conversation's latest draft when inheritConversationDraft is set", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const confirmIntent = makeIntent({
+      sourceUserMessageId: "msg-2",
+      reasonCode: "contextual_affirmation",
+    });
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      confirmIntent,
+      makeBatch({
+        sourceUserMessageId: "msg-1",
+        batchHash: "a".repeat(64),
+      })
+    );
+
+    const withoutInherit = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-2",
+      intentDecisionId: intentId,
+    });
+    expect(withoutInherit).toBeNull();
+
+    const withInherit = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-2",
+      intentDecisionId: intentId,
+      inheritConversationDraft: true,
+    });
+    expect(withInherit).not.toBeNull();
+    expect(withInherit!.batchId).toBe(batchId);
+  });
+
+  it("inherits the conversation's latest draft for a skip-review follow-up", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const skipIntent = makeIntent({
+      sourceUserMessageId: "msg-2",
+      reasonCode: "explicit_skip_review",
+    });
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      skipIntent,
+      makeBatch({
+        sourceUserMessageId: "msg-1",
+        batchHash: "a".repeat(64),
+      })
+    );
+
+    const result = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-2",
+      intentDecisionId: intentId,
+      inheritConversationDraft: true,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.batchId).toBe(batchId);
+  });
+});
+
+describe("OutboundEmailAuthorizationService.lookupTurnAuthorization", () => {
+  it("returns the batch id without creating an authorization for an unreviewed draft", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ batchHash: "a".repeat(64) })
+    );
+
+    const result = await service.lookupTurnAuthorization({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+    });
+    expect(result.batchId).toBe(batchId);
+    expect(result.authorization).toBeNull();
+
+    const reloaded = await draftModel.readBatch(batchId);
+    expect(reloaded?.status).toBe("draft_ready");
+    expect(reloaded?.authorizationId).toBeNull();
+  });
+
+  it("returns an existing review approval triple without creating another", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ batchHash: "a".repeat(64) })
+    );
+    const approval = await service.createReviewApproval({
+      batchId,
+      batchHash: "a".repeat(64),
+      sourceUserMessageId: "msg-1",
+    });
+    expect(approval.success).toBe(true);
+
+    const result = await service.lookupTurnAuthorization({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+    });
+    expect(result.batchId).toBe(batchId);
+    expect(result.authorization).not.toBeNull();
+    expect(result.authorization?.authorizationId).toBe(
+      approval.authorizationId
+    );
+    expect(result.authorization?.batchHash).toBe("a".repeat(64));
+  });
+
+  it("returns no batch when only a terminal batch exists for the turn", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    await seedIntentAndBatch(
+      draftModel,
+      makeIntent(),
+      makeBatch({ status: "sent" })
+    );
+
+    const result = await service.lookupTurnAuthorization({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+    });
+    expect(result.batchId).toBeNull();
+    expect(result.authorization).toBeNull();
+  });
 });

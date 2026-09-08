@@ -102,6 +102,63 @@ export class OutboundEmailDeliveryModel extends BaseDb {
   }
 
   /**
+   * One delivery outcome by row id — backs the unified send-log detail view's
+   * authorized half (the revision join uses the outcome's pinned revisionId,
+   * i.e. the exact revision that was sent).
+   */
+  async readOutcome(
+    id: number
+  ): Promise<OutboundEmailDeliveryOutcomeEntity | null> {
+    return await this.outcomeRepo.findOne({ where: { id } });
+  }
+
+  /**
+   * Recent delivery outcomes across ALL batches (no batch_id filter), paginated.
+   * Backs the unified send-log view's authorized-send half. Mirrors the legacy
+   * send-log model's where/sort contract: where matches recipientAddress; sort
+   * allow-lists id/completedAt/status; defaults to newest-first by id.
+   * Returns {records, total} so the aggregator can merge with legacy rows.
+   */
+  async listOutcomesRecent(
+    page: number,
+    limit: number,
+    where?: string,
+    sort?: { key: string; order: string }
+  ): Promise<{ records: OutboundEmailDeliveryOutcomeEntity[]; total: number }> {
+    let qb = this.outcomeRepo.createQueryBuilder("outcome");
+
+    if (where) {
+      qb = qb.andWhere("outcome.recipientAddress LIKE :search", {
+        search: `%${where}%`,
+      });
+    }
+
+    if (sort?.key && sort?.order) {
+      const key = sort.key.toLowerCase();
+      const order = sort.order.toLowerCase();
+      const allowKey = ["id", "completedat", "status"];
+      const allowOrder = ["asc", "desc"];
+      if (!allowKey.includes(key)) {
+        throw new Error("not allow sort key");
+      }
+      if (!allowOrder.includes(order)) {
+        throw new Error("not allow sort order");
+      }
+      // Normalize "completedat" → the mapped column name.
+      const column = key === "completedat" ? "completedAt" : key;
+      qb = qb.orderBy(
+        `outcome.${column}`,
+        order.toUpperCase() as "ASC" | "DESC"
+      );
+    } else {
+      qb = qb.orderBy("outcome.id", "DESC");
+    }
+
+    const [records, total] = await qb.skip(page).take(limit).getManyAndCount();
+    return { records, total };
+  }
+
+  /**
    * The single outcome for a (sendAttemptId, draftId) pair — the unique index
    * guarantees at most one. Used by the worker-event bridge to correlate an
    * envelope event to the persisted outcome before mutating it (§15.4).

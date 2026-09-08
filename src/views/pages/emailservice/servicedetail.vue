@@ -508,9 +508,14 @@ async function onSubmit() {
 
 const openTestDialog = () => {
   const missing: string[] = [];
+  // Editing a saved service: the password field starts empty because
+  // credentials never round-trip to the form (getEmailServiceDetail returns
+  // the "" sentinel). An empty password here means "use the stored one" —
+  // the send resolves it by id server-side — so it is not a missing field.
+  const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!name.value) missing.push(t('emailservice.name'));
   if (!from.value) missing.push(t('emailservice.from'));
-  if (!password.value) missing.push(t('emailservice.password'));
+  if (!password.value && !canUseStoredPassword) missing.push(t('emailservice.password'));
   if (!host.value) missing.push(t('emailservice.host'));
   if (!port.value) missing.push(t('emailservice.port'));
   if (missing.length > 0) {
@@ -539,6 +544,11 @@ const submitTestemail = async () => {
     host: host.value,
     port: port.value,
     ssl: ssl.value
+  }
+  // Carry the id so a test send in edit mode can reuse the stored password
+  // when the form still holds the "" credential sentinel.
+  if (isEdit.value && Id.value > 0) {
+    emailSetting.id = Id.value;
   }
   const emailRequestdata: EmailRequestData = {
     From: from.value,

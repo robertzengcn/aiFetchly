@@ -777,4 +777,107 @@ describe("EmailMarketingController", () => {
       expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
     });
   });
+
+  describe("resolveOutboundSetting", () => {
+    // sendEmail hands param.Setting straight to `new EmailService(...)`, whose
+    // transporter reads Setting.password directly. When editing an existing
+    // service, getEmailServiceDetail returns password: "" (credential
+    // sentinel — plaintext never round-trips to the renderer), so an edit-mode
+    // "Test" send arrives with an empty password. resolveOutboundSetting must
+    // swap the sentinel for the stored password by id, mirroring
+    // EMAILSERVICEUPDATE's credential handling.
+
+    const makeSetting = (
+      overrides: Partial<
+        import("@/entityTypes/emailmarketingType").EmailServiceEntitydata
+      > = {}
+    ) => {
+      const setting: import("@/entityTypes/emailmarketingType").EmailServiceEntitydata =
+        {
+          name: "Primary SMTP",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          password: "",
+          ...overrides,
+        };
+      return setting;
+    };
+
+    it("reuses the stored password when the incoming password is the empty sentinel (edit mode)", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 9;
+      existing.name = "Primary SMTP";
+      existing.from = "sender@example.com";
+      existing.host = "smtp.example.com";
+      existing.port = "465";
+      existing.password = "stored-smtp-password";
+      existing.ssl = 1;
+
+      const getEmailService = sinon.stub().resolves(existing);
+      emailMarketingController.emailServiceModule = {
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      const setting = makeSetting({ id: 9 });
+      const resolved = await emailMarketingController.resolveOutboundSetting(
+        setting
+      );
+
+      expect(getEmailService.calledOnce).to.equal(true);
+      expect(getEmailService.firstCall.args[0]).to.equal(9);
+      expect(resolved.password).to.equal("stored-smtp-password");
+      // The other form fields stay as the user edited them.
+      expect(resolved.host).to.equal("smtp.example.com");
+      expect(resolved.from).to.equal("sender@example.com");
+      // Immutability: the caller's setting is not mutated.
+      expect(setting.password).to.equal("");
+    });
+
+    it("keeps the incoming password when a non-empty password is supplied (create / re-entered)", async () => {
+      const getEmailService = sinon.stub().resolves(undefined);
+      emailMarketingController.emailServiceModule = {
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      const resolved = await emailMarketingController.resolveOutboundSetting(
+        makeSetting({ id: 9, password: "fresh-password" })
+      );
+
+      // No DB lookup needed — the form sent a real password.
+      expect(getEmailService.called).to.equal(false);
+      expect(resolved.password).to.equal("fresh-password");
+    });
+
+    it("keeps the empty password when no id is carried (create mode, no lookup)", async () => {
+      const getEmailService = sinon.stub().resolves(undefined);
+      emailMarketingController.emailServiceModule = {
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      const resolved = await emailMarketingController.resolveOutboundSetting(
+        makeSetting()
+      );
+
+      expect(getEmailService.called).to.equal(false);
+      expect(resolved.password).to.equal("");
+    });
+
+    it("throws when the sentinel needs the stored password but the service no longer exists", async () => {
+      emailMarketingController.emailServiceModule = {
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      let threw = false;
+      try {
+        await emailMarketingController.resolveOutboundSetting(
+          makeSetting({ id: 99 })
+        );
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+    });
+  });
 });

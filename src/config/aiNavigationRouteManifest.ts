@@ -128,6 +128,21 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       aiDescription: "View and manage bulk email sending tasks",
     },
     {
+      routeName: "UNIFIED_EMAIL_SEND_LOG",
+      path: "/emailmarketing/buckemailtask/sendlog",
+      titleKey: "route.email_send_log",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "email send log",
+        "send log",
+        "email log",
+        "unified send log",
+      ],
+      aiDescription:
+        "Review all email send log entries — legacy bulk-task sends and AI-authorized outbound sends in one timeline",
+    },
+    {
       routeName: "CampaignList",
       path: "/campaign/list",
       titleKey: "route.campaign_list",

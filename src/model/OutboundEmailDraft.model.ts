@@ -101,6 +101,29 @@ export class OutboundEmailDraftModel extends BaseDb {
     });
   }
 
+  /**
+   * Latest authorizable batch in the conversation, regardless of which user
+   * message created it. Used when the user confirms a previously presented
+   * draft ("yes, send it") on a new turn that has no batch of its own.
+   */
+  async findLatestAuthorizableBatchForConversation(
+    conversationId: string
+  ): Promise<OutboundEmailDraftBatchEntity | null> {
+    const authorizable = [
+      "draft_ready",
+      "direct_authorized",
+      "review_authorized",
+      "awaiting_review",
+    ] as const;
+    return await this.batchRepo.findOne({
+      where: {
+        conversationId,
+        status: In(authorizable),
+      },
+      order: { id: "DESC" },
+    });
+  }
+
   /** Advance the batch's envelope-set hash pointer (post-preflight). */
   async updateBatchHash(id: number, batchHash: string): Promise<void> {
     await this.batchRepo.update(id, { batchHash });
@@ -183,6 +206,40 @@ export class OutboundEmailDraftModel extends BaseDb {
       where: { draftId },
       order: { revisionNumber: "DESC" },
     });
+  }
+
+  /**
+   * Batch-read the current (highest revisionNumber) revision for each given
+   * draftId in a single query. Returns a Map keyed by draftId for O(1) lookup.
+   *
+   * Used by the unified send-log view to join up to PAGE_FETCH_CAP outcomes to
+   * their subjects without N+1 sequential reads (one per draft). One query
+   * fetches all revisions for the requested draft set ordered by
+   * revisionNumber DESC; we keep the first (highest) row per draftId.
+   */
+  async readCurrentRevisions(
+    draftIds: readonly number[]
+  ): Promise<Map<number, OutboundEmailDraftRevisionEntity>> {
+    const result = new Map<number, OutboundEmailDraftRevisionEntity>();
+    const uniqueIds = [...new Set(draftIds)].filter(
+      (id) => Number.isFinite(id) && id > 0
+    );
+    if (uniqueIds.length === 0) {
+      return result;
+    }
+    const revisions = await this.revisionRepo
+      .createQueryBuilder("rev")
+      .where("rev.draftId IN (:...ids)", { ids: uniqueIds })
+      .orderBy("rev.revisionNumber", "DESC")
+      .getMany();
+    // Revisions are ordered by revisionNumber DESC, so the first row seen for
+    // any draftId is its current (highest) revision.
+    for (const rev of revisions) {
+      if (!result.has(rev.draftId)) {
+        result.set(rev.draftId, rev);
+      }
+    }
+    return result;
   }
 
   /**

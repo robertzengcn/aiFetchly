@@ -592,25 +592,73 @@ export class EmailMarketingController {
     return String(value).trim();
   }
 
+  /**
+   * Resolve the outbound SMTP setting for a send, swapping the empty-password
+   * credential sentinel for the stored password.
+   *
+   * Credentials never round-trip to the renderer: getEmailServiceDetail returns
+   * password: "" and an empty password on save means "keep existing". The same
+   * sentinel arrives on a test-email send from the edit page, so the stored
+   * row must be resolved by id and its password reused — otherwise the send
+   * fires with an empty SMTP password and fails auth.
+   *
+   * Returns a NEW setting object; the caller's setting is not mutated.
+   */
+  public async resolveOutboundSetting(
+    setting: EmailServiceEntitydata
+  ): Promise<EmailServiceEntitydata> {
+    const hasPassword =
+      typeof setting.password === "string" && setting.password.length > 0;
+    if (hasPassword) {
+      return { ...setting };
+    }
+    const id = setting.id;
+    if (id === undefined || id === null || Number(id) <= 0) {
+      // Create-mode send with no id: nothing to resolve against.
+      return { ...setting };
+    }
+    const existing = await this.emailServiceModule.getEmailService(Number(id));
+    if (!existing) {
+      throw new Error(`Email service ${id} not found`);
+    }
+    if (!existing.password || existing.password.length === 0) {
+      throw new Error(`Email service ${id} has no stored password`);
+    }
+    return { ...setting, password: existing.password };
+  }
+
   //send email
   public async sendEmail(
     param: EmailSendParam,
     errorCall?: (errorMessage: string) => void,
     successCallback?: () => void
   ): Promise<void> {
-    const emailService = new EmailService(param.Setting);
-    await emailService.sendEmail(
-      param.EmailRequestData,
-      function (errorString) {
-        if (errorCall) {
-          errorCall(errorString);
+    try {
+      const setting = await this.resolveOutboundSetting(param.Setting);
+      const emailService = new EmailService(setting);
+      await emailService.sendEmail(
+        param.EmailRequestData,
+        function (errorString) {
+          if (errorCall) {
+            errorCall(errorString);
+          }
+        },
+        function () {
+          if (successCallback) {
+            successCallback();
+          }
         }
-      },
-      function () {
-        if (successCallback) {
-          successCallback();
-        }
+      );
+    } catch (error: unknown) {
+      // Resolution failures (missing service / no stored password) surface
+      // through the same error channel as SMTP failures so the test-email
+      // dialog reports them instead of crashing the IPC handler.
+      const message = error instanceof Error ? error.message : String(error);
+      if (errorCall) {
+        errorCall(message);
+        return;
       }
-    );
+      throw error;
+    }
   }
 }

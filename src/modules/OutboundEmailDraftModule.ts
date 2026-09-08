@@ -1,5 +1,8 @@
 import { BaseModule } from "@/modules/baseModule";
-import { OutboundEmailDraftModel, type AppendRevisionInput } from "@/model/OutboundEmailDraft.model";
+import {
+  OutboundEmailDraftModel,
+  type AppendRevisionInput,
+} from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailAuditLogModel } from "@/model/OutboundEmailAuditLog.model";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
@@ -104,6 +107,26 @@ export class OutboundEmailDraftModule extends BaseModule {
   ): Promise<OutboundEmailDraftRevisionEntity | null> {
     await this.ensureConnection();
     return await this.draftModel.readRevision(id);
+  }
+
+  /** The current (highest revision number) revision for a draft. */
+  async readCurrentRevision(
+    draftId: number
+  ): Promise<OutboundEmailDraftRevisionEntity | null> {
+    await this.ensureConnection();
+    return await this.draftModel.readCurrentRevision(draftId);
+  }
+
+  /**
+   * Batch-read the current revision for many drafts in one query. Returns a
+   * Map keyed by draftId. Used by the unified send-log view to avoid N+1
+   * sequential reads when joining up to PAGE_FETCH_CAP outcomes to subjects.
+   */
+  async readCurrentRevisions(
+    draftIds: readonly number[]
+  ): Promise<Map<number, OutboundEmailDraftRevisionEntity>> {
+    await this.ensureConnection();
+    return await this.draftModel.readCurrentRevisions(draftIds);
   }
 
   async appendRevision(

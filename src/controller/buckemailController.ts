@@ -5,10 +5,13 @@ import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
 import { EmailServiceApi } from "@/api/emailServiceApi";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
+import { OutboundEmailSendLogModule } from "@/modules/OutboundEmailSendLogModule";
 import { SortBy } from "@/entityTypes/commonType";
 import {
   BuckEmailListType,
   EmailMarketingSendLogListDisplay,
+  UnifiedSendLogEntry,
+  UnifiedSendLogDetailEntry,
 } from "@/entityTypes/buckemailType";
 import { getStatusName } from "@/modules/lib/function";
 
@@ -18,12 +21,14 @@ export class BuckemailController {
   private emailserviceAPI: EmailServiceApi;
   private buckEmailTaskMoudule: BuckEmailTaskModule;
   private emailMarketingSendlogModule: EmailMarketingSendLogModule;
+  private unifiedSendLogModule: OutboundEmailSendLogModule;
   constructor() {
     this.emailtemAPI = new EmailMarketingTemplateApi();
     this.emailfilterAPI = new EmailMarketingFilterApi();
     this.buckEmailTaskMoudule = new BuckEmailTaskModule();
     this.emailserviceAPI = new EmailServiceApi();
     this.emailMarketingSendlogModule = new EmailMarketingSendLogModule();
+    this.unifiedSendLogModule = new OutboundEmailSendLogModule();
   }
 
   //get buck email task list
@@ -37,8 +42,9 @@ export class BuckemailController {
       size,
       sort
     );
+    const total = await this.buckEmailTaskMoudule.countBuckEmailTasks();
     const data: Array<BuckEmailListType> = [];
-    Taskentity.forEach(async (element) => {
+    for (const element of Taskentity) {
       let status = "unkonw";
       if (element.status) {
         status = getStatusName(element.status);
@@ -46,22 +52,18 @@ export class BuckemailController {
       const btype = await this.buckEmailTaskMoudule.getBuckEmailTypeName(
         element.type
       );
-      let id = 0;
-      if (element.id) {
-        id = element.id;
-      }
+      const id = element.id ?? 0;
       const item: BuckEmailListType = {
         TaskId: id,
         Status: status,
         RecordTime: element.record_time,
         Type: btype,
       };
-
       data.push(item);
-    });
+    }
     const result = {
       records: data,
-      total: Taskentity.length,
+      total,
     };
     return result;
   }
@@ -89,30 +91,58 @@ export class BuckemailController {
       sort
     );
     const data: Array<EmailMarketingSendLogListDisplay> = [];
-    res.records.forEach(async (element) => {
+    for (const element of res.records) {
       let status = "unkonw";
-      if (element.status) {
+      // Failure rows have status 0 (SendStatus.Failure) — a truthiness check
+      // would misclassify them as unknown, so compare against null explicitly.
+      if (element.status !== undefined && element.status !== null) {
         status = await this.emailMarketingSendlogModule.getStatusName(
           element.status
         );
       }
-      let elementID = 0;
-      if (element.id) {
-        elementID = element.id;
-      }
+      const elementID = element.id ?? 0;
       const item: EmailMarketingSendLogListDisplay = {
         id: elementID,
-        status: status,
+        status,
         receiver: element.receiver,
         title: element.title,
         record_time: element.record_time,
       };
       data.push(item);
-    });
+    }
     const result = {
       records: data,
       total: res.total,
     };
     return result;
+  }
+  //get unified send log (legacy + authorized outbound)
+  public async getUnifiedSendLog(
+    page: number,
+    size: number,
+    where?: string,
+    sort?: SortBy
+  ): Promise<{
+    records: Array<UnifiedSendLogEntry>;
+    total: number;
+  }> {
+    const res = await this.unifiedSendLogModule.getUnifiedSendLog(
+      page,
+      size,
+      where,
+      sort
+    );
+    return {
+      records: res.records,
+      total: res.total,
+    };
+  }
+
+  //get one unified send-log row's detail, keyed by the (source, id) pair
+  public async getUnifiedSendLogDetail(
+    source: "legacy" | "authorized",
+    id: number
+  ): Promise<UnifiedSendLogDetailEntry> {
+    return await this.unifiedSendLogModule.getUnifiedSendLogDetail(source, id);
   }
 }

@@ -3,7 +3,6 @@ import { BUCKEMAILSEND } from "@/config/channellist";
 import { ipcMain } from "electron";
 import {
   EmailMarketingsubdata,
-  EmailItem,
   Buckemailstruct,
 } from "@/entityTypes/emailmarketingType";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -11,25 +10,17 @@ import {
   BUCKEMAILSENDMESSAGE,
   BUCKEMAILTASKLIST,
   BUCKEMAILTASKSENDLOG,
+  UNIFIED_EMAIL_SEND_LOG,
+  UNIFIED_EMAIL_SEND_LOG_DETAIL,
 } from "@/config/channellist";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
-import {
-  BuckemailTaskStartInput,
-  mapBuckemailTaskStartInputToEntity,
-} from "@/entityTypes/emailmarketingType";
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
-import { ItemSearchparam } from "@/entityTypes/commonType";
-import { CommonResponse } from "@/entityTypes/commonType";
-import {
-  BuckEmailListType,
-  BuckEmailTasklogQueryType,
-  EmailMarketingSendLogListDisplay,
-} from "@/entityTypes/buckemailType";
-import { EmailMarketingSendLogEntity } from "@/model/emailMarketingSendLogdb";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   buckEmailTaskListInputSchema,
   buckEmailTaskSendLogInputSchema,
+  unifiedEmailSendLogInputSchema,
+  unifiedEmailSendLogDetailInputSchema,
 } from "@/schemas/ipc/buckEmail";
 /**
  * buck send email ipc
@@ -118,7 +109,9 @@ export function registerBuckEmailIpcHandlers() {
     buckEmailTaskListInputSchema,
     async (input) => {
       const buckemailCon = new BuckemailController();
-      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
+      const sortby = Array.isArray(input.sortby)
+        ? input.sortby[0]
+        : input.sortby;
       const res = await buckemailCon.getBuckEmailTaskList(
         input.page ?? 0,
         input.size ?? 100,
@@ -142,7 +135,9 @@ export function registerBuckEmailIpcHandlers() {
       // Schema now requires TaskId as positive int; missing/invalid is
       // rejected at boundary by the wrapper with a clear zod message.
       const buckemailCon = new BuckemailController();
-      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
+      const sortby = Array.isArray(input.sortby)
+        ? input.sortby[0]
+        : input.sortby;
       const res = await buckemailCon.getBuckEmailSendLog(
         input.TaskId,
         input.page ?? 0,
@@ -154,6 +149,41 @@ export function registerBuckEmailIpcHandlers() {
         records: res.records,
         num: res.total,
       };
+    }
+  );
+  //get unified email send log (legacy bulk-task + authorized outbound)
+  registerValidatedHandler(
+    UNIFIED_EMAIL_SEND_LOG,
+    unifiedEmailSendLogInputSchema,
+    async (input) => {
+      const buckemailCon = new BuckemailController();
+      const sortby = Array.isArray(input.sortby)
+        ? input.sortby[0]
+        : input.sortby;
+      // The frontend (UnifiedEmailSendLogTable) sends the search-box value as
+      // `search`; the legacy task-keyed table sends `where`. Accept either so
+      // the search box actually filters instead of being silently dropped.
+      const where = input.search ?? input.where;
+      const res = await buckemailCon.getUnifiedSendLog(
+        input.page ?? 0,
+        input.size ?? 100,
+        where,
+        sortby
+      );
+      return {
+        records: res.records,
+        num: res.total,
+      };
+    }
+  );
+  //get one unified send-log row's detail (legacy content/log or authorized
+  //revision-pinned body + provider envelope)
+  registerValidatedHandler(
+    UNIFIED_EMAIL_SEND_LOG_DETAIL,
+    unifiedEmailSendLogDetailInputSchema,
+    async (input) => {
+      const buckemailCon = new BuckemailController();
+      return await buckemailCon.getUnifiedSendLogDetail(input.source, input.id);
     }
   );
 }

@@ -53,6 +53,8 @@ const DENY_CORPUS: string[] = [
   "what is the status of the campaign?",
   "tell me about the recipients",
   "let's think about a follow-up email",
+  "without review",
+  "please write a test email to bob@example.com",
   // negation wrapped around a send word
   "send the emails but do not send it yet",
   "please send after I look it over again",
@@ -102,6 +104,19 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
     expect(refusedCode(gate)).toBe("draft_required");
   });
 
+  it("requires Review after a send_now draft exists (LLM must not send in the same turn)", () => {
+    // "send a test email to …" is send_now intent, but the body was written
+    // by the model. A draft without user approval must be review_required —
+    // otherwise the model drafts and immediately calls start_email_send_task.
+    const d = OutboundEmailIntentResolver.resolve(
+      input("send a test email to 1093968009@qq.com")
+    );
+    expect(d.mode).toBe("send_now");
+
+    const gate = OutboundEmailToolGate.evaluate(d, null, 7);
+    expect(refusedCode(gate)).toBe("review_required");
+  });
+
   it("blocks a review_first intent even if an authorization were somehow present", () => {
     const d = OutboundEmailIntentResolver.resolve(
       input("send them now but let me review first")
@@ -135,12 +150,11 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
 /**
  * Direct-send phrasing corpus (technical design §9.2 / §13.1 / AD-001).
  *
- * "please send a test email to …" is an unambiguous send instruction: the user
- * is asking for delivery now, not a draft for later review. It must resolve to
- * `send_now` so that, once a draft batch exists for the turn, trusted app code
- * can create the §13.1 direct-send authorization. The deny/review/ambiguous
- * corpus above is unchanged — only wording that clearly asks for the send
- * resolves here.
+ * "please send a test email to …" is an unambiguous send instruction and
+ * still resolves to `send_now`. The send-tool gate nevertheless requires a
+ * user Review click before delivery: LLM-composed subject/body is not
+ * approved just because the user said "send". The deny/review/ambiguous
+ * corpus above is unchanged.
  */
 describe("OutboundEmailIntentCorpus — direct-send phrasing resolves send_now", () => {
   const SEND_CORPUS: string[] = [
@@ -165,6 +179,44 @@ describe("OutboundEmailIntentCorpus — direct-send phrasing resolves send_now",
       input("send a test email to bob@example.com but let me review first")
     );
     expect(d.mode).toBe("review_first");
+  });
+});
+
+describe("OutboundEmailIntentCorpus — explicit skip-review may send without Review", () => {
+  const SKIP_REVIEW_CORPUS: string[] = [
+    "please write a test email to 1093968009@qq.com directly, without review",
+    "please create a test email and send it to 1093968009@qq.com directly",
+    "please send it directly without review",
+  ];
+
+  it("resolves write-email-without-review to send_now + explicit_skip_review", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input(
+        "please write a test email to 1093968009@qq.com directly, without review"
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+  });
+
+  it("resolves the live skip-review chat phrasings to send_now + explicit_skip_review", () => {
+    for (const text of SKIP_REVIEW_CORPUS) {
+      const d = OutboundEmailIntentResolver.resolve(input(text));
+      expect(d.mode, `"${text}" must resolve send_now`).toBe("send_now");
+      expect(d.reasonCode, `"${text}" must waive Review`).toBe(
+        "explicit_skip_review"
+      );
+    }
+  });
+
+  it("still requires Review at the gate for ordinary send_now (no skip-review)", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input("send a test email to 1093968009@qq.com")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_send_instruction");
+    const gate = OutboundEmailToolGate.evaluate(d, null, 10);
+    expect(refusedCode(gate)).toBe("review_required");
   });
 });
 
@@ -211,5 +263,27 @@ describe("OutboundEmailIntentCorpus — contextual affirmation (§9.4)", () => {
       inputWithPrior("yes", "The drafts are ready for your review.")
     );
     expect(d.mode).not.toBe("send_now");
+  });
+
+  it("'yes, please send it' after a presented draft is contextual_affirmation", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      inputWithPrior(
+        "yes, please send it",
+        "A test email draft has been created. Please review and approve."
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("contextual_affirmation");
+  });
+
+  it("'yes, send it' after click-Review instructions is contextual_affirmation", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      inputWithPrior(
+        "yes, send it",
+        'The system requires you to click "Review" in the interface before it can be sent.'
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("contextual_affirmation");
   });
 });

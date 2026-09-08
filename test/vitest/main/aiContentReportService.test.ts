@@ -73,7 +73,7 @@ describe("AIContentReportService", () => {
     expect(postJson.mock.calls[0][0]).toBe("/api/ai/content-reports");
   });
 
-  it("overwrites renderer placeholder appVersion/platform and fills installId in submitReport", async () => {
+  it("overwrites renderer placeholder appVersion/platform and sends installId only as a header", async () => {
     const postJson = vi.fn().mockResolvedValue(makeResponse());
     const service = new AIContentReportService({
       httpClient: { postJson, get: vi.fn() },
@@ -92,11 +92,19 @@ describe("AIContentReportService", () => {
       })
     );
     const sent = postJson.mock.calls[0][1] as CreateAIContentReportRequest;
+    const options = postJson.mock.calls[0][2] as {
+      headers?: Record<string, string>;
+    };
     expect(sent.context.appVersion).toBe("9.9.9");
     expect(sent.context.platform).toBe(
       process.platform as "win32" | "darwin" | "linux"
     );
-    expect(sent.context.installId).toBe("stable-install-id");
+    // Backend rejects unknown body fields; install id rides the header.
+    expect(sent.context.installId).toBeUndefined();
+    expect(JSON.stringify(sent)).not.toContain("installId");
+    expect(options.headers?.["X-AiFetchly-Install-Id"]).toBe(
+      "stable-install-id"
+    );
   });
 
   it("truncates long text in submitReport so the Zod 32000 cap is not tripped", async () => {
@@ -113,7 +121,7 @@ describe("AIContentReportService", () => {
     expect(sent.output.text?.length).toBeLessThanOrEqual(32000);
   });
 
-  it("fills appVersion, platform, and installId in assembleContext", () => {
+  it("fills appVersion and platform in assembleContext and strips installId", () => {
     const service = new AIContentReportService({
       httpClient: { postJson: vi.fn(), get: vi.fn() },
       appVersion: () => "9.9.9",
@@ -128,7 +136,7 @@ describe("AIContentReportService", () => {
     });
     expect(ctx.appVersion).toBe("9.9.9");
     expect(ctx.platform).toBe(process.platform as "win32" | "darwin" | "linux");
-    expect(ctx.installId).toBe("stable-install-id");
+    expect(ctx.installId).toBeUndefined();
     expect(ctx.locale).toBe("fr-FR");
   });
 
@@ -639,8 +647,13 @@ describe("AIContentReportService.submitReport v2 dispatch", () => {
     );
     expect(result.reportId).toBe("r2");
     const sent = postJson.mock.calls[0][1] as CreateAIConversationReportRequest;
+    const options = postJson.mock.calls[0][2] as {
+      headers?: Record<string, string>;
+    };
     expect(sent.context.appVersion).toBe("9.9.9");
-    expect(sent.context.installId).toBe("install-xyz");
+    expect(sent.context.installId).toBeUndefined();
+    expect(JSON.stringify(sent)).not.toContain("installId");
+    expect(options.headers?.["X-AiFetchly-Install-Id"]).toBe("install-xyz");
     expect(sent.context.selectedAIItemCount).toBe(1);
     expect(sent.items[0].text?.length).toBeLessThanOrEqual(8000);
     expect(sent.items[0].textTruncated).toBe(true);
@@ -793,8 +806,13 @@ describe("AIContentReportService.submitReport v2 dispatch", () => {
     const result = await service.submitReport(makeValidRequest());
     expect(result.reportId).toBe("r1");
     const sent = postJson.mock.calls[0][1] as CreateAIContentReportRequest;
+    const options = postJson.mock.calls[0][2] as {
+      headers?: Record<string, string>;
+    };
     expect(sent.schemaVersion).toBe(1);
     expect(sent.context.appVersion).toBe("1.0.0");
-    expect(sent.context.installId).toBe("install-xyz");
+    expect(sent.context.installId).toBeUndefined();
+    expect(JSON.stringify(sent)).not.toContain("installId");
+    expect(options.headers?.["X-AiFetchly-Install-Id"]).toBe("install-xyz");
   });
 });

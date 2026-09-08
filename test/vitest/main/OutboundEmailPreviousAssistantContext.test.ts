@@ -81,4 +81,30 @@ describe("findPrecedingAssistantContext", () => {
     expect(ctx.previousAssistantMessageId).toBeNull();
     expect(ctx.previousAssistantText).toBeNull();
   });
+
+  it("skips tool_call and tool_result rows to reach the prose assistant turn", () => {
+    const toolResult = msg(
+      "assistant",
+      "tr1",
+      '{"success":false,"code":"review_required"}',
+      3,
+      3000
+    );
+    toolResult.messageType = "tool_result" as never;
+    const messages: AIChatMessageEntity[] = [
+      msg("user", "u1", "send a test email", 1, 1000),
+      msg(
+        "assistant",
+        "a1",
+        "A draft is ready. Please review and approve.",
+        2,
+        2000
+      ),
+      toolResult,
+      msg("user", "u2", "yes, send it", 4, 4000),
+    ];
+    const ctx = findPrecedingAssistantContext(messages, "u2");
+    expect(ctx.previousAssistantMessageId).toBe("a1");
+    expect(ctx.previousAssistantText).toContain("Please review and approve");
+  });
 });

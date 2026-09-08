@@ -24,7 +24,11 @@ vi.mock("@/views/api/emailservice", () => ({
 }));
 
 // Stub vue-router's useRouter — component pushes routes on edit/create.
-vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+// (Hoisted mocks are required so navigation tests can assert push calls.)
+const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push: routerMocks.push }),
+}));
 
 const i18n = createI18n({
   legacy: false,
@@ -54,6 +58,10 @@ const i18n = createI18n({
         name: "name",
         from: "sender account",
         create_service: "create email service",
+      },
+      route: {
+        bulk_email_task_list: "Email Task List",
+        email_send_log: "Email Send Log",
       },
     },
   },
@@ -329,6 +337,32 @@ describe("EmailServiceTable import", () => {
       expect(snackbar.attributes("data-message")).toContain(
         "Invalid file format"
       );
+    });
+  });
+});
+
+describe("EmailServiceTable send log navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
+  });
+
+  it("renders the send log button in standalone list mode", () => {
+    const wrapper = mountTable();
+    expect(
+      wrapper.find('[data-testid="email-service-send-log-btn"]').exists()
+    ).toBe(true);
+  });
+
+  it("navigates to the unified email send log page when clicked", async () => {
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-send-log-btn"]')
+      .trigger("click");
+
+    expect(routerMocks.push).toHaveBeenCalledWith({
+      name: "UNIFIED_EMAIL_SEND_LOG",
     });
   });
 });

@@ -12,7 +12,9 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
 v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
-       
+        <template v-slot:item.record_time="{ item }">
+            <span data-testid="record-time-cell">{{ formatRecordTime(item.record_time) }}</span>
+        </template>
     </v-data-table-server>
   
 
@@ -23,7 +25,7 @@ import { useI18n } from "vue-i18n";
 import { getBuckEmailSendLog } from '@/views/api/buckemail'
 import { ref, computed,watch,onMounted } from 'vue'
 import { SearchResult } from '@/views/api/types'
-import { CapitalizeFirstLetter } from "@/views/utils/function"
+import { CapitalizeFirstLetter, formatRecordTime } from "@/views/utils/function"
 import {EmailMarketingSendLogListDisplay} from "@/entityTypes/buckemailType"
 const $route = useRoute();
 const taskId = ref(0);

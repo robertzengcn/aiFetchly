@@ -30,6 +30,14 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             >
                 {{ t('common.import') }}
             </v-btn>
+
+            <v-btn
+                class="btn ml-3" variant="outlined" prepend-icon="mdi-file-document-multiple"
+                data-testid="email-service-send-log-btn"
+                @click="goToSendLog"
+            >
+                {{ CapitalizeFirstLetter(t('route.email_send_log')) }}
+            </v-btn>
         </div>
 
     </div>
@@ -205,6 +213,12 @@ function createService() {
     console.log("create email Service")
     router.push({
         name: 'Email_Marketing_Service_Create'
+    });
+}
+
+function goToSendLog() {
+    router.push({
+        name: 'UNIFIED_EMAIL_SEND_LOG'
     });
 }
 
