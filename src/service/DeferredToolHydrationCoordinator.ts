@@ -62,7 +62,9 @@ function isReplayableSentinel(result: unknown): boolean {
   }
   if (result && typeof result === "object") {
     const r = result as Record<string, unknown>;
-    const text = `${String(r.error ?? "")} ${String(r.message ?? "")} ${String(r.content ?? "")}`;
+    const text = `${String(r.error ?? "")} ${String(r.message ?? "")} ${String(
+      r.content ?? ""
+    )}`;
     if (DEFERRED_TOOL_SENTINEL_RE.test(text)) return true;
     return false;
   }
@@ -99,4 +101,69 @@ export class HydrationReplayLedger {
   size(): number {
     return this.replayed.size;
   }
+}
+
+/**
+ * Deterministic fingerprint of validated tool-call arguments (recursively
+ * key-sorted) so the ledger dedupes the SAME call regardless of JSON key
+ * ordering (FR-28 / design §8.7).
+ */
+export function stableToolCallFingerprint(args: unknown): string {
+  const walk = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(walk);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, child]) => [key, walk(child)])
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(walk(args));
+}
+
+/**
+ * The loop-side hydration decision (FR-28): the model called a tool the
+ * deferred catalog knows but that is not exposed yet.
+ *
+ *  - "execute": hydrate + replay THIS call internally — the loop falls
+ *    through to the normal execution path; the model never sees a
+ *    synthetic retry failure. Consumes the fingerprint's one replay.
+ *  - "exhausted": the fingerprint already used its replay — surface the
+ *    typed INSTALL_TOOL_LOAD_RETRY_EXHAUSTED error instead.
+ *  - "none": the tool is not a deferred catalog entry or is already
+ *    discovered; ordinary dispatch continues untouched.
+ */
+export type DeferredHydrationDecision =
+  | { readonly action: "execute" }
+  | { readonly action: "exhausted" }
+  | { readonly action: "none" };
+
+export interface DeferredHydrationGateInput {
+  /** The catalog entry for the called tool, when one exists. */
+  readonly catalogEntry: { readonly loadPolicy: string } | undefined;
+  /** Whether the deferred catalog mode is active for this turn. */
+  readonly catalogActive: boolean;
+  /** Tool names already discovered/exposed this conversation. */
+  readonly discoveredToolNames: ReadonlySet<string>;
+  readonly toolName: string;
+  readonly callArguments: unknown;
+  readonly conversationId: string;
+  readonly ledger: HydrationReplayLedger;
+}
+
+export function decideDeferredToolHydration(
+  input: DeferredHydrationGateInput
+): DeferredHydrationDecision {
+  if (!input.catalogActive) return { action: "none" };
+  const entry = input.catalogEntry;
+  if (!entry || entry.loadPolicy !== "deferred") return { action: "none" };
+  if (input.discoveredToolNames.has(input.toolName)) return { action: "none" };
+  const fingerprint = `${input.conversationId}:${
+    input.toolName
+  }:${stableToolCallFingerprint(input.callArguments)}`;
+  return input.ledger.consumeReplay(fingerprint)
+    ? { action: "execute" }
+    : { action: "exhausted" };
 }

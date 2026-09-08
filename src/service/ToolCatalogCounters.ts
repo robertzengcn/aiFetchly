@@ -17,7 +17,10 @@ export type ToolCatalogCounterKey =
   | "search_selected_count"
   | "fallback_count"
   | "mcp_description_truncated_count"
-  | "mcp_schema_pruned_count";
+  | "mcp_schema_pruned_count"
+  /** FR-28 transparent deferred-load hydration replays (design §8.7). */
+  | "hydration_replays"
+  | "hydration_replay_exhausted";
 
 const ALL_KEYS: readonly ToolCatalogCounterKey[] = [
   "search_calls",
@@ -26,6 +29,8 @@ const ALL_KEYS: readonly ToolCatalogCounterKey[] = [
   "fallback_count",
   "mcp_description_truncated_count",
   "mcp_schema_pruned_count",
+  "hydration_replays",
+  "hydration_replay_exhausted",
 ];
 
 export type ToolCatalogCounterSnapshot = Record<

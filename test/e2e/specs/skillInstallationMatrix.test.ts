@@ -511,20 +511,14 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     const app = aiApp;
     const fixture = makeSecretFixture(app.testRoot.rootPath);
 
-    // The coordinator's sentinel decision is a pure function
-    // (DEFERRED_TOOL_SENTINEL_RE + no-mutation-evidence rule). Verify the
-    // E2E app exposes the module contract the loop relies on: the exact
-    // pre-mutation sentinel is classified replayable exactly once, and a
-    // mutation-carrying result is NOT. These assertions run against the
-    // packaged main bundle via the vitest harness (see
-    // test/vitest/main/SkillInstallPolicy.test.ts) — here we assert the
-    // end-to-end invariant: ONE prepare creates ONE session, and the retry
-    // the model would have made RESUMES it (the visible half of the
-    // transparent-replay contract).
-    void fixture;
-
-    // And one prepare for the source yields ONE persisted session —
-    // a duplicate prepare (the retry the model would have made) resumes.
+    // Since the transparent-replay fix, a deferred-tool call is hydrated
+    // and executed INTERNALLY (one replay per fingerprint, ledger-capped —
+    // see decideDeferredToolHydration and its unit tests in
+    // test/vitest/main/SkillInstallPolicy.test.ts); the model never sees a
+    // synthetic "deferred tool loaded; retry" failure. The end-to-end
+    // invariant asserted here: ONE source yields ONE persisted session —
+    // even a duplicate prepare (whatever retry pressure exists) RESUMES it,
+    // so the replay path can never create a second session or checkout.
     const first = await prepareToAwaitingApproval(app, fixture);
     const second = await prepareToAwaitingApproval(app, fixture);
     expect(second?.sessionId).toBe(first?.sessionId);
@@ -645,15 +639,11 @@ test("approved command execution is renderer-driven and template-bound (FR-16)",
   // Run the approved template through the renderer channel: the caller
   // supplies ONLY the template id — never command text.
   const token = await approvalToken(app, held.sessionId);
-  const run = await invoke<CommandRunResult>(
-    app,
-    "skill-install:run-command",
-    {
-      sessionId: held.sessionId,
-      commandId: template?.id,
-      approvalToken: token,
-    }
-  );
+  const run = await invoke<CommandRunResult>(app, "skill-install:run-command", {
+    sessionId: held.sessionId,
+    commandId: template?.id,
+    approvalToken: token,
+  });
   expect(run?.ok).toBe(true);
   expect(run?.exitCode).toBe(0);
   expect(run?.stdoutPreview).toMatch(/v\d+\.\d+/);

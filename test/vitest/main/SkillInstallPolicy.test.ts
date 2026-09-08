@@ -12,12 +12,12 @@ import {
   buildSkillInstallationRoutingSection,
   SKILL_INSTALL_COMPACT_REMINDER,
 } from "@/service/SkillInstallationRoutingPromptSection";
-import {
-  evaluateSkillInstallationToolPolicy,
-} from "@/service/SkillInstallationToolPolicy";
+import { evaluateSkillInstallationToolPolicy } from "@/service/SkillInstallationToolPolicy";
 import {
   shouldHydrateAndReplay,
   HydrationReplayLedger,
+  decideDeferredToolHydration,
+  stableToolCallFingerprint,
 } from "@/service/DeferredToolHydrationCoordinator";
 
 // ---------------------------------------------------------------------------
@@ -59,9 +59,7 @@ describe("classifySkillRequestIntent", () => {
     const decision = classifySkillRequestIntent(
       "Set up https://github.com/browser-use/video-use for me. Read install.md first."
     );
-    expect(decision.source).toBe(
-      "https://github.com/browser-use/video-use"
-    );
+    expect(decision.source).toBe("https://github.com/browser-use/video-use");
   });
 
   it("daily-use phrasing routes to use_skill, not the installer", () => {
@@ -96,7 +94,9 @@ describe("buildSkillInstallationRoutingSection", () => {
 
   it("contains all seven normative rules", () => {
     expect(section).toContain("Call skill_install_prepare");
-    expect(section).toContain("Do not clone the repository using shell_execute");
+    expect(section).toContain(
+      "Do not clone the repository using shell_execute"
+    );
     expect(section).toContain("Do not search the tool catalog for Git");
     expect(section).toContain("session_id and next_action");
     expect(section).toContain("Never accept API keys through chat");
@@ -212,7 +212,9 @@ describe("evaluateSkillInstallationToolPolicy", () => {
     const verdict = evaluateSkillInstallationToolPolicy({
       routing,
       toolName: "shell_execute",
-      toolArguments: { command: "git clone https://github.com/browser-use/video-use" },
+      toolArguments: {
+        command: "git clone https://github.com/browser-use/video-use",
+      },
       manualActionApproved: true,
     });
     expect(verdict.allowed).toBe(true);
@@ -260,5 +262,117 @@ describe("shouldHydrateAndReplay", () => {
     expect(ledger.consumeReplay("fp")).toBe(true);
     expect(ledger.consumeReplay("fp")).toBe(false);
     expect(ledger.size()).toBe(1);
+  });
+});
+
+describe("decideDeferredToolHydration — the loop-side transparent replay gate (FR-28)", () => {
+  const deferredEntry = { loadPolicy: "deferred" };
+  const discovered = new Set<string>();
+
+  it("executes (hydrate + replay) a deferred, undiscovered tool call exactly once", () => {
+    const ledger = new HydrationReplayLedger();
+    const first = decideDeferredToolHydration({
+      catalogActive: true,
+      catalogEntry: deferredEntry,
+      discoveredToolNames: discovered,
+      toolName: "glob_files",
+      callArguments: { pattern: "*.md" },
+      conversationId: "conv-1",
+      ledger,
+    });
+    expect(first.action).toBe("execute");
+    // After the loop adds the name, the same call is ordinary dispatch.
+    const afterDiscovery = new Set(["glob_files"]);
+    const second = decideDeferredToolHydration({
+      catalogActive: true,
+      catalogEntry: deferredEntry,
+      discoveredToolNames: afterDiscovery,
+      toolName: "glob_files",
+      callArguments: { pattern: "*.md" },
+      conversationId: "conv-1",
+      ledger,
+    });
+    expect(second.action).toBe("none");
+  });
+
+  it("is exhausted when the SAME fingerprint replays again (e.g. after a restart reset discovery)", () => {
+    const ledger = new HydrationReplayLedger();
+    const args = { source: "https://github.com/a/b", constraints: ["x"] };
+    const decide = (toolNames: Set<string>) =>
+      decideDeferredToolHydration({
+        catalogActive: true,
+        catalogEntry: deferredEntry,
+        discoveredToolNames: toolNames,
+        toolName: "file_write",
+        callArguments: args,
+        conversationId: "conv-2",
+        ledger,
+      });
+    expect(decide(new Set()).action).toBe("execute");
+    // Discovery was NOT persisted (restart) — the ledger still refuses.
+    expect(decide(new Set()).action).toBe("exhausted");
+  });
+
+  it("leaves non-deferred, catalog-inactive, and unknown tools untouched", () => {
+    const ledger = new HydrationReplayLedger();
+    expect(
+      decideDeferredToolHydration({
+        catalogActive: false,
+        catalogEntry: deferredEntry,
+        discoveredToolNames: new Set(),
+        toolName: "glob_files",
+        callArguments: {},
+        conversationId: "c",
+        ledger,
+      }).action
+    ).toBe("none");
+    expect(
+      decideDeferredToolHydration({
+        catalogActive: true,
+        catalogEntry: { loadPolicy: "always" },
+        discoveredToolNames: new Set(),
+        toolName: "skill_install_prepare",
+        callArguments: {},
+        conversationId: "c",
+        ledger,
+      }).action
+    ).toBe("none");
+    expect(
+      decideDeferredToolHydration({
+        catalogActive: true,
+        catalogEntry: undefined,
+        discoveredToolNames: new Set(),
+        toolName: "mystery_tool",
+        callArguments: {},
+        conversationId: "c",
+        ledger,
+      }).action
+    ).toBe("none");
+  });
+
+  it("fingerprints are key-order independent and conversation-scoped", () => {
+    expect(
+      stableToolCallFingerprint({ a: 1, b: { c: 2, d: 3 } })
+    ).toBe(stableToolCallFingerprint({ b: { d: 3, c: 2 }, a: 1 }));
+    expect(stableToolCallFingerprint({ a: 1 })).not.toBe(
+      stableToolCallFingerprint({ a: 2 })
+    );
+    // Different conversations get independent replay budgets via the
+    // fingerprint prefix — same args, different conversation ids.
+    const ledger = new HydrationReplayLedger();
+    const args = { q: "x" };
+    const decideFor = (conversationId: string) =>
+      decideDeferredToolHydration({
+        catalogActive: true,
+        catalogEntry: deferredEntry,
+        discoveredToolNames: new Set(),
+        toolName: "t",
+        callArguments: args,
+        conversationId,
+        ledger,
+      });
+    expect(decideFor("conv-a").action).toBe("execute");
+    expect(decideFor("conv-b").action).toBe("execute");
+    expect(decideFor("conv-a").action).toBe("exhausted");
   });
 });

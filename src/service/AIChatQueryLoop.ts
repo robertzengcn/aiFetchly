@@ -78,6 +78,10 @@ import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import {
+  HydrationReplayLedger,
+  decideDeferredToolHydration,
+} from "@/service/DeferredToolHydrationCoordinator";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
@@ -663,6 +667,8 @@ export class AIChatQueryLoop {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
+  /** One internal replay per call fingerprint, ever (FR-28 §8.7). */
+  private readonly hydrationLedger = new HydrationReplayLedger();
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -1609,26 +1615,56 @@ export class AIChatQueryLoop {
                 continue;
               }
 
-              discoveredToolNames.add(call.name);
-              const retryContent = serializeToolResultContent({
-                success: false,
-                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
-              });
-              eventSink.emit({
-                type: "tool_result",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                toolCallId: call.id,
+              // FR-28 transparent one-shot hydration + replay (design §8.7):
+              // hydrate the tool and execute THIS validated call now through
+              // the generic path below — the model never receives a synthetic
+              // "deferred tool loaded; retry" failure. One replay per call
+              // fingerprint, ever (process-wide ledger, independent of the
+              // round-level transient retry counter).
+              const hydrationDecision = decideDeferredToolHydration({
+                catalogActive,
+                catalogEntry: entry,
+                discoveredToolNames,
                 toolName: call.name,
-                fullContent: retryContent,
-                toolResult: { success: false, error: "deferred tool loaded" },
+                callArguments: call.arguments ?? {},
+                conversationId: input.conversationId,
+                ledger: this.hydrationLedger,
               });
-              messages.push({
-                role: "tool",
-                tool_call_id: call.id,
-                content: retryContent,
-              });
-              continue;
+              if (hydrationDecision.action === "execute") {
+                discoveredToolNames.add(call.name);
+                toolCatalogCounters.increment("hydration_replays");
+                log.info(
+                  `[tool-catalog] hydrated deferred tool "${call.name}"; replaying the call internally (FR-28)`
+                );
+                // Fall through: the same call executes in THIS round.
+              } else if (hydrationDecision.action === "exhausted") {
+                toolCatalogCounters.increment("hydration_replay_exhausted");
+                const exhaustedContent = serializeToolResultContent({
+                  success: false,
+                  error:
+                    `Tool "${call.name}" could not be loaded automatically ` +
+                    `(retry budget exhausted). Search the tool catalog first.`,
+                  error_code: "INSTALL_TOOL_LOAD_RETRY_EXHAUSTED",
+                });
+                eventSink.emit({
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: exhaustedContent,
+                  toolResult: {
+                    success: false,
+                    error: "deferred tool load retry exhausted",
+                  },
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: exhaustedContent,
+                });
+                continue;
+              }
             }
           }
 
