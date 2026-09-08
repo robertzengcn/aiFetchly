@@ -1315,6 +1315,15 @@ const onSend = (): void => {
 };
 
 const onKeydown = (event: KeyboardEvent): void => {
+  // IME composition guard (FR-COMP-004 / PRD §13.2): while an input method is
+  // composing (Chinese/Japanese/Korean…), Enter confirms the composition —
+  // it must neither send the message nor select a suggestion. Some Chromium
+  // versions leave isComposing false on the final keydown and report the
+  // legacy keyCode 229 instead, so both signals are honored.
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+
   if (atMentionOpen.value) {
     syncAtMentionFromKeyboardEvent(event);
   }
