@@ -3473,30 +3473,6 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
-      name: "browser_capture_screenshot",
-      description:
-        "Capture a screenshot of the managed browser window. Returns metadata only (mime, size) — " +
-        "the image is shown in the browser window, not returned as bytes.",
-      parameters: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session id." },
-        },
-        required: ["session_id"],
-      },
-      tier: "main",
-      requiresConfirmation: false,
-      permissionCategory: "automation",
-      source: "built-in",
-      timeoutClass: "browser",
-      execute: async (args, context) =>
-        wrap(
-          (a) => getDefaultManagedBrowserAiToolService().captureScreenshot(a),
-          args,
-          context
-        ),
-    },
-    {
       name: "browser_request_handoff",
       description:
         "Pause AI control and hand the browser window to the user (e.g. for a login, CAPTCHA, or " +
@@ -3543,6 +3519,31 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       execute: async (args, context) =>
         wrap(
           (a) => getDefaultManagedBrowserAiToolService().resumeAfterHandoff(a),
+          args,
+          context
+        ),
+    },
+    {
+      // TODO-MSB-015: the PRD contract names this tool browser_screenshot;
+      // registered under that name (browser_capture_screenshot retired).
+      name: "browser_screenshot",
+      description:
+        "Capture a screenshot of the managed browser window. Returns metadata (mime, byte size) — the image is shown in the user's browser window, not returned as bytes to the model.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+        },
+        required: ["session_id"],
+      },
+      tier: "main",
+      requiresConfirmation: false,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "browser",
+      execute: async (args, context) =>
+        wrap(
+          (a) => getDefaultManagedBrowserAiToolService().captureScreenshot(a),
           args,
           context
         ),

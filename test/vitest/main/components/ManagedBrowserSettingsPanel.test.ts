@@ -23,6 +23,7 @@ const baseSettings: EffectiveManagedBrowserSettings = {
 };
 
 const apiMocks = vi.hoisted(() => ({
+  listEligibleAccounts: vi.fn(async (): Promise<unknown[]> => []),
   getEffectiveBrowserSettings: vi.fn(async (): Promise<unknown> => null),
   updateBrowserPreferences: vi.fn(async (patch: unknown): Promise<unknown> => patch),
   getCacheStatus: vi.fn(async (): Promise<unknown> => null),
@@ -342,7 +343,7 @@ describe("GAP-09 active-session gating on disable", () => {
     expect(apiMocks.stopManagedBrowser).not.toHaveBeenCalled();
   });
 
-  it("finish stops the session gracefully, then persists the disable", async () => {
+  it("finish KEEPS the session running and only disables new starts (TODO-MSB-004)", async () => {
     apiMocks.listActiveSessions.mockImplementation(async () => [
       { sessionId: "mb_live0000000001", state: "handoff" },
     ]);
@@ -360,16 +361,12 @@ describe("GAP-09 active-session gating on disable", () => {
     );
     await wrapper.find("[data-testid='mb-active-finish']").trigger("click");
     await vi.waitFor(() =>
-      expect(apiMocks.stopManagedBrowser).toHaveBeenCalledWith(
-        "mb_live0000000001",
-        "user_stop"
-      )
-    );
-    await vi.waitFor(() =>
       expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
         browserEnabled: false,
       })
     );
+    // Finish never terminates the live session.
+    expect(apiMocks.stopManagedBrowser).not.toHaveBeenCalled();
   });
 
   it("stop-now stops with cancelled and persists the disable", async () => {
@@ -398,6 +395,91 @@ describe("GAP-09 active-session gating on disable", () => {
     await vi.waitFor(() =>
       expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
         browserEnabled: false,
+      })
+    );
+  });
+});
+
+
+describe("TODO-MSB-005 selected-account clear", () => {
+  it("the selected account's confirmation id reaches clearCache with the account scope", async () => {
+    apiMocks.listEligibleAccounts.mockImplementation(async () => [
+      { accountId: 101, platformId: 2, accountLabel: "My Channel" },
+    ]);
+    apiMocks.issueClearConfirmation.mockImplementation(async (input: { scope: string }) =>
+      input.scope === "account"
+        ? { confirmationId: "conf-acct-001" }
+        : { confirmationId: "conf-all-001" }
+    );
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.listEligibleAccounts).toHaveBeenCalled()
+    );
+    // Wait until the account select is populated, then request the clear.
+    await vi.waitFor(() =>
+      expect(
+        (wrapper.find("[data-testid='mb-btn-clear-account']").element as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    await wrapper.find("[data-testid='mb-btn-clear-account']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.issueClearConfirmation).toHaveBeenCalledWith({
+        scope: "account",
+        accountId: 101,
+      })
+    );
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-clear-confirm-dialog']").exists()
+      ).toBe(true)
+    );
+    await wrapper
+      .find("[data-testid='mb-btn-clear-confirm-ok']")
+      .trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.clearCache).toHaveBeenCalledWith({
+        scope: "account",
+        accountId: 101,
+        activeSessionDecision: "defer",
+        confirmationId: "conf-acct-001",
+      })
+    );
+  });
+
+  it("offers stop-and-clear when the selected account's session is live", async () => {
+    apiMocks.listEligibleAccounts.mockImplementation(async () => [
+      { accountId: 101, platformId: 2, accountLabel: "My Channel" },
+    ]);
+    apiMocks.listActiveSessions.mockImplementation(async () => [
+      { sessionId: "mb_live0000000001", accountId: 101, state: "ready" },
+    ]);
+    apiMocks.issueClearConfirmation.mockImplementation(async () => ({
+      confirmationId: "conf-acct-002",
+    }));
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(
+        (wrapper.find("[data-testid='mb-btn-clear-account']").element as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    await wrapper.find("[data-testid='mb-btn-clear-account']").trigger("click");
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-clear-active-choice']").exists()
+      ).toBe(true)
+    );
+    await wrapper.find("[data-testid='mb-clear-choice-stop']").trigger("click");
+    await wrapper
+      .find("[data-testid='mb-btn-clear-confirm-ok']")
+      .trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.clearCache).toHaveBeenCalledWith({
+        scope: "account",
+        accountId: 101,
+        activeSessionDecision: "stop_and_clear",
+        confirmationId: "conf-acct-002",
       })
     );
   });

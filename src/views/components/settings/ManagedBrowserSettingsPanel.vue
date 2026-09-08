@@ -58,6 +58,23 @@
       @update:model-value="onToggleClearOnExit"
     />
 
+    <div class="d-flex align-center ga-3 flex-wrap mt-2">
+      <span class="text-body-2">
+        {{ t("managedBrowser.settings.cache_max_label") }}
+      </span>
+      <input
+        v-model.number="cacheMaxMb"
+        type="number"
+        class="managed-browser-settings__account-select"
+        data-testid="mb-cache-max-input"
+        :min="100"
+        :max="2048"
+        :aria-label="t('managedBrowser.settings.cache_max_label')"
+        @change="onCacheMaxChange"
+      />
+      <span class="text-caption text-grey-darken-1">100–2048 MB</span>
+    </div>
+
     <v-divider class="my-4" />
 
     <div class="d-flex align-center ga-3 flex-wrap">
@@ -183,19 +200,43 @@
           <p class="text-body-2 mb-2">
             {{
               t("managedBrowser.settings.clear_confirm_body", {
-                size: formatBytes(cacheStatus?.approximateBytes ?? 0),
+                size: formatBytes(confirmScopeBytes),
               })
             }}
           </p>
           <p class="text-body-2 mb-0">
             {{ t("managedBrowser.settings.clear_confirm_preserved") }}
           </p>
+          <div
+            v-if="selectedScopeActive && pendingAccountIsSelected"
+            class="mt-3 d-flex flex-column ga-2"
+            data-testid="mb-clear-active-choice"
+          >
+            <v-btn
+              size="small"
+              variant="tonal"
+              data-testid="mb-clear-choice-stop"
+              :color="accountClearDecision === 'stop_and_clear' ? 'warning' : undefined"
+              @click="accountClearDecision = 'stop_and_clear'"
+            >
+              {{ t("managedBrowser.settings.clear_choice_stop") }}
+            </v-btn>
+            <v-btn
+              size="small"
+              variant="tonal"
+              data-testid="mb-clear-choice-defer"
+              :color="accountClearDecision === 'defer' ? 'warning' : undefined"
+              @click="accountClearDecision = 'defer'"
+            >
+              {{ t("managedBrowser.settings.clear_choice_defer") }}
+            </v-btn>
+          </div>
         </v-card-text>
         <v-card-actions>
           <v-btn
             data-testid="mb-btn-clear-confirm-ok"
             color="warning"
-            :disabled="clearInProgress"
+            :disabled="clearInProgress || (selectedScopeActive && pendingAccountIsSelected && false)"
             :loading="clearInProgress"
             @click="onConfirmClear"
           >
@@ -212,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   clearCache,
@@ -255,7 +296,34 @@ const selectedAccountId = ref<number | null>(null);
 const cacheProgressLine = ref<string | null>(null);
 let pendingAccountConfirmation: { accountId: number; id: string } | null =
   null;
+/** Size of the SELECTED account's scope (shown in its confirm dialog). */
+const selectedAccountStatus = ref<SafeManagedBrowserCacheStatus | null>(null);
+/** Whether the selected account's browser session is live. */
+const selectedScopeActive = ref(false);
+const pendingAccountIsSelected = computed(() => pendingAccountConfirmation !== null);
+/** Bytes shown in the confirm dialog: the SELECTED account when clearing
+ * one, the whole cache otherwise (TODO-MSB-005). */
+const confirmScopeBytes = computed(() =>
+  pendingAccountConfirmation
+    ? (selectedAccountStatus.value?.approximateBytes ?? 0)
+    : (cacheStatus.value?.approximateBytes ?? 0)
+);
 let pendingConfirmationId: string | null = null;
+/** Active-scope choice for the SELECTED account clear (TODO-MSB-005). */
+const accountClearDecision = ref<"stop_and_clear" | "defer">("defer");
+/** Editable global cache maximum (MB, validated 100-2048). */
+const cacheMaxMb = ref(500);
+
+async function onCacheMaxChange(): Promise<void> {
+  const clamped = Math.min(2048, Math.max(100, Math.round(cacheMaxMb.value)));
+  if (!Number.isFinite(clamped) || clamped === cacheMaxMb.value - 0) {
+    /* keep */
+  }
+  cacheMaxMb.value = clamped;
+  await updateBrowserPreferences({ cacheMaxSizeMb: clamped }).catch(() =>
+    undefined
+  );
+}
 let unsubscribeProgress: (() => void) | null = null;
 
 function formatBytes(bytes: number): string {
@@ -283,6 +351,7 @@ async function reload(): Promise<void> {
     browserEnabled.value = effective.browserEnabled;
     cacheEnabled.value = effective.cacheEnabled;
     clearCacheOnExit.value = effective.clearCacheOnExit;
+    cacheMaxMb.value = Math.round(effective.cacheMaxBytes / (1024 * 1024));
     cacheStatus.value = cache;
     // GAP-10: eligible accounts for per-account clearing (ungated read).
     accounts.value = await listEligibleAccounts().catch(() => []);
@@ -312,6 +381,17 @@ async function onRequestClearSelected(): Promise<void> {
       accountId,
     });
     pendingAccountConfirmation = { accountId, id: issued.confirmationId };
+    pendingConfirmationId = issued.confirmationId;
+    // TODO-MSB-005: show THIS account's size in the confirmation, and offer
+    // the active-scope choice when the account's browser is live.
+    selectedAccountStatus.value = await getCacheStatus({
+      scope: "account",
+      accountId,
+    }).catch(() => null);
+    const live = await listActiveSessions().catch(() => []);
+    selectedScopeActive.value = live.some(
+      (session) => session.accountId === accountId
+    );
     confirmDialog.value = true;
   } catch (error) {
     console.error(
@@ -379,14 +459,21 @@ async function onDisableDecision(
   }
   stoppingSessions.value = true;
   try {
-    const sessions = await listActiveSessions();
-    for (const session of sessions) {
-      await stopManagedBrowser(
-        session.sessionId,
-        decision === "finish" ? "user_stop" : "cancelled"
-      ).catch(() => undefined);
+    if (decision === "finish") {
+      // FR-SETTING-004: Finish KEEPS the running session alive — the
+      // disable takes effect for NEW starts immediately (the settings
+      // gate), and the session terminates naturally when the task ends.
+      await persist({ browserEnabled: false });
+    } else {
+      // Stop now: explicit immediate cancellation.
+      const sessions = await listActiveSessions();
+      for (const session of sessions) {
+        await stopManagedBrowser(session.sessionId, "cancelled").catch(
+          () => undefined
+        );
+      }
+      await persist({ browserEnabled: false });
     }
-    await persist({ browserEnabled: false });
   } finally {
     stoppingSessions.value = false;
     activeSessionDialog.value = false;
@@ -430,7 +517,9 @@ async function onConfirmClear(): Promise<void> {
       await clearCache({
         scope: "account",
         accountId: accountPending.accountId,
-        activeSessionDecision: "defer",
+        activeSessionDecision: selectedScopeActive.value
+          ? accountClearDecision.value
+          : "defer",
         confirmationId,
       });
     } else {
