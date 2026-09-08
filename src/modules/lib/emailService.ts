@@ -4,17 +4,17 @@ import {
   EmailServiceEntitydata,
 } from "@/entityTypes/emailmarketingType";
 import {
-  createOutboundSmtpTransporter,
+  OutboundSmtpSession,
   smtpErrorMessage,
 } from "@/modules/lib/smtpTransport";
 
 export class EmailService {
-  private transporter: nodemailer.Transporter;
+  private session: OutboundSmtpSession;
   private emailSender: string;
 
   constructor(param: EmailServiceEntitydata) {
     this.emailSender = param.from;
-    this.transporter = createOutboundSmtpTransporter(param);
+    this.session = new OutboundSmtpSession(param);
   }
 
   public async sendEmail(
@@ -30,7 +30,7 @@ export class EmailService {
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
+      const info = await this.session.sendMail(mailOptions);
       console.log("Email sent:", info.response);
       successCallback?.();
     } catch (error: unknown) {

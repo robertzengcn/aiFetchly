@@ -2,7 +2,7 @@ import { Buckemailremotedata } from "@/entityTypes/emailmarketingType";
 import { convertVariableInTemplate } from "@/views/utils/emailFun";
 import { EmailTemplatePreviewdata } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
-import { createOutboundSmtpTransporter } from "@/modules/lib/smtpTransport";
+import { OutboundSmtpSession } from "@/modules/lib/smtpTransport";
 import { randomInt } from "crypto";
 import { z } from "zod/v4";
 import {
@@ -121,10 +121,10 @@ function classifySmtpError(message: string): "safe" | "unknown" {
 function defaultSenderFactory(
   service: EmailServiceEntitydata
 ): AuthorizedSmtpSender {
-  const transporter = createOutboundSmtpTransporter(service);
+  const session = new OutboundSmtpSession(service);
   return {
     async send(mail: AuthorizedSmtpMail): Promise<AuthorizedSmtpSendResult> {
-      const info = await transporter.sendMail({
+      const info = await session.sendMail({
         from: mail.from,
         to: mail.to,
         subject: mail.subject,
@@ -136,11 +136,7 @@ function defaultSenderFactory(
       return { messageId };
     },
     close(): void {
-      try {
-        transporter.close();
-      } catch {
-        // Transport already closed — release is best-effort (§16.2 item 10).
-      }
+      session.close();
     },
   };
 }

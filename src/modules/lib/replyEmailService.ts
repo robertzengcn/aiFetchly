@@ -4,7 +4,7 @@ import type {
   EmailSendResult,
 } from "@/entityTypes/emailmarketingType";
 import {
-  createOutboundSmtpTransporter,
+  OutboundSmtpSession,
   smtpErrorMessage,
 } from "@/modules/lib/smtpTransport";
 
@@ -26,12 +26,12 @@ export interface ReplyEmailRequestData {
  * Mirrors {@link EmailService} construction but adds a reply-specific send.
  */
 export class ReplyEmailService {
-  private transporter: nodemailer.Transporter;
+  private session: OutboundSmtpSession;
   private emailSender: string;
 
   constructor(param: EmailServiceEntitydata) {
     this.emailSender = param.from;
-    this.transporter = createOutboundSmtpTransporter(param);
+    this.session = new OutboundSmtpSession(param);
   }
 
   async sendReplyEmail(data: ReplyEmailRequestData): Promise<EmailSendResult> {
@@ -53,7 +53,7 @@ export class ReplyEmailService {
     }
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
+      const info = await this.session.sendMail(mailOptions);
       return {
         receiver: data.receiver,
         status: true,
