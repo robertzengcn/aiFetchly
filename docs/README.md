@@ -7,6 +7,7 @@
 
 ## Product Requirements
 
+- [PRD: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-prd.md)
 - [PRD: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-prd.md)
 - [Technical Design: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-technical-design.md)
 - [PRD: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-prd.md)
