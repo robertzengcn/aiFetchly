@@ -410,20 +410,27 @@ export function registerEmailMarketingIpcHandlers() {
       const filePath = dialogResult.filePaths[0];
       const ext = path.extname(filePath).toLowerCase().replace(".", "");
       const format: "csv" | "json" = ext === "json" ? "json" : "csv";
-      const content = fs.readFileSync(filePath, "utf-8");
+      let content: string;
+      try {
+        content = fs.readFileSync(filePath, "utf-8");
+      } catch {
+        // Read failure (file deleted/moved or unreadable between the dialog
+        // and the read): surface a stable key instead of a raw ENOENT/EACCES
+        // message with the full path.
+        throw new Error("import_failed");
+      }
 
       const controller = new EmailMarketingController();
       let result: EmailServiceImportResult;
       try {
         result = await controller.importEmailServices(content, format);
-      } catch (parseError) {
+      } catch {
         // Malformed CSV/JSON or wrong structure — nothing was written.
-        // Map to the import_invalid_file message key (per spec error table).
-        throw new Error(
-          `import_invalid_file${
-            parseError instanceof Error ? `: ${parseError.message}` : ""
-          }`
-        );
+        // Surface ONLY the message key: parse-error text (e.g. V8's
+        // JSON.parse "Unexpected token..." embeds a raw source snippet)
+        // can echo file content — which may include password values —
+        // into the envelope and the main-process log.
+        throw new Error("import_invalid_file");
       }
 
       // Empty file / zero valid rows: surface as a failure envelope so the

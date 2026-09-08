@@ -294,6 +294,83 @@ describe("EmailMarketingController", () => {
       expect(update.firstCall.args[1].imapHost).to.equal(undefined);
     });
 
+    it("preserves the existing receiveProtocol when the import row omits it", async () => {
+      // A hand-edited CSV without a receiveProtocol column must not rewrite
+      // an existing pop3 service to imap — the mapper default must only
+      // apply on create, never on update-by-name.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Pop Service";
+      existing.receiveProtocol = "pop3";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      // No receiveProtocol column in the header row.
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Pop Service,pop@example.com,pop.example.com,995,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receiveProtocol).to.equal("pop3");
+    });
+
+    it("defaults receiveProtocol to imap on create when the import row omits it", async () => {
+      // A new service (no name match) always needs a valid protocol.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Newbie,n@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
+    });
+
+    it("lets an explicit receiveProtocol in the import row win over the existing one", async () => {
+      // Import carries pop3 explicitly while the existing service is imap:
+      // the imported value is the user's explicit intent and must win.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Switch Service";
+      existing.receiveProtocol = "imap";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Switch Service,s@example.com,smtp.example.com,465,1,newpass,pop3\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receiveProtocol).to.equal("pop3");
+    });
+
     it("skips a row with a field-count mismatch and imports the valid rows (partial import)", async () => {
       const create = sinon.stub().resolves(1);
       emailMarketingController.emailServiceModule = makeStubModule({
@@ -603,6 +680,85 @@ describe("EmailMarketingController", () => {
         threw = true;
       }
       expect(threw).to.equal(true);
+    });
+
+    it("treats a 0-byte CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("treats a whitespace-only CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "   \n  \n",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("imports a BOM-prefixed CSV (Excel/Windows export) normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // U+FEFF BOM before the first header, as Excel-on-Windows writes.
+      // Papa does not strip it (trim() treats Cf as non-whitespace), so it
+      // otherwise lands in the first column name and every row loses `name`.
+      const bom = String.fromCharCode(0xfeff);
+      const csv =
+        bom +
+        "name,from,host,port,ssl,password\n" +
+        "Bom,b@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(0);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
+    });
+
+    it("imports a BOM-prefixed JSON file normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // A leading BOM makes JSON.parse reject the whole file otherwise.
+      const bom = String.fromCharCode(0xfeff);
+      const json =
+        bom +
+        JSON.stringify([
+          {
+            name: "Bom",
+            from: "b@example.com",
+            host: "h",
+            port: "25",
+            ssl: 1,
+            password: "p",
+          },
+        ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
     });
 
     it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {

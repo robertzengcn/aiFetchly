@@ -433,16 +433,26 @@ export class EmailMarketingController {
           // Import files never carry inbound-receive credentials — preserve
           // the existing service's receivePassword so the update doesn't
           // wipe it (encryptCredentialsForStorage nulls absent values).
-          // Other receive fields survive as undefined via TypeORM's changed-
-          // column diffing; do NOT default them here — a default would
-          // silently rewrite existing receive config on every import update.
+          // Likewise preserve receiveProtocol when the row omits the
+          // column (hand-edited/truncated CSVs): defaulting to "imap" would
+          // silently flip a pop3 service. Other receive fields survive as
+          // undefined via TypeORM's changed-column diffing; do NOT default
+          // them here — a default would silently rewrite existing receive
+          // config on every import update.
           if (!entity.receivePassword || entity.receivePassword.length === 0) {
             entity.receivePassword = existing.receivePassword;
+          }
+          if (!entity.receiveProtocol) {
+            entity.receiveProtocol = existing.receiveProtocol ?? "imap";
           }
           // The SMTP password IS always overwritten by the imported value
           // (import is an explicit act; the file carries the password).
           await this.emailServiceModule.updateEmailService(existing.id, entity);
         } else {
+          // A created service always needs a valid protocol — default here,
+          // not in the mapper, so updates can distinguish "row omitted the
+          // column" from "row wants imap".
+          entity.receiveProtocol = entity.receiveProtocol ?? "imap";
           await this.emailServiceModule.createEmailService(entity);
         }
         imported++;
@@ -464,8 +474,13 @@ export class EmailMarketingController {
     content: string,
     format: "csv" | "json"
   ): { rows: Record<string, unknown>[]; rowErrors: Map<number, string> } {
+    // Strip a leading BOM (U+FEFF) — common in Excel-on-Windows and Notepad
+    // exports. JSON.parse rejects it outright; on the CSV side it would land
+    // in the first header name unless stripped (done here explicitly rather
+    // than relying on the transformHeader trim()).
+    const sanitized = content.replace(/^\uFEFF/, "");
     if (format === "json") {
-      const parsed: unknown = JSON.parse(content);
+      const parsed: unknown = JSON.parse(sanitized);
       // Export shape { total, services, exportDate } or bare array.
       if (Array.isArray(parsed)) {
         return {
@@ -489,11 +504,24 @@ export class EmailMarketingController {
     // CSV — header row, case-insensitive columns. "greedy" also skips
     // whitespace-only lines (stray-space lines are common in hand-edited
     // CSVs; with plain `true` they surface as TooFewFields errors).
-    const result = Papa.parse<Record<string, unknown>>(content, {
+    const result = Papa.parse<Record<string, unknown>>(sanitized, {
       header: true,
       skipEmptyLines: "greedy",
       transformHeader: (header: string) => header.trim().toLowerCase(),
     });
+    // A file with no data rows whose only Papa errors are an undetectable
+    // delimiter (0-byte, whitespace-only, BOM-only, header-only, or text
+    // without row breaks) is an empty-in-effect file, not a malformed one:
+    // return zero rows so the caller reports "no valid rows"
+    // (import_no_valid_rows) instead of "invalid file".
+    if (
+      (result.data?.length ?? 0) === 0 &&
+      (result.errors ?? []).every(
+        (parseError) => parseError.code === "UndetectableDelimiter"
+      )
+    ) {
+      return { rows: [], rowErrors: new Map() };
+    }
     const rowErrors = new Map<number, string>();
     for (const parseError of result.errors ?? []) {
       // Field-count mismatches are row-level problems: collect them keyed by
@@ -526,14 +554,18 @@ export class EmailMarketingController {
     entity.password = this.rowValueToString(row.password);
     // ssl defaults to 1 (secure) when absent/blank; invalid → NaN → row error.
     entity.ssl = this.parseImportSsl(this.rowValueToString(row.ssl));
-    // receiveProtocol defaults to "imap" when absent/blank.
+    // receiveProtocol: blank/absent is left unassigned (undefined) — the
+    // create branch below defaults it to "imap", while the update branch
+    // preserves the existing service's protocol. Read case-insensitively:
+    // CSV headers are lowercased by transformHeader (receiveprotocol), JSON
+    // rows carry the camelCase key (receiveProtocol).
     const protocolRaw = this.rowValueToString(
-      row.receiveProtocol
+      row.receiveProtocol ?? row.receiveprotocol
     ).toLowerCase();
-    entity.receiveProtocol =
-      protocolRaw.length === 0
-        ? "imap"
-        : (protocolRaw as EmailServiceEntity["receiveProtocol"]);
+    if (protocolRaw.length > 0) {
+      entity.receiveProtocol =
+        protocolRaw as EmailServiceEntity["receiveProtocol"];
+    }
     // id and create_time are read but intentionally ignored on write.
     return entity;
   }

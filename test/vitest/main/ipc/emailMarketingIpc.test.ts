@@ -306,11 +306,16 @@ describe("Email Marketing IPC Handlers", () => {
       expect(result.data!.errors[0]).toContain("row 2");
     });
 
-    test("returns status:false with import_invalid_file when the controller rejects", async () => {
+    test("returns status:false with exactly the import_invalid_file key (no parse detail) when the controller rejects", async () => {
       const malformed = "{ not json ";
       fs.writeFileSync(tmpImportJsonPath, malformed, "utf-8");
+      // V8 embeds raw source snippets in JSON.parse errors — e.g. an
+      // unquoted password value would echo into the message. The envelope
+      // must carry ONLY the stable key, never the parse detail.
       mockImportEmailServices.mockRejectedValue(
-        new SyntaxError("Unexpected token")
+        new SyntaxError(
+          'Unexpected token \'s\', ..."assword": mysecret}" is not valid JSON'
+        )
       );
       mockShowOpenDialog.mockResolvedValue({
         canceled: false,
@@ -324,7 +329,47 @@ describe("Email Marketing IPC Handlers", () => {
       )) as CommonMessage<null>;
 
       expect(result.status).toBe(false);
-      expect(result.msg).toContain("import_invalid_file");
+      expect(result.msg).toBe("import_invalid_file");
+    });
+
+    test("rejects a non-empty payload without opening the dialog (strict schema)", async () => {
+      // Pin: the import schema is z.strictObject({}) — any extra field must
+      // be rejected at the boundary before the dialog opens. Locks the
+      // boundary against future schema relaxation.
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEIMPORT,
+        {},
+        JSON.stringify({ foo: 1 })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockShowOpenDialog).not.toHaveBeenCalled();
+      expect(mockImportEmailServices).not.toHaveBeenCalled();
+    });
+
+    test("returns status:false with import_failed when the file cannot be read", async () => {
+      // Delete/permission race between the dialog and the read: the raw
+      // ENOENT/EACCES message (with the full path) must not leak — surface
+      // the stable import_failed key instead.
+      const missingPath = path.join(
+        os.tmpdir(),
+        "email_services_import_missing_test.csv"
+      );
+      if (fs.existsSync(missingPath)) fs.unlinkSync(missingPath);
+      mockShowOpenDialog.mockResolvedValue({
+        canceled: false,
+        filePaths: [missingPath],
+      });
+
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEIMPORT,
+        {},
+        JSON.stringify({})
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(result.msg).toBe("import_failed");
+      expect(mockImportEmailServices).not.toHaveBeenCalled();
     });
   });
 });

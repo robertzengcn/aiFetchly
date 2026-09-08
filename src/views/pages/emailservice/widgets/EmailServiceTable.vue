@@ -22,6 +22,16 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             </v-btn>
 
             <v-btn
+                v-if="!isSelectedtable"
+                class="btn ml-3" variant="flat" prepend-icon="mdi-import" color="secondary"
+                :loading="importing"
+                data-testid="email-service-import-btn"
+                @click="handleImport"
+            >
+                {{ t('common.import') }}
+            </v-btn>
+
+            <v-btn
                 class="btn ml-3" variant="outlined" prepend-icon="mdi-file-document-multiple"
                 data-testid="email-service-send-log-btn"
                 @click="goToSendLog"
@@ -55,12 +65,18 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
         :type="exportNotice.type"
     />
 
+    <notice-snackbar
+        v-model="importNotice.show"
+        :message="importNotice.message"
+        :type="importNotice.type"
+    />
+
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { EmailServiceListdata } from "@/entityTypes/emailmarketingType"
-import { getEmailServiceList, deleteEmailService, exportEmailServices } from '@/views/api/emailservice'
+import { getEmailServiceList, deleteEmailService, exportEmailServices, importEmailServices } from '@/views/api/emailservice'
 import { ref, computed,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import { CapitalizeFirstLetter } from "@/views/utils/function"
@@ -241,6 +257,64 @@ async function handleExport() {
         console.error('Email service export failed:', error);
     } finally {
         exporting.value = false;
+    }
+}
+
+const importing = ref(false);
+const importNotice = ref<{
+    show: boolean;
+    type: 'success' | 'error' | 'info' | 'warning';
+    message: string;
+}>({
+    show: false,
+    type: 'info',
+    message: '',
+});
+
+async function handleImport() {
+    if (importing.value) return;
+    importing.value = true;
+    try {
+        const result = await importEmailServices();
+        if (result.skipped > 0) {
+            // Partial import — warning with imported/skipped counts + errors.
+            const errs = result.errors.join(', ');
+            importNotice.value = {
+                show: true,
+                type: 'warning',
+                message: `${t('common.import_partial', { imported: result.imported, skipped: result.skipped })}${errs ? t('common.import_partial_skipped', { errors: errs }) : ''}`,
+            };
+        } else {
+            importNotice.value = {
+                show: true,
+                type: 'success',
+                message: `${t('common.import_success')}: ${result.imported}`,
+            };
+        }
+        // Reload the list to reflect imported services.
+        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const cancelled = /cancel/i.test(msg);
+        const noRows = /import_no_valid_rows/i.test(msg);
+        const invalidFile = /import_invalid_file/i.test(msg);
+        const importFailed = /import_failed/i.test(msg);
+        importNotice.value = {
+            show: true,
+            type: cancelled ? 'info' : 'error',
+            message: cancelled
+                ? t('common.import_cancelled')
+                : noRows
+                    ? t('common.import_no_valid_rows')
+                    : invalidFile
+                        ? t('common.import_invalid_file')
+                        : importFailed
+                            ? t('common.import_failed')
+                            : `${t('common.import_failed')}: ${msg}`,
+        };
+        console.error('Email service import failed:', error);
+    } finally {
+        importing.value = false;
     }
 }
 
