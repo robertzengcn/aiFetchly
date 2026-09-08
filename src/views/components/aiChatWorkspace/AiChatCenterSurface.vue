@@ -658,6 +658,16 @@ function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
   composerFocusSignal.value += 1;
 }
 
+/**
+ * Focus transfer (PRD §16.3/§19.1): selecting a conversation or creating a
+ * new chat moves focus into the composer — the typing context the user just
+ * navigated to. Deep-link mounts keep the app's default focus.
+ */
+watch(conversationId, (next, previous) => {
+  if (!next || next === previous) return;
+  composerFocusSignal.value += 1;
+});
+
 function onRemoveGeneratedImage(
   reference: ChatV2GeneratedImageReference
 ): void {
@@ -1132,6 +1142,11 @@ onMounted(async () => {
   void voice.loadSettings();
   if (conversationId.value) {
     void loadApprovalMode(conversationId.value);
+    // Focus transfer (PRD §19.1): mounting with a conversation already
+    // selected (New chat from an inner route, reload restore, deep link)
+    // lands focus in the composer — the mount never observed the id
+    // transition the conversation watcher keys on.
+    composerFocusSignal.value += 1;
   }
   conversationWorkspace.refresh().catch(() => undefined);
   // Dashboard "ask AI" entry (?prompt=): open a fresh chat ready for the

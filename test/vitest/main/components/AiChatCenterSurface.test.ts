@@ -767,6 +767,25 @@ describe("AiChatCenterSurface workspace chooser states (FR-WS-002/007)", () => {
 });
 
 describe("AiChatCenterSurface durable drafts (FR-COMP-011)", () => {
+  it("moves focus into the composer on conversation selection (PRD §19.1)", async () => {
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    const composer = wrapper.findComponent({ name: "AiChatV2Composer" });
+    // Initial selection bumped the focus signal exactly once (not on mount).
+    const afterFirst: number = composer.props("generatedImageFocusSignal");
+    expect(afterFirst).toBe(1);
+
+    // Switching to another conversation bumps it again; re-asserting the
+    // same conversation does not (no id change).
+    useChatWorkspaceStore().setSelected("conv-2");
+    await flushPromises();
+    expect(composer.props("generatedImageFocusSignal")).toBe(afterFirst + 1);
+    useChatWorkspaceStore().setSelected("conv-2");
+    await flushPromises();
+    expect(composer.props("generatedImageFocusSignal")).toBe(afterFirst + 1);
+  });
+
   it("binds the per-conversation draft key to the composer", async () => {
     const wrapper = mountSurface();
     const chatWorkspace = useChatWorkspaceStore();

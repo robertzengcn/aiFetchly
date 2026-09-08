@@ -138,6 +138,32 @@ test.describe("conversation selection from an inner page (criterion 4)", () => {
       "true"
     );
   });
+
+  test("focus transfers to the center landmark and composer (PRD §16.3/§19.1)", async ({
+    shellApp: app,
+  }) => {
+    const page = app.mainWindow;
+    await openWorkspace(page);
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(composerTextarea(page)).toBeVisible({ timeout: 10_000 });
+
+    // Inner-page navigation: focus lands on the center landmark, not the
+    // navigation control that was just clicked.
+    await page.getByTestId("workspace-insights").click();
+    await expect(page.getByTestId("chat-center-surface")).toBeHidden();
+    expect(
+      await page.evaluate(() =>
+        (document.activeElement as HTMLElement | null)?.getAttribute(
+          "data-testid"
+        )
+      )
+    ).toBe("app-center-route-host");
+
+    // New chat (a conversation-creating action): focus lands in the composer.
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible();
+    await expect(composerTextarea(page)).toBeFocused({ timeout: 10_000 });
+  });
 });
 
 test.describe("draft continuity (FR-COMP-011, criterion 21)", () => {

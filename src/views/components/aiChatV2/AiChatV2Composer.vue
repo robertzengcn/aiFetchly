@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-composer">
+  <div ref="composerRoot" class="v2-composer">
     <div class="v2-composer__mention">
       <AiChatV2AtMentionSuggestions
         v-if="atMentionOpen"
@@ -146,7 +146,6 @@
 
     <v-textarea
       v-model="draft"
-      ref="textareaField"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
       auto-grow
@@ -557,17 +556,38 @@ function onMoveGeneratedImage(fromIndex: number, direction: -1 | 1): void {
   emit("reorder-generated-images", references);
 }
 
-interface FocusableTextarea {
-  focus: () => void;
-}
-
-const textareaField = ref<FocusableTextarea | null>(null);
+const composerRoot = ref<HTMLElement | null>(null);
 
 watch(
   () => props.generatedImageFocusSignal,
   (signal: number | undefined) => {
     if (!signal || signal <= 0) return;
-    void nextTick(() => textareaField.value?.focus());
+    void nextTick(() => {
+      // Vuetify builds that do not expose focus() on the component instance
+      // still render a real textarea; the auto-grow sizer is a hidden
+      // sibling with the same input class — always prefer the visible input.
+      const resolveTarget = (): HTMLTextAreaElement | null => {
+        const textarea = composerRoot.value?.querySelector(
+          "textarea.v-field__input:not(.v-textarea__sizer), textarea:not(.v-textarea__sizer)"
+        ) as HTMLTextAreaElement | null;
+        if (textarea) return textarea;
+        return null;
+      };
+      // Focus can land while the route-loading overlay still hides the
+      // composer (v-show → focus() is a silent no-op on hidden elements), so
+      // retry briefly until the element accepts focus.
+      const attempt = (remaining: number): void => {
+        const target = resolveTarget();
+        if (target) {
+          target.focus();
+          if (document.activeElement === target) return;
+        }
+        if (remaining > 0) {
+          window.setTimeout(() => attempt(remaining - 1), 50);
+        }
+      };
+      attempt(8); // ~400ms covers the route-loading overlay window
+    });
   }
 );
 
