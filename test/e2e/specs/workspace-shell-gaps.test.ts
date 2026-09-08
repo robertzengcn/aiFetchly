@@ -37,7 +37,9 @@ function composerTextarea(
 }
 
 test.describe("workspace chooser (acceptance criteria 9/10/12, FR-WS-004)", () => {
-  test("choosing and approving a workspace updates the badge state", async ({ page: _page }, testInfo) => {
+  test("choosing and approving a workspace updates the badge state", async ({
+    page: _page,
+  }, testInfo) => {
     test.setTimeout(150_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -115,9 +117,26 @@ test.describe("conversation selection from an inner page (criterion 4)", () => {
 
     await page.getByTestId("workspace-plugins").click();
     await expect(page.getByTestId("chat-center-surface")).toBeHidden();
-    await page.getByTestId(String(rowTestid)).click();
+
+    // FR-SHELL-008: while an inner route is current, the retained selected
+    // conversation is NOT simultaneously exposed as current — the inner nav
+    // item holds aria-current="page" and the row keeps only aria-selected.
+    const rowOnInner = page.getByTestId(String(rowTestid));
+    await expect(rowOnInner).toHaveAttribute("aria-selected", "true");
+    await expect(rowOnInner).not.toHaveAttribute("aria-current");
+    await expect(page.getByTestId("workspace-plugins")).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+
+    await rowOnInner.click();
     await expect(page.getByTestId("chat-center-surface")).toBeVisible();
     await expect(composerTextarea(page)).toBeVisible({ timeout: 10_000 });
+    // Back on the chat route the selected conversation becomes current.
+    await expect(page.getByTestId(String(rowTestid))).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
   });
 });
 
@@ -184,7 +203,9 @@ test.describe("browser history navigation (criterion 7)", () => {
 });
 
 test.describe("window restoration (FR-WIN-007, criterion 35)", () => {
-  test("deterministic maximized startup keeps valid normal bounds", async ({ page: _page }, testInfo) => {
+  test("deterministic maximized startup keeps valid normal bounds", async ({
+    page: _page,
+  }, testInfo) => {
     test.setTimeout(150_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");

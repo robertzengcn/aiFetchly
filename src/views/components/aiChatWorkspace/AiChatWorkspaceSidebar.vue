@@ -150,7 +150,11 @@
               role="treeitem"
               :aria-level="2"
               :aria-selected="isSelected(conversation)"
-              :aria-current="isSelected(conversation) ? 'true' : undefined"
+              :aria-current="
+                isSelected(conversation) && chatRouteActive
+                  ? 'true'
+                  : undefined
+              "
               @click="emit('select', conversation.conversationId)"
             >
               <WorkspaceStatusIndicator
@@ -220,6 +224,11 @@
               :aria-level="1"
               :aria-selected="isSelected(conversation)"
               :class="{ selected: isSelected(conversation) }"
+              :aria-current="
+                isSelected(conversation) && chatRouteActive
+                  ? 'true'
+                  : undefined
+              "
               @click="emit('select', conversation.conversationId)"
             >
               <WorkspaceStatusIndicator
@@ -360,6 +369,15 @@ function isRouteActive(path: string): boolean {
   const current = route.path;
   return current === path || current.startsWith(`${path}/`);
 }
+
+/**
+ * Whether the chat center is the CURRENT center route (PRD §11.4/§19.1,
+ * FR-SHELL-008): the retained selected conversation keeps `aria-selected`
+ * everywhere, but it may expose `aria-current` only while chat is actually
+ * the active surface — an inner route must never share "current" with a
+ * conversation.
+ */
+const chatRouteActive = computed(() => route.name === "AI_Chat_Workspace");
 
 /**
  * Roving keyboard model (FR-038, design §22.1): ArrowUp/Down move between
