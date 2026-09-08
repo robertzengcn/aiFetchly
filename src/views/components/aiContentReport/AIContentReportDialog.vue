@@ -106,6 +106,7 @@
         <v-btn
           color="primary"
           variant="flat"
+          data-testid="ai-content-report-submit"
           :loading="submitting"
           :disabled="submitting"
           @click="onSubmit"
@@ -173,7 +174,7 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "submitted", reportId: string): void;
 }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 // Focus management (PRD §11.3): focus the title on open, restore to the
 // originating Report button on close.
@@ -339,6 +340,18 @@ async function onSubmit(): Promise<void> {
     return;
   }
 
+  // Defense-in-depth: guarantee a non-empty clientReportId before transmission.
+  // The id is normally generated in the modelValue open-watcher, but that
+  // watcher is non-immediate and does NOT fire when the dialog is mounted
+  // already-open (the v-if mount-on-demand pattern used by AiChatV2.vue and
+  // other parents). Generating here on first submit closes that gap so the
+  // IPC schema's `clientReportId: z.string().min(1)` can never reject an
+  // empty id. The guard is idempotent — a non-empty value is left untouched,
+  // so retries reuse the same id (PRD §13.2 / FR-4.8 dedup invariant).
+  if (!clientReportId.value) {
+    clientReportId.value = generateClientReportId();
+  }
+
   // Build image previews for the selected images.
   const imageSources = props.descriptor.images ?? [];
   const selectedIndices = Array.from(selectedImageIndices.value).sort();
@@ -404,7 +417,7 @@ async function onSubmit(): Promise<void> {
       generatedAt: props.descriptor.context.generatedAt,
       appVersion: "unknown", // filled by main-process service
       platform: "win32", // filled by main-process service
-      locale: useI18n().locale.value || "en-US",
+      locale: locale.value || "en-US",
     },
   };
 

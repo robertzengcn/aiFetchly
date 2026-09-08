@@ -33,6 +33,10 @@ import {
   listEmailTemplates,
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
+import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
+import { normalizeEmailServiceIds } from "@/service/outboundEmail/resolveOutboundSender";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 import {
   listEmailInboxes,
   fetchUnreadEmails,
@@ -41,6 +45,7 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
+import { htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
 import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
@@ -79,13 +84,16 @@ import {
 // Internal state
 // ---------------------------------------------------------------------------
 
-/** Map of skill name → full definition. Stored in globalThis to survive HMR. */
-const globalRegistry = globalThis as unknown as {
+/** HMR-safe global slot for the skill registry. */
+type AifetchlyGlobal = typeof globalThis & {
   __aifetchlySkillRegistry?: Map<string, SkillDefinition>;
 };
+
+/** Map of skill name → full definition. Stored in globalThis to survive HMR. */
+const aifetchlyGlobal = globalThis as AifetchlyGlobal;
 const registry: Map<string, SkillDefinition> =
-  globalRegistry.__aifetchlySkillRegistry ?? new Map();
-globalRegistry.__aifetchlySkillRegistry = registry;
+  aifetchlyGlobal.__aifetchlySkillRegistry ?? new Map();
+aifetchlyGlobal.__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
@@ -1486,7 +1494,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_email_services",
     description:
-      "List configured email sending services without exposing passwords.",
+      "List configured SMTP email sending services (outbound senders) without exposing passwords. " +
+      "Use these service IDs with start_email_send_task. This is NOT the inbox list — " +
+      "list_email_inboxes is IMAP receive-only and may be empty even when senders exist.",
     parameters: {
       type: "object",
       properties: {
@@ -1602,9 +1612,148 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "draft_outbound_email_batch",
+    description:
+      "Draft a NEW batch of outbound marketing emails as durable, reviewable " +
+      "drafts — does NOT send. Resolves the selected recipient source into " +
+      "canonicalized, deduplicated recipients and creates one immutable draft " +
+      "revision per recipient. Use this BEFORE start_email_send_task so the user " +
+      "can review/approve content. The model supplies campaign inputs (recipient " +
+      "source, service candidates, subject/body or template_ids); it does NOT " +
+      "supply delivery mode or authorization. Returns batch_id, draft_count, and " +
+      "batch_hash. Conversation and authorization context come from trusted app " +
+      "state, not arguments.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_search_task_id: {
+          type: "number",
+          description:
+            "Existing email search task ID. Provide exactly one of this or emails.",
+        },
+        emails: {
+          type: "array",
+          description:
+            "Direct recipient emails. Provide exactly one of this or email_search_task_id.",
+          items: {
+            oneOf: [
+              { type: "string", format: "email" },
+              {
+                type: "object",
+                properties: {
+                  address: { type: "string", format: "email" },
+                  title: { type: "string" },
+                  source: { type: "string" },
+                },
+                required: ["address"],
+              },
+            ],
+          },
+        },
+        email_subject: {
+          type: "string",
+          description:
+            "Email subject line (required when not using templates).",
+        },
+        email_html_content: {
+          type: "string",
+          description: "Email HTML body (required when not using templates).",
+        },
+        template_ids: {
+          type: "array",
+          description:
+            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+          items: { type: "number" },
+        },
+        service_ids: {
+          type: "array",
+          description: "Email service IDs to send with.",
+          items: { type: "number" },
+        },
+        not_duplicate: {
+          type: "boolean",
+          description:
+            "Whether to remove duplicate recipients before drafting.",
+          default: true,
+        },
+      },
+      required: ["service_ids"],
+    },
+    tier: "main",
+    // Creating a durable draft does not contact recipients. Keep the actual
+    // start_email_send_task permission-gated so the user makes one outbound
+    // decision instead of approving both preparation and delivery.
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      // Resolve the DB path from the Token service, matching the outbound
+      // IPC layer (outboundEmailDelivery-ipc.ts). Passing no dbpath would
+      // make OutboundEmailDraftModel fall back to the os.tmpdir() test
+      // database, which flips SqliteDb.getInstance to a different path and
+      // destroys the process-wide live connection mid-conversation.
+      const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const service = new OutboundEmailDraftService(dbpath);
+      // Resolve recipients from the same sources the send tool accepts, reusing
+      // the existing compatibility helpers so draft/send share materialization.
+      const { resolveBulkRecipients } = await import(
+        "@/service/EmailMarketingAiTools"
+      );
+      const resolved = await resolveBulkRecipients({
+        email_search_task_id: (args as { email_search_task_id?: number })
+          .email_search_task_id,
+        emails: (args as { emails?: unknown[] }).emails as never[] | undefined,
+        not_duplicate:
+          (args as { not_duplicate?: boolean }).not_duplicate ?? true,
+      });
+      // Sender is resolved from the selected SMTP service inside generateBatch
+      // (AD-005/AD-006). Coerce service_ids so a single id or numeric strings
+      // still bind a real From address instead of storing an empty sender.
+      const serviceIds = normalizeEmailServiceIds(
+        (args as { service_ids?: unknown }).service_ids
+      );
+      const result = await service.generateBatch({
+        conversationId: context.conversationId,
+        sourceUserMessageId: context.sourceUserMessageId ?? "",
+        intentDecisionId: context.intentDecisionId ?? 0,
+        recipientSourceType: resolved.recipientSource,
+        recipients: resolved.recipients,
+        serviceIds,
+        senderAddress: "",
+        subject: (args as { email_subject?: string }).email_subject ?? "",
+        // The model supplies an HTML body; store it as `bodyHtml` and derive a
+        // plain-text fallback so markup never leaks into the text body at send
+        // time (and multipart mail carries both parts, not escaped tags).
+        bodyHtml:
+          (args as { email_html_content?: string }).email_html_content ?? null,
+        bodyText: htmlToPlainText(
+          (args as { email_html_content?: string }).email_html_content ?? ""
+        ),
+      });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "start_email_send_task",
     description:
-      "Create and start an email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
+      "Send NEW outbound marketing emails to external contacts/customers. " +
+      "This is the tool for new mail, not inbox replies (do NOT use send_email_reply). " +
+      "After drafting, call this again if the user explicitly asked to send " +
+      "without review / send directly, OR if the user has now confirmed in " +
+      'chat (e.g. "yes, send it"). Do NOT re-draft a batch the user already ' +
+      "confirmed. Otherwise stop and wait for the user to click Review and " +
+      "approve the content. Calling this before a draft exists, or before " +
+      "that approval when review is required, is rejected. Provide " +
+      "service_ids from list_email_services plus either template_ids or " +
+      "email_subject and email_html_content. Provide exactly one of emails " +
+      "(direct recipients) or email_search_task_id. For different content per " +
+      "recipient, call once per address with that email in emails. " +
+      "Returns immediately with task_id once sending has started in the background; " +
+      "do not wait on this call for SMTP delivery. Check the email send log for results.",
     parameters: {
       type: "object",
       properties: {
@@ -1673,7 +1822,74 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: true,
     permissionCategory: "automation",
     source: "built-in",
-    execute: async (args) => {
+    timeoutClass: "fast",
+    confirmationPolicy: "request_scoped_action",
+    execute: async (args, context) => {
+      // Intent-aware delivery path (technical design §14.3/§15): when the
+      // tool gate (§14.2) resolved a request-scoped authorization for this
+      // turn, claim the draft batch via the delivery service (§15.1
+      // idempotency) instead of the legacy ad-hoc send. The authorization
+      // triple comes from trusted app state (context), NEVER from args
+      // (AD-003).
+      const outboundAuthorization = context?.outboundAuthorization;
+      if (outboundAuthorization) {
+        const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+        const { OutboundEmailDeliveryService } = await import(
+          "@/service/outboundEmail/OutboundEmailDeliveryService"
+        );
+        const { OutboundEmailWorkerStarter } = await import(
+          "@/service/outboundEmail/OutboundEmailWorkerStarter"
+        );
+        // §15.2 — wire the production worker starter (builds the v2 payload,
+        // decrypts service credentials, forks taskCode.js) exactly like the
+        // OUTBOUND_EMAIL_BATCH_SEND IPC handler does.
+        const workerStarter = new OutboundEmailWorkerStarter({
+          dbpath,
+        }).toWorkerStarter();
+        const delivery = new OutboundEmailDeliveryService({
+          dbpath,
+          workerStarter,
+        });
+        try {
+          const claim = await delivery.claim({
+            batchId: outboundAuthorization.batchId,
+            authorizationId: outboundAuthorization.authorizationId,
+            batchHash: outboundAuthorization.batchHash,
+          });
+          const claimed =
+            claim.status === "claimed" || claim.status === "already_processed";
+          return {
+            success: claimed,
+            result: {
+              status: claim.status,
+              send_attempt_id: claim.attemptId,
+              batch_id: outboundAuthorization.batchId,
+              ...(claim.status === "already_processed"
+                ? {
+                    note: "This batch was already claimed by an earlier send attempt; no duplicate send was started.",
+                  }
+                : {}),
+            },
+          };
+        } catch (err) {
+          console.error(
+            "[outbound-email-delivery] claim failed for batch " +
+              `${outboundAuthorization.batchId}:`,
+            err
+          );
+          return {
+            success: false,
+            result: {
+              status: "claim_failed",
+              batch_id: outboundAuthorization.batchId,
+              error:
+                err instanceof Error ? err.message : "Unknown claim failure",
+            },
+          };
+        }
+      }
+
+      // Legacy path (non-chat callers): unchanged behavior.
       const result = await startBulkEmailSendTask(args);
       return {
         success: result.success,
@@ -1684,8 +1900,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_email_inboxes",
     description:
-      "List email services that have inbound receive enabled. Returns inbox name, " +
-      "address, host, folder, sync status, and last sync error. Never exposes passwords or tokens.",
+      "List email services that have inbound IMAP receive enabled. Returns inbox name, " +
+      "address, host, folder, sync status, and last sync error. This is NOT for sending: " +
+      "an empty result does not mean sending is unavailable — use list_email_services + " +
+      "start_email_send_task for outbound mail. Never exposes passwords or tokens.",
     parameters: {
       type: "object",
       properties: {
@@ -1882,9 +2100,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "send_email_reply",
     description:
-      "Send a persisted reply draft as an email. Requires user confirmation because it sends " +
-      "email. Verifies the draft and outbound service, preserves reply threading headers " +
-      "(In-Reply-To, References), updates draft/message state, and writes a send audit record.",
+      "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
+      "Requires user confirmation. Do NOT use this to send new marketing/outbound emails " +
+      "to external contacts — use start_email_send_task instead. Verifies the draft and " +
+      "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
     parameters: {
       type: "object",
       properties: {

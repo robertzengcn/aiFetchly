@@ -407,8 +407,32 @@ const updateExpression = () => {
   generatedExpression.value = parts.join(' ')
 }
 
-const copyExpression = () => {
-  navigator.clipboard.writeText(generatedExpression.value)
+const copyTextFallback = (text: string): void => {
+  const textArea = document.createElement('textarea')
+  textArea.value = text
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.left = '-9999px'
+  document.body.appendChild(textArea)
+  textArea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textArea)
+  if (!copied) {
+    throw new Error('Fallback clipboard copy failed')
+  }
+}
+
+const copyExpression = async (): Promise<void> => {
+  const text = generatedExpression.value
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (error: unknown) {
+    try {
+      copyTextFallback(text)
+    } catch {
+      console.error('Failed to copy cron expression', error)
+    }
+  }
 }
 
 const applyExpression = () => {

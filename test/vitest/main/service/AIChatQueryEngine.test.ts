@@ -641,6 +641,90 @@ describe("AIChatQueryEngine", () => {
       const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
       expect(loopInput.planContext?.planState.status).toBe("approved");
     });
+
+    it("does not advertise EnterPlanMode while an approved plan executes in chat mode", async () => {
+      // Regression: after approval the plan lifecycle has ended for planning
+      // purposes (isActivePlanState → false), so execution rounds run in chat
+      // mode — but the engine still advertised ENTER_PLAN_MODE_TOOL because
+      // autoPlanEnabled only checked `!isPlanMode`. The model could then call
+      // a tool that handleEnterPlanMode is guaranteed to reject with
+      // "Plan is already approved; cannot re-enter Plan Mode." wasting a round
+      // and confusing the model mid-execution.
+      const approvedPlan: AIChatPlanStateView = {
+        planId: "plan-1",
+        conversationId: "v2-test-conv",
+        status: "approved",
+        title: "Campaign plan",
+        objective: "Create campaign files",
+        currentVersion: 2,
+        approvedAt: new Date().toISOString(),
+      };
+      mockGetPlanState.mockResolvedValue(approvedPlan);
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      // Chat mode — the post-approval execution round the renderer kicks off
+      // via onSend("Plan approved. Please begin executing the plan now.").
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      const toolNames = loopInput.openAITools.map(
+        (t) => t.function.name as string
+      );
+      expect(toolNames).not.toContain("EnterPlanMode");
+      // The approved-plan context must still be absent (plain chat round)…
+      expect(loopInput.planContext).toBeUndefined();
+      // …and autoPlan stays off so the loop would reject any stray call.
+      expect(loopInput.autoPlan).toBeUndefined();
+    });
+
+    it("advertises EnterPlanMode in plain chat mode with no approved plan", async () => {
+      // Companion guard: ordinary chat (no plan at all) must still advertise
+      // EnterPlanMode when auto-plan is enabled, so the fix above does not
+      // overcorrect and kill model-initiated plan entry entirely.
+      mockGetPlanState.mockResolvedValue(null);
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "hello",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      const toolNames = loopInput.openAITools.map(
+        (t) => t.function.name as string
+      );
+      expect(toolNames).toContain("EnterPlanMode");
+      expect(loopInput.autoPlan).toBeDefined();
+    });
   });
 
   describe("stopActiveTurn", () => {
@@ -826,7 +910,6 @@ describe("AIChatQueryEngine", () => {
       // The metadata-only role:tool message is present too.
       expect(serialized).toContain('"role":"tool"');
     });
-
     it("seeds the resumed loop with the approved tool's outputImages (batch harvest)", async () => {
       let capturedSeed: readonly unknown[] | undefined;
       const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
@@ -893,6 +976,64 @@ describe("AIChatQueryEngine", () => {
       expect(capturedSeed?.length).toBe(1);
       const seeded = capturedSeed?.[0] as { url?: string };
       expect(seeded?.url).toContain("agent-v2-x");
+    });
+
+    it("preserves outbound intent context when continuing after draft approval", async () => {
+      let resumedInput: AIChatQueryLoopInput | undefined;
+      const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
+        resumedInput = input;
+        return {
+          type: "completed" as const,
+          conversationId: "v2-outbound",
+          assistantMessageId: "assistant-outbound",
+          fullContent: "done",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult;
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+
+      (
+        engine as unknown as {
+          pendingPermissions: Map<string, unknown>;
+        }
+      ).pendingPermissions.set("v2-outbound", {
+        conversationId: "v2-outbound",
+        assistantMessageId: "assistant-outbound",
+        conversationMessages: [
+          { role: "user", content: "yes, send it" },
+        ] as OpenAIChatMessage[],
+        abortController: new AbortController(),
+        request: { message: "yes, send it" },
+        openAITools: [],
+        nextRound: 2,
+        toolCallId: "draft-call",
+        toolName: "draft_outbound_email_batch",
+        toolArguments: { service_ids: [1] },
+        sourceUserMessageId: "user-confirmation-message",
+        intentDecisionId: 42,
+        planContext: undefined,
+        eventSink: { emit: vi.fn() },
+        toolCatalogState: undefined,
+      });
+
+      vi.mocked(SkillExecutor.execute).mockResolvedValue({
+        tool_call_id: "draft-call",
+        tool_name: "draft_outbound_email_batch",
+        success: true,
+        result: { success: true, batchId: 4, batchHash: "a".repeat(64) },
+        execution_time_ms: 5,
+      });
+
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "draft-call",
+        conversationId: "v2-outbound",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(resumedInput?.sourceUserMessageId).toBe(
+        "user-confirmation-message"
+      );
+      expect(resumedInput?.intentDecisionId).toBe(42);
     });
   });
 });

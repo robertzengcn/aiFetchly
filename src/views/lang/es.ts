@@ -134,6 +134,7 @@ export default {
     email_marketing: "Campaña de Divulgación",
     bulk_email_task_list: "Lista de tareas de correo",
     email_send_log: "Registro de envíos",
+    email_send_log_detail: "Detalle del registro de envíos",
     sending_bulk_emails: "Enviando correos masivos",
     email_template: "Plantilla de correo",
     email_template_detail: "Plantilla de correo",
@@ -685,6 +686,12 @@ export default {
     upgrade_plan: "Actualizar",
     pricing_url_missing: "La URL de la página de precios no está configurada",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Tu suscripción está activa. Las funciones de IA alojadas están desbloqueadas.",
+    cancelled:
+      "Tu suscripción ha cambiado. Es posible que algunas funciones de IA no estén disponibles.",
+  },
   extramodule: {
     extramoduleName: "Nombre del módulo extra",
     extramoduleDescription: "Descripción del módulo extra",
@@ -1200,6 +1207,46 @@ export default {
       needs_human_review: "Requiere Revisión",
     },
   },
+  outboundEmail: {
+    batch_card_title: "Lote de Correo Saliente",
+    recipient_count: "Destinatarios",
+    mode_send_now: "Enviar Ahora",
+    mode_review_first: "Revisar Primero",
+    mode_draft_only: "Solo Borrador",
+    review_reason: "Requiere revisión",
+    review_action: "Revisar",
+    sent_summary: "Lote enviado.",
+    partial_summary: "Lote enviado parcialmente.",
+    unknown_summary: "Estado de entrega desconocido.",
+    failed_summary: "El lote falló.",
+    discarded_summary: "Lote descartado.",
+    review_title: "Revisar Correo Saliente",
+    recipient: "Destinatario",
+    sender: "Remitente",
+    subject: "Asunto",
+    body: "Cuerpo",
+    mode: "Modo",
+    send: "Enviar",
+    discard: "Descartar",
+    approve: "Aprobar",
+    edit: "Editar",
+    save: "Guardar",
+    cancel: "Cancelar",
+    approval_invalidated:
+      "Las ediciones invalidan la aprobación previa. Re-apruebe antes de enviar.",
+    preflight_blocked: "No se puede aprobar: hallazgos bloqueantes.",
+    send_success: "Lote en cola para envío.",
+    send_failed: "Falló el envío del lote.",
+    no_approval: "Apruebe antes de enviar.",
+    progress_title: "Progreso de Entrega",
+    status: "Estado",
+    submitted: "Enviado",
+    sent: "Entregado",
+    failed: "Fallido",
+    delivery_unknown: "Entrega Desconocida",
+    unknown_no_retry: "Estado desconocido — no reintente automáticamente.",
+    retry: "Reintentar",
+  },
   emailservice: {
     id: "ID",
     from: "Cuenta de remitente",
@@ -1269,6 +1316,25 @@ export default {
     title: "Título",
     content: "Contenido",
     record_time: "Hora de registro",
+    source: "Origen",
+    source_legacy: "Tarea masiva",
+    source_authorized: "Autorizado por IA",
+    actions: "acciones",
+    detail_title: "Detalle del registro de envío",
+    log: "registro",
+    task_id: "id de tarea",
+    sender: "remitente",
+    actor: "autor",
+    body: "cuerpo",
+    provider_message_id: "id de mensaje del proveedor",
+    error_code: "código de error",
+    submitted_at: "enviado a las",
+    completed_at: "completado a las",
+    batch_id: "id de lote",
+    draft_id: "id de borrador",
+    revision_id: "id de revisión",
+    attempt_id: "id de intento de envío",
+    detail_not_found: "No se encontró el registro de envío",
   },
   socialaccount: {
     create_account: "Crear cuenta de herramienta",
@@ -1859,6 +1925,8 @@ export default {
     ai_message_task_create: "Crear Tarea de Mensaje IA",
     ai_message_task_edit: "Editar Tarea de Mensaje IA",
     ai_message_task_name: "Nombre de la Tarea",
+    ai_message_task_name_hint:
+      "Ingrese un nombre para esta tarea de mensaje IA",
     ai_message_task_description: "Descripción",
     ai_message_task_message: "Mensaje IA",
     ai_message_task_message_hint:
@@ -2799,6 +2867,11 @@ export default {
       "Plan rechazado. Por favor, revisa el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
     changes_requested_continue_message:
       "Cambios solicitados en el plan. Por favor, actualiza el plan según los siguientes comentarios y vuelve a enviarlo para su aprobación.",
+    approve_failed:
+      "La aprobación del plan no se completó. Inténtalo de nuevo.",
+    reject_failed: "El rechazo del plan no se completó. Inténtalo de nuevo.",
+    changes_request_failed:
+      "La solicitud de cambios del plan no se completó. Inténtalo de nuevo.",
     reject_feedback: "Motivo de rechazo",
     changes_feedback: "¿Qué necesita cambiar?",
     no_plan_yet: "Aún no hay contenido del plan.",
@@ -3606,6 +3679,59 @@ export default {
       attention: "Requiere atención",
       recentOutcomes: "Resultados recientes",
       suggested: "Acciones sugeridas",
+    },
+  },
+  aiConversationReport: {
+    action: "Reportar conversación",
+    actionAriaLabel: "Reportar esta conversación para su revisión",
+    unavailable:
+      "La función de reporte de conversación no está disponible actualmente.",
+    noEligibleOutputs:
+      "Todavía no hay resultados de IA reportables en esta conversación.",
+    dialogTitle: "Reportar conversación",
+    selectionInstruction: "Selecciona los resultados de IA a reportar.",
+    selectionCount: "{n} seleccionados",
+    selectionCountOfMax: "{n} de {max} seleccionados",
+    selectAll: "Seleccionar todo",
+    includeRelatedUserContext:
+      "Incluir mi mensaje relacionado que originó el resultado de IA",
+    userMessageWillBeSent:
+      "Si continúas, tu mensaje relacionado seleccionado se enviará a AiFetchly junto con los resultados de IA.",
+    relatedUserLabel: "Tu mensaje — se enviará",
+    attachmentOmitted:
+      "Se omitió un archivo adjunto de tu mensaje; solo se incluye el texto del mensaje.",
+    imageLabel: "Incluir imagen en el informe",
+    generatedAtLabel: "Generado el",
+    consentDefault:
+      "Solo se enviarán los resultados de IA seleccionados y tu descripción. Tus otros mensajes, archivos y el razonamiento de la IA no se incluyen.",
+    consentWithUserContext:
+      "Has elegido incluir tu mensaje relacionado. Se enviará junto con los resultados de IA que seleccionaste.",
+    truncationWarning:
+      "Los resultados extensos se recortaron para ajustarse al límite de tamaño del informe.",
+    listTruncated:
+      "Mostrando los primeros {shown} de {total} resultados. Desplázate por la conversación para reportar otro.",
+    continueAndSubmit: "Enviar informe",
+    cancel: "Cancelar",
+    conversationChanged:
+      "La conversación cambió mientras el informe estaba abierto. Vuelve a abrirlo.",
+    categoryLabel: "¿Qué problema tiene esta conversación?",
+    commentLabel: "Detalles adicionales (opcional)",
+    itemTypes: {
+      text: "Texto",
+      image: "Imagen",
+      mixed: "Texto e imágenes",
+      plan: "Plan",
+      artifact: "Artefacto",
+    },
+    errors: {
+      selectionRequired:
+        "Selecciona al menos un resultado de IA para reportar.",
+      selectionLimit: "Puedes seleccionar como máximo 10 resultados de IA.",
+      imageLimit: "Un informe puede incluir como máximo 3 imágenes.",
+      relatedMessageUnavailable:
+        "No hay ningún mensaje relacionado disponible para el resultado seleccionado.",
+      unsupportedSchema:
+        "Este tipo de informe no es compatible. Actualiza la aplicación.",
     },
   },
 };

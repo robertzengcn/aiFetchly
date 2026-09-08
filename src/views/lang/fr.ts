@@ -134,6 +134,7 @@ export default {
     email_marketing: "Campagne de Prospection",
     bulk_email_task_list: "Liste des tâches e-mail",
     email_send_log: "Journal d’envoi",
+    email_send_log_detail: "Détail du journal d’envoi",
     sending_bulk_emails: "Envoi d’e-mails en masse",
     email_template: "Modèle d’e-mail",
     email_template_detail: "Modèle d’e-mail",
@@ -680,6 +681,12 @@ export default {
     upgrade_plan: "Mettre à niveau",
     pricing_url_missing: "L'URL de la page des tarifs n'est pas configurée",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Votre abonnement est actif. Les fonctionnalités IA hébergées sont déverrouillées.",
+    cancelled:
+      "Votre abonnement a changé. Certaines fonctionnalités IA peuvent être indisponibles.",
+  },
   extramodule: {
     extramoduleName: "Extra Module Name",
     extramoduleDescription: "Extra Module Description",
@@ -1189,6 +1196,46 @@ export default {
       needs_human_review: "Examen Requis",
     },
   },
+  outboundEmail: {
+    batch_card_title: "Lot de Courrier Sortant",
+    recipient_count: "Destinataires",
+    mode_send_now: "Envoyer Maintenant",
+    mode_review_first: "Réviser d'Abord",
+    mode_draft_only: "Brouillon Uniquement",
+    review_reason: "Révision requise",
+    review_action: "Réviser",
+    sent_summary: "Lot envoyé.",
+    partial_summary: "Lot partiellement envoyé.",
+    unknown_summary: "Statut de livraison inconnu.",
+    failed_summary: "Le lot a échoué.",
+    discarded_summary: "Lot abandonné.",
+    review_title: "Réviser le Courrier Sortant",
+    recipient: "Destinataire",
+    sender: "Expéditeur",
+    subject: "Objet",
+    body: "Corps",
+    mode: "Mode",
+    send: "Envoyer",
+    discard: "Abandonner",
+    approve: "Approuver",
+    edit: "Modifier",
+    save: "Enregistrer",
+    cancel: "Annuler",
+    approval_invalidated:
+      "Les modifications invalident l'approbation précédente. Ré-approuvez avant l'envoi.",
+    preflight_blocked: "Impossible d'approuver : problèmes bloquants.",
+    send_success: "Lot en file d'attente pour envoi.",
+    send_failed: "Échec de l'envoi du lot.",
+    no_approval: "Approuvez avant l'envoi.",
+    progress_title: "Progression de Livraison",
+    status: "Statut",
+    submitted: "Soumis",
+    sent: "Envoyé",
+    failed: "Échec",
+    delivery_unknown: "Livraison Inconnue",
+    unknown_no_retry: "Statut inconnu — ne pas relancer automatiquement.",
+    retry: "Relancer",
+  },
   emailservice: {
     id: "id",
     from: "sender account",
@@ -1251,11 +1298,30 @@ export default {
   },
   emailtasksendlog: {
     id: "id",
-    status: "status",
-    receiver: "receiver",
-    title: "title",
-    content: "content",
-    record_time: "record time",
+    status: "statut",
+    receiver: "destinataire",
+    title: "titre",
+    content: "contenu",
+    record_time: "heure d’enregistrement",
+    source: "source",
+    source_legacy: "Tâche en masse",
+    source_authorized: "Autorisé par IA",
+    actions: "actions",
+    detail_title: "Détail du journal d’envoi",
+    log: "journal",
+    task_id: "id de tâche",
+    sender: "expéditeur",
+    actor: "auteur",
+    body: "corps",
+    provider_message_id: "id de message du fournisseur",
+    error_code: "code d’erreur",
+    submitted_at: "soumis à",
+    completed_at: "terminé à",
+    batch_id: "id de lot",
+    draft_id: "id de brouillon",
+    revision_id: "id de révision",
+    attempt_id: "id de tentative d’envoi",
+    detail_not_found: "Enregistrement du journal d’envoi introuvable",
   },
   socialaccount: {
     create_account: "Créer un compte d’outil",
@@ -1655,10 +1721,13 @@ export default {
     bulk_email: "Bulk Email",
     google_maps: "Google Maps",
     yandex_maps: "Yandex Maps",
+    ai_message: "Tâche de message IA",
     ai_message_task: "Tâche de message IA",
     ai_message_task_create: "Créer une tâche de message IA",
     ai_message_task_edit: "Modifier la tâche de message IA",
     ai_message_task_name: "Nom de la tâche",
+    ai_message_task_name_hint:
+      "Saisissez un nom pour cette tâche de message IA",
     ai_message_task_description: "Description",
     ai_message_task_message: "Message IA",
     ai_message_task_message_hint:
@@ -2779,6 +2848,11 @@ export default {
       "Plan rejeté. Veuillez réviser le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
     changes_requested_continue_message:
       "Modifications demandées. Veuillez mettre à jour le plan en fonction des commentaires suivants et le soumettre à nouveau pour approbation.",
+    approve_failed:
+      "L'approbation du plan ne s'est pas terminée. Veuillez réessayer.",
+    reject_failed: "Le rejet du plan ne s'est pas terminé. Veuillez réessayer.",
+    changes_request_failed:
+      "La demande de modifications du plan ne s'est pas terminée. Veuillez réessayer.",
     reject_feedback: "Raison du rejet",
     changes_feedback: "Qu'est-ce qui doit changer?",
     no_plan_yet: "Pas encore de contenu de plan.",
@@ -3591,6 +3665,58 @@ export default {
       attention: "Nécessite votre attention",
       recentOutcomes: "Résultats récents",
       suggested: "Actions suggérées",
+    },
+  },
+  aiConversationReport: {
+    action: "Signaler la conversation",
+    actionAriaLabel: "Signaler cette conversation pour révision",
+    unavailable:
+      "La fonction de signalement de conversation est actuellement indisponible.",
+    noEligibleOutputs:
+      "Il n'y a pas encore de sorties d'IA signalables dans cette conversation.",
+    dialogTitle: "Signaler la conversation",
+    selectionInstruction: "Sélectionnez les sorties d'IA à signaler.",
+    selectionCount: "{n} sélectionné(s)",
+    selectionCountOfMax: "{n} sur {max} sélectionné(s)",
+    selectAll: "Tout sélectionner",
+    includeRelatedUserContext:
+      "Inclure mon message associé à l'origine de la sortie d'IA",
+    userMessageWillBeSent:
+      "Si vous continuez, votre message associé sélectionné sera envoyé à AiFetchly avec les sorties d'IA.",
+    relatedUserLabel: "Votre message — sera envoyé",
+    attachmentOmitted:
+      "Une pièce jointe de votre message a été omise ; seul le texte du message est inclus.",
+    imageLabel: "Inclure l'image dans le rapport",
+    generatedAtLabel: "Généré le",
+    consentDefault:
+      "Seules les sorties d'IA sélectionnées et votre description seront envoyées. Vos autres messages, fichiers et le raisonnement de l'IA ne sont pas inclus.",
+    consentWithUserContext:
+      "Vous avez choisi d'inclure votre message associé. Il sera envoyé avec les sorties d'IA que vous avez sélectionnées.",
+    truncationWarning:
+      "Les sorties trop longues ont été tronquées pour respecter la limite de taille du signalement.",
+    listTruncated:
+      "Affichage des {shown} premières sorties sur {total}. Faites défiler la conversation pour en signaler une autre.",
+    continueAndSubmit: "Envoyer le signalement",
+    cancel: "Annuler",
+    conversationChanged:
+      "La conversation a changé pendant que le signalement était ouvert. Veuillez le rouvrir.",
+    categoryLabel: "Quel est le problème avec cette conversation ?",
+    commentLabel: "Détails supplémentaires (facultatif)",
+    itemTypes: {
+      text: "Texte",
+      image: "Image",
+      mixed: "Texte et images",
+      plan: "Plan",
+      artifact: "Artefact",
+    },
+    errors: {
+      selectionRequired: "Sélectionnez au moins une sortie d'IA à signaler.",
+      selectionLimit: "Vous pouvez sélectionner au maximum 10 sorties d'IA.",
+      imageLimit: "Un signalement peut contenir au maximum 3 images.",
+      relatedMessageUnavailable:
+        "Aucun message associé n'est disponible pour la sortie sélectionnée.",
+      unsupportedSchema:
+        "Ce type de signalement n'est pas pris en charge. Veuillez mettre à jour l'application.",
     },
   },
 };

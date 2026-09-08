@@ -1,5 +1,7 @@
 import { EmailMarketingController } from "@/controller/emailMarketingController";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
+import * as fs from "fs";
+import * as path from "path";
 import {
   EMAILMARKETINGTEMPLIST,
   EMAILMARKETINGTEMPREMOVE,
@@ -12,13 +14,14 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICEUPDATE,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
   EMAILFILTERDELETE,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
 } from "@/config/channellist";
 import {
   CommonResponse,
-  CommonMessage,
   CommonIdrequest,
   CommonDialogMsg,
 } from "@/entityTypes/commonType";
@@ -29,6 +32,7 @@ import {
   EmailSendParam,
   EmailFilterDetialdata,
   EmailTemplateRespdata,
+  EmailServiceImportResult,
 } from "@/entityTypes/emailmarketingType";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterEntity } from "@/entity/EmailFilter.entity";
@@ -39,7 +43,10 @@ import {
   emailMarketingListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
+  emailServiceExportInputSchema,
+  emailServiceImportInputSchema,
 } from "@/schemas/ipc/emailMarketing";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 
 /**
  * Email Marketing IPC handlers.
@@ -338,6 +345,93 @@ export function registerEmailMarketingIpcHandlers() {
       const emailmarketCon = new EmailMarketingController();
       await emailmarketCon.deleteEmailService(id);
       return id;
+    }
+  );
+
+  // ── Service export ────────────────────────────────────────────────────
+
+  registerValidatedHandler(
+    EMAILSERVICEEXPORT,
+    emailServiceExportInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      const format = input.format ?? "csv";
+      const exportData = await controller.exportEmailServices(format);
+      const fileExtension = format === "csv" ? "csv" : "json";
+      const defaultFilename = `email_services_export_${
+        new Date().toISOString().split("T")[0]
+      }.${fileExtension}`;
+
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showSaveDialog({
+        title: "Export Email Services",
+        defaultPath: path.join(app.getPath("documents"), defaultFilename),
+        filters: [
+          {
+            name: format === "csv" ? "CSV Files" : "JSON Files",
+            extensions: [fileExtension],
+          },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+        throw new Error("Export cancelled by user");
+      }
+      const filePath = dialogResult.filePaths[0];
+      const content =
+        format === "csv"
+          ? (exportData as string)
+          : JSON.stringify(exportData, null, 2);
+      fs.writeFileSync(filePath, content, "utf-8");
+      return filePath;
+    }
+  );
+
+  // ── Service import ────────────────────────────────────────────────────
+
+  registerValidatedHandler(
+    EMAILSERVICEIMPORT,
+    emailServiceImportInputSchema,
+    async () => {
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showOpenDialog({
+        title: "Import Email Services",
+        defaultPath: app.getPath("documents"),
+        filters: [
+          { name: "CSV Files", extensions: ["csv"] },
+          { name: "JSON Files", extensions: ["json"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        properties: ["openFile"],
+      });
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
+        throw new Error("Import cancelled by user");
+      }
+      const filePath = dialogResult.filePaths[0];
+      const ext = path.extname(filePath).toLowerCase().replace(".", "");
+      const format: "csv" | "json" = ext === "json" ? "json" : "csv";
+      const content = fs.readFileSync(filePath, "utf-8");
+
+      const controller = new EmailMarketingController();
+      let result: EmailServiceImportResult;
+      try {
+        result = await controller.importEmailServices(content, format);
+      } catch (parseError) {
+        // Malformed CSV/JSON or wrong structure — nothing was written.
+        // Map to the import_invalid_file message key (per spec error table).
+        throw new Error(
+          `import_invalid_file${
+            parseError instanceof Error ? `: ${parseError.message}` : ""
+          }`
+        );
+      }
+
+      // Empty file / zero valid rows: surface as a failure envelope so the
+      // renderer shows the "no valid rows" message instead of a silent reload.
+      if (result.imported === 0 && result.skipped === 0) {
+        throw new Error("import_no_valid_rows");
+      }
+      return result;
     }
   );
 

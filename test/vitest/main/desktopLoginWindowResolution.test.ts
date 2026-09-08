@@ -24,8 +24,16 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const mockState = vi.hoisted(() => ({
+  dbPath: "",
   registryWindow: null as { isDestroyed: () => boolean } | null,
 }));
+const mockSqliteDbReset = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ connection: { isInitialized: true } })
+);
+const mockScheduleManagerDestroy = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(undefined)
+);
+const mockScheduleManagerGet = vi.hoisted(() => vi.fn().mockReturnValue({}));
 
 vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: vi.fn().mockReturnValue([]) },
@@ -74,7 +82,9 @@ vi.mock("@/service/AIChatConversationUpdateBroadcaster", () => ({
 // --- Mocks for completeDesktopLogin's dependency tree ---------------------
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockReturnValue(""),
+    getValue: vi.fn((key: string) =>
+      key === "user_dbpath" ? mockState.dbPath : ""
+    ),
     setValue: vi.fn(),
   })),
 }));
@@ -109,15 +119,16 @@ vi.mock("@/config/SqliteDb", () => ({
     getInstance: vi.fn().mockReturnValue({
       connection: { isInitialized: true },
     }),
-    resetInstance: vi.fn().mockResolvedValue({
-      connection: { isInitialized: true },
-    }),
+    resetInstance: mockSqliteDbReset,
     ensureInitialized: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 vi.mock("@/modules/ScheduleManager", () => ({
-  ScheduleManager: { resetInstance: vi.fn().mockResolvedValue(undefined) },
+  ScheduleManager: {
+    destroyInstance: mockScheduleManagerDestroy,
+    getInstance: mockScheduleManagerGet,
+  },
 }));
 
 vi.mock("@/controller/SearchController", () => ({
@@ -144,6 +155,24 @@ vi.mock("@/modules/tokenRefresh", () => ({
   TokenRefreshService: {
     isAutoRefreshRunning: vi.fn().mockReturnValue(true),
     startAutoRefresh: vi.fn(),
+  },
+}));
+
+// completeDesktopLogin now routes the user-info fetch through the entitlement
+// service (FR-2.2). Mock it so this wiring test stays isolated from the real
+// reconcile logic (which is covered by subscriptionEntitlementService.test.ts).
+vi.mock("@/service/SubscriptionEntitlementService", () => ({
+  SubscriptionEntitlementService: {
+    getInstance: () => ({
+      reconcile: vi.fn().mockResolvedValue({
+        ok: true,
+        changed: false,
+        skipped: false,
+        trigger: "login",
+        snapshot: { plans: [], aiEnabled: false, planNames: [] },
+        previous: { plans: [], aiEnabled: false, planNames: [] },
+      }),
+    }),
   },
 }));
 
@@ -179,6 +208,7 @@ describe("desktop login window resolution", () => {
       __aifetchlyIpcHandlersRegistered?: boolean;
     };
     delete globalState.__aifetchlyIpcHandlersRegistered;
+    mockState.dbPath = "";
     mockState.registryWindow = null;
   });
 
@@ -238,5 +268,22 @@ describe("desktop login window resolution", () => {
 
     // Tokens still persist; the login is not failed by the missing window.
     expect(result.ok).toBe(true);
+  });
+
+  test("rebuilds ScheduleManager only after replacing the user database", async () => {
+    mockState.dbPath = "/tmp/aifetchly-login-user";
+
+    const result = await completeDesktopLogin(null, {
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresIn: 3600,
+    });
+
+    expect(result.ok).toBe(true);
+    const destroyOrder = mockScheduleManagerDestroy.mock.invocationCallOrder[0];
+    const resetOrder = mockSqliteDbReset.mock.invocationCallOrder[0];
+    const getOrder = mockScheduleManagerGet.mock.invocationCallOrder[0];
+    expect(destroyOrder).toBeLessThan(resetOrder);
+    expect(getOrder).toBeGreaterThan(resetOrder);
   });
 });

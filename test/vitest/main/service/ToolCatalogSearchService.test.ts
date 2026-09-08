@@ -197,6 +197,34 @@ describe("ToolCatalogSearchService.search — query ranking", () => {
     expect(r.matches.map((m) => m.name)).toContain("attach_local_images");
     expect(r.matches[0].name).toBe("attach_local_images");
   });
+
+  it("discovers start_email_send_task for outbound marketing send queries", () => {
+    const catalog = buildCatalog([
+      tool(
+        "start_email_send_task",
+        "Send NEW outbound marketing emails to external contacts/customers."
+      ),
+      tool(
+        "send_email_reply",
+        "Send a persisted reply draft as an INBOUND email reply."
+      ),
+      tool(
+        "list_email_inboxes",
+        "List email services that have inbound IMAP receive enabled."
+      ),
+      tool("file_read", "Read a workspace file"),
+    ]);
+    const svc = new ToolCatalogSearchService();
+    const r = svc.search({
+      args: { query: "send marketing email outbound" },
+      catalog,
+      state: emptyState,
+      context: ctx,
+    });
+    expect(r.matches.map((m) => m.name)).toContain("start_email_send_task");
+    expect(r.selectedToolNames).toContain("start_email_send_task");
+    expect(r.matches[0].name).toBe("start_email_send_task");
+  });
 });
 
 describe("ToolCatalogSearchService.search — policy", () => {

@@ -41,6 +41,8 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICELIST,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
   EMAILFILTERDELETE,
   BUCKEMAILSEND,
   BUCKEMAILSENDMESSAGE,
@@ -48,6 +50,8 @@ import {
   RECEIVESENDTESTEMAILMESSAGE,
   BUCKEMAILTASKLIST,
   BUCKEMAILTASKSENDLOG,
+  UNIFIED_EMAIL_SEND_LOG,
+  UNIFIED_EMAIL_SEND_LOG_DETAIL,
   EMAIL_RECEIVE_SYNC,
   EMAIL_RECEIVE_CONNECTION_TEST,
   EMAIL_RECEIVE_MESSAGE_LIST,
@@ -96,6 +100,9 @@ import {
   SYSTEM_SETTING_UPDATE,
   VIDEO_INFORMATION_TRANSLATE,
   QUERY_USER_INFO,
+  USER_REFRESH_ENTITLEMENT,
+  USER_OPEN_PRICING_PLAN,
+  USER_INFO_UPDATED,
   OPENLOGINPAGE,
   NATIVATECOMMAND,
   LOGIN_STATUS,
@@ -506,6 +513,20 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+  AI_CONTENT_REPORT_CAPABILITIES,
+  // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle
+  OUTBOUND_EMAIL_BATCH_GET,
+  OUTBOUND_EMAIL_DRAFT_UPDATE,
+  OUTBOUND_EMAIL_BATCH_APPROVE,
+  OUTBOUND_EMAIL_BATCH_SEND,
+  OUTBOUND_EMAIL_BATCH_DISCARD,
+  OUTBOUND_EMAIL_BATCH_STATUS,
+  OUTBOUND_EMAIL_BATCH_PROGRESS,
+  // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
+  // a production/dev invoke always fails with "No handler registered" (see
+  // src/main-process/e2e/E2ESeedIpc.ts).
+  E2E_SEED_EMAIL_SERVICE,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -657,6 +678,10 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_PROGRESS,
       // Portable workspace memory sync summary (main -> renderer)
       AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -737,6 +762,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -779,6 +806,10 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -845,9 +876,13 @@ contextBridge.exposeInMainWorld("api", {
       EMAILSERVICEDETAIL,
       EMAILSERVICELIST,
       EMAILSERVICEDELETE,
+      EMAILSERVICEEXPORT,
+      EMAILSERVICEIMPORT,
       EMAILFILTERDELETE,
       BUCKEMAILTASKLIST,
       BUCKEMAILTASKSENDLOG,
+      UNIFIED_EMAIL_SEND_LOG,
+      UNIFIED_EMAIL_SEND_LOG_DETAIL,
       EMAIL_RECEIVE_SYNC,
       EMAIL_RECEIVE_CONNECTION_TEST,
       EMAIL_RECEIVE_MESSAGE_LIST,
@@ -880,6 +915,8 @@ contextBridge.exposeInMainWorld("api", {
       "session-recording:clear",
       "session-recording:get-directory",
       QUERY_USER_INFO,
+      USER_REFRESH_ENTITLEMENT,
+      USER_OPEN_PRICING_PLAN,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,
       CHOOSEFILEDIALOG,
@@ -1258,6 +1295,19 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+      AI_CONTENT_REPORT_CAPABILITIES,
+      // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
+      // Plain handlers (not AI-gated): operate on already-authorized state.
+      OUTBOUND_EMAIL_BATCH_GET,
+      OUTBOUND_EMAIL_DRAFT_UPDATE,
+      OUTBOUND_EMAIL_BATCH_APPROVE,
+      OUTBOUND_EMAIL_BATCH_SEND,
+      OUTBOUND_EMAIL_BATCH_DISCARD,
+      OUTBOUND_EMAIL_BATCH_STATUS,
+      // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
+      // elsewhere this invoke fails with "No handler registered".
+      E2E_SEED_EMAIL_SERVICE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

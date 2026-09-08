@@ -13,7 +13,10 @@ import {ScheduleExecutionLogInterface} from "@/modules/interface/ScheduleExecuti
 import { ScheduleExecutionLogModule } from "./ScheduleExecutionLogModule";
 import { ScheduleDependencyModule } from "./ScheduleDependencyModule";
 import { ScheduleDependencyInterface, DependencyStatistics } from "./interface/ScheduleDependencyInterface";
-import { SchedulerStatusModel } from "@/model/SchedulerStatus.model";
+import {
+    isDatabaseConnectionClosedError,
+    SchedulerStatusModel
+} from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
 export interface SchedulerStatus {
@@ -549,7 +552,9 @@ export class ScheduleManager {
     async handleAppShutdown(): Promise<void> {
         log.info('Shutting down ScheduleManager...');
         await this.persistStoppedStatus();
-        await this.stop();
+        // The shutdown write above is deliberate and guarded against a closed
+        // connection. Do not let stop() persist the same state a second time.
+        await this.stop(true);
     }
 
     /**
@@ -596,6 +601,9 @@ export class ScheduleManager {
      * Persist stopped status to database
      */
     async persistStoppedStatus(): Promise<void> {
+        if (!this.schedulerStatusModel.isConnectionOpen()) {
+            return;
+        }
         try {
             await this.schedulerStatusModel.updateStatus({
                 is_running: false,
@@ -603,6 +611,9 @@ export class ScheduleManager {
                 last_error_message: undefined
             });
         } catch (error) {
+            if (isDatabaseConnectionClosedError(error)) {
+                return;
+            }
             log.error('Failed to persist stopped status:', error);
         }
     }

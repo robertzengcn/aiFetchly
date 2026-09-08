@@ -1,6 +1,7 @@
 "use strict";
 import { ipcMain, BrowserWindow } from "electron";
 import { WebSocketClient } from "@/modules/WebSocketClient";
+import { TokenRefreshService } from "@/modules/tokenRefresh";
 import {
   WEBSOCKET_CONNECT,
   WEBSOCKET_DISCONNECT,
@@ -13,6 +14,8 @@ import { registerValidatedHandler } from "@/main-process/communication/_shared/r
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
+
+let unsubscribeTokenRefresh: (() => void) | null = null;
 
 /**
  * Register WebSocket IPC handlers
@@ -74,6 +77,17 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
   );
 
   log.info("WebSocket IPC handlers registered");
+
+  if (unsubscribeTokenRefresh) {
+    unsubscribeTokenRefresh();
+  }
+  unsubscribeTokenRefresh = TokenRefreshService.onRefreshSuccess(() => {
+    const wsClient = WebSocketClient.getInstance();
+    const retried = wsClient.retryConnectIfDisconnected(win);
+    if (retried && !wsClient.isConnected()) {
+      log.info("WebSocket reconnect initiated after token refresh");
+    }
+  });
 }
 
 /**
@@ -90,7 +104,13 @@ export async function initializeWebSocketConnection(
   try {
     const wsClient = WebSocketClient.getInstance();
     wsClient.connect(win);
-    log.info("WebSocket connection initialized on app startup");
+    if (wsClient.getStatus() === "disconnected") {
+      log.info(
+        "WebSocket not connected on startup (no valid token); will retry after token refresh"
+      );
+    } else {
+      log.info("WebSocket connection initialized on app startup");
+    }
   } catch (error) {
     log.error("Failed to initialize WebSocket connection:", error);
   }
@@ -101,6 +121,10 @@ export async function initializeWebSocketConnection(
  */
 export function cleanupWebSocketConnection(): void {
   try {
+    if (unsubscribeTokenRefresh) {
+      unsubscribeTokenRefresh();
+      unsubscribeTokenRefresh = null;
+    }
     WebSocketClient.resetInstance();
     log.info("WebSocket connection cleaned up");
   } catch (error) {

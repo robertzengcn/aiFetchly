@@ -5,7 +5,7 @@ import { BrowserWindow } from "electron";
 import { log } from "@/modules/Logger";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import WebSocket from "ws";
-import { UserController } from "@/controller/UserController";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import type {
   WSConnectionStatus,
   WSMessage,
@@ -213,19 +213,59 @@ export class WebSocketClient {
     this.win = win;
     this.manualDisconnect = false;
 
-    // Check if already connected
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.hasActiveSocket()) {
       log.info("WebSocket already connected");
       return;
     }
 
     // Check for valid token
     if (!this.hasValidToken()) {
-      log.info("No valid token found, skipping WebSocket connection");
+      log.info(
+        "No valid token found, skipping WebSocket connection (will retry after token refresh)"
+      );
       return;
     }
 
     this.doConnect();
+  }
+
+  /**
+   * Retry connecting after a successful token refresh.
+   *
+   * Startup often sees an expired JWT, skips the socket, then refreshes the
+   * token a moment later. Without this retry, purchase notifications never
+   * reach the desktop app because the hub only delivers to live connections.
+   */
+  public retryConnectIfDisconnected(win?: BrowserWindow): boolean {
+    if (win) {
+      this.win = win;
+    }
+
+    if (this.hasActiveSocket()) {
+      return true;
+    }
+
+    if (!this.win || this.win.isDestroyed()) {
+      log.info("Cannot retry WebSocket connection: no active window");
+      return false;
+    }
+
+    if (!this.hasValidToken()) {
+      log.info("Cannot retry WebSocket connection: token still invalid");
+      return false;
+    }
+
+    this.manualDisconnect = false;
+    this.doConnect();
+    return true;
+  }
+
+  private hasActiveSocket(): boolean {
+    return (
+      this.ws !== null &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    );
   }
 
   /**
@@ -317,6 +357,12 @@ export class WebSocketClient {
           this.clientId = message.payload.client_id;
         }
         log.info(`WebSocket connected with client ID: ${this.clientId}`);
+        // FR-5.2: reconcile entitlement now that the socket is connected.
+        // This recovers notifies missed while disconnected. Coalesces with a
+        // recent startup reconcile (STARTUP_CONNECT_COALESCE_MS).
+        void SubscriptionEntitlementService.getInstance().reconcile(
+          "ws_connect"
+        );
         break;
 
       case "pong":
@@ -385,45 +431,28 @@ export class WebSocketClient {
   }
 
   /**
-   * Refresh user info when subscription status changes
-   * This updates the user's plan and AI enabled flag in the token service
+   * Refresh user info when subscription status changes.
+   *
+   * FR-5.3: route through SubscriptionEntitlementService so the snapshot is
+   * compared, the renderer is notified on the dedicated USER_INFO_UPDATED
+   * channel (not the WEBSOCKET_EVENT passthrough), and plan fields are never
+   * written from the notify payload — only from the GET /api/user/info that
+   * the service triggers.
    */
   private async refreshUserInfoOnSubscriptionChange(
     notificationType: string
   ): Promise<void> {
     try {
-      const userController = new UserController();
-
-      // First, refresh user info from the server
-      const jwtUser = await userController.updateUserInfo();
-
-      if (jwtUser) {
-        // After updateUserInfo() refreshes from server, get the updated local data
-        const userInfo = userController.getUserInfo();
-
-        log.info(`User info refreshed after ${notificationType}:`, {
-          email: userInfo.email,
-          plansCount: userInfo.plans?.length || 0,
-          aiEnabled: userInfo.aiEnabled,
-        });
-
-        // Notify renderer that user info has been updated due to subscription change
-        this.sendToRenderer({
-          type: "message",
-          data: {
-            type: "user_info_updated",
-            payload: {
-              reason: notificationType,
-              plans: userInfo.plans,
-              aiEnabled: userInfo.aiEnabled,
-            },
-          } as WSMessage,
-        });
-      } else {
-        log.warn(
-          `Failed to refresh user info after ${notificationType}: jwtUser is null`
-        );
-      }
+      await SubscriptionEntitlementService.getInstance().reconcile(
+        "ws_notify",
+        {
+          force: true,
+          notificationType,
+        }
+      );
+      log.info(
+        `Subscription change (${notificationType}) routed to entitlement service`
+      );
     } catch (error) {
       log.error(
         `Failed to refresh user info after ${notificationType}:`,

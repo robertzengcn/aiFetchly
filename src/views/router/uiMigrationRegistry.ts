@@ -252,7 +252,7 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     routeNames: ["MapScraper", "GoogleMapsScraper", "YandexMapsScraper"],
     supportingTemplates: ["task-state", "results"],
   },
-  // --- Email marketing (14) --------------------------------------------------
+  // --- Email marketing (16) --------------------------------------------------
   {
     surfaceId: "email-overview",
     family: "email-marketing",
@@ -275,6 +275,21 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     state: "shell",
     routeNames: ["BUCK_Email_TASK_LOG_LIST"],
     supportingTemplates: ["detail"],
+  },
+  {
+    surfaceId: "email-unified-send-logs",
+    family: "email-marketing",
+    template: "collection",
+    state: "shell",
+    routeNames: ["UNIFIED_EMAIL_SEND_LOG"],
+    supportingTemplates: ["detail"],
+  },
+  {
+    surfaceId: "email-unified-send-log-detail",
+    family: "email-marketing",
+    template: "detail",
+    state: "shell",
+    routeNames: ["UNIFIED_EMAIL_SEND_LOG_DETAIL"],
   },
   {
     surfaceId: "email-send-form",
@@ -464,8 +479,8 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
   { routeName: "d404", reason: "not-found" },
 ];
 
-/** Total in-scope surface count (PRD acceptance criterion 3). */
-export const IN_SCOPE_SURFACE_COUNT = 50;
+/** Total in-scope surface count, including the unified send-log surfaces. */
+export const IN_SCOPE_SURFACE_COUNT = 52;
 
 /** Look up the registry entry owning a route name. */
 export function findSurfaceByRouteName(

@@ -2,9 +2,56 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import type { ZodType, ZodTypeDef } from "zod";
 import { log } from "@/modules/Logger";
-import { isAiEnabled } from "@/service/AiFeatureGate";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { formatZodValidationError } from "@/utils/zodErrors";
 import type { CommonMessage } from "@/entityTypes/commonType";
+
+/**
+ * Generic IPC dispatch: parse the renderer payload, validate it, run the
+ * handler, and wrap the result in the standard envelope.
+ *
+ * Every failure path resolves to a `status:false` envelope — nothing throws
+ * out of `ipcMain.handle` (design §13.3). windowInvoke in apirequest.ts sends
+ * `JSON.stringify(data)` through IPC, so a string payload is parsed first;
+ * malformed JSON becomes a rejection envelope, never a thrown SyntaxError.
+ */
+async function dispatchValidated<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
+  event: IpcMainInvokeEvent,
+  raw: unknown
+): Promise<CommonMessage<TOutput> | CommonMessage<null>> {
+  let input: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      input = JSON.parse(raw);
+    } catch {
+      log.warn(`[${channel}] received malformed JSON payload`);
+      return {
+        status: false,
+        msg: "Malformed request payload",
+        data: null,
+      } satisfies CommonMessage<null>;
+    }
+  }
+
+  const parsed = schema().safeParse(input);
+  if (!parsed.success) {
+    const msg = formatZodValidationError(channel, parsed.error);
+    log.warn(`[${channel}] validation failed: ${msg}`);
+    return { status: false, msg, data: null } satisfies CommonMessage<null>;
+  }
+
+  try {
+    const data = await handler(parsed.data, event);
+    return { status: true, msg: "ok", data } satisfies CommonMessage<TOutput>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    log.error(`[${channel}] handler error: ${msg}`);
+    return { status: false, msg, data: null } satisfies CommonMessage<null>;
+  }
+}
 
 /**
  * 注册带 schema 校验的 IPC handler。
@@ -21,26 +68,7 @@ export function registerValidatedHandler<TInput, TOutput>(
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
-    // windowInvoke in apirequest.ts sends JSON.stringify(data) through IPC,
-    // resulting in a string on this side. Parse it if needed so the zod
-    // schema receives an object instead of a string.
-    const input =
-      typeof raw === "string" && raw.length > 0 ? JSON.parse(raw) : raw;
-    const parsed = schema().safeParse(input);
-    if (!parsed.success) {
-      const msg = formatZodValidationError(channel, parsed.error);
-      log.warn(`[${channel}] validation failed: ${msg}`);
-      return { status: false, msg, data: null } satisfies CommonMessage<null>;
-    }
-
-    try {
-      const data = await handler(parsed.data, event);
-      return { status: true, msg: "ok", data } satisfies CommonMessage<TOutput>;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      log.error(`[${channel}] handler error: ${msg}`);
-      return { status: false, msg, data: null } satisfies CommonMessage<null>;
-    }
+    return await dispatchValidated(channel, schema, handler, event, raw);
   });
 }
 
@@ -64,7 +92,12 @@ export function registerAiValidatedHandler<TInput, TOutput>(
     //    is off OR when the Token store is unreachable (DB not initialized,
     //    encrypted store corrupted). A broken feature gate must never
     //    silently enable paid features.
-    if (!isAiEnabled()) {
+    //    FR-6: if the gate is currently closed, run one lazy reconcile first so
+    //    a user who just paid (notify/cache hasn't caught up) is unlocked. The
+    //    reconcile is cooldown-gated (30s) so mashing Chat can't stampede the
+    //    API. GET failures keep the cache, so a Community user is never
+    //    falsely unlocked.
+    if (!(await ensureHostedAiEnabled())) {
       log.warn(`[${channel}] blocked: AI feature is not enabled`);
       return {
         status: false,
@@ -73,25 +106,7 @@ export function registerAiValidatedHandler<TInput, TOutput>(
       } satisfies CommonMessage<null>;
     }
 
-    // 2. schema 校验
-    // (same JSON.parse handling as above — apirequest.ts sends stringified data)
-    const input =
-      typeof raw === "string" && raw.length > 0 ? JSON.parse(raw) : raw;
-    const parsed = schema().safeParse(input);
-    if (!parsed.success) {
-      const msg = formatZodValidationError(channel, parsed.error);
-      log.warn(`[${channel}] validation failed: ${msg}`);
-      return { status: false, msg, data: null } satisfies CommonMessage<null>;
-    }
-
-    // 3. 业务执行
-    try {
-      const data = await handler(parsed.data, event);
-      return { status: true, msg: "ok", data } satisfies CommonMessage<TOutput>;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      log.error(`[${channel}] AI handler error: ${msg}`);
-      return { status: false, msg, data: null } satisfies CommonMessage<null>;
-    }
+    // 2. + 3. payload 解析、schema 校验、业务执行（与 registerValidatedHandler 同一实现）
+    return await dispatchValidated(channel, schema, handler, event, raw);
   });
 }

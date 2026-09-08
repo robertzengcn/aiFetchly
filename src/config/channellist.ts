@@ -54,6 +54,8 @@ export const EMAILSERVICEUPDATE = "email:service:update";
 export const EMAILSERVICEDETAIL = "email:service:detail";
 export const EMAILSERVICELIST = "email:service:list";
 export const EMAILSERVICEDELETE = "email:service:delete";
+export const EMAILSERVICEEXPORT = "email:service:export";
+export const EMAILSERVICEIMPORT = "email:service:import";
 
 //email template
 export const EMAILTEMPLATE_LIST = "email:template:list";
@@ -71,6 +73,9 @@ export const BUCKEMAILTASKLIST = "buck:email:task:list";
 export const SENDTESTEMAIL = "send:test:email";
 export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
 export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
+export const UNIFIED_EMAIL_SEND_LOG = "buck:email:sendlog:unified";
+export const UNIFIED_EMAIL_SEND_LOG_DETAIL =
+  "buck:email:sendlog:unified:detail";
 
 // ======== Email receive + AI auto-reply ========
 export const EMAIL_RECEIVE_SYNC = "email:receive:sync";
@@ -141,6 +146,13 @@ export const VIDEO_INFORMATION_TRANSLATE = "video:information:translate";
 export const VIDEO_VOICE_TRANSLATE = "video:voice:translate";
 export const SYSTEM_SETTING_UPDATE = "system_setting:update";
 export const QUERY_USER_INFO = "user:info";
+// Subscription entitlement reconciliation (PRD: subscription-entitlement-reconciliation).
+// Manual / test / renderer-initiated pull — calls the service, never TypeORM.
+export const USER_REFRESH_ENTITLEMENT = "user:refresh-entitlement";
+// Renderer asks main to open the pricing page (records pricingOpenedAt + retry loop).
+export const USER_OPEN_PRICING_PLAN = "user:open-pricing-plan";
+// Main -> renderer broadcast of the new entitlement snapshot (only when changed).
+export const USER_INFO_UPDATED = "user:info:updated";
 export const OPENLOGINPAGE = "open:page";
 export const GET_LOGIN_URL = "user:get_login_url";
 export const CANCEL_DESKTOP_LOGIN = "user:cancel_desktop_login";
@@ -786,3 +798,29 @@ export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";
 // Safety/support reporting for AI-generated output (Microsoft Store Policy
 // 11.16). NOT AI-gated — must remain available when USER_AI_ENABLED is false.
 export const AI_CONTENT_REPORT_CREATE = "ai:content:report:create";
+
+/** Capability discovery for content reporting (design §13). NOT AI-gated. */
+export const AI_CONTENT_REPORT_CAPABILITIES = "ai:content:report:capabilities";
+
+// ======== Intent-Aware Outbound Email Delivery (§17) ========
+// Request/response (invoke) channels drive the review/approve/send lifecycle.
+// BATCH_PROGRESS is a main→renderer event channel for live status updates.
+// Draft generation is AI-gated; the review/approve/send/discard/status
+// channels are plain (they operate on already-authorized state and must stay
+// usable for inspection even when AI is disabled).
+export const OUTBOUND_EMAIL_BATCH_GET = "outbound:email:batch:get";
+export const OUTBOUND_EMAIL_DRAFT_UPDATE = "outbound:email:draft:update";
+export const OUTBOUND_EMAIL_BATCH_APPROVE = "outbound:email:batch:approve";
+export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
+export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
+export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
+export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== E2E test-support channels ========
+// Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).
+// They exist because the sanitized E2E environment cannot run the production
+// create path for these rows (e.g. email-service credential encryption requires
+// the remote /api/user/secret-key backend, which does not exist in E2E), so the
+// test harness needs a direct, gated seeding path. They never exist in a
+// production or development run.
+export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";

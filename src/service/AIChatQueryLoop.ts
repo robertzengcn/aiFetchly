@@ -39,7 +39,11 @@ import {
   isAIChatRecoverableError,
   type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
-import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
+import {
+  isContentLevelTransientError,
+  isQuotaError,
+} from "@/service/AIChatErrorMapper";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
 import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
@@ -51,6 +55,18 @@ import {
   isEnterPlanModeToolName,
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
+import { OutboundEmailToolGate } from "@/service/outboundEmail/OutboundEmailToolGate";
+import {
+  allowsOutboundDirectSendAuthorization,
+  type OutboundEmailToolGateResult,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
+import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
+
+/** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
+const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
+const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -66,7 +82,7 @@ import {
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { VERIFY_CONTACT_INFO_TOOL_NAME } from "@/config/contactVerification";
@@ -340,6 +356,18 @@ interface PreparedToolCall {
     arguments?: Record<string, unknown>;
   };
   blockedResult?: ToolExecutionResult;
+  /**
+   * Trusted outbound-email authorization triple, resolved by the tool gate
+   * (§14.2) for an allowed `start_email_send_task` call. Threaded through to
+   * the send tool's execution context so it can claim the batch via
+   * `OutboundEmailDeliveryService.claim` (§15.1) instead of the legacy path.
+   * Present only when the gate allowed the send; undefined otherwise.
+   */
+  outboundAuthorization?: {
+    batchId: number;
+    authorizationId: number;
+    batchHash: string;
+  };
 }
 
 /**
@@ -813,6 +841,12 @@ export class AIChatQueryLoop {
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
     const tracker: RoundContentTracker = { delivered: false };
+    // FR-6.3: a hosted 402 / quota-exhausted error may be a stale-cache lag
+    // (user just paid while a call was in flight). Lazy-reconcile entitlement
+    // ONCE before surfacing the error; if USER_AI_ENABLED flips true, retry the
+    // call once. Bounded by ensureHostedAiEnabled's 30s cooldown so a user
+    // mashing send can't stampede /api/user/info. Do not loop.
+    let quotaRetried = false;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
       const attemptInput: AIChatQueryLoopInput =
@@ -822,6 +856,27 @@ export class AIChatQueryLoop {
 
       if (result.type !== "failed") {
         return result;
+      }
+
+      // FR-6.3: quota error + no content delivered + not already retried ->
+      // lazy-reconcile once; if entitlement is now unlocked, retry this attempt.
+      if (
+        !quotaRetried &&
+        !tracker.delivered &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        isQuotaError(result.error)
+      ) {
+        quotaRetried = true;
+        const unlocked = await ensureHostedAiEnabled();
+        if (unlocked) {
+          // Entitlement flipped to active (the user just paid). Re-run this
+          // same attempt once: the for-loop's `attempt += 1` is offset by the
+          // decrement here so the next iteration re-runs the same attempt
+          // number with a pristine transcript snapshot.
+          attempt -= 1;
+          continue;
+        }
       }
 
       const canRetry =
@@ -1911,6 +1966,66 @@ export class AIChatQueryLoop {
             }
           }
 
+          // Outbound-email intent gate: enforce the "model proposes, trusted
+          // app code authorizes" rule (technical design §14.2) BEFORE the send
+          // tool executes. The gate resolves a request-scoped authorization
+          // from the turn's intent + draft batch (§13.1); only an allowed
+          // decision lets the send tool proceed, carrying the claim triple.
+          let outboundAuthorization:
+            | {
+                batchId: number;
+                authorizationId: number;
+                batchHash: string;
+              }
+            | undefined;
+          if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
+            const gateDecision = await this.evaluateOutboundEmailGate(input);
+            if (!gateDecision.allowed) {
+              await emitToolCall(call.arguments ?? {});
+              // Actionable reason text (§19): tell the model how to unblock so
+              // it stops re-drafting. draft_required → draft first;
+              // review_required → the user must review; authorization_missing
+              // → the user must confirm sending for this turn.
+              const blockedReason = explainOutboundGateBlock(
+                gateDecision.code,
+                gateDecision.batchId
+              );
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                outboundGateBlocked: true,
+                code: gateDecision.code,
+                reason: blockedReason,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  outboundGateBlocked: true,
+                  code: gateDecision.code,
+                },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            }
+            // Gate allowed: thread the trusted authorization triple through
+            // to the send tool so it claims the batch (§15.1) instead of the
+            // legacy path.
+            outboundAuthorization = {
+              batchId: gateDecision.batchId,
+              authorizationId: gateDecision.authorizationId,
+              batchHash: gateDecision.batchHash,
+            };
+          }
+
           const executableCall = {
             id: call.id,
             name: call.name,
@@ -1918,7 +2033,8 @@ export class AIChatQueryLoop {
           };
           const preparedCall = await this.prepareToolCall(
             input,
-            executableCall
+            executableCall,
+            outboundAuthorization
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           await emitToolCall(effectiveArguments);
@@ -2007,6 +2123,14 @@ export class AIChatQueryLoop {
                 toolCallId: call.id,
                 toolName: call.name,
                 toolArguments: effectiveArguments,
+                // Trusted intent context must survive the permission pause so
+                // the resume re-execution can still bind the draft batch to
+                // the originating user message (technical design §9). The
+                // gate-resolved authorization must survive too — losing it
+                // would make the resumed send fall to the legacy path (RC4).
+                sourceUserMessageId: input.sourceUserMessageId,
+                intentDecisionId: input.intentDecisionId,
+                outboundAuthorization,
                 planContext,
                 eventSink: eventSink,
                 toolCatalogState: catalogActive
@@ -2486,6 +2610,11 @@ export class AIChatQueryLoop {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
+    },
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
     }
   ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
@@ -2516,6 +2645,17 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
+              // Trusted intent context (technical design §9/§14.2): binds the
+              // draft to the exact user message + persisted intent decision
+              // so authorization is never derived from tool arguments.
+              sourceUserMessageId: input.sourceUserMessageId,
+              intentDecisionId: input.intentDecisionId,
+              // Trusted gate-resolved authorization for an allowed send
+              // (§15.1); threaded for uniformity with the foreground path.
+              outboundAuthorization,
+              // Draft generation only persists reviewable local state; it
+              // does not contact recipients. The send tool remains gated.
+              skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -2737,12 +2877,95 @@ export class AIChatQueryLoop {
     }
   }
 
+  /**
+   * Evaluate the outbound-email delivery gate for the current turn (technical
+   * design §14.2). Loads the persisted intent decision threaded into the loop
+   * input by the query engine. Ordinary `send_now` only looks up an already-
+   * persisted authorization (Review approval) — auto-creating one is what let
+   * the model send in the same turn as the draft. The exception is
+   * `explicit_skip_review` or `contextual_affirmation`: the user waived
+   * Review or confirmed the presented draft in chat, so a direct-send
+   * authorization is created after a draft exists.
+   *
+   * Fail-closed: any unreadable intent, missing turn identity, or resolver
+   * failure yields a blocking code — a send is never authorized on error.
+   */
+  private async evaluateOutboundEmailGate(
+    input: AIChatQueryLoopInput
+  ): Promise<OutboundEmailToolGateResult> {
+    // Without a trusted intent decision for this turn's user message there is
+    // no evidence the user asked to send at all — blocked as draft_required.
+    if (input.intentDecisionId == null) {
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+    // The authorization binds to the exact user message (AD-001/AD-005). No
+    // trusted source message id means no binding is possible — block.
+    if (!input.sourceUserMessageId) {
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+
+    try {
+      const intentDecision = await new OutboundEmailIntentModule().read(
+        input.intentDecisionId
+      );
+      if (!intentDecision) {
+        return OutboundEmailToolGate.evaluate(null, null, null);
+      }
+
+      // Resolve the DB path from the Token service (matching the draft tool
+      // and outbound IPC layer): passing no dbpath would make the models fall
+      // back to the os.tmpdir() test database, flipping SqliteDb.getInstance
+      // to a different path and destroying the live connection mid-conversation.
+      const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const authService = new OutboundEmailAuthorizationService(dbpath);
+
+      if (
+        intentDecision.mode === "send_now" &&
+        allowsOutboundDirectSendAuthorization(intentDecision.reasonCode)
+      ) {
+        const auth = await authService.resolveDirectSendForTurn({
+          conversationId: input.conversationId,
+          sourceUserMessageId: input.sourceUserMessageId,
+          intentDecisionId: intentDecision.id,
+          inheritConversationDraft: true,
+        });
+        if (auth) {
+          return OutboundEmailToolGate.evaluate(
+            intentDecision,
+            auth,
+            auth.batchId
+          );
+        }
+      }
+
+      const lookup = await authService.lookupTurnAuthorization({
+        conversationId: input.conversationId,
+        sourceUserMessageId: input.sourceUserMessageId,
+      });
+
+      return OutboundEmailToolGate.evaluate(
+        intentDecision,
+        lookup.authorization,
+        lookup.batchId
+      );
+    } catch (err) {
+      console.error("[outbound-email-intent] gate lookup failed:", err);
+      // Fail closed: an unreadable decision must never authorize a send.
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+  }
+
   private async prepareToolCall(
     input: AIChatQueryLoopInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
+    },
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
     }
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
@@ -2767,6 +2990,7 @@ export class AIChatQueryLoop {
           preAggregate,
           Date.now() - startedAt
         ),
+        outboundAuthorization,
       };
     }
 
@@ -2780,6 +3004,7 @@ export class AIChatQueryLoop {
       descriptor,
       preAggregate,
       effectiveCall,
+      outboundAuthorization,
     };
   }
 
@@ -2787,7 +3012,13 @@ export class AIChatQueryLoop {
     input: AIChatQueryLoopInput,
     prepared: PreparedToolCall
   ): Promise<ToolExecutionResult> {
-    const { descriptor, effectiveCall, preAggregate, startedAt } = prepared;
+    const {
+      descriptor,
+      effectiveCall,
+      preAggregate,
+      startedAt,
+      outboundAuthorization,
+    } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);
@@ -2803,7 +3034,11 @@ export class AIChatQueryLoop {
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(input, effectiveCall);
+      const { jobId } = await this.executeAsyncTool(
+        input,
+        effectiveCall,
+        outboundAuthorization
+      );
       toolResult = await this.pollAsyncJobToCompletion(
         input,
         effectiveCall,
@@ -2815,7 +3050,8 @@ export class AIChatQueryLoop {
         effectiveCall,
         skill,
         timeoutMs,
-        startedAt
+        startedAt,
+        outboundAuthorization
       );
     }
 
@@ -2855,7 +3091,12 @@ export class AIChatQueryLoop {
     },
     skill: SkillDefinition | null | undefined,
     timeoutMs: number,
-    startedAt: number
+    startedAt: number,
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
+    }
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
@@ -2868,6 +3109,18 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         args: call.arguments,
         model: input.request.model,
+        // Trusted intent context (technical design §9/§14.2): binds the
+        // draft to the exact user message + persisted intent decision
+        // so authorization is never derived from tool arguments.
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
+        // Trusted outbound-email authorization triple for an allowed send
+        // (§14.2/§15.1). The send tool claims the batch via this; never
+        // sourced from tool arguments (AD-003).
+        outboundAuthorization,
+        // Preparing reviewable local drafts must not create a second user
+        // decision before the separately protected outbound send action.
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing
