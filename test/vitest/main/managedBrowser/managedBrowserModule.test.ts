@@ -1022,11 +1022,15 @@ describe("ManagedBrowserModule renderer sinks", () => {
       requestId: "call-1",
       riskClass: "consequential_write",
       contentSummary: "Publish video",
+      programDigest: "a".repeat(64),
+      pageRevision: 3,
     });
     expect(approvals).toEqual([
       {
         sessionId: "mb_x0000000000001",
         requestId: "call-1",
+        programDigest: "a".repeat(64),
+        pageRevision: 3,
         riskClass: "consequential_write",
         messageKey: "managedBrowser.approval.required",
         contentSummary: "Publish video",

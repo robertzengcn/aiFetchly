@@ -149,6 +149,8 @@ export interface BrowserModuleLike {
     requestId: string;
     riskClass: string;
     contentSummary?: string | null;
+    programDigest?: string;
+    pageRevision?: number;
   }): void;
   /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
   getLastObservation?(sessionId: string): {
@@ -156,8 +158,20 @@ export interface BrowserModuleLike {
   } | null;
   /** Cancel the active worker request (GAP-14). */
   cancelActiveRequest?(sessionId: string): Promise<void>;
-  /** Consume the single outstanding approval decision (GAP-01). */
-  consumeApprovalForSession?(sessionId: string): "approve" | "deny" | null;
+  /** Consume the approval decision bound to this exact program (TODO-MSB-002). */
+  consumeApprovalForProgram?(input: {
+    sessionId: string;
+    programDigest: string;
+    pageRevision: number;
+  }): "approve" | "deny" | null;
+  /** Record an approval bound to a digest (TODO-MSB-002). */
+  recordApproval?(input: {
+    sessionId: string;
+    requestId: string;
+    decision: "approve" | "deny";
+    programDigest?: string;
+    pageRevision?: number;
+  }): void;
 }
 
 /** Prefix stamped on every observation-derived payload (§14). */
@@ -417,20 +431,27 @@ export class ManagedBrowserAiToolService {
     if (assessment.routing === "handoff") {
       await this.requireHandoff(parsed.data.session_id, assessment);
     }
-    if (assessment.requiresApproval && !context.skipPermissionCheck) {
-      // The one-click approval dialog records an APPROVE for the session;
-      // consuming it here authorizes exactly ONE retry (single-use, 10-min
-      // freshness) without a second interruption.
+    // TODO-MSB-002: consequential actions are ALWAYS-CONFIRM — no
+    // permission mode (session consent, permission-prompt skip, or
+    // full_access) bypasses the managed-browser approval. The approval is
+    // bound to the exact program digest + page revision and consumed
+    // single-use; a different program or a mutated revision never matches.
+    if (assessment.requiresApproval) {
+      const programDigest = computeProgramDigest(program);
       const priorDecision =
-        this.browserModule.consumeApprovalForSession?.(
-          parsed.data.session_id
-        ) ?? null;
+        this.browserModule.consumeApprovalForProgram?.({
+          sessionId: parsed.data.session_id,
+          programDigest,
+          pageRevision: parsed.data.page_revision,
+        }) ?? null;
       if (priorDecision !== "approve") {
         this.browserModule.notifyApprovalRequired?.({
           sessionId: parsed.data.session_id,
           requestId: context.toolCallId,
           riskClass: assessment.riskClass,
           contentSummary: buildApprovalSummary(program, descriptorFor),
+          programDigest,
+          pageRevision: parsed.data.page_revision,
         });
         throw new ManagedBrowserAiToolError(
           "approval_required",
@@ -441,6 +462,7 @@ export class ManagedBrowserAiToolService {
         );
       }
     }
+    void context.skipPermissionCheck;
 
     // Attach main-process-attested expected fingerprints so the worker
     // revalidates each target immediately before execution (GAP-01/03).
@@ -558,7 +580,19 @@ export class ManagedBrowserAiToolService {
     if (assessment.riskClass !== "privileged_script") {
       throw new ManagedBrowserAiToolError("action_not_allowed");
     }
-    if (!context.skipPermissionCheck) {
+    const sourceHash = crypto
+      .createHash("sha256")
+      .update(parsed.data.source)
+      .digest("hex");
+    // TODO-MSB-002/009: always-confirm — the permission mode never
+    // bypasses; the approval binds to the exact source hash + revision.
+    const priorDecision =
+      this.browserModule.consumeApprovalForProgram?.({
+        sessionId: parsed.data.session_id,
+        programDigest: sourceHash,
+        pageRevision: parsed.data.page_revision,
+      }) ?? null;
+    if (priorDecision !== "approve") {
       this.browserModule.notifyApprovalRequired?.({
         sessionId: parsed.data.session_id,
         requestId: context.toolCallId,
@@ -568,13 +602,11 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError(
         "approval_required",
         "privileged_script",
-        "script_requires_explicit_approval"
+        priorDecision === "deny"
+          ? "approval_denied"
+          : "script_requires_explicit_approval"
       );
     }
-    const sourceHash = crypto
-      .createHash("sha256")
-      .update(parsed.data.source)
-      .digest("hex");
     log.info(
       `[ManagedBrowserTools] evaluate_script approved: sha256=${sourceHash.slice(0, 16)} bytes=${parsed.data.source.length}`
     );
@@ -709,6 +741,23 @@ export class ManagedBrowserAiToolService {
       this.wrapModuleError(error);
     }
   }
+}
+
+/** Stable digest of the exact program an approval authorizes. */
+export function computeProgramDigest(
+  program: BrowserActionProgram
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        actions: program.actions.map((action) =>
+          JSON.parse(JSON.stringify(action))
+        ),
+        intent: program.intent ?? null,
+      })
+    )
+    .digest("hex");
 }
 
 /**

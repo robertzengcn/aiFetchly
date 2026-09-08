@@ -96,7 +96,15 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     sendToRenderer(win, MANAGED_BROWSER_PROGRESS_EVENT, progress)
   );
   browserModule.setApprovalSink((request) =>
-    sendToRenderer(win, MANAGED_BROWSER_APPROVAL_EVENT, request)
+    sendToRenderer(win, MANAGED_BROWSER_APPROVAL_EVENT, {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      programDigest: request.programDigest,
+      pageRevision: request.pageRevision,
+      riskClass: request.riskClass,
+      messageKey: request.messageKey,
+      contentSummary: request.contentSummary,
+    })
   );
 
   // --- AI-facing session channels (USER_AI_ENABLED checked FIRST) -------
@@ -161,7 +169,17 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     MANAGED_BROWSER_APPROVE,
     managedBrowserApproveInputSchema,
     async (input) => {
-      browserModule.recordApproval(input);
+      browserModule.recordApproval({
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        decision: input.decision,
+        ...(input.programDigest
+          ? { programDigest: input.programDigest }
+          : {}),
+        ...(input.pageRevision
+          ? { pageRevision: input.pageRevision }
+          : {}),
+      });
       return { recorded: true as const };
     }
   );

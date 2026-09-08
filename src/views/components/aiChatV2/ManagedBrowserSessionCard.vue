@@ -215,6 +215,8 @@ const progressLine = ref<string | null>(null);
 const approvalRequest = ref<{
   readonly sessionId: string;
   readonly requestId: string;
+  readonly programDigest: string | null;
+  readonly pageRevision: number | null;
   readonly riskClass: string;
   readonly contentSummary: string | null;
 } | null>(null);
@@ -391,6 +393,12 @@ async function onApprovalDecision(
       sessionId: request.sessionId,
       requestId: request.requestId,
       decision,
+      ...(request.programDigest
+        ? { programDigest: request.programDigest }
+        : {}),
+      ...(request.pageRevision
+        ? { pageRevision: request.pageRevision }
+        : {}),
     });
   } catch (error) {
     console.error("[ManagedBrowserSessionCard] approval failed:", error);

@@ -365,6 +365,8 @@ describe("GAP-08 chat wiring", () => {
     captureCallback(apiMocks.onManagedBrowserApprovalRequired)({
       sessionId: "mb_test000000001",
       requestId: "call-9",
+      programDigest: "b".repeat(64),
+      pageRevision: 4,
       riskClass: "consequential_write",
       messageKey: "managedBrowser.approval.required",
       contentSummary: 'click "Publish video"',
@@ -382,6 +384,8 @@ describe("GAP-08 chat wiring", () => {
         sessionId: "mb_test000000001",
         requestId: "call-9",
         decision: "approve",
+        programDigest: "b".repeat(64),
+        pageRevision: 4,
       })
     );
     await vi.waitFor(() =>

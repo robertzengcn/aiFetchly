@@ -45,6 +45,9 @@ function makeModule(
     getLastObservation: vi.fn(() => null),
     notifyApprovalRequired: vi.fn(),
     cancelActiveRequest: vi.fn(async (): Promise<void> => undefined),
+    consumeApprovalForProgram: vi.fn(
+      (_input: unknown): "approve" | "deny" | null => null
+    ),
     getStatus: vi.fn((sessionId: string) =>
       sessionId === SESSION_ID ? status() : null
     ),
@@ -333,16 +336,24 @@ describe("GAP-01 resolved-target approval", () => {
     );
   });
 
-  it("attests expected fingerprints and executes once consent was granted", async () => {
+  it("attests expected fingerprints and executes on a DIGEST-MATCHING approval", async () => {
     const module = moduleWithObservation();
+    const program = {
+      actions: [{ type: "click", ref: "e_title", pageRevision: 4 }],
+    };
+    // The dialog-approved decision for exactly this program+revision.
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (input: { programDigest: string; pageRevision: number }) =>
+        input.pageRevision === 4 ? "approve" : null
+    );
     const service = makeService({ module });
     const result = await service.runActions(
       {
         session_id: SESSION_ID,
         page_revision: 4,
-        program: { actions: [{ type: "click", ref: "e_title", pageRevision: 4 }] },
+        program,
       },
-      { ...CTX, skipPermissionCheck: true }
+      CTX
     );
     expect(result.effect).toBe("known");
     expect(module.runActions).toHaveBeenCalledWith(SESSION_ID, {
@@ -358,17 +369,56 @@ describe("GAP-01 resolved-target approval", () => {
     });
   });
 
-  it("a full-access grant still cannot bypass consequential approval", async () => {
+  it("full_access / skipPermissionCheck cannot bypass consequential approval (TODO-MSB-002)", async () => {
     const module = moduleWithObservation();
     const service = makeService({ module });
-    // skipPermissionCheck ONLY arrives from a real permission grant for the
-    // exact approved program; absent it, even session-level consent fails.
     const err = await errorOf(
       service.runActions(
         {
           session_id: SESSION_ID,
           page_revision: 4,
           program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+        },
+        { ...CTX, skipPermissionCheck: true }
+      )
+    );
+    expect(err.code).toBe("approval_required");
+    expect(err.riskClass).toBe("consequential_write");
+  });
+
+  it("an approval for a DIFFERENT program digest never authorizes (TODO-MSB-002)", async () => {
+    const module = moduleWithObservation();
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      () => null // digest mismatch → no matching decision
+    );
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 4,
+          program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+        },
+        CTX
+      )
+    );
+    expect(err.code).toBe("approval_required");
+  });
+
+  it("a revision mutation invalidates a prior approval (TODO-MSB-002)", async () => {
+    const module = moduleWithObservation();
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (input: { pageRevision: number }) =>
+        input.pageRevision === 4 ? "approve" : null
+    );
+    const service = makeService({ module });
+    // The model re-sent the program at a MUTATED revision — no match.
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 9,
+          program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 9 }] },
         },
         CTX
       )
@@ -442,13 +492,13 @@ describe("GAP-12 privileged page-context script", () => {
     );
   });
 
-  it("executes with consent and returns redacted, budgeted results", async () => {
+  it("executes on a SOURCE-HASH-matching approval and returns redacted results", async () => {
     const module = makeModule();
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      () => "approve"
+    );
     const service = makeService({ module });
-    const result = await service.evaluateScript(ARGS, {
-      ...CTX,
-      skipPermissionCheck: true,
-    });
+    const result = await service.evaluateScript(ARGS, CTX);
     expect(result.ok).toBe(true);
     expect(module.evaluateScript).toHaveBeenCalledWith(SESSION_ID, {
       source: ARGS.source,
@@ -456,6 +506,16 @@ describe("GAP-12 privileged page-context script", () => {
     });
     expect(String(result.sourceHash)).toMatch(/^[0-9a-f]{64}$/);
     expect(result.contentNotice).toContain("untrusted_page_content");
+  });
+
+  it("skipPermissionCheck cannot bypass script approval (TODO-MSB-002)", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.evaluateScript(ARGS, { ...CTX, skipPermissionCheck: true })
+    );
+    expect(err.code).toBe("approval_required");
+    expect(module.evaluateScript).not.toHaveBeenCalled();
   });
 
   it("rejects oversized or malformed model arguments", async () => {

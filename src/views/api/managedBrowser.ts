@@ -99,6 +99,9 @@ export async function approveBrowserAction(input: {
   sessionId: string;
   requestId: string;
   decision: "approve" | "deny";
+  /** Digest binding: the approval authorizes exactly this program. */
+  programDigest?: string;
+  pageRevision?: number;
 }): Promise<{ recorded: boolean }> {
   return await windowInvoke(MANAGED_BROWSER_APPROVE, input);
 }
@@ -222,6 +225,8 @@ export function onManagedBrowserProgress(
 export interface ManagedBrowserApprovalRequest {
   readonly sessionId: string;
   readonly requestId: string;
+  readonly programDigest: string | null;
+  readonly pageRevision: number | null;
   readonly riskClass: string;
   readonly messageKey: string;
   readonly contentSummary: string | null;

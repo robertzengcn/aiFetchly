@@ -75,6 +75,9 @@ export const managedBrowserApproveInputSchema = lazySchema(() =>
     sessionId: sessionIdSchema,
     requestId: z.string().min(4).max(96),
     decision: z.enum(["approve", "deny"]),
+    /** Digest binding (TODO-MSB-002): the approval authorizes exactly this. */
+    programDigest: z.string().length(64).optional(),
+    pageRevision: z.number().int().positive().optional(),
   })
 );
 
@@ -199,6 +202,9 @@ export const approvalRequiredEventSchema = lazySchema(() =>
   z.strictObject({
     sessionId: sessionIdSchema,
     requestId: z.string().min(4).max(96),
+    /** Digest of the exact program this approval would authorize. */
+    programDigest: z.string().length(64).nullable(),
+    pageRevision: z.number().int().positive().nullable(),
     riskClass: z.enum([
       "read",
       "reversible_write",

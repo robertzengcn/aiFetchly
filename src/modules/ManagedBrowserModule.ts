@@ -241,6 +241,10 @@ export class ManagedBrowserModule {
       readonly sessionId: string;
       readonly decision: "approve" | "deny";
       readonly recordedAtEpochMs: number;
+      /** SHA-256 of the exact program/script this approval authorizes. */
+      readonly programDigest: string | null;
+      /** Page revision the approval was granted against. */
+      readonly pageRevision: number | null;
     }
   >();
   /** Wired by the IPC layer: pushes every safe status to the renderer. */
@@ -268,6 +272,8 @@ export class ManagedBrowserModule {
         request: {
           readonly sessionId: string;
           readonly requestId: string;
+          readonly programDigest: string | null;
+          readonly pageRevision: number | null;
           readonly riskClass: string;
           readonly messageKey: string;
           readonly contentSummary: string | null;
@@ -331,6 +337,8 @@ export class ManagedBrowserModule {
     sink: (request: {
       readonly sessionId: string;
       readonly requestId: string;
+      readonly programDigest: string | null;
+      readonly pageRevision: number | null;
       readonly riskClass: string;
       readonly messageKey: string;
       readonly contentSummary: string | null;
@@ -345,11 +353,15 @@ export class ManagedBrowserModule {
     readonly requestId: string;
     readonly riskClass: string;
     readonly contentSummary?: string | null;
+    readonly programDigest?: string;
+    readonly pageRevision?: number;
   }): void {
     if (this.externalApprovalSink) {
       this.externalApprovalSink({
         sessionId: input.sessionId,
         requestId: input.requestId,
+        programDigest: input.programDigest ?? null,
+        pageRevision: input.pageRevision ?? null,
         riskClass: input.riskClass,
         messageKey: "managedBrowser.approval.required",
         contentSummary: input.contentSummary ?? null,
@@ -742,6 +754,9 @@ export class ManagedBrowserModule {
     readonly sessionId: string;
     readonly requestId: string;
     readonly decision: "approve" | "deny";
+    /** Digest of the exact program/script being approved (TODO-MSB-002). */
+    readonly programDigest?: string;
+    readonly pageRevision?: number;
   }): void {
     this.requireSession(input.sessionId);
     if (this.approvalDecisions.size >= 100) {
@@ -755,6 +770,8 @@ export class ManagedBrowserModule {
       sessionId: input.sessionId,
       decision: input.decision,
       recordedAtEpochMs: this.now(),
+      programDigest: input.programDigest ?? null,
+      pageRevision: input.pageRevision ?? null,
     });
   }
 
@@ -764,18 +781,37 @@ export class ManagedBrowserModule {
    * "deny" when the user denied (still consumed), null when no decision
    * was recorded. Single-use by construction.
    */
-  public consumeApprovalForSession(
-    sessionId: string
-  ): "approve" | "deny" | null {
+  public consumeApprovalForProgram(input: {
+    readonly sessionId: string;
+    readonly programDigest: string;
+    readonly pageRevision: number;
+  }): "approve" | "deny" | null {
     for (const [requestId, entry] of this.approvalDecisions) {
-      if (entry.sessionId === sessionId) {
+      if (entry.sessionId !== input.sessionId) {
+        continue;
+      }
+      // A deny is session-scoped: consume it regardless of digest.
+      if (entry.decision === "deny") {
         this.approvalDecisions.delete(requestId);
-        // Stale decisions (>10 min) never authorize a new program.
         if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
           return null;
         }
-        return entry.decision;
+        return "deny";
       }
+      const digestMatches =
+        entry.programDigest === null ||
+        entry.programDigest === input.programDigest;
+      const revisionMatches =
+        entry.pageRevision === null ||
+        entry.pageRevision === input.pageRevision;
+      if (!digestMatches || !revisionMatches) {
+        continue; // a stale approve for a DIFFERENT program never matches
+      }
+      this.approvalDecisions.delete(requestId);
+      if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
+        return null;
+      }
+      return "approve";
     }
     return null;
   }
