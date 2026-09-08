@@ -142,8 +142,8 @@
         </template>
       </template>
       <template v-else>
-        <div v-if="message.content" class="v2-message__content">
-          {{ message.content }}
+        <div v-if="displayContent" class="v2-message__content">
+          {{ displayContent }}
         </div>
         <details
           v-if="hasReasoning"
@@ -255,7 +255,7 @@
       </div>
 
       <div
-        v-if="message.role === 'user' && pastedChips.length > 0"
+        v-if="message.role === 'user' && showPastedChips"
         class="v2-message__mentions"
       >
         <span
@@ -335,6 +335,11 @@ import type { ReportableOutputDescriptor } from "@/views/components/aiContentRep
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
+import {
+  buildPastedContentsFromBlocks,
+  expandPastedTextForDisplay,
+} from "@/service/pastedText/PastedTextDisplay";
+import { parsePastedTextRefs } from "@/service/pastedText/PastedTextParser";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -904,13 +909,41 @@ async function onPasteDetailsToggle(
   }
 }
 
+const pastedBlocksFromMeta = computed<readonly ChatV2PastedBlockMetadata[]>(
+  () => {
+    if (props.message.role !== "user") return [];
+    const meta = props.message.metadata as
+      | { pastedBlocks?: ChatV2PastedBlockMetadata[] }
+      | undefined;
+    return meta?.pastedBlocks ?? [];
+  }
+);
+
+const readyPasteByHash = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {};
+  for (const [hash, state] of Object.entries(pastePreviewByHash.value)) {
+    if (state.status === "ready") {
+      out[hash] = state.content;
+    }
+  }
+  return out;
+});
+
+const displayContent = computed((): string => {
+  const raw = props.message.content ?? "";
+  if (props.message.role !== "user") return raw;
+  return expandPastedTextForDisplay(
+    raw,
+    buildPastedContentsFromBlocks(
+      pastedBlocksFromMeta.value,
+      readyPasteByHash.value
+    )
+  );
+});
+
 const pastedChips = computed<PastedChip[]>(() => {
-  if (props.message.role !== "user") return [];
-  const meta = props.message.metadata as
-    | { pastedBlocks?: ChatV2PastedBlockMetadata[] }
-    | undefined;
-  const blocks = meta?.pastedBlocks;
-  if (!blocks || blocks.length === 0) return [];
+  const blocks = pastedBlocksFromMeta.value;
+  if (blocks.length === 0) return [];
 
   return blocks.map((b): PastedChip => {
     const label =
@@ -933,6 +966,22 @@ const pastedChips = computed<PastedChip[]>(() => {
     };
   });
 });
+
+const showPastedChips = computed((): boolean => {
+  if (pastedChips.value.length === 0) return false;
+  return parsePastedTextRefs(displayContent.value).length > 0;
+});
+
+watch(
+  pastedChips,
+  (chips) => {
+    for (const chip of chips) {
+      if (chip.inlineContent || !chip.contentHash) continue;
+      void onPasteDetailsToggle(chip, true);
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>

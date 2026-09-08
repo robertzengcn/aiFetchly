@@ -821,6 +821,7 @@ import {
   isValidLoopCount,
 } from "@/views/utils/aiGoalCommand";
 import { parseAiLoopCommand } from "@/service/slashCommands/AiChatLoopCommandParser";
+import { pastedBlocksFromSend } from "@/service/pastedText/PastedTextDisplay";
 import {
   createScheduledLoop,
   controlScheduledLoop,
@@ -3807,6 +3808,22 @@ const onSend = async (
     (!chunk.conversationId || chunk.conversationId === streamConversationId);
 
   const nowIso = new Date().toISOString();
+  const optimisticPastedBlocks = pastedBlocksFromSend(
+    displayText,
+    options?.pastedContents
+  );
+  const tempUserMetadata: ChatV2MessageMetadata | undefined =
+    attachmentMetadata || optimisticPastedBlocks
+      ? {
+          source: "chat-v2",
+          ...(attachmentMetadata
+            ? { attachments: attachmentMetadata }
+            : {}),
+          ...(optimisticPastedBlocks
+            ? { pastedBlocks: optimisticPastedBlocks }
+            : {}),
+        }
+      : undefined;
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: streamConversationId,
@@ -3814,9 +3831,7 @@ const onSend = async (
     content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
-    metadata: attachmentMetadata
-      ? { source: "chat-v2", attachments: attachmentMetadata }
-      : undefined,
+    metadata: tempUserMetadata,
   };
   let streamMessages = [...messages.value, tempUser];
   const streamMessageListController: MessageListController = {
