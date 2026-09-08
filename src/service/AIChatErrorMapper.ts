@@ -46,7 +46,8 @@ export function isQuotaError(err: unknown): boolean {
 
 /**
  * Broad pattern for transient, retryable server-side failures: empty
- * responses, finish_reason=error, rate limits, timeouts, 502s, AI-server 5xx
+ * responses, finish_reason=error, rate limits, timeouts, 502s, HTTP 5xx
+ * envelopes (including Cloudflare 520 origin failures), AI-server 5xx
  * codes, and the SQLite "database connection is not open" hiccup. These
  * recover on a fresh attempt after a short backoff. Drives the user-facing
  * message only — the query loop's auto-retry decision uses the narrower
@@ -54,7 +55,7 @@ export function isQuotaError(err: unknown): boolean {
  * streaming HTTP client's own retry layer.
  */
 const TRANSIENT_ERROR_PATTERN =
-  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i;
+  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|HTTP\s+5\d{2}|AI server error code=5\d\d|database connection is not open/i;
 
 /**
  * Returns true when the error represents a transient, retryable AI-server

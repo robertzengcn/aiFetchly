@@ -849,6 +849,25 @@ describe("AI Chat V2 — stream lifecycle", () => {
     expect(payload?.errorMessage).not.toContain("stack trace");
   });
 
+  it("maps HTTP 520 origin failures to the transient-issue message", async () => {
+    mockOpenAIChatCompletionStream.mockRejectedValue(
+      new Error("HTTP 520: <none>")
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi" })
+    );
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
   it("sends tools, executes tool calls, and continues to a final answer", async () => {
     mockSkillExecute.mockResolvedValue({
       tool_call_id: "call_1",

@@ -3,7 +3,6 @@ import { AiChatApi } from "@/api/aiChatApi";
 import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
 // Import the modules to be mocked
-import { HttpClient } from "@/modules/lib/httpclient";
 import { Token } from "@/modules/token";
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
@@ -585,7 +584,7 @@ describe("AiChatApi - Error Sanitization", () => {
     it.each(sanitizeErrorTests)(
       "$name",
       ({ input, shouldNotContain, shouldContain, maxLength }) => {
-        const sanitized = (api as any).sanitizeErrorInfo(input);
+        const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo(input);
 
         if (shouldNotContain) {
           shouldNotContain.forEach((str: string) => {
@@ -607,12 +606,12 @@ describe("AiChatApi - Error Sanitization", () => {
   });
 
   it("should handle empty error info", () => {
-    const sanitized = (api as any).sanitizeErrorInfo("");
+    const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo("");
     expect(sanitized).toBe("");
   });
 
   it("should handle error info with only whitespace", () => {
-    const sanitized = (api as any).sanitizeErrorInfo("   \n\t   ");
+    const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo("   \n\t   ");
     expect(sanitized).toBe("");
   });
 });
@@ -628,37 +627,37 @@ describe("AiChatApi - Screenshot Validation", () => {
   describe("validateScreenshot", () => {
     it("should accept valid PNG data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
       }).not.toThrow();
     });
 
     it("should accept valid JPEG data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
       }).not.toThrow();
     });
 
     it("should accept valid WebP data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/webp;base64,UklGR");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/webp;base64,UklGR");
       }).not.toThrow();
     });
 
     it("should reject text data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:text/plain;base64,invalid");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:text/plain;base64,invalid");
       }).toThrow("Invalid screenshot format");
     });
 
     it("should reject malformed data URI", () => {
       expect(() => {
-        (api as any).validateScreenshot("data:image/png;");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/png;");
       }).toThrow("Invalid screenshot format");
     });
 
     it("should accept raw base64 string (for wrapping)", () => {
       expect(() => {
-        (api as any).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
+        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
       }).not.toThrow();
     });
   });
@@ -678,31 +677,31 @@ describe("AiChatApi - Page Size Validation", () => {
     it("should accept page content within limit", () => {
       const content = "x".repeat(49 * 1024); // 49KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should reject page content exceeding limit", () => {
       const content = "x".repeat(51 * 1024); // 51KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
       }).toThrow("Page content too large");
     });
 
     it("should accept page content exactly at limit", () => {
       const content = "x".repeat(50 * 1024); // Exactly 50KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should include size information in error", () => {
       const content = "x".repeat(60 * 1024); // 60KB
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
       }).toThrow(/61440/);
       expect(() => {
-        (api as any).validatePageSize(content);
+        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
       }).toThrow(/51200/);
     });
   });
@@ -1450,6 +1449,41 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
       await p;
 
       expect(layers).toEqual(["overload_retry"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries when postStream throws an HTTP 520 envelope then succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostStreamShared
+        .mockRejectedValueOnce(new Error("HTTP 520: <none>"))
+        .mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const recoveries: Array<{ reason: string }> = [];
+      const chunks: string[] = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        (chunk) => {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) chunks.push(content);
+        },
+        {
+          retryProfile: "foreground",
+          onRecoveryStatus: (info) => recoveries.push({ reason: info.reason }),
+        }
+      );
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(chunks.join("")).toBe("ok");
+      expect(recoveries).toEqual([{ reason: "server_error" }]);
     } finally {
       vi.useRealTimers();
     }

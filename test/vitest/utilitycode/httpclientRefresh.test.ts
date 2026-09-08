@@ -256,4 +256,21 @@ describe("HttpClient token-refresh behavior", () => {
     expect(mockRefreshOnce).not.toHaveBeenCalled();
     expect(mockRemoveToken).not.toHaveBeenCalled();
   });
+
+  it("returns Cloudflare HTTP 520 stream responses instead of throwing", async () => {
+    const cf520 = {
+      ok: false,
+      status: 520,
+      statusText: "<none>",
+    } as unknown as Response;
+    fetchSpy.mockResolvedValueOnce(cf520);
+
+    const res = await client.postStream("/api/ai/v1/chat/completions", {
+      message: "hi",
+    });
+
+    expect(res.status).toBe(520);
+    expect(res.ok).toBe(false);
+    expect(res.statusText).toBe("<none>");
+  });
 });

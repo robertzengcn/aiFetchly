@@ -485,7 +485,10 @@ export class HttpClient {
       }
     }
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    // Return non-OK bodies (Cloudflare 520, 502, 429, …) so stream callers
+    // can classify status/headers/body and retry. Throwing a generic
+    // `HTTP 520: <none>` here used to mark origin failures non-recoverable
+    // and interrupt AI chat. 401/403 still refresh above this line.
     return res;
   }
 }

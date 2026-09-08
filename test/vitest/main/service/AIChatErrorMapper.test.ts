@@ -157,6 +157,12 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
+  it("maps a thrown HTTP 520 envelope to the transient-issue message", () => {
+    expect(userSafeError(new Error("HTTP 520: <none>"))).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
   it("still falls back to the generic message for unknown errors", () => {
     expect(userSafeError(new Error("something else entirely"))).toBe(
       "An unexpected error occurred. Please try again."
@@ -220,6 +226,9 @@ describe("AIChatErrorMapper - isTransientRetryableError", () => {
     expect(
       isTransientRetryableError(new Error("database connection is not open"))
     ).toBe(true);
+    expect(isTransientRetryableError(new Error("HTTP 520: <none>"))).toBe(
+      true
+    );
   });
 
   it("never classifies aborts or non-Error values as retryable", () => {

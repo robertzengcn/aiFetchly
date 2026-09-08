@@ -179,6 +179,18 @@ export class AIChatRecoveryClassifier {
           originalError: error,
         });
       }
+      // HttpClient.postStream used to throw `HTTP 520: <none>` (Cloudflare
+      // origin failure with an empty statusText). Parse the status so 5xx
+      // envelopes retry as server_error instead of non_recoverable.
+      const httpStatus = this.extractThrownHttpStatus(error);
+      if (httpStatus !== undefined) {
+        return new AIChatRecoverableError({
+          reason: this.classifyHttpStatus(httpStatus, error.message),
+          status: httpStatus,
+          message: error.message || `HTTP ${httpStatus}`,
+          originalError: error,
+        });
+      }
       const fromAuth = this.classifyAuthText(text);
       if (fromAuth) {
         return new AIChatRecoverableError({
@@ -352,6 +364,31 @@ export class AIChatRecoveryClassifier {
 
   private matchesAny(text: string, patterns: readonly RegExp[]): boolean {
     return patterns.some((p) => p.test(text));
+  }
+
+  /**
+   * Pull an HTTP status out of a thrown Error: a numeric `status` field
+   * (HttpResponseError) or an `HTTP 520` / `HTTP 520: <none>` envelope.
+   */
+  private extractThrownHttpStatus(error: Error): number | undefined {
+    const status = (error as { status?: unknown }).status;
+    if (
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= 100 &&
+      status < 600
+    ) {
+      return status;
+    }
+    const match = error.message.match(/\bHTTP\s+(\d{3})\b/i);
+    if (!match) {
+      return undefined;
+    }
+    const parsed = Number(match[1]);
+    if (!Number.isInteger(parsed) || parsed < 100 || parsed >= 600) {
+      return undefined;
+    }
+    return parsed;
   }
 
   private classifyNameLike(name: string): AIChatRecoveryReason | undefined {
