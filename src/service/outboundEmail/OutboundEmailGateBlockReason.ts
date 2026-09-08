@@ -38,15 +38,18 @@ export function explainOutboundGateBlock(
       return (
         `Outbound send blocked: no reviewed draft is ready for this turn${batchRef}. ` +
         "Call draft_outbound_email_batch first to create a reviewable batch. " +
-        "After drafting, call start_email_send_task only if the user explicitly " +
-        "asked to send without review or send directly. Otherwise do NOT send — " +
-        "present the draft and wait for the user to click Review."
+        "After drafting, call start_email_send_task with skip_review=true if the " +
+        "user explicitly asked to send without review or send directly. If the " +
+        "user already waived review, call start_email_send_task with skip_review=true " +
+        "immediately — do not draft first. Otherwise do NOT send — present the " +
+        "draft and wait for the user to click Review."
       );
     case "review_required":
       return (
         `Outbound send blocked: this batch${batchRef} must be reviewed before sending. ` +
-        "Do NOT re-draft or re-call the send tool. Present the draft for user " +
-        "review and wait for an explicit approval."
+        "Do NOT re-draft. If the user explicitly waived review, call " +
+        "start_email_send_task again with skip_review=true. Otherwise present the " +
+        "draft and wait for an explicit Review approval."
       );
     case "authorization_missing":
       return (

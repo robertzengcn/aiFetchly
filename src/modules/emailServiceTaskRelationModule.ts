@@ -125,8 +125,9 @@ export class EmailServiceTaskRelationModule extends BaseModule {
 
     async getEmailServiceIdsByTaskId(buckemailTaskId: number): Promise<number[]> {
         try {
-            const emailServices = await this.getEmailServicesByTaskId(buckemailTaskId);
-            return emailServices.map(service => service.id);
+            return await this.emailServiceTaskRelationModel.listEmailServiceIdsByTaskId(
+                buckemailTaskId
+            );
         } catch (error) {
             console.error('Error getting email service IDs by task ID:', error);
             throw error;

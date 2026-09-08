@@ -97,6 +97,46 @@ describe("OutboundEmailIntentResolver (deterministic, technical design §9.2)", 
     expect(d.mode).not.toBe("send_now");
   });
 
+  it("resolves send-them/it/emails-without-review as skip-review send_now", () => {
+    const cases = [
+      "send them without review",
+      "send it without review",
+      "send emails without review",
+      "please send these emails to the contacts without review",
+      "write email to customer and send them without review",
+    ];
+    for (const text of cases) {
+      const d = OutboundEmailIntentResolver.resolve(input(text));
+      expect(d.mode, `"${text}" must resolve send_now`).toBe("send_now");
+      expect(d.reasonCode, `"${text}" must waive Review`).toBe(
+        "explicit_skip_review"
+      );
+    }
+  });
+
+  it("resolves a long campaign brief that waives review as skip-review send_now", () => {
+    const d = OutboundEmailIntentResolver.resolve(
+      input(
+        "we are a software company, we have developed a desktop ai agent, " +
+          "which can help user to find customer contact info, and write email " +
+          "to customer, you can find our software feature in knowledge library, " +
+          "please send emails to the companies in the csv without review"
+      )
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+  });
+
+  it("keeps skip-review send_now when NFKC/lowercase expands a character", () => {
+    // Turkish İ lowercases to two code units. Evidence offsets must not
+    // downgrade a clear skip-review send to draft_only.
+    const d = OutboundEmailIntentResolver.resolve(
+      input("İstanbul team: send them without review")
+    );
+    expect(d.mode).toBe("send_now");
+    expect(d.reasonCode).toBe("explicit_skip_review");
+  });
+
   it("does not treat write-an-email alone as a send", () => {
     const d = OutboundEmailIntentResolver.resolve(
       input("please write a test email to 1093968009@qq.com")

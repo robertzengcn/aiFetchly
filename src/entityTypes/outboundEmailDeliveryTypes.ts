@@ -51,10 +51,14 @@ export function isExplicitSkipReviewReason(
 }
 
 /**
- * True when trusted app code may create a direct-send authorization without
- * the Review UI. Covers an explicit Review waiver AND a chat confirmation
- * ("yes, send it") after the assistant presented the draft. A model-supplied
- * tool argument must never be used for this.
+ * True when trusted phrase matching may create a direct-send authorization
+ * without the Review UI. Covers an explicit Review waiver in the user text
+ * AND a chat confirmation ("yes, send it") after the assistant presented
+ * the draft.
+ *
+ * A model-supplied `skip_review` argument is a separate fallback — see
+ * {@link isModelDeclaredSkipReview} and {@link canHonorModelDeclaredSkipReview}.
+ * That path still cannot override review_first / do-not-send / conflicts.
  */
 export function allowsOutboundDirectSendAuthorization(
   reasonCode: OutboundEmailIntentReasonCode
@@ -63,6 +67,50 @@ export function allowsOutboundDirectSendAuthorization(
     reasonCode === "explicit_skip_review" ||
     reasonCode === "contextual_affirmation"
   );
+}
+
+/**
+ * Boolean `skip_review` on `start_email_send_task`. Extra keys are ignored.
+ * Only a real boolean `true` counts — strings such as `"true"` do not.
+ */
+export const outboundSkipReviewArgumentSchema = z
+  .object({
+    skip_review: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * True when the send-tool arguments contain `skip_review: true`.
+ */
+export function isModelDeclaredSkipReview(args: unknown): boolean {
+  const parsed = outboundSkipReviewArgumentSchema.safeParse(args);
+  return parsed.success && parsed.data.skip_review === true;
+}
+
+/**
+ * Whether `skip_review: true` may skip the Review UI (and drafting when
+ * no batch exists yet).
+ *
+ * Phrase matching misses many natural waivers. The model can declare the
+ * waiver and send this call's recipients/content immediately, but it cannot
+ * override a user who asked to review, not to send, or whose instructions
+ * conflict, and a resolver failure stays fail-closed.
+ */
+export function canHonorModelDeclaredSkipReview(intent: {
+  mode: OutboundEmailDeliveryMode;
+  reasonCode: OutboundEmailIntentReasonCode;
+}): boolean {
+  if (intent.mode === "review_first") {
+    return false;
+  }
+  if (
+    intent.reasonCode === "explicit_do_not_send" ||
+    intent.reasonCode === "conflicting_instruction" ||
+    intent.reasonCode === "resolver_failure"
+  ) {
+    return false;
+  }
+  return intent.mode === "send_now" || intent.mode === "draft_only";
 }
 
 export const outboundEmailBatchStatusSchema = z.enum([
@@ -298,6 +346,7 @@ export type AuthorizedEmailWorkerEventSchema = z.infer<
 export type OutboundEmailToolGateResult =
   | {
       allowed: true;
+      skipReviewDirectSend?: false;
       batchId: number;
       authorizationId: number;
       /**
@@ -306,6 +355,15 @@ export type OutboundEmailToolGateResult =
        * the send tool can claim without re-reading the batch.
        */
       batchHash: string;
+    }
+  | {
+      allowed: true;
+      /**
+       * `skip_review: true` on `start_email_send_task` with no draft batch.
+       * The send tool uses this call's recipients/content (legacy path)
+       * instead of claiming a reviewed batch.
+       */
+      skipReviewDirectSend: true;
     }
   | {
       allowed: false;

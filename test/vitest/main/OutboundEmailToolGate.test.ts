@@ -23,6 +23,18 @@ describe("OutboundEmailToolGate", () => {
     });
   });
 
+  it("blocks review_required for draft_only once a draft batch exists", () => {
+    // A durable batch is already reviewable. Telling the model to draft
+    // again (draft_required) is what produced the 24-batch retry loop.
+    expect(
+      OutboundEmailToolGate.evaluate(intent("draft_only"), null, 30)
+    ).toEqual({
+      allowed: false,
+      code: "review_required",
+      batchId: 30,
+    });
+  });
+
   it("blocks review_required for a review_first intent", () => {
     expect(
       OutboundEmailToolGate.evaluate(intent("review_first"), null, null)
@@ -62,7 +74,7 @@ describe("OutboundEmailToolGate", () => {
       null
     );
     // TypeScript narrows the discriminated union; assert the allowed branch.
-    if (!result.allowed) {
+    if (!result.allowed || result.skipReviewDirectSend === true) {
       throw new Error("expected allowed");
     }
     expect(result.batchId).toBe(42);

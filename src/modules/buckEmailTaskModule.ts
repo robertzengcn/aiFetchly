@@ -13,10 +13,11 @@ import {
   EmailServiceEntitydata,
   Buckemailremotedata,
 } from "@/entityTypes/emailmarketingType";
-import { EmailMarketingTemplateApi } from "@/api/emailMarketingTemplateApi";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
-import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
-import { EmailServiceApi } from "@/api/emailServiceApi";
+import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
+import { EmailFilterModule } from "@/modules/EmailFilterModule";
+import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import {
   WriteLog,
   getApplogspath,
@@ -49,9 +50,6 @@ import { dedupeEmailList } from "@/service/EmailMarketingAiTools";
 export class BuckEmailTaskModule extends BaseModule {
   //private dbpath: string
   private buckEmailTaskModel: BuckEmailTaskModel;
-  private emailtemAPI: EmailMarketingTemplateApi;
-  private emailfilterAPI: EmailMarketingFilterApi;
-  private emailserviceAPI: EmailServiceApi;
   private emailMarketingSendlogModule: EmailMarketingSendLogModule;
   private emailTemplateTaskRelationModule: EmailTemplateTaskRelationModule;
   private emailFilterTaskRelationModule: EmailFilterTaskRelationModule;
@@ -65,9 +63,6 @@ export class BuckEmailTaskModule extends BaseModule {
     super();
     // this.dbpath = dbpath
     this.buckEmailTaskModel = new BuckEmailTaskModel(this.dbpath);
-    this.emailtemAPI = new EmailMarketingTemplateApi();
-    this.emailfilterAPI = new EmailMarketingFilterApi();
-    this.emailserviceAPI = new EmailServiceApi();
     this.emailMarketingSendlogModule = new EmailMarketingSendLogModule();
     this.emailTemplateTaskRelationModule =
       new EmailTemplateTaskRelationModule();
@@ -185,48 +180,95 @@ export class BuckEmailTaskModule extends BaseModule {
       throw new Error("email list is empty");
     }
 
-    //get email template list (optional when using inline email_content)
-    const emailTemplateList =
-      await this.emailTemplateTaskRelationModule.getEmailTemplatesByBuckemailTaskId(
+    // Load templates from the local email_template table (same source as
+    // list_email_templates). Empty is allowed when the task uses inline
+    // email_subject / email_html_content instead of stored templates.
+    const templateIds =
+      await this.emailTemplateTaskRelationModule.getEmailTemplateIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailTemplateList.length; i++) {
-      const element = emailTemplateList[i];
-      const res = await this.emailtemAPI.readTemplate(
-        element.emailTemplateId.toString()
-      );
-      if (res.data) {
-        emailtemplist.push(res.data);
+    const emailTemplateModule = new EmailTemplateModule();
+    for (const templateId of templateIds) {
+      const template = await emailTemplateModule.read(templateId);
+      if (!template) {
+        continue;
       }
+      emailtemplist.push({
+        TplId: template.id,
+        TplTitle: template.title,
+        TplContent: template.content,
+        TplDescription: template.description ?? "",
+        Status: template.status,
+      });
     }
 
-    //get email filter list
-    const emailFilterList =
-      await this.emailFilterTaskRelationModule.getEmailFiltersByBuckemailTaskId(
+    // Load filters + regex details from local email_filter tables (same
+    // source as list_email_filters). Missing filters are skipped.
+    const filterIds =
+      await this.emailFilterTaskRelationModule.getEmailFilterIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailFilterList.length; i++) {
-      const element = emailFilterList[i];
-      const res = await this.emailfilterAPI.getEmailFilterById(
-        element.emailFilterId.toString()
+    const emailFilterModule = new EmailFilterModule();
+    const emailFilterDetailModule = new EmailFilterDetailModule();
+    const filterDetails =
+      await emailFilterDetailModule.getEmailFilterDetailsByFilterIds(
+        filterIds
       );
-      if (res.data) {
-        emailfilterlist.push(res.data);
+    const detailsByFilterId = new Map<
+      number,
+      Array<{ id: number; content: string }>
+    >();
+    for (const detail of filterDetails) {
+      const mapped = { id: detail.id, content: detail.content };
+      const existing = detailsByFilterId.get(detail.filter_id);
+      if (existing) {
+        existing.push(mapped);
+      } else {
+        detailsByFilterId.set(detail.filter_id, [mapped]);
       }
     }
-    //get email service list
-    const emailServiceList =
-      await this.emailServiceTaskRelationModule.getEmailServicesByTaskId(
+    for (const filterId of filterIds) {
+      const filter = await emailFilterModule.read(filterId);
+      if (!filter) {
+        continue;
+      }
+      emailfilterlist.push({
+        id: filter.id,
+        name: filter.name,
+        description: filter.description ?? "",
+        filter_details: detailsByFilterId.get(filterId) ?? [],
+        created_time: filter.createdAt
+          ? filter.createdAt.toISOString().split("T")[0]
+          : "",
+      });
+    }
+    // Load SMTP senders from the local email_service table (same source as
+    // list_email_services / skip_review start_email_send_task). The remote
+    // /api/emailservice/:id lookup used the local SQLite id, which is not a
+    // remote service id — that left Emailservicelist empty and the worker
+    // reported "No email service is available for this task".
+    const serviceIds =
+      await this.emailServiceTaskRelationModule.getEmailServiceIdsByTaskId(
         taskId
       );
-    for (let i = 0; i < emailServiceList.length; i++) {
-      const element = emailServiceList[i];
-      const res = await this.emailserviceAPI.getEmailServiceById(
-        element.id.toString()
-      );
-      if (res.data) {
-        emailservicelist.push(res.data);
+    const emailServiceModule = new EmailServiceModule();
+    for (const serviceId of serviceIds) {
+      const decrypted = await emailServiceModule.getEmailService(serviceId);
+      if (!decrypted) {
+        continue;
       }
+      emailservicelist.push({
+        id: decrypted.id,
+        from: decrypted.from,
+        password: decrypted.password,
+        host: decrypted.host,
+        port: decrypted.port,
+        name: decrypted.name,
+        ssl: decrypted.ssl,
+      });
+    }
+    if (emailservicelist.length === 0) {
+      throw new Error("No email service is available for this task");
     }
 
     const notDuplicate = buckemailTaskEntity.notduplicate === 1;
@@ -257,15 +299,9 @@ export class BuckEmailTaskModule extends BaseModule {
     taskId: number
   ): Promise<EmailTemplateRespdata> {
     if (remotedata.Emailtemplist.length > 0) {
-      const templateId =
-        remotedata.Emailtemplist[
-          Math.floor(Math.random() * remotedata.Emailtemplist.length)
-        ].TplId;
-      const res = await this.emailtemAPI.readTemplate(String(templateId));
-      if (!res.data) {
-        throw new Error(`Email template ${templateId} not found`);
-      }
-      return res.data;
+      return remotedata.Emailtemplist[
+        Math.floor(Math.random() * remotedata.Emailtemplist.length)
+      ];
     }
 
     const subject = remotedata.email_subject?.trim() ?? "";

@@ -98,6 +98,32 @@ describe("startBulkEmailSendTask", () => {
     );
   });
 
+  it("keeps service_ids when skip_review is set on the send tool args", async () => {
+    const outcome = await startBulkEmailSendTask({
+      emails: [{ address: "1093968009@qq.com" }],
+      service_ids: [1],
+      email_subject: "Test Email",
+      email_html_content: "<p>This is a test email sent from aiFetchly.</p>",
+      skip_review: true,
+    });
+
+    expect(outcome.success).toBe(true);
+    expect(moduleMocks.startCampaign).toHaveBeenCalledWith(
+      expect.objectContaining({
+        EmailServicelist: [1],
+        email_subject: "Test Email",
+        EmailList: [
+          {
+            address: "1093968009@qq.com",
+            source: DIRECT_EMAIL_SOURCE,
+            title: undefined,
+          },
+        ],
+      }),
+      { waitForExit: true }
+    );
+  });
+
   it("returns the SMTP failure instead of reporting success", async () => {
     moduleMocks.startCampaign.mockRejectedValue(
       new Error("SMTP authentication failed")

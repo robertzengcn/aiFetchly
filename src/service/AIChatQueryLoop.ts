@@ -56,6 +56,8 @@ import {
 import { OutboundEmailToolGate } from "@/service/outboundEmail/OutboundEmailToolGate";
 import {
   allowsOutboundDirectSendAuthorization,
+  canHonorModelDeclaredSkipReview,
+  isModelDeclaredSkipReview,
   type OutboundEmailToolGateResult,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
@@ -1826,7 +1828,10 @@ export class AIChatQueryLoop {
               }
             | undefined;
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
-            const gateDecision = await this.evaluateOutboundEmailGate(input);
+            const gateDecision = await this.evaluateOutboundEmailGate(
+              input,
+              call.arguments
+            );
             if (!gateDecision.allowed) {
               await emitToolCall(call.arguments ?? {});
               // Actionable reason text (§19): tell the model how to unblock so
@@ -1863,14 +1868,16 @@ export class AIChatQueryLoop {
               });
               continue;
             }
-            // Gate allowed: thread the trusted authorization triple through
-            // to the send tool so it claims the batch (§15.1) instead of the
-            // legacy path.
-            outboundAuthorization = {
-              batchId: gateDecision.batchId,
-              authorizationId: gateDecision.authorizationId,
-              batchHash: gateDecision.batchHash,
-            };
+            // skip_review with no draft: send this call's content via the
+            // legacy path. Otherwise thread the trusted authorization triple
+            // so the send tool claims the batch (§15.1).
+            if (!gateDecision.skipReviewDirectSend) {
+              outboundAuthorization = {
+                batchId: gateDecision.batchId,
+                authorizationId: gateDecision.authorizationId,
+                batchHash: gateDecision.batchHash,
+              };
+            }
           }
 
           const executableCall = {
@@ -2577,22 +2584,37 @@ export class AIChatQueryLoop {
    * the model send in the same turn as the draft. The exception is
    * `explicit_skip_review` or `contextual_affirmation`: the user waived
    * Review or confirmed the presented draft in chat, so a direct-send
-   * authorization is created after a draft exists.
+   * authorization is created after a draft exists. Phrase matching misses
+   * many natural waivers, so `skip_review: true` on this send call is a
+   * second path — still blocked for review_first / do-not-send / conflicts.
+   * When that flag is set and no draft batch exists, the send proceeds
+   * immediately with this call's recipients/content (no draft/review step).
    *
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
    */
   private async evaluateOutboundEmailGate(
-    input: AIChatQueryLoopInput
+    input: AIChatQueryLoopInput,
+    toolArguments?: Record<string, unknown>
   ): Promise<OutboundEmailToolGateResult> {
+    const skipReviewArg = isModelDeclaredSkipReview(toolArguments);
+
     // Without a trusted intent decision for this turn's user message there is
-    // no evidence the user asked to send at all — blocked as draft_required.
+    // no evidence the user asked to send at all — blocked as draft_required,
+    // unless the model passed skip_review=true (send this call directly).
     if (input.intentDecisionId == null) {
+      if (skipReviewArg) {
+        return { allowed: true, skipReviewDirectSend: true };
+      }
       return OutboundEmailToolGate.evaluate(null, null, null);
     }
     // The authorization binds to the exact user message (AD-001/AD-005). No
-    // trusted source message id means no binding is possible — block.
+    // trusted source message id means no binding is possible — block, unless
+    // skip_review sends this call's content without a batch claim.
     if (!input.sourceUserMessageId) {
+      if (skipReviewArg) {
+        return { allowed: true, skipReviewDirectSend: true };
+      }
       return OutboundEmailToolGate.evaluate(null, null, null);
     }
 
@@ -2601,6 +2623,9 @@ export class AIChatQueryLoop {
         input.intentDecisionId
       );
       if (!intentDecision) {
+        if (skipReviewArg) {
+          return { allowed: true, skipReviewDirectSend: true };
+        }
         return OutboundEmailToolGate.evaluate(null, null, null);
       }
 
@@ -2611,22 +2636,37 @@ export class AIChatQueryLoop {
       const dbpath = new Token().getValue(USERSDBPATH) ?? "";
       const authService = new OutboundEmailAuthorizationService(dbpath);
 
-      if (
+      const honorModelSkipReview =
+        skipReviewArg && canHonorModelDeclaredSkipReview(intentDecision);
+      const honorPhraseSkipReview =
         intentDecision.mode === "send_now" &&
-        allowsOutboundDirectSendAuthorization(intentDecision.reasonCode)
-      ) {
+        allowsOutboundDirectSendAuthorization(intentDecision.reasonCode);
+
+      if (honorPhraseSkipReview || honorModelSkipReview) {
         const auth = await authService.resolveDirectSendForTurn({
           conversationId: input.conversationId,
           sourceUserMessageId: input.sourceUserMessageId,
           intentDecisionId: intentDecision.id,
-          inheritConversationDraft: true,
+          // skip_review without a this-turn batch should send THIS call's
+          // content, not inherit an older conversation draft.
+          inheritConversationDraft:
+            honorPhraseSkipReview && !honorModelSkipReview,
+          allowDraftOnlyIntent: honorModelSkipReview,
         });
         if (auth) {
+          // draft_only + leftover authorization must stay blocked at the
+          // gate. Honor skip_review by evaluating this call as send_now.
+          const gateIntent = honorModelSkipReview
+            ? { mode: "send_now" as const }
+            : intentDecision;
           return OutboundEmailToolGate.evaluate(
-            intentDecision,
+            gateIntent,
             auth,
             auth.batchId
           );
+        }
+        if (honorModelSkipReview) {
+          return { allowed: true, skipReviewDirectSend: true };
         }
       }
 

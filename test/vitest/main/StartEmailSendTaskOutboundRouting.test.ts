@@ -164,6 +164,7 @@ describe("start_email_send_task authorized routing (RC4)", () => {
 
     const skill = SkillRegistry.getSkill("start_email_send_task");
     expect(skill).toBeDefined();
+    expect(skill?.parameters.properties).toHaveProperty("skip_review");
 
     const exec = skill!.execute!;
     const result = await exec(

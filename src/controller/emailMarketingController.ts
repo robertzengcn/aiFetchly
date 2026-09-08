@@ -1,4 +1,3 @@
-//import {EmailMarketingTemplateApi} from "@/api/emailMarketingTemplateApi";
 import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
 import { ListData } from "@/entityTypes/commonType";
 import {
@@ -9,8 +8,6 @@ import {
   EmailServiceExportPayload,
   EmailServiceImportResult,
 } from "@/entityTypes/emailmarketingType";
-//import {EmailMarketingFilterApi} from "@/api/emailMarketingFilterApi";
-//import {EmailServiceApi} from "@/api/emailServiceApi";
 import { EmailService } from "@/modules/lib/emailService";
 import { EmailTemplateModuleInterface } from "@/modules/interface/EmailTemplateModuleInterface";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
@@ -33,17 +30,12 @@ export class EmailMarketingController {
   emailFilterModule: EmailFilterModuleInterface;
   emailServiceModule: EmailServiceModuleInterface;
   emailFilterDetailModule: EmailFilterDetailModuleInterface;
-  // emailMarketingFilterApi:EmailMarketingFilterApi
-  // emailServiceApi:EmailServiceApi
   constructor() {
     this.emailTemplateModule = new EmailTemplateModule();
     this.emailFilterTaskRelationModule = new EmailFilterTaskRelationModule();
     this.emailFilterModule = new EmailFilterModule();
     this.emailServiceModule = new EmailServiceModule();
     this.emailFilterDetailModule = new EmailFilterDetailModule();
-    //         this.emailMarketingTemplateApi = new EmailMarketingTemplateApi();
-    //         this.emailMarketingFilterApi=new EmailMarketingFilterApi();
-    // this.emailServiceApi=new EmailServiceApi();
   }
   //list email template
   public async listEmailTemplate(

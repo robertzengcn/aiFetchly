@@ -143,7 +143,7 @@ describe("OutboundEmailIntentCorpus — zero false direct sends", () => {
       { batchId: 42, authorizationId: 1, batchHash: "a".repeat(64) },
       42
     );
-    expect(refusedCode(withAuth)).toBe("draft_required");
+    expect(refusedCode(withAuth)).toBe("review_required");
   });
 });
 
@@ -187,6 +187,9 @@ describe("OutboundEmailIntentCorpus — explicit skip-review may send without Re
     "please write a test email to 1093968009@qq.com directly, without review",
     "please create a test email and send it to 1093968009@qq.com directly",
     "please send it directly without review",
+    "send them without review",
+    "send emails without review",
+    "please send emails to the companies in the csv without review",
   ];
 
   it("resolves write-email-without-review to send_now + explicit_skip_review", () => {

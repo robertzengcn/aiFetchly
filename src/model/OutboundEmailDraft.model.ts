@@ -73,6 +73,31 @@ export class OutboundEmailDraftModel extends BaseDb {
   }
 
   /**
+   * Every authorizable batch for a conversation + user turn, oldest first.
+   * Per-recipient `draft_outbound_email_batch` calls create one batch each;
+   * skip-review send must drain them in order instead of only the newest.
+   */
+  async findAuthorizableBatchesForTurn(
+    conversationId: string,
+    sourceUserMessageId: string
+  ): Promise<OutboundEmailDraftBatchEntity[]> {
+    const authorizable = [
+      "draft_ready",
+      "direct_authorized",
+      "review_authorized",
+      "awaiting_review",
+    ] as const;
+    return await this.batchRepo.find({
+      where: {
+        conversationId,
+        sourceUserMessageId,
+        status: In(authorizable),
+      },
+      order: { id: "ASC" },
+    });
+  }
+
+  /**
    * The newest non-terminal batch for a conversation + user turn, or null when
    * none exists. Used by the outbound-email tool gate (§14.2) to find the
    * draft_ready batch that a send_now intent should authorize (§13.1). Only

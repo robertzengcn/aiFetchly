@@ -82,7 +82,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s).toContain("draft_outbound_email_batch");
     expect(s).toContain("list_email_services");
     expect(s.toLowerCase()).toContain("outbound");
-    expect(s.toLowerCase()).toContain("wait for the user to click review");
+    expect(s).toContain("skip_review=true");
+    expect(s).toContain("do NOT draft first");
     expect(s.toLowerCase()).toContain("marketing");
     // The model previously treated an empty IMAP inbox list as "cannot send".
     expect(s.toLowerCase()).toContain("empty inbox");

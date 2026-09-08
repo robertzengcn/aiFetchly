@@ -84,6 +84,12 @@ export class EmailTemplateTaskRelationModule extends BaseModule {
         return await this.emailTemplateTaskRelationModel.getEmailTemplatesByBuckemailTaskId(buckemailTaskId);
     }
 
+    async getEmailTemplateIdsByTaskId(buckemailTaskId: number): Promise<number[]> {
+        return await this.emailTemplateTaskRelationModel.listEmailTemplateIdsByTaskId(
+            buckemailTaskId
+        );
+    }
+
     /**
      * Delete all relations by buckemail task ID
      * @param buckemailTaskId The buckemail task ID
