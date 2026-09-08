@@ -11,6 +11,7 @@ import {
 } from "@/service/AIChatErrorMapper";
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
+import { UnresolvedPastedTextError } from "@/service/pastedText/UnresolvedPastedTextError";
 
 describe("AIChatErrorMapper - userSafeError", () => {
   it("returns the quota sentinel on 402 / insufficient_quota", () => {
@@ -81,6 +82,14 @@ describe("AIChatErrorMapper - userSafeError", () => {
     expect(userSafeError(network)).toBe(
       "Could not connect to the AI provider."
     );
+  });
+
+  it("surfaces UnresolvedPastedTextError instead of the generic fallback", () => {
+    expect(
+      userSafeError(
+        new UnresolvedPastedTextError([1])
+      )
+    ).toBe("Pasted text is no longer available. Please paste it again.");
   });
 
   it("returns a model-missing message on 404", () => {

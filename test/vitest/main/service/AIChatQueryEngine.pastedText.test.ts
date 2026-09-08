@@ -12,6 +12,9 @@ import type {
 const ws = vi.hoisted(() => ({ rootPath: "" }));
 
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
+const mockCreateConversationIfNeeded = vi
+  .fn()
+  .mockReturnValue("v2-test-conv");
 
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(() => ({
@@ -20,7 +23,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     saveAssistantMessage: vi.fn().mockResolvedValue({}),
     saveToolCallMessage: vi.fn().mockResolvedValue({}),
     saveToolResultMessage: vi.fn().mockResolvedValue({}),
-    createConversationIfNeeded: vi.fn().mockReturnValue("v2-test-conv"),
+    createConversationIfNeeded: mockCreateConversationIfNeeded,
     getDefaultSystemPrompt: vi.fn().mockReturnValue("You are helpful."),
   })),
 }));
@@ -93,10 +96,12 @@ describe("AIChatQueryEngine pasted text integration", () => {
     vi.clearAllMocks();
     lastAtMentionMessageToSave = null;
     ws.rootPath = "/tmp/aifetchly";
+    mockSaveUserMessage.mockResolvedValue({ messageId: "user-1" });
+    mockCreateConversationIfNeeded.mockReturnValue("v2-test-conv");
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it("expands pasted placeholders into the model message before @-mention resolution and persists placeholders + pastedBlocks metadata", async () => {
@@ -169,5 +174,37 @@ describe("AIChatQueryEngine pasted text integration", () => {
 
     // 3) @-mention resolution runs after paste expansion.
     expect(lastAtMentionMessageToSave).toBe(`before ${pastedBody} after`);
+  });
+
+  it("does not persist or stream when pasted placeholders cannot be expanded", async () => {
+    const contextAssembler = {
+      assemble: vi.fn().mockResolvedValue({ messages: [] }),
+    } as unknown as AIChatContextAssembler;
+
+    const loop = {
+      run: vi.fn(),
+    } as unknown as AIChatQueryLoop;
+
+    const engine = new AIChatQueryEngine(loop, { contextAssembler });
+    const emit = vi.fn();
+    const eventSink: AIChatQueryEventSink = { emit };
+
+    await engine.submitMessage({
+      eventSink,
+      request: {
+        message: "[Pasted text #1]",
+      },
+    });
+
+    expect(mockSaveUserMessage).not.toHaveBeenCalled();
+    expect(contextAssembler.assemble).not.toHaveBeenCalled();
+    expect(loop.run).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        errorMessage:
+          "Pasted text is no longer available. Please paste it again.",
+      })
+    );
   });
 });

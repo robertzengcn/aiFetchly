@@ -2438,6 +2438,8 @@ export default {
       hide_content: "Eingefügten Inhalt ausblenden",
       removed: "Eingefügter Inhalt entfernt",
       loading: "Eingefügter Inhalt wird geladen...",
+      missing_contents:
+        "Der eingefügte Text ist nicht mehr verfügbar. Bitte füge ihn erneut ein.",
     },
     goalLoop: {
       objectiveRequired: "Gib ein Ziel an. Verwendung: /goal <Ziel>",

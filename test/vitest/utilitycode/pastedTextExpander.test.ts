@@ -49,4 +49,14 @@ describe("pastedText expander", () => {
       kind: "truncated",
     });
   });
+
+  it("reports every pasted-text ref as unknown when pastedContents is missing", () => {
+    const display = "[Pasted text #1] and [Pasted text #2 +1 lines]";
+    const expanded = expandPastedTextRefs(display, undefined);
+
+    expect(expanded.expandedText).toBe(display);
+    expect(expanded.replacedPasteIds).toEqual([]);
+    expect(expanded.unknownPasteIds).toEqual([1, 2]);
+    expect(expanded.pastedBlocks).toEqual([]);
+  });
 });

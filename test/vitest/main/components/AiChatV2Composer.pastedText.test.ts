@@ -31,6 +31,8 @@ const i18n = createI18n({
           hide_content: "Hide pasted content",
           removed: "Removed pasted content",
           loading: "Loading pasted content...",
+          missing_contents:
+            "Pasted text is no longer available. Please paste it again.",
         },
         atMentions: {
           ariaLabel: "Mention workspace files",
@@ -70,11 +72,19 @@ const ButtonStub = defineComponent({
   template: '<button type="button" @click="$emit(\'click\')"><slot /></button>',
 });
 
-function mountComposer() {
+const SlideStub = defineComponent({
+  name: "VSlideYReverseTransition",
+  template: "<div><slot /></div>",
+});
+
+function mountComposer(
+  props: { conversationId?: string | null } = {}
+) {
   return mount(AiChatV2Composer, {
     props: {
       isStreaming: false,
       isProcessing: false,
+      ...props,
     },
     global: {
       plugins: [i18n],
@@ -83,7 +93,7 @@ function mountComposer() {
         VBtn: ButtonStub,
         VIcon: true,
         VChip: true,
-        VSlideYReverseTransition: false,
+        VSlideYReverseTransition: SlideStub,
       },
     },
   });
@@ -149,6 +159,61 @@ describe("AiChatV2Composer pasted text", () => {
         },
         onAccepted: expect.any(Function),
       })
+    );
+  });
+
+  it("keeps pastedContents after conversationId changes while the draft still has a paste ref", async () => {
+    const wrapper = mountComposer({ conversationId: null });
+    const textarea = wrapper.find<HTMLTextAreaElement>(
+      '[data-testid="ai-chat-composer"]'
+    );
+
+    const raw = `${"A".repeat(200)}\n${"B".repeat(200)}\n${"C".repeat(200)}`;
+    textarea.element.setSelectionRange(0, 0);
+    await textarea.trigger("paste", {
+      preventDefault: vi.fn(),
+      clipboardData: {
+        getData: () => raw,
+      },
+    });
+    expect(textarea.element.value).toBe("[Pasted text #1 +2 lines]");
+
+    await wrapper.setProps({ conversationId: "v2-new-conversation" });
+
+    await textarea.trigger("keydown", {
+      key: "Enter",
+      shiftKey: false,
+      preventDefault: vi.fn(),
+    });
+
+    const sendEvents = wrapper.emitted("send");
+    expect(sendEvents).toHaveLength(1);
+    expect(sendEvents![0][0]).toBe("[Pasted text #1 +2 lines]");
+    expect(sendEvents![0][2]).toEqual(
+      expect.objectContaining({
+        pastedContents: {
+          "1": raw,
+        },
+      })
+    );
+  });
+
+  it("does not send when the draft has a pasted-text placeholder without contents", async () => {
+    const wrapper = mountComposer();
+    const textarea = wrapper.find<HTMLTextAreaElement>(
+      '[data-testid="ai-chat-composer"]'
+    );
+
+    await textarea.setValue("[Pasted text #1]");
+    await textarea.trigger("keydown", {
+      key: "Enter",
+      shiftKey: false,
+      preventDefault: vi.fn(),
+    });
+
+    expect(wrapper.emitted("send")).toBeUndefined();
+    expect(wrapper.text()).toContain(
+      "Pasted text is no longer available. Please paste it again."
     );
   });
 });

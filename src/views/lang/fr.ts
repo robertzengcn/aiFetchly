@@ -2431,6 +2431,8 @@ export default {
       hide_content: "Masquer le contenu collé",
       removed: "Contenu collé supprimé",
       loading: "Chargement du contenu collé...",
+      missing_contents:
+        "Le texte collé n'est plus disponible. Veuillez le coller à nouveau.",
     },
     goalLoop: {
       objectiveRequired: "Indique un objectif. Utilisation : /goal <objectif>",

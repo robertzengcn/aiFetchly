@@ -1002,6 +1002,22 @@ const onSend = (): void => {
   const text = draft.value.trim();
   if ((!text && selectedFiles.value.length === 0) || props.isStreaming) return;
   closeAtMention();
+  const missingPasteIds = parsePastedTextRefs(text)
+    .filter(
+      (ref) =>
+        !Object.prototype.hasOwnProperty.call(
+          pastedContentsById.value,
+          String(ref.pasteId)
+        )
+    )
+    .map((ref) => ref.pasteId);
+  if (missingPasteIds.length > 0) {
+    showNotice(
+      t("aiChatV2.pastedText.missing_contents") ||
+        "Pasted text is no longer available. Please paste it again."
+    );
+    return;
+  }
   const files = [...selectedFiles.value];
   const pastedContents =
     Object.keys(pastedContentsById.value).length > 0
@@ -1097,7 +1113,13 @@ watch(
     if (!draft.value.startsWith("/")) {
       closeSlash();
     }
-    resetPastedState();
+    // Paste bodies belong to the shared draft, not the conversation id.
+    // New Chat / workspace setup / first-send id assignment used to wipe the
+    // map while leaving `[Pasted text #N]` in the box, so send shipped the
+    // placeholder with no pastedContents for the model to expand.
+    if (parsePastedTextRefs(draft.value).length === 0) {
+      resetPastedState();
+    }
   }
 );
 </script>

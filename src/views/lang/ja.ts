@@ -2396,6 +2396,8 @@ export default {
       hide_content: "貼り付け内容を隠す",
       removed: "貼り付け内容を削除",
       loading: "貼り付け内容を読み込み中...",
+      missing_contents:
+        "貼り付けたテキストはもう利用できません。もう一度貼り付けてください。",
     },
     goalLoop: {
       objectiveRequired: "目標を入力してください。使い方: /goal <目標>",

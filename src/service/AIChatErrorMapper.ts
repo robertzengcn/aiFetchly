@@ -2,6 +2,7 @@
 
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
+import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
@@ -191,6 +192,9 @@ export function userSafeError(err: unknown): string {
     // clobber them with a generic "unexpected error".
     if (err instanceof AIProviderError) {
       return err.message || "AI provider error.";
+    }
+    if (err instanceof UnresolvedPastedTextError) {
+      return err.message;
     }
     const msg = err.message || "Unknown error";
     if (

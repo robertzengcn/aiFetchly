@@ -2432,6 +2432,8 @@ export default {
       hide_content: "Hide pasted content",
       removed: "Removed pasted content",
       loading: "Loading pasted content...",
+      missing_contents:
+        "Pasted text is no longer available. Please paste it again.",
     },
     goalLoop: {
       objectiveRequired:

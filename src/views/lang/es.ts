@@ -2449,6 +2449,8 @@ export default {
       hide_content: "Ocultar contenido pegado",
       removed: "Contenido pegado eliminado",
       loading: "Cargando contenido pegado...",
+      missing_contents:
+        "El texto pegado ya no está disponible. Pégalo de nuevo.",
     },
     goalLoop: {
       objectiveRequired: "Indica un objetivo. Uso: /goal <objetivo>",

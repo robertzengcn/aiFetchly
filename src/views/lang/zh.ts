@@ -2331,6 +2331,7 @@ export default {
       hide_content: "隐藏已粘贴内容",
       removed: "已移除已粘贴内容",
       loading: "正在加载已粘贴内容...",
+      missing_contents: "粘贴的文本已不可用，请重新粘贴后再发送。",
     },
     goalLoop: {
       objectiveRequired: "请提供目标内容。用法：/goal <目标>",
