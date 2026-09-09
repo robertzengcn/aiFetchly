@@ -409,10 +409,12 @@ describe("TODO-MSB-005 selected-account clear", () => {
       { accountId: 101, platformId: 2, accountLabel: "My Channel" },
     ]);
     apiMocks.issueClearConfirmation.mockImplementation(
-      async (input?: { scope?: string }) =>
-        input?.scope === "account"
+      async (input: unknown): Promise<unknown> => {
+        const scope = (input as { scope?: string } | undefined)?.scope;
+        return scope === "account"
           ? { confirmationId: "conf-acct-001" }
-          : { confirmationId: "conf-all-001" }
+          : { confirmationId: "conf-all-001" };
+      }
     );
     const wrapper = mountPanel();
     await vi.waitFor(() =>
