@@ -1068,7 +1068,7 @@ git commit -m "feat: bound email-service update IPC schema + merge smtpUsername/
 
 - [ ] **Step 7.1: Replace the export projection with the shared safe row**
 
-In `src/controller/emailMarketingController.ts`, rewrite `exportEmailServices` (lines 306–352). Import `SafeEmailServiceExportRow` and `resolveEmailServiceIdentity` at the top. Replace the method body:
+> **PARTIALLY DONE in Task 2 (commit `8063701b`):** the JSON branch of `exportEmailServices` already builds `SafeEmailServiceExportRow[]` via `resolveEmailServiceIdentity` (pulled forward to keep the tree typecheck-clean after `EmailServiceExportPayload.services` changed type). The imports (`SafeEmailServiceExportRow`, `resolveEmailServiceIdentity`) are already in place. **Remaining work for this step: only the CSV branch** — hoist the row-building loop out of the JSON-only branch so both formats share one `rows` array (it currently sits inside `if (format === "json")`), then replace the CSV headers/rows with the shared projection below. The complete target method body:
 
 ```typescript
   // Export email services (safe fields only). format: "csv" | "json"
@@ -1135,6 +1135,77 @@ In `src/controller/emailMarketingController.ts`, rewrite `exportEmailServices` (
     return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
   }
 ```
+
+<details>
+<summary>Original full-method spec (both branches) — kept for reference</summary>
+
+```typescript
+  // Export email services (safe fields only). format: "csv" | "json"
+  public async exportEmailServices(
+    format: "csv" | "json" = "csv"
+  ): Promise<string | EmailServiceExportPayload> {
+    const entities = await this.emailServiceModule.exportEmailServicesList();
+
+    const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
+      const identity = resolveEmailServiceIdentity({
+        smtpUsername: item.smtpUsername,
+        from: item.from,
+        replyTo: item.replyTo,
+      });
+      return {
+        id: item.id,
+        name: item.name,
+        smtpUsername: identity.smtpUsername,
+        from: item.from,
+        replyTo: identity.replyToAddress,
+        host: item.host,
+        port: item.port,
+        ssl: item.ssl,
+        receiveProtocol: item.receiveProtocol,
+        create_time: item.createdAt?.toISOString() || "",
+      };
+    });
+
+    if (format === "json") {
+      return {
+        total: rows.length,
+        services: rows,
+        exportDate: new Date().toISOString(),
+      };
+    }
+
+    const headers = [
+      "id",
+      "name",
+      "smtpUsername",
+      "from",
+      "replyTo",
+      "host",
+      "port",
+      "ssl",
+      "receiveProtocol",
+      "create_time",
+    ];
+    const csvRows = rows.map((row) => [
+      row.id.toString(),
+      this.escapeCsvField(row.name),
+      this.escapeCsvField(row.smtpUsername),
+      this.escapeCsvField(row.from),
+      row.replyTo === null ? "" : this.escapeCsvField(row.replyTo),
+      this.escapeCsvField(row.host),
+      row.port,
+      row.ssl.toString(),
+      row.receiveProtocol,
+      row.create_time,
+    ]);
+    const csv = [headers.join(","), ...csvRows.map((r) => r.join(","))].join(
+      "\n"
+    );
+    return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
+  }
+```
+
+</details>
 
 - [ ] **Step 7.2: Update the existing export test assertions**
 
