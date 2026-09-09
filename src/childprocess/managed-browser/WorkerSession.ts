@@ -44,6 +44,7 @@ import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/Y
 import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
+  sanitizeScriptResult,
   toSafeErrorMessage,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -523,7 +524,14 @@ export class WorkerSession {
         });
         return;
       }
-      const redacted = redactSecrets(result);
+      // TODO-MSB-009: storage/cookie/token-typed results are REJECTED,
+      // and the shape is depth/array bounded before any redaction.
+      const shaped = sanitizeScriptResult(result);
+      if (!shaped.ok) {
+        this.emitError(requestId, "result_too_large", shaped.reasonCode);
+        return;
+      }
+      const redacted = redactSecrets(shaped.value);
       let serialized: string;
       try {
         serialized = JSON.stringify(redacted) ?? "null";
@@ -817,11 +825,14 @@ export class WorkerSession {
     } catch {
       // Structural fakes without the event — nothing to watch.
     }
-    // GAP-13: browser-created states are DENY-by-default — JS dialogs are
-    // dismissed without interaction, popups are closed, downloads are
-    // cancelled. The AI never silently accepts a prompt it did not open.
+    // TODO-MSB-011: browser-created states are DENY-by-default AND
+    // OBSERVABLE — every handled state advances a bounded counter and
+    // notifies the main process so the user sees what was blocked (never a
+    // silent accept of a prompt the AI did not open).
     try {
       page.on("dialog", (dialog) => {
+        this.boundedStateCounts.dialog += 1;
+        this.reportBoundedState("dialog");
         void dialog.dismiss().catch(() => undefined);
       });
     } catch {
@@ -829,6 +840,8 @@ export class WorkerSession {
     }
     try {
       page.on("popup", (popup) => {
+        this.boundedStateCounts.popup += 1;
+        this.reportBoundedState("popup");
         void popup.close().catch(() => undefined);
       });
     } catch {
@@ -836,11 +849,41 @@ export class WorkerSession {
     }
     try {
       page.on("download", (download) => {
+        this.boundedStateCounts.download += 1;
+        this.reportBoundedState("download");
         void download.cancel().catch(() => undefined);
       });
     } catch {
       /* structural fake */
     }
+  }
+
+  /** Bounded per-kind counters for the controlled-state report. */
+  private readonly boundedStateCounts = {
+    dialog: 0,
+    popup: 0,
+    download: 0,
+  };
+  private lastBoundedStateReportAt = 0;
+
+  /**
+   * TODO-MSB-011: surface a handled browser-created state to the main
+   * process as a sanitized SESSION_STATE_CHANGED (rate-limited to 1/s so a
+   * dialog storm cannot flood the channel). Counts never leave the worker;
+   * only the state name + reason code travel.
+   */
+  private reportBoundedState(kind: "dialog" | "popup" | "download"): void {
+    const now = this.now();
+    if (now - this.lastBoundedStateReportAt < 1_000) {
+      return;
+    }
+    this.lastBoundedStateReportAt = now;
+    this.send({
+      ...this.base(`evt-bounded-state-${kind}-${now}`),
+      type: "SESSION_STATE_CHANGED",
+      state: this.runtime.getState(),
+      reasonCode: `browser_${kind}_blocked`,
+    });
   }
 
   private async buildObservation(

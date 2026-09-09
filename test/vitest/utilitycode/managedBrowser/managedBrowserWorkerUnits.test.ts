@@ -878,3 +878,87 @@ describe("TODO-MSB-010 action vocabulary", () => {
     expect(page.pressedKeys).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// TODO-MSB-009 remainder: script result rejection + write detection
+// ---------------------------------------------------------------------------
+
+import {
+  sanitizeScriptResult,
+  isWriteCapableScriptSource,
+} from "@/childprocess/managed-browser/ResultSanitizer";
+
+describe("sanitizeScriptResult (TODO-MSB-009)", () => {
+  it("rejects cookie/storage/token-typed values outright", () => {
+    expect(sanitizeScriptResult({ cookies: "a=b" })).toMatchObject({
+      ok: false,
+      reasonCode: "script_result_forbidden_field",
+    });
+    expect(
+      sanitizeScriptResult({ localStorage: "x" })
+    ).toMatchObject({ ok: false });
+    expect(sanitizeScriptResult({ token: "abc" })).toMatchObject({
+      ok: false,
+    });
+    // nested too
+    expect(
+      sanitizeScriptResult({ data: { inner: { apiKey: "k" } } })
+    ).toMatchObject({ ok: false });
+  });
+
+  it("enforces depth and array bounds", () => {
+    const deep: unknown = {};
+    let node = deep as Record<string, unknown>;
+    for (let i = 0; i < 20; i++) {
+      node.next = {};
+      node = node.next as Record<string, unknown>;
+    }
+    expect(sanitizeScriptResult(deep)).toMatchObject({
+      ok: false,
+      reasonCode: "script_result_depth_exceeded",
+    });
+    expect(sanitizeScriptResult(new Array(300).fill(1))).toMatchObject({
+      ok: false,
+      reasonCode: "script_result_too_large",
+    });
+  });
+
+  it("passes ordinary shapes through", () => {
+    expect(sanitizeScriptResult({ count: 3, label: "ok" })).toEqual({
+      ok: true,
+      value: { count: 3, label: "ok" },
+    });
+  });
+});
+
+describe("isWriteCapableScriptSource (TODO-MSB-009)", () => {
+  it("flags DOM-mutating, storage-writing, and network-sending sources", () => {
+    expect(
+      isWriteCapableScriptSource(
+        "(() => { localStorage.setItem('x','y'); return 1; })()"
+      )
+    ).toBe(true);
+    expect(
+      isWriteCapableScriptSource("fetch('https://x.example').then(r=>r.status)")
+    ).toBe(true);
+    expect(
+      isWriteCapableScriptSource(
+        "document.querySelector('#a').innerHTML = '<b>x</b>'"
+      )
+    ).toBe(true);
+    expect(
+      isWriteCapableScriptSource("location.href = 'https://evil.example'")
+    ).toBe(true);
+  });
+
+  it("keeps read-only sources read-only", () => {
+    expect(
+      isWriteCapableScriptSource(
+        "(() => document.querySelectorAll('a').length)()"
+      )
+    ).toBe(false);
+    expect(
+      isWriteCapableScriptSource("document.title")
+    ).toBe(false);
+  });
+});

@@ -165,6 +165,80 @@ export function summarizeInputValue(
   return text;
 }
 
+/** Keys whose VALUES are rejected outright from script results (FR-SCRIPT). */
+const SCRIPT_RESULT_FORBIDDEN_KEYS =
+  /^(cookie|cookies|localstorage|sessionstorage|indexeddb|document\.cookie|token|tokens|apikey|api_key|authorization|password|credential|credentials)$/i;
+
+/**
+ * Bounded, security-shaped serialization for script results (TODO-MSB-009):
+ *   - depth-limited (cycles cut, not followed);
+ *   - array-length limited;
+ *   - storage/cookie/token-typed values are REJECTED (marker), not merely
+ *     redacted — a script must not be able to exfiltrate document.cookie
+ *     or storage dumps by wrapping them in innocent-looking structures;
+ *   - byte-budgeted by the caller.
+ */
+export function sanitizeScriptResult(
+  value: unknown,
+  depth = 0
+): { ok: true; value: unknown } | { ok: false; reasonCode: string } {
+  if (depth > 8) {
+    return { ok: false, reasonCode: "script_result_depth_exceeded" };
+  }
+  if (typeof value === "string") {
+    return { ok: true, value };
+  }
+  if (value === null || typeof value !== "object") {
+    return { ok: true, value };
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 200) {
+      return { ok: false, reasonCode: "script_result_too_large" };
+    }
+    const out: unknown[] = [];
+    for (const item of value) {
+      const inner = sanitizeScriptResult(item, depth + 1);
+      if (!inner.ok) {
+        return inner;
+      }
+      out.push(inner.value);
+    }
+    return { ok: true, value: out };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (SCRIPT_RESULT_FORBIDDEN_KEYS.test(key)) {
+      return { ok: false, reasonCode: "script_result_forbidden_field" };
+    }
+    const inner = sanitizeScriptResult(val, depth + 1);
+    if (!inner.ok) {
+      return inner;
+    }
+    out[key] = inner.value;
+  }
+  return { ok: true, value: out };
+}
+
+/**
+ * Static write-behavior detection for script sources (TODO-MSB-009): a
+ * script whose source touches DOM-mutating, storage-writing, network-
+ * sending, or navigation-changing APIs is classified write-capable and
+ * must clear the CONSEQUENTIAL approval bar, not just the script bar.
+ */
+const SCRIPT_WRITE_PATTERNS: readonly RegExp[] = [
+  /\b(document\.cookie|localStorage|sessionStorage|indexedDB)\s*[=.[(]/i,
+  /\b(fetch|XMLHttpRequest|navigator\.sendBeacon|WebSocket)\s*\(/i,
+  /\b(location\.(href|assign|replace)|window\.open|history\.(push|replace)State)\s*[=(]/i,
+  /\.(submit|remove|click)\s*\(\s*\)\s*;?\s*$/m,
+  /\.(innerHTML|outerHTML|insertAdjacentHTML)\s*=/i,
+  /\bdocument\.(createElement|write)\b/i,
+  /\.(append|prepend|before|after|replaceWith|setAttribute)\s*\(/i,
+];
+
+export function isWriteCapableScriptSource(source: string): boolean {
+  return SCRIPT_WRITE_PATTERNS.some((pattern) => pattern.test(source));
+}
+
 /** Budget an accessible name. */
 export function budgetName(name: string): string {
   return truncateText(

@@ -3548,6 +3548,7 @@ export default {
       cache_clear_deferred: "セッション終了後にキャッシュを削除します",
       cache_clear_completed: "ブラウザキャッシュを削除しました",
       cache_clear_failed: "ブラウザキャッシュの削除に失敗しました",
+      browser_state_blocked: "ブラウザのプロンプト（ダイアログ・ポップアップ・ダウンロード）を安全にブロックしました",
     },
     states: {
       starting: "起動中",

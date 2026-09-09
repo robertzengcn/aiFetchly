@@ -1468,3 +1468,27 @@ describe("TODO-MSB-009 script revision binding", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 });
+
+
+describe("TODO-MSB-011 controlled browser states", () => {
+  it("a blocked dialog/popup/download state publishes a sanitized notice", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "SESSION_STATE_CHANGED",
+      state: "running",
+      reasonCode: "browser_dialog_blocked",
+    } as unknown as OutboundEvent);
+    expect(
+      h.notices.some(
+        (n) =>
+          n.type === "browser_state_blocked" &&
+          n.messageKey.includes("browser_state_blocked")
+      )
+    ).toBe(true);
+  });
+});

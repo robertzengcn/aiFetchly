@@ -58,6 +58,7 @@ const SEVERITY_BY_TYPE: Readonly<Record<BrowserChatNoticeType, SafeBrowserChatNo
   cache_clear_deferred: "info",
   cache_clear_completed: "success",
   cache_clear_failed: "error",
+  browser_state_blocked: "warning",
 };
 
 const REQUIRES_ACTION_TYPES: ReadonlySet<BrowserChatNoticeType> = new Set([

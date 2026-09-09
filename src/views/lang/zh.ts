@@ -3434,6 +3434,7 @@ export default {
       cache_clear_deferred: "缓存将在会话结束后清理",
       cache_clear_completed: "浏览器缓存已清理",
       cache_clear_failed: "浏览器缓存清理失败",
+      browser_state_blocked: "已拦截并安全关闭浏览器弹窗（对话框、弹窗或下载）",
     },
     states: {
       starting: "启动中",

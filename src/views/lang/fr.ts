@@ -3597,6 +3597,7 @@ export default {
       cache_clear_deferred: "Le vidage du caché s'exécutera à la fin de la session",
       cache_clear_completed: "Cache du navigateur vidé",
       cache_clear_failed: "Échec du vidage du cache",
+      browser_state_blocked: "Une invite du navigateur a été bloquée en sécurité (dialogue, popup ou téléchargement)",
     },
     states: {
       starting: "Démarrage",

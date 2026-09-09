@@ -250,7 +250,8 @@ export type BrowserChatNoticeType =
   | "browser_crashed"
   | "cache_clear_deferred"
   | "cache_clear_completed"
-  | "cache_clear_failed";
+  | "cache_clear_failed"
+  | "browser_state_blocked";
 
 /** Renderer-safe chat notice. The renderer localizes `messageKey`. */
 export interface SafeBrowserChatNotice {

@@ -1134,6 +1134,16 @@ export class ManagedBrowserModule {
         } else {
           this.clearHandoffWindow(record);
         }
+        if (event.reasonCode?.startsWith("browser_")) {
+          // TODO-MSB-011: a browser-created state was handled (dialog
+          // dismissed / popup closed / download cancelled) — tell the user
+          // instead of silently absorbing it.
+          this.publishNotice(
+            record,
+            "browser_state_blocked",
+            event.reasonCode
+          );
+        }
         break;
       case "SESSION_READY":
         record.state = "ready";

@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import { log } from "@/modules/Logger";
 import { isAiEnabled } from "@/service/AiFeatureGate";
+import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
   ManagedBrowserError,
@@ -604,6 +605,9 @@ export class ManagedBrowserAiToolService {
       .createHash("sha256")
       .update(parsed.data.source)
       .digest("hex");
+    // TODO-MSB-009: write-capable sources clear the CONSEQUENTIAL bar —
+    // the approval request names the write risk explicitly.
+    const writeCapable = isWriteCapableScriptSource(parsed.data.source);
     // TODO-MSB-002/009: always-confirm — the permission mode never
     // bypasses; the approval binds to the exact source hash + revision.
     const priorDecision =
@@ -617,7 +621,7 @@ export class ManagedBrowserAiToolService {
         sessionId: parsed.data.session_id,
         requestId: context.toolCallId,
         riskClass: "privileged_script",
-        contentSummary: `evaluate_script (${parsed.data.source.length} chars, purpose: ${parsed.data.purpose.slice(0, 120)})`,
+        contentSummary: `evaluate_script (${parsed.data.source.length} chars${writeCapable ? ", WRITES PAGE STATE" : ""}, purpose: ${parsed.data.purpose.slice(0, 120)})`,
       });
       throw new ManagedBrowserAiToolError(
         "approval_required",

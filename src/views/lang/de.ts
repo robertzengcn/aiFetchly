@@ -3610,6 +3610,7 @@ export default {
       cache_clear_deferred: "Cache wird nach Sitzungsende geleert",
       cache_clear_completed: "Browser-Cache geleert",
       cache_clear_failed: "Leeren des Browser-Caches fehlgeschlagen",
+      browser_state_blocked: "Eine Browser-Aufforderung wurde sicher blockiert (Dialog, Popup oder Download)",
     },
     states: {
       starting: "Wird gestartet",

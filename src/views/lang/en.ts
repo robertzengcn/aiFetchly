@@ -3580,6 +3580,7 @@ export default {
       cache_clear_deferred: "Cache clear will run when the session ends",
       cache_clear_completed: "Browser cache cleared",
       cache_clear_failed: "Browser cache clear failed",
+      browser_state_blocked: "A browser prompt was blocked (dialog, popup, or download) and safely dismissed",
     },
     states: {
       starting: "Starting",

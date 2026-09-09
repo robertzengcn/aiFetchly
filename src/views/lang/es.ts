@@ -3612,6 +3612,7 @@ export default {
       cache_clear_deferred: "La limpieza de caché se ejecutará al terminar la sesión",
       cache_clear_completed: "Caché del navegador limpiada",
       cache_clear_failed: "Falló la limpieza de la caché",
+      browser_state_blocked: "Se bloqueó de forma segura un aviso del navegador (diálogo, popup o descarga)",
     },
     states: {
       starting: "Iniciando",
