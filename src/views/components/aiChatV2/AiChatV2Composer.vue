@@ -785,13 +785,13 @@ async function onMicClick(): Promise<void> {
           audioBase64,
           mimeType: "audio/wav",
         });
-      } catch (trErr) {
-        const detail = trErr instanceof Error ? trErr.message : String(trErr);
-        const base =
-          t("aiChatV2.voice.transcription_failed") ||
-          "Voice transcription failed.";
+      } catch {
+        // Bounded public message only (PRD §14.5/§23): the worker's raw
+        // exception can carry filesystem paths or provider details and is
+        // never appended to renderer-visible text.
         showNotice(
-          detail.trim().length > 0 ? `${base} ${detail}` : base,
+          t("aiChatV2.voice.transcription_failed") ||
+            "Voice transcription failed.",
         );
         return;
       }

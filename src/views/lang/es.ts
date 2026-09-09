@@ -2454,6 +2454,8 @@ export default {
       settings_unavailable: "Entrada de voz no disponible: abre los ajustes",
       busy: "La entrada de voz no está disponible durante la ejecución actual",
       settings_load_failed: "No se pudo cargar la configuración de voz.",
+      settings_save_failed: "No se pudo guardar la preferencia de respuestas habladas.",
+      retry: "Reintentar",
       stop_recording: "Detener grabación",
       recording: "Grabando...",
       transcribing: "Transcribiendo...",

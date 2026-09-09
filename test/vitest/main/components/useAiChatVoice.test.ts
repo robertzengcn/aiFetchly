@@ -61,6 +61,7 @@ const i18n = createI18n({
         voice: {
           runtime_install_size:
             "Runtime download: {runtimeSize}. Whisper Base model: ~{modelSize}.",
+          model_install_failed: "Voice model installation failed.",
         },
       },
     },
@@ -257,7 +258,12 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
     expect(downloadVoiceModelMock).toHaveBeenCalledWith(
       "sherpa-onnx:stt:whisper-base"
     );
-    expect(voice.modelInstallError.value).toContain("network");
+    // PRD §14.5: the failure is the bounded localized message — the raw
+    // exception text ("network") is never surfaced.
+    expect(voice.modelInstallError.value).toContain(
+      "Voice model installation failed."
+    );
+    expect(voice.modelInstallError.value).not.toContain("network");
   });
 
   it("confirmRuntimeInstall installs runtime + STT model and enables push-to-talk", async () => {

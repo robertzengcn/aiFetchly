@@ -2434,6 +2434,8 @@ export default {
       settings_unavailable: "Saisie vocale indisponible — ouvrir les paramètres",
       busy: "La saisie vocale est indisponible pendant l’exécution en cours",
       settings_load_failed: "Impossible de charger les paramètres vocaux.",
+      settings_save_failed: "Impossible d’enregistrer la préférence de réponses parlées.",
+      retry: "Réessayer",
       stop_recording: "Arrêter l'enregistrement",
       recording: "Enregistrement...",
       transcribing: "Transcription...",

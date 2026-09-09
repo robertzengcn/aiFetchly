@@ -2443,6 +2443,8 @@ export default {
       settings_unavailable: "Spracheingabe nicht verfügbar – Einstellungen öffnen",
       busy: "Die Spracheingabe ist während des aktuellen Vorgangs nicht verfügbar",
       settings_load_failed: "Spracheinstellungen konnten nicht geladen werden.",
+      settings_save_failed: "Die Einstellung für gesprochene Antworten konnte nicht gespeichert werden.",
+      retry: "Erneut versuchen",
       stop_recording: "Aufnahme stoppen",
       recording: "Aufnahme...",
       transcribing: "Transkription...",

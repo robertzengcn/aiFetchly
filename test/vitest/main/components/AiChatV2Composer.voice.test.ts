@@ -172,6 +172,25 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
+  it("shows a bounded transcription failure without raw exception text (PRD §14.5)", async () => {
+    const wrapper = mountComposer({ voiceEnabled: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    transcribeVoiceMock.mockRejectedValue(
+      new Error(
+        "ENOENT: /home/robertzeng/.config/voice/secret-api-key.pem worker crashed"
+      )
+    );
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Voice transcription failed.");
+    // The raw exception — paths, keys, usernames — never reaches the DOM.
+    expect(wrapper.text()).not.toContain("ENOENT");
+    expect(wrapper.text()).not.toContain("robertzeng");
+    expect(wrapper.text()).not.toContain("secret-api-key");
+  });
+
   it("auto-send emits send with the transcript and fromVoice flag", async () => {
     const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
     await wrapper.find(".v2-composer__voice-button").trigger("click");
@@ -208,10 +227,9 @@ describe("AiChatV2Composer voice controls", () => {
 
   it("preserves an older typed draft after a voice send is accepted", async () => {
     const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
-    wrapper.findComponent(TextareaStub).vm.$emit(
-      "update:modelValue",
-      "older typed draft"
-    );
+    wrapper
+      .findComponent(TextareaStub)
+      .vm.$emit("update:modelValue", "older typed draft");
     await wrapper.vm.$nextTick();
 
     await wrapper.find(".v2-composer__voice-button").trigger("click");
@@ -240,16 +258,20 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
-  it("shows the transcription failure detail returned by the main process", async () => {
-    transcribeVoiceMock.mockRejectedValue(new Error("STT model is not loaded."));
+  it("shows a bounded transcription failure even when the worker returns detail", async () => {
+    // PRD §14.5: worker detail (paths, provider responses) is never echoed —
+    // only the bounded public message renders.
+    transcribeVoiceMock.mockRejectedValue(
+      new Error("STT model missing: /models/sherpa.bin (code 0x8bad)")
+    );
     const wrapper = mountComposer({ voiceEnabled: true });
     await wrapper.find(".v2-composer__voice-button").trigger("click");
     await flushPromises();
     await wrapper.find(".v2-composer__voice-button").trigger("click");
     await flushPromises();
-    expect(wrapper.find(".v2-composer__notice").text()).toContain(
-      "Voice transcription failed. STT model is not loaded."
-    );
+    expect(wrapper.text()).toContain("Voice transcription failed.");
+    expect(wrapper.text()).not.toContain("/models/sherpa.bin");
+    expect(wrapper.text()).not.toContain("0x8bad");
   });
 
   it("keeps the transcript in the draft when chat is unavailable on auto-send", async () => {

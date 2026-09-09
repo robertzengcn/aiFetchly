@@ -2334,6 +2334,8 @@ export default {
       settings_unavailable: "语音输入不可用——请打开设置",
       busy: "当前任务运行期间语音输入不可用",
       settings_load_failed: "无法加载语音设置。",
+      settings_save_failed: "无法保存语音回复偏好设置。",
+      retry: "重试",
       stop_recording: "停止录音",
       recording: "录音中...",
       transcribing: "识别中...",

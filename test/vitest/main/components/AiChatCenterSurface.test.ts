@@ -13,6 +13,7 @@ const previewWorkspaceAgentsMock = vi.fn();
 const getOpenAIChatModelsMock = vi.fn();
 const getToolApprovalMock = vi.fn();
 const getVoiceSettingsMock = vi.fn();
+const setVoiceSettingsMock = vi.fn();
 const getVoiceStatusMock = vi.fn();
 const getLocalAiRuntimeStatusMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
@@ -59,7 +60,7 @@ vi.mock("@/views/api/aiChatV2Voice", () => ({
   getVoiceStatus: (...args: unknown[]) => getVoiceStatusMock(...args),
   notifyVoiceModelsChanged: vi.fn(),
   onVoiceModelDownloadProgress: vi.fn().mockReturnValue(() => undefined),
-  setVoiceSettings: vi.fn(),
+  setVoiceSettings: (...args: unknown[]) => setVoiceSettingsMock(...args),
   synthesizeVoice: vi.fn(),
   transcribeVoice: vi.fn(),
 }));
@@ -134,7 +135,13 @@ const i18n = createI18n({
         pathUnavailable: "Workspace folder is not accessible right now.",
         busyReason: "Available after current run",
       },
-      aiChatV2: { voice: {} },
+      aiChatV2: {
+        voice: {
+          settings_save_failed: "Couldn't save the spoken-response preference.",
+          retry: "Retry",
+          open_model_settings: "Open settings",
+        },
+      },
     },
   },
 });
@@ -208,6 +215,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2ContextBadge: true,
         AiChatVoiceOutputToggle: defineComponent({
+          name: "AiChatVoiceOutputToggle",
           template: '<div data-testid="voice-toggle-stub" />',
         }),
         AiChatVoiceRuntimeInstallDialog: true,
@@ -905,6 +913,58 @@ describe("AiChatCenterSurface durable drafts (FR-COMP-011)", () => {
       second
         .findComponent({ name: "AiChatV2Composer" })
         .props("voiceSettingsUnavailable")
+    ).toBe(false);
+  });
+});
+
+describe("AiChatCenterSurface spoken-response save failure (FR-VOICE-004)", () => {
+  it("shows a localized recoverable notice with retry and never renders the raw error", async () => {
+    setVoiceSettingsMock.mockRejectedValue(
+      new Error("sqlite:/home/robertzeng/secret.db LOCKED api_key=sk-123")
+    );
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="voice-save-error"]').exists()
+    ).toBe(false);
+
+    // Toggle spoken response on (settings default to disabled, runtime ready).
+    wrapper
+      .findComponent({ name: "AiChatVoiceOutputToggle" })
+      .vm.$emit("toggle");
+    await flushPromises();
+
+    const notice = wrapper.get('[data-testid="voice-save-error"]');
+    expect(notice.attributes("role")).toBe("alert");
+    expect(notice.text()).toContain(
+      "Couldn't save the spoken-response preference."
+    );
+    expect(notice.text()).toContain("Retry");
+    // Sanitized: the raw exception never reaches the DOM.
+    expect(wrapper.text()).not.toContain("secret");
+    expect(wrapper.text()).not.toContain("sqlite");
+    expect(wrapper.text()).not.toContain("sk-123");
+
+    // Retry re-attempts the save through the composable.
+    setVoiceSettingsMock.mockClear();
+    setVoiceSettingsMock.mockResolvedValue({
+      inputMode: "disabled",
+      ttsMode: "all_assistant_messages",
+      autoSendTranscript: false,
+      sttLanguage: "auto",
+      ttsLanguage: "auto",
+      sttModelId: "stt",
+      ttsModelId: "tts",
+      ttsSpeed: 1,
+      maxRecordingMs: 60000,
+    });
+    await wrapper.get('[data-testid="voice-save-retry"]').trigger("click");
+    await flushPromises();
+    expect(setVoiceSettingsMock).toHaveBeenCalledTimes(1);
+    // A successful retry clears the recoverable failure.
+    expect(
+      wrapper.find('[data-testid="voice-save-error"]').exists()
     ).toBe(false);
   });
 });

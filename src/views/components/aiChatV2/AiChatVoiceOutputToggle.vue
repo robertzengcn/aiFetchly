@@ -16,6 +16,7 @@
     :title="toggleTitle"
     :aria-label="toggleTitle"
     :aria-pressed="enabled"
+    :aria-busy="saving"
     @click="onClick"
   >
     <v-icon size="small">

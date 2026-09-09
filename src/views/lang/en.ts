@@ -2435,6 +2435,8 @@ export default {
       settings_unavailable: "Voice input unavailable — open settings",
       busy: "Voice input is unavailable during the current run",
       settings_load_failed: "Voice settings couldn't be loaded.",
+      settings_save_failed: "Couldn't save the spoken-response preference.",
+      retry: "Retry",
       stop_recording: "Stop recording",
       recording: "Recording...",
       transcribing: "Transcribing...",

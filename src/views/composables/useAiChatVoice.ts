@@ -77,6 +77,8 @@ export interface AiChatVoiceState {
   readonly spokenResponseToggleTitle: Readonly<ComputedRef<string>>;
   readonly speaking: Readonly<Ref<boolean>>;
   readonly settingsSaving: Readonly<Ref<boolean>>;
+  /** FR-VOICE-004: recoverable spoken-response preference-save failure. */
+  readonly settingsSaveFailed: Readonly<Ref<boolean>>;
   readonly modelInstalling: Readonly<Ref<boolean>>;
   readonly modelInstallError: Readonly<Ref<string | null>>;
   /** True when TTS enablement is blocked on installing the speech model. */
@@ -131,13 +133,12 @@ export function useAiChatVoice(options: {
     { ttsMode: "disabled", latestInputWasVoice: false },
     undefined,
     undefined,
-    (error) => {
-      const fallback =
-        t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
+    () => {
+      // PRD §14.5/§23/§29: renderer-visible voice errors are bounded public
+      // messages — raw exception text (paths, provider responses, keys) is
+      // never appended.
       playbackError.value =
-        error.message.trim().length > 0
-          ? `${fallback} ${error.message}`
-          : fallback;
+        t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
     }
   );
   speechController.start();
@@ -159,6 +160,8 @@ export function useAiChatVoice(options: {
   const status = ref<AiChatVoiceRuntimeStatus | null>(null);
   const localRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
   const settingsSaving = ref(false);
+  /** FR-VOICE-004: last spoken-response preference save failed (recoverable). */
+  const settingsSaveFailed = ref(false);
   const modelInstalling = ref(false);
   const modelInstallError = ref<string | null>(null);
   const ttsInstallPrompt = ref(false);
@@ -309,6 +312,7 @@ export function useAiChatVoice(options: {
   async function toggleSpokenResponse(): Promise<void> {
     if (settingsSaving.value) return;
     settingsSaving.value = true;
+    settingsSaveFailed.value = false;
     modelInstallError.value = null;
     playbackError.value = null;
     ttsInstallPrompt.value = false;
@@ -334,9 +338,11 @@ export function useAiChatVoice(options: {
         ttsMode: enabling ? "all_assistant_messages" : "disabled",
       });
       applySettings(saved);
-    } catch (err) {
-      modelInstallError.value =
-        err instanceof Error ? err.message : String(err);
+    } catch {
+      // FR-VOICE-004: a preference-save failure is a RECOVERABLE state —
+      // bounded flag + localized retry in the chat center; the raw error
+      // never reaches the renderer.
+      settingsSaveFailed.value = true;
     } finally {
       settingsSaving.value = false;
     }
@@ -351,12 +357,12 @@ export function useAiChatVoice(options: {
         status.value?.sttModelId ?? "sherpa-onnx:stt:auto"
       );
       await loadSettings();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      modelInstallError.value = `${
+    } catch {
+      // Bounded public message only (PRD §14.5) — raw exception text may
+      // contain paths or provider details.
+      modelInstallError.value =
         t("aiChatV2.voice.model_install_failed") ||
-        "Voice model installation failed."
-      } ${msg}`;
+        "Voice model installation failed.";
       await loadSettings();
     } finally {
       modelInstalling.value = false;
@@ -373,12 +379,10 @@ export function useAiChatVoice(options: {
       await downloadVoiceModel(ttsModelId);
       notifyVoiceModelsChanged();
       await loadSettings();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      modelInstallError.value = `${
+    } catch {
+      modelInstallError.value =
         t("aiChatV2.voice.tts_model_install_failed") ||
-        "Speech model installation failed."
-      } ${msg}`;
+        "Speech model installation failed.";
       await loadSettings();
     } finally {
       modelInstalling.value = false;
@@ -396,12 +400,10 @@ export function useAiChatVoice(options: {
       runtimeInstallOffer.value = await prepareLocalAiRuntimeInstall(
         VOICE_SHERPA_RUNTIME_ID
       );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      runtimeInstallError.value = `${
+    } catch {
+      runtimeInstallError.value =
         t("aiChatV2.voice.runtime_install_prepare_failed") ||
-        "Could not prepare the voice runtime download."
-      } ${msg}`;
+        "Could not prepare the voice runtime download.";
     }
   }
 
@@ -551,6 +553,7 @@ export function useAiChatVoice(options: {
     spokenResponseToggleTitle,
     speaking,
     settingsSaving,
+    settingsSaveFailed,
     modelInstalling,
     modelInstallError,
     ttsInstallPrompt,

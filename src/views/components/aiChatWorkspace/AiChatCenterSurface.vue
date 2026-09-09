@@ -293,6 +293,45 @@
       </v-btn>
     </div>
 
+    <!-- Spoken-response preference save failure (FR-VOICE-004): recoverable,
+         localized, with a retry — the raw IPC error never renders. -->
+    <div
+      v-if="voice.settingsSaveFailed.value"
+      class="chat-center__tts-notice"
+      role="alert"
+      data-testid="voice-save-error"
+    >
+      <v-icon size="x-small" color="warning" class="mr-1">
+        mdi-volume-off
+      </v-icon>
+      <span class="chat-center__tts-notice-text">
+        {{
+          t("aiChatV2.voice.settings_save_failed") ||
+          "Couldn't save the spoken-response preference."
+        }}
+      </span>
+      <v-btn
+        size="x-small"
+        color="primary"
+        variant="tonal"
+        class="ml-2"
+        data-testid="voice-save-retry"
+        :disabled="voice.settingsSaving.value"
+        @click="voice.toggleSpokenResponse"
+      >
+        {{ t("aiChatV2.voice.retry") || "Retry" }}
+      </v-btn>
+      <v-btn
+        size="x-small"
+        variant="text"
+        class="ml-1"
+        :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+        @click="openVoiceSettings"
+      >
+        {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+      </v-btn>
+    </div>
+
     <AiChatVoiceRuntimeInstallDialog
       v-model="voiceRuntimeInstallDialog"
       :installing="voice.runtimeInstalling.value"
