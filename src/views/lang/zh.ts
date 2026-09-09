@@ -2332,6 +2332,8 @@ export default {
       microphone: "语音输入",
       start_recording: "开始录音",
       settings_unavailable: "语音输入不可用——请打开设置",
+      input_disabled: "语音输入已关闭——打开设置开启",
+      permission_retry_hint: "请允许麦克风权限后重试。",
       busy: "当前任务运行期间语音输入不可用",
       settings_load_failed: "无法加载语音设置。",
       settings_save_failed: "无法保存语音回复偏好设置。",

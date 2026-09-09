@@ -2441,6 +2441,8 @@ export default {
       microphone: "Spracheingabe",
       start_recording: "Aufnahme starten",
       settings_unavailable: "Spracheingabe nicht verfügbar – Einstellungen öffnen",
+      input_disabled: "Spracheingabe ist aus – Einstellungen öffnen",
+      permission_retry_hint: "Erlaube den Mikrofonzugriff und versuche es erneut.",
       busy: "Die Spracheingabe ist während des aktuellen Vorgangs nicht verfügbar",
       settings_load_failed: "Spracheinstellungen konnten nicht geladen werden.",
       settings_save_failed: "Die Einstellung für gesprochene Antworten konnte nicht gespeichert werden.",

@@ -2433,6 +2433,8 @@ export default {
       microphone: "Voice input",
       start_recording: "Start recording",
       settings_unavailable: "Voice input unavailable — open settings",
+      input_disabled: "Voice input is off — open settings",
+      permission_retry_hint: "Allow microphone access, then try again.",
       busy: "Voice input is unavailable during the current run",
       settings_load_failed: "Voice settings couldn't be loaded.",
       settings_save_failed: "Couldn't save the spoken-response preference.",

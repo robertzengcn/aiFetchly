@@ -163,12 +163,15 @@
       @paste="onPaste"
     >
       <!--
-        FR-VOICE-001/005: the microphone stays VISIBLE whenever voice input is
-        enabled by policy OR merely recoverable-unavailable (settings failed to
-        load) — a recoverable capability is never silently removed. The label
-        always states WHY recording is currently impossible (FR-VOICE-003).
+        FR-VOICE-001/003/005 + FR-COMP-009: the microphone affordance stays
+        VISIBLE in every state on builds that support microphone capture —
+        policy-enabled (record), policy-disabled (setup affordance routing to
+        voice settings), or recoverable-unavailable (settings failed to load).
+        Only a permanently unsupported build (no getUserMedia) hides it, and
+        the accessible label always states WHY recording is currently
+        impossible.
       -->
-      <template v-if="voiceEnabled || voiceSettingsUnavailable" #append-inner>
+      <template v-if="voiceSupportedByBuild" #append-inner>
         <v-btn
           icon
           size="small"
@@ -672,10 +675,22 @@ const voiceAvailabilityNotice = computed(() =>
 );
 
 /**
+ * FR-COMP-009: this build supports microphone capture when the Chromium
+ * embedding exposes getUserMedia. Permanently unsupported builds hide the
+ * affordance entirely; everything else keeps it visible (PRD §14.2/14.4).
+ */
+const voiceSupportedByBuild =
+  typeof navigator !== "undefined" &&
+  navigator.mediaDevices?.getUserMedia !== undefined;
+
+/**
  * FR-VOICE-003: the microphone distinguishes ready, recording, transcribing,
  * busy, and setup-required states. Busy covers an active run; setup covers a
- * recoverable settings-load failure.
+ * recoverable settings-load failure; policy-disabled routes to settings.
  */
+const micPolicyDisabled = computed(
+  () => !props.voiceEnabled && !props.voiceSettingsUnavailable
+);
 const micBusy = computed(() => props.isStreaming || props.isProcessing);
 const micDisabled = computed(
   () =>
@@ -694,6 +709,12 @@ const micTitle = computed(() => {
     return (
       t("aiChatV2.voice.settings_unavailable") ||
       "Voice input unavailable — open settings"
+    );
+  }
+  if (micPolicyDisabled.value) {
+    return (
+      t("aiChatV2.voice.input_disabled") ||
+      "Voice input is off — open settings"
     );
   }
   if (micBusy.value) {
@@ -747,12 +768,29 @@ const VOICE_ERROR_L10N: Record<VoiceRecorderErrorKind, { key: string; fallback: 
 };
 
 function recorderErrorNotice(err: unknown): string {
-  const { key, fallback } = VOICE_ERROR_L10N[classifyRecorderError(err)];
-  return t(key) || fallback;
+  const kind = classifyRecorderError(err);
+  const { key, fallback } = VOICE_ERROR_L10N[kind];
+  const base = t(key) || fallback;
+  if (kind === "permission_denied") {
+    // Explicit retry guidance (FR-VOICE-003 / PRD §14.2): permission denial
+    // is recoverable by the user.
+    const hint =
+      t("aiChatV2.voice.permission_retry_hint") ||
+      "Allow microphone access, then try again.";
+    return `${base} ${hint}`;
+  }
+  return base;
 }
 
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
+  // Policy-disabled builds keep the affordance as a SETUP entry point: the
+  // click routes to voice settings instead of silently doing nothing
+  // (FR-VOICE-005 / PRD §14.4).
+  if (micPolicyDisabled.value) {
+    emit("open-voice-settings");
+    return;
+  }
   if (props.voiceRuntimeUnavailable) {
     emit("install-voice-runtime");
     return;

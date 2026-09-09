@@ -2432,6 +2432,8 @@ export default {
       microphone: "Saisie vocale",
       start_recording: "Commencer l'enregistrement",
       settings_unavailable: "Saisie vocale indisponible — ouvrir les paramètres",
+      input_disabled: "La saisie vocale est désactivée — ouvrir les paramètres",
+      permission_retry_hint: "Autorisez l’accès au micro, puis réessayez.",
       busy: "La saisie vocale est indisponible pendant l’exécution en cours",
       settings_load_failed: "Impossible de charger les paramètres vocaux.",
       settings_save_failed: "Impossible d’enregistrer la préférence de réponses parlées.",

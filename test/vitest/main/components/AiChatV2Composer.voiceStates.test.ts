@@ -40,6 +40,7 @@ const i18n = createI18n({
           stop_recording: "Stop recording",
           transcribing: "Transcribing…",
           settings_unavailable: "Voice input unavailable — open settings",
+          input_disabled: "Voice input is off — open settings",
           busy: "Voice input is unavailable during the current run",
           settings_load_failed: "Voice settings couldn't be loaded.",
           open_model_settings: "Open settings",
@@ -81,16 +82,44 @@ function mountComposer(props: Record<string, unknown> = {}) {
   });
 }
 
+/**
+ * happy-dom ships no navigator.mediaDevices; the composer's build-support
+ * signal reads it, so stub a Chromium-like capture capability per test.
+ */
+function stubMediaDevices(supported: boolean): void {
+  Object.defineProperty(navigator, "mediaDevices", {
+    value: supported
+      ? { getUserMedia: () => Promise.resolve() }
+      : undefined,
+    configurable: true,
+  });
+}
+
 describe("AiChatV2Composer voice states (FR-VOICE-001/003/005)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stubMediaDevices(true);
   });
 
-  it("hides the microphone only when policy-disabled AND settings are fine", () => {
+  it("keeps a labeled setup microphone when voice input is policy-disabled", async () => {
     const wrapper = mountComposer({ voiceEnabled: false });
-    expect(wrapper.find('[data-testid="ai-chat-microphone"]').exists()).toBe(
-      false
+    const mic = wrapper.get('[data-testid="ai-chat-microphone"]');
+    expect(mic.attributes("disabled")).toBeUndefined();
+    expect(mic.attributes("aria-label")).toBe(
+      "Voice input is off — open settings"
     );
+
+    // The setup affordance routes to voice settings instead of recording.
+    await mic.trigger("click");
+    expect(wrapper.emitted("open-voice-settings")).toHaveLength(1);
+  });
+
+  it("hides the microphone only on a permanently unsupported build", () => {
+    stubMediaDevices(false);
+    const wrapper = mountComposer({ voiceEnabled: true });
+    expect(
+      wrapper.find('[data-testid="ai-chat-microphone"]').exists()
+    ).toBe(false);
   });
 
   it("keeps a disabled, labeled microphone plus a settings action when settings failed to load", async () => {

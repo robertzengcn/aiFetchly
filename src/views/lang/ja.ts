@@ -2396,6 +2396,8 @@ export default {
       microphone: "音声入力",
       start_recording: "録音を開始",
       settings_unavailable: "音声入力は利用できません——設定を開いてください",
+      input_disabled: "音声入力はオフです——設定を開いてください",
+      permission_retry_hint: "マイクへのアクセスを許可してから、もう一度お試しください。",
       busy: "現在の実行中は音声入力を利用できません",
       settings_load_failed: "音声設定を読み込めませんでした。",
       settings_save_failed: "音声応答の設定を保存できませんでした。",
