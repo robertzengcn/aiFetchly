@@ -1,4 +1,9 @@
 "use strict";
+// DIAGNOSTIC (T-13 package-smoke firstWindow timeout): raw canaries that emit to
+// stderr with NO module dependencies, so we can localize exactly where the
+// packaged main process stalls (it currently produces zero output for 33s).
+// TODO: remove once the packaged startup hang is root-caused.
+process.stderr.write("[canary] background.js module load STARTED\n");
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
 import {
@@ -253,6 +258,7 @@ function clearStartupMarker(): void {
   }
 }
 
+process.stderr.write("[canary] imports complete, line ~256 reached\n");
 log.info("Application starting...");
 
 // Puppeteer registers process "exit" listeners per launched browser, and
@@ -705,6 +711,9 @@ function initialize() {
 
   async function createWindowBody(): Promise<void> {
     rendererHtmlLoaded = false;
+    process.stderr.write(
+      "[canary] createWindowBody entered, about to new BrowserWindow\n"
+    );
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -1122,6 +1131,7 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   app.whenReady().then(async () => {
+    process.stderr.write("[canary] app.whenReady fired\n");
     registerGeneratedImageProtocolHandler();
 
     // Configure Content Security Policy (must be called after app is ready)
@@ -1159,6 +1169,7 @@ function initialize() {
     const menu = menuManager.createMenu();
     Menu.setApplicationMenu(menu);
 
+    process.stderr.write("[canary] about to call createWindow()\n");
     createWindow();
 
     // Show crash prompt if there was an unclean shutdown (no-op otherwise).
