@@ -131,3 +131,29 @@ describe("AiChatV2Composer layout (chat-first shell design §10)", () => {
     expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe("AiChatV2Composer lower-toolbar order (PRD §13.3)", () => {
+  it("renders controls, then attachment, then spoken-response, then send", () => {
+    const wrapper = mountComposer({
+      controls:
+        '<div data-testid="order-controls">mode model approval context</div>',
+      "toolbar-actions": '<div data-testid="order-spoken">spoken</div>',
+    });
+
+    const position = (a: string, b: string): boolean => {
+      const elA = wrapper.find('[data-testid="' + a + '"]').element;
+      const elB = wrapper.find('[data-testid="' + b + '"]').element;
+      return (
+        (elA.compareDocumentPosition(elB) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+        0
+      );
+    };
+
+    // PRD §13.3 (authoritative): mode/model/approval/context (the controls
+    // slot) → attachment → spoken-response → Send.
+    expect(position("order-controls", "ai-chat-attach")).toBe(true);
+    expect(position("ai-chat-attach", "order-spoken")).toBe(true);
+    expect(position("order-spoken", "ai-chat-send")).toBe(true);
+  });
+});

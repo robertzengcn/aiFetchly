@@ -307,22 +307,11 @@
       </div>
     </v-slide-y-reverse-transition>
     <div class="v2-composer__bar">
-      <!-- Attach file button. Rendered as its own flex item at the far
-           left of the bar so the mode/model/tool selectors in the prepend
-           slot can't push it off-screen on narrow chat panels. -->
-      <v-btn
-        v-if="!isStreaming && !isProcessing"
-        icon
-        size="small"
-        variant="text"
-        class="v2-composer__attach"
-        :title="t('aiChatV2.attachments.add') || 'Attach file'"
-        @click="triggerFilePicker"
-      >
-        <v-icon size="small">mdi-paperclip</v-icon>
-      </v-btn>
-      <!-- Lower toolbar (chat-first shell design §10.3): the semantic
-           `controls` slot (mode/model/tool approval) wins; when it is absent
+      <!-- Lower toolbar (chat-first shell design §10.3 / PRD §13.3): the
+           semantic `controls` slot (mode, model, tool approval, context)
+           renders FIRST, then the attach action — the PRD declares the
+           mode → model → approval → context → attachment → spoken-response
+           order fixed and authoritative. When the controls slot is absent
            the legacy `prepend` slot renders instead so a flag rollback never
            loses controls. -->
       <div
@@ -334,6 +323,20 @@
           <slot name="prepend" />
         </slot>
       </div>
+      <!-- Attach file button: after the selectors, before the trailing
+           actions. -->
+      <v-btn
+        v-if="!isStreaming && !isProcessing"
+        icon
+        size="small"
+        variant="text"
+        class="v2-composer__attach"
+        data-testid="ai-chat-attach"
+        :title="t('aiChatV2.attachments.add') || 'Attach file'"
+        @click="triggerFilePicker"
+      >
+        <v-icon size="small">mdi-paperclip</v-icon>
+      </v-btn>
       <div class="v2-composer__actions">
         <!-- Spoken-response and other trailing actions (design §10.1) render
              before stop-speaking/send so Send stays the last control. -->
@@ -1581,7 +1584,7 @@ watch(
   align-items: center;
   gap: 8px;
 }
-/* Attach button never shrinks — always visible on the far left. */
+/* Attach button never shrinks — always visible after the selectors. */
 .v2-composer__attach {
   flex: 0 0 auto;
 }
