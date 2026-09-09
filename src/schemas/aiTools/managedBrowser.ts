@@ -111,6 +111,8 @@ export const browserEvaluateScriptToolSchema = lazySchema(() =>
     /** Exact page-context JavaScript. NEVER executed as Node. */
     source: z.string().min(1).max(20_000),
     purpose: z.string().min(1).max(300),
+    /** Declared expected output shape, shown in the approval (FR-SCRIPT-003). */
+    expected_output: z.string().min(1).max(300),
     timeout_ms: z.number().int().min(100).max(10_000).optional(),
     page_revision: z.number().int().positive(),
   })

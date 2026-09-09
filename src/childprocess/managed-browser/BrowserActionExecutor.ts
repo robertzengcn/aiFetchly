@@ -42,6 +42,7 @@ import {
  */
 
 export interface ExecutorElementHandle extends DisposableElement {
+  hover(options?: { timeout?: number }): Promise<void>;
   click(options?: { timeout?: number }): Promise<void>;
   type(text: string, options?: { delay?: number }): Promise<void>;
   select(...values: string[]): Promise<string[]>;
@@ -343,6 +344,47 @@ export class BrowserActionExecutor {
           return await this.doWaitFor(action, options);
         case "extract":
           return await this.doExtract(action.refs, options, run.extracted);
+        case "hover":
+          return await this.withElement(action, options, async (entry) => {
+            await entry.element.scrollIntoView();
+            await entry.element.hover();
+            return { success: true };
+          });
+        case "clear":
+          return await this.withElement(action, options, async (entry) => {
+            await entry.element.scrollIntoView();
+            await entry.element.evaluate(
+              "((el) => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })"
+            );
+            return { success: true };
+          });
+        case "go_back":
+          await options.page.evaluate("(() => history.back())()");
+          options.registry.reset(options.registry.currentRevision + 1);
+          return { success: true };
+        case "go_forward":
+          await options.page.evaluate("(() => history.forward())()");
+          options.registry.reset(options.registry.currentRevision + 1);
+          return { success: true };
+        case "reload":
+          await options.page.evaluate("(() => location.reload())()");
+          options.registry.reset(options.registry.currentRevision + 1);
+          return { success: true };
+        case "screenshot":
+          // Metadata-only marker: the headed window is the user surface.
+          return { success: true };
+        case "stop":
+          return {
+            success: false,
+            errorCode: "cancelled" as const,
+            stopCode: "cancelled" as const,
+          };
+        case "request_handoff":
+          return {
+            success: false,
+            errorCode: "challenge_requires_handoff" as const,
+            stopCode: "handoff_required" as const,
+          };
         default:
           return { success: false, errorCode: "action_not_allowed" };
       }
@@ -470,7 +512,7 @@ export class BrowserActionExecutor {
   private async withElement(
     action: Extract<
       BrowserAction,
-      { type: "click" | "fill" | "select" }
+      { type: "click" | "fill" | "select" | "hover" | "clear" }
     >,
     options: ExecuteProgramOptions,
     fn: (entry: ReferenceEntry<ExecutorElementHandle>) => Promise<{

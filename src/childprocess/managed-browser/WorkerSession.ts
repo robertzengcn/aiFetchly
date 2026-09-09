@@ -509,6 +509,10 @@ export class WorkerSession {
         ),
       ]);
       if (result === null && this.now() - startedAt >= timeoutMs) {
+        // TODO-MSB-009: a timed-out script may STILL be running in the page.
+        // Invalidate every reference and mark the page revision so nothing
+        // stale executes against a mutated DOM afterwards.
+        this.registry.reset(this.registry.currentRevision + 1);
         this.send({
           ...this.base(requestId),
           type: "EVALUATE_SCRIPT_RESULT",

@@ -469,13 +469,16 @@ describe("clear cache", () => {
 });
 
 
+const SCRIPT_ARGS = {
+  session_id: SESSION_ID,
+  source: "document.querySelectorAll('a').length",
+  purpose: "count links",
+  expected_output: "a number",
+  page_revision: 2,
+};
+
 describe("GAP-12 privileged page-context script", () => {
-  const ARGS = {
-    session_id: SESSION_ID,
-    source: "document.querySelectorAll('a').length",
-    purpose: "count links",
-    page_revision: 2,
-  };
+  const ARGS = SCRIPT_ARGS;
 
   it("ALWAYS requires approval — no permission mode may skip it", async () => {
     const module = makeModule();
@@ -504,6 +507,7 @@ describe("GAP-12 privileged page-context script", () => {
     expect(module.evaluateScript).toHaveBeenCalledWith(SESSION_ID, {
       source: ARGS.source,
       timeoutMs: 5000,
+      pageRevision: ARGS.page_revision,
     });
     expect(String(result.sourceHash)).toMatch(/^[0-9a-f]{64}$/);
     expect(result.contentNotice).toContain("untrusted_page_content");
@@ -564,5 +568,83 @@ describe("GAP-14 abort propagation", () => {
     );
     controller.abort(); // after completion — must NOT trigger a cancel
     expect(module.cancelActiveRequest).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("TODO-MSB-010 recursive classification", () => {
+  it("a consequential click nested inside repeat requires approval", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        sessionId: SESSION_ID,
+        pageRevision: 4,
+        url: "https://www.youtube.com/upload",
+        origin: "https://www.youtube.com",
+        title: "Upload",
+        state: "ready",
+        elements: [
+          { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+        ],
+        visibleText: "",
+        notices: [],
+        truncated: false,
+      })
+    );
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 4,
+          program: {
+            actions: [
+              {
+                type: "repeat",
+                condition: "text",
+                text: "more",
+                maxIterations: 3,
+                body: [{ type: "click", ref: "e_pub", pageRevision: 4 }],
+              },
+            ],
+          } as never,
+        },
+        { ...CTX, skipPermissionCheck: true }
+      )
+    );
+    expect(err.code).toBe("approval_required");
+    expect(err.riskClass).toBe("consequential_write");
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("TODO-MSB-009 script hardening", () => {
+  it("forwards the page_revision binding to the module (fail-closed there)", async () => {
+    const module = makeModule();
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      () => "approve"
+    );
+    const service = makeService({ module });
+    const result = await service.evaluateScript(
+      { ...SCRIPT_ARGS, page_revision: 99 },
+      CTX
+    );
+    expect(result.ok).toBe(true);
+    expect(module.evaluateScript).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({ pageRevision: 99 })
+    );
+  });
+
+  it("requires the expected_output declaration (schema-enforced)", async () => {
+    const service = makeService({});
+    const err = await errorOf(
+      service.evaluateScript(
+        { ...SCRIPT_ARGS, expected_output: undefined } as never,
+        CTX
+      )
+    );
+    expect(err.code).toBe("invalid_tool_arguments");
   });
 });

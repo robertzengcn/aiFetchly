@@ -38,6 +38,11 @@ class FakeHandle implements ExecutorElementHandle {
   async dispose(): Promise<void> {
     this.disposed = true;
   }
+  public hovered = false;
+
+  async hover(): Promise<void> {
+    this.hovered = true;
+  }
   async click(): Promise<void> {
     this.clicked = true;
   }
@@ -790,5 +795,86 @@ describe("GAP-13 composite programs", () => {
     });
     // 1 guard + 50*2 = 101 steps > 100 limit.
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TODO-MSB-010: expanded action vocabulary
+// ---------------------------------------------------------------------------
+
+describe("TODO-MSB-010 action vocabulary", () => {
+  it("hovers a current-revision element with live-descriptor validation", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "link", "Channel");
+    const outcome = await executor.executeProgram(
+      { actions: [{ type: "hover", ref, pageRevision: 1 }] },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(handle.hovered).toBe(true);
+  });
+
+  it("clears an input field via a trusted page-context reset", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "textbox", "Search");
+    let cleared = false;
+    handle.evaluate = async <T,>(script: unknown): Promise<T> => {
+      if (String(script).includes("el.value = ''")) {
+        cleared = true;
+      }
+      if (String(script).includes("aria-label")) {
+        return { role: "textbox", name: "Search" } as T;
+      }
+      return null as T;
+    };
+    const outcome = await executor.executeProgram(
+      { actions: [{ type: "clear", ref, pageRevision: 1 }] },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(cleared).toBe(true);
+  });
+
+  it("history navigation invalidates references", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref } = registerElement(registry, "button", "X");
+    const outcome = await executor.executeProgram(
+      { actions: [{ type: "go_back" }] },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    expect(registry.lookup(ref).status).toBe("unknown_ref");
+    expect(outcome.pageRevision).toBe(2);
+  });
+
+  it("structured stop cancels the program between actions", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "press_key", key: "a" },
+          { type: "stop" },
+          { type: "press_key", key: "b" },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("cancelled");
+    expect(page.pressedKeys).toEqual(["a"]);
+  });
+
+  it("request_handoff stops the program for a user handoff", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "request_handoff" },
+          { type: "press_key", key: "z" },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.stopCode).toBe("handoff_required");
+    expect(page.pressedKeys).toHaveLength(0);
   });
 });

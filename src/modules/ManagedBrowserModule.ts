@@ -904,7 +904,12 @@ export class ManagedBrowserModule {
    */
   public async evaluateScript(
     sessionId: string,
-    input: { readonly source: string; readonly timeoutMs: number }
+    input: {
+      readonly source: string;
+      readonly timeoutMs: number;
+      /** Required current page revision (TODO-MSB-009 fail-closed). */
+      readonly pageRevision: number;
+    }
   ): Promise<{
     readonly ok: boolean;
     readonly resultSummary: string | null;
@@ -913,6 +918,11 @@ export class ManagedBrowserModule {
   }> {
     const record = this.requireSession(sessionId);
     this.guard(record, "RUN_ACTIONS");
+    // TODO-MSB-009: scripts are revision-bound — a stale page reference
+    // means the script was written for a different DOM. Fail closed.
+    if (record.lastObservation && record.lastObservation.pageRevision !== input.pageRevision) {
+      throw new ManagedBrowserError("stale_page_reference");
+    }
     const message = await this.requestWorker(
       record,
       {

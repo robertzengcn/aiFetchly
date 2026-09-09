@@ -369,6 +369,39 @@ export const leafBrowserActionSchema = z.discriminatedUnion("type", [
       .min(1)
       .max(MANAGED_BROWSER_ACTION_LIMITS.maxExtractedItems),
   }),
+  z.strictObject({
+    type: z.literal("hover"),
+    ref: elementRefSchema,
+    pageRevision: z.number().int().positive(),
+    expectedRole: z.string().min(1).max(48).optional(),
+    expectedName: z.string().max(200).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("clear"),
+    ref: elementRefSchema,
+    pageRevision: z.number().int().positive(),
+    expectedRole: z.string().min(1).max(48).optional(),
+    expectedName: z.string().max(200).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("go_back"),
+  }),
+  z.strictObject({
+    type: z.literal("go_forward"),
+  }),
+  z.strictObject({
+    type: z.literal("reload"),
+  }),
+  z.strictObject({
+    type: z.literal("screenshot"),
+  }),
+  z.strictObject({
+    type: z.literal("stop"),
+  }),
+  z.strictObject({
+    type: z.literal("request_handoff"),
+    reason: z.string().max(64).optional(),
+  }),
 ]);
 
 const compositeBrowserActionSchema = z.discriminatedUnion("type", [

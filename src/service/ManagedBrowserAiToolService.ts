@@ -31,7 +31,9 @@ import {
 import { formatZodValidationError } from "@/utils/zodErrors";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
 import type {
+  BrowserAction,
   BrowserActionProgram,
+  BrowserLeafAction,
   ManagedBrowserOutboundMessage,
 } from "@/schemas/worker/managedBrowser";
 
@@ -127,7 +129,7 @@ export interface BrowserModuleLike {
   ): Promise<{ mimeType: string; base64: string }>;
   evaluateScript(
     sessionId: string,
-    input: { source: string; timeoutMs: number }
+    input: { source: string; timeoutMs: number; pageRevision: number }
   ): Promise<{
     ok: boolean;
     resultSummary: string | null;
@@ -407,11 +409,13 @@ export class ManagedBrowserAiToolService {
       return element ? { role: element.role, name: element.name } : null;
     };
     const assessment = this.classifier.classifyProgram(
-      program.actions.map((action) => {
+      flattenProgramActions(program.actions).map((action) => {
         if (
           (action.type === "click" ||
             action.type === "fill" ||
-            action.type === "select") &&
+            action.type === "select" ||
+            action.type === "hover" ||
+            action.type === "clear") &&
           "ref" in action
         ) {
           const descriptor = descriptorFor(action.ref);
@@ -466,13 +470,26 @@ export class ManagedBrowserAiToolService {
 
     // Attach main-process-attested expected fingerprints so the worker
     // revalidates each target immediately before execution (GAP-01/03).
-    const augmentedProgram: BrowserActionProgram = {
-      ...program,
-      actions: program.actions.map((action) => {
+    const attested = (
+      nodes: readonly BrowserAction[]
+    ): BrowserAction[] =>
+      nodes.map((action) => {
+        if (action.type === "if") {
+          return {
+            ...action,
+            then: attested(action.then),
+            ...(action.else ? { else: attested(action.else) } : {}),
+          };
+        }
+        if (action.type === "repeat") {
+          return { ...action, body: attested(action.body) };
+        }
         if (
           (action.type === "click" ||
             action.type === "fill" ||
-            action.type === "select") &&
+            action.type === "select" ||
+            action.type === "hover" ||
+            action.type === "clear") &&
           "ref" in action
         ) {
           const descriptor = descriptorFor(action.ref);
@@ -485,7 +502,10 @@ export class ManagedBrowserAiToolService {
           }
         }
         return action;
-      }),
+      });
+    const augmentedProgram: BrowserActionProgram = {
+      ...program,
+      actions: attested(program.actions),
     };
 
     // Rate-limited progress: at most one event per ~5 steps.
@@ -616,6 +636,7 @@ export class ManagedBrowserAiToolService {
         {
           source: parsed.data.source,
           timeoutMs: parsed.data.timeout_ms ?? 5_000,
+          pageRevision: parsed.data.page_revision,
         }
       );
       return {
@@ -741,6 +762,33 @@ export class ManagedBrowserAiToolService {
       this.wrapModuleError(error);
     }
   }
+}
+
+/**
+ * Flatten a program's action TREE (TODO-MSB-010): if/repeat bodies are
+ * walked recursively so nested actions get the same trusted-target
+ * resolution and risk classification as top-level ones.
+ */
+export function flattenProgramActions(
+  actions: readonly BrowserAction[]
+): BrowserLeafAction[] {
+  const out: BrowserLeafAction[] = [];
+  const walk = (nodes: readonly BrowserAction[]): void => {
+    for (const node of nodes) {
+      if (node.type === "if") {
+        walk(node.then);
+        if (node.else) {
+          walk(node.else);
+        }
+      } else if (node.type === "repeat") {
+        walk(node.body);
+      } else {
+        out.push(node as BrowserLeafAction);
+      }
+    }
+  };
+  walk(actions);
+  return out;
 }
 
 /** Stable digest of the exact program an approval authorizes. */

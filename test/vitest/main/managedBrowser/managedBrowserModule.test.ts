@@ -1412,3 +1412,59 @@ describe("review fixes (2026-09-08)", () => {
     expect(h.module.getStatus(status.sessionId)).toBeNull();
   });
 });
+
+
+describe("TODO-MSB-009 script revision binding", () => {
+  it("evaluateScript fails closed on a stale page revision", async () => {
+    const h = makeHarness({
+      startScript: {
+        OBSERVE: () =>
+          ({
+            ...replyBase("mb_script00000001"),
+            type: "OBSERVATION_RESULT",
+            observation: {
+              sessionId: "mb_script00000001",
+              pageRevision: 7,
+              url: "https://www.youtube.com",
+              origin: "https://www.youtube.com",
+              title: "T",
+              state: "ready",
+              elements: [],
+              visibleText: "",
+              notices: [],
+              truncated: false,
+            },
+          } as unknown as ManagedBrowserOutboundMessage),
+        EVALUATE_SCRIPT: () =>
+          ({
+            ...replyBase("mb_script00000001"),
+            type: "EVALUATE_SCRIPT_RESULT",
+            ok: true,
+            resultSummary: "1",
+            resultBytes: 1,
+            truncated: false,
+          } as unknown as ManagedBrowserOutboundMessage),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    await h.module.observe(status.sessionId); // caches revision 7
+    await expect(
+      h.module.evaluateScript(status.sessionId, {
+        source: "1",
+        timeoutMs: 1_000,
+        pageRevision: 3, // stale
+      })
+    ).rejects.toMatchObject({ code: "stale_page_reference" });
+    // Matching revision executes.
+    await expect(
+      h.module.evaluateScript(status.sessionId, {
+        source: "1",
+        timeoutMs: 1_000,
+        pageRevision: 7,
+      })
+    ).resolves.toMatchObject({ ok: true });
+  });
+});
