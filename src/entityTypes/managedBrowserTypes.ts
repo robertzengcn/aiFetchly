@@ -224,6 +224,8 @@ export interface SafeManagedBrowserStatus {
   readonly pageRevision: number;
   readonly authenticated: boolean | null;
   readonly handoffReason: ManagedBrowserHandoffReason | null;
+  /** Whether a proxy is active for this session — NEVER credentials. */
+  readonly proxyActive: boolean;
   /** Handoff window deadline (epoch ms) — null outside handoff states. */
   readonly handoffExpiresAtEpochMs: number | null;
   readonly lastErrorCode: ManagedBrowserErrorCode | null;

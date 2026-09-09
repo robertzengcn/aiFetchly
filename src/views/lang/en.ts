@@ -3548,6 +3548,7 @@ export default {
   managedBrowser: {
     platform_fallback: "Social",
     unknown_account: "Unknown account",
+    proxy_active: "Proxy",
     start: {
       title: "Start managed browser",
       empty: "No eligible social accounts yet. Add an account with a saved login first.",
@@ -3600,6 +3601,7 @@ export default {
     },
     controls: {
       take_over: "Take over",
+      pause_ai: "Pause AI",
       verify_login: "I've finished logging in",
       resume: "Continue task",
       extend: "Extend time",

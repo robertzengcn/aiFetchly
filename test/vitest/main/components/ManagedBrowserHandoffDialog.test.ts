@@ -26,6 +26,7 @@ function status(
     authenticated: false,
     handoffReason: "login_required",
     handoffExpiresAtEpochMs: Date.now() + 5 * 60_000,
+    proxyActive: false,
     lastErrorCode: null,
     ...overrides,
   };

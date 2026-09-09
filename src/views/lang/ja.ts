@@ -3516,6 +3516,7 @@ export default {
   managedBrowser: {
     platform_fallback: "ソーシャル",
     unknown_account: "不明なアカウント",
+    proxy_active: "プロキシ",
     start: {
       title: "管理ブラウザを起動",
       empty: "利用できるアカウントがまだありません。保存済みログインのアカウントを先に追加してください。",
@@ -3568,6 +3569,7 @@ export default {
     },
     controls: {
       take_over: "引き継ぐ",
+      pause_ai: "AIを一時停止",
       verify_login: "ログインしました",
       resume: "タスクを続行",
       extend: "時間を延長",

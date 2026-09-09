@@ -3578,6 +3578,7 @@ export default {
   managedBrowser: {
     platform_fallback: "Sozial",
     unknown_account: "Unbekanntes Konto",
+    proxy_active: "Proxy",
     start: {
       title: "Verwalteten Browser starten",
       empty: "Noch keine geeigneten Konten. Fügen Sie zuerst ein Konto mit gespeicherter Anmeldung hinzu.",
@@ -3630,6 +3631,7 @@ export default {
     },
     controls: {
       take_over: "Übernehmen",
+      pause_ai: "KI pausieren",
       verify_login: "Ich habe mich angemeldet",
       resume: "Aufgabe fortsetzen",
       extend: "Zeit verlängern",

@@ -9,6 +9,7 @@ import {
   MANAGED_BROWSER_RESUME,
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_CANCEL_ACTIVE,
   MANAGED_BROWSER_EXTEND_HANDOFF,
   MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
   MANAGED_BROWSER_GET_CACHE_STATUS,
@@ -104,6 +105,12 @@ export async function approveBrowserAction(input: {
   pageRevision?: number;
 }): Promise<{ recorded: boolean }> {
   return await windowInvoke(MANAGED_BROWSER_APPROVE, input);
+}
+
+export async function cancelActiveBrowserRequest(
+  sessionId: string
+): Promise<void> {
+  await windowInvoke(MANAGED_BROWSER_CANCEL_ACTIVE, { session_id: sessionId });
 }
 
 export async function extendHandoff(

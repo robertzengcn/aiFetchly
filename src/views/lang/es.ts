@@ -3580,6 +3580,7 @@ export default {
   managedBrowser: {
     platform_fallback: "Social",
     unknown_account: "Cuenta desconocida",
+    proxy_active: "Proxy",
     start: {
       title: "Iniciar navegador gestionado",
       empty: "Aún no hay cuentas elegibles. Añade una cuenta con sesión guardada primero.",
@@ -3632,6 +3633,7 @@ export default {
     },
     controls: {
       take_over: "Tomar el control",
+      pause_ai: "Pausar IA",
       verify_login: "Ya he iniciado sesión",
       resume: "Continuar tarea",
       extend: "Ampliar tiempo",

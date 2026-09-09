@@ -9,12 +9,27 @@
         status.platformLabel || t("managedBrowser.platform_fallback")
       }}</span>
       <span
+        v-if="status.proxyActive"
+        class="mb-session-card__proxy"
+        data-testid="mb-session-proxy"
+      >
+        <v-icon size="x-small" aria-hidden="true">mdi-shield-outline</v-icon>
+        {{ t("managedBrowser.proxy_active") }}
+      </span>
+      <span
         class="mb-session-card__state"
         data-testid="mb-session-state"
         :class="`mb-session-card__state--${stateTone}`"
       >
         <v-icon size="x-small" aria-hidden="true">{{ stateIcon }}</v-icon>
         {{ t(`managedBrowser.states.${status.state}`) || status.state }}
+      </span>
+      <span
+        v-if="elapsedLabel"
+        class="mb-session-card__elapsed"
+        data-testid="mb-session-header-elapsed"
+      >
+        {{ elapsedLabel }}
       </span>
     </div>
 
@@ -66,6 +81,15 @@
         </v-btn>
       </template>
       <template v-else>
+        <v-btn
+          size="small"
+          variant="tonal"
+          data-testid="mb-btn-pause-ai"
+          :disabled="busy"
+          @click="onPauseAi"
+        >
+          {{ t("managedBrowser.controls.pause_ai") }}
+        </v-btn>
         <v-btn
           size="small"
           variant="tonal"
@@ -303,6 +327,22 @@ async function run(action: () => Promise<unknown>): Promise<void> {
   }
 }
 
+async function onPauseAi(): Promise<void> {
+  const current = status.value;
+  if (!current) {
+    return;
+  }
+  // Pause AI: cancel the in-flight request but KEEP the session alive —
+  // the user can resume or take over without a browser restart.
+  await run(async () => {
+    const { cancelActiveBrowserRequest } = await import(
+      "@/views/api/managedBrowser"
+    );
+    await cancelActiveBrowserRequest(current.sessionId);
+    progressLine.value = null;
+  });
+}
+
 function onTakeOver(): void {
   const current = status.value;
   if (!current) {
@@ -504,6 +544,18 @@ onBeforeUnmount(() => {
   font-size: 0.85rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mb-session-card__proxy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: #546e7a;
+  border: 1px solid rgba(84, 110, 122, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
   white-space: nowrap;
 }
 

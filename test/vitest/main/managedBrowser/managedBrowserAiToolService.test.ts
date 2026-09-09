@@ -32,6 +32,7 @@ function status(
     authenticated: true,
     handoffReason: null,
     handoffExpiresAtEpochMs: null,
+    proxyActive: false,
     lastErrorCode: null,
     ...overrides,
   };

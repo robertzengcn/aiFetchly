@@ -127,6 +127,8 @@ interface ActiveSessionRecord {
   handoffReason: ManagedBrowserHandoffReason | null;
   handoffBaseAtEpochMs: number | null;
   handoffExpiresAtEpochMs: number | null;
+  /** Whether the session runs through a proxy (badge only, no details). */
+  proxyActive: boolean;
   lastErrorCode: ManagedBrowserErrorCode | null;
   /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
   lastObservation: BrowserObservation | null;
@@ -494,6 +496,7 @@ export class ManagedBrowserModule {
         handoffReason: null,
         handoffBaseAtEpochMs: null,
         handoffExpiresAtEpochMs: null,
+        proxyActive: false,
         lastErrorCode: null,
         lastObservation: null,
         challengeAttempts: new Set<string>(),
@@ -560,6 +563,7 @@ export class ManagedBrowserModule {
                 : {}),
             }
           : ({ mode: "direct" } as const);
+      record.proxyActive = sessionProxy.mode !== "direct";
       const reply = await client.request(
         {
           type: "START_SESSION",
@@ -1309,6 +1313,7 @@ export class ManagedBrowserModule {
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,
       handoffExpiresAtEpochMs: record.handoffExpiresAtEpochMs,
+      proxyActive: record.proxyActive,
       lastErrorCode: record.lastErrorCode,
     };
   }

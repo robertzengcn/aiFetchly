@@ -3402,6 +3402,7 @@ export default {
   managedBrowser: {
     platform_fallback: "社交",
     unknown_account: "未知账号",
+    proxy_active: "代理",
     start: {
       title: "启动托管浏览器",
       empty: "暂无可用账号。请先添加已保存登录的账号。",
@@ -3454,6 +3455,7 @@ export default {
     },
     controls: {
       take_over: "接管",
+      pause_ai: "暂停 AI",
       verify_login: "我已完成登录",
       resume: "继续任务",
       extend: "延长时间",

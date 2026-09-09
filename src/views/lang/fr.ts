@@ -3565,6 +3565,7 @@ export default {
   managedBrowser: {
     platform_fallback: "Social",
     unknown_account: "Compte inconnu",
+    proxy_active: "Proxy",
     start: {
       title: "Démarrer le navigateur géré",
       empty: "Aucun compte éligible pour l'instant. Ajoutez d'abord un compte avec une session enregistrée.",
@@ -3617,6 +3618,7 @@ export default {
     },
     controls: {
       take_over: "Prendre la main",
+      pause_ai: "Suspendre l'IA",
       verify_login: "Je me suis connecté",
       resume: "Continuer la tâche",
       extend: "Prolonger le temps",

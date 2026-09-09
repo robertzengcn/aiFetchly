@@ -9,6 +9,7 @@ import {
   MANAGED_BROWSER_RESUME,
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_CANCEL_ACTIVE,
   MANAGED_BROWSER_EXTEND_HANDOFF,
   MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
   MANAGED_BROWSER_GET_CACHE_STATUS,
@@ -34,6 +35,7 @@ import {
   managedBrowserResumeInputSchema,
   managedBrowserStopInputSchema,
   managedBrowserApproveInputSchema,
+  managedBrowserCancelActiveInputSchema,
   managedBrowserExtendHandoffInputSchema,
   managedBrowserGetEffectiveSettingsInputSchema,
   managedBrowserGetCacheStatusInputSchema,
@@ -181,6 +183,15 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           : {}),
       });
       return { recorded: true as const };
+    }
+  );
+
+  registerAiValidatedHandler(
+    MANAGED_BROWSER_CANCEL_ACTIVE,
+    managedBrowserCancelActiveInputSchema,
+    async (input) => {
+      await browserModule.cancelActiveRequest(input.session_id);
+      return { cancelled: true as const };
     }
   );
 

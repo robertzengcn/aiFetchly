@@ -34,6 +34,7 @@ const apiMocks = vi.hoisted(() => ({
   extendHandoff: vi.fn(async (): Promise<unknown> => null),
   stopManagedBrowser: vi.fn(async (): Promise<unknown> => null),
   verifyManualLogin: vi.fn(async (): Promise<unknown> => null),
+  cancelActiveBrowserRequest: vi.fn(async (): Promise<void> => undefined),
 }));
 vi.mock("@/views/api/managedBrowser", () => apiMocks);
 
@@ -53,6 +54,7 @@ function status(
     authenticated: true,
     handoffReason: null,
     handoffExpiresAtEpochMs: null,
+    proxyActive: false,
     lastErrorCode: null,
     ...overrides,
   };
@@ -65,6 +67,7 @@ const i18n = createI18n({
     en: {
       managedBrowser: {
         platform_fallback: "Social",
+        proxy_active: "Proxy",
         states: {
           ready: "Ready",
           handoff: "You have control",
@@ -416,5 +419,56 @@ describe("GAP-08 chat wiring", () => {
     expect(
       wrapper.find("[data-testid='mb-session-elapsed']").exists()
     ).toBe(true);
+  });
+});
+
+
+describe("TODO-MSB-003 session header", () => {
+  it("shows a distinct Pause AI control that cancels without stopping", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-pause-ai']").exists()).toBe(
+        true
+      )
+    );
+    await wrapper.find("[data-testid='mb-btn-pause-ai']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.cancelActiveBrowserRequest).toHaveBeenCalledWith(
+        "mb_test000000001"
+      )
+    );
+    // Pause never stops the session.
+    expect(apiMocks.stopManagedBrowser).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+        true
+      )
+    );
+  });
+
+  it("shows the proxy badge only when a proxy is active (no credentials)", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [
+      status({ proxyActive: true }),
+    ]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-proxy']").exists()).toBe(
+        true
+      )
+    );
+    expect(wrapper.find("[data-testid='mb-session-proxy']").text()).toContain(
+      "Proxy"
+    );
+  });
+
+  it("shows whole-session elapsed in the header before any progress", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(
+        wrapper.find("[data-testid='mb-session-header-elapsed']").exists()
+      ).toBe(true)
+    );
   });
 });

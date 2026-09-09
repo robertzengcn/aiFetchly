@@ -70,6 +70,12 @@ export const managedBrowserStopInputSchema = lazySchema(() =>
   })
 );
 
+export const managedBrowserCancelActiveInputSchema = lazySchema(() =>
+  z.strictObject({
+    session_id: sessionIdSchema,
+  })
+);
+
 export const managedBrowserApproveInputSchema = lazySchema(() =>
   z.strictObject({
     sessionId: sessionIdSchema,
