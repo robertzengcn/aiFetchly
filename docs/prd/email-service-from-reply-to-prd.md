@@ -10,6 +10,7 @@
 - **Primary use case**: One SMTP mailbox with several provider-approved sending aliases
 - **Example provider**: Spaceship Email; requirements remain provider-neutral
 - **Related documents**:
+  - `docs/prd/email-service-from-reply-to-technical-design.md`
   - `docs/prd/ai-outbound-email-intent-aware-delivery-prd.md`
   - `docs/prd/ai-email-thread-aware-reply-reliability-prd.md`
   - `docs/prd/ai-email-receive-auto-reply-prd.md`
