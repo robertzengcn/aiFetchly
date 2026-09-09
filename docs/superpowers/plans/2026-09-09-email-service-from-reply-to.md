@@ -18,10 +18,13 @@
 yarn typecheck          # tsc --noEmit
 yarn vue-typecheck      # vue-tsc --noEmit
 yarn test              # Mocha module tests (test/modules/*.test.ts)
-yarn testmain          # Vitest main/utilitycode (with tsc globalSetup gate)
+yarn testmain          # Vitest main-process tests (test/vitest/main/**, with tsc globalSetup gate)
+yarn vitest-puppeteer  # Vitest utilitycode tests (test/vitest/utilitycode/**, vite.utilityCode.config.mjs)
 yarn test:components   # Vitest component tests — HARD CI gate
 yarn test:e2e          # Playwright Electron E2E (builds first)
 ```
+
+**IMPORTANT — vitest config split:** `yarn testmain` runs `vite.main.config.mjs`, whose `test.include` is `test/vitest/main/**/*.test.ts` ONLY (it does NOT pick up `test/vitest/utilitycode/**`). Utilitycode tests run under `yarn vitest-puppeteer` (config `vite.utilityCode.config.mjs`, include `test/vitest/utilitycode/**/*.test.ts`, also gated by the tsc globalSetup). So: for a file under `test/vitest/utilitycode/`, run `yarn vitest-puppeteer test/vitest/utilitycode/<file>.test.ts`; for a file under `test/vitest/main/`, run `yarn testmain test/vitest/main/<file>.test.ts`.
 
 For focused runs during a phase, use a specific file (e.g. `yarn test test/modules/emailMarketingController.test.ts`) before the broader suites. Vitest utilitycode tests run under `vite.utilityCode.config.mjs` (include `test/vitest/utilitycode/**/*.test.ts`, tsc globalSetup; bypass only with `AIFETCHLY_SKIP_TSC=1` for tight inner loops — never commit code needing it).
 
@@ -207,7 +210,7 @@ describe("EmailServiceIdentityResolver", () => {
 
 - [ ] **Step 1.2: Run the tests to verify they fail**
 
-Run: `yarn testmain test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts`
 Expected: FAIL — module `@/modules/lib/EmailServiceIdentityResolver` does not exist (import resolves to undefined).
 
 - [ ] **Step 1.3: Write the resolver implementation**
@@ -270,7 +273,7 @@ export function containsEmailHeaderBreak(value: string): boolean {
 
 - [ ] **Step 1.4: Run the tests to verify they pass**
 
-Run: `yarn testmain test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts`
 Expected: PASS — all 8 tests.
 
 - [ ] **Step 1.5: Commit**
@@ -1053,7 +1056,7 @@ git add src/schemas/ipc/emailMarketing.ts src/main-process/communication/emailMa
 git commit -m "feat: bound email-service update IPC schema + merge smtpUsername/replyTo"
 ```
 
-**Phase 1 exit check:** legacy services resolve exactly as before (nullable columns → From fallback); new identities can be stored and loaded without sending changes. Run `yarn testmain test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts` + `yarn test test/modules/emailServiceModule.validation.test.ts` + `yarn testmain test/vitest/main/EmailServiceLegacySchemaSync.test.ts` — all PASS.
+**Phase 1 exit check:** legacy services resolve exactly as before (nullable columns → From fallback); new identities can be stored and loaded without sending changes. Run `yarn vitest-puppeteer test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts` + `yarn test test/modules/emailServiceModule.validation.test.ts` + `yarn testmain test/vitest/main/EmailServiceLegacySchemaSync.test.ts` — all PASS.
 
 ---
 
@@ -1595,7 +1598,7 @@ describe("buildSmtpTransportOptions identity (§13.1)", () => {
 
 - [ ] **Step 10.2: Run to verify failure**
 
-Run: `yarn testmain test/vitest/utilitycode/smtpTransport.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/smtpTransport.test.ts`
 Expected: FAIL — `auth.user` is currently `param.from`.
 
 - [ ] **Step 10.3: Update transport to use resolved identity**
@@ -1781,7 +1784,7 @@ export function ensureRePrefix(subject: string): string {
 
 - [ ] **Step 10.6: Run the transport + SMTP tests**
 
-Run: `yarn testmain test/vitest/utilitycode/smtpTransport.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/smtpTransport.test.ts`
 Expected: PASS — `auth.user` uses smtpUsername with From fallback.
 
 - [ ] **Step 10.7: Commit**
@@ -1857,7 +1860,7 @@ describe("classifySmtpFailure (§19)", () => {
 
 - [ ] **Step 11.2: Run to verify failure**
 
-Run: `yarn testmain test/vitest/utilitycode/smtpErrorClassifier.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/smtpErrorClassifier.test.ts`
 Expected: FAIL — module does not exist.
 
 - [ ] **Step 11.3: Create the shared classifier**
@@ -2003,7 +2006,7 @@ export function classifySmtpFailure(error: unknown): ClassifiedSmtpFailure {
 
 - [ ] **Step 11.4: Run the classifier tests**
 
-Run: `yarn testmain test/vitest/utilitycode/smtpErrorClassifier.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/smtpErrorClassifier.test.ts`
 Expected: PASS.
 
 - [ ] **Step 11.5: Copy new fields in the legacy bulk `send()` path**
@@ -2035,7 +2038,7 @@ git add src/modules/lib/smtpErrorClassifier.ts src/childprocess/emailSend.ts tes
 git commit -m "feat: shared SMTP error classifier + legacy bulk identity copy"
 ```
 
-**Phase 3 exit check:** all non-authorized send paths use the resolved identity; focused tests pass. Run `yarn testmain test/vitest/utilitycode/smtpTransport.test.ts test/vitest/utilitycode/smtpErrorClassifier.test.ts` — PASS.
+**Phase 3 exit check:** all non-authorized send paths use the resolved identity; focused tests pass. Run `yarn vitest-puppeteer test/vitest/utilitycode/smtpTransport.test.ts test/vitest/utilitycode/smtpErrorClassifier.test.ts` — PASS.
 
 ---
 
@@ -2162,7 +2165,7 @@ describe("OutboundEmailEnvelopeHasher v2 (§15)", () => {
 
 - [ ] **Step 12.2: Run to verify failure**
 
-Run: `yarn testmain test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts`
 Expected: FAIL — `hashEnvelopeV2`/`hashBatchV2` don't exist.
 
 - [ ] **Step 12.3: Add the v2 canonicalizer + hasher (v1 untouched)**
@@ -2300,7 +2303,7 @@ export type AuthorizedEmailWorkerPayloadV3 = Omit<
 
 - [ ] **Step 12.5: Run the hasher tests**
 
-Run: `yarn testmain test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts`
 Expected: PASS — v1 pinned + v2 identity/reply/batch tests.
 
 - [ ] **Step 12.6: Commit**
@@ -2533,7 +2536,7 @@ In `src/service/outboundEmail/OutboundEmailDeliveryService.ts`:
 
 Extend `test/vitest/utilitycode/EmailSendCompletion.test.ts` (§23.4/§23.5): v3 schema rejects missing identity; service/envelope mismatch aborts before SMTP; main + worker compute same v2 hashes; identity change after approval blocks delivery; compatible all-v1 batches use payload v2; incompatible v1 identity requires review; mixed-version batch cannot send.
 
-Run: `yarn testmain test/vitest/utilitycode/EmailSendCompletion.test.ts`
+Run: `yarn vitest-puppeteer test/vitest/utilitycode/EmailSendCompletion.test.ts`
 Expected: PASS.
 
 - [ ] **Step 14.6: Commit**
@@ -2543,7 +2546,7 @@ git add src/service/outboundEmail/OutboundEmailWorkerStarter.ts src/childprocess
 git commit -m "feat: worker payload v3 + v2 hash recompute + delivery identity check + legacy gates"
 ```
 
-**Phase 4 exit check:** v2 identity is bound main-process-to-worker and mismatches fail before SMTP. Run `yarn testmain test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts test/vitest/utilitycode/EmailSendCompletion.test.ts test/vitest/main/OutboundEmailDraftService.test.ts test/vitest/main/OutboundEmailPreflight.test.ts` — all PASS.
+**Phase 4 exit check:** v2 identity is bound main-process-to-worker and mismatches fail before SMTP. Run `yarn vitest-puppeteer test/vitest/utilitycode/OutboundEmailEnvelopeHasher.test.ts test/vitest/utilitycode/EmailSendCompletion.test.ts` AND `yarn testmain test/vitest/main/OutboundEmailDraftService.test.ts test/vitest/main/OutboundEmailPreflight.test.ts` — all PASS.
 
 ---
 
@@ -3345,7 +3348,7 @@ function certaintyToOutcome(
 
 Extend reply hasher/binding/delivery tests: v1 fixtures unchanged; v2 binds smtpUsername + replyTo; current service mismatch blocks before claim; inbound Reply-To still selects recipient; configured outgoing Reply-To becomes the sent header; legacy compatibility rules enforced.
 
-Run: `yarn testmain` (reply-related files)
+Run: `yarn vitest-puppeteer` (reply-related utilitycode tests) and `yarn testmain` (reply-related main tests)
 Expected: PASS.
 
 - [ ] **Step 15.8: Commit**
@@ -3375,7 +3378,7 @@ Expected: PASS (hard CI gate).
 
 - [ ] **Step 16.3: Focused utilitycode + main suites**
 
-Run: `yarn testmain`
+Run: `yarn vitest-puppeteer` (utilitycode) and `yarn testmain` (main)
 Expected: PASS.
 
 - [ ] **Step 16.4: Mocha module suite**
