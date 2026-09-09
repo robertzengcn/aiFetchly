@@ -919,6 +919,15 @@ IPC handlers must validate all renderer input and call `LocalAiRuntimeModule`. T
 
 ### 14.1 Workflow ownership
 
+Implementation (2026-09): app packaging lives in `.github/workflows/release.yml`.
+Runtime packaging lives in `.github/workflows/local-ai-runtime-release.yml` and
+rebuilds only when the runtime fingerprint changes (Electron ABI, runtime
+packages, worker/packaging sources, or `src/config/localAiRuntimeRelease.json`).
+See `docs/ci/local-ai-runtime-release.md`.
+
+The original v1 contract below allowed publishing runtimes on every app release
+for simplicity. That coupling is no longer used.
+
 `.github/workflows/release.yml` must orchestrate dependency installation, app packaging, native verification, and runtime packaging. Cross-platform artifacts must be created or verified on their target operating system, not assembled as an unchecked multi-platform dependency copy on a different runner.
 
 ### 14.2 Dependency installation stages

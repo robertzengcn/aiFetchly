@@ -31,6 +31,7 @@ import {
   createLocalAiRuntimeModule,
   disposeIdleWorkersForRuntime,
 } from "@/main-process/communication/local-ai-runtime-ipc";
+import { LOCAL_AI_RUNTIME_RELEASE } from "@/config/localAiRuntimeRelease";
 import {
   LOCAL_AI_RUNTIME_STATUS,
   LOCAL_AI_RUNTIME_LIST,
@@ -105,8 +106,7 @@ describe("local-ai-runtime catalog source", () => {
     delete process.env.AIFETCHLY_RUNTIME_RELEASE_TAG;
 
     expect(resolveCatalogSource()).toEqual({
-      catalogUrl:
-        "https://github.com/robertzengcn/aiFetchly/releases/download/local-ai-runtime-v1.0.0/local-ai-runtimes.json",
+      catalogUrl: `https://github.com/robertzengcn/aiFetchly/releases/download/${LOCAL_AI_RUNTIME_RELEASE.releaseTag}/local-ai-runtimes.json`,
       allowedHosts: ["github.com"],
     });
   });

@@ -1,40 +1,121 @@
-name: Manual Local AI Runtime Release
+name: Local AI Runtime Release
+
+# Downloadable embedding/voice runtimes are independent of the app installer
+# release. Rebuild them when the fingerprint of Electron, runtime packages,
+# worker packaging, or src/config/localAiRuntimeRelease.json changes.
+# See docs/ci/local-ai-runtime-release.md.
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: GitHub Release tag that will host the runtime assets
-        required: true
-        default: local-ai-runtime-v1.0.0
+        description: GitHub Release tag that will host the runtime assets (empty = committed config)
+        required: false
         type: string
       runtime_version:
-        description: Version embedded into runtime archive names and metadata
-        required: true
-        default: 1.0.0
+        description: Version embedded into runtime archive names (empty = committed config)
+        required: false
         type: string
       min_app_version:
-        description: Minimum app version allowed to install these runtimes
-        required: true
-        default: 1.0.0
+        description: Minimum app version allowed to install these runtimes (empty = committed config)
+        required: false
         type: string
       publish_github_release:
         description: Create/update the GitHub Release and upload assets
         required: true
         default: true
         type: boolean
+  push:
+    branches:
+      - master
+    paths:
+      - package.json
+      - yarn.lock
+      - src/config/localAiRuntimeRelease.json
+      - src/config/localAiRuntimeRelease.ts
+      - src/childprocess/embedding/**
+      - src/childprocess/local-ai-runtime/**
+      - src/schemas/worker/localEmbedding.ts
+      - src/schemas/worker/runtimeProbe.ts
+      - src/service/embedding/LocalEmbeddingModels.ts
+      - vite.localEmbeddingWorker.config.mjs
+      - vite.workerSsrNoExternal.mjs
+      - scripts/build-local-ai-runtime.mjs
+      - scripts/verify-local-ai-runtime.mjs
+      - scripts/generate-local-ai-runtime-catalog.mjs
+      - scripts/lib/localAiRuntime/**
+      - scripts/should-rebuild-local-ai-runtime.mjs
+      - .github/workflows/local-ai-runtime-release.yml
+
+concurrency:
+  group: local-ai-runtime-release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  should-rebuild:
+    name: Detect whether runtimes need a rebuild
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      rebuild: ${{ steps.check.outputs.rebuild }}
+      reason: ${{ steps.check.outputs.reason }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      runtime_version: ${{ steps.check.outputs.runtime_version }}
+      min_app_version: ${{ steps.check.outputs.min_app_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+
+      - name: Compare runtime fingerprint
+        id: check
+        env:
+          FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OVERRIDE_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          OVERRIDE_RUNTIME_VERSION: ${{ github.event.inputs.runtime_version }}
+          OVERRIDE_MIN_APP_VERSION: ${{ github.event.inputs.min_app_version }}
+        run: |
+          set -euo pipefail
+          node scripts/should-rebuild-local-ai-runtime.mjs \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Record rebuild decision
+        run: |
+          set -euo pipefail
+          echo "rebuild=${{ steps.check.outputs.rebuild }}"
+          echo "reason=${{ steps.check.outputs.reason }}"
+          echo "release_tag=${{ steps.check.outputs.release_tag }}"
+          echo "runtime_version=${{ steps.check.outputs.runtime_version }}"
+          echo "min_app_version=${{ steps.check.outputs.min_app_version }}"
+          {
+            echo "## Local AI runtime rebuild"
+            echo
+            echo "- rebuild: \`${{ steps.check.outputs.rebuild }}\`"
+            echo "- reason: ${{ steps.check.outputs.reason }}"
+            echo "- release tag: \`${{ steps.check.outputs.release_tag }}\`"
+            echo "- runtime version: \`${{ steps.check.outputs.runtime_version }}\`"
+            echo "- min app version: \`${{ steps.check.outputs.min_app_version }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-local-ai-runtimes:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }} runtimes
+    needs: should-rebuild
+    if: ${{ needs.should-rebuild.outputs.rebuild == 'true' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     env:
-      RUNTIME_VERSION: ${{ inputs.runtime_version }}
+      RUNTIME_VERSION: ${{ needs.should-rebuild.outputs.runtime_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -136,13 +217,14 @@ jobs:
 
   generate-runtime-catalog:
     name: Generate runtime catalog
-    needs: build-local-ai-runtimes
+    needs: [should-rebuild, build-local-ai-runtimes]
+    if: ${{ needs.should-rebuild.outputs.rebuild == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
-      RUNTIME_VERSION: ${{ inputs.runtime_version }}
-      MIN_APP_VERSION: ${{ inputs.min_app_version }}
+      RUNTIME_VERSION: ${{ needs.should-rebuild.outputs.runtime_version }}
+      MIN_APP_VERSION: ${{ needs.should-rebuild.outputs.min_app_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -168,11 +250,21 @@ jobs:
         run: |
           node scripts/generate-local-ai-runtime-catalog.mjs \
             --input runtime-assets \
-            --release-tag "${{ inputs.release_tag }}" \
+            --release-tag "${{ needs.should-rebuild.outputs.release_tag }}" \
             --repository "${{ github.repository }}" \
             --runtime-version "$RUNTIME_VERSION" \
             --min-app-version "$MIN_APP_VERSION" \
             --output runtime-assets/local-ai-runtimes.json
+
+      - name: Write runtime fingerprint
+        env:
+          OVERRIDE_RELEASE_TAG: ${{ needs.should-rebuild.outputs.release_tag }}
+          OVERRIDE_RUNTIME_VERSION: ${{ needs.should-rebuild.outputs.runtime_version }}
+          OVERRIDE_MIN_APP_VERSION: ${{ needs.should-rebuild.outputs.min_app_version }}
+        run: |
+          node scripts/should-rebuild-local-ai-runtime.mjs \
+            --skip-compare \
+            --write-fingerprint runtime-assets/runtime-fingerprint.json
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
@@ -183,8 +275,8 @@ jobs:
 
   publish-runtime-release:
     name: Publish runtime GitHub Release
-    if: ${{ inputs.publish_github_release }}
-    needs: generate-runtime-catalog
+    if: ${{ needs.should-rebuild.outputs.rebuild == 'true' && (github.event_name == 'push' || github.event.inputs.publish_github_release == 'true') }}
+    needs: [should-rebuild, generate-runtime-catalog]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -200,10 +292,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ needs.should-rebuild.outputs.release_tag }}
           RELEASE_TARGET: ${{ github.sha }}
-          RUNTIME_VERSION: ${{ inputs.runtime_version }}
-          MIN_APP_VERSION: ${{ inputs.min_app_version }}
+          RUNTIME_VERSION: ${{ needs.should-rebuild.outputs.runtime_version }}
+          MIN_APP_VERSION: ${{ needs.should-rebuild.outputs.min_app_version }}
         run: |
           set -euo pipefail
           release_title="Local AI Runtime ${RUNTIME_VERSION}"

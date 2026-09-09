@@ -9,6 +9,7 @@ locally. Workflow definition: `.github/workflows/release.yml`.
 | Goal | Command |
 |---|---|
 | Production installers + **auto-published** GitHub Release | `gh workflow run release.yml -f build_mode=production` |
+| Rebuild downloadable local-AI runtimes | `gh workflow run local-ai-runtime-release.yml` (see `docs/ci/local-ai-runtime-release.md`) |
 | Store submission packages (Windows MSIX + macOS PKG) | `gh workflow run release.yml -f build_mode=store` |
 | Test installers (test backend, unsigned) | `gh workflow run release.yml -f build_mode=test` |
 | Watch a run | `gh run watch` |
@@ -80,7 +81,8 @@ This is the **release** path. The final `publish-github-release` job:
 
 1. Validates auto-update artifacts (`scripts/validate-update-artifacts.js`):
    Windows `RELEASES` + `*-full.nupkg` + `.exe`; macOS signed `.zip` + `.dmg`.
-2. Collects installers + local-AI-runtime catalog.
+2. Collects Windows and macOS installers. Downloadable local-AI runtimes are
+   published separately (`docs/ci/local-ai-runtime-release.md`).
 3. Creates the release tagged `v<version>` and **publishes it immediately**
    (no draft step). Once published, `update.electronjs.org` serves it to
    installed apps via `update-electron-app`.
@@ -161,4 +163,5 @@ safe for local use; CI uses the `publish-github-release` job instead.
 
 - `docs/RELEASE_WORKFLOW.md` — full workflow guarantees, secrets, auto-update feed details
 - `docs/windows-store-publishing.md` — Microsoft Store submission walkthrough
-- `docs/gh_release_package.md` — local-AI-runtime release commands
+- `docs/ci/local-ai-runtime-release.md` — when and how downloadable local-AI runtimes rebuild
+- `docs/gh_release_package.md` — local-AI-runtime release command cheat sheet

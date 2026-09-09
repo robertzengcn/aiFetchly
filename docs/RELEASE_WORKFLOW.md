@@ -1,6 +1,16 @@
 # Manual Release Build Workflow
 
-The `.github/workflows/release.yml` workflow builds Windows and macOS installers (plus downloadable local-AI runtimes) on demand. For **production** builds it also runs a `publish-github-release` job that validates the auto-update assets and attaches them to a GitHub Release that is **published immediately**, so installed apps can auto-update via `update.electronjs.org`. The human gate is triggering the production build itself. Test builds only retain installers as GitHub Actions artifacts for manual download and testing; they never publish a release.
+The `.github/workflows/release.yml` workflow builds Windows and macOS installers
+on demand. Downloadable local-AI runtimes are **not** part of this workflow;
+they are built by `.github/workflows/local-ai-runtime-release.yml` when their
+fingerprint changes. See `docs/ci/local-ai-runtime-release.md`.
+
+For **production** builds this workflow also runs a `publish-github-release`
+job that validates the auto-update assets and attaches them to a GitHub
+Release that is **published immediately**, so installed apps can auto-update
+via `update.electronjs.org`. The human gate is triggering the production build
+itself. Test builds only retain installers as GitHub Actions artifacts for
+manual download and testing; they never publish a release.
 
 ## Running a build
 
