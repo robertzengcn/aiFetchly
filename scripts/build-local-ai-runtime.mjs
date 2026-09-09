@@ -25,18 +25,12 @@ import {
   copyClosure,
 } from "./lib/localAiRuntime/runtimeClosure.mjs";
 import { buildDeterministicZipBytes } from "./lib/localAiRuntime/deterministicZip.mjs";
+import {
+  RUNTIME_ROOTS,
+  SHERPA_PLATFORM_PACKAGE,
+} from "./lib/localAiRuntime/runtimeRoots.mjs";
 
-export const RUNTIME_ROOTS = {
-  "embedding-xenova": ["@xenova/transformers", "onnxruntime-node", "onnxruntime-common", "sharp"],
-  "voice-sherpa": ["sherpa-onnx-node"],
-};
-
-export const SHERPA_PLATFORM_PACKAGE = {
-  "win32-x64": "sherpa-onnx-win-x64",
-  "darwin-x64": "sherpa-onnx-darwin-x64",
-  "darwin-arm64": "sherpa-onnx-darwin-arm64",
-  "linux-x64": "sherpa-onnx-linux-x64",
-};
+export { RUNTIME_ROOTS, SHERPA_PLATFORM_PACKAGE };
 
 const ARTIFACT_PREFIX = {
   "embedding-xenova": "embedding",

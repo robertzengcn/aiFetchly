@@ -24,7 +24,9 @@ slow path and it is not needed for an installer-only release.
 Pushes to `master` that touch runtime-related paths start a **cheap detect
 job** (`should-rebuild`). That job does **not** install `node_modules`. It
 computes a fingerprint and compares it to `runtime-fingerprint.json` on the
-published runtime tag.
+published runtime tag. The detect scripts must not import packaging code that
+needs third-party packages (run #16 failed by pulling in `crc-32` through
+the ZIP builder).
 
 The heavy matrix (Windows x64, macOS x64, macOS arm64, Linux x64) runs only
 when the fingerprint moved.

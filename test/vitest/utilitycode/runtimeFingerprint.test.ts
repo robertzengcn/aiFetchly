@@ -22,7 +22,7 @@ import {
 import {
   RUNTIME_ROOTS,
   SHERPA_PLATFORM_PACKAGE,
-} from "../../../scripts/build-local-ai-runtime.mjs";
+} from "../../../scripts/lib/localAiRuntime/runtimeRoots.mjs";
 import {
   decideRebuild,
   isDirectExecution,
@@ -225,5 +225,34 @@ describe("should-rebuild entrypoint detection", () => {
     expect(isDirectExecution(pathToFileURL(scriptPath).href, scriptPath)).toBe(
       true
     );
+  });
+});
+
+describe("detect-job import graph", () => {
+  it("does not import packaging code that requires node_modules", () => {
+    // Run #16 failed because should-rebuild imported build-local-ai-runtime.mjs,
+    // which loads deterministicZip.mjs → crc-32, and the detect job has no
+    // yarn install. Keep the fingerprint chain on Node builtins + runtimeRoots.
+    const fingerprint = readFileSync(
+      path.resolve("scripts/lib/localAiRuntime/runtimeFingerprint.mjs"),
+      "utf8"
+    );
+    const shouldRebuild = readFileSync(
+      path.resolve("scripts/should-rebuild-local-ai-runtime.mjs"),
+      "utf8"
+    );
+    const roots = readFileSync(
+      path.resolve("scripts/lib/localAiRuntime/runtimeRoots.mjs"),
+      "utf8"
+    );
+    expect(fingerprint).not.toMatch(/from\s+["'][^"']*build-local-ai-runtime/);
+    expect(fingerprint).not.toMatch(/from\s+["'][^"']*deterministicZip/);
+    expect(fingerprint).not.toMatch(/from\s+["']crc-32["']/);
+    expect(shouldRebuild).not.toMatch(
+      /from\s+["'][^"']*build-local-ai-runtime/
+    );
+    expect(shouldRebuild).not.toMatch(/from\s+["'][^"']*deterministicZip/);
+    expect(shouldRebuild).not.toMatch(/from\s+["']crc-32["']/);
+    expect(roots).not.toMatch(/from ["'][^./]/);
   });
 });

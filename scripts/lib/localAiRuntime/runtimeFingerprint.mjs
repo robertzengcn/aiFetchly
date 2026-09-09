@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   RUNTIME_ROOTS,
   SHERPA_PLATFORM_PACKAGE,
-} from "../../build-local-ai-runtime.mjs";
+} from "./runtimeRoots.mjs";
 
 export const FINGERPRINT_SCHEMA_VERSION = 1;
 export const FINGERPRINT_ASSET_NAME = "runtime-fingerprint.json";
