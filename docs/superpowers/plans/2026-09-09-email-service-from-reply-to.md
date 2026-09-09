@@ -463,8 +463,11 @@ describe("Legacy schema synchronization (§6.5)", () => {
       0
     );
     const legacyId = Number(
-      legacy.prepare(`SELECT last_insert_rowid() AS id`).get() as { id: number }
-        .id
+      (
+        legacy.prepare(`SELECT last_insert_rowid() AS id`).get() as {
+          id: number;
+        }
+      ).id
     );
     legacy.close();
 
@@ -3450,7 +3453,7 @@ Expected: PASS (hard CI gate).
 - [ ] **Step 16.3: Focused utilitycode + main suites**
 
 Run: `yarn vitest-puppeteer` (utilitycode) and `yarn testmain` (main)
-Expected: PASS.
+Expected: No NEW failures vs baseline. **Note:** the main suite has ~27 pre-existing failures across ~8 unrelated files (EmailReply trio flaky under parallel load, `rescanSlaBackstop` perf-timing, `documentServiceStagedAttachment`×2, `AIFetchlyConfigLoader.agents`×5/`commands`×4/×1, `WorkspaceConfigScanner`×10, `exportGeneratedArtifactsTool`×2) that exist on `master` without this feature. Phase 6 passes when the only failing tests are that same baseline set — capture the baseline failure list (`yarn testmain 2>&1 | grep -E "FAIL|×"`) before feature work and diff against it here.
 
 - [ ] **Step 16.4: Mocha module suite**
 
