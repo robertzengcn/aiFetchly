@@ -2149,7 +2149,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Update an INSTALLED skill to its latest source revision. Re-acquires the recorded " +
       "source, re-inspects, and returns a fresh plan for approval — expanded capabilities " +
-      "always require renewed approval. Requires the installation_id.",
+      "always require renewed approval. Identify the installation by its installation_id " +
+      "OR by the installed skill's exact name (a unique name resolves deterministically; " +
+      "an ambiguous name returns the candidate ids).",
     parameters: {
       type: "object",
       properties: {
@@ -2158,14 +2160,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Installation id from a prior skill_install_status/approve result.",
         },
+        name: {
+          type: "string",
+          description:
+            "Installed skill name, e.g. 'video-use' (natural-language identity).",
+        },
       },
-      required: ["installationId"],
+      required: [],
     },
     tier: "main",
     requiresConfirmation: true,
     permissionCategory: "filesystem",
     source: "built-in",
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
         "@/modules/SkillInstallationModule"
       );
@@ -2173,15 +2180,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         return { success: false, result: { error: "Installer disabled." } };
       }
       const installationId = String(args.installationId ?? "");
-      if (!installationId) {
+      const name = String(args.name ?? "");
+      if (!installationId && !name) {
         return {
           success: false,
-          result: { error: "installationId is required." },
+          result: { error: "installationId or name is required." },
         };
       }
-      const snapshot = await new SkillInstallationModule().update(
-        installationId
-      );
+      const snapshot = await new SkillInstallationModule().update({
+        ...(installationId ? { installationId } : {}),
+        ...(name ? { name } : {}),
+        // FR-26/FR-29: keep the real conversation on the update session.
+        conversationId: context.conversationId,
+      });
       return { success: snapshot.state !== "failed", result: { ...snapshot } };
     },
   },
@@ -2190,7 +2201,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Repair an installed skill WITHOUT updating it: recheck the activation, content, " +
       "registry registration, and status; re-register in the runtime catalog when missing. " +
-      "Requires the installation_id.",
+      "Identify the installation by its installation_id OR by the installed skill's " +
+      "exact name.",
     parameters: {
       type: "object",
       properties: {
@@ -2198,8 +2210,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           type: "string",
           description: "Installation id from a prior installer result.",
         },
+        name: {
+          type: "string",
+          description:
+            "Installed skill name, e.g. 'video-use' (natural-language identity).",
+        },
       },
-      required: ["installationId"],
+      required: [],
     },
     tier: "main",
     requiresConfirmation: false,
@@ -2210,13 +2227,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         "@/modules/SkillInstallationModule"
       );
       const installationId = String(args.installationId ?? "");
-      if (!installationId) {
+      const name = String(args.name ?? "");
+      if (!installationId && !name) {
         return {
           success: false,
-          result: { error: "installationId is required." },
+          result: { error: "installationId or name is required." },
         };
       }
-      const report = await new SkillInstallationModule().repair(installationId);
+      const report = await new SkillInstallationModule().repair({
+        ...(installationId ? { installationId } : {}),
+        ...(name ? { name } : {}),
+      });
       return { success: report.ok, result: { ...report } };
     },
   },

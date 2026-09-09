@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifySkillRequestIntent,
+  extractInstalledSkillName,
   extractSource,
 } from "@/service/SkillInstallIntentGuard";
 import {
@@ -29,8 +30,6 @@ describe("classifySkillRequestIntent", () => {
     "Set up https://github.com/browser-use/video-use for me",
     "Please install this skill: https://github.com/anthropics/skills",
     "Register the skill from https://github.com/foo/bar.git",
-    "update my skills",
-    "repair the installed video-use skill",
     "install the skill package from ./my-skill-folder",
   ];
   const notInstall = [
@@ -47,6 +46,41 @@ describe("classifySkillRequestIntent", () => {
     expect(decision.intent).toBe("install-package");
     expect(decision.confidence).toBe("explicit");
     expect(decision.allowedEntryPoint).toBe("skill_install_prepare");
+  });
+
+  // FR-26: update/repair/configure/uninstall route to the session-scoped
+  // lifecycle entry points, NOT prepare (which needs a source).
+  it("routes update/repair/configure phrases to the lifecycle action entry", () => {
+    const update = classifySkillRequestIntent("update my skills");
+    expect(update.intent).toBe("update-package");
+    expect(update.allowedEntryPoint).toBe("skill_install_session_action");
+    expect(update.confidence).toBe("explicit");
+
+    const repair = classifySkillRequestIntent(
+      "repair the installed video-use skill"
+    );
+    expect(repair.intent).toBe("repair-package");
+    expect(repair.allowedEntryPoint).toBe("skill_install_session_action");
+    expect(repair.skillName).toBe("video-use");
+
+    const configure = classifySkillRequestIntent(
+      "configure the installed video-use skill"
+    );
+    expect(configure.intent).toBe("configure-package");
+    expect(configure.skillName).toBe("video-use");
+
+    const uninstall = classifySkillRequestIntent("remove the scrape plugin");
+    expect(uninstall.intent).toBe("manage-installation");
+    expect(uninstall.skillName).toBe("scrape");
+  });
+
+  it("extracts installed-skill names from identity-first phrases", () => {
+    expect(extractInstalledSkillName("update video-use")).toBe("video-use");
+    expect(
+      extractInstalledSkillName("repair the installed video-use skill")
+    ).toBe("video-use");
+    expect(extractInstalledSkillName("update my skills")).toBeNull();
+    expect(extractInstalledSkillName("update the plugin")).toBeNull();
   });
 
   it.each(notInstall)("does NOT intercept '%s'", (message) => {

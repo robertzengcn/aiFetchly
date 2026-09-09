@@ -1191,25 +1191,90 @@ export class SkillInstallationModule extends BaseModule {
    * required again whenever capabilities expand (§24.1). The previous
    * healthy activation stays in place until the new one verifies.
    */
-  async update(installationId: string): Promise<InstallSnapshot> {
+  /**
+   * FR-26 identity resolution: natural-language update/repair/configure
+   * requests carry a NAME ("update video-use"), not an installation id.
+   * Unique ready match resolves deterministically; multiple matches ask a
+   * bounded clarification; none is a typed SKILL_NOT_FOUND.
+   */
+  private async resolveInstallationIdentity(input: {
+    installationId?: string;
+    name?: string;
+  }): Promise<
+    | { readonly ok: true; readonly entity: SkillInstallationEntity }
+    | { readonly ok: false; readonly code: string; readonly message: string }
+  > {
     const { installations } = await this.getModels();
-    const entity = await installations.findByInstallationId(installationId);
-    if (!entity) {
+    if (input.installationId) {
+      const entity = await installations.findByInstallationId(
+        input.installationId
+      );
+      if (entity) return { ok: true, entity };
+      return {
+        ok: false,
+        code: "SKILL_NOT_FOUND",
+        message: `No installation with id '${input.installationId}'.`,
+      };
+    }
+    if (input.name) {
+      const lowered = input.name.toLowerCase();
+      const matches = (await installations.listByScope("user", 0)).filter(
+        (row) =>
+          row.enabled &&
+          ["ready", "disabled"].includes(row.status) &&
+          row.name.toLowerCase() === lowered
+      );
+      if (matches.length === 1) return { ok: true, entity: matches[0] };
+      if (matches.length > 1) {
+        return {
+          ok: false,
+          code: "SKILL_AMBIGUOUS",
+          message:
+            `Multiple installations are named '${input.name}': ` +
+            matches.map((m) => `${m.name} (${m.installationId})`).join(", ") +
+            `. Repeat the request with the exact installation id.`,
+        };
+      }
+      return {
+        ok: false,
+        code: "SKILL_NOT_FOUND",
+        message: `No installed skill named '${input.name}'.`,
+      };
+    }
+    return {
+      ok: false,
+      code: "INSTALL_SESSION_REQUIRED",
+      message: "Provide the installation id or the installed skill's name.",
+    };
+  }
+
+  async update(input: {
+    installationId?: string;
+    name?: string;
+    /** FR-26/FR-29: the REAL calling conversation — kept on the session. */
+    conversationId?: string;
+  }): Promise<InstallSnapshot> {
+    const resolved = await this.resolveInstallationIdentity(input);
+    if (!resolved.ok) {
       return this.errorSnapshot(
         "failed",
-        "INSTALL_SESSION_REQUIRED",
-        `Unknown installation '${installationId}'.`,
+        resolved.code,
+        resolved.message,
         "none"
       );
     }
+    const entity = resolved.entity;
     // Update flows through prepare against the recorded source; the
     // activation service's backup mechanism retains the previous version
     // until the new one verifies.
     // Update FORCES a fresh session (the ready-installation idempotency
     // gate must not short-circuit an explicit update request): pass an
     // explicit sessionId so prepare skips the resume/report-ready path.
+    // FR-26: the session carries the REAL calling conversation (the
+    // synthetic update:<id> identity is only the legacy fallback), so
+    // FR-29 correlation works for the follow-up approve.
     return this.prepare({
-      conversationId: `update:${installationId}`,
+      conversationId: input.conversationId ?? `update:${entity.installationId}`,
       source: entity.sourceUri,
       ...(entity.sourceSubdirectory
         ? { subdirectory: entity.sourceSubdirectory }
@@ -1219,7 +1284,7 @@ export class SkillInstallationModule extends BaseModule {
         entity.activationMode === "junction"
           ? "linked"
           : "managed-copy",
-      sessionId: `update-${installationId}-${Date.now()}`,
+      sessionId: `update-${entity.installationId}-${Date.now()}`,
     });
   }
 
@@ -1229,7 +1294,11 @@ export class SkillInstallationModule extends BaseModule {
    * SKILL.md hash matches the recorded content hash, the runtime catalog
    * still resolves the skill, and re-registers when the catalog lost it.
    */
-  async repair(installationId: string): Promise<{
+  async repair(input: {
+    installationId?: string;
+    /** FR-26: natural-language identity ("repair video-use"). */
+    name?: string;
+  }): Promise<{
     ok: boolean;
     checks: readonly {
       readonly name: string;
@@ -1237,16 +1306,21 @@ export class SkillInstallationModule extends BaseModule {
       readonly detail: string;
     }[];
     repaired: readonly string[];
+    /** Typed identity-resolution failure (SKILL_NOT_FOUND / SKILL_AMBIGUOUS). */
+    errorCode?: string;
+    errorMessage?: string;
   }> {
-    const { installations } = await this.getModels();
-    const entity = await installations.findByInstallationId(installationId);
-    if (!entity) {
+    const resolved = await this.resolveInstallationIdentity(input);
+    if (!resolved.ok) {
       return {
         ok: false,
         checks: [],
         repaired: [],
+        errorCode: resolved.code,
+        errorMessage: resolved.message,
       };
     }
+    const entity = resolved.entity;
 
     const activation = new SkillActivationService();
     const checks: { name: string; passed: boolean; detail: string }[] = [];
@@ -1283,7 +1357,7 @@ export class SkillInstallationModule extends BaseModule {
 
     // 3. Runtime catalog still resolves the skill; re-register if missing.
     const catalog = getDefaultPromptSkillCatalog();
-    const runtimeId = `prompt:user:${installationId}`;
+    const runtimeId = `prompt:user:${entity.installationId}`;
     const registered = catalog.get(runtimeId) !== null;
     checks.push({
       name: "catalog-registered",
@@ -1293,7 +1367,7 @@ export class SkillInstallationModule extends BaseModule {
     if (!registered && structureOk) {
       const restored = this.registerPromptSkill(
         entity.activationPath,
-        installationId
+        entity.installationId
       );
       if (restored) {
         repaired.push("catalog-re-registered");

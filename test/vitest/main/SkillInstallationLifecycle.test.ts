@@ -26,7 +26,7 @@ function makeFixture(): string {
   );
   execSync("git init -q", { cwd: repo });
   execSync("git add -A", { cwd: repo });
-  execSync('git -c user.email=t@t -c user.name=t commit -q -m init', {
+  execSync("git -c user.email=t@t -c user.name=t commit -q -m init", {
     cwd: repo,
   });
   return repo;
@@ -81,7 +81,7 @@ async function installFixture(): Promise<{
     planRevision: prepared.planRevision as string,
     approve: true,
     approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-    });
+  });
   if (snapshot.state === "awaiting_secret") {
     snapshot = await module.resumeAfterSecret(prepared.sessionId);
   }
@@ -118,7 +118,7 @@ describe("SkillInstallationModule lifecycle", () => {
     expect(catalog.get(`prompt:user:${installationId}`)).toBeNull();
 
     const module = new SkillInstallationModule();
-    const report = await module.repair(installationId);
+    const report = await module.repair({ installationId });
     expect(report.ok).toBe(true);
     expect(report.repaired).toContain("catalog-re-registered");
     expect(
@@ -137,17 +137,81 @@ describe("SkillInstallationModule lifecycle", () => {
       "\n\n## New Section\n\nUpdated instructions."
     );
     execSync("git add -A", { cwd: fixtureRoot });
-    execSync('git -c user.email=t@t -c user.name=t commit -q -m update', {
+    execSync("git -c user.email=t@t -c user.name=t commit -q -m update", {
       cwd: fixtureRoot,
     });
 
     const module = new SkillInstallationModule();
-    const updateSnapshot = await module.update(installationId);
+    const updateSnapshot = await module.update({ installationId });
     // Update holds at plan review — renewed approval is required.
     expect(updateSnapshot.state).toBe("awaiting_approval");
     expect(updateSnapshot.nextAction).toBe("review-plan");
     expect(updateSnapshot.planRevision).not.toBeNull();
   }, 120_000);
+
+  it("update/repair resolve a natural-language NAME (FR-26)", async () => {
+    await installFixture(); // fixture skill name: video-use
+    const module = new SkillInstallationModule();
+
+    // Unique name → deterministic resolution, real conversation preserved.
+    const byName = await module.update({
+      name: "Video-Use", // case-insensitive match
+      conversationId: "conv-nl-update",
+    });
+    expect(byName.state).toBe("awaiting_approval");
+    expect(byName.sessionId).not.toBeNull();
+
+    // Repair by name verifies without updating.
+    const repairByName = await module.repair({ name: "video-use" });
+    expect(repairByName.ok).toBe(true);
+
+    // Missing identity → typed SKILL_NOT_FOUND.
+    const missing = await module.update({ name: "no-such-skill" });
+    expect(missing.errorCode).toBe("SKILL_NOT_FOUND");
+    const missingRepair = await module.repair({ name: "no-such-skill" });
+    expect(missingRepair.errorCode).toBe("SKILL_NOT_FOUND");
+
+    // Neither id nor name → typed guidance.
+    const neither = await module.update({});
+    expect(neither.errorCode).toBe("INSTALL_SESSION_REQUIRED");
+
+    // Two installations with the SAME name → bounded clarification listing
+    // the candidate ids (never a silent guess).
+    const secondSource = fs.mkdtempSync(
+      path.join(os.tmpdir(), "video-use-second-")
+    );
+    try {
+      fs.copyFileSync(
+        path.join(fixtureRoot, "SKILL.md"),
+        path.join(secondSource, "SKILL.md")
+      );
+      execSync("git init -q", { cwd: secondSource });
+      execSync("git add -A", { cwd: secondSource });
+      execSync("git -c user.email=t@t -c user.name=t commit -q -m init", {
+        cwd: secondSource,
+      });
+      const second = await module.prepare({
+        conversationId: "conv-nl-second",
+        source: secondSource,
+      });
+      let approvedSecond = await module.approve({
+        sessionId: second.sessionId,
+        planRevision: second.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(second.sessionId)) ?? "",
+      });
+      if (approvedSecond.state === "awaiting_secret") {
+        approvedSecond = await module.resumeAfterSecret(second.sessionId);
+      }
+      expect(approvedSecond.installationId).toBeTruthy();
+
+      const ambiguous = await module.update({ name: "video-use" });
+      expect(ambiguous.errorCode).toBe("SKILL_AMBIGUOUS");
+      expect(ambiguous.safeSummary).toContain("installation id");
+    } finally {
+      fs.rmSync(secondSource, { recursive: true, force: true });
+    }
+  }, 180_000);
 
   it("uninstall removes an owned managed copy and reports what was preserved", async () => {
     const { installationId } = await installFixture();
@@ -167,8 +231,9 @@ describe("SkillInstallationModule lifecycle", () => {
     if (!result.ok) return;
     expect(result.removed).toBe("directory");
     expect(fs.existsSync(activationPath)).toBe(false);
-    expect(getDefaultPromptSkillCatalog().resolve("video-use", {}).definition)
-      .toBeNull();
+    expect(
+      getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
+    ).toBeNull();
   }, 120_000);
 
   it("uninstalling a linked installation never deletes the external target", async () => {
@@ -183,7 +248,7 @@ describe("SkillInstallationModule lifecycle", () => {
       planRevision: prepared.planRevision as string,
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      });
+    });
     if (snapshot.state === "awaiting_secret") {
       snapshot = await module.resumeAfterSecret(prepared.sessionId);
     }
@@ -191,13 +256,10 @@ describe("SkillInstallationModule lifecycle", () => {
     expect(installationId).not.toBeNull();
     if (!installationId) return;
 
-    const linkPath = path.join(
-      configHome,
-      ".aifetchly",
-      "skills",
-      "video-use"
-    );
-    expect(fs.lstatSync(linkPath).isSymbolicLink() || fs.existsSync(linkPath)).toBe(true);
+    const linkPath = path.join(configHome, ".aifetchly", "skills", "video-use");
+    expect(
+      fs.lstatSync(linkPath).isSymbolicLink() || fs.existsSync(linkPath)
+    ).toBe(true);
 
     const result = await module.uninstall({ installationId });
     expect(result.ok).toBe(true);
@@ -312,10 +374,15 @@ describe("SkillInstallationModule lifecycle", () => {
 
   it("update/repair/uninstall reject unknown installation ids", async () => {
     const module = new SkillInstallationModule();
-    const updateResult = await module.update("no-such-install");
-    expect(updateResult.errorCode).toBe("INSTALL_SESSION_REQUIRED");
-    const repairResult = await module.repair("no-such-install");
+    const updateResult = await module.update({
+      installationId: "no-such-install",
+    });
+    expect(updateResult.errorCode).toBe("SKILL_NOT_FOUND");
+    const repairResult = await module.repair({
+      installationId: "no-such-install",
+    });
     expect(repairResult.ok).toBe(false);
+    expect(repairResult.errorCode).toBe("SKILL_NOT_FOUND");
     const disableResult = await module.disable("no-such-install");
     expect(disableResult).toBe(false);
     const uninstallResult = await module.uninstall({

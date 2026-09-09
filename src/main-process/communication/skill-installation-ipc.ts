@@ -337,6 +337,18 @@ export function registerSkillInstallationIpcHandlers(): void {
 }
 
 const installationSchema = z.object({ installationId: z.string().min(1) });
+/** FR-26: update/repair accept a natural-language NAME identity too. */
+const installationIdentitySchema = z
+  .object({
+    installationId: z.string().min(1).optional(),
+    name: z.string().min(1).max(200).optional(),
+    /** FR-29: bind the update session to the calling conversation. */
+    conversationId: z.string().min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((v) => Boolean(v.installationId || v.name), {
+    message: "installationId or name is required",
+  });
 const uninstallSchema = z.object({
   installationId: z.string().min(1),
   deleteSecrets: z.boolean().optional(),
@@ -346,12 +358,18 @@ export function registerSkillInstallationLifecycleIpcHandlers(): void {
   ipcMain.handle(SKILL_INSTALL_UPDATE, async (_event, data: unknown) => {
     if (!isAiEnabled())
       return denied("AI functionality is only available to subscribers.");
-    const decoded = decode(installationSchema, data);
+    const decoded = decode(installationIdentitySchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {
-      const snapshot = await new SkillInstallationModule().update(
-        decoded.value.installationId
-      );
+      const snapshot = await new SkillInstallationModule().update({
+        ...(decoded.value.installationId
+          ? { installationId: decoded.value.installationId }
+          : {}),
+        ...(decoded.value.name ? { name: decoded.value.name } : {}),
+        ...(decoded.value.conversationId
+          ? { conversationId: decoded.value.conversationId }
+          : {}),
+      });
       return ok(snapshot);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Update failed.");
@@ -359,12 +377,15 @@ export function registerSkillInstallationLifecycleIpcHandlers(): void {
   });
 
   ipcMain.handle(SKILL_INSTALL_REPAIR, async (_event, data: unknown) => {
-    const decoded = decode(installationSchema, data);
+    const decoded = decode(installationIdentitySchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {
-      const report = await new SkillInstallationModule().repair(
-        decoded.value.installationId
-      );
+      const report = await new SkillInstallationModule().repair({
+        ...(decoded.value.installationId
+          ? { installationId: decoded.value.installationId }
+          : {}),
+        ...(decoded.value.name ? { name: decoded.value.name } : {}),
+      });
       return ok(report);
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Repair failed.");
