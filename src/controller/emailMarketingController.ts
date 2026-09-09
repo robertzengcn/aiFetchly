@@ -7,8 +7,10 @@ import {
   EmailSendParam,
   EmailServiceExportPayload,
   EmailServiceImportResult,
+  SafeEmailServiceExportRow,
 } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import { EmailTemplateModuleInterface } from "@/modules/interface/EmailTemplateModuleInterface";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterTaskRelationModule } from "@/modules/EmailFilterTaskRelationModule";
@@ -309,14 +311,25 @@ export class EmailMarketingController {
     const entities = await this.emailServiceModule.exportEmailServicesList();
 
     if (format === "json") {
-      const rows: EmailServiceListdata[] = entities.map((item) => ({
-        id: item.id,
-        name: item.name,
-        from: item.from,
-        host: item.host,
-        receiveProtocol: item.receiveProtocol,
-        create_time: item.createdAt?.toISOString() || "",
-      }));
+      const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
+        const identity = resolveEmailServiceIdentity({
+          smtpUsername: item.smtpUsername,
+          from: item.from,
+          replyTo: item.replyTo,
+        });
+        return {
+          id: item.id,
+          name: item.name,
+          smtpUsername: identity.smtpUsername,
+          from: item.from,
+          replyTo: identity.replyToAddress,
+          host: item.host,
+          port: item.port,
+          ssl: item.ssl,
+          receiveProtocol: item.receiveProtocol,
+          create_time: item.createdAt?.toISOString() || "",
+        };
+      });
       return {
         total: rows.length,
         services: rows,

@@ -156,7 +156,9 @@ export type EmailFilterDetialdata = {
 };
 export type EmailServiceEntitydata = {
   id?: number;
+  smtpUsername?: string | null;
   from: string;
+  replyTo?: string | null;
   password: string;
   host: string;
   port: string;
@@ -186,10 +188,28 @@ export type EmailServiceListdata = {
   create_time: string;
 };
 
+/**
+ * Safe (secret-free) single projection of one email service for both CSV and
+ * JSON export (§11.1). Uses the EFFECTIVE smtpUsername so legacy rows export a
+ * usable login identifier. Never contains SMTP or receive passwords.
+ */
+export type SafeEmailServiceExportRow = {
+  id: number;
+  name: string;
+  smtpUsername: string;
+  from: string;
+  replyTo: string | null;
+  host: string;
+  port: string;
+  ssl: number;
+  receiveProtocol: EmailReceiveProtocol;
+  create_time: string;
+};
+
 /** JSON export envelope for the email service list (safe fields only). */
 export type EmailServiceExportPayload = {
   total: number;
-  services: EmailServiceListdata[];
+  services: SafeEmailServiceExportRow[];
   exportDate: string;
 };
 
