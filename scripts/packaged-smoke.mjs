@@ -81,7 +81,16 @@ async function main() {
   try {
     app = await _electron.launch({
       executablePath: exe,
-      args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+      // --enable-logging=stderr surfaces Electron/main-process errors (missing
+      // shared libs, sandbox failures, uncaught exceptions) on the CI log so a
+      // firstWindow timeout is debuggable instead of a bare 30s wait.
+      args: [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--enable-logging=stderr",
+        "--v=1",
+      ],
       env: {
         ...process.env,
         // Isolated user-data; do NOT set AIFETCHLY_E2E (packaged app must run normally).
@@ -89,6 +98,15 @@ async function main() {
       },
       timeout: 60_000,
     });
+    // Capture the packaged app's own stdout/stderr so a launch-time failure
+    // (missing .so, native-module load error, main-process crash) appears in
+    // the CI log before the firstWindow timeout, not as a silent 30s stall.
+    app.stdout().on("data", (chunk) =>
+      process.stdout.write(`[packaged-smoke][app:stdout] ${chunk}`)
+    );
+    app.stderr().on("data", (chunk) =>
+      process.stderr.write(`[packaged-smoke][app:stderr] ${chunk}`)
+    );
     const page = await app.firstWindow();
     // Renderer HTML loaded from the packaged layout (file:// or app://), not 5173.
     await page.waitForLoadState("domcontentloaded", { timeout: 60_000 });
