@@ -2450,6 +2450,8 @@ export default {
     model_selector_label: "模型",
     model_loading: "正在加载模型…",
     model_none_available: "没有可用模型",
+    model_none_hint: "未配置可用模型。",
+    model_open_settings: "打开模型服务设置",
     model_auto: "自动",
     model_auto_default: "默认",
     model_free: "免费",

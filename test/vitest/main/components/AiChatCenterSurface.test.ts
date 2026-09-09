@@ -211,7 +211,11 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         AiChatV2ModeSelector: defineComponent({
           template: '<div data-testid="mode-selector-stub" />',
         }),
-        AiChatV2ModelSelector: true,
+        AiChatV2ModelSelector: defineComponent({
+          name: "AiChatV2ModelSelector",
+          props: ["modelValue", "items", "defaultModel", "disabled", "loading", "noModels"],
+          template: '<div data-testid="model-selector-stub" />',
+        }),
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2ContextBadge: true,
         AiChatVoiceOutputToggle: defineComponent({
@@ -966,5 +970,39 @@ describe("AiChatCenterSurface spoken-response save failure (FR-VOICE-004)", () =
     expect(
       wrapper.find('[data-testid="voice-save-error"]').exists()
     ).toBe(false);
+  });
+});
+
+
+describe("AiChatCenterSurface model availability states (PRD §13.4)", () => {
+  it("distinguishes bounded loading from the actionable no-model state", async () => {
+    // A settled catalog response with an EMPTY list must not spin forever.
+    getOpenAIChatModelsMock.mockResolvedValue({ data: [], default_model: undefined });
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    const selector = wrapper.findComponent({ name: "AiChatV2ModelSelector" });
+    expect(selector.props("loading")).toBe(false); // loading ended
+    expect(selector.props("noModels")).toBe(true); // actionable empty state
+  });
+
+  it("keeps loading true only until the catalog settles with models", async () => {
+    let releaseModels: (value: { data: unknown[]; default_model?: string }) => void =
+      () => undefined;
+    getOpenAIChatModelsMock.mockReturnValue(
+      new Promise((resolve) => {
+        releaseModels = resolve;
+      })
+    );
+    const wrapper = mountSurface();
+    await flushPromises();
+    const selector = wrapper.findComponent({ name: "AiChatV2ModelSelector" });
+    expect(selector.props("loading")).toBe(true); // bounded: request in flight
+    expect(selector.props("noModels")).toBe(false);
+
+    releaseModels({ data: [{ id: "m1" }], default_model: "m1" });
+    await flushPromises();
+    expect(selector.props("loading")).toBe(false);
+    expect(selector.props("noModels")).toBe(false);
   });
 });

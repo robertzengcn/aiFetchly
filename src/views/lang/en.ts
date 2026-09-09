@@ -2554,6 +2554,8 @@ export default {
     model_selector_label: "Model",
     model_loading: "Loading models…",
     model_none_available: "No models available",
+    model_none_hint: "No usable model is configured.",
+    model_open_settings: "Open provider settings",
     model_auto: "Auto",
     model_auto_default: "Default",
     model_free: "Free",

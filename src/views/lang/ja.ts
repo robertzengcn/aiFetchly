@@ -2518,6 +2518,8 @@ export default {
     model_selector_label: "モデル",
     model_loading: "モデルを読み込み中…",
     model_none_available: "利用できるモデルがありません",
+    model_none_hint: "利用可能なモデルが設定されていません。",
+    model_open_settings: "プロバイダ設定を開く",
     model_auto: "自動",
     model_auto_default: "デフォルト",
     model_free: "無料",

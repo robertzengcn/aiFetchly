@@ -1,5 +1,9 @@
 <template>
-  <div class="v2-model-selector">
+  <div
+    class="v2-model-selector"
+    :title="noModels ? noModelsHint : undefined"
+    :aria-label="noModels ? noModelsHint : undefined"
+  >
     <v-select
       :model-value="modelValue"
       :items="selectItems"
@@ -47,6 +51,24 @@
         </v-list-item>
       </template>
     </v-select>
+    <!--
+      Actionable no-model state (PRD §13.4/§18): once loading has COMPLETED
+      with no usable model, an inline provider-settings action replaces the
+      dead end. The icon button keeps the toolbar row height unchanged.
+    -->
+    <v-btn
+      v-if="noModels && !loading"
+      icon
+      size="x-small"
+      variant="text"
+      class="v2-model-selector__settings"
+      data-testid="model-open-settings"
+      :aria-label="t('aiChatV2.model_open_settings') || 'Open provider settings'"
+      :title="t('aiChatV2.model_open_settings') || 'Open provider settings'"
+      @click.stop="emit('open-settings')"
+    >
+      <v-icon size="small">mdi-cog-outline</v-icon>
+    </v-btn>
   </div>
 </template>
 
@@ -62,11 +84,20 @@ const props = defineProps<{
   defaultModel?: string;
   disabled?: boolean;
   loading?: boolean;
+  /** Loading has COMPLETED with no usable model (PRD §13.4 action state). */
+  noModels?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
+  (e: "open-settings"): void;
 }>();
 const { t } = useI18n();
+
+const noModelsHint = computed(
+  () =>
+    t("aiChatV2.model_none_hint") ||
+    "No usable model is configured. Open provider settings."
+);
 
 interface ModelSelectItem {
   value: string;
@@ -136,5 +167,8 @@ const formatContextSize = (tokens: number): string => {
 .v2-model-selector__select {
   min-width: 130px;
   max-width: 200px;
+}
+.v2-model-selector__settings {
+  margin-left: 2px;
 }
 </style>

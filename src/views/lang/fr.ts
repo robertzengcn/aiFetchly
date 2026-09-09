@@ -2557,6 +2557,8 @@ export default {
     model_selector_label: "Modèle",
     model_loading: "Chargement des modèles…",
     model_none_available: "Aucun modèle disponible",
+    model_none_hint: "Aucun modèle utilisable n’est configuré.",
+    model_open_settings: "Ouvrir les paramètres du fournisseur",
     model_auto: "Auto",
     model_auto_default: "Par défaut",
     model_free: "Gratuit",

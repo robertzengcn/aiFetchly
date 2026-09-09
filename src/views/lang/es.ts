@@ -2578,6 +2578,8 @@ export default {
     model_selector_label: "Modelo",
     model_loading: "Cargando modelos…",
     model_none_available: "No hay modelos disponibles",
+    model_none_hint: "No hay ningún modelo utilizable configurado.",
+    model_open_settings: "Abrir ajustes del proveedor",
     model_auto: "Automático",
     model_auto_default: "Predeterminado",
     model_free: "Gratis",

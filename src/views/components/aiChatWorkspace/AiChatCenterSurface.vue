@@ -196,7 +196,9 @@
           :items="availableModels"
           :default-model="defaultModelId"
           :disabled="selectedStore.isBusy"
-          :loading="availableModels.length === 0"
+          :loading="!modelsLoaded"
+          :no-models="modelsLoaded && availableModels.length === 0"
+          @open-settings="openProviderSettings"
         />
         <AiChatV2ToolApprovalModeSelector
           v-model="toolApprovalMode"
@@ -755,6 +757,12 @@ const availableModels = ref<OpenAIModel[]>([]);
 const defaultModelId = ref<string | undefined>(undefined);
 const modelContextWindows = ref<Map<string, number>>(new Map());
 const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
+/**
+ * PRD §13.4: bounded loading — loading ends when the catalog request
+ * settles (success OR failure); a settled empty list is the actionable
+ * no-model state, never an indefinite spinner.
+ */
+const modelsLoaded = ref(false);
 
 async function loadModels(): Promise<void> {
   try {
@@ -786,6 +794,8 @@ async function loadModels(): Promise<void> {
     selectedModel.value = usable;
   } catch {
     // Model list unavailable — "Auto" fallback; sending still works.
+  } finally {
+    modelsLoaded.value = true;
   }
 }
 
@@ -1009,6 +1019,11 @@ function settlePrompt(value: string | null): void {
 }
 
 function openVoiceSettings(): void {
+  void router.push({ name: "system_setting_ai_provider" });
+}
+
+/** PRD §13.4: the no-model action routes to the AI provider settings. */
+function openProviderSettings(): void {
   void router.push({ name: "system_setting_ai_provider" });
 }
 
