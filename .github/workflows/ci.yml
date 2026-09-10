@@ -239,14 +239,6 @@ jobs:
         # or if main_window/index.html is missing from the package.
         run: yarn verify-packaged-app
 
-      - name: Packaged smoke diagnosis (T-13 root-cause)
-        # TEMPORARY: bypasses Playwright to determine whether the packaged binary
-        # executes background.js at all. Prints package.json `main`, verifies
-        # background.js exists + contains the startup canary, and spawns the
-        # binary directly (no CDP) dumping raw Electron output for 12s.
-        run: |
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" node scripts/packaged-smoke-diagnose.mjs
-
       - name: Packaged application smoke (T-13)
         # Launch the packaged executable with an isolated user-data dir and verify
         # the first window, renderer HTML, and preload bridge (design §17.2).
