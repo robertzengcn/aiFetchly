@@ -237,4 +237,84 @@ describe("OutboundEmailEnvelopeHasher v2 (§15)", () => {
     const h2 = OutboundEmailEnvelopeHasher.hashBatchV2([...entries].reverse());
     expect(h1).toBe(h2);
   });
+
+  // §7.3 normalization contract — property-based, not hand-counted (avoids the
+  // plan's `sender:16`-vs-`17` miscount class of error). Locks the rules that
+  // distinguish v2 from v1: local-part preserved, domain lowercased, SMTP
+  // username case-sensitive, and v1/v2 can never collide for identical content.
+  it("preserves the local part and lowercases only the domain (§7.3)", () => {
+    const base = {
+      version: 2 as const,
+      emailServiceId: 1,
+      smtpUsername: "x@y.com",
+      recipientAddress: "u@y.com",
+      subject: "s",
+      bodyText: "b",
+      bodyHtml: null,
+    };
+    const mixed = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      senderAddress: "Sales.Team@Example.COM",
+      replyToAddress: "Support.Group@Example.COM",
+    });
+    const normalizedDomain = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      senderAddress: "Sales.Team@example.com",
+      replyToAddress: "Support.Group@example.com",
+    });
+    // Domain case folds; local part (Sales.Team) does NOT.
+    expect(mixed).toBe(normalizedDomain);
+
+    // Whole-address lowercasing (v1 behavior) would change the hash — it must not.
+    const wholeLower = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      senderAddress: "sales.team@example.com",
+      replyToAddress: "support.group@example.com",
+    });
+    expect(mixed).not.toBe(wholeLower);
+  });
+
+  it("treats the SMTP username as case-sensitive (§7.3)", () => {
+    const base = {
+      version: 2 as const,
+      emailServiceId: 1,
+      senderAddress: "s@y.com",
+      replyToAddress: null,
+      recipientAddress: "u@y.com",
+      subject: "s",
+      bodyText: "b",
+      bodyHtml: null,
+    };
+    const lower = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      smtpUsername: "user@example.com",
+    });
+    const mixed = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      smtpUsername: "User@Example.com",
+    });
+    expect(lower).not.toBe(mixed);
+  });
+
+  it("produces a different hash than v1 for identical content (version field)", () => {
+    const content = {
+      emailServiceId: 3,
+      senderAddress: "sales@example.com",
+      recipientAddress: "user@example.com",
+      subject: "Hi",
+      bodyText: "Body",
+      bodyHtml: null,
+    };
+    const v1 = OutboundEmailEnvelopeHasher.hashEnvelope({
+      version: 1,
+      ...content,
+    });
+    const v2 = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      version: 2,
+      smtpUsername: "sales@example.com",
+      replyToAddress: null,
+      ...content,
+    });
+    expect(v1).not.toBe(v2);
+  });
 });
