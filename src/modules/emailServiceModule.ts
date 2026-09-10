@@ -240,11 +240,13 @@ export class EmailServiceModule
       const ssl = protocol === "imap" ? service.imapSsl : service.pop3Ssl;
       if (!host || !portStr) return null;
 
-      // Username defaults to the SMTP `from` address when not provided.
-      const username =
-        service.receiveUsername && service.receiveUsername.trim().length > 0
-          ? service.receiveUsername
-          : service.from ?? "";
+      // Username: explicit receiveUsername → SMTP username → From (§8.3).
+      const identity = resolveEmailServiceIdentity({
+        smtpUsername: service.smtpUsername,
+        from: service.from,
+        receiveUsername: service.receiveUsername,
+      });
+      const username = identity.receiveUsername;
       // Password defaults to the SMTP password when not provided.
       const password =
         service.receivePassword && service.receivePassword.length > 0

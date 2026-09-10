@@ -231,6 +231,8 @@ export class EmailMarketingController {
     entity.host = param.host;
     entity.port = param.port;
     entity.from = param.from;
+    entity.smtpUsername = param.smtpUsername ?? null;
+    entity.replyTo = param.replyTo ?? null;
     entity.password = param.password;
     entity.ssl = param.ssl;
     // inbound receive fields

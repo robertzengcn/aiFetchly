@@ -48,6 +48,26 @@ export class EmailServiceModel extends BaseDb {
     }
   }
 
+  /**
+   * Read the complete effective identity for a service (§22.2). Returns null
+   * when the service does not exist. Does not decrypt passwords.
+   */
+  async readIdentity(id: number): Promise<{
+    smtpUsername: string | null;
+    from: string;
+    replyTo: string | null;
+    receiveUsername: string | null;
+  } | null> {
+    const entity = await this.read(id);
+    if (!entity) return null;
+    return {
+      smtpUsername: entity.smtpUsername ?? null,
+      from: entity.from,
+      replyTo: entity.replyTo ?? null,
+      receiveUsername: entity.receiveUsername ?? null,
+    };
+  }
+
   async update(id: number, service: EmailServiceEntity): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;
