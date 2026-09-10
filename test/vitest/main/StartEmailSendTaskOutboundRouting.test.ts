@@ -85,7 +85,32 @@ import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/Outbo
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailIntentModel } from "@/model/OutboundEmailIntent.model";
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
+import { EmailServiceModel } from "@/model/EmailService.model";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
+
+/**
+ * Seed an email-service row with id=1 whose resolved identity matches what
+ * `generateBatch` freezes into the revision (from=sender@example.com,
+ * smtpUsername=null→resolves to from, replyTo=null). The §15.5 identity-reload
+ * gate reads this row at claim time; without it, `readIdentity(1)` returns
+ * null and the claim aborts with `sender_identity_changed`.
+ */
+async function seedEmailService(): Promise<void> {
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.id = 1;
+  entity.name = "Primary";
+  entity.from = "sender@example.com";
+  entity.smtpUsername = null;
+  entity.replyTo = null;
+  entity.password = "secret";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  await model.create(entity);
+}
 
 /** Seed a fully-authorized draft batch and return the claim triple. */
 async function seedAuthorizedBatch(): Promise<{
@@ -93,6 +118,7 @@ async function seedAuthorizedBatch(): Promise<{
   batchHash: string;
   authorizationId: number;
 }> {
+  await seedEmailService();
   const draftService = new OutboundEmailDraftService(tmpDir, {
     aiEnabledOverride: true,
   });
