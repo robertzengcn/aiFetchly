@@ -14,6 +14,7 @@
  * an AIFETCHLY_SKILL_STAGING_ROOT override for tests/advanced deployments.
  */
 
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -208,7 +209,11 @@ export class SkillSourceAcquisitionService {
       }
 
       const contentHash = staged.result.contentHash;
-      const resolvedRevision = await this.resolveRevision(target, descriptor);
+      const resolvedRevision = await this.resolveRevision(
+        localRoot,
+        target,
+        descriptor
+      );
 
       return {
         ok: true,
@@ -319,20 +324,66 @@ export class SkillSourceAcquisitionService {
   }
 
   private async resolveRevision(
+    cloneRoot: string,
     stagingRoot: string,
     descriptor: SkillSourceDescriptor
   ): Promise<string> {
-    // Prompt skills without a semantic version use the content hash of the
-    // staged tree as their immutable identity (PRD §11.2).
+    // An explicitly pinned 40-hex revision IS the provenance (PRD §11.2).
     if (
       descriptor.requestedRevision &&
       /^[0-9a-f]{40}$/i.test(descriptor.requestedRevision)
     ) {
       return descriptor.requestedRevision;
     }
+    // FR-03: git/github acquisitions record the RESOLVED COMMIT SHA — read
+    // HEAD from the fetcher's still-live clone (typed args, bounded wait)
+    // BEFORE staging cleanup. Branch, tag, and default-branch installs all
+    // resolve through the same rev-parse. The staged-tree content hash
+    // remains the SEPARATE content identity (both are recorded).
+    if (descriptor.kind === "git" || descriptor.kind === "github") {
+      try {
+        const sha = await this.revParseHead(cloneRoot);
+        if (sha) return sha;
+      } catch {
+        /* archive fallback path has no .git — content identity below */
+      }
+    }
+    // Non-git sources (and archive fallbacks without a local clone) use the
+    // content hash of the staged tree as their immutable identity.
     const { hashTree } = await import(
       "@/childprocess/skill-installation/stagePackage"
     );
     return hashTree(stagingRoot);
+  }
+
+  /** `git -C <clone> rev-parse HEAD` with typed args and a bounded wait. */
+  private revParseHead(cloneRoot: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      try {
+        const child = spawn("git", ["-C", cloneRoot, "rev-parse", "HEAD"], {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+        });
+        let out = "";
+        const timer = setTimeout(() => {
+          child.kill();
+          resolve(null);
+        }, 10_000);
+        child.stdout?.on("data", (chunk: Buffer) => {
+          out += chunk.toString("utf8");
+        });
+        child.on("error", () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          const trimmed = out.trim();
+          resolve(code === 0 && /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : null);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
   }
 }

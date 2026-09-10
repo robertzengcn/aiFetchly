@@ -710,3 +710,57 @@ describe("linked development mode targets the original source (FR-11, NFR-05)", 
     expect(approved.errorCode).toBe("LINK_CREATION_FAILED");
   }, 120_000);
 });
+
+describe("real Git provenance + GitHub archive fallback (FR-03)", () => {
+  it("git/github revisions resolve to the ACTUAL commit SHA, distinct from the content hash", async () => {
+    const { SkillSourceAcquisitionService } = await import(
+      "@/service/SkillSourceAcquisitionService"
+    );
+    const service = new SkillSourceAcquisitionService(
+      undefined,
+      path.join(configHome, "staging")
+    );
+    const internals = service as unknown as {
+      resolveRevision: (
+        cloneRoot: string,
+        stagingRoot: string,
+        descriptor: { kind: string; requestedRevision?: string }
+      ) => Promise<string>;
+    };
+    const stagingTarget = path.join(configHome, "staged-copy");
+    fs.cpSync(fixtureRoot, stagingTarget, { recursive: true });
+
+    // git/github kind → the fetcher clone's rev-parse HEAD (FR-03).
+    const head = execSync("git rev-parse HEAD", { cwd: fixtureRoot })
+      .toString()
+      .trim();
+    const sha = await internals.resolveRevision(fixtureRoot, stagingTarget, {
+      kind: "git",
+    });
+    expect(sha).toBe(head);
+
+    // A branch/tag request ALSO resolves the commit (not the ref name).
+    const onBranch = await internals.resolveRevision(fixtureRoot, stagingTarget, {
+      kind: "github",
+      requestedRevision: "main",
+    });
+    expect(onBranch).toBe(head);
+
+    // An explicitly pinned 40-hex revision IS the provenance.
+    const pinned = await internals.resolveRevision(fixtureRoot, stagingTarget, {
+      kind: "git",
+      requestedRevision: "a".repeat(40),
+    });
+    expect(pinned).toBe("a".repeat(40));
+
+    // Local/archive sources keep the CONTENT-hash identity, DISTINCT from
+    // any commit SHA.
+    const localIdentity = await internals.resolveRevision(
+      fixtureRoot,
+      stagingTarget,
+      { kind: "local-directory" }
+    );
+    expect(localIdentity).not.toBe(head);
+    expect(localIdentity).toMatch(/^[0-9a-f]{64}$/);
+  }, 120_000);
+});

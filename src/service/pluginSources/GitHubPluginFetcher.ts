@@ -142,6 +142,37 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
     }
   ) {}
 
+  /**
+   * Bounded HTTPS archive fallback for public repos (FR-03): the codeload
+   * zipball of the requested ref (default branch when absent). Returns null
+   * when the download fails so the caller surfaces the original git error.
+   */
+  private async acquireRepoArchive(
+    owner: string,
+    repo: string,
+    ref: string | undefined
+  ): Promise<PluginAcquireResult | null> {
+    // The simple /zip/<ref> form accepts branch, tag, SHA, or HEAD.
+    const url = `https://codeload.github.com/${owner}/${repo}/zip/${
+      ref ?? "HEAD"
+    }`;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-gh-archive-"));
+    const zipPath = path.join(tmp, "repo.zip");
+    try {
+      await downloadZip(url, zipPath);
+      return await this.deps.zip.acquire({
+        kind: "local-zip",
+        uri: zipPath,
+      } as PluginSourceRequest);
+    } catch {
+      return null;
+    } finally {
+      // The zip fetcher extracts into its own temp; the download file is
+      // ours to clean.
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
   async acquire(req: PluginSourceRequest): Promise<PluginAcquireResult> {
     const cls = classifyGitHubUrl(req.uri ?? "");
     if (cls.type === "unknown") {
@@ -158,7 +189,18 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
 
     if (cls.type === "repo") {
       const uri = `https://github.com/${cls.owner}/${cls.repo}.git`;
-      return this.deps.git.acquire({ ...req, kind: "git", uri, ref: req.ref });
+      const viaGit = await this.deps.git.acquire({
+        ...req,
+        kind: "git",
+        uri,
+        ref: req.ref,
+      });
+      if (viaGit.success) return viaGit;
+      // FR-03 / §11.1 fallback: public GitHub repositories must install
+      // WITHOUT a local Git executable. The codeload archive path uses only
+      // bounded HTTPS; on any failure the ORIGINAL git error is surfaced.
+      const viaArchive = await this.acquireRepoArchive(cls.owner, cls.repo, req.ref);
+      return viaArchive ?? viaGit;
     }
 
     const assetUrl =
