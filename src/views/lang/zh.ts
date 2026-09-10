@@ -1226,6 +1226,7 @@ export default {
     uploadfilemsg_title: "手动上传cookies文件",
     uploadfilemsg_content: "请从浏览器导出cookies并手动上传cookies文件",
     upload_cookies_button: "上传 cookies (Netscape .txt)",
+    open_managed_browser: "打开托管浏览器",
     upload_cookies_cancel: "上传cookies已取消",
     handleCookiesfileSuccess: "处理cookies文件成功",
     handleCookiesfileFailure: "处理cookies文件失败",
@@ -3403,6 +3404,10 @@ export default {
     platform_fallback: "社交",
     unknown_account: "未知账号",
     proxy_active: "代理",
+    screenshot: {
+        capture: "刷新缩略图",
+        alt: "最新浏览器截图",
+      },
     start: {
       title: "启动托管浏览器",
       empty: "暂无可用账号。请先添加已保存登录的账号。",

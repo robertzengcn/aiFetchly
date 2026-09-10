@@ -10,6 +10,7 @@ import {
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
   MANAGED_BROWSER_CANCEL_ACTIVE,
+  MANAGED_BROWSER_CAPTURE_SCREENSHOT,
   MANAGED_BROWSER_EXTEND_HANDOFF,
   MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
   MANAGED_BROWSER_GET_CACHE_STATUS,
@@ -36,6 +37,7 @@ import {
   managedBrowserStopInputSchema,
   managedBrowserApproveInputSchema,
   managedBrowserCancelActiveInputSchema,
+  managedBrowserCaptureScreenshotInputSchema,
   managedBrowserExtendHandoffInputSchema,
   managedBrowserGetEffectiveSettingsInputSchema,
   managedBrowserGetCacheStatusInputSchema,
@@ -184,6 +186,13 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       });
       return { recorded: true as const };
     }
+  );
+
+  registerAiValidatedHandler(
+    MANAGED_BROWSER_CAPTURE_SCREENSHOT,
+    managedBrowserCaptureScreenshotInputSchema,
+    async (input) =>
+      browserModule.captureSessionScreenshot(input.session_id)
   );
 
   registerAiValidatedHandler(

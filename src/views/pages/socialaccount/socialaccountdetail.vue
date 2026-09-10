@@ -162,6 +162,17 @@
           >
             {{ t('socialaccount.upload_cookies_button') }}
           </v-btn>
+          <v-btn
+            v-if="socialaccountId > 0"
+            color="secondary"
+            variant="tonal"
+            prepend-icon="mdi-monitor"
+            :loading="openingManagedBrowser"
+            data-testid="open-managed-browser"
+            @click="openManagedBrowser"
+          >
+            {{ t('socialaccount.open_managed_browser') || 'Open managed browser' }}
+          </v-btn>
         </v-card-actions>
       </v-card>
 
@@ -250,6 +261,26 @@ const phone = ref("");
 const email = ref("");
 // const proxy = ref(0);
 const socialaccountId = ref(0);
+const openingManagedBrowser = ref(false);
+
+/** TODO-MSB-003: Tool Account entry point — start the managed browser for
+ * THIS account from its detail page; the AI chat session card takes over. */
+async function openManagedBrowser(): Promise<void> {
+  if (socialaccountId.value <= 0 || openingManagedBrowser.value) return;
+  openingManagedBrowser.value = true;
+  try {
+    const { startManagedBrowser } = await import('@/views/api/managedBrowser');
+    await startManagedBrowser({
+      accountId: socialaccountId.value,
+      purpose: 'account-page',
+    });
+    await router.push('/aiworkspace');
+  } catch (error) {
+    console.error('[socialaccountdetail] managed browser start failed:', error);
+  } finally {
+    openingManagedBrowser.value = false;
+  }
+}
 const social_type_id = ref<number>();
 const proxyValue = ref<Array<Proxy>>([]);
 const proxyValueshow = ref<Array<string>>([]);

@@ -610,6 +610,8 @@ export const MANAGED_BROWSER_STOP = "managed-browser:stop";
 export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
 export const MANAGED_BROWSER_CANCEL_ACTIVE =
   "managed-browser:cancel-active";
+export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
+  "managed-browser:capture-screenshot";
 export const MANAGED_BROWSER_EXTEND_HANDOFF = "managed-browser:extend-handoff";
 export const MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS =
   "managed-browser:get-effective-settings";

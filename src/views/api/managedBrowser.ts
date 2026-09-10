@@ -10,6 +10,7 @@ import {
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
   MANAGED_BROWSER_CANCEL_ACTIVE,
+  MANAGED_BROWSER_CAPTURE_SCREENSHOT,
   MANAGED_BROWSER_EXTEND_HANDOFF,
   MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
   MANAGED_BROWSER_GET_CACHE_STATUS,
@@ -105,6 +106,12 @@ export async function approveBrowserAction(input: {
   pageRevision?: number;
 }): Promise<{ recorded: boolean }> {
   return await windowInvoke(MANAGED_BROWSER_APPROVE, input);
+}
+
+export async function captureSessionScreenshot(input: {
+  session_id: string;
+}): Promise<{ mimeType: string; base64: string }> {
+  return await windowInvoke(MANAGED_BROWSER_CAPTURE_SCREENSHOT, input);
 }
 
 export async function cancelActiveBrowserRequest(

@@ -35,6 +35,10 @@ const apiMocks = vi.hoisted(() => ({
   stopManagedBrowser: vi.fn(async (): Promise<unknown> => null),
   verifyManualLogin: vi.fn(async (): Promise<unknown> => null),
   cancelActiveBrowserRequest: vi.fn(async (): Promise<void> => undefined),
+  captureSessionScreenshot: vi.fn(async (): Promise<unknown> => ({
+    mimeType: "image/jpeg",
+    base64: btoa("fakejpegbytes"),
+  })),
 }));
 vi.mock("@/views/api/managedBrowser", () => apiMocks);
 
@@ -470,5 +474,52 @@ describe("TODO-MSB-003 session header", () => {
         wrapper.find("[data-testid='mb-session-header-elapsed']").exists()
       ).toBe(true)
     );
+  });
+});
+
+
+describe("TODO-MSB-003 screenshot surface", () => {
+  it("capture renders an ephemeral thumbnail from a blob URL", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-screenshot']").exists()).toBe(
+        true
+      )
+    );
+    await wrapper.find("[data-testid='mb-btn-screenshot']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.captureSessionScreenshot).toHaveBeenCalledWith({
+        session_id: "mb_test000000001",
+      })
+    );
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-screenshot']").exists()).toBe(
+        true
+      )
+    );
+  });
+
+  it("capture failure (sensitive state) disables the control and shows no image", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    apiMocks.captureSessionScreenshot.mockRejectedValueOnce(
+      new Error("action_not_allowed")
+    );
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-screenshot']").exists()).toBe(
+        true
+      )
+    );
+    await wrapper.find("[data-testid='mb-btn-screenshot']").trigger("click");
+    await vi.waitFor(() =>
+      expect(
+        (wrapper.find("[data-testid='mb-btn-screenshot']").element as HTMLButtonElement)
+          .disabled
+      ).toBe(true)
+    );
+    expect(
+      wrapper.find("[data-testid='mb-session-screenshot']").exists()
+    ).toBe(false);
   });
 });

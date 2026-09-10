@@ -1271,6 +1271,7 @@ export default {
     uploadfilemsg_content:
       "Bitte exportieren Sie die Cookies aus Ihrem Browser und laden Sie die Cookie-Datei manuell hoch",
     upload_cookies_button: "Cookies hochladen (Netscape .txt)",
+    open_managed_browser: "Verwalteten Browser öffnen",
     upload_cookies_cancel: "Cookie-Upload abgebrochen",
     handleCookiesfileSuccess: "Cookie-Datei erfolgreich verarbeitet",
     handleCookiesfileFailure: "Cookie-Datei-Verarbeitung fehlgeschlagen",
@@ -3579,6 +3580,10 @@ export default {
     platform_fallback: "Sozial",
     unknown_account: "Unbekanntes Konto",
     proxy_active: "Proxy",
+    screenshot: {
+        capture: "Miniatur aktualisieren",
+        alt: "Neuester Browser-Screenshot",
+      },
     start: {
       title: "Verwalteten Browser starten",
       empty: "Noch keine geeigneten Konten. Fügen Sie zuerst ein Konto mit gespeicherter Anmeldung hinzu.",

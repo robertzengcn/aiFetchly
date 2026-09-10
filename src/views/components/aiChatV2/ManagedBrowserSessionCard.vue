@@ -143,6 +143,25 @@
       </li>
     </ul>
 
+    <div v-if="screenshotUrl" class="mb-session-card__shot">
+      <img
+        :src="screenshotUrl"
+        :alt="t('managedBrowser.screenshot.alt')"
+        data-testid="mb-session-screenshot"
+      />
+    </div>
+    <div class="mb-session-card__controls mb-session-card__controls--secondary">
+      <v-btn
+        size="x-small"
+        variant="text"
+        data-testid="mb-btn-screenshot"
+        :disabled="busy || screenshotDenied"
+        @click="onCaptureScreenshot"
+      >
+        {{ t("managedBrowser.screenshot.capture") }}
+      </v-btn>
+    </div>
+
     <v-dialog
       :model-value="approvalRequest !== null"
       max-width="440"
@@ -252,6 +271,45 @@ let unsubscribeNotices: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 let unsubscribeApprovals: (() => void) | null = null;
 let elapsedTicker: ReturnType<typeof setInterval> | null = null;
+/** Ephemeral latest screenshot (object URL, revoked on replace/exit). */
+const screenshotUrl = ref<string | null>(null);
+const screenshotDenied = ref(false);
+let screenshotObjectUrl: string | null = null;
+
+function clearScreenshot(): void {
+  if (screenshotObjectUrl) {
+    URL.revokeObjectURL(screenshotObjectUrl);
+    screenshotObjectUrl = null;
+  }
+  screenshotUrl.value = null;
+}
+
+async function onCaptureScreenshot(): Promise<void> {
+  const current = status.value;
+  if (!current) {
+    return;
+  }
+  await run(async () => {
+    const { captureSessionScreenshot } = await import(
+      "@/views/api/managedBrowser"
+    );
+    const shot = await captureSessionScreenshot({
+      session_id: current.sessionId,
+    });
+    clearScreenshot();
+    const blob = new Blob(
+      [Uint8Array.from(atob(shot.base64), (c) => c.charCodeAt(0))],
+      { type: shot.mimeType }
+    );
+    screenshotObjectUrl = URL.createObjectURL(blob);
+    screenshotUrl.value = screenshotObjectUrl;
+    screenshotDenied.value = false;
+  }).catch(() => {
+    // Sensitive states (handoff/login/challenge) deny capture — hide the
+    // control until the session leaves them.
+    screenshotDenied.value = true;
+  });
+}
 
 const stateIsHandoffLike = computed(() => {
   const state = status.value?.state;
@@ -302,6 +360,7 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
     approvalRequest.value = null;
     progressLine.value = null;
     firstSeenAt.value = null;
+    clearScreenshot();
     return;
   }
   status.value = next;
@@ -309,6 +368,11 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   handoffDialogOpen.value = stateIsHandoffLike.value || handoffDialogOpen.value;
   if (!stateIsHandoffLike.value) {
     handoffDialogOpen.value = false;
+  } else {
+    // Nothing identifiable stays visible while the user handles a login
+    // or challenge — the thumbnail is cleared entering sensitive states.
+    clearScreenshot();
+    screenshotDenied.value = true;
   }
 }
 
@@ -510,6 +574,7 @@ onBeforeUnmount(() => {
     clearInterval(elapsedTicker);
     elapsedTicker = null;
   }
+  clearScreenshot();
 });
 </script>
 
@@ -640,6 +705,18 @@ onBeforeUnmount(() => {
 }
 .mb-session-card__notice--error {
   color: #c62828;
+}
+
+.mb-session-card__shot img {
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--v-border-opacity, 0.12));
+  display: block;
+}
+
+.mb-session-card__controls--secondary {
+  justify-content: flex-end;
 }
 
 .mb-session-card__controls {

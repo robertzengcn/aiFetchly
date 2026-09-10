@@ -1275,6 +1275,7 @@ export default {
     uploadfilemsg_content:
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Upload cookies (Netscape .txt)",
+    open_managed_browser: "Open managed browser",
     upload_cookies_cancel: "Upload cookies cancelled",
     handleCookiesfileSuccess: "handle cookies file success",
     handleCookiesfileFailure: "handle cookies file failure",
@@ -3549,6 +3550,10 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Unknown account",
     proxy_active: "Proxy",
+    screenshot: {
+        capture: "Refresh thumbnail",
+        alt: "Latest browser screenshot",
+      },
     start: {
       title: "Start managed browser",
       empty: "No eligible social accounts yet. Add an account with a saved login first.",

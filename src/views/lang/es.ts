@@ -1277,6 +1277,7 @@ export default {
     uploadfilemsg_content:
       "Por favor exporte las cookies de su navegador y suba el archivo de cookies manualmente",
     upload_cookies_button: "Subir cookies (Netscape .txt)",
+    open_managed_browser: "Abrir navegador gestionado",
     upload_cookies_cancel: "Subida de cookies cancelada",
     handleCookiesfileSuccess: "Archivo de cookies procesado correctamente",
     handleCookiesfileFailure: "Error al procesar archivo de cookies",
@@ -3581,6 +3582,10 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Cuenta desconocida",
     proxy_active: "Proxy",
+    screenshot: {
+        capture: "Actualizar miniatura",
+        alt: "Última captura del navegador",
+      },
     start: {
       title: "Iniciar navegador gestionado",
       empty: "Aún no hay cuentas elegibles. Añade una cuenta con sesión guardada primero.",

@@ -944,6 +944,34 @@ export class ManagedBrowserModule {
     };
   }
 
+  /**
+   * Renderer-facing screenshot capture (TODO-MSB-003/015): returns the
+   * image for the EPHEMERAL latest-thumbnail view only. Denied in
+   * sensitive handoff/login states (nothing identifiable leaves the page
+   * while the user is entering credentials) and while a challenge is
+   * unresolved.
+   */
+  public async captureSessionScreenshot(
+    sessionId: string
+  ): Promise<{ mimeType: string; base64: string }> {
+    const record = this.requireSession(sessionId);
+    const sensitive = new Set([
+      "handoff",
+      "user_login_in_progress",
+      "verifying_manual_login",
+      "login_required",
+      "challenge_detected",
+      "challenge_resolving",
+    ]);
+    if (sensitive.has(record.state)) {
+      throw new ManagedBrowserError(
+        "action_not_allowed",
+        "screenshot_disabled_in_sensitive_state"
+      );
+    }
+    return this.captureScreenshot(sessionId);
+  }
+
   public async captureScreenshot(
     sessionId: string
   ): Promise<{ mimeType: string; base64: string }> {

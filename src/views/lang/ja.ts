@@ -1252,6 +1252,7 @@ export default {
     uploadfilemsg_content:
       "ブラウザからCookieをエクスポートし、Cookieファイルを手動でアップロードしてください",
     upload_cookies_button: "Cookieをアップロード (Netscape .txt)",
+    open_managed_browser: "管理ブラウザを開く",
     upload_cookies_cancel: "Cookieのアップロードがキャンセルされました",
     handleCookiesfileSuccess: "Cookieファイル処理成功",
     handleCookiesfileFailure: "Cookieファイル処理失敗",
@@ -3517,6 +3518,10 @@ export default {
     platform_fallback: "ソーシャル",
     unknown_account: "不明なアカウント",
     proxy_active: "プロキシ",
+    screenshot: {
+        capture: "サムネイルを更新",
+        alt: "最新のブラウザのスクリーンショット",
+      },
     start: {
       title: "管理ブラウザを起動",
       empty: "利用できるアカウントがまだありません。保存済みログインのアカウントを先に追加してください。",

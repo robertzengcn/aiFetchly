@@ -1264,6 +1264,7 @@ export default {
     uploadfilemsg_content:
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Importer les cookies (Netscape .txt)",
+    open_managed_browser: "Ouvrir le navigateur géré",
     upload_cookies_cancel: "Importation des cookies annulée",
     handleCookiesfileSuccess: "handle cookies file success",
     handleCookiesfileFailure: "handle cookies file failure",
@@ -3566,6 +3567,10 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Compte inconnu",
     proxy_active: "Proxy",
+    screenshot: {
+        capture: "Actualiser la miniature",
+        alt: "Dernière capture du navigateur",
+      },
     start: {
       title: "Démarrer le navigateur géré",
       empty: "Aucun compte éligible pour l'instant. Ajoutez d'abord un compte avec une session enregistrée.",
