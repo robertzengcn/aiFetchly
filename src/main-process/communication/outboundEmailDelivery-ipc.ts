@@ -27,7 +27,11 @@ import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model";
 import { OutboundEmailPreflightService } from "@/service/outboundEmail/OutboundEmailPreflightService";
 import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
-import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type {
+  BatchEnvelopeEntry,
+  BatchEnvelopeEntryV2,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import { resolveOutboundIdentity } from "@/service/outboundEmail/resolveOutboundSender";
 import type { AuthorizedEmailWorkerEvent } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
@@ -147,21 +151,37 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       if (!draft) {
         throw new Error("draft_not_found");
       }
-      const envelope: BatchEnvelopeEntry = {
-        version: 1,
+      // Resolve the full effective identity for the service so the new
+      // revision carries a complete v2 envelope snapshot (§6.4). The renderer
+      // only sends the From address; smtpUsername/replyTo come from the
+      // service row via the resolver.
+      const identity = await resolveOutboundIdentity({
+        dbpath,
+        preferredServiceId: input.emailServiceId,
+        serviceIds: [input.emailServiceId],
+      });
+      const smtpUsername = identity?.smtpUsername ?? input.senderAddress;
+      const replyToAddress = identity?.replyToAddress ?? null;
+      const envelope: BatchEnvelopeEntryV2 = {
+        version: 2,
         draftId: draft.id,
         emailServiceId: input.emailServiceId,
+        smtpUsername,
         senderAddress: input.senderAddress,
+        replyToAddress,
         recipientAddress: draft.recipientAddress,
         subject: input.subject,
         bodyText: input.bodyText,
         bodyHtml: input.bodyHtml,
       };
-      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelopeV2(envelope);
       const revision = await draftModel.appendRevision({
         draftId: draft.id,
         actor: "user",
         emailServiceId: input.emailServiceId,
+        envelopeVersion: 2,
+        smtpUsername,
+        replyToAddress,
         senderAddress: input.senderAddress,
         recipientAddress: draft.recipientAddress,
         subject: input.subject,
@@ -170,25 +190,12 @@ export function registerOutboundEmailDeliveryIpcHandlers(
         contentHash,
       });
 
-      // Recompute the batch hash over every current revision and persist it.
-      const allDrafts = await draftModel.listDraftsByBatch(draft.batchId);
-      const envelopes: BatchEnvelopeEntry[] = [];
-      for (const d of allDrafts) {
-        const rev = await draftModel.readCurrentRevision(d.id);
-        if (!rev) continue;
-        envelopes.push({
-          version: 1,
-          draftId: d.id,
-          emailServiceId: rev.emailServiceId,
-          senderAddress: rev.senderAddress,
-          recipientAddress: rev.recipientAddress,
-          subject: rev.subject,
-          bodyText: rev.bodyText,
-          bodyHtml: rev.bodyHtml,
-        });
-      }
-      const batchHash = OutboundEmailEnvelopeHasher.hashBatch(envelopes);
-      await draftModel.updateBatchHash(draft.batchId, batchHash);
+      // Recompute the batch hash over every current revision (version-aware)
+      // and persist it via the draft service, which mirrors the partitioning
+      // logic used at generation time (v2 hash for all-v2 batches).
+      const batchHash = await new OutboundEmailDraftService(
+        dbpath
+      ).recomputeBatchHash(draft.batchId);
 
       // §13.3 — any envelope change invalidates the active authorization and
       // returns the batch to draft_ready.
@@ -227,10 +234,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       // Defense-in-depth: the caller's reviewed hash must match the persisted
       // batch hash before we authorize. After sender hydration the hash
       // changes; accept the pre-fill hash the dialog loaded as well.
-      if (
-        currentHash !== input.batchHash &&
-        originalHash !== input.batchHash
-      ) {
+      if (currentHash !== input.batchHash && originalHash !== input.batchHash) {
         throw new Error("batch_hash_mismatch");
       }
 
@@ -239,18 +243,36 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       const entries = await Promise.all(
         drafts.map(async (draft) => {
           const revision = await draftModel.readCurrentRevision(draft.id);
-          const envelope: BatchEnvelopeEntry | null = revision
-            ? {
-                version: 1,
-                draftId: draft.id,
-                emailServiceId: revision.emailServiceId,
-                senderAddress: revision.senderAddress,
-                recipientAddress: revision.recipientAddress,
-                subject: revision.subject,
-                bodyText: revision.bodyText,
-                bodyHtml: revision.bodyHtml,
-              }
-            : null;
+          // Version-aware envelope reconstruction (§17.3): v2 revisions carry
+          // smtpUsername + replyToAddress bound into the hash; v1 revisions
+          // use the legacy shape. Preflight recomputes the hash for the
+          // matching version and rejects a mismatch (§12.13).
+          const envelope: BatchEnvelopeEntry | BatchEnvelopeEntryV2 | null =
+            revision
+              ? (revision.envelopeVersion ?? 1) === 2
+                ? {
+                    version: 2,
+                    draftId: draft.id,
+                    emailServiceId: revision.emailServiceId,
+                    smtpUsername: revision.smtpUsername ?? "",
+                    senderAddress: revision.senderAddress,
+                    replyToAddress: revision.replyToAddress,
+                    recipientAddress: revision.recipientAddress,
+                    subject: revision.subject,
+                    bodyText: revision.bodyText,
+                    bodyHtml: revision.bodyHtml,
+                  }
+                : {
+                    version: 1,
+                    draftId: draft.id,
+                    emailServiceId: revision.emailServiceId,
+                    senderAddress: revision.senderAddress,
+                    recipientAddress: revision.recipientAddress,
+                    subject: revision.subject,
+                    bodyText: revision.bodyText,
+                    bodyHtml: revision.bodyHtml,
+                  }
+              : null;
           return {
             view: { draft, revision },
             envelope,

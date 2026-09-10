@@ -418,7 +418,7 @@ export class OutboundEmailDraftService {
     });
   }
 
-  private async recomputeBatchHash(batchId: number): Promise<string | null> {
+  async recomputeBatchHash(batchId: number): Promise<string | null> {
     const drafts = await this.draftModel.listDraftsByBatch(batchId);
     const v1Envelopes: BatchEnvelopeEntry[] = [];
     const v2Envelopes: BatchEnvelopeEntryV2[] = [];
