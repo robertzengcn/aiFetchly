@@ -92,6 +92,34 @@ export interface EmailReplyApprovalEnvelope {
   readonly validationVersion: string;
 }
 
+/**
+ * Version-2 reply approval envelope (§18.1). Adds a leading `version: 2`
+ * field and binds the resolved service identity (`smtpUsername`,
+ * `replyToAddress`) so that any change to the SMTP login or Reply-To
+ * invalidates approval. The v1 {@link EmailReplyApprovalEnvelope} is kept
+ * unchanged so legacy revisions remain byte-identical.
+ *
+ * Field order matches the v2 canonicalizer in
+ * {@link canonicalizeApprovalEnvelopeV2}: smtpUsername and replyToAddress
+ * appear BEFORE recipient so the hash covers the full delivery identity.
+ */
+export interface EmailReplyApprovalEnvelopeV2 {
+  readonly version: 2;
+  readonly draftId: number;
+  readonly revisionId: number;
+  readonly emailServiceId: number;
+  readonly originalMessageId: number;
+  readonly smtpUsername: string;
+  readonly senderAddress: string;
+  readonly replyToAddress: string | null;
+  readonly recipientAddress: string;
+  readonly subject: string;
+  readonly bodyText: string;
+  readonly bodyHtml: string | null;
+  readonly policyVersion: string;
+  readonly validationVersion: string;
+}
+
 /** Input to {@link EmailReplyPolicyOrchestrator.evaluate}. */
 export interface EvaluateReplyPolicyInput {
   readonly stage: EmailReplyPolicyStage;

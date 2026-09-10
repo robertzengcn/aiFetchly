@@ -247,6 +247,9 @@ export class EmailReplyDraftModel extends BaseDb {
       revisionEntity.senderAddress = input.senderAddress;
       revisionEntity.recipientAddress = input.recipientAddress;
       revisionEntity.contentHash = input.contentHash;
+      revisionEntity.envelopeVersion = input.envelopeVersion ?? 1;
+      revisionEntity.smtpUsername = input.smtpUsername ?? null;
+      revisionEntity.replyToAddress = input.replyToAddress ?? null;
       revisionEntity.generationMetadataJson =
         input.generationMetadataJson ?? null;
       revisionEntity.validationFindingsJson =
@@ -707,6 +710,22 @@ export interface AppendRevisionInput {
   validationVersion?: string | null;
   /** Optional clock for deterministic tests. */
   at?: Date;
+  /**
+   * Envelope schema version (§18.1). Defaults to 1 (legacy) when omitted so
+   * existing callers stay on the v1 hash path. Set to 2 for revisions that
+   * bind the resolved service identity.
+   */
+  envelopeVersion?: 1 | 2;
+  /**
+   * Effective SMTP login username frozen on this revision (§18.1). Null for v1
+   * revisions; populated for v2 revisions by the materializer.
+   */
+  smtpUsername?: string | null;
+  /**
+   * Effective Reply-To frozen on this revision (§18.1). Null for v1 revisions
+   * and for v2 revisions where the service has no configured Reply-To.
+   */
+  replyToAddress?: string | null;
 }
 
 export interface ClaimSendInput {
