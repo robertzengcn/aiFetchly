@@ -290,6 +290,11 @@ export const authorizedOutboundEnvelopeV3Schema = z.object({
   envelopeHash: z.string().length(64),
 });
 
+/** v3 envelope carrying v2 identity (smtpUsername + replyToAddress). */
+export type AuthorizedOutboundEnvelopeV3 = z.infer<
+  typeof authorizedOutboundEnvelopeV3Schema
+>;
+
 export const authorizedEmailWorkerPayloadV3Schema = z.object({
   version: z.literal(3),
   mode: z.literal("authorized_envelopes"),

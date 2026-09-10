@@ -9,14 +9,27 @@ import {
   EmailServiceEntitydata,
   EmailRequestData,
 } from "@/entityTypes/emailmarketingType";
-import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
-import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import {
+  OutboundEmailEnvelopeHasher,
+  normalizeEmailAddressV2,
+  normalizeSmtpUsernameForHash,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type {
+  BatchEnvelopeEntry,
+  BatchEnvelopeEntryV2,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { OUTBOUND_EMAIL_BATCH_LIMITS } from "@/service/outboundEmail/outboundEmailLimits";
-import { authorizedEmailWorkerPayloadV2Schema } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
+import {
+  authorizedEmailWorkerPayloadV2Schema,
+  authorizedEmailWorkerPayloadV3Schema,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
 import type {
   AuthorizedEmailWorkerEvent,
   AuthorizedEmailWorkerPayloadV2,
+  AuthorizedEmailWorkerPayloadV3,
   AuthorizedOutboundEnvelope,
+  AuthorizedOutboundEnvelopeV3,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +43,7 @@ import type {
  */
 export interface AuthorizedSmtpMail {
   readonly from: string;
+  readonly replyTo: string | null;
   readonly to: string;
   readonly subject: string;
   readonly text: string;
@@ -80,42 +94,22 @@ const workerEmailServiceSchema = z.object({
 });
 
 /**
- * Patterns that prove the server NEVER accepted the message, so a retry is a
- * definite pre-acceptance rejection and safe ("safe"). Mirrors
- * `EmailSubmissionClassifier` (FR-019): only known pre-acceptance failures are
- * definite; everything else is ambiguous/`unknown`.
+ * §16.2 — version-3 worker service schema. Carries the effective SMTP username
+ * (non-null, used for authentication) and normalized Reply-To alongside the
+ * legacy credential fields. The worker validates each envelope identity against
+ * its referenced service row before creating a transporter.
  */
-const DEFINITE_REJECTION_PATTERNS: readonly RegExp[] = [
-  /EAUTH/i,
-  /Invalid login/i,
-  /authentication/i,
-  /Username and Password not accepted/i,
-  /EENVELOPE/i,
-  /Recipient address rejected/i,
-  /Sender address rejected/i,
-  /Relay access denied/i,
-  /User unknown/i,
-  /no mailbox/i,
-  /ECONNREFUSED/i,
-  /connection refused/i,
-  /ENOTFOUND/i,
-  /getaddrinfo/i,
-  /EHOSTUNREACH/i,
-  /certificate/i,
-  /self-signed/i,
-  /UNABLE_TO_VERIFY/i,
-  /self.signed certificate/i,
-  /Recipients rejected/i,
-];
-
-function classifySmtpError(message: string): "safe" | "unknown" {
-  // Default-safe: only a known pre-acceptance rejection is `safe` to retry;
-  // an ambiguous (timeout, mid-transfer drop) or unrecognized error falls
-  // through to `unknown` so `delivery_unknown` is never auto-retried (FR-019).
-  return DEFINITE_REJECTION_PATTERNS.some((p) => p.test(message))
-    ? "safe"
-    : "unknown";
-}
+const workerEmailServiceV3Schema = z.object({
+  id: z.number().int(),
+  smtpUsername: z.string().min(1).max(255),
+  from: z.string().min(1).max(255),
+  replyTo: z.string().max(320).nullable(),
+  password: z.string().min(1),
+  host: z.string().min(1),
+  port: z.string(),
+  name: z.string(),
+  ssl: z.number(),
+});
 
 /** Build a real nodemailer-backed sender for a service record. */
 function defaultSenderFactory(
@@ -130,6 +124,7 @@ function defaultSenderFactory(
         subject: mail.subject,
         text: mail.text,
         ...(mail.html === null ? {} : { html: mail.html }),
+        ...(mail.replyTo === null ? {} : { replyTo: mail.replyTo }),
       });
       const messageId =
         typeof info?.messageId === "string" ? info.messageId : null;
@@ -181,6 +176,24 @@ export class EmailSend {
    * decisions.
    */
   public async sendAuthorizedEnvelopes(
+    payload: AuthorizedEmailWorkerPayloadV2 | AuthorizedEmailWorkerPayloadV3,
+    eventCallback: (event: AuthorizedEmailWorkerEvent) => void
+  ): Promise<void> {
+    // §16.1 — discriminate on payload version. v3 carries v2 identity
+    // (smtpUsername + replyToAddress); v2 is the legacy all-v1 path.
+    if (payload.version === 3) {
+      await this.sendAuthorizedEnvelopesV3(payload, eventCallback);
+      return;
+    }
+    await this.sendAuthorizedEnvelopesV2(payload, eventCallback);
+  }
+
+  /**
+   * v2 (legacy) authorized-envelope send path (§16.2). Validates the v2 payload,
+   * recomputes v1 envelope + batch hashes, and submits each envelope to its
+   * exact assigned service. Unchanged from the original implementation.
+   */
+  private async sendAuthorizedEnvelopesV2(
     payload: AuthorizedEmailWorkerPayloadV2,
     eventCallback: (event: AuthorizedEmailWorkerEvent) => void
   ): Promise<void> {
@@ -465,6 +478,242 @@ export class EmailSend {
   }
 
   /**
+   * v3 authorized-envelope send path (§16.4). Carries v2 identity: each
+   * envelope binds smtpUsername + replyToAddress into its hash. The worker
+   * validates the v3 payload, narrows service rows via the v3 schema, compares
+   * every envelope identity to its referenced service row (§16.4 step 5),
+   * recomputes v2 envelope + batch hashes, and only then submits. A mismatch
+   * at any gate aborts the whole batch before SMTP.
+   */
+  private async sendAuthorizedEnvelopesV3(
+    payload: AuthorizedEmailWorkerPayloadV3,
+    eventCallback: (event: AuthorizedEmailWorkerEvent) => void
+  ): Promise<void> {
+    const emit = (e: AuthorizedEmailWorkerEvent): void => {
+      eventCallback(e);
+    };
+    const failAll = (
+      errorCode: string,
+      retrySafety: "safe" | "unknown" = "safe"
+    ): void => {
+      for (const env of payload.envelopes) {
+        emit({
+          type: "authorized-email-failed",
+          batchId: payload.batchId,
+          sendAttemptId: payload.sendAttemptId,
+          draftId: env.draftId,
+          revisionId: env.revisionId,
+          envelopeHash: env.envelopeHash,
+          errorCode,
+          retrySafety,
+        });
+      }
+      emit({
+        type: "authorized-email-worker-complete",
+        batchId: payload.batchId,
+        sendAttemptId: payload.sendAttemptId,
+      });
+    };
+
+    // §16.4 step 1 — validate the v3 payload with the shared schema.
+    const parsedPayload = authorizedEmailWorkerPayloadV3Schema.safeParse({
+      ...payload,
+      emailServices: payload.emailServices,
+    });
+    if (!parsedPayload.success) {
+      failAll("worker_payload_invalid");
+      return;
+    }
+
+    const batchId = parsedPayload.data.batchId;
+    const sendAttemptId = parsedPayload.data.sendAttemptId;
+    const envelopes = parsedPayload.data.envelopes;
+
+    // §16.4 step 4 — size + body caps (defense-in-depth; main process preflighted).
+    if (envelopes.length > OUTBOUND_EMAIL_BATCH_LIMITS.maxRecipients) {
+      failAll("worker_batch_too_large");
+      return;
+    }
+    for (const env of envelopes) {
+      if (env.bodyText.length > OUTBOUND_EMAIL_BATCH_LIMITS.maxTextBodyChars) {
+        failAll("worker_body_too_large");
+        return;
+      }
+      if (
+        env.bodyHtml !== null &&
+        env.bodyHtml.length > OUTBOUND_EMAIL_BATCH_LIMITS.maxHtmlBodyChars
+      ) {
+        failAll("worker_body_too_large");
+        return;
+      }
+    }
+
+    // §16.4 steps 2+3 — build a v3 service map; reject missing or duplicate
+    // records. Each row is narrowed with workerEmailServiceV3Schema (carries
+    // smtpUsername + replyTo) before it is trusted.
+    const serviceMap = new Map<number, EmailServiceEntitydata>();
+    const duplicateServiceIds: number[] = [];
+    for (const raw of payload.emailServices) {
+      const parsed = workerEmailServiceV3Schema.safeParse(raw);
+      if (!parsed.success) {
+        continue;
+      }
+      const svcId = parsed.data.id;
+      const svc = parsed.data as EmailServiceEntitydata;
+      if (serviceMap.has(svcId)) {
+        duplicateServiceIds.push(svcId);
+        continue;
+      }
+      serviceMap.set(svcId, svc);
+    }
+
+    // §16.4 step 5 — compare each envelope identity to its referenced service
+    // row using the EXACT normalization the hash uses (byte-identical). smtp
+    // username: trim-only; senderAddress + replyTo: trim + lowercase domain
+    // (preserve local part); replyToAddress: match including null. A mismatch
+    // is a tamper signal — abort the whole batch before SMTP.
+    let identityMismatch = false;
+    for (const env of envelopes) {
+      const svc = serviceMap.get(env.emailServiceId);
+      if (!svc) {
+        identityMismatch = true;
+        continue;
+      }
+      const svcSmtp = normalizeSmtpUsernameForHash(
+        svc.smtpUsername ?? svc.from ?? ""
+      );
+      const envSmtp = normalizeSmtpUsernameForHash(env.smtpUsername);
+      if (svcSmtp !== envSmtp) {
+        identityMismatch = true;
+        continue;
+      }
+      const svcFrom = normalizeEmailAddressV2(svc.from ?? "");
+      const envFrom = normalizeEmailAddressV2(env.senderAddress);
+      if (svcFrom !== envFrom) {
+        identityMismatch = true;
+        continue;
+      }
+      const svcReplyTo =
+        svc.replyTo === null || svc.replyTo === undefined
+          ? null
+          : normalizeEmailAddressV2(svc.replyTo);
+      const envReplyTo =
+        env.replyToAddress === null
+          ? null
+          : normalizeEmailAddressV2(env.replyToAddress);
+      if (svcReplyTo !== envReplyTo) {
+        identityMismatch = true;
+        continue;
+      }
+    }
+    if (identityMismatch) {
+      failAll("worker_identity_mismatch");
+      return;
+    }
+
+    // §16.4 step 6+7 — recompute every v2 envelope hash + the v2 batch hash.
+    let hashMismatch = false;
+    const batchEntries: BatchEnvelopeEntryV2[] = [];
+    for (const env of envelopes) {
+      const entry: BatchEnvelopeEntryV2 = {
+        version: 2,
+        draftId: env.draftId,
+        emailServiceId: env.emailServiceId,
+        smtpUsername: env.smtpUsername,
+        senderAddress: env.senderAddress,
+        replyToAddress: env.replyToAddress,
+        recipientAddress: env.recipientAddress,
+        subject: env.subject,
+        bodyText: env.bodyText,
+        bodyHtml: env.bodyHtml,
+      };
+      const recomputed = OutboundEmailEnvelopeHasher.hashEnvelopeV2(entry);
+      if (recomputed !== env.envelopeHash) {
+        hashMismatch = true;
+      }
+      batchEntries.push(entry);
+    }
+    const recomputedBatchHash =
+      OutboundEmailEnvelopeHasher.hashBatchV2(batchEntries);
+    if (recomputedBatchHash !== parsedPayload.data.batchHash) {
+      hashMismatch = true;
+    }
+    if (hashMismatch) {
+      failAll("worker_payload_hash_mismatch");
+      return;
+    }
+
+    // §16.4 step 3 — duplicate service records are a tamper signal.
+    if (duplicateServiceIds.length > 0) {
+      failAll("worker_service_duplicate");
+      return;
+    }
+
+    // §16.4 step 9 — build one sender per referenced service. Missing services
+    // abort the batch.
+    const senders = new Map<number, AuthorizedSmtpSender>();
+    const referencedIds = new Set(envelopes.map((e) => e.emailServiceId));
+    let missingService = false;
+    for (const id of referencedIds) {
+      const svc = serviceMap.get(id);
+      if (!svc) {
+        missingService = true;
+        continue;
+      }
+      senders.set(id, this.senderFactory(svc));
+    }
+    if (missingService) {
+      failAll("worker_service_missing");
+      return;
+    }
+
+    // §16.4 steps 10–11 — submit exact envelopes with concurrency limit.
+    const outcomes = await this.submitEnvelopesV3(
+      envelopes,
+      senders,
+      serviceMap
+    );
+
+    for (const outcome of outcomes) {
+      if (outcome.kind === "submitted") {
+        emit({
+          type: "authorized-email-submitted",
+          batchId,
+          sendAttemptId,
+          draftId: outcome.draftId,
+          revisionId: outcome.revisionId,
+          envelopeHash: outcome.envelopeHash,
+          providerMessageId: outcome.providerMessageId,
+        });
+      } else {
+        emit({
+          type: "authorized-email-failed",
+          batchId,
+          sendAttemptId,
+          draftId: outcome.draftId,
+          revisionId: outcome.revisionId,
+          envelopeHash: outcome.envelopeHash,
+          errorCode: outcome.errorCode,
+          retrySafety: outcome.retrySafety,
+        });
+      }
+    }
+
+    // Release transport objects and zero credential references (§16.4 step 11).
+    for (const sender of senders.values()) {
+      sender.close();
+    }
+    senders.clear();
+    serviceMap.clear();
+
+    emit({
+      type: "authorized-email-worker-complete",
+      batchId,
+      sendAttemptId,
+    });
+  }
+
+  /**
    * Submit envelopes with concurrency capped at {@link SMTP_CONCURRENCY}.
    * Returns one typed outcome per envelope, preserving input order. Sender
    * selection is deterministic — by envelope.emailServiceId, never random.
@@ -493,6 +742,102 @@ export class EmailSend {
     }
     await Promise.all(pool);
     return results;
+  }
+
+  /**
+   * v3 submit path (§16.4 steps 10–11). Same concurrency model as
+   * {@link submitEnvelopes} but operates on v3 envelopes carrying v2 identity.
+   * Each envelope's `replyToAddress` flows into the SMTP `Reply-To` header.
+   */
+  private async submitEnvelopesV3(
+    envelopes: readonly AuthorizedOutboundEnvelopeV3[],
+    senders: Map<number, AuthorizedSmtpSender>,
+    serviceMap: Map<number, EmailServiceEntitydata>
+  ): Promise<EnvelopeOutcome[]> {
+    const results: EnvelopeOutcome[] = new Array(envelopes.length);
+    let cursor = 0;
+    const next = (): number => cursor++;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next();
+        if (i >= envelopes.length) {
+          return;
+        }
+        const env = envelopes[i];
+        results[i] = await this.submitOneV3(env, senders, serviceMap);
+      }
+    };
+    const pool: Promise<void>[] = [];
+    for (let w = 0; w < SMTP_CONCURRENCY; w++) {
+      pool.push(worker());
+    }
+    await Promise.all(pool);
+    return results;
+  }
+
+  /**
+   * §16.4 step 10 — submit one v3 envelope. The From header is the frozen
+   * authorized `senderAddress` (AD-005); the Reply-To header is the envelope's
+   * `replyToAddress` (null → omitted, so the provider falls back to From).
+   * Failures are classified via the production SMTP classifier (§19.2): a
+   * known pre-acceptance rejection → `safe`; everything else → `unknown`
+   * (fail-closed: never auto-retry ambiguous errors).
+   */
+  private async submitOneV3(
+    env: AuthorizedOutboundEnvelopeV3,
+    senders: Map<number, AuthorizedSmtpSender>,
+    serviceMap: Map<number, EmailServiceEntitydata>
+  ): Promise<EnvelopeOutcome> {
+    const sender = senders.get(env.emailServiceId);
+    const service = serviceMap.get(env.emailServiceId);
+    if (!sender || !service) {
+      return {
+        kind: "failed",
+        draftId: env.draftId,
+        revisionId: env.revisionId,
+        envelopeHash: env.envelopeHash,
+        errorCode: "worker_service_missing",
+        retrySafety: "safe",
+      };
+    }
+    if (!env.senderAddress || env.senderAddress.trim().length === 0) {
+      return {
+        kind: "failed",
+        draftId: env.draftId,
+        revisionId: env.revisionId,
+        envelopeHash: env.envelopeHash,
+        errorCode: "worker_sender_missing",
+        retrySafety: "safe",
+      };
+    }
+    const mail: AuthorizedSmtpMail = {
+      from: env.senderAddress,
+      replyTo: env.replyToAddress,
+      to: env.recipientAddress,
+      subject: env.subject,
+      text: env.bodyText,
+      html: env.bodyHtml,
+    };
+    try {
+      const result = await sender.send(mail);
+      return {
+        kind: "submitted",
+        draftId: env.draftId,
+        revisionId: env.revisionId,
+        envelopeHash: env.envelopeHash,
+        providerMessageId: result.messageId,
+      };
+    } catch (error: unknown) {
+      const classified = classifySmtpFailure(error);
+      return {
+        kind: "failed",
+        draftId: env.draftId,
+        revisionId: env.revisionId,
+        envelopeHash: env.envelopeHash,
+        errorCode: classified.code,
+        retrySafety: classified.retrySafety,
+      };
+    }
   }
 
   /** Submit one envelope to its exact assigned service; classify any failure. */
@@ -534,6 +879,8 @@ export class EmailSend {
     }
     const mail: AuthorizedSmtpMail = {
       from: env.senderAddress,
+      // v1 envelopes carry no Reply-To — null omits the header (§16.3).
+      replyTo: null,
       to: env.recipientAddress,
       subject: env.subject,
       text: env.bodyText,
@@ -549,14 +896,14 @@ export class EmailSend {
         providerMessageId: result.messageId,
       };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const classified = classifySmtpFailure(error);
       return {
         kind: "failed",
         draftId: env.draftId,
         revisionId: env.revisionId,
         envelopeHash: env.envelopeHash,
-        errorCode: "smtp_rejected",
-        retrySafety: classifySmtpError(message),
+        errorCode: classified.code,
+        retrySafety: classified.retrySafety,
       };
     }
   }

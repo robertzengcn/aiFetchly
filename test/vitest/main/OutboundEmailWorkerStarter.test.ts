@@ -1,17 +1,24 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { OutboundEmailWorkerStarter } from "@/service/outboundEmail/OutboundEmailWorkerStarter";
 import { OutboundEmailDeliveryService } from "@/service/outboundEmail/OutboundEmailDeliveryService";
+import type { ClaimResult } from "@/service/outboundEmail/OutboundEmailDeliveryService";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model";
 import { SqliteDb } from "@/config/SqliteDb";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
-import type { AuthorizedEmailWorkerPayloadV2 } from "@/entityTypes/outboundEmailDeliveryTypes";
+import type { AuthorizedEmailWorkerPayloadV3 } from "@/entityTypes/outboundEmailDeliveryTypes";
 import type { EmailServiceEntity } from "@/entity/EmailService.entity";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+
+/** Narrow a ClaimResult to its attemptId-carrying statuses. */
+function attemptIdOf(claim: ClaimResult): number {
+  if ("attemptId" in claim) return claim.attemptId;
+  throw new Error(`expected claim to carry an attemptId, got ${claim.status}`);
+}
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-outbound-starter");
 
@@ -34,6 +41,35 @@ beforeEach(() => {
 
 function recipients(): EmailItem[] {
   return [{ address: "a@example.com", title: "A", source: "direct" }];
+}
+
+/**
+ * Seed an email-service row with id=1 whose resolved identity matches what
+ * `generateBatch` freezes into the revision (from=sender@example.com,
+ * smtpUsername=null→resolves to from, replyTo=null). The §15.5 identity-reload
+ * gate reads this row at claim time; without it, `readIdentity(1)` returns
+ * null and the claim aborts with `sender_identity_changed`.
+ */
+async function seedEmailService(overrides?: {
+  from?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
+}): Promise<void> {
+  const { EmailServiceModel } = await import("@/model/EmailService.model");
+  const { EmailServiceEntity } = await import("@/entity/EmailService.entity");
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.id = 1;
+  entity.name = "Primary";
+  entity.from = overrides?.from ?? "sender@example.com";
+  entity.smtpUsername = overrides?.smtpUsername ?? null;
+  entity.replyTo = overrides?.replyTo ?? null;
+  entity.password = "secret";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  await model.create(entity);
 }
 
 /** Describes a fake utility-process child the starter can "fork". */
@@ -106,6 +142,7 @@ async function seedAndClaim(starter: OutboundEmailWorkerStarter): Promise<{
 }> {
   SqliteDb.getInstance(tmpDir);
   await SqliteDb.ensureInitialized();
+  await seedEmailService();
 
   const draftService = new OutboundEmailDraftService(tmpDir, {
     aiEnabledOverride: true,
@@ -171,14 +208,14 @@ async function seedAndClaim(starter: OutboundEmailWorkerStarter): Promise<{
 
   return {
     batchId: generated.batchId!,
-    attemptId: result.attemptId!,
+    attemptId: attemptIdOf(result),
     batchHash: generated.batchHash!,
     status: result.status,
   };
 }
 
 describe("OutboundEmailWorkerStarter", () => {
-  it("builds the v2 payload, forks the worker, marks the attempt sending, and posts sendAuthorizedEmails", async () => {
+  it("builds the v3 payload, forks the worker, marks the attempt sending, and posts sendAuthorizedEmails", async () => {
     const { fork, spawned } = makeFakeFork();
     const credentialLoader = vi.fn(
       async (id: number): Promise<EmailServiceEntity | undefined> => {
@@ -215,19 +252,27 @@ describe("OutboundEmailWorkerStarter", () => {
     expect(attempt?.workerPid).toBe(child.pid);
     expect(attempt?.workerStartedAt).toBeInstanceOf(Date);
 
-    // Exactly one message posted: sendAuthorizedEmails with the v2 payload.
+    // Exactly one message posted: sendAuthorizedEmails with the v3 payload.
+    // generateBatch creates v2 revisions (§17.3), so the starter emits a
+    // version-3 payload carrying v2 identity (smtpUsername + replyToAddress)
+    // in every envelope (§16.1).
     expect(messages).toHaveLength(1);
     expect(messages[0].action).toBe("sendAuthorizedEmails");
-    const payload = messages[0].data as AuthorizedEmailWorkerPayloadV2;
-    expect(payload.version).toBe(2);
+    const payload = messages[0].data as AuthorizedEmailWorkerPayloadV3;
+    expect(payload.version).toBe(3);
     expect(payload.mode).toBe("authorized_envelopes");
     expect(payload.batchId).toBe(ctx.batchId);
     expect(payload.sendAttemptId).toBe(ctx.attemptId);
     expect(payload.batchHash).toBe(ctx.batchHash);
     expect(payload.envelopes).toHaveLength(1);
     const env = payload.envelopes[0];
+    expect(env.envelopeVersion).toBe(2);
     expect(env.envelopeHash).toHaveLength(64);
     expect(env.senderAddress).toBe("sender@example.com");
+    // smtpUsername falls back to the sender address when the revision carries
+    // a null smtpUsername (the identity resolver resolves it to `from`).
+    expect(env.smtpUsername).toBe("sender@example.com");
+    expect(env.replyToAddress).toBeNull();
     expect(payload.emailServices).toHaveLength(1);
     expect(payload.emailServices[0].id).toBe(1);
     // Credentials are present in the worker payload (sent over MessagePort,

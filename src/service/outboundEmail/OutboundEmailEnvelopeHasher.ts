@@ -63,9 +63,7 @@ export function canonicalizeOutboundEnvelope(
   const subject = normalizeLineEndings(envelope.subject);
   const bodyText = normalizeLineEndings(envelope.bodyText);
   const bodyHtml =
-    envelope.bodyHtml === null
-      ? null
-      : normalizeLineEndings(envelope.bodyHtml);
+    envelope.bodyHtml === null ? null : normalizeLineEndings(envelope.bodyHtml);
   const sender = normalizeAddressForHash(envelope.senderAddress);
   const recipient = normalizeAddressForHash(envelope.recipientAddress);
 
@@ -76,7 +74,9 @@ export function canonicalizeOutboundEnvelope(
     `recipient:${len(recipient)}:${recipient}`,
     `subject:${len(subject)}:${subject}`,
     `bodyText:${len(bodyText)}:${bodyText}`,
-    `bodyHtml:${bodyHtml === null ? "<<NULL_BODY_HTML>>" : `${len(bodyHtml)}:${bodyHtml}`}`,
+    `bodyHtml:${
+      bodyHtml === null ? "<<NULL_BODY_HTML>>" : `${len(bodyHtml)}:${bodyHtml}`
+    }`,
   ];
   return fields.join("|");
 }
@@ -109,17 +109,23 @@ const NULL_REPLY_TO_TOKEN = "<<NULL_REPLY_TO>>";
 
 /**
  * v2 email normalization (§7.3): trim, preserve local part, lowercase domain
- * ONLY. Distinct from v1 whole-address lowercasing.
+ * ONLY. Distinct from v1 whole-address lowercasing. Exported so the worker's
+ * §16.4 step-5 identity comparison uses byte-identical canonicalization to
+ * the hash function — never a divergent reimplementation.
  */
-function normalizeEmailAddressV2(address: string): string {
+export function normalizeEmailAddressV2(address: string): string {
   const trimmed = address.trim();
   const at = trimmed.lastIndexOf("@");
   if (at < 0) return trimmed;
   return `${trimmed.slice(0, at)}${trimmed.slice(at).toLowerCase()}`;
 }
 
-/** SMTP username normalization for hashing: trim only (§7.3). */
-function normalizeSmtpUsernameForHash(value: string): string {
+/**
+ * SMTP username normalization for hashing: trim only (§7.3). Exported for the
+ * same reason as {@link normalizeEmailAddressV2} — the worker identity gate
+ * must canonicalize exactly as the hash does.
+ */
+export function normalizeSmtpUsernameForHash(value: string): string {
   return value.trim();
 }
 

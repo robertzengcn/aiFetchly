@@ -12,8 +12,16 @@ import { OutboundEmailAuthorizationEntity } from "@/entity/OutboundEmailAuthoriz
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
-import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
-import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import {
+  OutboundEmailEnvelopeHasher,
+  normalizeEmailAddressV2,
+  normalizeSmtpUsernameForHash,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type {
+  BatchEnvelopeEntry,
+  BatchEnvelopeEntryV2,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import { EmailServiceModel } from "@/model/EmailService.model";
 import {
   OUTBOUND_POLICY_VERSION,
   OUTBOUND_VALIDATION_VERSION,
@@ -61,6 +69,52 @@ class IdempotencyKeyAlreadyClaimed extends Error {
   }
 }
 
+/**
+ * §17.2 — thrown inside the claim transaction when a batch mixes v1 and v2
+ * current revisions. The outer catch converts it to `mixed_version_batch`
+ * WITHOUT consuming the authorization (the transaction rolls back).
+ */
+class MixedVersionBatchError extends Error {
+  constructor() {
+    super(
+      "mixed_version_batch: batch contains both v1 and v2 current revisions"
+    );
+    this.name = "MixedVersionBatchError";
+  }
+}
+
+/**
+ * §17.1 — thrown inside the claim transaction when a legacy all-v1 batch's
+ * referenced services do not satisfy the v1 compatibility gate. The outer
+ * catch converts it to `legacy_identity_requires_review` WITHOUT consuming the
+ * authorization (the transaction rolls back). The user must create a new v2
+ * revision and re-approve.
+ */
+class LegacyIdentityRequiresReviewError extends Error {
+  constructor() {
+    super(
+      "legacy_identity_requires_review: legacy v1 batch identity no longer matches the approved sender"
+    );
+    this.name = "LegacyIdentityRequiresReviewError";
+  }
+}
+
+/**
+ * §15.5 — thrown AFTER the claim transaction commits, before starting the v2
+ * worker, when a freshly-reloaded service identity no longer matches the frozen
+ * revision. This is a delivery-time check (the transaction already committed),
+ * so the attempt is marked failed via {@link handleWorkerStartFailure} and the
+ * status returned as `sender_identity_changed`.
+ */
+class SenderIdentityChangedError extends Error {
+  constructor() {
+    super(
+      "sender_identity_changed: service identity changed between approval and delivery"
+    );
+    this.name = "SenderIdentityChangedError";
+  }
+}
+
 export interface ClaimInput {
   readonly batchId: number;
   readonly authorizationId: number;
@@ -70,7 +124,10 @@ export interface ClaimInput {
 export type ClaimResult =
   | { status: "claimed"; attemptId: number }
   | { status: "already_processed"; attemptId: number }
-  | { status: "worker_start_failed"; attemptId: number };
+  | { status: "worker_start_failed"; attemptId: number }
+  | { status: "legacy_identity_requires_review" }
+  | { status: "sender_identity_changed" }
+  | { status: "mixed_version_batch" };
 
 export interface WorkerStartResult {
   readonly started: boolean;
@@ -94,6 +151,7 @@ export interface OutboundEmailDeliveryServiceOptions {
 }
 
 export class OutboundEmailDeliveryService extends BaseDb {
+  private readonly dbpath: string;
   private readonly draftModel: OutboundEmailDraftModel;
   private readonly authorizationModel: OutboundEmailAuthorizationModel;
   private readonly deliveryModel: OutboundEmailDeliveryModel;
@@ -117,6 +175,7 @@ export class OutboundEmailDeliveryService extends BaseDb {
         : options;
     const dbpath = opts.dbpath ?? "";
     super(dbpath);
+    this.dbpath = dbpath;
     this.draftModel = new OutboundEmailDraftModel(dbpath);
     this.authorizationModel = new OutboundEmailAuthorizationModel(dbpath);
     this.deliveryModel = new OutboundEmailDeliveryModel(dbpath);
@@ -234,11 +293,16 @@ export class OutboundEmailDeliveryService extends BaseDb {
           }
 
           // Step 5 — recompute envelope + batch hashes from current revisions.
+          // Version-aware (§15.5): v2 revisions carry smtpUsername +
+          // replyToAddress bound into the hash; v1 use the legacy shape. Mixed
+          // v1+v2 batches are blocked (§17.2) — they cannot be sent under one
+          // canonicalization rule.
           const drafts = await this.draftModel.listDraftsByBatch(
             input.batchId,
             manager
           );
-          const envelopes: BatchEnvelopeEntry[] = [];
+          const v1Envelopes: BatchEnvelopeEntry[] = [];
+          const v2Envelopes: BatchEnvelopeEntryV2[] = [];
           const revisions: OutboundEmailDraftRevisionEntity[] = [];
           for (const draft of drafts) {
             const revision = await this.draftModel.readCurrentRevision(
@@ -250,19 +314,63 @@ export class OutboundEmailDeliveryService extends BaseDb {
               );
             }
             revisions.push(revision);
-            envelopes.push({
-              version: 1,
-              draftId: draft.id,
-              emailServiceId: revision.emailServiceId,
-              senderAddress: revision.senderAddress,
-              recipientAddress: revision.recipientAddress,
-              subject: revision.subject,
-              bodyText: revision.bodyText,
-              bodyHtml: revision.bodyHtml,
-            });
+            const version = revision.envelopeVersion ?? 1;
+            if (version === 2) {
+              v2Envelopes.push({
+                version: 2,
+                draftId: draft.id,
+                emailServiceId: revision.emailServiceId,
+                smtpUsername: revision.smtpUsername ?? "",
+                senderAddress: revision.senderAddress,
+                replyToAddress: revision.replyToAddress,
+                recipientAddress: revision.recipientAddress,
+                subject: revision.subject,
+                bodyText: revision.bodyText,
+                bodyHtml: revision.bodyHtml,
+              });
+            } else {
+              v1Envelopes.push({
+                version: 1,
+                draftId: draft.id,
+                emailServiceId: revision.emailServiceId,
+                senderAddress: revision.senderAddress,
+                recipientAddress: revision.recipientAddress,
+                subject: revision.subject,
+                bodyText: revision.bodyText,
+                bodyHtml: revision.bodyHtml,
+              });
+            }
           }
+
+          // §17.2 — a batch mixing v1 and v2 current revisions cannot be sent.
+          // Abort before consuming the authorization; do not insert an attempt.
+          if (v1Envelopes.length > 0 && v2Envelopes.length > 0) {
+            throw new MixedVersionBatchError();
+          }
+
+          // §17.1 — legacy v1 gate. An all-v1 batch may only use the legacy
+          // payload-v2 path when every referenced service satisfies:
+          //   effective From == approved sender
+          //   effective Reply-To == null
+          //   effective SMTP username == approved sender
+          // (approved sender = the revision's senderAddress). If any condition
+          // fails, require a new v2 revision + re-approval. This preserves the
+          // authentication identity v1 implicitly assumed.
+          if (v1Envelopes.length > 0) {
+            const legacyGate = await this.checkLegacyIdentityGate(
+              v1Envelopes,
+              revisions
+            );
+            if (!legacyGate.ok) {
+              throw new LegacyIdentityRequiresReviewError();
+            }
+          }
+
+          // Recompute the batch hash with the matching canonicalizer.
           const recomputedBatchHash =
-            OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+            v2Envelopes.length > 0
+              ? OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes)
+              : OutboundEmailEnvelopeHasher.hashBatch(v1Envelopes);
 
           // Step 6 — authorization hash equals the current batch hash.
           if (authorization.batchHash !== recomputedBatchHash) {
@@ -306,13 +414,29 @@ export class OutboundEmailDeliveryService extends BaseDb {
             manager
           );
 
-          // Step 9 — one pending outcome per draft.
+          // Step 9 — one pending outcome per draft. Version-aware: the envelope
+          // hash matches the version that was authorized (v1→hashEnvelope,
+          // v2→hashEnvelopeV2). Outcomes carry the same hash the worker will
+          // recompute, so the bridge can correlate without re-deriving version.
+          const allEnvelopes: Array<BatchEnvelopeEntry | BatchEnvelopeEntryV2> =
+            [...v1Envelopes, ...v2Envelopes];
           for (let i = 0; i < drafts.length; i++) {
             const draft = drafts[i];
             const revision = revisions[i];
-            const envelopeHash = OutboundEmailEnvelopeHasher.hashEnvelope(
-              envelopes[i]
-            );
+            const envForHash = allEnvelopes.find((e) => e.draftId === draft.id);
+            if (!envForHash) {
+              throw new Error(
+                `envelope_reconstruction_failed: draft ${draft.id}`
+              );
+            }
+            const envelopeHash =
+              envForHash.version === 2
+                ? OutboundEmailEnvelopeHasher.hashEnvelopeV2(
+                    envForHash as BatchEnvelopeEntryV2
+                  )
+                : OutboundEmailEnvelopeHasher.hashEnvelope(
+                    envForHash as BatchEnvelopeEntry
+                  );
             await this.deliveryModel.createOutcome(
               Object.assign(new OutboundEmailDeliveryOutcomeEntity(), {
                 sendAttemptId: attempt.id,
@@ -371,6 +495,43 @@ export class OutboundEmailDeliveryService extends BaseDb {
           attemptId: error.existingAttemptId,
         };
       }
+      // §17.2 — mixed-version batches are rejected before the authorization is
+      // consumed (the transaction rolls back). No attempt is created.
+      if (error instanceof MixedVersionBatchError) {
+        return { status: "mixed_version_batch" };
+      }
+      // §17.1 — legacy v1 identity no longer matches; require a new v2
+      // revision + re-approval. Transaction rolls back, no attempt consumed.
+      if (error instanceof LegacyIdentityRequiresReviewError) {
+        return { status: "legacy_identity_requires_review" };
+      }
+      throw error;
+    }
+
+    // §15.5 — delivery-time identity reload. BEFORE starting the v2 worker,
+    // reload each referenced service and compare its resolved identity to the
+    // immutable revision (service ID, smtpUsername trim-only, From
+    // email-normalized, Reply-To including null). A mismatch means the service
+    // was edited after approval — abort without consuming SMTP capacity. This
+    // check runs AFTER the transaction commits, so a mismatch is routed through
+    // the worker-start-failure cleanup (attempt → failed) and surfaced as
+    // `sender_identity_changed`. Only v2 revisions carry the bound identity
+    // needed for this comparison; v1 revisions already passed the §17.1 gate.
+    try {
+      await this.verifyIdentityNotChanged(claimed.revisions);
+    } catch (error: unknown) {
+      if (error instanceof SenderIdentityChangedError) {
+        const message = error.message;
+        console.error(
+          `[outbound-email-delivery] sender identity changed for attempt ${claimed.attemptId}: ${message}`
+        );
+        await this.handleWorkerStartFailure(
+          claimed.attemptId,
+          input.batchId,
+          (manager) => this.draftModel.listDraftsByBatch(input.batchId, manager)
+        );
+        return { status: "sender_identity_changed" };
+      }
       throw error;
     }
 
@@ -417,6 +578,114 @@ export class OutboundEmailDeliveryService extends BaseDb {
     );
 
     return { status: "claimed", attemptId: claimed.attemptId };
+  }
+
+  /**
+   * §17.1 legacy v1 compatibility gate. An all-v1 batch may use the legacy
+   * payload-v2 path only when every referenced service satisfies:
+   *   effective From == approved sender (email-normalized)
+   *   effective Reply-To == null
+   *   effective SMTP username == approved sender (trim-only)
+   * The "approved sender" is the revision's frozen `senderAddress` — the value
+   * the v1 hash covered. If any condition fails, the caller must create a new
+   * v2 revision + re-approve. Uses the same normalization as the hasher so the
+   * comparison is byte-identical.
+   *
+   * Runs inside the claim transaction so a failure rolls back without consuming
+   * the authorization.
+   */
+  private async checkLegacyIdentityGate(
+    v1Envelopes: BatchEnvelopeEntry[],
+    revisions: OutboundEmailDraftRevisionEntity[]
+  ): Promise<{ ok: true } | { ok: false }> {
+    const emailServiceModel = new EmailServiceModel(this.dbpath);
+    for (let i = 0; i < v1Envelopes.length; i++) {
+      const env = v1Envelopes[i];
+      const revision = revisions[i];
+      const identity = await emailServiceModel.readIdentity(env.emailServiceId);
+      if (!identity) {
+        // Service was deleted after approval — fail closed.
+        return { ok: false };
+      }
+      const effectiveFrom = identity.from ?? "";
+      const effectiveSmtpUsername = identity.smtpUsername ?? effectiveFrom;
+      const effectiveReplyTo = identity.replyTo ?? null;
+      // §17.1 conditions — approved sender = revision.senderAddress.
+      if (
+        normalizeEmailAddressV2(effectiveFrom) !==
+        normalizeEmailAddressV2(revision.senderAddress)
+      ) {
+        return { ok: false };
+      }
+      if (effectiveReplyTo !== null) {
+        return { ok: false };
+      }
+      if (
+        normalizeSmtpUsernameForHash(effectiveSmtpUsername) !==
+        normalizeSmtpUsernameForHash(revision.senderAddress)
+      ) {
+        return { ok: false };
+      }
+    }
+    return { ok: true };
+  }
+
+  /**
+   * §15.5 delivery-time identity reload. Before starting the v2 worker, reload
+   * each referenced email service and compare its resolved identity to the
+   * immutable revision. A mismatch returns a stable `sender_identity_changed`
+   * finding and does not consume SMTP submission capacity. Only v2 revisions
+   * carry the bound identity needed for this comparison; v1 revisions already
+   * passed the §17.1 gate inside the transaction.
+   *
+   * Uses byte-identical normalization to the hash function so the comparison
+   * is authoritative.
+   */
+  private async verifyIdentityNotChanged(
+    revisions: OutboundEmailDraftRevisionEntity[]
+  ): Promise<void> {
+    const emailServiceModel = new EmailServiceModel(this.dbpath);
+    const distinctIds = Array.from(
+      new Set(revisions.map((r) => r.emailServiceId))
+    );
+    for (const id of distinctIds) {
+      const identity = await emailServiceModel.readIdentity(id);
+      if (!identity) {
+        // Service deleted between approval and delivery — fail closed.
+        throw new SenderIdentityChangedError();
+      }
+      // Compare against every v2 revision referencing this service.
+      for (const revision of revisions) {
+        if (revision.emailServiceId !== id) continue;
+        const version = revision.envelopeVersion ?? 1;
+        if (version !== 2) continue;
+        const svcSmtp = normalizeSmtpUsernameForHash(
+          identity.smtpUsername ?? identity.from ?? ""
+        );
+        const revSmtp = normalizeSmtpUsernameForHash(
+          revision.smtpUsername ?? revision.senderAddress
+        );
+        if (svcSmtp !== revSmtp) {
+          throw new SenderIdentityChangedError();
+        }
+        const svcFrom = normalizeEmailAddressV2(identity.from ?? "");
+        const revFrom = normalizeEmailAddressV2(revision.senderAddress);
+        if (svcFrom !== revFrom) {
+          throw new SenderIdentityChangedError();
+        }
+        const svcReplyTo =
+          identity.replyTo === null || identity.replyTo === undefined
+            ? null
+            : normalizeEmailAddressV2(identity.replyTo);
+        const revReplyTo =
+          revision.replyToAddress === null
+            ? null
+            : normalizeEmailAddressV2(revision.replyToAddress);
+        if (svcReplyTo !== revReplyTo) {
+          throw new SenderIdentityChangedError();
+        }
+      }
+    }
   }
 
   /**

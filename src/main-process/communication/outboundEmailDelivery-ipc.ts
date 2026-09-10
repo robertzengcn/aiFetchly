@@ -330,9 +330,12 @@ export function registerOutboundEmailDeliveryIpcHandlers(
         authorizationId: input.authorizationId,
         batchHash: input.batchHash,
       });
+      // The three new delivery gates (§17.1/§17.2/§15.5) abort before an
+      // attempt is created or before the worker starts; they carry no
+      // attemptId. The renderer treats a null attemptId as "no send started."
       return {
         status: result.status,
-        attemptId: result.attemptId,
+        attemptId: "attemptId" in result ? result.attemptId : null,
       };
     }
   );
