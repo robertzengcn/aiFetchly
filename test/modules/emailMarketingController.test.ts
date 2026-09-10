@@ -113,6 +113,7 @@ describe("EmailMarketingController", () => {
       entity.name = name;
       entity.from = `user${id}@example.com`;
       entity.password = "SECRET-smtp-password";
+      entity.receivePassword = "SECRET-recv-password";
       entity.host = "smtp.example.com";
       entity.port = "465";
       entity.ssl = 1;
@@ -139,10 +140,16 @@ describe("EmailMarketingController", () => {
       expect(csv).to.contain(
         "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,create_time"
       );
+      // Full first data row locks the column ORDER (legacy row: effective
+      // smtpUsername === from, replyTo → empty cell).
+      expect(csv).to.contain(
+        "1,Primary SMTP,user1@example.com,user1@example.com,,smtp.example.com,465,1,imap,2026-01-15T10:30:00.000Z"
+      );
       expect(csv).to.contain("Primary SMTP");
       expect(csv).to.contain("user1@example.com");
       expect(csv).to.contain('"Secondary, SMTP ""quoted"""');
       expect(csv).to.not.contain("SECRET-smtp-password");
+      expect(csv).to.not.contain("SECRET-recv-password");
     });
 
     it("exports JSON with safe fields only (no password)", async () => {
@@ -158,6 +165,9 @@ describe("EmailMarketingController", () => {
 
       expect(payload.total).to.equal(1);
       expect(JSON.stringify(payload)).to.not.contain("SECRET-smtp-password");
+      expect(JSON.stringify(payload)).to.not.contain("SECRET-recv-password");
+      expect(JSON.stringify(payload)).to.not.contain('"password"');
+      expect(JSON.stringify(payload)).to.not.contain('"receivePassword"');
       // Safe fields present: the sender email is a visible list column.
       expect(JSON.stringify(payload)).to.contain("user1@example.com");
       // New identity fields are exported. makeService leaves smtpUsername /
@@ -224,13 +234,16 @@ describe("EmailMarketingController", () => {
         "csv"
       )) as string;
       expect(csv).to.not.contain("SECRET-smtp-password");
+      expect(csv).to.not.contain("SECRET-recv-password");
 
       const payload = await emailMarketingController.exportEmailServices(
         "json"
       );
       const serialized = JSON.stringify(payload);
       expect(serialized).to.not.contain("SECRET-smtp-password");
+      expect(serialized).to.not.contain("SECRET-recv-password");
       expect(serialized).to.not.contain('"password"');
+      expect(serialized).to.not.contain('"receivePassword"');
     });
   });
 
