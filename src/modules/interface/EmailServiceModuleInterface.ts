@@ -1,6 +1,30 @@
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { SortBy, ListData } from "@/entityTypes/commonType";
 
+export interface ValidateEmailServiceOptions {
+  readonly mode: "create" | "update" | "send";
+  readonly hasStoredPassword?: boolean;
+}
+
+export interface EmailServiceValidationError {
+  readonly code: EmailServiceValidationCode;
+  readonly message: string;
+}
+
+export type EmailServiceValidationCode =
+  | "service_name_required"
+  | "smtp_username_required"
+  | "smtp_username_too_long"
+  | "from_required"
+  | "from_invalid"
+  | "reply_to_invalid"
+  | "email_header_break_forbidden"
+  | "password_required"
+  | "host_required"
+  | "port_required"
+  | "port_invalid"
+  | "receive_config_invalid";
+
 export interface EmailServiceModuleInterface {
   /**
    * Create a new email service
@@ -77,13 +101,26 @@ export interface EmailServiceModuleInterface {
   getActiveEmailServices(): Promise<EmailServiceEntity[]>;
 
   /**
-   * Validate email service configuration
-   * @param service The email service entity to validate
-   * @returns Validation result with validity status and error messages
+   * Validate an email service configuration with operation context (§8.1).
+   * @param service The entity to validate
+   * @param options Operation mode + stored-password availability
+   * @returns Validation result with stable field/error codes
    */
   validateEmailService(
-    service: EmailServiceEntity
-  ): Promise<{ valid: boolean; errors: string[] }>;
+    service: EmailServiceEntity,
+    options: ValidateEmailServiceOptions
+  ): Promise<{ valid: boolean; errors: EmailServiceValidationError[] }>;
+
+  /**
+   * Read the complete effective identity snapshot for a service (§22.2).
+   * Returns null when the service does not exist.
+   */
+  readIdentity(id: number): Promise<{
+    smtpUsername: string;
+    fromAddress: string;
+    replyToAddress: string | null;
+    receiveUsername: string;
+  } | null>;
 
   /**
    * List ALL email services for export (no pagination, no search filter).

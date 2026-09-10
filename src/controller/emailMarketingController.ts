@@ -423,11 +423,16 @@ export class EmailMarketingController {
       // validateEmailService covers email format, port numeric, required
       // fields (incl. password), and receive-protocol-specific rules.
       const validation = await this.emailServiceModule.validateEmailService(
-        entity
+        entity,
+        { mode: "create" }
       );
       if (!validation.valid) {
         skipped++;
-        errors.push(`row ${rowNumber}: ${validation.errors.join("; ")}`);
+        errors.push(
+          `row ${rowNumber}: ${validation.errors
+            .map((e) => e.message)
+            .join("; ")}`
+        );
         continue;
       }
       try {
