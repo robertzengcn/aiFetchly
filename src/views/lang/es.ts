@@ -1255,6 +1255,12 @@ export default {
   },
   emailservice: {
     id: "ID",
+    smtp_username: "Nombre de usuario SMTP",
+    smtp_username_hint:
+      "Cuenta de inicio de sesión SMTP (por defecto la dirección From)",
+    reply_to: "Responder a",
+    reply_to_hint:
+      "Dirección opcional para respuestas (déjelo en blanco para ninguna)",
     from: "Cuenta de remitente",
     from_hint: "Ingrese la cuenta del remitente",
     password: "Contraseña",

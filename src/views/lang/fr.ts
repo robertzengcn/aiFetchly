@@ -1244,6 +1244,11 @@ export default {
   },
   emailservice: {
     id: "id",
+    smtp_username: "Nom d'utilisateur SMTP",
+    smtp_username_hint: "Compte de connexion SMTP (par défaut l'adresse From)",
+    reply_to: "Répondre à",
+    reply_to_hint:
+      "Adresse facultative pour les réponses (laisser vide pour aucune)",
     from: "sender account",
     from_hint: "input email sender account",
     password: "password",
