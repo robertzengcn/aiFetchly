@@ -43,6 +43,7 @@ import {
   emailMarketingListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
+  emailServiceUpdateInputSchema,
   emailServiceExportInputSchema,
   emailServiceImportInputSchema,
 } from "@/schemas/ipc/emailMarketing";
@@ -271,7 +272,7 @@ export function registerEmailMarketingIpcHandlers() {
 
   registerValidatedHandler(
     EMAILSERVICEUPDATE,
-    emailMarketingUpdateInputSchema,
+    emailServiceUpdateInputSchema,
     async (input) => {
       const qdata = input as unknown as EmailServiceEntitydata;
       const emailmarketCon = new EmailMarketingController();
@@ -300,6 +301,19 @@ export function registerEmailMarketingIpcHandlers() {
         entity.host = qdata.host ?? existing.host;
         entity.port = qdata.port ?? existing.port;
         entity.from = qdata.from ?? existing.from;
+        entity.smtpUsername =
+          qdata.smtpUsername !== undefined
+            ? qdata.smtpUsername === null ||
+              qdata.smtpUsername.trim().length === 0
+              ? null
+              : qdata.smtpUsername.trim()
+            : existing.smtpUsername ?? null;
+        entity.replyTo =
+          qdata.replyTo !== undefined
+            ? qdata.replyTo === null || qdata.replyTo.trim().length === 0
+              ? null
+              : qdata.replyTo.trim()
+            : existing.replyTo ?? null;
         // Empty incoming password = keep existing (credential sentinel).
         entity.password =
           qdata.password && qdata.password.length > 0
