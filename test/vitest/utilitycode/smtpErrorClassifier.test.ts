@@ -22,13 +22,37 @@ describe("classifySmtpFailure (§19)", () => {
     expect(r.code).toBe("smtp_recipient_rejected");
   });
 
+  it("classifies structured command AUTH as smtp_auth_failed", () => {
+    const r = classifySmtpFailure({ command: "AUTH", message: "bad creds" });
+    expect(r.code).toBe("smtp_auth_failed");
+  });
+
+  it("classifies structured command RCPT as smtp_recipient_rejected", () => {
+    const r = classifySmtpFailure({ command: "RCPT", message: "unknown user" });
+    expect(r.code).toBe("smtp_recipient_rejected");
+  });
+
+  it("handles Error instances and primitive strings via text()", () => {
+    const fromError = classifySmtpFailure(
+      new Error("ENOTFOUND name not known")
+    );
+    expect(fromError.code).toBe("smtp_connection_failed");
+    expect(fromError.sanitizedMessage).toContain("ENOTFOUND");
+
+    const fromPrimitive = classifySmtpFailure("ECONNREFUSED connect refused");
+    expect(fromPrimitive.code).toBe("smtp_connection_failed");
+  });
+
   it("classifies TLS/cert errors as smtp_tls_failed (safe)", () => {
     const r = classifySmtpFailure({ message: "self-signed certificate" });
     expect(r.code).toBe("smtp_tls_failed");
   });
 
   it("classifies DNS/refused as smtp_connection_failed (safe)", () => {
-    const r = classifySmtpFailure({ code: "ENOTFOUND", message: "getaddrinfo" });
+    const r = classifySmtpFailure({
+      code: "ENOTFOUND",
+      message: "getaddrinfo",
+    });
     expect(r.code).toBe("smtp_connection_failed");
   });
 
@@ -43,10 +67,32 @@ describe("classifySmtpFailure (§19)", () => {
       message: "Auth failed for password=secret123",
     });
     expect(r.sanitizedMessage).not.toContain("secret123");
+    expect(r.sanitizedMessage).toContain("[REDACTED]");
+  });
+
+  it("redacts common credential variants (§19.3)", () => {
+    const variants = [
+      "Auth failed for password=secret123",
+      "Login rejected passwd=p4ss",
+      "Authorization: Bearer abc-123-def",
+      "Query ?token=s3cret&state=xyz",
+      "Cookie: session=cookiedata",
+    ];
+    for (const msg of variants) {
+      const r = classifySmtpFailure({ message: msg });
+      expect(r.sanitizedMessage).not.toContain("secret123");
+      expect(r.sanitizedMessage).not.toContain("p4ss");
+      expect(r.sanitizedMessage).not.toContain("abc-123-def");
+      expect(r.sanitizedMessage).not.toContain("s3cret");
+      expect(r.sanitizedMessage).not.toContain("cookiedata");
+    }
   });
 
   it("classifies EENVELOPE as smtp_from_rejected", () => {
-    const r = classifySmtpFailure({ code: "EENVELOPE", message: "Message rejected" });
+    const r = classifySmtpFailure({
+      code: "EENVELOPE",
+      message: "Message rejected",
+    });
     expect(r.code).toBe("smtp_from_rejected");
   });
 

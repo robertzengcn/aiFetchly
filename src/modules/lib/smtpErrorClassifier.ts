@@ -1,3 +1,5 @@
+import { redactString } from "@/modules/diagnostics/DiagnosticRedactor";
+
 export type SmtpFailureCode =
   | "smtp_auth_failed"
   | "smtp_from_rejected"
@@ -40,11 +42,13 @@ function text(error: unknown): string {
 }
 
 /**
- * Sanitize the provider message (§19.3): strip passwords, long responses.
- * Never echo a raw password that a provider might mirror back.
+ * Sanitize the provider message (§19.3): strip SMTP/receive passwords,
+ * authorization tokens, and long provider responses. Delegates to the shared
+ * `DiagnosticRedactor.redactString` so the credential redaction surface stays
+ * consistent app-wide, then enforces the 240-char log limit.
  */
 function sanitize(message: string): string {
-  const redacted = message.replace(/password=\S+/gi, "password=***");
+  const redacted = redactString(message);
   return redacted.length > LOG_LIMIT
     ? `${redacted.slice(0, LOG_LIMIT)}…`
     : redacted;
@@ -52,7 +56,7 @@ function sanitize(message: string): string {
 
 /**
  * Classify an SMTP failure using §19.2 precedence: structured Nodemailer
- * fields (code, command, responseCode) before known response patterns.
+ * fields (code, command) before known response patterns.
  * `delivery_unknown` is never auto-retried (fail-closed).
  */
 export function classifySmtpFailure(error: unknown): ClassifiedSmtpFailure {
