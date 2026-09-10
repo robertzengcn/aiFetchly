@@ -123,6 +123,28 @@ function withClaimLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * §12.4 acquisition concurrency bound: at most 2 concurrent acquisitions
+ * GLOBALLY. Further prepares QUEUE here (before creating their session
+ * row), so saturation degrades to serialization instead of exhausting
+ * disk/network.
+ */
+const MAX_CONCURRENT_ACQUISITIONS = 2;
+let activeAcquisitions = 0;
+const acquisitionQueue: (() => void)[] = [];
+async function withAcquisitionSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeAcquisitions >= MAX_CONCURRENT_ACQUISITIONS) {
+    await new Promise<void>((resolve) => acquisitionQueue.push(resolve));
+  }
+  activeAcquisitions += 1;
+  try {
+    return await fn();
+  } finally {
+    activeAcquisitions -= 1;
+    acquisitionQueue.shift()?.();
+  }
+}
+
 const STATE_TO_NEXT_ACTION: Record<
   SkillInstallationState,
   SkillInstallNextAction
@@ -341,7 +363,9 @@ export class SkillInstallationModule extends BaseModule {
     // Heartbeat before the long acquisition so a slow clone does not look
     // abandoned mid-flight (the lease refreshes again at activation).
     await sessions.heartbeatLease(sessionId, SESSION_LEASE_TTL_MS, Date.now());
-    const acquired = await acquisition.acquire(sessionId, descriptor);
+    const acquired = await withAcquisitionSlot(() =>
+      acquisition.acquire(sessionId, descriptor)
+    );
     if (!acquired.ok) {
       await this.fail(
         sessions,

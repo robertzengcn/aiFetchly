@@ -25,13 +25,24 @@ import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
 import { sha256Hex } from "@/utils/contentHash";
 
 const INSTRUCTION_FILE_MAX_BYTES = 512 * 1024;
+/** §12.4 AGGREGATE bound: instruction content sent toward planning, TOTAL. */
+const INSTRUCTION_AGGREGATE_MAX_BYTES = 512 * 1024;
 const HELPER_DIRS = ["helpers", "scripts", "references", "assets"];
+/** Helper files an instruction may reference (names only, §12.3 bounded). */
+const HELPER_REFERENCE_RE = /\b(?:helpers|scripts)\/([\w./-]+\.[A-Za-z0-9]+)/g;
+const MAX_HELPER_REFERENCES = 50;
 
 export interface InspectionResult {
   readonly rootRelativePath: string;
   readonly discovered: readonly DiscoveredSkillPackage[];
   readonly instructionFiles: readonly InstructionFile[];
   readonly diagnostics: readonly string[];
+  /**
+   * FR-04/NFR-04: helper files the instructions explicitly reference — a
+   * bounded NAME inventory (no content) so planning sees the helper surface
+   * without injecting it (§12.3).
+   */
+  readonly referencedHelpers: readonly string[];
 }
 
 export interface InstructionFile {
@@ -64,6 +75,7 @@ export class SkillPackageInspectionService {
         discovered: [],
         instructionFiles: [],
         diagnostics: ["subdirectory escapes the acquired root"],
+        referencedHelpers: [],
       };
     }
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
@@ -72,14 +84,17 @@ export class SkillPackageInspectionService {
         discovered: [],
         instructionFiles: [],
         diagnostics: ["acquired root is not a directory"],
+        referencedHelpers: [],
       };
     }
 
     const discovered = this.discoverAt(root, ".", diagnostics);
+    const referencedHelpers: string[] = [];
     const instructionFiles = this.readInstructionFiles(
       root,
       constraints,
-      diagnostics
+      diagnostics,
+      referencedHelpers
     );
 
     return {
@@ -87,6 +102,7 @@ export class SkillPackageInspectionService {
       discovered,
       instructionFiles,
       diagnostics,
+      referencedHelpers,
     };
   }
 
@@ -297,7 +313,8 @@ export class SkillPackageInspectionService {
   private readInstructionFiles(
     root: string,
     constraints: UserConstraints,
-    diagnostics: string[]
+    diagnostics: string[],
+    referencedHelpers: string[]
   ): InstructionFile[] {
     const wanted: { file: string; precedence: number }[] = [];
     // Named files must stay inside the acquired root after normalization —
@@ -316,11 +333,17 @@ export class SkillPackageInspectionService {
     }
     wanted.push({ file: "install.md", precedence: 1 });
     wanted.push({ file: "setup.md", precedence: 2 });
-    wanted.push({ file: "readme.md", precedence: 3 });
-    wanted.push({ file: "skill.md", precedence: 4 });
+    // Security guidance precedes generic docs (NFR-04): the planner must
+    // see declared constraints before README-driven commands.
+    wanted.push({ file: "security.md", precedence: 3 });
+    wanted.push({ file: "readme.md", precedence: 4 });
+    wanted.push({ file: "skill.md", precedence: 5 });
 
     const found: InstructionFile[] = [];
     const seen = new Set<string>();
+    // §12.4 AGGREGATE budget across EVERY instruction file — the per-file
+    // cap alone let N files consume N x 512 KiB toward planning.
+    let aggregateBytes = 0;
     for (const { file, precedence } of wanted) {
       if (seen.has(file)) continue;
       const abs = this.findCaseInsensitive(root, file);
@@ -334,7 +357,25 @@ export class SkillPackageInspectionService {
           );
           continue;
         }
+        if (aggregateBytes + stat.size > INSTRUCTION_AGGREGATE_MAX_BYTES) {
+          diagnostics.push(
+            `aggregate instruction content exceeds the ${INSTRUCTION_AGGREGATE_MAX_BYTES}-byte design bound; ${file} and later files skipped`
+          );
+          break;
+        }
         const content = fs.readFileSync(abs, "utf-8");
+        aggregateBytes += stat.size;
+        // Bounded helper inventory (§12.3): record REFERENCED helper names
+        // only — never their content.
+        for (const match of content.matchAll(HELPER_REFERENCE_RE)) {
+          const name = match[1];
+          if (
+            referencedHelpers.length < MAX_HELPER_REFERENCES &&
+            !referencedHelpers.includes(name)
+          ) {
+            referencedHelpers.push(name);
+          }
+        }
         found.push({
           relativePath: path.relative(root, abs).split(path.sep).join("/"),
           precedence,

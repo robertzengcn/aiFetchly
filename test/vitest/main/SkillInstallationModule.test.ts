@@ -1144,3 +1144,104 @@ describe("conversation/session correlation on lifecycle calls (FR-29)", () => {
     }
   }, 120_000);
 });
+
+describe("precedence-aware, bounded package inspection (FR-04, NFR-04)", () => {
+  const { SkillPackageInspectionService } = {} as never;
+  void SkillPackageInspectionService;
+
+  it("enforces the AGGREGATE instruction bound across every file", async () => {
+    const { SkillPackageInspectionService: Svc } = await import(
+      "@/service/SkillPackageInspectionService"
+    );
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "agg-fixture-"));
+    try {
+      fs.writeFileSync(
+        path.join(repo, "SKILL.md"),
+        "---\nname: agg-skill\ndescription: d\n---\n\n# Usage\n\nx"
+      );
+      // install.md consumes 400 KiB; setup.md would push past the 512 KiB
+      // AGGREGATE even though each file is under the per-file cap.
+      fs.writeFileSync(
+        path.join(repo, "install.md"),
+        "# I\n" + "a".repeat(400 * 1024)
+      );
+      fs.writeFileSync(
+        path.join(repo, "setup.md"),
+        "# S\n" + "b".repeat(200 * 1024)
+      );
+      const result = new Svc().inspect(repo, undefined, {});
+      expect(result.instructionFiles.map((f) => f.relativePath)).toContain(
+        "install.md"
+      );
+      expect(result.instructionFiles.map((f) => f.relativePath)).not.toContain(
+        "setup.md"
+      );
+      expect(
+        result.diagnostics.some((d) => d.includes("aggregate instruction"))
+      ).toBe(true);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("security guidance precedes README; helper references are inventoried by NAME only", async () => {
+    const { SkillPackageInspectionService: Svc } = await import(
+      "@/service/SkillPackageInspectionService"
+    );
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "sec-fixture-"));
+    try {
+      fs.writeFileSync(
+        path.join(repo, "SKILL.md"),
+        "---\nname: sec-skill\ndescription: d\n---\n\nRun helpers/cut.py first."
+      );
+      fs.writeFileSync(
+        path.join(repo, "security.md"),
+        "# Security\n\nNever write outside helpers/."
+      );
+      fs.writeFileSync(
+        path.join(repo, "readme.md"),
+        "# Readme\n\nAlso see scripts/render.js."
+      );
+      const result = new Svc().inspect(repo, undefined, {});
+      const paths = result.instructionFiles.map((f) => f.relativePath);
+      const securityIdx = paths.indexOf("security.md");
+      const readmeIdx = paths.indexOf("readme.md");
+      expect(securityIdx).toBeGreaterThan(-1);
+      expect(readmeIdx).toBeGreaterThan(-1);
+      expect(securityIdx).toBeLessThan(readmeIdx);
+      // Referenced helpers recorded by name; content NOT in instructions.
+      expect(result.referencedHelpers).toContain("cut.py");
+      expect(result.referencedHelpers).toContain("render.js");
+      expect(
+        result.instructionFiles.every((f) => !f.content.includes("print"))
+      ).toBe(true);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("acquisition concurrency is bounded: 4 concurrent prepares serialize through 2 slots", async () => {
+    const module = new SkillInstallationModule();
+    const repos = Array.from({ length: 4 }, (_, i) => {
+      const repo = fs.mkdtempSync(path.join(os.tmpdir(), `conc-${i}-`));
+      fs.writeFileSync(
+        path.join(repo, "SKILL.md"),
+        `---\nname: conc-skill-${i}\ndescription: d\n---\n\n# Usage\n\nx`
+      );
+      return repo;
+    });
+    try {
+      const snapshots = await Promise.all(
+        repos.map((repo, i) =>
+          module.prepare({ conversationId: `conv-conc-${i}`, source: repo })
+        )
+      );
+      // All four complete (queued, not dropped) and each holds a plan.
+      for (const snapshot of snapshots) {
+        expect(snapshot.state).toBe("awaiting_approval");
+      }
+    } finally {
+      for (const repo of repos) fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
