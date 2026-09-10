@@ -5,13 +5,16 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import type {
   EmailReplyApprovalEnvelope,
+  EmailReplyApprovalEnvelopeV2,
   EmailReplyApprovedByType,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import {
   generateApprovalToken,
   hashApprovalToken,
   hashApprovalEnvelope,
+  hashApprovalEnvelopeV2,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
+import { resolveOutboundIdentity } from "@/service/outboundEmail/resolveOutboundSender";
 import { validateReplyOutput } from "@/service/emailReply/EmailReplyOutputValidator";
 import {
   REPLY_POLICY_VERSION,
@@ -127,21 +130,56 @@ export class EmailReplyApprovalService {
     }
 
     // Recompute the canonical hash from trusted state and require it to match
-    // the revision's materialized hash.
-    const envelope: EmailReplyApprovalEnvelope = {
-      draftId: draft.id,
-      revisionId: revision.id,
-      emailServiceId,
-      originalMessageId: message.id,
-      senderAddress: revision.senderAddress,
-      recipientAddress: revision.recipientAddress,
-      subject: revision.subject,
-      bodyText: revision.bodyText,
-      bodyHtml: revision.bodyHtml,
-      policyVersion: REPLY_POLICY_VERSION,
-      validationVersion: REPLY_VALIDATOR_VERSION,
-    };
-    const contentHash = hashApprovalEnvelope(envelope);
+    // the revision's materialized hash. Version-aware (§18.1): v2 revisions
+    // carry smtpUsername + replyToAddress bound into the hash; v1 uses the
+    // legacy shape. The stored approvedHash must match the revision's version.
+    const revisionVersion: 1 | 2 = revision.envelopeVersion ?? 1;
+    let contentHash: string;
+    if (revisionVersion === 2) {
+      // Resolve the full service identity for v2 so the hash binds smtpUsername
+      // and replyToAddress from trusted server state, not renderer input.
+      const identity = await resolveOutboundIdentity({
+        dbpath: "",
+        preferredServiceId: emailServiceId,
+      });
+      if (!identity) {
+        throw new Error(
+          "Cannot approve: unable to resolve email service identity for v2 revision"
+        );
+      }
+      const envelopeV2: EmailReplyApprovalEnvelopeV2 = {
+        version: 2,
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        smtpUsername: identity.smtpUsername,
+        senderAddress: revision.senderAddress,
+        replyToAddress: identity.replyToAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      contentHash = hashApprovalEnvelopeV2(envelopeV2);
+    } else {
+      const envelope: EmailReplyApprovalEnvelope = {
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        senderAddress: revision.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      contentHash = hashApprovalEnvelope(envelope);
+    }
     if (revision.contentHash && revision.contentHash !== contentHash) {
       throw new Error(
         "Cannot approve: revision content hash is stale; regenerate the draft"
