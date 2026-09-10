@@ -896,10 +896,34 @@ Add the `readIdentity` method to the module (after `getEmailServiceReceiveConfig
 Run: `yarn test test/modules/emailServiceModule.validation.test.ts`
 Expected: PASS — all 8 tests.
 
-- [ ] **Step 4.6: Run typecheck**
+- [ ] **Step 4.6: Run typecheck (with minimal import-path caller fix)**
 
 Run: `yarn typecheck`
-Expected: PASS. (If any caller of the old single-arg `validateEmailService` surfaces, fix it — the controller's import path is updated in Task 6; the controller test stubs are updated in Task 8.)
+Expected: PASS.
+
+**NOTE — pre-commit full-project typecheck forces a minimal forward-fix in this task.** The import loop in `src/controller/emailMarketingController.ts` (currently around lines 423–432) calls the old single-arg `validateEmailService(entity)` and does `validation.errors.join("; ")`. After the signature change that call site no longer type-checks, and the pre-commit hook runs full-project `tsc` — so the commit is blocked until it is fixed. The FULL import-loop rewrite (lookup-before-validate + merge matrix + `{mode, hasStoredPassword}`) is Task 8's scope; do NOT pull that forward here. Apply only the minimal compile fix:
+
+```typescript
+      // validateEmailService covers email format, port numeric, required
+      // fields (incl. password), and receive-protocol-specific rules.
+      const validation = await this.emailServiceModule.validateEmailService(
+        entity,
+        { mode: "create" }
+      );
+      if (!validation.valid) {
+        skipped++;
+        errors.push(
+          `row ${rowNumber}: ${validation.errors
+            .map((e) => e.message)
+            .join("; ")}`
+        );
+        continue;
+      }
+```
+
+(`mode: "create"` is the correct interim default: the pre-Task-8 loop never does lookup-before-validate, so every row is treated as a fresh create — which is exactly what the old single-arg validation did. Task 8 replaces this block wholesale with the mode-aware loop.)
+
+**Ripple in the existing controller tests (do NOT fix here — Task 8 updates the stubs):** `test/modules/emailMarketingController.test.ts` stubs `validateEmailService` with string arrays (`{ valid: false, errors: ["Password is required"] }`), so the runtime `.map((e) => e.message)` on a string yields `undefined` and joins to empty. These two tests (`caps reported errors at 10` and `skips rows with a missing password`) will fail at RUNTIME (not typecheck — the stubs are cast `as unknown as EmailServiceModuleInterface`) until Task 8 rewrites the loop and stubs. The controller-related runtime failures are pre-existing Task 8 debt; only the validation test file (`test/modules/emailServiceModule.validation.test.ts`) is expected green in this task.
 
 - [ ] **Step 4.7: Commit**
 
