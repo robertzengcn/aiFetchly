@@ -68,7 +68,7 @@ jobs:
       min_app_version: ${{ steps.check.outputs.min_app_version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -134,7 +134,7 @@ jobs:
             runner: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set reproducible build timestamp
         shell: bash
@@ -227,7 +227,7 @@ jobs:
       MIN_APP_VERSION: ${{ needs.should-rebuild.outputs.min_app_version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set reproducible catalog timestamp
         shell: bash
