@@ -203,6 +203,62 @@ function getPackageRootName(packageName) {
   return packageName.split("/")[0];
 }
 
+/**
+ * Compute the STATIC production dependency closure of a set of package roots by
+ * reading each package's package.json `dependencies` + `optionalDependencies`.
+ *
+ * This is the cheap equivalent of the flora-colossus Walker realpath scan used
+ * by getExternalNestedDependencies: both discover the same set of transitive
+ * runtime packages, but this one only does O(transitive deps) readFileSync calls
+ * on package.json files — no realpath/stat storm over every file in every
+ * subtree. It is what the CI `FORGE_SKIP_NATIVE_REBUILD=1` path must use so the
+ * keep-list still includes hoisted pure-JS transitives (e.g. typeorm → tslib)
+ * that the packaged main script requires at module load, without re-triggering
+ * the full-graph walk that stalls the constrained CI runner.
+ *
+ * Returns a Set of package roots (bare name, or `@scope/name`).
+ */
+function getStaticProductionClosure(packageRoots) {
+  const projectRoot = normalize(__dirname);
+  const found = new Set();
+  const queue = [];
+  for (const root of packageRoots) {
+    const name = getPackageRootName(root);
+    if (!found.has(name)) {
+      found.add(name);
+      queue.push(name);
+    }
+  }
+  const seen = new Set(queue);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const pkgJsonPath = join(
+      projectRoot,
+      "node_modules",
+      current,
+      "package.json"
+    );
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const deps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.optionalDependencies || {}),
+    };
+    for (const depName of Object.keys(deps)) {
+      const depRoot = getPackageRootName(depName);
+      if (seen.has(depRoot)) continue;
+      seen.add(depRoot);
+      found.add(depRoot);
+      queue.push(depRoot);
+    }
+  }
+  return found;
+}
+
 function removeEmptyDirectories(rootDir) {
   if (!existsSync(rootDir)) {
     return;
@@ -1050,19 +1106,24 @@ module.exports = {
         return foundModules;
       };
       // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) also skips
-      // this prePackage dependency-graph walk. The walk uses @electron-forge
-      // core-utils' Walker to recursively realpath-scan every EXTERNAL_DEPENDENCIES
-      // subtree (puppeteer, typeorm, canvas, ...) to discover nested native
-      // deps and add them to the packager keep-list. On the constrained CI
-      // runner this same full-graph walk (mirroring the @electron/rebuild walk
-      // scripts/patch-remote-rebuild.js already no-ops) can stall packaging
-      // before it reaches "Copying files". The smoke test only verifies packaged
-      // worker files + renderer HTML layout — it never loads native binaries at
-      // runtime — so the static EXTERNAL_DEPENDENCIES allow-list (which already
-      // lists every direct native dep) is sufficient. Mirrors the
-      // FORGE_SKIP_NATIVE_REBUILD skip rationale in scripts/patch-remote-rebuild.js.
+      // the flora-colossus realpath walk in getExternalNestedDependencies. That
+      // walk recursively scans every EXTERNAL_DEPENDENCIES subtree (puppeteer,
+      // typeorm, canvas, ...) to discover nested native deps and add them to the
+      // packager keep-list; on the constrained CI runner it can stall packaging
+      // before "Copying files". But the skip path MUST NOT drop transitive
+      // runtime packages: the packaged main script (background.js) requires
+      // `typeorm` at module load, which requires hoisted pure-JS transitives
+      // (e.g. `tslib`) that are NOT in the static EXTERNAL_DEPENDENCIES list. A
+      // bare static allow-list ships a package that crashes on launch with
+      // "Cannot find module 'tslib'". So instead compute the STATIC production
+      // closure via getStaticProductionClosure (cheap package.json reads over
+      // `node_modules/`, no realpath storm) — it keeps the same pure-JS
+      // transitives the full walk would, while skipping the expensive native
+      // realpath scan that stalls CI.
       if (process.env.FORGE_SKIP_NATIVE_REBUILD === "1") {
-        nativeModuleDependenciesToPackage = Array.from(EXTERNAL_DEPENDENCIES);
+        nativeModuleDependenciesToPackage = Array.from(
+          getStaticProductionClosure(EXTERNAL_DEPENDENCIES)
+        );
       } else {
         const nativeModuleDependencies = await getExternalNestedDependencies(
           EXTERNAL_DEPENDENCIES
