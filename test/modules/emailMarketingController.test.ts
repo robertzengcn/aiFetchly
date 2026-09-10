@@ -137,7 +137,7 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.contain(
-        "id,name,from,host,port,ssl,receiveProtocol,create_time"
+        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,create_time"
       );
       expect(csv).to.contain("Primary SMTP");
       expect(csv).to.contain("user1@example.com");
@@ -160,6 +160,12 @@ describe("EmailMarketingController", () => {
       expect(JSON.stringify(payload)).to.not.contain("SECRET-smtp-password");
       // Safe fields present: the sender email is a visible list column.
       expect(JSON.stringify(payload)).to.contain("user1@example.com");
+      // New identity fields are exported. makeService leaves smtpUsername /
+      // replyTo unset (legacy row), so the resolver's fallbacks apply:
+      // effective smtpUsername === from, replyTo === null.
+      const service0 = payload.services[0] as Record<string, unknown>;
+      expect(service0.smtpUsername).to.equal("user1@example.com");
+      expect(service0.replyTo).to.equal(null);
     });
 
     it("returns a header-only CSV when there are no services", async () => {
@@ -172,8 +178,59 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.equal(
-        "id,name,from,host,port,ssl,receiveProtocol,create_time\n"
+        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,create_time\n"
       );
+    });
+
+    it("exports explicit smtpUsername and replyTo values (no fallback)", async () => {
+      // A service with explicit identity columns exports those values, not
+      // the resolver's legacy fallbacks (smtpUsername -> from, replyTo -> null).
+      const service = makeService(3, "Identity Service");
+      service.smtpUsername = "login@example.com";
+      service.replyTo = "replies@example.com";
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([service]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      expect(csv).to.contain("login@example.com");
+      expect(csv).to.contain("replies@example.com");
+
+      const payload = (await emailMarketingController.exportEmailServices(
+        "json"
+      )) as {
+        total: number;
+        services: Record<string, unknown>[];
+        exportDate: string;
+      };
+      const service0 = payload.services[0];
+      expect(service0.smtpUsername).to.equal("login@example.com");
+      expect(service0.replyTo).to.equal("replies@example.com");
+    });
+
+    it("exports no password key or value in either format for a password-bearing service", async () => {
+      // makeService sets a real password; neither the CSV nor the JSON export
+      // may carry it, and the JSON row must not even contain a `password` key.
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon
+          .stub()
+          .resolves([makeService(4, "Secret Service")]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+      expect(csv).to.not.contain("SECRET-smtp-password");
+
+      const payload = await emailMarketingController.exportEmailServices(
+        "json"
+      );
+      const serialized = JSON.stringify(payload);
+      expect(serialized).to.not.contain("SECRET-smtp-password");
+      expect(serialized).to.not.contain('"password"');
     });
   });
 

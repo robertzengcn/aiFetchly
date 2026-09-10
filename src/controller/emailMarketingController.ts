@@ -312,26 +312,27 @@ export class EmailMarketingController {
   ): Promise<string | EmailServiceExportPayload> {
     const entities = await this.emailServiceModule.exportEmailServicesList();
 
-    if (format === "json") {
-      const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
-        const identity = resolveEmailServiceIdentity({
-          smtpUsername: item.smtpUsername,
-          from: item.from,
-          replyTo: item.replyTo,
-        });
-        return {
-          id: item.id,
-          name: item.name,
-          smtpUsername: identity.smtpUsername,
-          from: item.from,
-          replyTo: identity.replyToAddress,
-          host: item.host,
-          port: item.port,
-          ssl: item.ssl,
-          receiveProtocol: item.receiveProtocol,
-          create_time: item.createdAt?.toISOString() || "",
-        };
+    const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
+      const identity = resolveEmailServiceIdentity({
+        smtpUsername: item.smtpUsername,
+        from: item.from,
+        replyTo: item.replyTo,
       });
+      return {
+        id: item.id,
+        name: item.name,
+        smtpUsername: identity.smtpUsername,
+        from: item.from,
+        replyTo: identity.replyToAddress,
+        host: item.host,
+        port: item.port,
+        ssl: item.ssl,
+        receiveProtocol: item.receiveProtocol,
+        create_time: item.createdAt?.toISOString() || "",
+      };
+    });
+
+    if (format === "json") {
       return {
         total: rows.length,
         services: rows,
@@ -342,27 +343,30 @@ export class EmailMarketingController {
     const headers = [
       "id",
       "name",
+      "smtpUsername",
       "from",
+      "replyTo",
       "host",
       "port",
       "ssl",
       "receiveProtocol",
       "create_time",
     ];
-    const csvRows = entities.map((item) => [
-      item.id?.toString() ?? "",
-      this.escapeCsvField(item.name ?? ""),
-      this.escapeCsvField(item.from ?? ""),
-      this.escapeCsvField(item.host ?? ""),
-      item.port ?? "",
-      item.ssl?.toString() ?? "",
-      item.receiveProtocol ?? "",
-      item.createdAt?.toISOString() ?? "",
+    const csvRows = rows.map((row) => [
+      row.id.toString(),
+      this.escapeCsvField(row.name),
+      this.escapeCsvField(row.smtpUsername),
+      this.escapeCsvField(row.from),
+      row.replyTo === null ? "" : this.escapeCsvField(row.replyTo),
+      this.escapeCsvField(row.host),
+      row.port,
+      row.ssl.toString(),
+      row.receiveProtocol,
+      row.create_time,
     ]);
-    const csv = [
-      headers.join(","),
-      ...csvRows.map((row) => row.join(",")),
-    ].join("\n");
+    const csv = [headers.join(","), ...csvRows.map((r) => r.join(","))].join(
+      "\n"
+    );
     return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
   }
 
