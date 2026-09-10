@@ -1,15 +1,18 @@
 import { EmailServiceModel } from "@/model/EmailService.model";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
-/**
- * Resolve the frozen envelope sender from configured SMTP services
- * (AD-005/AD-006). The model never supplies the sender; trusted app code
- * binds `email_service.from` (legacy rows: `from_email`) into the hash
- * before review/authorization.
- */
-
+/** Legacy single-field resolver result (kept for backward-compatible callers). */
 export interface ResolvedOutboundSender {
   readonly emailServiceId: number;
   readonly senderAddress: string;
+}
+
+/** Full identity result (§13.2): authentication + visible + reply identities. */
+export interface ResolvedOutboundIdentity {
+  readonly emailServiceId: number;
+  readonly smtpUsername: string;
+  readonly senderAddress: string;
+  readonly replyToAddress: string | null;
 }
 
 export interface ResolveOutboundSenderOptions {
@@ -49,13 +52,13 @@ export function normalizeEmailServiceIds(raw: unknown): number[] {
 }
 
 /**
- * Look up the envelope sender for the preferred/candidate services, then
- * fall back to the first active SMTP service with a non-empty from-address.
- * Returns null when nothing usable is configured — callers must fail closed.
+ * Resolve the full effective identity for the preferred/candidate services,
+ * falling back to the first active service with a non-empty From. Returns
+ * null when nothing usable is configured — callers must fail closed.
  */
-export async function resolveOutboundSender(
+export async function resolveOutboundIdentity(
   options: ResolveOutboundSenderOptions
-): Promise<ResolvedOutboundSender | null> {
+): Promise<ResolvedOutboundIdentity | null> {
   const model = new EmailServiceModel(options.dbpath);
   const orderedIds: number[] = [];
   const seen = new Set<number>();
@@ -71,11 +74,27 @@ export async function resolveOutboundSender(
     pushId(id);
   }
 
+  const resolveOne = async (
+    id: number
+  ): Promise<ResolvedOutboundIdentity | null> => {
+    const raw = await model.readIdentity(id);
+    if (!raw || !raw.from) return null;
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: raw.smtpUsername,
+      from: raw.from,
+      replyTo: raw.replyTo,
+    });
+    return {
+      emailServiceId: id,
+      smtpUsername: identity.smtpUsername,
+      senderAddress: identity.fromAddress,
+      replyToAddress: identity.replyToAddress,
+    };
+  };
+
   for (const id of orderedIds) {
-    const senderAddress = await model.readSenderAddress(id);
-    if (senderAddress) {
-      return { emailServiceId: id, senderAddress };
-    }
+    const resolved = await resolveOne(id);
+    if (resolved) return resolved;
   }
 
   const listed = await model.listEmailServices(0, 1000);
@@ -83,10 +102,21 @@ export async function resolveOutboundSender(
     if (service.status !== 1 || seen.has(service.id)) {
       continue;
     }
-    const senderAddress = await model.readSenderAddress(service.id);
-    if (senderAddress) {
-      return { emailServiceId: service.id, senderAddress };
-    }
+    const resolved = await resolveOne(service.id);
+    if (resolved) return resolved;
   }
   return null;
+}
+
+/** Thin wrapper preserving the legacy single-field return shape. */
+export async function resolveOutboundSender(
+  options: ResolveOutboundSenderOptions
+): Promise<ResolvedOutboundSender | null> {
+  const identity = await resolveOutboundIdentity(options);
+  return identity
+    ? {
+        emailServiceId: identity.emailServiceId,
+        senderAddress: identity.senderAddress,
+      }
+    : null;
 }

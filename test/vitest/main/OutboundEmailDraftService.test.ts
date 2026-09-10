@@ -6,6 +6,7 @@ import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type { BatchEnvelopeEntryV2 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { SqliteDb } from "@/config/SqliteDb";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
 import path from "node:path";
@@ -246,6 +247,119 @@ describe("OutboundEmailDraftService.generateBatch", () => {
     const revision = await model.readCurrentRevision(drafts[0].id);
     expect(revision?.senderAddress).toBe("repair-sender@example.com");
     expect(revision?.revisionNumber).toBe(2);
+  });
+
+  it("creates v2 revisions with smtpUsername, replyToAddress, and envelopeVersion=2", async () => {
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    await SqliteDb.ensureInitialized();
+
+    const result = await service.generateBatch({
+      conversationId: "conv-v2",
+      sourceUserMessageId: "msg-v2",
+      intentDecisionId: 1,
+      recipientSourceType: "direct",
+      recipients: [
+        { address: "alpha@example.com", title: "Alpha", source: "direct" },
+      ],
+      serviceIds: [1],
+      senderAddress: "sender@example.com",
+      subject: "V2 test",
+      bodyText: "Body v2",
+      bodyHtml: "<p>v2</p>",
+    });
+    expect(result.success).toBe(true);
+
+    const model = new OutboundEmailDraftModel(tmpDir);
+    const drafts = await model.listDraftsByBatch(result.batchId!);
+    const revision = await model.readCurrentRevision(drafts[0].id);
+    expect(revision).not.toBeNull();
+    expect(revision!.envelopeVersion).toBe(2);
+    // Caller-supplied sender address with serviceId=1 → smtpUsername defaults
+    // to the resolved identity's smtpUsername (fallback rule: from when no
+    // smtpUsername configured on the service).
+    expect(revision!.smtpUsername).toBe("sender@example.com");
+    expect(revision!.replyToAddress).toBeNull();
+  });
+
+  it("produces a v2 content hash that differs from v1 for the same content", async () => {
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    await SqliteDb.ensureInitialized();
+
+    const result = await service.generateBatch({
+      conversationId: "conv-hash",
+      sourceUserMessageId: "msg-hash",
+      intentDecisionId: 1,
+      recipientSourceType: "direct",
+      recipients: [
+        { address: "hash@example.com", title: "Hash", source: "direct" },
+      ],
+      serviceIds: [1],
+      senderAddress: "sender@example.com",
+      subject: "Hash test",
+      bodyText: "Hash body",
+      bodyHtml: null,
+    });
+    expect(result.success).toBe(true);
+
+    const model = new OutboundEmailDraftModel(tmpDir);
+    const drafts = await model.listDraftsByBatch(result.batchId!);
+    const revision = await model.readCurrentRevision(drafts[0].id);
+    expect(revision).not.toBeNull();
+
+    // The stored hash must match a v2 recomputation.
+    const v2Envelope: BatchEnvelopeEntryV2 = {
+      version: 2,
+      draftId: drafts[0].id,
+      emailServiceId: revision!.emailServiceId,
+      smtpUsername: revision!.smtpUsername ?? "",
+      senderAddress: revision!.senderAddress,
+      replyToAddress: revision!.replyToAddress,
+      recipientAddress: revision!.recipientAddress,
+      subject: revision!.subject,
+      bodyText: revision!.bodyText,
+      bodyHtml: revision!.bodyHtml,
+    };
+    const v2Hash = OutboundEmailEnvelopeHasher.hashEnvelopeV2(v2Envelope);
+    expect(revision!.contentHash).toBe(v2Hash);
+
+    // v1 hash over the same content must differ (v2 includes smtpUsername
+    // and replyToAddress fields that v1 does not).
+    const v1Hash = OutboundEmailEnvelopeHasher.hashEnvelope({
+      version: 1,
+      emailServiceId: revision!.emailServiceId,
+      senderAddress: revision!.senderAddress,
+      recipientAddress: revision!.recipientAddress,
+      subject: revision!.subject,
+      bodyText: revision!.bodyText,
+      bodyHtml: revision!.bodyHtml,
+    });
+    expect(v2Hash).not.toBe(v1Hash);
+  });
+
+  it("fillMissingSenders creates v2 revisions with identity snapshot", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedSmtpService("identity-sender@example.com");
+    const batchId = await seedEmptySenderBatch(serviceId);
+    const service = new OutboundEmailDraftService(tmpDir, {
+      aiEnabledOverride: true,
+    });
+    const filled = await service.fillMissingSenders(batchId);
+    expect(filled.changed).toBe(true);
+
+    const model = new OutboundEmailDraftModel(tmpDir);
+    const drafts = await model.listDraftsByBatch(batchId);
+    const revision = await model.readCurrentRevision(drafts[0].id);
+    expect(revision?.envelopeVersion).toBe(2);
+    expect(revision?.senderAddress).toBe("identity-sender@example.com");
+    // No explicit smtpUsername on the seeded service → fallback rule applies
+    // (smtpUsername = from address).
+    expect(revision?.smtpUsername).toBe("identity-sender@example.com");
+    expect(revision?.replyToAddress).toBeNull();
   });
 });
 
