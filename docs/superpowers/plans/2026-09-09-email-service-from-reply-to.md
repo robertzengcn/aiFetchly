@@ -1085,6 +1085,8 @@ git commit -m "feat: bound email-service update IPC schema + merge smtpUsername/
 
 **Phase 1 exit check:** legacy services resolve exactly as before (nullable columns → From fallback); new identities can be stored and loaded without sending changes. Run `yarn vitest-puppeteer test/vitest/utilitycode/EmailServiceIdentityResolver.test.ts` + `yarn test test/modules/emailServiceModule.validation.test.ts` + `yarn testmain test/vitest/main/EmailServiceLegacySchemaSync.test.ts` — all PASS.
 
+**FOLLOW-UP (registered during Task 6 code-quality review):** the EMAILSERVICEUPDATE handler calls `updateEmailService`/`createEmailService` directly and does NOT invoke `validateEmailService` before persistence, so CR/LF in `from`/`smtpUsername`/`replyTo` is NOT rejected on the IPC update/create path (only the import loop at `emailMarketingController.ts:427` validates). This is pre-existing behavior (the old passthrough schema + no validation had the same gap), not a regression introduced by Phase 1, but it leaves the §7.2 "reject CR/LF before persistence" invariant unenforced on that path. The `emailServiceUpdateInputSchema` bounds length only. **Closing this** = wire `validateEmailService(entity, { mode: "update"|"create", hasStoredPassword })` into the handler (needs a `findEmailServiceByName`/`getEmailService` read to determine `hasStoredPassword` for update mode). Scope this as its own task once Phase 1 has landed and the renderer form (Task 9) is in place, to avoid destabilizing the phased rollout. Until then, a clarifying comment on `emailServiceUpdateInputSchema` documents that the schema is not the complete security boundary.
+
 ---
 
 ### Task 7: Safe export projection + format parity (Phase 2, part A)

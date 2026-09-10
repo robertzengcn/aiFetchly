@@ -51,6 +51,16 @@ export const emailMarketingUpdateInputSchema = lazySchema(() =>
  * identity fields (§12.4). The shared passthrough schema above stays for
  * TEMPUPDATE/FILTERUPDATE; the email-service update must NOT rely on
  * `.passthrough()` for smtpUsername/from/replyTo.
+ *
+ * NOTE on CR/LF (§7.2): this schema bounds LENGTH only (`.max(...)`). It
+ * does NOT reject `\r`/`\n` in smtpUsername/from/replyTo — that header-
+ * injection defense lives in `EmailServiceModule.validateEmailService` via
+ * `containsEmailHeaderBreak`. The EMAILSERVICEUPDATE handler does NOT yet
+ * call `validateEmailService` before persistence (pre-existing behavior; the
+ * import path at `emailMarketingController` does validate). Wiring validation
+ * into this handler is a tracked follow-up; until then a CR/LF value can be
+ * persisted from the update/create path. The schema is NOT the complete
+ * security boundary for identity fields.
  */
 export const emailServiceUpdateInputSchema = lazySchema(() =>
   z.object({
