@@ -1416,6 +1416,29 @@ export class SkillInstallationModule extends BaseModule {
         : "activation path missing or unreadable",
     });
 
+    // 1a. Linked installations: the link target must still exist (§17.5) —
+    // a vanished checkout leaves the skill unusable and repair must say so
+    // rather than silently re-registering stale content.
+    if (
+      entity.activationMode === "symbolic-link" ||
+      entity.activationMode === "junction"
+    ) {
+      try {
+        const real = fs.realpathSync(entity.activationPath);
+        checks.push({
+          name: "link-target-present",
+          passed: true,
+          detail: real,
+        });
+      } catch (err) {
+        checks.push({
+          name: "link-target-present",
+          passed: false,
+          detail: `Linked target is missing (${err instanceof Error ? err.message : String(err)}). Restore the folder or reinstall.`,
+        });
+      }
+    }
+
     // 1b. Content hash matches the RECORDED revision (§24.2: repair must
     // detect changed content without silently updating to a new revision).
     // The recorded hash is the staged-tree hash (stagePackage.hashTree), so
@@ -1566,6 +1589,86 @@ export class SkillInstallationModule extends BaseModule {
       });
     }
     return views;
+  }
+
+  /**
+   * FR-11 / §17.5 linked-target refresh: re-read the ORIGINAL source through
+   * the app-owned link, detect a changed or vanished target, and refresh the
+   * runtime catalog when the content changed. Never deletes or rewrites the
+   * external target; never silently updates the recorded revision.
+   */
+  async refreshLinkedInstallation(
+    installationId: string
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: "unchanged" | "changed";
+        readonly contentChanged: boolean;
+      }
+    | { readonly ok: false; readonly code: string; readonly message: string }
+  > {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) {
+      return {
+        ok: false,
+        code: "SKILL_NOT_FOUND",
+        message: `No installation with id '${installationId}'.`,
+      };
+    }
+    if (
+      entity.activationMode !== "symbolic-link" &&
+      entity.activationMode !== "junction"
+    ) {
+      return {
+        ok: false,
+        code: "LINK_UNSUPPORTED",
+        message: "Only linked installations can be refreshed from their source.",
+      };
+    }
+    try {
+      fs.realpathSync(entity.activationPath);
+    } catch {
+      return {
+        ok: false,
+        code: "LINK_TARGET_MISSING",
+        message:
+          "The linked source folder is gone. Restore it, or uninstall the skill and reinstall from the new location.",
+      };
+    }
+    // Re-register the catalog from the CURRENT target content so external
+    // edits become visible after the refresh (FR-11 acceptance).
+    const registered = this.registerPromptSkill(
+      entity.activationPath,
+      installationId
+    );
+    if (!registered) {
+      return {
+        ok: false,
+        code: "SKILL_FORMAT_INVALID",
+        message:
+          "The linked source no longer contains a readable SKILL.md.",
+      };
+    }
+    // Content change detection against the recorded activation baseline.
+    let contentChanged = false;
+    try {
+      const { hashTree } = await import(
+        "@/childprocess/skill-installation/stagePackage"
+      );
+      const current = hashTree(entity.activationPath);
+      const recorded = (JSON.parse(entity.metadataJson ?? "{}") as {
+        activationContentHash?: string;
+      }).activationContentHash;
+      contentChanged = recorded !== undefined && current !== recorded;
+    } catch {
+      /* hashing is best-effort; the refresh itself already succeeded */
+    }
+    return {
+      ok: true,
+      status: contentChanged ? "changed" : "unchanged",
+      contentChanged,
+    };
   }
 
   async disable(
@@ -1755,16 +1858,46 @@ export class SkillInstallationModule extends BaseModule {
 
     const activation = new SkillActivationService();
     // acquiredRoot IS the absolute staging path recorded at acquisition.
-    const sourceRoot = plan.source.acquiredRoot;
+    let sourceRoot = plan.source.acquiredRoot;
+    const isLinkedMode =
+      plan.activation.mode === "symbolic-link" ||
+      plan.activation.mode === "junction";
+    // FR-11: linked development mode exposes the USER'S original folder —
+    // NOT the installer's staging copy (external edits stay live; staging is
+    // app-owned and cleaned). Only local folder sources can link; a remote
+    // source has no durable original on disk, so linked mode fails with a
+    // typed error instead of silently linking ephemeral staging.
+    let linkedTargetPath: string | null = null;
+    if (isLinkedMode) {
+      const original = plan.source.canonicalUri;
+      if (
+        path.isAbsolute(original) &&
+        fs.existsSync(original) &&
+        fs.statSync(original).isDirectory()
+      ) {
+        sourceRoot = original;
+        linkedTargetPath = original;
+      } else {
+        await this.fail(
+          sessions,
+          events,
+          sessionId,
+          "LINK_CREATION_FAILED",
+          "Linked install mode requires a local folder source so the link targets your original checkout; use managed copy for remote repositories."
+        );
+        return this.errorSnapshot(
+          "failed",
+          "LINK_CREATION_FAILED",
+          "Linked install mode requires a local folder source so the link targets your original checkout; use managed copy for remote repositories.",
+          sessionId
+        );
+      }
+    }
 
     const result = await activation.activate({
       sourceRoot,
       skillName: selected.name,
-      mode:
-        plan.activation.mode === "symbolic-link" ||
-        plan.activation.mode === "junction"
-          ? ("linked" as const)
-          : ("managed-copy" as const),
+      mode: isLinkedMode ? ("linked" as const) : ("managed-copy" as const),
       contentHash: plan.source.contentHash,
       installationId: sessionId,
     });
@@ -1814,6 +1947,7 @@ export class SkillInstallationModule extends BaseModule {
       planRevision: plan.planRevision,
       backupPath: result.backupPath,
       ...(activationContentHash ? { activationContentHash } : {}),
+      ...(linkedTargetPath ? { linkedTargetPath } : {}),
     });
     // Upsert by installation identity (D2 review test): a prior
     // revoked/failed row for the same source+revision+mode must be

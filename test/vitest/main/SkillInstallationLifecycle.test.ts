@@ -569,3 +569,144 @@ describe("lifecycle identity for every package kind + repair verification (FR-19
     expect(await module.enable(installationId)).toBe(true);
   }, 120_000);
 });
+
+describe("linked development mode targets the original source (FR-11, NFR-05)", () => {
+  /** Install the fixture in linked mode; returns the module + installation id. */
+  async function installLinked(): Promise<{
+    module: SkillInstallationModule;
+    installationId: string | null;
+  }> {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-linked",
+      source: fixtureRoot,
+      mode: "linked",
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    return { module, installationId: approved.installationId };
+  }
+
+  it("the link points at the USER'S folder, not installer staging", async () => {
+    const { installationId } = await installLinked();
+    expect(installationId).toBeTruthy();
+    if (!installationId) return;
+    const { SkillInstallationModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const installations = new SkillInstallationModel(tmpDir);
+    const row = await installations.findByInstallationId(installationId);
+    expect(row?.activationMode === "symbolic-link" || row?.activationMode === "junction").toBe(true);
+    // The link resolves to the ORIGINAL fixture folder.
+    expect(fs.realpathSync(row?.activationPath ?? "")).toBe(
+      fs.realpathSync(fixtureRoot)
+    );
+    // Provenance records the link target (§22.3).
+    expect(JSON.parse(row?.metadataJson ?? "{}")).toMatchObject({
+      linkedTargetPath: fixtureRoot,
+    });
+  }, 120_000);
+
+  it("external edits become visible after refresh; vanished targets are typed", async () => {
+    const { module, installationId } = await installLinked();
+    if (!installationId) return;
+
+    // Baseline: unchanged.
+    const before = await module.refreshLinkedInstallation(installationId);
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(before.status).toBe("unchanged");
+
+    // External edit in the ORIGINAL folder.
+    fs.appendFileSync(
+      path.join(fixtureRoot, "SKILL.md"),
+      "\n## Edited externally\n"
+    );
+    const after = await module.refreshLinkedInstallation(installationId);
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.status).toBe("changed");
+    // The edit is visible THROUGH the activation path (no re-copy).
+    const throughLink = fs.readFileSync(
+      path.join(
+        (await (async () => {
+          const { SkillInstallationModel } = await import(
+            "@/model/SkillInstallation.model"
+          );
+          const row = await new SkillInstallationModel(tmpDir).findByInstallationId(
+            installationId
+          );
+          return row?.activationPath ?? "";
+        })()),
+        "SKILL.md"
+      ),
+      "utf-8"
+    );
+    expect(throughLink).toContain("Edited externally");
+
+    // Vanished target → typed LINK_TARGET_MISSING, nothing deleted.
+    const activationPath = await (async () => {
+      const { SkillInstallationModel } = await import(
+        "@/model/SkillInstallation.model"
+      );
+      const row = await new SkillInstallationModel(tmpDir).findByInstallationId(
+        installationId
+      );
+      return row?.activationPath ?? "";
+    })();
+    // Move the ORIGINAL away (simulating a removed checkout) — the link
+    // itself stays (it is app-owned).
+    const movedAway = `${fixtureRoot}-moved`;
+    fs.renameSync(fixtureRoot, movedAway);
+    try {
+      const missing = await module.refreshLinkedInstallation(installationId);
+      expect(missing.ok).toBe(false);
+      if (!missing.ok) expect(missing.code).toBe("LINK_TARGET_MISSING");
+      // Uninstall still removes ONLY the link; the moved source survives.
+      const uninstall = await module.uninstall({ installationId });
+      expect(uninstall.ok).toBe(true);
+      if (uninstall.ok) expect(uninstall.removed).toBe("link");
+      expect(fs.existsSync(movedAway)).toBe(true);
+      expect(fs.existsSync(activationPath)).toBe(false);
+    } finally {
+      fs.renameSync(movedAway, fixtureRoot);
+    }
+  }, 180_000);
+
+  it("linked mode with a REMOTE source never links staging", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-linked-remote",
+      source: "https://github.com/browser-use/video-use",
+      mode: "linked",
+    });
+    if (prepared.state === "failed") {
+      // Offline (this host): remote acquisition fails with the typed code —
+      // the wrong-link scenario is unreachable, which is the invariant.
+      expect(prepared.errorCode).toBe("SOURCE_ACQUISITION_FAILED");
+      return;
+    }
+    // Online: the plan holds; approving may pause at awaiting_secret for the
+    // fixture's declared credential — resume, then activation must fail with
+    // the typed LINK_CREATION_FAILED (linked requires a local folder).
+    expect(prepared.state).toBe("awaiting_approval");
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("failed");
+    expect(approved.errorCode).toBe("LINK_CREATION_FAILED");
+  }, 120_000);
+});
