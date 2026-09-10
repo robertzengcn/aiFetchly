@@ -681,6 +681,8 @@ export class EmailSend {
       const emailserviceenditydata: EmailServiceEntitydata = {
         name: randomEmailservice.name,
         from: randomEmailservice.from,
+        smtpUsername: randomEmailservice.smtpUsername ?? null,
+        replyTo: randomEmailservice.replyTo ?? null,
         host: randomEmailservice.host,
         port: randomEmailservice.port,
         ssl: randomEmailservice.ssl,
