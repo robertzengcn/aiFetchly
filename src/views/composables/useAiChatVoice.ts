@@ -26,6 +26,7 @@ import {
   prepareLocalAiRuntimeInstall,
 } from "@/views/api/localAiRuntime";
 import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
+import { emitShellDiagnostic } from "@/views/utils/shellDiagnostics";
 import type {
   AiChatVoiceRuntimeStatus,
   AiChatVoiceSettingsView,
@@ -292,6 +293,15 @@ export function useAiChatVoice(options: {
       ) {
         modelInstallError.value = null;
       }
+      // Structured, content-free diagnostics (design §22): capability
+      // booleans + outcome only — never transcript or audio details.
+      emitShellDiagnostic({
+        type: "voice.settings_loaded",
+        inputEnabled: inputEnabled.value,
+        spokenEnabled: spokenResponseEnabled.value,
+        runtimeReady: !runtimeUnavailable.value,
+        outcome: "ok",
+      });
     } catch {
       // Settings load failure: voice actions show unavailable/setup state;
       // typed chat remains usable (design §11.4). settingsUnavailable keeps
@@ -299,6 +309,13 @@ export function useAiChatVoice(options: {
       // instead of silently removing the capability.
       settingsUnavailable.value = true;
       inputEnabled.value = false;
+      emitShellDiagnostic({
+        type: "voice.settings_loaded",
+        inputEnabled: false,
+        spokenEnabled: false,
+        runtimeReady: false,
+        outcome: "error",
+      });
       autoSend.value = false;
       maxRecordingMs.value = DEFAULT_MAX_RECORDING_MS;
       settings.value = null;

@@ -7,6 +7,11 @@ import {
   releaseWorkspaceWatch,
 } from "@/views/api/workspaceWatch";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
+import {
+  emitShellDiagnostic,
+  hashConversationId,
+  workspaceFailureCategory,
+} from "@/views/utils/shellDiagnostics";
 
 /**
  * Shared conversation-workspace state (chat-first shell design §9.1).
@@ -125,6 +130,7 @@ export function useConversationWorkspace(
       void refreshMemoryCount();
       return;
     }
+    const startedAt = Date.now();
     loading.value = true;
     errorMessage.value = null;
     try {
@@ -141,12 +147,26 @@ export function useConversationWorkspace(
         : null;
       // Keep an in-flight setup card open only while no workspace resolved.
       if (ws) setupOpen.value = false;
+      // Structured, content-free diagnostics (design §22): hashed id +
+      // booleans + latency — never the workspace path.
+      emitShellDiagnostic({
+        type: "chat.workspace_loaded",
+        conversationHash: hashConversationId(id),
+        assigned: ws !== null,
+        approved: ws?.approvalState === "approved",
+        latencyMs: Date.now() - startedAt,
+      });
     } catch (err) {
       if (generation !== refreshGeneration) return; // stale response
       // Non-fatal: fall back to the last known safe summary and surface an
       // inline retry state without broadening tool permissions (design §9.3).
       errorMessage.value =
         err instanceof Error ? err.message : "Failed to load workspace";
+      emitShellDiagnostic({
+        type: "chat.workspace_load_failed",
+        conversationHash: hashConversationId(id),
+        category: workspaceFailureCategory(err),
+      });
     } finally {
       if (generation === refreshGeneration) {
         loading.value = false;

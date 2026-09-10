@@ -33,7 +33,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, provide, ref } from "vue";
+import { onMounted, onUnmounted, provide, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
@@ -50,12 +50,30 @@ import {
   isWorkspaceRedesignEnabled,
   setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
+import {
+  emitShellDiagnostic,
+  trackShellMounted,
+  trackShellUnmounted,
+} from "@/views/utils/shellDiagnostics";
 
 const router = useRouter();
 const { t } = useI18n();
 const shell = useAppShellStore();
 const chatWorkspace = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
+
+// Structured, content-free diagnostics (design §22): shell mount counting
+// doubles as duplicate-shell detection in development.
+watch(
+  () => [shell.mode, shell.navigationOpen] as const,
+  ([mode, open]) => {
+    emitShellDiagnostic({
+      type: "shell.navigation_overlay_changed",
+      mode,
+      open,
+    });
+  }
+);
 
 /** Rollout flag state (workspace redesign PRD §33) — footer mode toggle. */
 const redesignDefault = ref(false);
@@ -107,6 +125,7 @@ async function onToggleMode(): Promise<void> {
 }
 
 onMounted(() => {
+  emitShellDiagnostic({ type: "shell.mounted", duplicateCount: trackShellMounted().duplicates });
   // Application-scoped bootstrap: exactly one summary subscription for the
   // authenticated lifetime (design §8.3), torn down only when the
   // authenticated application unmounts — never on center-route changes.
@@ -121,6 +140,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  trackShellUnmounted();
   chatWorkspace.teardown();
 });
 </script>

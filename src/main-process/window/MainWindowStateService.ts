@@ -112,23 +112,55 @@ export class MainWindowStateService {
       };
     }
     let raw: unknown = null;
+    let invalidReason: "unreadable" | null = null;
     try {
       const value = this.store.getValue(STATE_KEY);
       raw = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
     } catch {
       // Corrupt or unavailable state — fall through to defaults.
+      invalidReason = "unreadable";
     }
     const saved =
       raw === null
         ? null
         : normalizeSavedState(raw, this.currentDisplays(), primary);
     if (saved) {
+      // Structured, content-free diagnostics (technical design §22):
+      // bounded booleans only — never bounds values or display details.
+      // Display clamping is detected by comparing the persisted bounds with
+      // the work-area-clamped result the normalizer returned.
+      const rawBounds = (
+        raw as {
+          normalBounds?: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+          };
+        } | null
+      )?.normalBounds;
+      const clamped =
+        rawBounds !== undefined &&
+        (rawBounds.x !== saved.normalBounds.x ||
+          rawBounds.y !== saved.normalBounds.y ||
+          rawBounds.width !== saved.normalBounds.width ||
+          rawBounds.height !== saved.normalBounds.height);
+      console.log(
+        `[window-state] restored source=saved clamped=${
+          clamped ? "true" : "false"
+        } maximized=${saved.maximized ? "true" : "false"}`
+      );
       return {
         normalBounds: saved.normalBounds,
         maximized: saved.maximized,
         source: "saved",
       };
     }
+    console.log(
+      `[window-state] restored source=default reason=${
+        invalidReason ?? (raw === null ? "missing" : "invalid")
+      }`
+    );
     return {
       normalBounds: computeInitialBounds(primary),
       maximized: false,

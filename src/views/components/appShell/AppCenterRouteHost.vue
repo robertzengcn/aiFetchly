@@ -42,6 +42,7 @@ import LegacyPageFrame from "./LegacyPageFrame.vue";
 import { findSurfaceByRouteName } from "@/views/router/uiMigrationRegistry";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useInnerPageShellFlag } from "@/views/composables/useInnerPageShellFlag";
+import { emitShellDiagnostic } from "@/views/utils/shellDiagnostics";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -72,9 +73,17 @@ let initialRouteWatch = true;
 /** Owner-route inspector cleanup (design §9.4). */
 watch(
   () => route.name,
-  (name) => {
+  (name, previousName) => {
     if (typeof name === "string") {
       inspector.onRouteChanged(String(route.path));
+    }
+    // Structured, content-free diagnostics (design §22): route names only.
+    if (!initialRouteWatch) {
+      emitShellDiagnostic({
+        type: "shell.route_changed",
+        from: typeof previousName === "string" ? previousName : null,
+        to: typeof name === "string" ? name : null,
+      });
     }
     // Brief loading affordance keeps the shell interactive (IPR-044);
     // it never blocks navigation or remounts the shell.

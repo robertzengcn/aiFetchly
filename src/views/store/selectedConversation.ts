@@ -27,6 +27,10 @@ import { windowInvoke } from "@/views/utils/apirequest";
 import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
 import { markPermissionPromptExecuting } from "@/views/components/aiChatV2/toolExecutionStateUtil";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import {
+  emitShellDiagnostic,
+  hashConversationId,
+} from "@/views/utils/shellDiagnostics";
 
 /** Default mounted ordinary message rows (design §12.2: bounded window). */
 export const MAX_MOUNTED_MESSAGES = 200;
@@ -183,12 +187,24 @@ export const useSelectedConversationStore = defineStore(
         return;
       }
 
+      const startedAt = Date.now();
       ensureDetailSubscription();
       try {
         const snapshot = await selectConversation(conversationId, generation);
         // Apply only if this handshake is still the latest selection.
-        if (appliedGeneration !== generation) return;
-        if (snapshot.acceptedGeneration === -1) return;
+        if (
+          appliedGeneration !== generation ||
+          snapshot.acceptedGeneration === -1
+        ) {
+          emitShellDiagnostic({
+            type: "chat.selection_loaded",
+            conversationHash: hashConversationId(conversationId),
+            generation,
+            latencyMs: Date.now() - startedAt,
+            outcome: "superseded",
+          });
+          return;
+        }
         presenter.seedHistory([...snapshot.messages]);
         nextBeforeCursor = snapshot.nextBefore;
         hasOlder.value = snapshot.hasOlder;
@@ -196,11 +212,25 @@ export const useSelectedConversationStore = defineStore(
         activeRunId.value = snapshot.activeRunId;
         selectedTitle.value = snapshot.title;
         syncFromPresenter();
+        emitShellDiagnostic({
+          type: "chat.selection_loaded",
+          conversationHash: hashConversationId(conversationId),
+          generation,
+          latencyMs: Date.now() - startedAt,
+          outcome: "ok",
+        });
         await markReadAfterLoad(conversationId);
       } catch (err) {
         if (appliedGeneration === generation) {
           loadError.value =
             err instanceof Error ? err.message : "Failed to load conversation";
+          emitShellDiagnostic({
+            type: "chat.selection_loaded",
+            conversationHash: hashConversationId(conversationId),
+            generation,
+            latencyMs: Date.now() - startedAt,
+            outcome: "error",
+          });
         }
       } finally {
         if (appliedGeneration === generation) {

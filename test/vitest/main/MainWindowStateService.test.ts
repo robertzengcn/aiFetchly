@@ -100,6 +100,58 @@ describe("MainWindowStateService.resolveInitialState (design §14.4/§14.7)", ()
     });
   });
 
+  it("emits bounded content-free restore diagnostics (design §22)", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      // Valid saved state within the display: saved source, not clamped.
+      const saved = new MainWindowStateService({
+        store: makeStore({
+          "mainWindow.state.v1": JSON.stringify({
+            version: 1,
+            maximized: true,
+            normalBounds: { x: 40, y: 40, width: 1100, height: 700 },
+            displayId: "1",
+          }),
+        }),
+        screen: makeScreen(),
+      });
+      expect(saved.resolveInitialState().source).toBe("saved");
+      expect(logSpy).toHaveBeenLastCalledWith(
+        "[window-state] restored source=saved clamped=false maximized=true"
+      );
+
+      // Corrupt state: bounded reason category only, no raw payload.
+      const corrupt = new MainWindowStateService({
+        store: makeStore({ "mainWindow.state.v1": "{not json" }),
+        screen: makeScreen(),
+      });
+      expect(corrupt.resolveInitialState().source).toBe("default");
+      expect(logSpy).toHaveBeenLastCalledWith(
+        "[window-state] restored source=default reason=unreadable"
+      );
+
+      // Off-work-area bounds are clamped onto a connected display and the
+      // clamping is observable without leaking bounds values.
+      const clamped = new MainWindowStateService({
+        store: makeStore({
+          "mainWindow.state.v1": JSON.stringify({
+            version: 1,
+            maximized: false,
+            normalBounds: { x: 0, y: 0, width: 2500, height: 900 },
+            displayId: "1",
+          }),
+        }),
+        screen: makeScreen(),
+      });
+      clamped.resolveInitialState();
+      expect(logSpy).toHaveBeenLastCalledWith(
+        "[window-state] restored source=saved clamped=true maximized=false"
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("falls back to centered defaults on corrupt stored JSON", () => {
     const store = makeStore({ "mainWindow.state.v1": "{not json" });
     const service = new MainWindowStateService({ store, screen: makeScreen() });
