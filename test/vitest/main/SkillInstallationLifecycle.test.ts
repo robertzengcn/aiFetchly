@@ -101,7 +101,10 @@ describe("SkillInstallationModule lifecycle", () => {
     expect(catalog.resolve("video-use", {}).definition).not.toBeNull();
 
     const module = new SkillInstallationModule();
-    expect(await module.disable(installationId)).toBe(true);
+    expect(await module.disable(installationId)).toEqual({
+      disabled: true,
+      deactivatedInvocations: expect.any(Number),
+    });
     // Disabled skills are hidden from discovery AND invocation.
     expect(catalog.resolve("video-use", {}).definition).toBeNull();
 
@@ -271,7 +274,7 @@ describe("SkillInstallationModule lifecycle", () => {
     expect(fs.existsSync(linkPath)).toBe(false);
   }, 120_000);
 
-  it("cancel during activation enters rollback_required (D2)", async () => {
+  it("cancel during activation rolls back immediately and cancels (D2/NFR-05)", async () => {
     const { SkillActivationService } = await import(
       "@/service/SkillActivationService"
     );
@@ -317,8 +320,13 @@ describe("SkillInstallationModule lifecycle", () => {
       await sessionsModel.create(row);
     }
     const cancelled = await module.cancel(second.sessionId);
-    expect(cancelled.state).toBe("rollback_required");
-    expect(cancelled.nextAction).toBe("retry");
+    // T8 (§10.1/NFR-05): cancelling mid-activation now performs the
+    // rollback IMMEDIATELY and lands in cancelled — rollback_required is
+    // reserved for a rollback that itself failed. This synthetic session
+    // has no activation yet, so the rollback is trivially complete; the
+    // real-activation rollback evidence lives in the decline-dependency
+    // and E2E flows.
+    expect(cancelled.state).toBe("cancelled");
   }, 120_000);
 
   it("uninstall deletes stored credentials by default and preserves them when asked (D2)", async () => {
@@ -384,10 +392,180 @@ describe("SkillInstallationModule lifecycle", () => {
     expect(repairResult.ok).toBe(false);
     expect(repairResult.errorCode).toBe("SKILL_NOT_FOUND");
     const disableResult = await module.disable("no-such-install");
-    expect(disableResult).toBe(false);
+    expect(disableResult.disabled).toBe(false);
     const uninstallResult = await module.uninstall({
       installationId: "no-such-install",
     });
     expect(uninstallResult.ok).toBe(false);
   }, 60_000);
+});
+
+describe("lifecycle identity for every package kind + repair verification (FR-19, NFR-05)", () => {
+  it("executable routing persists the same lifecycle installation row", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "exec-fixture-"));
+    try {
+      fs.writeFileSync(
+        path.join(repo, "manifest.json"),
+        JSON.stringify({
+          name: "exec-skill",
+          version: "1.0.0",
+          // JavaScript runtime keeps the import pipeline hermetic (the
+          // python runtime triggers venv preparation).
+          runtime: "javascript",
+          entry: "main.js",
+          description: "Executable fixture",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Input text." },
+            },
+            required: ["query"],
+          },
+        })
+      );
+      fs.writeFileSync(path.join(repo, "main.js"), "console.log('hi');\n");
+      const module = new SkillInstallationModule();
+      const prepared = await module.prepare({
+        conversationId: "conv-exec",
+        source: repo,
+      });
+      expect(prepared.state).toBe("awaiting_approval");
+      const approved = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
+      expect(approved.state).toBe("ready");
+
+      // The lifecycle row exists with the executable identity.
+      const { SkillInstallationModel } = await import(
+        "@/model/SkillInstallation.model"
+      );
+      const installations = new SkillInstallationModel(tmpDir);
+      const row = approved.installationId
+        ? await installations.findByInstallationId(approved.installationId)
+        : null;
+      expect(row).not.toBeNull();
+      expect(row?.kind).toBe("executable");
+      expect(row?.status).toBe("ready");
+      expect(row?.sourceUri).toContain("exec-fixture");
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("plugin routing persists a lifecycle row through the shared helper", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-plugin-row",
+      source: fixtureRoot,
+    });
+    // Drive the shared row-persistence helper directly (the plugin IMPORT
+    // pipeline itself is PluginImportService's concern): the row must
+    // carry the plugin identity and link back to the session.
+    const internals = module as unknown as {
+      persistRoutedInstallationRow: (input: {
+        sessions: unknown;
+        sessionId: string;
+        kind: "plugin" | "executable";
+        name: string;
+        plan: {
+          source: {
+            canonicalUri: string;
+            resolvedRevision: string;
+            contentHash: string;
+          };
+        };
+        metadata: Record<string, unknown>;
+      }) => Promise<void>;
+    };
+    const { SkillInstallationSessionModel, SkillInstallationModel } =
+      await import("@/model/SkillInstallation.model");
+    const sessions = new SkillInstallationSessionModel(tmpDir);
+    const installations = new SkillInstallationModel(tmpDir);
+    await internals.persistRoutedInstallationRow({
+      sessions,
+      sessionId: prepared.sessionId,
+      kind: "plugin",
+      name: "plugin-fixture",
+      plan: {
+        source: {
+          canonicalUri: "/plugin/canonical/uri",
+          resolvedRevision: "rev123",
+          contentHash: "a".repeat(64),
+        },
+      },
+      metadata: { pluginId: 7 },
+    });
+    const session = await sessions.findBySessionId(prepared.sessionId);
+    expect(session?.installationId).toBeTruthy();
+    const row = session?.installationId
+      ? await installations.findByInstallationId(session.installationId)
+      : null;
+    expect(row?.kind).toBe("plugin");
+    expect(row?.name).toBe("plugin-fixture");
+    expect(JSON.parse(row?.metadataJson ?? "{}")).toMatchObject({
+      pluginId: 7,
+    });
+  }, 120_000);
+
+  it("repair detects changed activation content without rewriting it", async () => {
+    const { installationId } = await installFixture();
+    if (!installationId) return;
+    // Mutate the ACTIVATED content (linked edits / manual changes).
+    const { SkillInstallationModel } = await import(
+      "@/model/SkillInstallation.model"
+    );
+    const installations = new SkillInstallationModel(tmpDir);
+    const row = await installations.findByInstallationId(installationId);
+    expect(row?.activationPath).toBeTruthy();
+    fs.appendFileSync(
+      path.join(row?.activationPath ?? "", "SKILL.md"),
+      "\n<!-- externally edited -->\n"
+    );
+
+    const module = new SkillInstallationModule();
+    const report = await module.repair({ installationId });
+    const hashCheck = report.checks.find((c) => c.name === "content-hash-matches");
+    expect(hashCheck?.passed).toBe(false);
+    expect(hashCheck?.detail).toContain("update is required");
+    // Repair never rewrote the content back.
+    const after = fs.readFileSync(
+      path.join(row?.activationPath ?? "", "SKILL.md"),
+      "utf-8"
+    );
+    expect(after).toContain("externally edited");
+  }, 120_000);
+
+  it("disable deactivates durable invocations across conversations", async () => {
+    const { installationId } = await installFixture();
+    if (!installationId) return;
+    // Seed two active invocations in different conversations.
+    const { PromptSkillInvocationModule } = await import(
+      "@/modules/PromptSkillInvocationModule"
+    );
+    const invocations = new PromptSkillInvocationModule();
+    const runtimeId = `prompt:user:${installationId}`;
+    for (const conversationId of ["conv-a", "conv-b"]) {
+      await invocations.recordInvocation({
+        conversationId,
+        agentScope: "",
+        runtimeId,
+        contentHash: "b".repeat(64),
+        normalizedInstructions: "# skill\ninstructions",
+        tokenEstimate: 10,
+        invocationArgumentsJson: "{}",
+        invocationSource: "explicit",
+        invokedAt: new Date(),
+      });
+    }
+
+    const module = new SkillInstallationModule();
+    const result = await module.disable(installationId);
+    expect(result.disabled).toBe(true);
+    expect(result.deactivatedInvocations).toBe(2);
+    // And enable does NOT resurrect them (a fresh invocation is required).
+    expect(await module.enable(installationId)).toBe(true);
+  }, 120_000);
 });

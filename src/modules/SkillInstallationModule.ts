@@ -585,6 +585,19 @@ export class SkillInstallationModule extends BaseModule {
         "ready",
         "plugin routed through PluginImportService"
       );
+      // FR-19: plugins persist the SAME lifecycle identity prompt skills
+      // use, so update/repair/disable/uninstall address them uniformly.
+      await this.persistRoutedInstallationRow({
+        sessions,
+        sessionId,
+        kind: "plugin",
+        name: result.plugin.name,
+        plan,
+        metadata: {
+          pluginId: result.plugin.id,
+          pluginVersion: result.plugin.version,
+        },
+      });
       const ready = await sessions.findBySessionId(sessionId);
       if (!ready) {
         return this.errorSnapshot(
@@ -657,6 +670,15 @@ export class SkillInstallationModule extends BaseModule {
         "ready",
         `executable '${result.name}' routed through SkillImportService`
       );
+      // FR-19: executable skills persist the same lifecycle identity.
+      await this.persistRoutedInstallationRow({
+        sessions,
+        sessionId,
+        kind: "executable",
+        name: result.name,
+        plan,
+        metadata: { routedThrough: "SkillImportService" },
+      });
       const ready = await sessions.findBySessionId(sessionId);
       if (!ready) {
         return this.errorSnapshot(
@@ -1087,9 +1109,67 @@ export class SkillInstallationModule extends BaseModule {
     if (["ready", "cancelled"].includes(session.state)) {
       return this.snapshotFromEntity(session);
     }
-    // Before activation: remove staging. After activation: rollback.
+    // Before activation: remove staging. After activation begins: roll the
+    // activation back IMMEDIATELY (§10.1 / NFR-05) — cancelling must not
+    // leave a half-activated skill behind. A rollback failure surfaces
+    // rollback_required with the recovery detail instead of cancelling.
     if (["activating", "verifying"].includes(session.state)) {
-      await this.transition(sessions, events, sessionId, "rollback_required");
+      let rollbackDetail = "";
+      if (session.installationId) {
+        const { installations } = await this.getModels();
+        const entity = await installations.findByInstallationId(
+          session.installationId
+        );
+        if (entity) {
+          const metadata = JSON.parse(entity.metadataJson ?? "{}") as {
+            backupPath?: string | null;
+          };
+          const rolled = new SkillActivationService().rollback(
+            entity.activationPath,
+            metadata.backupPath ?? null
+          );
+          getDefaultPromptSkillCatalog().remove(
+            `prompt:user:${session.installationId}`
+          );
+          entity.status = "cancelled";
+          entity.enabled = false;
+          try {
+            await installations.save(entity);
+          } catch {
+            /* best-effort row update — the session state governs */
+          }
+          if (!rolled.ok) rollbackDetail = rolled.message;
+        }
+      }
+      if (rollbackDetail) {
+        await this.appendEvent(
+          events,
+          sessionId,
+          "rollback-failed",
+          session.state,
+          "rollback_required",
+          rollbackDetail
+        );
+        await this.transition(sessions, events, sessionId, "rollback_required");
+        return this.errorSnapshot(
+          "rollback_required",
+          "ROLLBACK_FAILED",
+          `Cancellation could not restore the previous activation: ${rollbackDetail}`,
+          sessionId
+        );
+      }
+      await this.appendEvent(
+        events,
+        sessionId,
+        "rollback-completed",
+        session.state,
+        "cancelled",
+        "activation rolled back on cancel"
+      );
+      new SkillSourceAcquisitionService().removeSession(sessionId);
+      await this.transition(sessions, events, sessionId, "cancelled");
+      const cancelledNow = await sessions.findBySessionId(sessionId);
+      return this.snapshotFromEntity(cancelledNow ?? session);
     } else {
       await this.transition(sessions, events, sessionId, "cancelled");
       new SkillSourceAcquisitionService().removeSession(sessionId);
@@ -1336,6 +1416,45 @@ export class SkillInstallationModule extends BaseModule {
         : "activation path missing or unreadable",
     });
 
+    // 1b. Content hash matches the RECORDED revision (§24.2: repair must
+    // detect changed content without silently updating to a new revision).
+    // The recorded hash is the staged-tree hash (stagePackage.hashTree), so
+    // verification re-hashes the activation tree with the same algorithm.
+    if (structureOk) {
+      try {
+        const { hashTree } = await import(
+          "@/childprocess/skill-installation/stagePackage"
+        );
+        const currentHash = hashTree(entity.activationPath);
+        const recorded =
+          (
+            JSON.parse(entity.metadataJson ?? "{}") as {
+              activationContentHash?: string;
+            }
+          ).activationContentHash ?? entity.contentHash;
+        const matches = currentHash === recorded;
+        checks.push({
+          name: "content-hash-matches",
+          passed: matches,
+          detail: matches
+            ? `${currentHash.slice(0, 12)} matches the recorded revision`
+            : `content changed since install (recorded ${entity.contentHash.slice(
+                0,
+                12
+              )}, found ${currentHash.slice(
+                0,
+                12
+              )}); update is required, repair will not rewrite it`,
+        });
+      } catch (err) {
+        checks.push({
+          name: "content-hash-matches",
+          passed: false,
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // 2. SKILL.md still readable at the recorded activation (linked installs
     //    can change or vanish). The exact content hash is re-verified by the
     //    invocation path at every use; repair checks structural presence.
@@ -1398,10 +1517,12 @@ export class SkillInstallationModule extends BaseModule {
    * Disable: remove the skill from model discovery and invocation
    * immediately while preserving files, provenance, and secrets (§24.3).
    */
-  async disable(installationId: string): Promise<boolean> {
+  async disable(
+    installationId: string
+  ): Promise<{ disabled: boolean; deactivatedInvocations: number }> {
     const { installations } = await this.getModels();
     const entity = await installations.findByInstallationId(installationId);
-    if (!entity) return false;
+    if (!entity) return { disabled: false, deactivatedInvocations: 0 };
     entity.enabled = false;
     entity.status = "disabled";
     await installations.save(entity);
@@ -1409,7 +1530,30 @@ export class SkillInstallationModule extends BaseModule {
       `prompt:user:${installationId}`,
       false
     );
-    return true;
+    // FR-19: a disabled skill must not keep instructing conversations that
+    // invoked it — durable invocation state is deactivated across ALL
+    // conversations (recovery reconciles with a structured diagnostic).
+    const deactivatedInvocations = await this.deactivateInvocations(
+      installationId
+    );
+    return { disabled: true, deactivatedInvocations };
+  }
+
+  /** Deactivate every durable invocation of the runtime; failures are
+   *  best-effort — disable/uninstall still complete. */
+  private async deactivateInvocations(installationId: string): Promise<number> {
+    try {
+      const { PromptSkillInvocationModule } = await import(
+        "@/modules/PromptSkillInvocationModule"
+      );
+      const result =
+        await new PromptSkillInvocationModule().deactivateByRuntimeId(
+          `prompt:user:${installationId}`
+        );
+      return result.affectedRows;
+    } catch {
+      return 0;
+    }
   }
 
   /** Re-enable a disabled installation (§24.3 mirror). */
@@ -1442,6 +1586,7 @@ export class SkillInstallationModule extends BaseModule {
         removed: "directory" | "link";
         targetPreserved: string | null;
         secretsDeleted: number;
+        deactivatedInvocations: number;
       }
     | { ok: false; message: string }
   > {
@@ -1453,9 +1598,13 @@ export class SkillInstallationModule extends BaseModule {
       return { ok: false, message: "Unknown installation." };
     }
 
-    // Disable discovery first.
+    // Disable discovery first, then deactivate any durable invocations so
+    // no conversation keeps following instructions from the removed skill.
     getDefaultPromptSkillCatalog().remove(
       `prompt:user:${input.installationId}`
+    );
+    const deactivatedInvocations = await this.deactivateInvocations(
+      input.installationId
     );
 
     const activation = new SkillActivationService();
@@ -1488,7 +1637,53 @@ export class SkillInstallationModule extends BaseModule {
       removed: removed.removed,
       targetPreserved: removed.targetPreserved,
       secretsDeleted,
+      deactivatedInvocations,
     };
+  }
+
+  /**
+   * FR-19: persist a lifecycle installation row for plugin/executable
+   * packages routed through their own services — the plugin service owns
+   * its storage, so the row records provenance + identity (activationPath
+   * stays empty; management actions route back through the owning service).
+   */
+  private async persistRoutedInstallationRow(input: {
+    sessions: SkillInstallationSessionModel;
+    sessionId: string;
+    kind: "plugin" | "executable";
+    name: string;
+    plan: SkillInstallPlan;
+    metadata: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      const { installations } = await this.getModels();
+      const session = await input.sessions.findBySessionId(input.sessionId);
+      const installationId =
+        session?.installationId ??
+        crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+      const entity = new SkillInstallationEntity();
+      entity.installationId = installationId;
+      entity.name = input.name;
+      entity.kind = input.kind;
+      entity.scope = "user";
+      entity.workspaceId = 0;
+      entity.sourceUri = input.plan.source.canonicalUri;
+      entity.sourceRevision = input.plan.source.resolvedRevision;
+      entity.sourceSubdirectory = "";
+      entity.activationMode = "managed-copy";
+      entity.activationPath = "";
+      entity.contentHash = input.plan.source.contentHash;
+      entity.status = "ready";
+      entity.enabled = true;
+      entity.metadataJson = JSON.stringify(input.metadata);
+      await installations.save(entity);
+      if (session && !session.installationId) {
+        session.installationId = installationId;
+        await input.sessions.create(session);
+      }
+    } catch {
+      /* provenance is best-effort — the routing result above governs */
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1552,9 +1747,22 @@ export class SkillInstallationModule extends BaseModule {
     entity.contentHash = plan.source.contentHash;
     entity.status = "ready";
     entity.enabled = true;
+    // §24.2 repair baseline: the ACTIVATION tree's own hash (the staged
+    // package hash covers a superset — install.md, siblings — so it is not
+    // directly comparable to the activated skill root).
+    let activationContentHash: string | undefined;
+    try {
+      const { hashTree } = await import(
+        "@/childprocess/skill-installation/stagePackage"
+      );
+      activationContentHash = hashTree(result.activationPath);
+    } catch {
+      /* best-effort baseline — repair falls back to the staged hash */
+    }
     entity.metadataJson = JSON.stringify({
       planRevision: plan.planRevision,
       backupPath: result.backupPath,
+      ...(activationContentHash ? { activationContentHash } : {}),
     });
     // Upsert by installation identity (D2 review test): a prior
     // revoked/failed row for the same source+revision+mode must be

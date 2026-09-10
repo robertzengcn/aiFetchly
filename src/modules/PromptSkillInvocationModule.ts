@@ -104,6 +104,18 @@ export class PromptSkillInvocationModule extends BaseModule {
     return model.deactivate(conversationId, agentScope, runtimeId);
   }
 
+  /**
+   * FR-19: deactivate a runtime's durable invocations across ALL
+   * conversations (skill disable/uninstall). Returns affected row and
+   * conversation counts for structured diagnostics.
+   */
+  async deactivateByRuntimeId(
+    runtimeId: string
+  ): Promise<{ affectedRows: number; conversationIds: readonly string[] }> {
+    const model = await this.getModel();
+    return model.deactivateByRuntimeId(runtimeId);
+  }
+
   private async nextRevision(
     model: PromptSkillInvocationModel,
     conversationId: string,

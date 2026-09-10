@@ -122,4 +122,25 @@ export class PromptSkillInvocationModel extends BaseDb {
     const r = await this.repository.delete({ conversationId });
     return r.affected ?? 0;
   }
+
+  /**
+   * FR-19/FR-23: deactivate every durable invocation of a runtime across ALL
+   * conversations (disable/uninstall must stop active instruction state).
+   * Returns the affected conversations so callers can emit structured
+   * diagnostics where the skill was live.
+   */
+  async deactivateByRuntimeId(
+    runtimeId: string
+  ): Promise<{ affectedRows: number; conversationIds: readonly string[] }> {
+    const rows = await this.repository.find({
+      where: { runtimeId, active: true },
+    });
+    const conversationIds = [
+      ...new Set(rows.map((row) => row.conversationId)),
+    ];
+    for (const row of rows) {
+      await this.repository.update({ id: row.id }, { active: false });
+    }
+    return { affectedRows: rows.length, conversationIds };
+  }
 }
