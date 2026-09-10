@@ -78,27 +78,21 @@ describe("buildSmtpTransportOptions", () => {
   });
 
   it("uses implicit TLS on port 465 even when the SSL toggle is off", () => {
-    const options = buildSmtpTransportOptions(
-      service({ port: "465", ssl: 0 })
-    );
+    const options = buildSmtpTransportOptions(service({ port: "465", ssl: 0 }));
 
     expect(options.secure).toBe(true);
     expect(options.requireTLS).toBe(false);
   });
 
   it("does not require TLS when SSL is off on a STARTTLS port", () => {
-    const options = buildSmtpTransportOptions(
-      service({ port: "587", ssl: 0 })
-    );
+    const options = buildSmtpTransportOptions(service({ port: "587", ssl: 0 }));
 
     expect(options.secure).toBe(false);
     expect(options.requireTLS).toBe(false);
   });
 
   it("uses STARTTLS for SSL on non-465 ports such as 25", () => {
-    const options = buildSmtpTransportOptions(
-      service({ port: "25", ssl: 1 })
-    );
+    const options = buildSmtpTransportOptions(service({ port: "25", ssl: 1 }));
 
     expect(options.port).toBe(25);
     expect(options.secure).toBe(false);
@@ -252,9 +246,9 @@ describe("OutboundSmtpSession TLS fallback", () => {
 
   it("retries STARTTLS after implicit TLS WRONG_VERSION_NUMBER", async () => {
     const first = fakeTransporter(
-      vi.fn().mockRejectedValue(
-        new Error("OPENSSL_internal:WRONG_VERSION_NUMBER")
-      )
+      vi
+        .fn()
+        .mockRejectedValue(new Error("OPENSSL_internal:WRONG_VERSION_NUMBER"))
     );
     const second = fakeTransporter(
       vi.fn().mockResolvedValue({ response: "250 accepted" })
@@ -334,5 +328,45 @@ describe("OutboundSmtpSession TLS fallback", () => {
 
     expect(smtpMock.createTransport).toHaveBeenCalledTimes(1);
     expect(first.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildSmtpTransportOptions identity (§13.1)", () => {
+  it("uses smtpUsername for auth.user when configured", () => {
+    const opts = buildSmtpTransportOptions(
+      service({
+        from: "sales@example.com",
+        smtpUsername: "mailbox@example.com",
+      })
+    );
+    expect(opts.auth.user).toBe("mailbox@example.com");
+    expect(opts.auth.pass).toBe("secret");
+  });
+
+  it("falls back to From when smtpUsername is null", () => {
+    const opts = buildSmtpTransportOptions(
+      service({
+        from: "sales@example.com",
+        smtpUsername: null,
+      })
+    );
+    expect(opts.auth.user).toBe("sales@example.com");
+  });
+
+  it("falls back to From when smtpUsername is undefined/omitted", () => {
+    const opts = buildSmtpTransportOptions(
+      service({ from: "sales@example.com" })
+    );
+    expect(opts.auth.user).toBe("sales@example.com");
+  });
+
+  it("falls back to From when smtpUsername is blank/whitespace", () => {
+    const opts = buildSmtpTransportOptions(
+      service({
+        from: "sales@example.com",
+        smtpUsername: "   ",
+      })
+    );
+    expect(opts.auth.user).toBe("sales@example.com");
   });
 });
