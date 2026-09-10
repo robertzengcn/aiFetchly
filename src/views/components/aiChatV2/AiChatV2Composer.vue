@@ -176,7 +176,7 @@
           icon
           size="small"
           variant="text"
-          class="v2-composer__voice-button"
+          class="v2-composer__voice-button v2-composer__icon-target"
           :color="isRecording ? 'error' : undefined"
           :disabled="micDisabled"
           :loading="isTranscribing"
@@ -330,7 +330,7 @@
         icon
         size="small"
         variant="text"
-        class="v2-composer__attach"
+        class="v2-composer__attach v2-composer__icon-target"
         data-testid="ai-chat-attach"
         :title="t('aiChatV2.attachments.add') || 'Attach file'"
         @click="triggerFilePicker"
@@ -353,7 +353,7 @@
           size="small"
           variant="text"
           color="primary"
-          class="v2-composer__stop-speaking"
+          class="v2-composer__stop-speaking v2-composer__icon-target"
           :title="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           :aria-label="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           @click="$emit('stop-speaking')"
@@ -365,6 +365,7 @@
           color="primary"
           icon="mdi-send"
           size="small"
+          class="v2-composer__icon-target"
           :disabled="hasNothingToSend || isProcessing"
           :loading="isProcessing"
           :aria-label="t('aiChatV2.send') || 'Send'"
@@ -376,6 +377,7 @@
           color="error"
           icon="mdi-stop"
           size="small"
+          class="v2-composer__icon-target"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
           data-testid="ai-chat-stop"
           @click="$emit('stop')"
@@ -1587,6 +1589,15 @@ watch(
 /* Attach button never shrinks — always visible after the selectors. */
 .v2-composer__attach {
   flex: 0 0 auto;
+}
+/*
+ * PRD §16.4: pointer/touch targets are at least 40x40px. Applied to the
+ * composer's compact icon-only controls (attach, microphone, stop-speaking,
+ * Send, Stop) without changing their visual icon size.
+ */
+.v2-composer__icon-target {
+  min-width: 40px;
+  min-height: 40px;
 }
 /* Prepend slot wraps and can shrink; selectors move to the next line on
    narrow panels instead of pushing the attach/send buttons off-screen. */

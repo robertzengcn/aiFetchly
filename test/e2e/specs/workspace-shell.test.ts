@@ -184,21 +184,67 @@ test.describe("narrow responsive shell (PRD §16.3)", () => {
   });
 });
 
-test.describe("live-AI flows (§25.6 scenario 10)", () => {
-  test.skip(
-    !LIVE_AI,
-    "requires AIFETCHLY_E2E_LIVE_AI=1 with a provider backend"
-  );
-
-  test("renderer reload restores the shell without cancelling runs", async ({
+test.describe("run preservation (§25.6 scenario 10, FR-SHELL-009)", () => {
+  test("a deterministic in-flight run survives a renderer reload and reconnects", async ({
     aiApp,
+    fakeAi,
   }) => {
+    // Long-running deterministic run: one chunk streams immediately, the
+    // completion holds for 10s — the reload happens mid-run without any
+    // live provider.
+    await fakeAi.setScenario("stream-delayed");
     const page = aiApp.mainWindow;
     await openWorkspace(page);
+    await page.getByTestId("workspace-new-chat").click();
+    const textarea = page
+      .getByTestId("ai-chat-composer")
+      .locator("textarea.v-field__input:not(.v-textarea__sizer)");
+    await expect(textarea).toBeVisible({ timeout: 10_000 });
+    await textarea.fill("run preservation probe");
+    await page.getByTestId("ai-chat-send").click();
+
+    // The run is in flight: the stop control shows and the first chunk
+    // rendered before the reload.
+    await expect(page.getByTestId("ai-chat-stop")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("workspace-transcript")).toContainText(
+      "Streaming",
+      { timeout: 15_000 }
+    );
+
+    // Reload the renderer mid-run. The MAIN-PROCESS run must continue (the
+    // engine owns the turn; only the renderer died).
     await page.reload();
     await expect(page.getByTestId("chat-center-surface")).toBeVisible({
       timeout: 20_000,
     });
     await expect(page.getByTestId("workspace-tree")).toBeVisible();
+
+    // The run's completion reconnects to the (restored) selected
+    // conversation: the post-hold suffix arrives through the re-established
+    // detail subscription or the seeded history — never cancelled.
+    await expect(page.getByTestId("workspace-transcript")).toContainText(
+      "-should-be-cancelled",
+      { timeout: 30_000 }
+    );
+    await expect(page.getByTestId("workspace-transcript")).toContainText(
+      "run preservation probe"
+    );
+  });
+
+  test.skip(
+    !LIVE_AI,
+    "requires AIFETCHLY_E2E_LIVE_AI=1 with a provider backend"
+  );
+
+  test("live provider: inner-page navigation during a real run", async ({
+    aiApp,
+  }) => {
+    const page = aiApp.mainWindow;
+    await openWorkspace(page);
+    await page.getByTestId("workspace-insights").click();
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible();
   });
 });

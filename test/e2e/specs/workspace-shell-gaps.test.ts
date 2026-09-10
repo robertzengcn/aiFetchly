@@ -330,11 +330,31 @@ test.describe("voice visibility (FR-VOICE-001/005, criterion 22/25)", () => {
 });
 
 test.describe("accessibility contract (PRD §16.4/§21, FR-QUAL-004)", () => {
-  test("the narrow navigation opener is at least 40x40px", async ({
+  test("every critical pointer target is at least 40x40px (PRD §16.4)", async ({
     shellApp: app,
   }) => {
     const page = app.mainWindow;
     await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByTestId("workspace-new-chat").click();
+    await expect(composerTextarea(page)).toBeVisible({ timeout: 10_000 });
+
+    // Narrow-mode opener measured after the sweep (viewport switch last).
+    const targets: Array<[string, ReturnType<typeof page.locator>]> = [
+      ["send", page.getByTestId("ai-chat-send")],
+      ["microphone", page.getByTestId("ai-chat-microphone")],
+      ["attach", page.getByTestId("ai-chat-attach")],
+      ["spoken-response", page.getByTestId("spoken-response-toggle")],
+      ["workspace-choose", page.getByTestId("workspace-badge-choose")],
+    ];
+    for (const [name, locator] of targets) {
+      await expect(locator).toBeVisible({ timeout: 10_000 });
+      const box = await locator.boundingBox();
+      expect(box, `${name} bounding box`).not.toBeNull();
+      expect(box?.width ?? 0, `${name} width`).toBeGreaterThanOrEqual(40);
+      expect(box?.height ?? 0, `${name} height`).toBeGreaterThanOrEqual(40);
+    }
+
     await page.setViewportSize({ width: 700, height: 800 });
     const toggle = page.getByTestId("app-shell-nav-toggle");
     await expect(toggle).toBeVisible({ timeout: 10_000 });

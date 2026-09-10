@@ -249,7 +249,9 @@ function requestOpenMemory(): void {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
-  min-height: 24px;
+  /* PRD §16.4: interaction targets at least 40x40 (badge stays one row). */
+  min-height: 40px;
+  min-width: 40px;
   padding: 0 6px;
   border: none;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.15);

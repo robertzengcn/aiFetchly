@@ -9,6 +9,7 @@
     icon
     size="small"
     variant="text"
+    class="v2-voice-toggle"
     data-testid="spoken-response-toggle"
     :color="enabled ? 'primary' : undefined"
     :loading="saving"
@@ -68,3 +69,11 @@ function onClick(): void {
   emit("toggle");
 }
 </script>
+
+<style scoped>
+/* PRD §16.4: pointer/touch targets are at least 40x40px. */
+.v2-voice-toggle {
+  min-width: 40px;
+  min-height: 40px;
+}
+</style>

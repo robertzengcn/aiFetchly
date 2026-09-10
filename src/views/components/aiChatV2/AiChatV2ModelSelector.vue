@@ -170,5 +170,8 @@ const formatContextSize = (tokens: number): string => {
 }
 .v2-model-selector__settings {
   margin-left: 2px;
+  /* PRD §16.4: interaction targets at least 40x40. */
+  min-width: 40px;
+  min-height: 40px;
 }
 </style>
