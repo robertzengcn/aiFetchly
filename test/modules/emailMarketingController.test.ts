@@ -357,11 +357,13 @@ describe("EmailMarketingController", () => {
       );
       // The SMTP password is still overwritten by the imported value.
       expect(update.firstCall.args[1].password).to.equal("newpass");
-      // Documented invariant: other receive fields stay undefined on update —
-      // TypeORM's changed-column diffing leaves them untouched, so the import
-      // never silently rewrites existing receive config.
-      expect(update.firstCall.args[1].receiveEnabled).to.equal(undefined);
-      expect(update.firstCall.args[1].imapHost).to.equal(undefined);
+      // Other receive fields are materialized from the existing service (not
+      // undefined) — the update always writes the merged receive config,
+      // which equals the existing service's values since import files never
+      // carry receive columns. Here `existing` has no receive fields set, so
+      // the defaults apply: receiveEnabled 0, imapHost null.
+      expect(update.firstCall.args[1].receiveEnabled).to.equal(0);
+      expect(update.firstCall.args[1].imapHost).to.equal(null);
     });
 
     it("preserves the existing receiveProtocol when the import row omits it", async () => {
@@ -562,9 +564,12 @@ describe("EmailMarketingController", () => {
 
     it("caps reported errors at 10 while counting all skipped rows", async () => {
       // All 12 rows fail validation → skipped 12, but errors capped at 10.
-      const validate = sinon
-        .stub()
-        .resolves({ valid: false, errors: ["Password is required"] });
+      const validate = sinon.stub().resolves({
+        valid: false,
+        errors: [
+          { code: "password_required", message: "Password is required" },
+        ],
+      });
       emailMarketingController.emailServiceModule = makeStubModule({
         validateEmailService: validate,
       });
@@ -641,9 +646,12 @@ describe("EmailMarketingController", () => {
     it("skips rows with a missing password and reports the file row number", async () => {
       // validateEmailService returns errors for the passwordless row.
       const validate = sinon.stub();
-      validate
-        .onCall(0)
-        .resolves({ valid: false, errors: ["Password is required"] });
+      validate.onCall(0).resolves({
+        valid: false,
+        errors: [
+          { code: "password_required", message: "Password is required" },
+        ],
+      });
       validate.onCall(1).resolves({ valid: true, errors: [] });
       const create = sinon.stub().resolves(1);
       emailMarketingController.emailServiceModule = makeStubModule({
@@ -845,6 +853,313 @@ describe("EmailMarketingController", () => {
 
       expect(create.firstCall.args[0].ssl).to.equal(1);
       expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
+    });
+
+    it("maps all documented header aliases (smtpUsername/smtpusername/smtp_username; replyTo/replyto/reply_to)", async () => {
+      // §10.2 — every documented alias form must land on the same normalized
+      // identity field: CSV headers are lowercased by transformHeader, JSON
+      // rows keep their original key case (camelCase export shape + snake_case
+      // legacy shape).
+      const runImport = async (
+        content: string,
+        format: "csv" | "json"
+      ): Promise<sinon.SinonStub> => {
+        const create = sinon.stub().resolves(1);
+        emailMarketingController.emailServiceModule = makeStubModule({
+          createEmailService: create,
+        });
+        const result = (await emailMarketingController.importEmailServices(
+          content,
+          format
+        )) as EmailServiceImportResult;
+        expect(result.imported).to.equal(1);
+        expect(result.skipped).to.equal(0);
+        return create;
+      };
+
+      // CSV: lowercase headers `smtpusername` / `replyto` (transformHeader
+      // lowercases them; `smtpusername` is itself an alias).
+      let create = await runImport(
+        "name,smtpusername,replyto,from,host,port,ssl,password\n" +
+          "CsvLower,login1@x.com,replies1@x.com,user1@x.com,smtp.example.com,465,1,pw\n",
+        "csv"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login1@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies1@x.com");
+
+      // JSON: snake_case keys smtp_username / reply_to (legacy documented form).
+      create = await runImport(
+        JSON.stringify([
+          {
+            name: "JsonSnake",
+            smtp_username: "login2@x.com",
+            reply_to: "replies2@x.com",
+            from: "user2@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login2@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies2@x.com");
+
+      // JSON: camelCase keys smtpUsername / replyTo (export shape).
+      create = await runImport(
+        JSON.stringify([
+          {
+            name: "JsonCamel",
+            smtpUsername: "login3@x.com",
+            replyTo: "replies3@x.com",
+            from: "user3@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login3@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies3@x.com");
+    });
+
+    it("rejects a row whose aliases conflict with duplicate_field_conflict", async () => {
+      // A JSON row can carry BOTH aliases (CSV cannot — Papa dedupes headers).
+      // Different non-empty values → duplicate_field_conflict; same value in
+      // two aliases → no conflict (≤ 1 distinct non-empty value).
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const conflicting = JSON.stringify([
+        {
+          name: "Conflict",
+          smtpUsername: "login@x.com",
+          smtp_username: "other@x.com",
+          from: "user@x.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          password: "pw",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        conflicting,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(
+        result.errors.some((e) => e.includes("duplicate_field_conflict"))
+      ).to.equal(true);
+      expect(create.called).to.equal(false);
+
+      // Same value in two aliases: NOT a conflict — imports fine.
+      const agree = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: agree,
+      });
+      const agreeResult = (await emailMarketingController.importEmailServices(
+        JSON.stringify([
+          {
+            name: "Agree",
+            smtpUsername: "login@x.com",
+            smtp_username: "login@x.com",
+            from: "user@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(agreeResult.imported).to.equal(1);
+      expect(agreeResult.skipped).to.equal(0);
+      expect(agree.firstCall.args[0].smtpUsername).to.equal("login@x.com");
+    });
+
+    it("preserves existing identity when a legacy file omits the new columns", async () => {
+      // §10.4 absent = preserve: a legacy CSV without smtpUsername/replyTo
+      // columns must never wipe stored identity values on update.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Legacy Service";
+      existing.smtpUsername = "legacy-login@x.com";
+      existing.replyTo = "legacy-reply@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Legacy Service,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].smtpUsername).to.equal(
+        "legacy-login@x.com"
+      );
+      expect(update.firstCall.args[1].replyTo).to.equal("legacy-reply@x.com");
+    });
+
+    it("clears replyTo to null when the imported value is blank", async () => {
+      // §10.4 blank = clear: an empty replyto cell is an explicit reset.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Clear Reply";
+      existing.replyTo = "old-reply@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,replyto,from,host,port,ssl,password\n" +
+        "Clear Reply,,sender@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].replyTo).to.equal(null);
+    });
+
+    it("resets smtpUsername to the From fallback when the imported value is blank", async () => {
+      // §10.4 blank = reset: an empty smtpusername cell resets the stored
+      // login to null (which resolves to From at runtime).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Reset Login";
+      existing.smtpUsername = "legacy-login@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,smtpusername,from,host,port,ssl,password\n" +
+        "Reset Login,,sender@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].smtpUsername).to.equal(null);
+    });
+
+    it("preserves the stored password when the imported password is blank (update)", async () => {
+      // §10.4: a blank/absent password NEVER clears the stored one on update,
+      // and validation runs in update mode with hasStoredPassword=true.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Keep Secret";
+      existing.password = "stored-secret";
+      const update = sinon.stub().resolves();
+      let captured: { mode?: string; hasStoredPassword?: boolean } = {};
+      const validate = sinon
+        .stub()
+        .callsFake(
+          (
+            _entity: unknown,
+            options: { mode: string; hasStoredPassword?: boolean }
+          ) => {
+            captured = options;
+            return Promise.resolve({ valid: true, errors: [] });
+          }
+        );
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+        validateEmailService: validate,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Keep Secret,sender@example.com,smtp.example.com,465,1,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].password).to.equal("stored-secret");
+      expect(captured.mode).to.equal("update");
+      expect(captured.hasStoredPassword).to.equal(true);
+    });
+
+    it("rejects a new service with a blank password (create mode)", async () => {
+      // No existing service → create mode; a blank password must be rejected
+      // by validation (password_required) with hasStoredPassword=false.
+      const create = sinon.stub().resolves(1);
+      let captured: { mode?: string; hasStoredPassword?: boolean } = {};
+      const validate = sinon
+        .stub()
+        .callsFake(
+          (
+            entity: { password?: string },
+            options: { mode: string; hasStoredPassword?: boolean }
+          ) => {
+            captured = options;
+            return Promise.resolve(
+              options.mode === "create" && !entity.password
+                ? {
+                    valid: false,
+                    errors: [
+                      {
+                        code: "password_required",
+                        message: "Password is required",
+                      },
+                    ],
+                  }
+                : { valid: true, errors: [] }
+            );
+          }
+        );
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "NewNoPass,user@example.com,smtp.example.com,465,1,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /password/i.test(e))).to.equal(true);
+      expect(captured.mode).to.equal("create");
+      expect(captured.hasStoredPassword).to.equal(false);
+      expect(create.called).to.equal(false);
     });
   });
 
