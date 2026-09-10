@@ -732,6 +732,10 @@ const challengeDetectedMessageSchema = z.strictObject({
   ]),
   evidenceCodes: z.array(z.string().min(1).max(64)).max(16),
   providerInputAvailable: z.boolean(),
+  /** PRIVATE provider input (TODO-MSB-013): the challenge site key,
+   * extracted by the worker. Consumed ONLY by the main-process provider
+   * call — never renderer, prompts, logs, or audit. */
+  siteKey: z.string().min(8).max(128).nullable().optional(),
 });
 
 const refreshedCookiesMessageSchema = z.strictObject({

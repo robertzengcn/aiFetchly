@@ -7,6 +7,7 @@ import {
   type AdapterReadiness,
   type DetectedChallenge,
   type PlatformBrowserAdapter,
+  type PlatformEffectDescriptor,
 } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 
 /**
@@ -41,6 +42,52 @@ export class YouTubeBrowserAdapter implements PlatformBrowserAdapter {
     'input[autocomplete*="cc-number" i]',
     'input[autocomplete*="passkey" i]',
   ];
+
+  /**
+   * TODO-MSB-012 / FR-P1-004: reviewed consequential-effect descriptors.
+   * Classification matches these BEFORE generic name heuristics — a
+   * relabeled Publish button still matches the "publish" marker, and the
+   * adapter (not the model) owns the vocabulary.
+   */
+  public readonly consequentialEffects: readonly PlatformEffectDescriptor[] =
+    [
+      {
+        effectId: "youtube.publish_video",
+        targetNameMarkers: ["publish"],
+        maxPerSession: 3,
+        previewKey: "managedBrowser.effects.publish_video",
+      },
+      {
+        effectId: "youtube.upload",
+        targetNameMarkers: ["upload"],
+        maxPerSession: 3,
+        previewKey: "managedBrowser.effects.upload",
+      },
+      {
+        effectId: "youtube.comment",
+        targetNameMarkers: ["comment"],
+        maxPerSession: 10,
+        previewKey: "managedBrowser.effects.comment",
+      },
+      {
+        effectId: "youtube.reply",
+        targetNameMarkers: ["reply"],
+        maxPerSession: 20,
+        previewKey: "managedBrowser.effects.reply",
+      },
+      {
+        effectId: "youtube.delete",
+        targetNameMarkers: ["delete", "remove"],
+        maxPerSession: 3,
+        previewKey: "managedBrowser.effects.delete",
+      },
+      {
+        effectId: "youtube.subscribe",
+        targetNameMarkers: ["subscribe"],
+        maxPerSession: 5,
+        previewKey: "managedBrowser.effects.subscribe",
+      },
+    ];
 
   public async assessAuthentication(
     page: AdapterPageLike

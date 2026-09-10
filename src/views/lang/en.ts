@@ -3600,6 +3600,14 @@ export default {
       stopped: "Stopped",
       failed: "Failed",
     },
+    effects: {
+      publish_video: "Publish a video",
+      upload: "Upload a file",
+      comment: "Post a comment",
+      reply: "Reply to a comment",
+      delete: "Delete content",
+      subscribe: "Subscribe to a channel",
+    },
     controls: {
       take_over: "Take over",
       pause_ai: "Pause AI",

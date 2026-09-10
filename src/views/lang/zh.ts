@@ -3454,6 +3454,14 @@ export default {
       stopped: "已停止",
       failed: "失败",
     },
+    effects: {
+      publish_video: "发布视频",
+      upload: "上传文件",
+      comment: "发表评论",
+      reply: "回复评论",
+      delete: "删除内容",
+      subscribe: "订阅频道",
+    },
     controls: {
       take_over: "接管",
       pause_ai: "暂停 AI",

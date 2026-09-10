@@ -89,6 +89,39 @@ function maxClass(
 }
 
 export class BrowserActionRiskClassifier {
+  private readonly adapterEffects: readonly AdapterEffectDescriptor[];
+
+  /**
+   * TODO-MSB-012: adapter-owned effect descriptors refine classification -
+   * an adapter marker match is CONSEQUENTIAL regardless of generic text
+   * heuristics (a relabeled Publish button still matches).
+   */
+  public constructor(
+    adapterEffects: readonly AdapterEffectDescriptor[] = DEFAULT_PILOT_EFFECTS
+  ) {
+    this.adapterEffects = adapterEffects;
+  }
+
+  /** The adapter effect a resolved target name matches, if any. */
+  public matchAdapterEffect(
+    targetName: string | null | undefined
+  ): { effectId: string; previewKey: string } | null {
+    if (!targetName) {
+      return null;
+    }
+    const lower = targetName.toLowerCase();
+    for (const effect of this.adapterEffects) {
+      if (
+        effect.targetNameMarkers.some((marker) =>
+          lower.includes(marker.toLowerCase())
+        )
+      ) {
+        return { effectId: effect.effectId, previewKey: effect.previewKey };
+      }
+    }
+    return null;
+  }
+
   /**
    * Classify one action context. Deterministic; the model's asserted class
    * (when provided) can only RAISE the severity (§15.4).
@@ -113,7 +146,10 @@ export class BrowserActionRiskClassifier {
         break;
       case "click":
       case "select":
-        if (isConsequentialDescriptor(context.targetName)) {
+        if (this.matchAdapterEffect(context.targetName)) {
+          riskClass = "consequential_write";
+          reasonCode = "adapter_effect";
+        } else if (isConsequentialDescriptor(context.targetName)) {
           riskClass = "consequential_write";
           reasonCode = "consequential_descriptor";
         } else {
@@ -214,6 +250,54 @@ export class BrowserActionRiskClassifier {
     return reasons.length > 0 ? { ...worst } : worst;
   }
 }
+
+/** Reviewed adapter effect descriptor consumed by the classifier. */
+export interface AdapterEffectDescriptor {
+  readonly effectId: string;
+  readonly targetNameMarkers: readonly string[];
+  readonly maxPerSession: number;
+  readonly previewKey: string;
+}
+
+/** Pilot effect descriptors (YouTube adapter set, TODO-MSB-012). */
+const DEFAULT_PILOT_EFFECTS: readonly AdapterEffectDescriptor[] = [
+  {
+    effectId: "youtube.publish_video",
+    targetNameMarkers: ["publish"],
+    maxPerSession: 3,
+    previewKey: "managedBrowser.effects.publish_video",
+  },
+  {
+    effectId: "youtube.upload",
+    targetNameMarkers: ["upload"],
+    maxPerSession: 3,
+    previewKey: "managedBrowser.effects.upload",
+  },
+  {
+    effectId: "youtube.comment",
+    targetNameMarkers: ["comment"],
+    maxPerSession: 10,
+    previewKey: "managedBrowser.effects.comment",
+  },
+  {
+    effectId: "youtube.reply",
+    targetNameMarkers: ["reply"],
+    maxPerSession: 20,
+    previewKey: "managedBrowser.effects.reply",
+  },
+  {
+    effectId: "youtube.delete",
+    targetNameMarkers: ["delete", "remove"],
+    maxPerSession: 3,
+    previewKey: "managedBrowser.effects.delete",
+  },
+  {
+    effectId: "youtube.subscribe",
+    targetNameMarkers: ["subscribe"],
+    maxPerSession: 5,
+    previewKey: "managedBrowser.effects.subscribe",
+  },
+];
 
 function isConsequentialDescriptor(value: string | null | undefined): boolean {
   if (!value) {

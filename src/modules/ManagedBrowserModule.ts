@@ -1470,7 +1470,7 @@ export class ManagedBrowserModule {
         const outcome = await provider.attemptSolve({
           challengeId: event.challengeId,
           origin: event.origin,
-          siteKey: "",
+          siteKey: event.siteKey ?? "",
           pageUrl: record.currentOrigin ?? event.origin,
           flow: event.flowClassification,
           currentActionRisk: "read",

@@ -3632,6 +3632,14 @@ export default {
       stopped: "Detenido",
       failed: "Fallido",
     },
+    effects: {
+      publish_video: "Publicar un vídeo",
+      upload: "Subir un archivo",
+      comment: "Publicar un comentario",
+      reply: "Responder a un comentario",
+      delete: "Eliminar contenido",
+      subscribe: "Suscribirse a un canal",
+    },
     controls: {
       take_over: "Tomar el control",
       pause_ai: "Pausar IA",

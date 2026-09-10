@@ -3617,6 +3617,14 @@ export default {
       stopped: "Arrêté",
       failed: "Échec",
     },
+    effects: {
+      publish_video: "Publier une vidéo",
+      upload: "Téléverser un fichier",
+      comment: "Publier un commentaire",
+      reply: "Répondre à un commentaire",
+      delete: "Supprimer du contenu",
+      subscribe: "S'abonner à une chaîne",
+    },
     controls: {
       take_over: "Prendre la main",
       pause_ai: "Suspendre l'IA",

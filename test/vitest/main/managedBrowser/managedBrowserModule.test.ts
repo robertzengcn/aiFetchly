@@ -1492,3 +1492,33 @@ describe("TODO-MSB-011 controlled browser states", () => {
     ).toBe(true);
   });
 });
+
+
+describe("TODO-MSB-013 provider site-key flow", () => {
+  it("CHALLENGE_DETECTED with a site key feeds the provider attempt", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    // The provider service is default-constructed; the observable contract
+    // here is that a site-key-bearing event flows through the module
+    // without error and the challenge notice still publishes.
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CHALLENGE_DETECTED",
+      challengeId: "ch_sitekey000001",
+      origin: "https://forum.example.com",
+      kind: "captcha_image",
+      flowClassification: "content_action",
+      evidenceCodes: ["recaptcha_frame"],
+      providerInputAvailable: true,
+      siteKey: "6Le-wvkSAAAAAPBMRTvw0Q",
+    } as unknown as OutboundEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(noticeTypes(h.notices)).toContain("challenge_detected");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe(
+      "challenge_detected"
+    );
+  });
+});

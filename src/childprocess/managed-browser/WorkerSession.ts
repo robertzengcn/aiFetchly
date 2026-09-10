@@ -733,6 +733,32 @@ export class WorkerSession {
   // -----------------------------------------------------------------------
 
   /**
+   * TODO-MSB-013: privately extract the challenge site key from the live
+   * page (reCAPTCHA-shaped attributes). Bounded, best-effort, and only
+   * ever sent to the main process alongside CHALLENGE_DETECTED.
+   */
+  private async extractChallengeSiteKey(): Promise<string | null> {
+    const page = this.page;
+    if (!page) {
+      return null;
+    }
+    try {
+      return await page.evaluate<string | null>(
+        `(() => {
+          const el =
+            document.querySelector('.g-recaptcha[data-sitekey]') ||
+            document.querySelector('[data-sitekey]');
+          if (!el) return null;
+          const key = el.getAttribute('data-sitekey');
+          return key ? key.slice(0, 128) : null;
+        })()`
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * GAP-05: run the adapter's challenge probe on the current page. A NEW
    * challenge (kind+origin key differs from the last report, or the dedupe
    * window lapsed) emits CHALLENGE_DETECTED + enters same-context handoff
@@ -750,6 +776,11 @@ export class WorkerSession {
     if (!detection) {
       return false;
     }
+    // TODO-MSB-013: extract the provider input (site key) PRIVATELY in the
+    // worker — it never enters prompts, logs, or renderer payloads; only
+    // the boolean providerInputAvailable has traveled so far, and the key
+    // rides the CHALLENGE_DETECTED event as an optional private field.
+    const siteKey = await this.extractChallengeSiteKey();
     const origin = extractPageOrigin(page.url());
     const key = `${detection.kind}|${origin}`;
     if (
@@ -771,7 +802,8 @@ export class WorkerSession {
       kind: detection.kind,
       flowClassification: detection.flow,
       evidenceCodes: [...detection.evidenceCodes],
-      providerInputAvailable: false,
+      providerInputAvailable: siteKey !== null,
+      ...(siteKey ? { siteKey } : {}),
     });
     this.runtime.transition("handoff");
     this.send({

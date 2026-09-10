@@ -190,3 +190,56 @@ describe("classifyProgram", () => {
     expect(result.riskClass).toBe("credential_or_security");
   });
 });
+
+// ---------------------------------------------------------------------------
+// TODO-MSB-012: adapter-owned effect descriptors
+// ---------------------------------------------------------------------------
+
+describe("TODO-MSB-012 adapter effect descriptors", () => {
+  const withEffects = new BrowserActionRiskClassifier([
+    {
+      effectId: "custom.do_thing",
+      targetNameMarkers: ["frobnicate"],
+      maxPerSession: 2,
+      previewKey: "managedBrowser.effects.custom",
+    },
+  ]);
+
+  it("an adapter marker match is consequential even without generic heuristics", () => {
+    // "Frobnicate" matches no consequential word in the generic pattern —
+    // only the injected adapter descriptor catches it.
+    const result = withEffects.classify({
+      actionType: "click",
+      targetName: "Frobnicate the widget",
+    });
+    expect(result).toMatchObject({
+      riskClass: "consequential_write",
+      routing: "approval",
+      reasonCode: "adapter_effect",
+    });
+  });
+
+  it("default pilot set classifies YouTube effects", () => {
+    for (const name of [
+      "Publish video",
+      "Upload file",
+      "Comment",
+      "Reply",
+      "Delete comment",
+      "Subscribe to channel",
+    ]) {
+      expect(
+        classifier.classify({ actionType: "click", targetName: name }),
+        name
+      ).toMatchObject({ riskClass: "consequential_write" });
+    }
+  });
+
+  it("matchAdapterEffect returns the effect identity for approval previews", () => {
+    expect(classifier.matchAdapterEffect("Publish video")).toEqual({
+      effectId: "youtube.publish_video",
+      previewKey: "managedBrowser.effects.publish_video",
+    });
+    expect(classifier.matchAdapterEffect("Play next video")).toBeNull();
+  });
+});

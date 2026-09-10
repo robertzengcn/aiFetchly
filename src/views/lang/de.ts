@@ -3630,6 +3630,14 @@ export default {
       stopped: "Gestoppt",
       failed: "Fehlgeschlagen",
     },
+    effects: {
+      publish_video: "Ein Video veröffentlichen",
+      upload: "Eine Datei hochladen",
+      comment: "Einen Kommentar posten",
+      reply: "Auf einen Kommentar antworten",
+      delete: "Inhalt löschen",
+      subscribe: "Einen Kanal abonnieren",
+    },
     controls: {
       take_over: "Übernehmen",
       pause_ai: "KI pausieren",

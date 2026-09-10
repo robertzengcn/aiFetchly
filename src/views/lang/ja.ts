@@ -3568,6 +3568,14 @@ export default {
       stopped: "停止しました",
       failed: "失敗",
     },
+    effects: {
+      publish_video: "動画を公開",
+      upload: "ファイルをアップロード",
+      comment: "コメントを投稿",
+      reply: "コメントに返信",
+      delete: "コンテンツを削除",
+      subscribe: "チャンネルを登録",
+    },
     controls: {
       take_over: "引き継ぐ",
       pause_ai: "AIを一時停止",

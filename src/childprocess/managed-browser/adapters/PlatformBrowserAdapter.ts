@@ -36,6 +36,23 @@ export interface DetectedChallenge {
   readonly flow: ChallengeFlowClassification;
 }
 
+/**
+ * A reviewed consequential-effect descriptor (TODO-MSB-012, FR-P1-004):
+ * adapter-owned, stable identifiers for effects that ALWAYS require
+ * approval regardless of what the target's accessible name happens to say.
+ */
+export interface PlatformEffectDescriptor {
+  /** Stable effect id, e.g. "youtube.publish_video". */
+  readonly effectId: string;
+  /** Name fragments that mark a target as this effect (suffix-exact match
+   * on the resolved target name, case-insensitive). */
+  readonly targetNameMarkers: readonly string[];
+  /** Maximum executions per session before an additional confirm. */
+  readonly maxPerSession: number;
+  /** Localized preview key shown in the approval dialog. */
+  readonly previewKey: string;
+}
+
 /** Adapters are pure data + probe functions over a page-like object. */
 export interface PlatformBrowserAdapter {
   readonly platformId: number;
@@ -51,6 +68,8 @@ export interface PlatformBrowserAdapter {
   detectChallenge(page: AdapterPageLike): Promise<DetectedChallenge | null>;
   /** Selector list of credential/OTP/payment inputs for handoff + redaction. */
   readonly sensitiveFieldSelectors: readonly string[];
+  /** Reviewed consequential-effect descriptors (TODO-MSB-012). */
+  readonly consequentialEffects: readonly PlatformEffectDescriptor[];
   readiness(page: AdapterPageLike): Promise<AdapterReadiness>;
 }
 
