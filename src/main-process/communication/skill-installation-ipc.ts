@@ -24,6 +24,7 @@ import {
   SKILL_INSTALL_RETRY,
   SKILL_INSTALL_DISABLE,
   SKILL_INSTALL_ENABLE,
+  SKILL_INSTALL_LIST,
   SKILL_INSTALL_PREPARE,
   SKILL_INSTALL_REPAIR,
   SKILL_INSTALL_RUN_COMMAND,
@@ -355,6 +356,16 @@ const uninstallSchema = z.object({
 });
 
 export function registerSkillInstallationLifecycleIpcHandlers(): void {
+  // Management listing (PRD §22.3): plain query, no AI gate.
+  ipcMain.handle(SKILL_INSTALL_LIST, async () => {
+    try {
+      const rows = await new SkillInstallationModule().listInstallations();
+      return ok(rows);
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "List failed.");
+    }
+  });
+
   ipcMain.handle(SKILL_INSTALL_UPDATE, async (_event, data: unknown) => {
     if (!isAiEnabled())
       return denied("AI functionality is only available to subscribers.");

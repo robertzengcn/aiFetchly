@@ -10,11 +10,17 @@ import {
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_APPROVE_DEPENDENCY,
   SKILL_INSTALL_CANCEL,
+  SKILL_INSTALL_DISABLE,
+  SKILL_INSTALL_ENABLE,
+  SKILL_INSTALL_LIST,
   SKILL_INSTALL_PREPARE,
+  SKILL_INSTALL_REPAIR,
   SKILL_INSTALL_RETRY,
   SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
+  SKILL_INSTALL_UNINSTALL,
+  SKILL_INSTALL_UPDATE,
 } from "@/config/channellist";
 import type {
   InstallSnapshot,
@@ -233,4 +239,103 @@ export async function runApprovedSkillInstallCommand(input: {
 }): Promise<ApprovedCommandRunView | null> {
   const resp = await windowInvoke(SKILL_INSTALL_RUN_COMMAND, input);
   return (resp as ApprovedCommandRunView | null) ?? null;
+}
+
+/** Management-listing row (PRD §22.3): detail fields, credential NAMES only. */
+export interface SkillInstallationView {
+  readonly installationId: string;
+  readonly name: string;
+  readonly kind: string;
+  readonly sourceUri: string;
+  readonly sourceRevision: string;
+  readonly activationMode: string;
+  readonly status: string;
+  readonly enabled: boolean;
+  readonly updatedAt: string;
+  readonly credentialNames: readonly string[];
+}
+
+/** List every installation across package kinds for the management UI. */
+export async function listSkillInstallations(): Promise<
+  SkillInstallationView[] | null
+> {
+  const resp = await windowInvoke(SKILL_INSTALL_LIST);
+  return (resp as SkillInstallationView[] | null) ?? null;
+}
+
+/** Update an installed skill by id or name (renewed approval required). */
+export async function updateSkillInstall(input: {
+  installationId?: string;
+  name?: string;
+  conversationId?: string;
+}): Promise<InstallSnapshot | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_UPDATE, input);
+  return (resp as InstallSnapshot | null) ?? null;
+}
+
+/** Repair report from skill_install_repair. */
+export interface SkillRepairReport {
+  readonly ok: boolean;
+  readonly checks: readonly {
+    readonly name: string;
+    readonly passed: boolean;
+    readonly detail: string;
+  }[];
+  readonly repaired: readonly string[];
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+}
+
+export async function repairSkillInstall(input: {
+  installationId?: string;
+  name?: string;
+}): Promise<SkillRepairReport | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_REPAIR, input);
+  return (resp as SkillRepairReport | null) ?? null;
+}
+
+export async function disableSkillInstall(
+  installationId: string
+): Promise<{ disabled: boolean; deactivatedInvocations: number } | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_DISABLE, { installationId });
+  return (
+    (resp as { disabled: boolean; deactivatedInvocations: number } | null) ??
+    null
+  );
+}
+
+export async function enableSkillInstall(
+  installationId: string
+): Promise<boolean | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_ENABLE, { installationId });
+  return (resp as boolean | null) ?? null;
+}
+
+export async function uninstallSkillInstall(input: {
+  installationId: string;
+  deleteSecrets?: boolean;
+}): Promise<
+  | {
+      ok: true;
+      removed: string;
+      targetPreserved: string | null;
+      secretsDeleted: number;
+      deactivatedInvocations: number;
+    }
+  | { ok: false; message: string }
+  | null
+> {
+  const resp = await windowInvoke(SKILL_INSTALL_UNINSTALL, input);
+  return (
+    (resp as
+      | {
+          ok: true;
+          removed: string;
+          targetPreserved: string | null;
+          secretsDeleted: number;
+          deactivatedInvocations: number;
+        }
+      | { ok: false; message: string }
+      | null) ?? null
+  );
 }

@@ -1517,6 +1517,57 @@ export class SkillInstallationModule extends BaseModule {
    * Disable: remove the skill from model discovery and invocation
    * immediately while preserving files, provenance, and secrets (§24.3).
    */
+  /**
+   * Management listing (PRD §22.3): every installation across kinds with the
+   * detail fields the skill-management UI shows — source, revision, mode,
+   * status/health, enabled state, and credential NAMES (never values).
+   */
+  async listInstallations(): Promise<
+    readonly {
+      readonly installationId: string;
+      readonly name: string;
+      readonly kind: string;
+      readonly sourceUri: string;
+      readonly sourceRevision: string;
+      readonly activationMode: string;
+      readonly status: string;
+      readonly enabled: boolean;
+      readonly updatedAt: string;
+      readonly credentialNames: readonly string[];
+    }[]
+  > {
+    const { installations } = await this.getModels();
+    const rows = await installations.listByScope("user", 0);
+    const views = [];
+    for (const row of rows) {
+      let credentialNames: string[] = [];
+      try {
+        const { SkillCredentialModule } = await import(
+          "@/modules/SkillCredentialModule"
+        );
+        const bindings = await new SkillCredentialModule().listBindings(
+          row.installationId
+        );
+        credentialNames = bindings.map((b) => b.environmentVariable);
+      } catch {
+        /* credential store unavailable — names stay empty */
+      }
+      views.push({
+        installationId: row.installationId,
+        name: row.name,
+        kind: row.kind,
+        sourceUri: row.sourceUri,
+        sourceRevision: row.sourceRevision,
+        activationMode: row.activationMode,
+        status: row.status,
+        enabled: row.enabled,
+        updatedAt: (row.updatedAt ?? new Date()).toISOString(),
+        credentialNames,
+      });
+    }
+    return views;
+  }
+
   async disable(
     installationId: string
   ): Promise<{ disabled: boolean; deactivatedInvocations: number }> {
