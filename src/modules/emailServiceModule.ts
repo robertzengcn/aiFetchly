@@ -372,8 +372,18 @@ export class EmailServiceModule
     if (!service.port || service.port.trim().length === 0) {
       push("port_required", "Port is required");
     } else {
-      const portNum = Number(service.port);
-      if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      const portStr = service.port.trim();
+      const portNum = Number(portStr);
+      // Canonical decimal digits only: fractional ("4.65"), hex ("0x1f"),
+      // and scientific notation ("1e2") coerce to passing numbers via
+      // Number() but are not valid port literals (§8.2).
+      if (
+        !/^[0-9]+$/.test(portStr) ||
+        isNaN(portNum) ||
+        !Number.isInteger(portNum) ||
+        portNum < 1 ||
+        portNum > 65535
+      ) {
         push("port_invalid", "Port must be a valid number between 1 and 65535");
       }
     }

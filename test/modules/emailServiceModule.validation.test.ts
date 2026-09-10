@@ -113,4 +113,78 @@ describe("EmailServiceModule.validateEmailService (options-aware)", function () 
     const codes = result.errors.map((e) => e.code);
     expect(codes).to.contain("port_invalid");
   });
+
+  it("non-integer ports are rejected with port_invalid", async function () {
+    const module = new EmailServiceModule();
+    const fractional = await module.validateEmailService(
+      makeService({ port: "4.65", password: "pw" }),
+      { mode: "create" }
+    );
+    expect(fractional.errors.map((e) => e.code)).to.contain("port_invalid");
+    const scientific = await module.validateEmailService(
+      makeService({ port: "1e2", password: "pw" }),
+      { mode: "create" }
+    );
+    expect(scientific.errors.map((e) => e.code)).to.contain("port_invalid");
+  });
+
+  it("port boundaries 0 and 65536 are rejected; 1 and 65535 are accepted", async function () {
+    const module = new EmailServiceModule();
+    for (const port of ["0", "65536"]) {
+      const result = await module.validateEmailService(
+        makeService({ port, password: "pw" }),
+        { mode: "create" }
+      );
+      expect(result.errors.map((e) => e.code)).to.contain("port_invalid");
+    }
+    for (const port of ["1", "65535"]) {
+      const result = await module.validateEmailService(
+        makeService({ port, password: "pw" }),
+        { mode: "create" }
+      );
+      expect(result.valid).to.be(true);
+    }
+  });
+
+  it("update mode without a stored password still requires a password", async function () {
+    const module = new EmailServiceModule();
+    const result = await module.validateEmailService(
+      makeService({ password: "" }),
+      { mode: "update", hasStoredPassword: false }
+    );
+    expect(result.valid).to.be(false);
+    expect(result.errors.map((e) => e.code)).to.contain("password_required");
+  });
+
+  it("receive enabled with a missing receive host is rejected with receive_config_invalid", async function () {
+    const module = new EmailServiceModule();
+    const result = await module.validateEmailService(
+      makeService({ receiveEnabled: 1, imapHost: null }),
+      { mode: "create" }
+    );
+    expect(result.valid).to.be(false);
+    const codes = result.errors.map((e) => e.code);
+    expect(codes).to.contain("receive_config_invalid");
+    const receiveError = result.errors.find(
+      (e) => e.code === "receive_config_invalid"
+    );
+    expect(receiveError?.message ?? "").to.contain(
+      "Receive IMAP host is required"
+    );
+  });
+
+  it("receive enabled resolves the receive username through the 3-level fallback", async function () {
+    const module = new EmailServiceModule();
+    const result = await module.validateEmailService(
+      makeService({
+        smtpUsername: "smtp-login@example.com",
+        receiveUsername: null,
+        receiveEnabled: 1,
+        imapHost: "imap.example.com",
+        imapPort: "993",
+      }),
+      { mode: "create" }
+    );
+    expect(result.valid).to.be(true);
+  });
 });

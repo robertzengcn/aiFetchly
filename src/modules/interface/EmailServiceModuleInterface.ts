@@ -13,7 +13,7 @@ export interface EmailServiceValidationError {
 
 export type EmailServiceValidationCode =
   | "service_name_required"
-  | "smtp_username_required"
+  | "smtp_username_required" // co-fires with from_required (resolver falls back to From)
   | "smtp_username_too_long"
   | "from_required"
   | "from_invalid"
