@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OutboundEmailEnvelopeHasher,
+  canonicalizeOutboundEnvelope,
   type CanonicalOutboundEnvelopeV1,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 
@@ -134,5 +135,106 @@ describe("OutboundEmailEnvelopeHasher", () => {
         "2761bdce2dae20d61a794575aa2a46482a568cdd0f96e75530238d9f8b20a2ec"
       );
     });
+  });
+});
+
+describe("OutboundEmailEnvelopeHasher v1 (pinned, byte-identical)", () => {
+  it("produces the pinned v1 envelope hash", () => {
+    const env: CanonicalOutboundEnvelopeV1 = {
+      version: 1,
+      emailServiceId: 3,
+      senderAddress: "Sales@Example.com",
+      recipientAddress: "user@example.com",
+      subject: "Hi",
+      bodyText: "Body",
+      bodyHtml: null,
+    };
+    // Pin the canonical string so any v1 regression is caught.
+    const canonical = canonicalizeOutboundEnvelope(env);
+    expect(canonical).toBe(
+      "version:1|emailServiceId:3|sender:17:sales@example.com|recipient:16:user@example.com|subject:2:Hi|bodyText:4:Body|bodyHtml:<<NULL_BODY_HTML>>"
+    );
+    expect(OutboundEmailEnvelopeHasher.hashEnvelope(env)).toHaveLength(64);
+  });
+});
+
+describe("OutboundEmailEnvelopeHasher v2 (§15)", () => {
+  it("binds smtpUsername and replyTo into the hash", () => {
+    const base = {
+      version: 2 as const,
+      emailServiceId: 3,
+      senderAddress: "sales@example.com",
+      recipientAddress: "user@example.com",
+      subject: "Hi",
+      bodyText: "Body",
+      bodyHtml: null,
+    };
+    const noIdentity = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      smtpUsername: "mailbox@example.com",
+      replyToAddress: null,
+    });
+    const withReplyTo = OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+      ...base,
+      smtpUsername: "mailbox@example.com",
+      replyToAddress: "support@example.com",
+    });
+    expect(noIdentity).not.toBe(withReplyTo);
+  });
+
+  it("null Reply-To differs from non-null Reply-To", () => {
+    const base = {
+      version: 2 as const,
+      emailServiceId: 1,
+      smtpUsername: "x@y.com",
+      senderAddress: "s@y.com",
+      recipientAddress: "r@y.com",
+      subject: "s",
+      bodyText: "b",
+      bodyHtml: null,
+    };
+    expect(
+      OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+        ...base,
+        replyToAddress: null,
+      })
+    ).not.toBe(
+      OutboundEmailEnvelopeHasher.hashEnvelopeV2({
+        ...base,
+        replyToAddress: "",
+      })
+    );
+  });
+
+  it("v2 batch ordering is deterministic", () => {
+    const entries = [
+      {
+        version: 2 as const,
+        draftId: 2,
+        emailServiceId: 1,
+        smtpUsername: "x@y.com",
+        senderAddress: "s@y.com",
+        replyToAddress: null,
+        recipientAddress: "b@y.com",
+        subject: "s",
+        bodyText: "b",
+        bodyHtml: null,
+      },
+      {
+        version: 2 as const,
+        draftId: 1,
+        emailServiceId: 1,
+        smtpUsername: "x@y.com",
+        senderAddress: "s@y.com",
+        replyToAddress: null,
+        recipientAddress: "a@y.com",
+        subject: "s",
+        bodyText: "b",
+        bodyHtml: null,
+      },
+    ];
+    const h1 = OutboundEmailEnvelopeHasher.hashBatchV2(entries);
+    const h2 = OutboundEmailEnvelopeHasher.hashBatchV2([...entries].reverse());
+    expect(h1).toBe(h2);
   });
 });
