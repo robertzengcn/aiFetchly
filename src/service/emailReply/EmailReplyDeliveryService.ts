@@ -11,6 +11,7 @@ import {
   buildSendIdempotencyKey,
   hashApprovalToken,
   hashApprovalEnvelope,
+  hashApprovalEnvelopeV2,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
@@ -24,6 +25,7 @@ import {
 } from "@/service/emailReply/replyReliabilityVersions";
 import type {
   EmailReplyApprovalEnvelope,
+  EmailReplyApprovalEnvelopeV2,
   SendApprovedReplyInput,
   SendApprovedReplyOutcome,
 } from "@/entityTypes/emailReplyReliabilityTypes";
@@ -66,6 +68,10 @@ export interface BoundMailbox {
   port: string;
   name: string;
   ssl: number;
+  /** Current effective SMTP username (§18.2). Null/undefined → falls back to `from`. */
+  smtpUsername?: string | null;
+  /** Current configured Reply-To (§18.2). Null/undefined = no Reply-To. */
+  replyTo?: string | null;
 }
 
 /**
@@ -131,25 +137,54 @@ export class EmailReplyDeliveryService {
       throw new Error("Send rejected: bound email service not found");
     }
 
-    // Recompute the envelope hash from trusted state.
-    const envelope: EmailReplyApprovalEnvelope = {
-      draftId: draft.id,
-      revisionId: revision.id,
-      emailServiceId,
-      originalMessageId: message.id,
-      senderAddress: revision.senderAddress,
-      recipientAddress: revision.recipientAddress,
-      subject: revision.subject,
-      bodyText: revision.bodyText,
-      bodyHtml: revision.bodyHtml,
-      policyVersion: REPLY_POLICY_VERSION,
-      validationVersion: REPLY_VALIDATOR_VERSION,
-    };
-    const recomputedHash = hashApprovalEnvelope(envelope);
+    // Recompute the envelope hash from trusted state. Version-aware (§18.1):
+    // v2 revisions carry smtpUsername + replyToAddress bound into the hash;
+    // v1 uses the legacy shape. The recomputed hash must match the revision's
+    // materialized content hash (enforced by validateSendBinding).
+    const revisionVersion: 1 | 2 = revision.envelopeVersion ?? 1;
+    let recomputedHash: string;
+    if (revisionVersion === 2) {
+      // The v2 hash requires smtpUsername and replyToAddress from the revision
+      // (frozen at materialization time). The service identity is compared
+      // separately in validateSendBinding (§18.2 delivery-time check).
+      const envelopeV2: EmailReplyApprovalEnvelopeV2 = {
+        version: 2,
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        smtpUsername: revision.smtpUsername ?? "",
+        senderAddress: revision.senderAddress,
+        replyToAddress: revision.replyToAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      recomputedHash = hashApprovalEnvelopeV2(envelopeV2);
+    } else {
+      const envelope: EmailReplyApprovalEnvelope = {
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        senderAddress: revision.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      recomputedHash = hashApprovalEnvelope(envelope);
+    }
 
     // 2. Mailbox + envelope binding (FR-017, P0.2). Pure validation; throws
     //    SendBindingError before the atomic claim so no SMTP submission can
     //    occur on any mismatch (wrong mailbox / sender / recipient / draft).
+    //    §18.2/§18.3: identity comparison (v2) or legacy gate (v1) runs here too.
     validateSendBinding({
       requestedDraftId: input.draftId,
       approval: {
@@ -168,6 +203,9 @@ export class EmailReplyDeliveryService {
         senderAddress: revision.senderAddress,
         recipientAddress: revision.recipientAddress,
         contentHash: revision.contentHash,
+        envelopeVersion: revisionVersion,
+        smtpUsername: revision.smtpUsername,
+        replyToAddress: revision.replyToAddress,
       },
       message: {
         id: message.id,
@@ -175,7 +213,13 @@ export class EmailReplyDeliveryService {
         fromAddress: message.fromAddress,
         replyToAddress: message.replyToAddress,
       },
-      service: { id: service.id, from: service.from, status: service.status },
+      service: {
+        id: service.id,
+        from: service.from,
+        status: service.status,
+        smtpUsername: service.smtpUsername,
+        replyTo: service.replyTo,
+      },
       recomputedHash,
     });
 
