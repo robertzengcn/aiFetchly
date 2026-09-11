@@ -15,6 +15,18 @@ interface ComplianceMessages {
 const locales: Record<string, ComplianceMessages> = { en, zh, es, fr, de, ja };
 
 describe("compliance-facing product nouns", () => {
+  // Policy split (compliance PRD vs f0a5c5b9):
+  //   - PRD-mandated neutral wording — Channel Alpha (Global) / Channel Beta
+  //     (CIS Region), "Export To Routing Sheet", and the Google/Yandex engine
+  //     names — is compliance language, not product naming: identical English
+  //     in EVERY locale.
+  //   - Module display names (Market Insight Explorer, Local Business
+  //     Finder, ...) carry the exact PRD noun in English and are localized
+  //     in the other five locales (f0a5c5b9 translated the branded route
+  //     menu items so the menu does not render in English regardless of
+  //     locale). Every locale must still resolve each key to a non-empty
+  //     value that is not a pre-PRD tool-descriptive name.
+
   test("uses PRD module names for primary navigation in every locale", () => {
     const expectedRouteValues: Record<string, string> = {
       search_scraper: "Market Insight Explorer",
@@ -27,18 +39,62 @@ describe("compliance-facing product nouns", () => {
       email_marketing: "Outreach Campaign",
     };
 
+    // The English locale carries the exact compliance-PRD module names.
+    for (const [key, value] of Object.entries(expectedRouteValues)) {
+      expect(locales.en.route[key]).toBe(value);
+    }
+
+    // Pre-PRD tool-descriptive names must never return in any locale.
+    const legacyRouteNames = new Set([
+      // English pre-PRD names.
+      "Search Scraper",
+      "Email Extraction",
+      "Yellow Pages Scraper",
+      "Map Scraper",
+      "Email Marketing",
+      // zh pre-PRD names (the locale that was live before d7e4e09c).
+      "搜索抓取器",
+      "邮件提取",
+      "黄页抓取器",
+      "Yandex Maps 抓取器",
+      "邮件营销",
+    ]);
+
     for (const messages of Object.values(locales)) {
-      for (const [key, value] of Object.entries(expectedRouteValues)) {
-        expect(messages.route[key]).toBe(value);
+      for (const key of Object.keys(expectedRouteValues)) {
+        const value = messages.route[key];
+        expect(typeof value).toBe("string");
+        expect(value.length).toBeGreaterThan(0);
+        expect(legacyRouteNames.has(value)).toBe(false);
       }
     }
   });
 
   test("uses neutral local business channel and export wording", () => {
+    // Module title: exact PRD noun in English, localized elsewhere.
+    expect(locales.en.mapScraper.title).toBe("Local Business Finder");
+
+    const legacyMapTitles = new Set([
+      "Map Scraper",
+      "Maps Scraper",
+      "Google Maps Scraper",
+      "Yandex Maps Scraper",
+    ]);
+
     for (const messages of Object.values(locales)) {
-      expect(messages.mapScraper.title).toBe("Local Business Finder");
-      expect(messages.mapScraper.provider_google).toBe("Channel Alpha (Global)");
-      expect(messages.mapScraper.provider_yandex).toBe("Channel Beta (CIS Region)");
+      const title = messages.mapScraper.title;
+      expect(typeof title).toBe("string");
+      expect(title.length).toBeGreaterThan(0);
+      expect(legacyMapTitles.has(title)).toBe(false);
+
+      // Neutral channel and export wording is mandated verbatim by the
+      // compliance PRD — identical in every locale, never localized.
+      expect(messages.mapScraper.provider_google).toBe(
+        "Channel Alpha (Global)"
+      );
+      expect(messages.mapScraper.provider_yandex).toBe(
+        "Channel Beta (CIS Region)"
+      );
       expect(messages.mapScraper.export_csv).toBe("Export To Routing Sheet");
     }
   });
