@@ -122,12 +122,11 @@ export function registerAIUserMemoryIpcHandlers(): void {
         force?: boolean;
         model?: string;
       };
+      const model = typeof req.model === "string" ? req.model.trim() : "";
       const result = await getSharedAutoDreamService().runNow({
         force: req.force === true,
         reason: "manual_ipc",
-        ...(typeof req.model === "string" && req.model.length > 0
-          ? { model: req.model }
-          : {}),
+        ...(model.length > 0 ? { model } : {}),
       });
       return ok(result);
     } catch (err) {
