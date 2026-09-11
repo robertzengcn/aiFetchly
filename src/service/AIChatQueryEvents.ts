@@ -483,6 +483,14 @@ export interface AIChatQueryLoopInput {
    */
   maxToolRounds?: number;
   /**
+   * When true, hitting the per-cycle tool-round cap does not pause the turn.
+   * The loop injects an in-memory continuation prompt and starts another
+   * cycle so /goal execution keeps calling the model until a clean stop,
+   * abort, empty-stop exhaustion, or the safety cycle cap. Engine sets
+   * this for chat-mode turns that have a non-terminal conversation goal.
+   */
+  goalAutoContinue?: boolean;
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.

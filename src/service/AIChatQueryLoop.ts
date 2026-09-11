@@ -105,18 +105,29 @@ import {
 } from "@/entityTypes/hookTypes";
 
 /**
- * Max model→tool→model rounds per user turn. Must be high enough to
- * accommodate plan-mode flows where each AskUserQuestion pauses and
- * resumes (consuming one round per question). A typical planning turn
+ * Max model→tool→model rounds per cycle inside one user turn. Must be high
+ * enough to accommodate plan-mode flows where each AskUserQuestion pauses
+ * and resumes (consuming one round per question). A typical planning turn
  * uses 1 (EnterPlanMode) + N (AskUserQuestion) + 1 (SubmitPlanForApproval)
  * + execution rounds. 8 was too low and dead-ended conversations after
  * ~7 questions.
+ *
+ * Ordinary chat turns pause when this cap is hit. /goal execution
+ * (`goalAutoContinue`) starts another cycle instead of pausing.
  *
  * Hitting this cap used to return `completed` with empty `fullContent`
  * after the last tool result. The engine then skipped persisting an
  * assistant row, so /goal plan execution looked like a silent stop.
  */
 export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * How many extra 30-round cycles /goal may start after hitting the cap.
+ * This is a runaway guard (Stop still aborts). 200 cycles × 30 rounds is
+ * enough for long scrapes without an unbounded loop if the model never
+ * stops calling tools.
+ */
+export const MAX_GOAL_TOOL_ROUND_CAP_CONTINUATIONS = 200;
 
 /**
  * How many times to nudge the model after it returns finish_reason=stop
@@ -128,6 +139,13 @@ export const MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS = 3;
 /** In-memory (not persisted) nudge sent when the model empty-stops after tools. */
 export const EMPTY_STOP_AFTER_TOOLS_PROMPT =
   "Continue the current plan now. Call the next tool or write a short progress update with blockers. Do not end the turn with an empty reply.";
+
+/**
+ * In-memory (not persisted) prompt injected when /goal hits the per-cycle
+ * tool-round cap and should keep executing instead of pausing.
+ */
+export const GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT =
+  "The current tool-round cycle ended, but the goal is not finished. Continue executing the plan now. Call the next tool or write a short progress update with blockers. Do not stop until the goal's completion conditions are met.";
 
 export function buildMaxToolRoundsPauseMessage(maxRounds: number): string {
   return (
@@ -946,6 +964,7 @@ export class AIChatQueryLoop {
     let turnEndedCleanly = false;
     let executedToolRound = false;
     let emptyStopContinuations = 0;
+    let goalRoundCapContinuations = 0;
     let forcedPauseContent: string | undefined;
     const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
     // Ensure a generous token budget so large tool-call arguments (e.g.
@@ -978,11 +997,43 @@ export class AIChatQueryLoop {
       // any other generated image.
       const collectedToolImages: OpenAIChatImage[] = [];
 
-      for (
-        let round = input.startRound;
-        round < maxToolRounds;
-        round += 1
-      ) {
+      for (let round = input.startRound; ; round += 1) {
+        if (round >= maxToolRounds) {
+          const canAutoContinue =
+            Boolean(input.goalAutoContinue) &&
+            executedToolRound &&
+            !forcedPauseContent &&
+            !input.abortController.signal.aborted &&
+            input.isActiveTurn();
+          if (
+            canAutoContinue &&
+            goalRoundCapContinuations < MAX_GOAL_TOOL_ROUND_CAP_CONTINUATIONS
+          ) {
+            goalRoundCapContinuations += 1;
+            messages.push({
+              role: "user",
+              content: GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "persistent_retry",
+              reason: "server_error",
+              attempt: goalRoundCapContinuations,
+              maxAttempts: MAX_GOAL_TOOL_ROUND_CAP_CONTINUATIONS,
+              message: "Continuing goal after tool-round cap",
+            });
+            console.log(
+              `[ai-chat-v2] goal auto-continue after ${maxToolRounds}-round cap; cycle ${goalRoundCapContinuations}/${MAX_GOAL_TOOL_ROUND_CAP_CONTINUATIONS}`
+            );
+            // for-loop increment runs after continue, so -1 → 0 next cycle.
+            round = -1;
+            continue;
+          }
+          break;
+        }
+
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);

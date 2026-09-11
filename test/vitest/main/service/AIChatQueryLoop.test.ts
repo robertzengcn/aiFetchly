@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
   EMPTY_STOP_AFTER_TOOLS_PROMPT,
+  GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
   buildEmptyStopAfterToolsPauseMessage,
   buildMaxToolRoundsPauseMessage,
@@ -526,6 +527,69 @@ describe("AIChatQueryLoop", () => {
         expect(result.fullContent).toContain("/loop");
       }
       expect(fakeStream).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it("auto-continues past the tool-round cap when goalAutoContinue is set", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount <= 2) {
+            onChunk(
+              makeToolCallChunk(
+                `call-goal-${callCount}`,
+                "search",
+                `{"q":"${callCount}"}`
+              )
+            );
+            return;
+          }
+          const lastUser = [...req.messages]
+            .reverse()
+            .find((m) => m.role === "user");
+          expect(lastUser?.content).toBe(
+            GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+          );
+          onChunk(makeChunk("Contacts saved. Goal complete.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-goal",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 2,
+        goalAutoContinue: true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Contacts saved. Goal complete.");
+        expect(result.fullContent).not.toContain("/loop");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(3);
       expect(fakeExecute).toHaveBeenCalledTimes(2);
     });
 
