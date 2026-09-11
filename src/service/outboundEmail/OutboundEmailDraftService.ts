@@ -374,8 +374,11 @@ export class OutboundEmailDraftService {
 
   /**
    * Prefer an explicit caller-supplied sender (tests / already-resolved
-   * tools). Otherwise resolve from the selected SMTP service, then the first
-   * active service. Fail closed when nothing is configured.
+   * tools). Otherwise resolve from the selected SMTP service. Fail closed
+   * (return null → `sender_address_missing`) when the named service cannot
+   * resolve an identity — do NOT fabricate an identity from the caller's
+   * sender address, which would bind a wrong smtpUsername and surface as a
+   * confusing sender_identity_changed failure at delivery time.
    */
   private async bindSender(
     input: GenerateBatchInput
@@ -387,7 +390,8 @@ export class OutboundEmailDraftService {
       if (typeof emailServiceId === "number" && emailServiceId > 0) {
         // Caller supplied a sender address; still resolve the full identity
         // (smtpUsername + replyTo) for the service so the revision carries a
-        // complete envelope snapshot (§6.4).
+        // complete envelope snapshot (§6.4). Fail closed when the service
+        // cannot resolve — the caller gets sender_address_missing.
         const identity = await resolveOutboundIdentity({
           dbpath: this.dbpath,
           preferredServiceId: emailServiceId,
@@ -402,13 +406,7 @@ export class OutboundEmailDraftService {
             replyToAddress: identity.replyToAddress,
           };
         }
-        // Fallback: caller address with empty smtp username.
-        return {
-          emailServiceId,
-          smtpUsername: trimmed,
-          senderAddress: trimmed,
-          replyToAddress: null,
-        };
+        return null;
       }
     }
     return await resolveOutboundIdentity({

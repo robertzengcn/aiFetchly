@@ -90,6 +90,7 @@ describe("OutboundEmailDraftService.generateBatch", () => {
       aiEnabledOverride: true,
     });
     await SqliteDb.ensureInitialized();
+    await seedService1();
 
     const result = await service.generateBatch({
       conversationId: "conv-1",
@@ -142,6 +143,7 @@ describe("OutboundEmailDraftService.generateBatch", () => {
       aiEnabledOverride: true,
     });
     await SqliteDb.ensureInitialized();
+    await seedService1();
 
     const result = await service.generateBatch({
       conversationId: "conv-1",
@@ -254,6 +256,7 @@ describe("OutboundEmailDraftService.generateBatch", () => {
       aiEnabledOverride: true,
     });
     await SqliteDb.ensureInitialized();
+    await seedService1();
 
     const result = await service.generateBatch({
       conversationId: "conv-v2",
@@ -288,6 +291,7 @@ describe("OutboundEmailDraftService.generateBatch", () => {
       aiEnabledOverride: true,
     });
     await SqliteDb.ensureInitialized();
+    await seedService1();
 
     const result = await service.generateBatch({
       conversationId: "conv-hash",
@@ -362,6 +366,26 @@ describe("OutboundEmailDraftService.generateBatch", () => {
     expect(revision?.replyToAddress).toBeNull();
   });
 });
+
+/**
+ * Seed an email-service row with id=1 and from=sender@example.com (the address
+ * the generateBatch tests pass as senderAddress). Required because the
+ * fail-closed bindSender refuses to fabricate an identity when the named
+ * service can't resolve — tests must seed a real service row.
+ */
+async function seedService1(): Promise<void> {
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.id = 1;
+  entity.name = "Test SMTP";
+  entity.from = "sender@example.com";
+  entity.password = "pass";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  await model.create(entity);
+}
 
 async function seedSmtpService(from: string): Promise<number> {
   const model = new EmailServiceModel(tmpDir);

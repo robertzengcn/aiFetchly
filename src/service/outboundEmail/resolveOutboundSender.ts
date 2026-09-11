@@ -45,9 +45,11 @@ export function normalizeEmailServiceIds(raw: unknown): number[] {
 }
 
 /**
- * Resolve the full effective identity for the preferred/candidate services,
- * falling back to the first active service with a non-empty From. Returns
- * null when nothing usable is configured — callers must fail closed.
+ * Resolve the full effective identity for the preferred/candidate services.
+ * Returns null when none of the named services can resolve — callers must
+ * fail closed. Does NOT scan all active services as a fallback (removed:
+ * scanning unrelated services could bind a different service's identity and
+ * produce a confusing sender_identity_changed failure at delivery time).
  */
 export async function resolveOutboundIdentity(
   options: ResolveOutboundSenderOptions
@@ -87,15 +89,6 @@ export async function resolveOutboundIdentity(
 
   for (const id of orderedIds) {
     const resolved = await resolveOne(id);
-    if (resolved) return resolved;
-  }
-
-  const listed = await model.listEmailServices(0, 1000);
-  for (const service of listed) {
-    if (service.status !== 1 || seen.has(service.id)) {
-      continue;
-    }
-    const resolved = await resolveOne(service.id);
     if (resolved) return resolved;
   }
   return null;
