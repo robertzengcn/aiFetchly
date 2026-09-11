@@ -189,6 +189,104 @@ describe("outbound email completion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// §13.2 — legacy services resolve the service identity and emit the
+// configured Reply-To as a header (omitted when null).
+// ---------------------------------------------------------------------------
+
+describe("legacy service Reply-To header emission", () => {
+  beforeEach(() => {
+    smtpMock.pending.length = 0;
+    smtpMock.sendMail.mockClear();
+    smtpMock.on.mockClear();
+    smtpMock.close.mockClear();
+  });
+
+  it("EmailService.sendEmail passes the configured replyTo to the SMTP transport", async () => {
+    const service = new EmailService({
+      ...serviceConfig,
+      smtpUsername: "api-login@example.com",
+      replyTo: "replies@example.com",
+    });
+    const success = vi.fn();
+
+    const sending = service.sendEmail(request, undefined, success);
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    expect(success).toHaveBeenCalledOnce();
+    expect(smtpMock.sendMail).toHaveBeenCalledTimes(1);
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      from?: string;
+      replyTo?: string;
+      to?: string;
+    };
+    expect(mailOptions.replyTo).toBe("replies@example.com");
+    expect(mailOptions.from).toBe("sender@example.com");
+    expect(mailOptions.to).toBe("buyer@example.com");
+  });
+
+  it("EmailService.sendEmail omits replyTo from the transport when it is not configured", async () => {
+    const service = new EmailService(serviceConfig);
+    const success = vi.fn();
+
+    const sending = service.sendEmail(request, undefined, success);
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      replyTo?: string;
+    };
+    expect(mailOptions.replyTo).toBeUndefined();
+  });
+
+  it("ReplyEmailService.sendReplyEmail passes the configured replyTo to the SMTP transport", async () => {
+    const service = new ReplyEmailService({
+      ...serviceConfig,
+      smtpUsername: "api-login@example.com",
+      replyTo: "replies@example.com",
+    });
+
+    const sending = service.sendReplyEmail({
+      receiver: "buyer@example.com",
+      subject: "Question about your listing",
+      text: "Hello!",
+    });
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    const result = await sending;
+
+    expect(result.status).toBe(true);
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      from?: string;
+      replyTo?: string;
+      subject?: string;
+    };
+    expect(mailOptions.replyTo).toBe("replies@example.com");
+    expect(mailOptions.from).toBe("sender@example.com");
+    expect(mailOptions.subject).toBe("Re: Question about your listing");
+  });
+
+  it("ReplyEmailService.sendReplyEmail omits replyTo when it is not configured", async () => {
+    const service = new ReplyEmailService(serviceConfig);
+
+    const sending = service.sendReplyEmail({
+      receiver: "buyer@example.com",
+      subject: "Question about your listing",
+      text: "Hello!",
+    });
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      replyTo?: string;
+    };
+    expect(mailOptions.replyTo).toBeUndefined();
+  });
+});
+
 describe("SMTP 535 authentication failures", () => {
   beforeEach(() => {
     smtpMock.pending.length = 0;

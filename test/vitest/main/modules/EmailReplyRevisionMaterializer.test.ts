@@ -6,9 +6,17 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReplyDraftModel } from "@/model/EmailReplyDraft.model";
 import { EmailReplyDraftRevisionModel } from "@/model/EmailReplyDraftRevision.model";
 import { EmailReplyApprovalModel } from "@/model/EmailReplyApproval.model";
-import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
-import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
+import {
+  materializeRevision1,
+  materializeRevision2,
+} from "@/service/emailReply/EmailReplyRevisionMaterializer";
+import {
+  hashApprovalEnvelope,
+  hashApprovalEnvelopeV2,
+} from "@/service/emailReply/EmailReplyRevisionHasher";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailServiceModel } from "@/model/EmailService.model";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
 
 /**
  * materializeRevision1 is the shared core of the v2 generate and edit wiring.
@@ -163,5 +171,165 @@ describe("materializeRevision1 — v2 generate/edit wiring core", () => {
     expect(activeAfter).toBeNull();
     const consumed = await approvalModel.read(approval.id);
     expect(consumed?.invalidatedAt).toBeTruthy();
+  });
+
+  // §18.1 — v2 reply revision binds the resolved service identity
+  // (smtpUsername + replyToAddress) and hashes via the v2 envelope. Production
+  // callers: emailReceive-ipc.ts (create draft) and
+  // EmailReplyDraftGenerationService.createDraft.
+  describe("materializeRevision2 — identity-bound v2 revision", () => {
+    let v2dbpath: string;
+
+    beforeAll(async () => {
+      v2dbpath = path.join(
+        os.tmpdir(),
+        `aifetchly-materialize-v2-${Date.now()}`
+      );
+      fs.mkdirSync(v2dbpath, { recursive: true });
+      await SqliteDb.resetInstance(v2dbpath);
+      await SqliteDb.ensureInitialized();
+
+      // Seed a service row whose identity the resolver must freeze.
+      const serviceModel = new EmailServiceModel(v2dbpath);
+      const service = new EmailServiceEntity();
+      service.id = 7;
+      service.name = "Primary";
+      service.from = "owner@svc.com";
+      service.smtpUsername = "api-login@svc.com";
+      service.replyTo = "replies@svc.com";
+      service.password = "secret";
+      service.host = "smtp.svc.com";
+      service.port = "465";
+      service.ssl = 1;
+      service.status = 1;
+      await serviceModel.create(service);
+    });
+
+    it("freezes the resolved identity onto the revision and hashes the v2 envelope", async () => {
+      const draftModel = new EmailReplyDraftModel(v2dbpath);
+      const revisionModel = new EmailReplyDraftRevisionModel(v2dbpath);
+      const draft = new EmailReplyDraftEntity();
+      draft.messageId = 300;
+      draft.emailServiceId = 7;
+      draft.subject = "Re: Pricing";
+      draft.bodyText = "v2 body.";
+      draft.bodyHtml = null;
+      draft.status = "draft";
+      draft.generationSource = "ai";
+      const saved = await draftModel.create(draft);
+
+      const result = await materializeRevision2(draftModel, {
+        draftId: saved.id,
+        actor: "ai",
+        subject: "Re: Pricing",
+        bodyText: "v2 body.",
+        bodyHtml: null,
+        senderAddress: "owner@svc.com",
+        recipientAddress: "prospect@example.com",
+        emailServiceId: 7,
+        originalMessageId: 300,
+        dbpath: v2dbpath,
+      });
+
+      expect(result.revisionNumber).toBe(1);
+      expect(result.smtpUsername).toBe("api-login@svc.com");
+      expect(result.replyToAddress).toBe("replies@svc.com");
+      expect(result.contentHash).toHaveLength(64);
+
+      // The revision row carries the v2 identity columns.
+      const revision = await revisionModel.read(result.revisionId);
+      expect(revision?.envelopeVersion).toBe(2);
+      expect(revision?.smtpUsername).toBe("api-login@svc.com");
+      expect(revision?.replyToAddress).toBe("replies@svc.com");
+
+      // The materialized hash matches the v2 envelope hash (identity included).
+      const expected = hashApprovalEnvelopeV2({
+        version: 2,
+        draftId: saved.id,
+        revisionId: result.revisionId,
+        emailServiceId: 7,
+        originalMessageId: 300,
+        smtpUsername: "api-login@svc.com",
+        senderAddress: "owner@svc.com",
+        replyToAddress: "replies@svc.com",
+        recipientAddress: "prospect@example.com",
+        subject: "Re: Pricing",
+        bodyText: "v2 body.",
+        bodyHtml: null,
+        policyVersion: "reply-policy-v2-1",
+        validationVersion: "reply-validator-v2-1",
+      });
+      expect(result.contentHash).toBe(expected);
+    });
+
+    it("applies the smtpUsername ?? from fallback when the service row has a null smtpUsername", async () => {
+      const serviceModel = new EmailServiceModel(v2dbpath);
+      const patch = new EmailServiceEntity();
+      patch.smtpUsername = null;
+      await serviceModel.update(7, patch);
+
+      const draftModel = new EmailReplyDraftModel(v2dbpath);
+      const draft = new EmailReplyDraftEntity();
+      draft.messageId = 301;
+      draft.emailServiceId = 7;
+      draft.subject = "Re: Fallback";
+      draft.bodyText = "Fallback body.";
+      draft.bodyHtml = null;
+      draft.status = "draft";
+      draft.generationSource = "ai";
+      const saved = await draftModel.create(draft);
+
+      const result = await materializeRevision2(draftModel, {
+        draftId: saved.id,
+        actor: "ai",
+        subject: "Re: Fallback",
+        bodyText: "Fallback body.",
+        bodyHtml: null,
+        senderAddress: "owner@svc.com",
+        recipientAddress: "prospect@example.com",
+        emailServiceId: 7,
+        originalMessageId: 301,
+        dbpath: v2dbpath,
+      });
+
+      // Null smtpUsername resolves to the From address (AD-002 fallback).
+      expect(result.smtpUsername).toBe("owner@svc.com");
+    });
+
+    it("fails closed when the email service identity cannot be resolved", async () => {
+      // The resolver is fail-closed: it walks ONLY the explicitly named
+      // service ids (preferred first, then candidates) and returns null when
+      // none resolve — it does NOT scan all active services. Point the
+      // revision at a nonexistent service id (404); with no named candidate
+      // resolving, resolveOutboundIdentity returns null.
+      const serviceModel = new EmailServiceModel(v2dbpath);
+      await serviceModel.updateServiceStatus(7, 0);
+
+      const draftModel = new EmailReplyDraftModel(v2dbpath);
+      const draft = new EmailReplyDraftEntity();
+      draft.messageId = 302;
+      draft.emailServiceId = 404;
+      draft.subject = "Re: Missing service";
+      draft.bodyText = "Body.";
+      draft.bodyHtml = null;
+      draft.status = "draft";
+      draft.generationSource = "ai";
+      const saved = await draftModel.create(draft);
+
+      await expect(
+        materializeRevision2(draftModel, {
+          draftId: saved.id,
+          actor: "ai",
+          subject: "Re: Missing service",
+          bodyText: "Body.",
+          bodyHtml: null,
+          senderAddress: "owner@svc.com",
+          recipientAddress: "prospect@example.com",
+          emailServiceId: 404,
+          originalMessageId: 302,
+          dbpath: v2dbpath,
+        })
+      ).rejects.toThrow(/unable to resolve email service identity/);
+    });
   });
 });
