@@ -56,6 +56,10 @@ export type ReplySenderFactory = (service: {
   port: string;
   name: string;
   ssl: number;
+  /** SMTP login (§13.1). Null/undefined → resolver falls back to `from`. */
+  smtpUsername?: string | null;
+  /** Configured outgoing Reply-To (§13.2). Null/undefined = no Reply-To. */
+  replyTo?: string | null;
 }) => ReplySender;
 
 /** Minimal mailbox shape the delivery service consumes (a subset of the entity). */
@@ -286,6 +290,10 @@ export class EmailReplyDeliveryService {
 
     // 8. SMTP submission. classifySubmissionResult turns the raw result into a
     //    certainty; unknown outcomes become delivery_unknown (never retried).
+    // Forward the full identity so the SMTP session authenticates with the
+    // configured SMTP username (not `from`) and the reply carries the
+    // configured Reply-To header (§13.1/§13.2). Omitting these would make the
+    // resolver fall back to `from` for auth and drop the Reply-To header.
     const sender = this.senderFactory({
       id: service.id,
       from: service.from,
@@ -294,6 +302,8 @@ export class EmailReplyDeliveryService {
       port: service.port,
       name: service.name,
       ssl: service.ssl,
+      smtpUsername: service.smtpUsername,
+      replyTo: service.replyTo,
     });
 
     let certainty: "accepted" | "definitely_rejected" | "unknown";
