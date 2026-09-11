@@ -26,6 +26,7 @@ import {
   OUTBOUND_POLICY_VERSION,
   OUTBOUND_VALIDATION_VERSION,
 } from "@/service/outboundEmail/outboundReliabilityVersions";
+import { log } from "@/modules/Logger";
 
 /**
  * Authoritative delivery service for the intent-aware outbound-email pipeline
@@ -522,7 +523,11 @@ export class OutboundEmailDeliveryService extends BaseDb {
     } catch (error: unknown) {
       if (error instanceof SenderIdentityChangedError) {
         const message = error.message;
-        console.error(
+        // Route to the file logger (electron-log → main.log) rather than raw
+        // console.error, which is NOT mirrored to app.log in production. This
+        // fail-closed security event must be auditable from the production log.
+        // The message is a fixed constant (no email address or SMTP username).
+        log.error(
           `[outbound-email-delivery] sender identity changed for attempt ${claimed.attemptId}: ${message}`
         );
         await this.handleWorkerStartFailure(
