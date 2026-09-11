@@ -3709,6 +3709,7 @@ export default {
       cache_phase_done: "Hecho",
       cache_phase_failed: "Fallido",
       active_stop_now: "Detener ahora",
+      stop_failed: "No se pudo detener una sesión activa; el ajuste sigue habilitado. Reintenta o detén el navegador desde la tarjeta del chat.",
       cache_enabled: "Conservar caché en disco entre sesiones",
       clear_cache_on_exit: "Limpiar la caché al salir de la aplicación",
       cache_size: "Tamaño de caché: {size}",

@@ -3569,6 +3569,11 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             type: "string",
             description: "Short human-readable purpose shown in the approval.",
           },
+          expected_output: {
+            type: "string",
+            description:
+              "Declared expected output shape (shown in the approval), e.g. 'a number' or '{count: number}'.",
+          },
           timeout_ms: {
             type: "number",
             description: "Execution window in ms (100-10000, default 5000).",
@@ -3578,7 +3583,13 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             description: "Current page revision (from the latest observation).",
           },
         },
-        required: ["session_id", "source", "purpose", "page_revision"],
+        required: [
+          "session_id",
+          "source",
+          "purpose",
+          "expected_output",
+          "page_revision",
+        ],
       },
       tier: "main",
       requiresConfirmation: true,

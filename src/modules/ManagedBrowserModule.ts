@@ -802,14 +802,16 @@ export class ManagedBrowserModule {
         }
         return "deny";
       }
-      const digestMatches =
+      // Review fix: a NULL digest or revision NEVER matches — null-bound
+      // approvals were wildcards that authorized any program/script.
+      // Approvals must be recorded with their exact digest + revision.
+      if (
         entry.programDigest === null ||
-        entry.programDigest === input.programDigest;
-      const revisionMatches =
+        entry.programDigest !== input.programDigest ||
         entry.pageRevision === null ||
-        entry.pageRevision === input.pageRevision;
-      if (!digestMatches || !revisionMatches) {
-        continue; // a stale approve for a DIFFERENT program never matches
+        entry.pageRevision !== input.pageRevision
+      ) {
+        continue; // a stale/unbound approve for a DIFFERENT program never matches
       }
       this.approvalDecisions.delete(requestId);
       if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
@@ -1204,7 +1206,6 @@ export class ManagedBrowserModule {
         // P0 ships with providers disabled, so the ladder resolves to
         // manual_handoff for every challenge; blocked decisions stop the
         // session outright.
-        record.challengeAttempts.add(event.challengeId);
         // GAP-15: the real gate configuration drives the policy ladder;
         // every refusal/failure keeps the manual handoff. Fire-and-forget:
         // the policy never blocks the event loop on a provider call.
@@ -1469,6 +1470,12 @@ export class ManagedBrowserModule {
       { type: "CHALLENGE_DETECTED" }
     >
   ): Promise<void> {
+    // Review fix: mark the challenge attempted only AFTER the ladder reads
+    // the attempted set — adding it first made every challenge look
+    // already-attempted and killed the provider path entirely.
+    const finish = (): void => {
+      record.challengeAttempts.add(event.challengeId);
+    };
     try {
       const provider = getDefaultCaptchaProviderService();
       const config = await provider.getConfig();
@@ -1490,6 +1497,7 @@ export class ManagedBrowserModule {
         },
         attemptedChallengeIds: record.challengeAttempts,
       });
+      finish();
       if (decision.mode === "blocked") {
         record.lastErrorCode = "challenge_resolution_failed";
         return;
@@ -1511,6 +1519,7 @@ export class ManagedBrowserModule {
       }
       // manual_handoff: nothing to do — the session is already in handoff.
     } catch (error) {
+      finish();
       log.warn(
         `[ManagedBrowserModule] challenge policy failed: ${
           error instanceof Error ? error.name : "unknown"

@@ -3530,6 +3530,7 @@ export default {
       cache_phase_done: "完成",
       cache_phase_failed: "失败",
       active_stop_now: "立即停止",
+      stop_failed: "无法停止进行中的会话——设置保持启用。请重试或在聊天卡片中停止浏览器。",
       cache_enabled: "在会话之间保留磁盘缓存",
       clear_cache_on_exit: "应用退出时清理缓存",
       cache_size: "缓存大小：{size}",

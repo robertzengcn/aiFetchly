@@ -242,6 +242,16 @@ import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes
 
 const TERMINAL_STATES = new Set(["stopped", "failed"]);
 
+/** States where nothing identifiable may be captured (matches the module gate). */
+const SENSITIVE_STATES = new Set([
+  "handoff",
+  "user_login_in_progress",
+  "verifying_manual_login",
+  "login_required",
+  "challenge_detected",
+  "challenge_resolving",
+]);
+
 const { t } = useI18n();
 
 const status = ref<SafeManagedBrowserStatus | null>(null);
@@ -373,6 +383,11 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
     // or challenge — the thumbnail is cleared entering sensitive states.
     clearScreenshot();
     screenshotDenied.value = true;
+  }
+  if (!SENSITIVE_STATES.has(next.state)) {
+    // Review fix: re-arm the capture control once the session returns to a
+    // safe state (screenshotDenied was never reset before).
+    screenshotDenied.value = false;
   }
 }
 

@@ -79,6 +79,7 @@ interface RunState {
   effectUnknown: boolean;
   deadline: number;
   depth: number;
+  handoffReason?: string;
 }
 
 export interface BrowserProgramOutcome {
@@ -94,6 +95,8 @@ export interface BrowserProgramOutcome {
     | "navigation_blocked"
     | "handoff_required"
     | null;
+  /** Structured handoff reason when stopCode is handoff_required. */
+  readonly handoffReason?: string;
   readonly extracted: readonly unknown[];
 }
 
@@ -131,7 +134,8 @@ export class BrowserActionExecutor {
       run.effectUnknown,
       options,
       run.results,
-      run.extracted
+      run.extracted,
+      run.handoffReason
     );
   }
 
@@ -191,6 +195,9 @@ export class BrowserActionExecutor {
 
       run.executedSteps++;
       const outcome = await this.executeOne(action, options, run);
+      if (outcome.handoffReason) {
+        run.handoffReason = outcome.handoffReason;
+      }
       run.results.push({
         actionIndex: run.results.length,
         type: action.type,
@@ -256,13 +263,15 @@ export class BrowserActionExecutor {
     effectUnknown: boolean,
     options: ExecuteProgramOptions,
     results: readonly ActionStepResult[],
-    extracted: readonly unknown[]
+    extracted: readonly unknown[],
+    handoffReason?: string
   ): BrowserProgramOutcome {
     return {
       effect: effectUnknown ? "unknown" : "known",
       pageRevision: options.registry.currentRevision,
       results,
       stopCode,
+      ...(handoffReason ? { handoffReason } : {}),
       extracted: extracted.slice(
         0,
         MANAGED_BROWSER_ACTION_LIMITS.maxExtractedItems
@@ -281,6 +290,7 @@ export class BrowserActionExecutor {
     urlAfter?: string | null;
     effectUnknown?: boolean;
     stopCode?: StopCode;
+    handoffReason?: string;
   }> {
     try {
       switch (action.type) {
@@ -352,6 +362,17 @@ export class BrowserActionExecutor {
           });
         case "clear":
           return await this.withElement(action, options, async (entry) => {
+            // Review fix: clearing a credential field is the same class of
+            // forbidden mutation as filling one — probe identically.
+            const inputType = await this.probeInputType(entry.element);
+            if (inputType && isSensitiveInputType(inputType)) {
+              return {
+                success: false,
+                errorCode: "challenge_requires_handoff" as const,
+                effectUnknown: false,
+                stopCode: "handoff_required" as const,
+              };
+            }
             await entry.element.scrollIntoView();
             await entry.element.evaluate(
               "((el) => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })"
@@ -383,7 +404,9 @@ export class BrowserActionExecutor {
           return {
             success: false,
             errorCode: "challenge_requires_handoff" as const,
+            effectUnknown: false,
             stopCode: "handoff_required" as const,
+            handoffReason: action.reason ?? "user_requested",
           };
         default:
           return { success: false, errorCode: "action_not_allowed" };
@@ -527,6 +550,7 @@ export class BrowserActionExecutor {
     elementFound?: boolean | null;
     effectUnknown?: boolean;
     stopCode?: StopCode;
+    handoffReason?: string;
   }> {
     const lookup = options.registry.lookup(action.ref, action.pageRevision);
     if (lookup.status === "stale_revision") {

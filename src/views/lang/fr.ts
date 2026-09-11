@@ -3694,6 +3694,7 @@ export default {
       cache_phase_done: "Terminé",
       cache_phase_failed: "Échec",
       active_stop_now: "Arrêter maintenant",
+      stop_failed: "Impossible d'arrêter une session active ; le réglage reste activé. Réessayez ou arrêtez le navigateur depuis la carte du chat.",
       cache_enabled: "Conserver un cache disque entre les sessions",
       clear_cache_on_exit: "Vider le cache à la fermeture de l'application",
       cache_size: "Taille du cache : {size}",

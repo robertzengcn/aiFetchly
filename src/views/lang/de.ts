@@ -3707,6 +3707,7 @@ export default {
       cache_phase_done: "Fertig",
       cache_phase_failed: "Fehlgeschlagen",
       active_stop_now: "Jetzt stoppen",
+      stop_failed: "Eine aktive Sitzung konnte nicht gestoppt werden – die Einstellung bleibt aktiviert. Versuchen Sie es erneut oder stoppen Sie den Browser über die Chat-Karte.",
       cache_enabled: "Datenträger-Cache zwischen Sitzungen behalten",
       clear_cache_on_exit: "Cache beim Beenden der App leeren",
       cache_size: "Cache-Größe: {size}",

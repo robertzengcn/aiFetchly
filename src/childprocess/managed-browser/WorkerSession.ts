@@ -463,7 +463,9 @@ export class WorkerSession {
         this.send({
           ...this.base(requestId),
           type: "HANDOFF_REQUIRED",
-          reason: "password_field",
+          // Structured reason from the triggering action (review fix: was
+          // hardcoded to password_field for every handoff path).
+          reason: (outcome.handoffReason as "password_field") ?? "password_field",
           challenge: null,
         });
       } else if (this.runtime.getState() === "running") {
@@ -658,7 +660,10 @@ export class WorkerSession {
   }
 
   public cancelCurrent(): void {
-    this.cancelled = true;
+    // Review fix: cancelling the CURRENT request must not permanently set
+    // the terminal `cancelled` flag — that bricked every later program
+    // (Pause AI, CANCEL_REQUEST). Terminal cancellation stays exclusive to
+    // stop(); here we only abort the in-flight run.
     this.currentRunActionsAbort?.abort();
   }
 
@@ -802,7 +807,10 @@ export class WorkerSession {
       kind: detection.kind,
       flowClassification: detection.flow,
       evidenceCodes: [...detection.evidenceCodes],
-      providerInputAvailable: siteKey !== null,
+      // Invariant (schema-level intent, enforced here): provider input is
+      // available ONLY when a real site key was extracted — never true
+      // with an empty key.
+      providerInputAvailable: siteKey !== null && siteKey.length >= 8,
       ...(siteKey ? { siteKey } : {}),
     });
     this.runtime.transition("handoff");

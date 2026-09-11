@@ -160,6 +160,13 @@
         </v-card-title>
         <v-card-text>
           {{ t("managedBrowser.settings.active_session_body") }}
+          <div
+            v-if="stopFailed"
+            class="text-caption text-error mt-2"
+            data-testid="mb-stop-failed"
+          >
+            {{ t("managedBrowser.settings.stop_failed") }}
+          </div>
         </v-card-text>
         <v-card-actions>
           <v-btn
@@ -289,6 +296,7 @@ const clearInProgress = ref(false);
 const confirmDialog = ref(false);
 const activeSessionDialog = ref(false);
 const stoppingSessions = ref(false);
+const stopFailed = ref(false);
 const accounts = ref<
   Array<{ readonly accountId: number; readonly accountLabel: string }>
 >([]);
@@ -315,10 +323,14 @@ const accountClearDecision = ref<"stop_and_clear" | "defer">("defer");
 const cacheMaxMb = ref(500);
 
 async function onCacheMaxChange(): Promise<void> {
-  const clamped = Math.min(2048, Math.max(100, Math.round(cacheMaxMb.value)));
-  if (!Number.isFinite(clamped) || clamped === cacheMaxMb.value - 0) {
-    /* keep */
+  const raw = Number(cacheMaxMb.value);
+  if (!Number.isFinite(raw)) {
+    // Review fix: reject non-numeric input outright — restore the last
+    // persisted value instead of persisting NaN.
+    await reload();
+    return;
   }
+  const clamped = Math.min(2048, Math.max(100, Math.round(raw)));
   cacheMaxMb.value = clamped;
   await updateBrowserPreferences({ cacheMaxSizeMb: clamped }).catch(() =>
     undefined
@@ -382,6 +394,9 @@ async function onRequestClearSelected(): Promise<void> {
     });
     pendingAccountConfirmation = { accountId, id: issued.confirmationId };
     pendingConfirmationId = issued.confirmationId;
+    // Review fix: a fresh confirmation never inherits a prior account's
+    // stop-and-clear choice.
+    accountClearDecision.value = "defer";
     // TODO-MSB-005: show THIS account's size in the confirmation, and offer
     // the active-scope choice when the account's browser is live.
     selectedAccountStatus.value = await getCacheStatus({
@@ -420,6 +435,7 @@ async function persist(patch: {
 }
 
 function onToggleBrowser(value: boolean | null): void {
+  stopFailed.value = false;
   if (value !== null) {
     if (value) {
       void persist({ browserEnabled: true });
@@ -467,10 +483,20 @@ async function onDisableDecision(
     } else {
       // Stop now: explicit immediate cancellation.
       const sessions = await listActiveSessions();
+      let anyStopFailed = false;
       for (const session of sessions) {
         await stopManagedBrowser(session.sessionId, "cancelled").catch(
-          () => undefined
+          () => {
+            anyStopFailed = true;
+          }
         );
+      }
+      if (anyStopFailed) {
+        // Review fix: a failed explicit Stop now keeps the setting ON and
+        // tells the user, instead of silently disabling with live sessions.
+        stopFailed.value = true;
+        await reload();
+        return;
       }
       await persist({ browserEnabled: false });
     }
@@ -497,6 +523,11 @@ async function onRequestClearAll(): Promise<void> {
     // Refresh the size shown in the confirmation dialog first.
     cacheStatus.value = await getCacheStatus({ scope: "all" });
     const issued = await issueClearConfirmation({ scope: "all" });
+    // Review fix: starting an ALL-scope confirmation invalidates any stale
+    // account confirmation (it contaminated the dialog's size + choices).
+    pendingAccountConfirmation = null;
+    selectedScopeActive.value = false;
+    accountClearDecision.value = "defer";
     pendingConfirmationId = issued.confirmationId;
     confirmDialog.value = true;
   } catch (error) {

@@ -128,6 +128,9 @@ export interface BrowserModuleLike {
   captureScreenshot(
     sessionId: string
   ): Promise<{ mimeType: string; base64: string }>;
+  captureSessionScreenshot(
+    sessionId: string
+  ): Promise<{ mimeType: string; base64: string }>;
   evaluateScript(
     sessionId: string,
     input: { source: string; timeoutMs: number; pageRevision: number }
@@ -485,6 +488,22 @@ export class ManagedBrowserAiToolService {
         if (action.type === "repeat") {
           return { ...action, body: attested(action.body) };
         }
+        const stampRef = (
+          refAction: Record<string, unknown>
+        ): Record<string, unknown> => {
+          const ref = refAction.ref;
+          if (typeof ref !== "string") {
+            return refAction;
+          }
+          const descriptor = descriptorFor(ref);
+          return descriptor
+            ? {
+                ...refAction,
+                expectedRole: descriptor.role,
+                expectedName: descriptor.name,
+              }
+            : refAction;
+        };
         if (
           (action.type === "click" ||
             action.type === "fill" ||
@@ -493,14 +512,10 @@ export class ManagedBrowserAiToolService {
             action.type === "clear") &&
           "ref" in action
         ) {
-          const descriptor = descriptorFor(action.ref);
-          if (descriptor) {
-            return {
-              ...action,
-              expectedRole: descriptor.role,
-              expectedName: descriptor.name,
-            };
-          }
+          return stampRef(action as unknown as Record<string, unknown>) as BrowserAction;
+        }
+        if (action.type === "wait_for" && action.ref) {
+          return stampRef(action as unknown as Record<string, unknown>) as BrowserAction;
         }
         return action;
       });
@@ -620,6 +635,10 @@ export class ManagedBrowserAiToolService {
       this.browserModule.notifyApprovalRequired?.({
         sessionId: parsed.data.session_id,
         requestId: context.toolCallId,
+        // Bound the approval to the EXACT source + revision (review:
+        // omitting these recorded a wildcard that authorized any script).
+        programDigest: sourceHash,
+        pageRevision: parsed.data.page_revision,
         riskClass: "privileged_script",
         contentSummary: `evaluate_script (${parsed.data.source.length} chars${writeCapable ? ", WRITES PAGE STATE" : ""}, purpose: ${parsed.data.purpose.slice(0, 120)})`,
       });
@@ -668,7 +687,10 @@ export class ManagedBrowserAiToolService {
     }
     this.ensureSession(parsed.data.session_id);
     try {
-      const shot = await this.browserModule.captureScreenshot(
+      // Review fix: the model-facing tool uses the SAME sensitive-state
+      // gate as the renderer thumbnail — nothing capturable during
+      // handoff/login/challenge states.
+      const shot = await this.browserModule.captureSessionScreenshot(
         parsed.data.session_id
       );
       return {
@@ -820,9 +842,19 @@ function buildApprovalSummary(
   program: BrowserActionProgram,
   descriptorFor: (ref: string) => { readonly role: string; readonly name: string } | null
 ): string {
+  // Review fix: walk the FLATTENED tree so consequential actions nested in
+  // if/repeat bodies appear in the approval the user is consenting to.
   const parts: string[] = [];
-  for (const action of program.actions.slice(0, 5)) {
-    if ((action.type === "click" || action.type === "fill" || action.type === "select") && "ref" in action) {
+  const flattened = flattenProgramActions(program.actions);
+  for (const action of flattened.slice(0, 8)) {
+    if (
+      (action.type === "click" ||
+        action.type === "fill" ||
+        action.type === "select" ||
+        action.type === "hover" ||
+        action.type === "clear") &&
+      "ref" in action
+    ) {
       const descriptor = descriptorFor(action.ref);
       parts.push(`${action.type} "${descriptor?.name ?? action.ref}"`);
     } else if (action.type === "navigate") {
@@ -830,6 +862,9 @@ function buildApprovalSummary(
     } else {
       parts.push(action.type);
     }
+  }
+  if (flattened.length > 8) {
+    parts.push(`+${flattened.length - 8} more`);
   }
   const intent = program.intent ? ` (intent: ${program.intent})` : "";
   return `${parts.join(", ")}${intent}`;

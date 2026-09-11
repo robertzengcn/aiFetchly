@@ -3679,6 +3679,7 @@ export default {
       cache_phase_done: "Done",
       cache_phase_failed: "Failed",
       active_stop_now: "Stop now",
+      stop_failed: "Could not stop a live session — the setting stays enabled. Try again or stop the browser from the chat card.",
       cache_enabled: "Keep a disk cache between sessions",
       clear_cache_on_exit: "Clear the cache when the app exits",
       cache_size: "Cache size: {size}",

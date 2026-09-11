@@ -84,6 +84,10 @@ function makeModule(
       mimeType: "image/jpeg",
       base64: "x".repeat(64),
     })),
+    captureSessionScreenshot: vi.fn(async () => ({
+      mimeType: "image/jpeg",
+      base64: "x".repeat(64),
+    })),
     evaluateScript: vi.fn(async () => ({
       ok: true,
       resultSummary: "{\"n\":1}",

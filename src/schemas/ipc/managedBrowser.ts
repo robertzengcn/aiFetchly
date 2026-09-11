@@ -181,12 +181,16 @@ const safeStatusSchema = z.strictObject({
   sessionId: sessionIdSchema,
   accountId: z.number().int().positive(),
   platformId: z.number().int().positive(),
+  accountLabel: z.string().max(255),
+  platformLabel: z.string().max(255),
+  proxyActive: z.boolean(),
   state: sessionStateSchema,
   currentOrigin: z.string().max(512).nullable(),
   pageTitle: z.string().max(300).nullable(),
   pageRevision: z.number().int().positive(),
   authenticated: z.boolean().nullable(),
   handoffReason: z.string().max(64).nullable(),
+  handoffExpiresAtEpochMs: z.number().int().nonnegative().nullable(),
   lastErrorCode: z.string().max(64).nullable(),
 });
 

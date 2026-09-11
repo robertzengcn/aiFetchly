@@ -3644,6 +3644,7 @@ export default {
       cache_phase_done: "完了",
       cache_phase_failed: "失敗",
       active_stop_now: "今すぐ停止",
+      stop_failed: "実行中のセッションを停止できませんでした。設定は有効のままです。再試行するか、チャットカードからブラウザを停止してください。",
       cache_enabled: "セッション間でディスクキャッシュを保持",
       clear_cache_on_exit: "アプリ終了時にキャッシュを削除",
       cache_size: "キャッシュサイズ：{size}",
