@@ -23,6 +23,8 @@ import {
 import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import { isValidReplyAddress } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 
 /** Returned once to the trusted caller; the raw token is never persisted/logged. */
 export interface ApprovalResult {
@@ -48,11 +50,23 @@ export interface ApproveDraftInput {
  * renderer input) and must match the revision's materialized content hash.
  */
 export class EmailReplyApprovalService {
+  private readonly dbpath: string;
   private readonly draftModule = new EmailReplyDraftModule();
   private readonly revisionModule = new EmailReplyDraftRevisionModule();
   private readonly approvalModule = new EmailReplyApprovalModule();
   private readonly messageModule = new EmailReceivedMessageModule();
   private readonly ruleModule = new EmailAutoReplyRuleModule();
+
+  /**
+   * @param dbpath Optional explicit database path (IPC handler resolves the
+   *   real user DB via `Token`/`USERSDBPATH`). When omitted the service
+   *   resolves the path itself, mirroring `BaseModule` — so the no-arg
+   *   constructor used in tests still works and production callers that pass
+   *   the resolved path avoid the `BaseDb` temp-dir fallback.
+   */
+  constructor(dbpath?: string) {
+    this.dbpath = dbpath ?? new Token().getValue(USERSDBPATH) ?? "";
+  }
 
   async approveDraft(input: ApproveDraftInput): Promise<ApprovalResult> {
     const draft = await this.draftModule.readAggregate(input.draftId);
@@ -139,7 +153,7 @@ export class EmailReplyApprovalService {
       // Resolve the full service identity for v2 so the hash binds smtpUsername
       // and replyToAddress from trusted server state, not renderer input.
       const identity = await resolveOutboundIdentity({
-        dbpath: "",
+        dbpath: this.dbpath,
         preferredServiceId: emailServiceId,
       });
       if (!identity) {
