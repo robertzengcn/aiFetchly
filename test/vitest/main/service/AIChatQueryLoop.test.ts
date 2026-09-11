@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
+  EMPTY_STOP_AFTER_TOOLS_PROMPT,
+  MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+  buildEmptyStopAfterToolsPauseMessage,
+  buildMaxToolRoundsPauseMessage,
   parseTextToolCalls,
   resolveToolChoiceForRound,
   type AIChatQueryLoopDeps,
@@ -355,6 +359,174 @@ describe("AIChatQueryLoop", () => {
         { q: "test" },
         expect.objectContaining({ toolCallId: "call-1" })
       );
+    });
+
+    it("continues after an empty stop that follows tool results", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-empty-1", "search", '{"q":"test"}')
+            );
+            return;
+          }
+          if (callCount === 2) {
+            onChunk(makeChunk("", "stop"));
+            return;
+          }
+          const last = req.messages[req.messages.length - 1];
+          expect(last).toEqual({
+            role: "user",
+            content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
+          });
+          onChunk(makeChunk("Next: scrape more distributors.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-empty-1",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "Plan approved. Please begin executing the plan now." },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Next: scrape more distributors.");
+      }
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+    });
+
+    it("pauses with a visible message after empty stops following tools are exhausted", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-empty-2", "search", '{"q":"test"}')
+            );
+            return;
+          }
+          onChunk(makeChunk("", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-empty-2",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const tokens: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "Plan approved. Please begin executing the plan now." },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "token" && e.contentDelta) {
+              tokens.push(e.contentDelta);
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      const pause = buildEmptyStopAfterToolsPauseMessage(
+        MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
+      );
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe(pause);
+      }
+      expect(tokens).toContain(pause);
+      expect(fakeStream).toHaveBeenCalledTimes(
+        1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1
+      );
+    });
+
+    it("pauses with a visible message when the tool-round cap is hit mid-plan", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          onChunk(
+            makeToolCallChunk(
+              `call-cap-${callCount}`,
+              "search",
+              `{"q":"${callCount}"}`
+            )
+          );
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-cap",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "Plan approved. Please begin executing the plan now." },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 2,
+      });
+      const pause = buildMaxToolRoundsPauseMessage(2);
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe(pause);
+        expect(result.fullContent).toContain("/loop");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
     });
 
     it("retries when provider emits a tool-call marker as plain text", async () => {

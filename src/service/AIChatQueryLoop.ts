@@ -111,8 +111,39 @@ import {
  * uses 1 (EnterPlanMode) + N (AskUserQuestion) + 1 (SubmitPlanForApproval)
  * + execution rounds. 8 was too low and dead-ended conversations after
  * ~7 questions.
+ *
+ * Hitting this cap used to return `completed` with empty `fullContent`
+ * after the last tool result. The engine then skipped persisting an
+ * assistant row, so /goal plan execution looked like a silent stop.
  */
-const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * How many times to nudge the model after it returns finish_reason=stop
+ * with no text and no tool calls, but this turn already executed tools.
+ * Empty stop after tools is not a finished plan — it is a premature end.
+ */
+export const MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS = 3;
+
+/** In-memory (not persisted) nudge sent when the model empty-stops after tools. */
+export const EMPTY_STOP_AFTER_TOOLS_PROMPT =
+  "Continue the current plan now. Call the next tool or write a short progress update with blockers. Do not end the turn with an empty reply.";
+
+export function buildMaxToolRoundsPauseMessage(maxRounds: number): string {
+  return (
+    `Reached the maximum of ${maxRounds} tool rounds in this turn, so the plan is not finished. ` +
+    "The last tool results are saved. Send another message or use /loop to continue."
+  );
+}
+
+export function buildEmptyStopAfterToolsPauseMessage(
+  attempts: number
+): string {
+  return (
+    `The assistant stopped after tool results without a next step (${attempts} empty replies). ` +
+    "The plan is not finished. Send another message or use /loop to continue."
+  );
+}
 
 /**
  * Polling interval for async tool jobs. The loop sleeps this long between
@@ -912,6 +943,11 @@ export class AIChatQueryLoop {
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
     let textToolCallMarkerRetryCount = 0;
+    let turnEndedCleanly = false;
+    let executedToolRound = false;
+    let emptyStopContinuations = 0;
+    let forcedPauseContent: string | undefined;
+    const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
     // Ensure a generous token budget so large tool-call arguments (e.g.
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
@@ -944,7 +980,7 @@ export class AIChatQueryLoop {
 
       for (
         let round = input.startRound;
-        round < CHAT_V2_MAX_TOOL_ROUNDS;
+        round < maxToolRounds;
         round += 1
       ) {
         // Free capacity from handoffs the model already saw in an earlier
@@ -1361,6 +1397,45 @@ export class AIChatQueryLoop {
                 "Plan submitted for approval. Please review the plan card.";
             }
           }
+
+          // After tools already ran this turn, finish_reason=stop with no
+          // text is a premature end, not a finished plan. Nudge the model
+          // to continue instead of persisting an empty completion.
+          const emptyAfterTools =
+            executedToolRound &&
+            lastFailedTool === null &&
+            accumulator.state.fullContent.trim().length === 0;
+          if (emptyAfterTools) {
+            if (
+              emptyStopContinuations < MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
+            ) {
+              emptyStopContinuations += 1;
+              messages.push({
+                role: "user",
+                content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: emptyStopContinuations,
+                maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+                message: "Continuing after empty model stop",
+              });
+              console.log(
+                `[ai-chat-v2] empty stop after tools; continuation ${emptyStopContinuations}/${MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS}`
+              );
+              continue;
+            }
+            forcedPauseContent = buildEmptyStopAfterToolsPauseMessage(
+              emptyStopContinuations
+            );
+            break;
+          }
+
+          turnEndedCleanly = true;
           break;
         }
 
@@ -1393,6 +1468,7 @@ export class AIChatQueryLoop {
         // delivered content so a later transient failure is not retried
         // (which would duplicate those events and orphan the persisted rows).
         tracker.delivered = true;
+        executedToolRound = true;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
@@ -2057,6 +2133,19 @@ export class AIChatQueryLoop {
       }
       if (fullContent.trim().length === 0 && lastFailedTool) {
         fullContent = buildFailedToolFallbackMessage(lastFailedTool);
+      }
+      if (!forcedPauseContent && !turnEndedCleanly && executedToolRound) {
+        forcedPauseContent = buildMaxToolRoundsPauseMessage(maxToolRounds);
+      }
+      if (forcedPauseContent) {
+        fullContent = forcedPauseContent;
+        eventSink.emit({
+          type: "token",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          contentDelta: forcedPauseContent,
+          model: finalAccumulator?.state.model,
+        });
       }
       const finishReason = finalAccumulator?.state.finishReason ?? "stop";
 

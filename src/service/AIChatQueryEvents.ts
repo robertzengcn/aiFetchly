@@ -478,6 +478,11 @@ export interface AIChatQueryLoopInput {
     baseDelayMs?: number;
   };
   /**
+   * Optional override for the per-turn model→tool→model round cap.
+   * Tests use a small value; production omits this and uses the default.
+   */
+  maxToolRounds?: number;
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.
