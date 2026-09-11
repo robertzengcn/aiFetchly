@@ -1575,6 +1575,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               console.error("[ai-auto-dream] chat trigger failed:", err)
@@ -1585,6 +1586,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               console.error("[workspace-auto-dream] chat trigger failed:", err)

@@ -46,9 +46,12 @@ export class AIAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; forwarded so the
+     * consolidation request carries an explicit model instead of null. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[ai-auto-dream] chat trigger failed:", err);
     }
@@ -57,9 +60,11 @@ export class AIAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, when known. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[ai-auto-dream] agent trigger failed:", err);
     }
@@ -68,11 +73,15 @@ export class AIAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Explicit model for the consolidation request. When omitted the
+     * request carries no model and the server applies its default. */
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Auto-dream run skipped");
@@ -97,6 +106,7 @@ export class AIAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -111,6 +121,7 @@ export class AIAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
@@ -153,6 +164,10 @@ export class AIAutoDreamService {
       });
 
       const req: OpenAIChatCompletionRequest = {
+        // Forward the triggering turn/task model when known so the hosted
+        // request carries an explicit model instead of null (the server
+        // would otherwise fall back to its default active model).
+        ...(input.model ? { model: input.model } : {}),
         messages: [
           { role: "system", content: buildAutoDreamSystemPrompt() },
           {

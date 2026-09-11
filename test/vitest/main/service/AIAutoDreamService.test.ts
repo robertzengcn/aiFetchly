@@ -251,4 +251,122 @@ describe("AIAutoDreamService", () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  it("forwards an explicit model to completeChat when provided via runNow", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "deepseek-v4-flash",
+    });
+    const completed = { ...runView, status: "completed" };
+    mockGetByRunId.mockResolvedValue(completed);
+    await svc.runNow({ force: true, model: "deepseek-v4-flash" });
+    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
+    );
+  });
+
+  it("omits the model key when no model is provided (server default applies)", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "server-default",
+    });
+    const completed = { ...runView, status: "completed" };
+    mockGetByRunId.mockResolvedValue(completed);
+    await svc.runNow({ force: true });
+    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    const sent = mockCompleteChat.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(sent).toBeDefined();
+    expect(sent).not.toHaveProperty("model");
+  });
+
+  it("forwards the triggering turn model via evaluateAfterChatTurn", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCollect.mockResolvedValue({
+      packets: [1, 2, 3, 4, 5].map((n) => ({
+        sourceKind: "chat_v2",
+        sourceId: `v2-${n}`,
+        updatedAt: new Date().toISOString(),
+        title: "t",
+        messages: [{ id: "m1", role: "user", content: "hello" }],
+      })),
+      chatConversationCount: 5,
+      agentTaskCount: 0,
+      reviewedThrough: new Date(),
+    });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "deepseek-v4-flash",
+    });
+    const completed = { ...runView, status: "completed" };
+    mockGetByRunId.mockResolvedValue(completed);
+    await svc.evaluateAfterChatTurn({
+      conversationId: "v2-1",
+      reason: "assistant_turn_completed",
+      model: "deepseek-v4-flash",
+    });
+    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
+    );
+  });
+
+  it("forwards the agent task model via evaluateAfterAgentTask", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCollect.mockResolvedValue({
+      packets: [1, 2, 3, 4, 5].map((n) => ({
+        sourceKind: "agent_task",
+        sourceId: `agt-${n}`,
+        updatedAt: new Date().toISOString(),
+        title: "t",
+        messages: [{ id: "m1", role: "user", content: "do work" }],
+      })),
+      chatConversationCount: 0,
+      agentTaskCount: 5,
+      reviewedThrough: new Date(),
+    });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "deepseek-v4-flash",
+    });
+    const completed = { ...runView, status: "completed" };
+    mockGetByRunId.mockResolvedValue(completed);
+    await svc.evaluateAfterAgentTask({
+      agentTaskId: "agt-1",
+      reason: "agent_task_completed",
+      model: "deepseek-v4-flash",
+    });
+    expect(mockCompleteChat).toHaveBeenCalledTimes(1);
+    expect(mockCompleteChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
+    );
+  });
 });

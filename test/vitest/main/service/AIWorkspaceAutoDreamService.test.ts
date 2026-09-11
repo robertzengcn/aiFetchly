@@ -331,4 +331,52 @@ describe("AIWorkspaceAutoDreamService", () => {
       expect.objectContaining({ runId: "wrun-1", memoriesCreated: 1, memoriesUpdated: 1, memoriesArchived: 1 })
     );
   });
+
+  it("forwards an explicit model to completeChat when provided via runNow", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "c1"), pkt(WS, "c2"), pkt(WS, "c3")],
+      chatConversationCount: 3,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    await svc().runNow({ force: true, model: "deepseek-v4-flash" });
+    expect(completeChat).toHaveBeenCalledTimes(1);
+    expect(completeChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
+    );
+  });
+
+  it("omits the model key when no model is provided (server default applies)", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "c1"), pkt(WS, "c2"), pkt(WS, "c3")],
+      chatConversationCount: 3,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    await svc().runNow({ force: true });
+    expect(completeChat).toHaveBeenCalledTimes(1);
+    const sent = completeChat.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(sent).toBeDefined();
+    expect(sent).not.toHaveProperty("model");
+  });
+
+  it("forwards the triggering turn model via evaluateAfterChatTurn", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "c1", 6)],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+    await svc().evaluateAfterChatTurn({
+      conversationId: "c1",
+      reason: "assistant_turn_completed",
+      model: "deepseek-v4-flash",
+    });
+    expect(completeChat).toHaveBeenCalledTimes(1);
+    expect(completeChat).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
+    );
+  });
 });

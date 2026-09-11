@@ -575,6 +575,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           console.error("[ai-auto-dream] agent trigger failed:", err)
@@ -585,6 +586,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           console.error("[workspace-auto-dream] agent trigger failed:", err)

@@ -66,9 +66,12 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; forwarded so the
+     * consolidation request carries an explicit model instead of null. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[workspace-auto-dream] chat trigger failed:", err);
     }
@@ -77,9 +80,11 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, when known. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[workspace-auto-dream] agent trigger failed:", err);
     }
@@ -88,11 +93,15 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Explicit model for the consolidation request. When omitted the
+     * request carries no model and the server applies its default. */
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -117,6 +126,7 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -131,6 +141,7 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
@@ -158,7 +169,8 @@ export class AIWorkspaceAutoDreamService {
       const view = await this.runForGroup(
         group,
         reviewedSince,
-        input.force === true
+        input.force === true,
+        input.model
       );
       if (view) results.push(view);
     }
@@ -187,7 +199,8 @@ export class AIWorkspaceAutoDreamService {
   private async runForGroup(
     group: WorkspacePacketGroup,
     reviewedSince: Date | null,
-    force: boolean
+    force: boolean,
+    model?: string
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
     const scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
@@ -231,6 +244,9 @@ export class AIWorkspaceAutoDreamService {
 
       const validWorkspaceKeys = new Set([group.workspaceKey]);
       const req: OpenAIChatCompletionRequest = {
+        // Forward the triggering turn/task model when known so the hosted
+        // request carries an explicit model instead of null.
+        ...(model ? { model } : {}),
         messages: [
           { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
           {
