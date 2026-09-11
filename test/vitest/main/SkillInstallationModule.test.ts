@@ -15,6 +15,7 @@ import {
   setTypedDependencyInstallerForTests,
 } from "@/modules/SkillInstallationModule";
 import { SkillInstallPrepareArgsSchema } from "@/entityTypes/skillInstallationTypes";
+import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 
 // Stateful detectAll seam: force every plan dependency to "missing" so the
@@ -1437,3 +1438,87 @@ describe("compaction recovery reconciles durable invocations (FR-23)", () => {
     }
   }, 120_000);
 });
+
+describe("session-aware installer tool boundary + manual-action transition (FR-30)", () => {
+  it("manual-action approval is token-bound, conversation-bound, and auditable", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-manual",
+      source: fixtureRoot,
+    });
+    const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+
+    // Wrong token → typed refusal.
+    const wrongToken = await module.approveManualAction({
+      sessionId: prepared.sessionId,
+      approvalToken: "not-the-token",
+    });
+    expect(wrongToken.errorCode).toBe("APPROVAL_REQUIRED");
+
+    // Cross-conversation → typed refusal.
+    const foreign = await module.approveManualAction({
+      sessionId: prepared.sessionId,
+      approvalToken: token,
+      conversationId: "conv-other",
+    });
+    expect(foreign.errorCode).toBe("INSTALL_SESSION_CONVERSATION_MISMATCH");
+
+    // Correct binding → audited transition; boundary sees it.
+    expect(await module.hasApprovedManualAction(prepared.sessionId)).toBe(false);
+    const approved = await module.approveManualAction({
+      sessionId: prepared.sessionId,
+      approvalToken: token,
+      conversationId: "conv-manual",
+    });
+    expect(approved.state).toBe("awaiting_approval");
+    expect(await module.hasApprovedManualAction(prepared.sessionId)).toBe(true);
+  }, 120_000);
+
+  it("the conversation's persisted session activates the boundary across turns", async () => {
+    const module = new SkillInstallationModule();
+    // An explicit install intent creates the session…
+    const prepared = await module.prepare({
+      conversationId: "conv-boundary",
+      source: fixtureRoot,
+    });
+    expect(prepared.state).toBe("awaiting_approval");
+
+    // …and the SESSION (not the message) is discoverable for follow-up
+    // turns that never restate the intent.
+    const routing = await module.findActiveSessionRouting("conv-boundary");
+    expect(routing).not.toBeNull();
+    expect(routing?.sessionId).toBe(prepared.sessionId);
+
+    // Other conversations and terminal sessions are NOT bound.
+    expect(await module.findActiveSessionRouting("conv-unrelated")).toBeNull();
+    await module.cancel(prepared.sessionId);
+    expect(await module.findActiveSessionRouting("conv-boundary")).toBeNull();
+  }, 120_000);
+
+  it("evaluateSkillInstallationToolPolicy honors manualActionApproved for the fallback", async () => {
+    const { evaluateSkillInstallationToolPolicy: evaluate } = await import(
+      "@/service/SkillInstallationToolPolicy"
+    );
+    const routing = classifyIntent("Set up https://github.com/a/b for me");
+    const blocked = evaluate({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: { command: "git clone https://github.com/a/b" },
+    });
+    expect(blocked.allowed).toBe(false);
+    // The approved manual-action transition opens the bounded fallback.
+    const opened = evaluate({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: { command: "git clone https://github.com/a/b" },
+      manualActionApproved: true,
+    });
+    expect(opened.allowed).toBe(true);
+  }, 60_000);
+});
+
+function classifyIntent(
+  message: string
+): ReturnType<typeof classifySkillRequestIntent> {
+  return classifySkillRequestIntent(message);
+}

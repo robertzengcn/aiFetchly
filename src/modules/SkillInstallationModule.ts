@@ -1695,6 +1695,88 @@ export class SkillInstallationModule extends BaseModule {
     };
   }
 
+  /**
+   * FR-30: the PERSISTED routing decision for a conversation — its most
+   * recent active installer session. The tool boundary enforces against
+   * this across follow-up turns and restarts, not just the current message.
+   */
+  async findActiveSessionRouting(
+    conversationId: string
+  ): Promise<{ sessionId: string; canonicalUri: string | null } | null> {
+    const { sessions } = await this.getModels();
+    const session = await sessions.findActiveByConversation(conversationId);
+    if (!session) return null;
+    return {
+      sessionId: session.sessionId,
+      canonicalUri: session.canonicalUri ?? null,
+    };
+  }
+
+  /**
+   * FR-30 / §9.7 manual-action transition: the ONE typed result that opens
+   * a bounded generic fallback. Marks the session as having an approved
+   * manual action (audit event + session approval flag semantics), which the
+   * tool boundary then honors for generic tools on the recognized target.
+   */
+  async approveManualAction(input: {
+    sessionId: string;
+    /** Renderer-only opaque token — same binding as plan approval. */
+    approvalToken: string;
+    /** FR-29 conversation binding. */
+    conversationId?: string;
+  }): Promise<InstallSnapshot> {
+    const { sessions, events } = await this.getModels();
+    const session = await sessions.findBySessionId(input.sessionId);
+    if (!session) {
+      return this.errorSnapshot(
+        "failed",
+        "INSTALL_SESSION_REQUIRED",
+        "Unknown installation session.",
+        input.sessionId
+      );
+    }
+    if (this.conversationMismatch(session, input.conversationId)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "INSTALL_SESSION_CONVERSATION_MISMATCH",
+        "This installation session belongs to a different conversation.",
+        input.sessionId
+      );
+    }
+    if (
+      session.approvalToken &&
+      input.approvalToken !== session.approvalToken
+    ) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "APPROVAL_REQUIRED",
+        "Manual action approval must come from the user's install card.",
+        input.sessionId
+      );
+    }
+    await this.appendEvent(
+      events,
+      input.sessionId,
+      "manual-action-approved",
+      session.state,
+      session.state,
+      "generic fallback opened for the recognized target"
+    );
+    const current = await sessions.findBySessionId(input.sessionId);
+    return this.snapshotFromEntity(current ?? session);
+  }
+
+  /**
+   * FR-30: has this session an approved manual-action transition? The tool
+   * boundary supplies this as manualActionApproved before allowing generic
+   * fallback tools on the install target.
+   */
+  async hasApprovedManualAction(sessionId: string): Promise<boolean> {
+    const { events } = await this.getModels();
+    const history = await events.listBySession(sessionId);
+    return history.some((e) => e.eventType === "manual-action-approved");
+  }
+
   async disable(
     installationId: string
   ): Promise<{ disabled: boolean; deactivatedInvocations: number }> {

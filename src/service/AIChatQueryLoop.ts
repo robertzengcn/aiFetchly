@@ -672,6 +672,12 @@ export class AIChatQueryLoop {
   /** FR-13 narrowing: active skills' allowed-tools intersection (null = off). */
   private skillToolAllowlist: Set<string> | null = null;
   private skillToolAllowlistDirty = true;
+  /** FR-30 boundary: the conversation's persisted active installer session. */
+  private activeInstallSession: {
+    sessionId: string;
+    canonicalUri: string | null;
+  } | null = null;
+  private installBoundaryDirty = true;
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -1875,17 +1881,73 @@ export class AIChatQueryLoop {
           // substitute for the typed installer on the recognized target.
           // Unrelated workspace work stays legal; only a typed
           // manual-action-required transition opens a generic fallback.
+          // FR-30 session-aware boundary: the message's intent OR this
+          // conversation's PERSISTED active installer session activates the
+          // boundary — so follow-up turns ("continue", "now do X on it")
+          // cannot sidestep the typed installer just by omitting the intent
+          // phrases. The session's manual-action approval (when granted)
+          // opens the bounded generic fallback.
           const skillInstallRouting = classifySkillRequestIntent(
             input.request.message
           );
+          let installRouting = skillInstallRouting;
+          if (installRouting.confidence !== "explicit") {
+            if (this.installBoundaryDirty) {
+              this.installBoundaryDirty = false;
+              try {
+                const { SkillInstallationModule } = await import(
+                  "@/modules/SkillInstallationModule"
+                );
+                this.activeInstallSession = await new SkillInstallationModule().findActiveSessionRouting(
+                  input.conversationId
+                );
+              } catch (boundaryError) {
+                log.warn(
+                  "[install-boundary] session lookup failed:",
+                  boundaryError
+                );
+              }
+            }
+            if (this.activeInstallSession) {
+              installRouting = {
+                policyVersion: 1,
+                intent: "install-package",
+                confidence: "explicit",
+                ...(this.activeInstallSession.canonicalUri
+                  ? {
+                      source: this.activeInstallSession.canonicalUri,
+                    }
+                  : {}),
+                allowedEntryPoint: "skill_install_prepare",
+                reasonCode: "active-session-binding",
+              };
+            }
+          } else {
+            this.installBoundaryDirty = true;
+          }
+          let manualActionApproved = false;
+          if (this.activeInstallSession) {
+            try {
+              const { SkillInstallationModule } = await import(
+                "@/modules/SkillInstallationModule"
+              );
+              manualActionApproved =
+                await new SkillInstallationModule().hasApprovedManualAction(
+                  this.activeInstallSession.sessionId
+                );
+            } catch {
+              /* boundary lookup is best-effort; default closed */
+            }
+          }
           if (
-            skillInstallRouting.confidence === "explicit" &&
+            installRouting.confidence === "explicit" &&
             !INSTALLER_TOOL_NAMES.has(call.name)
           ) {
             const verdict = evaluateSkillInstallationToolPolicy({
-              routing: skillInstallRouting,
+              routing: installRouting,
               toolName: call.name,
               toolArguments: call.arguments ?? {},
+              manualActionApproved,
             });
             if (!verdict.allowed) {
               await emitToolCall(call.arguments ?? {});

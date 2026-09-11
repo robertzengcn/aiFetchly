@@ -110,6 +110,25 @@ export class SkillInstallationSessionModel extends BaseDb {
     });
   }
 
+  /**
+   * FR-30: the most recent NON-TERMINAL session bound to a conversation —
+   * the persisted routing decision the tool boundary enforces across
+   * follow-up turns and restarts (latest by monotonic id).
+   */
+  async findActiveByConversation(
+    conversationId: string
+  ): Promise<SkillInstallationSessionEntity | null> {
+    const rows = await this.repository
+      .createQueryBuilder("s")
+      .where("s.conversationId = :cid", { cid: conversationId })
+      .andWhere("s.state NOT IN (:...terminal)", {
+        terminal: ["ready", "failed", "cancelled", "rollback_required"],
+      })
+      .orderBy("s.id", "DESC")
+      .getMany();
+    return rows[0] ?? null;
+  }
+
   async findActiveByCanonicalUri(
     canonicalUri: string
   ): Promise<SkillInstallationSessionEntity[]> {
