@@ -49,6 +49,7 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("read_attachment_content", "builtin")).toBe("always");
     expect(classify("knowledge_library_search", "builtin")).toBe("always");
     expect(classify("run_subagent", "builtin")).toBe("always");
+    expect(classify("conversation_tool_history", "builtin")).toBe("always");
   });
 
   it("keeps attach_local_images deferred by default (not always-loaded)", () => {

@@ -67,6 +67,7 @@ function row(opts: Partial<AIChatMessageEntity>): AIChatMessageEntity {
     content: opts.content ?? "",
     timestamp: opts.timestamp ?? new Date(0),
     messageType: opts.messageType ?? MessageType.MESSAGE,
+    metadata: opts.metadata,
   } as AIChatMessageEntity;
 }
 
@@ -183,6 +184,125 @@ describe("AIChatContextAssembler", () => {
         m.content.includes("# Session Memory")
     );
     expect(sessionBlock).toBeUndefined();
+  });
+
+  it("keeps the original user task after a long tool-calling turn fills the row window", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    const originalTask =
+      "email software distributors from the CSV files in the workspace";
+    const history: AIChatMessageEntity[] = [
+      row({
+        id: 1,
+        messageId: "user-task",
+        role: "user",
+        content: originalTask,
+        timestamp: new Date(1),
+        messageType: MessageType.MESSAGE,
+      }),
+    ];
+    for (let i = 0; i < 20; i++) {
+      const toolCallId = `call-${i}`;
+      const email = `user${i}@example.com`;
+      history.push(
+        row({
+          id: 2 + i * 2,
+          messageId: `tool-call-${i}`,
+          role: "assistant",
+          content: "",
+          timestamp: new Date(2 + i * 2),
+          messageType: MessageType.TOOL_CALL,
+          metadata: JSON.stringify({
+            source: "chat-v2",
+            toolCallId,
+            toolName: "start_email_send_task",
+            toolArguments: { emails: [email] },
+          }),
+        })
+      );
+      history.push(
+        row({
+          id: 3 + i * 2,
+          messageId: `tool-result-${i}`,
+          role: "assistant",
+          content: JSON.stringify({
+            success: true,
+            task_id: 100 + i,
+            recipient_count: 1,
+          }),
+          timestamp: new Date(3 + i * 2),
+          messageType: MessageType.TOOL_RESULT,
+          metadata: JSON.stringify({
+            source: "chat-v2",
+            toolCallId,
+            toolName: "start_email_send_task",
+            toolResult: {
+              success: true,
+              task_id: 100 + i,
+              recipient_count: 1,
+            },
+            toolResultStatus: "success",
+            success: true,
+          }),
+        })
+      );
+    }
+    history.push(
+      row({
+        id: 50,
+        messageId: "assistant-checkpoint",
+        role: "assistant",
+        content: "Continuing with Liquid Technologies:",
+        timestamp: new Date(50),
+        messageType: MessageType.MESSAGE,
+      })
+    );
+    history.push(
+      row({
+        id: 51,
+        messageId: "user-continue",
+        role: "user",
+        content: "please continue",
+        timestamp: new Date(51),
+        messageType: MessageType.MESSAGE,
+      })
+    );
+    mockGetConversationMessages.mockResolvedValue(history);
+
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "please continue",
+      currentUserMessageId: "user-continue",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+      recentMessageWindow: 5,
+    });
+
+    const contents = r.messages.map((m) => m.content);
+    expect(contents).toContain(originalTask);
+    expect(contents).toContain("Continuing with Liquid Technologies:");
+    const index = r.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("Prior tool activity")
+    );
+    expect(index).toBeTruthy();
+    expect(String(index!.content)).toContain("start_email_send_task");
+    expect(String(index!.content)).toContain("task_id=119");
+    const replayedTools = r.messages.filter((m) => m.role === "tool");
+    expect(replayedTools.length).toBe(4);
+    expect(replayedTools.map((m) => m.tool_call_id)).toEqual([
+      "call-16",
+      "call-17",
+      "call-18",
+      "call-19",
+    ]);
+    expect(r.messages[r.messages.length - 1]).toEqual({
+      role: "user",
+      content: "please continue",
+    });
   });
 
   it("preserves chronological order of recent history", async () => {
