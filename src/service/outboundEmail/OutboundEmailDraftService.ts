@@ -459,8 +459,8 @@ export class OutboundEmailDraftService {
     }
     // New revisions are always v2, but a batch may still contain legacy v1
     // revisions. Use the v2 batch hash when all envelopes are v2; v1 hash when
-    // all are v1. Mixed batches are a §17.2 concern — the delivery service
-    // enforces that gate; here we hash by the majority version.
+    // all are v1. Mixed batches hash as v2 (new revisions dominate the batch
+    // state); the delivery service's §17.2 gate rejects mixed batches entirely.
     let batchHash: string;
     if (v2Envelopes.length > 0 && v1Envelopes.length === 0) {
       batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes);

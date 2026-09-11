@@ -44,8 +44,15 @@ export function resolveEmailServiceIdentity(
 
 /**
  * Reject CR/LF in identity fields before persistence, hashing, and sending
- * (§7.2 header-injection defense).
+ * (§7.2 header-injection defense). Also blocks Unicode line/paragraph
+ * separators (U+2028/U+2029) which are valid JS string line terminators — a
+ * defense-in-depth measure; nodemailer's own sanitizer targets \r?\n only.
  */
 export function containsEmailHeaderBreak(value: string): boolean {
-  return value.includes("\r") || value.includes("\n");
+  return (
+    value.includes("\r") ||
+    value.includes("\n") ||
+    value.includes("\u2028") ||
+    value.includes("\u2029")
+  );
 }

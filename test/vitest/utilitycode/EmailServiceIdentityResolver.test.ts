@@ -97,4 +97,11 @@ describe("EmailServiceIdentityResolver", () => {
     expect(containsEmailHeaderBreak("plain")).toBe(false);
     expect(containsEmailHeaderBreak("")).toBe(false);
   });
+
+  it("containsEmailHeaderBreak flags Unicode line/paragraph separators", () => {
+    expect(containsEmailHeaderBreak("a\u2028b")).toBe(true);
+    expect(containsEmailHeaderBreak("a\u2029b")).toBe(true);
+    // A clean multi-word string is still allowed.
+    expect(containsEmailHeaderBreak("hello world")).toBe(false);
+  });
 });

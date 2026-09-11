@@ -499,11 +499,17 @@ export class OutboundEmailDeliveryService extends BaseDb {
       // §17.2 — mixed-version batches are rejected before the authorization is
       // consumed (the transaction rolls back). No attempt is created.
       if (error instanceof MixedVersionBatchError) {
+        log.warn(
+          `[outbound-email-delivery] mixed-version batch rejected for batch ${input.batchId} (§17.2)`
+        );
         return { status: "mixed_version_batch" };
       }
       // §17.1 — legacy v1 identity no longer matches; require a new v2
       // revision + re-approval. Transaction rolls back, no attempt consumed.
       if (error instanceof LegacyIdentityRequiresReviewError) {
+        log.warn(
+          `[outbound-email-delivery] legacy identity requires review for batch ${input.batchId} (§17.1)`
+        );
         return { status: "legacy_identity_requires_review" };
       }
       throw error;

@@ -1,12 +1,6 @@
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
-/** Legacy single-field resolver result (kept for backward-compatible callers). */
-export interface ResolvedOutboundSender {
-  readonly emailServiceId: number;
-  readonly senderAddress: string;
-}
-
 /** Full identity result (§13.2): authentication + visible + reply identities. */
 export interface ResolvedOutboundIdentity {
   readonly emailServiceId: number;
@@ -35,13 +29,12 @@ export function normalizeEmailServiceIds(raw: unknown): number[] {
   const values: unknown[] = Array.isArray(raw)
     ? raw
     : typeof raw === "string" && raw.includes(",")
-      ? raw.split(",")
-      : [raw];
+    ? raw.split(",")
+    : [raw];
   const ids: number[] = [];
   const seen = new Set<number>();
   for (const value of values) {
-    const n =
-      typeof value === "number" ? value : Number(String(value).trim());
+    const n = typeof value === "number" ? value : Number(String(value).trim());
     if (!Number.isInteger(n) || n <= 0 || seen.has(n)) {
       continue;
     }
@@ -106,17 +99,4 @@ export async function resolveOutboundIdentity(
     if (resolved) return resolved;
   }
   return null;
-}
-
-/** Thin wrapper preserving the legacy single-field return shape. */
-export async function resolveOutboundSender(
-  options: ResolveOutboundSenderOptions
-): Promise<ResolvedOutboundSender | null> {
-  const identity = await resolveOutboundIdentity(options);
-  return identity
-    ? {
-        emailServiceId: identity.emailServiceId,
-        senderAddress: identity.senderAddress,
-      }
-    : null;
 }
