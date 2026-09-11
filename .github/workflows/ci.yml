@@ -187,18 +187,38 @@ jobs:
 
       # electron-packager's finalize/prune phase (galactus building an in-memory
       # map of the whole dependency tree) produces transient memory spikes that
-      # can OOM-kill the process on a ~7 GB runner, surfacing as "lost
-      # communication with the server" mid-"Finalizing package". A 4 GB swap
-      # file absorbs those spikes. This was introduced by 7e1e14eb and
-      # accidentally dropped when the job was reworked; restored here.
+      # can OOM-kill the runner, surfacing as a bare "The runner has received a
+      # shutdown signal" / "The operation was canceled" mid-"Finalizing package"
+      # with no exit code and no error — the kernel OOM-kills the runner agent
+      # process itself. A swap file absorbs those spikes.
+      #
+      # The runner image already mounts a swapfile at /swapfile, so re-using that
+      # path silently no-ops ("fallocate failed: Text file busy" / "mkswap:
+      # /swapfile is mounted" / "swapon failed: Device or resource busy"). The
+      # previous `|| true` step therefore reported success while adding ZERO
+      # swap — leaving the job with only the runner's 3 GB of swap, which is not
+      # enough for galactus's finalize spike on this node_modules tree. Use a
+      # fresh path (/swapfile-ci) so the extra swap is actually created, and
+      # fail the step (not swallow) if it can't be enabled — a broken mitigation
+      # must be loud, not silent.
       - name: Add swap to absorb finalize memory spikes
         run: |
+          set -euo pipefail
           echo "Memory/swap before:"; free -h
-          sudo fallocate -l 4G /swapfile || true
-          sudo chmod 600 /swapfile || true
-          sudo mkswap /swapfile >/dev/null || true
-          sudo swapon /swapfile || true
+          # Use a path the runner image does not pre-mount.
+          sudo fallocate -l 4G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci >/dev/null
+          sudo swapon /swapfile-ci
           echo "Memory/swap after:"; free -h
+          # Hard-fail if swap did not actually increase: a no-op mitigation is
+          # worse than an explicit failure because it hides the OOM root cause.
+          # Runner ships ~3 GB swap; the 4 GB addition should bring total > 6 GB.
+          AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+          if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
+            echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before the packaging step OOM-kills the runner."
+            exit 1
+          fi
 
       - name: Guard forge asar unpack before packaging
         run: yarn verify-forge-asar-unpack

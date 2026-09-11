@@ -12,6 +12,7 @@ import {
   LOCAL_AI_RUNTIME_REMOVE,
   LOCAL_AI_RUNTIME_PROGRESS,
 } from "@/config/channellist";
+import { LOCAL_AI_RUNTIME_RELEASE } from "@/config/localAiRuntimeRelease";
 import { lazySchema } from "@/utils/lazySchema";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
@@ -77,7 +78,7 @@ export function resolveCatalogSource(): {
     "robertzengcn/aiFetchly";
   const releaseTag =
     process.env.AIFETCHLY_RUNTIME_RELEASE_TAG?.trim() ||
-    "local-ai-runtime-v1.0.0";
+    LOCAL_AI_RUNTIME_RELEASE.releaseTag;
   const catalogUrl =
     explicit ||
     `https://github.com/${repository}/releases/download/${encodeURIComponent(

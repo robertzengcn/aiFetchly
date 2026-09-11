@@ -10,7 +10,7 @@ const {
   statSync,
 } = require("node:fs");
 const { builtinModules } = require("node:module");
-const { join, normalize } = require("node:path");
+const { join, normalize, dirname } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
 /** @type {Set<string>} */
@@ -201,6 +201,102 @@ function getPackageRootName(packageName) {
     return name ? `${scope}/${name}` : packageName;
   }
   return packageName.split("/")[0];
+}
+
+/**
+ * Compute the production dependency closure of a set of package roots the way
+ * Node's own require resolver would, by walking the on-disk `node_modules`
+ * tree: for every package's declared `dependencies` + `optionalDependencies`,
+ * resolve each name from that package's location *up the directory tree* —
+ * preferring a nested `node_modules/<pkg>` inside the dependent when one
+ * exists (nested installs travel with their parent automatically) and
+ * otherwise resolving to the hoisted root `node_modules/<pkg>` — and recurse
+ * into whichever physical install location wins.
+ *
+ * This is the accurate replacement for the flora-colossus Walker realpath scan
+ * that getExternalNestedDependencies performs: it discovers the SAME set of
+ * transitive runtime packages, but via O(closure) `readFileSync` calls on
+ * `package.json` files — no realpath/stat storm over every file in every
+ * subtree, so it does not stall the constrained CI runner.
+ *
+ * A flat closure (resolving every dep name against the root `node_modules`
+ * only) is NOT sufficient: when a dependency ships its OWN nested copy of a
+ * package under `<dep>/node_modules/` (a version pin), that nested copy can
+ * itself depend on a package that Node resolves up-tree to a HOISTED root
+ * `node_modules/<transitive>` — e.g. `typeorm` nests `glob@11`, whose
+ * `path-scurry` dep is hoisted to the root. The flat closure walks root
+ * `glob@7` instead and never sees `path-scurry`; the packaged app then crashes
+ * on launch with `Cannot find module 'path-scurry'`. The resolver-accurate
+ * walk visits the nested `glob@11` and keeps `path-scurry`.
+ *
+ * Returns a Set of package roots (bare name, or `@scope/name`).
+ */
+function getResolvedProductionClosure(packageRoots) {
+  const projectRoot = normalize(__dirname);
+  const rootInstallDir = join(projectRoot, "node_modules");
+  const found = new Set();
+  const visitedInstallDirs = new Set();
+
+  // Node-style resolution: search `fromDir/node_modules/<name>` upward.
+  function resolveInstallDir(depName, fromDir) {
+    let dir = fromDir;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const candidate = join(dir, "node_modules", depName);
+      if (existsSync(join(candidate, "package.json"))) {
+        return candidate;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) {
+        return null;
+      }
+      dir = parent;
+    }
+  }
+
+  function walkInstallDir(installDir, depth) {
+    if (depth > 80 || visitedInstallDirs.has(installDir)) {
+      return;
+    }
+    visitedInstallDirs.add(installDir);
+
+    // Derive the package root name from the install dir's path under node_modules.
+    const relToRoot = installDir.slice(rootInstallDir.length + 1);
+    const relSegs = relToRoot.split(/[\\/]+/).filter(Boolean);
+    const pkgRootName =
+      relSegs.length > 0 && relSegs[0].startsWith("@")
+        ? relSegs.slice(0, 2).join("/")
+        : relSegs[0];
+    if (pkgRootName) {
+      found.add(pkgRootName);
+    }
+
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(join(installDir, "package.json"), "utf8"));
+    } catch {
+      return;
+    }
+    const deps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.optionalDependencies || {}),
+    };
+    for (const depName of Object.keys(deps)) {
+      const resolved = resolveInstallDir(depName, installDir);
+      if (resolved) {
+        walkInstallDir(resolved, depth + 1);
+      }
+    }
+  }
+
+  for (const entry of packageRoots) {
+    const rootName = getPackageRootName(entry);
+    const installDir =
+      resolveInstallDir(rootName, rootInstallDir) ||
+      join(rootInstallDir, rootName);
+    walkInstallDir(installDir, 0);
+  }
+  return found;
 }
 
 function removeEmptyDirectories(rootDir) {
@@ -613,7 +709,21 @@ module.exports = {
     // ignore: [
     //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
     // ],
-    prune: true,
+    // Under the CI smoke skip path (FORGE_SKIP_NATIVE_REBUILD=1) the
+    // `ignore` allow-list above is the authoritative keep/ignore decision for
+    // every file under node_modules. electron-packager's `prune: true` would
+    // ALSO run galactus's flora-colossus Walker.walkTree() — a recursive scan
+    // of the WHOLE root dependency tree (dev + prod + optional, ~2300 modules)
+    // building an in-memory module map, purely to make a module-level keep
+    // decision that the allow-list already subsumes. That walk is the dominant
+    // memory consumer of the finalize/copy phase and has OOM-killed the 15 GB
+    // CI runner mid-"Finalizing package" (bare "The operation was canceled"
+    // with no exit code — the kernel reaps the runner agent). Skipping it on
+    // the constrained runner keeps peak memory bounded to the file-by-file
+    // O(1) Set lookups of shouldKeepPackagedPath. Production (non-skip) builds
+    // keep prune:true so the module-level pass still trims anything the
+    // allow-list might let through.
+    prune: process.env.FORGE_SKIP_NATIVE_REBUILD !== "1",
     overwrite: true,
   },
   rebuildConfig: {
@@ -1050,19 +1160,27 @@ module.exports = {
         return foundModules;
       };
       // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) also skips
-      // this prePackage dependency-graph walk. The walk uses @electron-forge
-      // core-utils' Walker to recursively realpath-scan every EXTERNAL_DEPENDENCIES
-      // subtree (puppeteer, typeorm, canvas, ...) to discover nested native
-      // deps and add them to the packager keep-list. On the constrained CI
-      // runner this same full-graph walk (mirroring the @electron/rebuild walk
-      // scripts/patch-remote-rebuild.js already no-ops) can stall packaging
-      // before it reaches "Copying files". The smoke test only verifies packaged
-      // worker files + renderer HTML layout — it never loads native binaries at
-      // runtime — so the static EXTERNAL_DEPENDENCIES allow-list (which already
-      // lists every direct native dep) is sufficient. Mirrors the
-      // FORGE_SKIP_NATIVE_REBUILD skip rationale in scripts/patch-remote-rebuild.js.
+      // the flora-colossus realpath walk in getExternalNestedDependencies. That
+      // walk recursively scans every EXTERNAL_DEPENDENCIES subtree (puppeteer,
+      // typeorm, canvas, ...) to discover nested native deps and add them to the
+      // packager keep-list; on the constrained CI runner it can stall packaging
+      // before "Copying files". But the skip path MUST NOT drop transitive
+      // runtime packages: the packaged main script (background.js) requires
+      // `typeorm` at module load, which requires hoisted pure-JS transitives
+      // (e.g. `tslib`, and `path-scurry` via typeorm's nested `glob@11`) that
+      // are NOT in the static EXTERNAL_DEPENDENCIES list. A bare static
+      // allow-list ships a package that crashes on launch with
+      // "Cannot find module 'tslib'" / "Cannot find module 'path-scurry'".
+      // So instead compute the RESOLVER-ACCURATE production closure via
+      // getResolvedProductionClosure (Node-style nested node_modules walk —
+      // cheap package.json reads, no realpath storm) — it keeps the same
+      // transitives the full walk would, including the hoisted deps of nested
+      // installs, while skipping the expensive native realpath scan that
+      // stalls CI.
       if (process.env.FORGE_SKIP_NATIVE_REBUILD === "1") {
-        nativeModuleDependenciesToPackage = Array.from(EXTERNAL_DEPENDENCIES);
+        nativeModuleDependenciesToPackage = Array.from(
+          getResolvedProductionClosure(EXTERNAL_DEPENDENCIES)
+        );
       } else {
         const nativeModuleDependencies = await getExternalNestedDependencies(
           EXTERNAL_DEPENDENCIES
