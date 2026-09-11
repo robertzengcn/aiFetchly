@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import AdmZip from "adm-zip";
+import { SqliteDb } from "@/config/SqliteDb";
 
 // Import auto-discovery spawns the declared stdio command (npx -y ...) to
 // list MCP tools — a network spawn that has no place in a unit test. Mock
@@ -17,6 +27,35 @@ vi.mock("@/service/MCPToolService", () => ({
       return [];
     }
   },
+}));
+
+// The service-internal modules resolve their dbpath via
+// Token.getValue(USERSDBPATH) -> BaseModule fallback to the shared
+// `aifetchly-test` dir. Under parallel vitest workers, two workers running
+// TypeORM synchronize() DDL against that shared file throw SQLITE_BUSY. Mock
+// Token so USERSDBPATH points at an isolated per-run temp path, then reset
+// the SqliteDb singleton onto it. Mirrors EmailReplyRecovery.model.test.ts.
+const mockTokenStore = vi.hoisted(() => new Map<string, string>());
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({
+    getValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.get(key) ?? ""),
+    setValue: vi
+      .fn()
+      .mockImplementation((key: string, value: string) =>
+        mockTokenStore.set(key, value)
+      ),
+    deleteValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.delete(key)),
+    hasValue: vi
+      .fn()
+      .mockImplementation(
+        (key: string) =>
+          mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
+      ),
+  })),
 }));
 
 import { PluginImportService } from "@/service/PluginImportService";
@@ -51,7 +90,25 @@ const VALID_SKILL_MANIFEST = {
 
 describe("PluginImportService", () => {
   let tmp: string;
+  let dbpath: string;
   let pluginModule: PluginManagementModule;
+
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-plugin-import-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    mockTokenStore.set("USERSDBPATH", dbpath);
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-import-"));
