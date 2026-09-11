@@ -252,7 +252,7 @@ describe("AIAutoDreamService", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("forwards an explicit model to completeChat when provided via runNow", async () => {
+  it("routes consolidation through the small alias with the turn model as fallback", async () => {
     const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
     mockCompleteChat.mockResolvedValue({
       choices: [
@@ -269,11 +269,14 @@ describe("AIAutoDreamService", () => {
     await svc.runNow({ force: true, model: "deepseek-v4-flash" });
     expect(mockCompleteChat).toHaveBeenCalledTimes(1);
     expect(mockCompleteChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" })
+      expect.objectContaining({
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
     );
   });
 
-  it("omits the model key when no model is provided (server default applies)", async () => {
+  it("sends the small alias without fallback when no model is provided", async () => {
     const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
     mockCompleteChat.mockResolvedValue({
       choices: [
@@ -293,10 +296,11 @@ describe("AIAutoDreamService", () => {
       | Record<string, unknown>
       | undefined;
     expect(sent).toBeDefined();
-    expect(sent).not.toHaveProperty("model");
+    expect(sent).toMatchObject({ model: "small" });
+    expect(sent).not.toHaveProperty("fallbackModel");
   });
 
-  it("forwards the triggering turn model via evaluateAfterChatTurn", async () => {
+  it("forwards the triggering turn model as fallback via evaluateAfterChatTurn", async () => {
     const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
     mockCollect.mockResolvedValue({
       packets: [1, 2, 3, 4, 5].map((n) => ({
@@ -329,11 +333,14 @@ describe("AIAutoDreamService", () => {
     });
     expect(mockCompleteChat).toHaveBeenCalledTimes(1);
     expect(mockCompleteChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" })
+      expect.objectContaining({
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
     );
   });
 
-  it("forwards the agent task model via evaluateAfterAgentTask", async () => {
+  it("forwards the agent task model as fallback via evaluateAfterAgentTask", async () => {
     const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
     mockCollect.mockResolvedValue({
       packets: [1, 2, 3, 4, 5].map((n) => ({
@@ -366,7 +373,10 @@ describe("AIAutoDreamService", () => {
     });
     expect(mockCompleteChat).toHaveBeenCalledTimes(1);
     expect(mockCompleteChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" })
+      expect.objectContaining({
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
     );
   });
 });

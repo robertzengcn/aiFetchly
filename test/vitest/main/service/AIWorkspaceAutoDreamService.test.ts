@@ -332,7 +332,7 @@ describe("AIWorkspaceAutoDreamService", () => {
     );
   });
 
-  it("forwards an explicit model to completeChat when provided via runNow", async () => {
+  it("routes consolidation through the small alias with the turn model as fallback", async () => {
     collect.mockResolvedValue({
       packets: [pkt(WS, "c1"), pkt(WS, "c2"), pkt(WS, "c3")],
       chatConversationCount: 3,
@@ -342,11 +342,14 @@ describe("AIWorkspaceAutoDreamService", () => {
     await svc().runNow({ force: true, model: "deepseek-v4-flash" });
     expect(completeChat).toHaveBeenCalledTimes(1);
     expect(completeChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" })
+      expect.objectContaining({
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
     );
   });
 
-  it("omits the model key when no model is provided (server default applies)", async () => {
+  it("sends the small alias without fallback when no model is provided", async () => {
     collect.mockResolvedValue({
       packets: [pkt(WS, "c1"), pkt(WS, "c2"), pkt(WS, "c3")],
       chatConversationCount: 3,
@@ -359,10 +362,11 @@ describe("AIWorkspaceAutoDreamService", () => {
       | Record<string, unknown>
       | undefined;
     expect(sent).toBeDefined();
-    expect(sent).not.toHaveProperty("model");
+    expect(sent).toMatchObject({ model: "small" });
+    expect(sent).not.toHaveProperty("fallbackModel");
   });
 
-  it("forwards the triggering turn model via evaluateAfterChatTurn", async () => {
+  it("forwards the triggering turn model as fallback via evaluateAfterChatTurn", async () => {
     collect.mockResolvedValue({
       packets: [pkt(WS, "c1", 6)],
       chatConversationCount: 1,
@@ -376,7 +380,10 @@ describe("AIWorkspaceAutoDreamService", () => {
     });
     expect(completeChat).toHaveBeenCalledTimes(1);
     expect(completeChat).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "deepseek-v4-flash" })
+      expect.objectContaining({
+        model: "small",
+        fallbackModel: "deepseek-v4-flash",
+      })
     );
   });
 });

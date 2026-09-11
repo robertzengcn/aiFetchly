@@ -1,5 +1,5 @@
 "use strict";
-import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpClient, HttpResponseError } from "@/modules/lib/httpclient";
 import {
   CommonApiresp,
   ChatApiResponse,
@@ -14,6 +14,7 @@ import {
 } from "@/schemas/api/aiChat";
 import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import { isSmallModelAlias } from "@/service/aiProvider/SmallModelAlias";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
 import { type AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
@@ -525,6 +526,14 @@ export interface OpenAIReasoningOptions {
 export interface OpenAIChatCompletionRequest {
   messages: OpenAIChatMessage[];
   model?: string;
+  /**
+   * Desktop-internal fallback model for `SMALL_MODEL_ALIAS` requests. Never
+   * serialized on the wire: every payload builder copies explicit fields
+   * only. When the hosted server has no small row flagged (HTTP 404
+   * `small_model_unavailable`), the request is retried once with this model,
+   * or with no model (server default) when absent.
+   */
+  fallbackModel?: string;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
@@ -764,6 +773,14 @@ export interface StreamRecoveryInfo {
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
 const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
 const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
+ * discards the response body, so only the numeric status is observable).
+ */
+function isHttpNotFoundError(err: unknown): boolean {
+  return err instanceof HttpResponseError && err.status === 404;
+}
 
 export class AiChatApi {
   private _httpClient: HttpClient;
@@ -2128,7 +2145,40 @@ export class AiChatApi {
       data.user = request.user;
     }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
+    try {
+      return await this._httpClient.postJson(
+        "/api/ai/v1/chat/completions",
+        data
+      );
+    } catch (err) {
+      // The hosted server resolves the virtual "small" alias only when a
+      // small row is flagged (otherwise HTTP 404 `small_model_unavailable`;
+      // `postJson` surfaces it as `HttpResponseError` with status 404 and no
+      // body). Retry exactly once with the caller-supplied fallback model, or
+      // with no model (server default) when absent, so background
+      // consolidation still runs on backends without a small row. Any other
+      // error — including a 404 for a literal model id — propagates unchanged.
+      if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
+        throw err;
+      }
+      const retry: OpenAIChatCompletionRequest = { ...data };
+      if (
+        typeof request.fallbackModel === "string" &&
+        request.fallbackModel.length > 0
+      ) {
+        retry.model = request.fallbackModel;
+      } else {
+        delete retry.model;
+      }
+      this._debugLogRequest(
+        "/api/ai/v1/chat/completions (small-model fallback)",
+        retry
+      );
+      return await this._httpClient.postJson(
+        "/api/ai/v1/chat/completions",
+        retry
+      );
+    }
   }
 
   /**

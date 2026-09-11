@@ -20,6 +20,7 @@ import type {
   OpenAIChatCompletionResponse,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -66,8 +67,8 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
-    /** Model used by the triggering chat turn; forwarded so the
-     * consolidation request carries an explicit model instead of null. */
+    /** Model used by the triggering chat turn; sent as the fallback when the
+     * hosted server has no small-model row flagged for the "small" alias. */
     model?: string;
   }): Promise<void> {
     try {
@@ -80,7 +81,8 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
-    /** Effective model of the completed agent task, when known. */
+    /** Effective model of the completed agent task, used as the fallback when
+     * the hosted server has no small-model row flagged for the "small" alias. */
     model?: string;
   }): Promise<void> {
     try {
@@ -93,8 +95,8 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
-    /** Explicit model for the consolidation request. When omitted the
-     * request carries no model and the server applies its default. */
+    /** Explicit fallback model for the "small"-alias retry. When omitted the
+     * retry (if needed) carries no model and the server applies its default. */
     model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
@@ -244,9 +246,13 @@ export class AIWorkspaceAutoDreamService {
 
       const validWorkspaceKeys = new Set([group.workspaceKey]);
       const req: OpenAIChatCompletionRequest = {
-        // Forward the triggering turn/task model when known so the hosted
-        // request carries an explicit model instead of null.
-        ...(model ? { model } : {}),
+        // Route background consolidation through the hosted server's virtual
+        // "small" alias (cheap model). `fallbackModel` carries the triggering
+        // turn/task model for the single retry when the server has no small
+        // row flagged; local providers ignore the alias and use their
+        // configured default model instead.
+        model: SMALL_MODEL_ALIAS,
+        ...(model ? { fallbackModel: model } : {}),
         messages: [
           { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
           {
