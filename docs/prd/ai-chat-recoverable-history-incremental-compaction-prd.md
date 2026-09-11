@@ -2,6 +2,7 @@
 
 **Date:** 2026-09-11  
 **Status:** Draft for product and engineering review  
+**Technical design:** [Implementation architecture and contracts](ai-chat-recoverable-history-incremental-compaction-technical-design.md)  
 **Owner:** AiFetchly AI Chat  
 **Scope:** AI Chat V2, interactive continuation, and existing engine consumers  
 **Priority:** Required reliability improvement
