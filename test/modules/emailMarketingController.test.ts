@@ -1265,4 +1265,148 @@ describe("EmailMarketingController", () => {
       expect(threw).to.equal(true);
     });
   });
+
+  describe("validateEmailServiceForSave", () => {
+    // §7.2: the EMAILSERVICEUPDATE IPC handler must reject CR/LF in
+    // smtpUsername/from/replyTo before persistence. The controller method is
+    // the boundary the handler calls; it delegates to
+    // EmailServiceModule.validateEmailService and resolves hasStoredPassword
+    // from the existing row on update. These tests stub the module so the
+    // controller's wiring (mode dispatch, hasStoredPassword resolution,
+    // throw-on-invalid) is verified without a database.
+
+    const makeEntity = (): EmailServiceEntity => {
+      const e = new EmailServiceEntity();
+      e.name = "Primary SMTP";
+      e.from = "sender@example.com";
+      e.smtpUsername = null;
+      e.replyTo = null;
+      e.password = "pw";
+      e.host = "smtp.example.com";
+      e.port = "465";
+      e.ssl = 1;
+      e.status = 1;
+      e.receiveProtocol = "imap";
+      e.receiveEnabled = 0;
+      return e;
+    };
+
+    it("create mode validates without a DB lookup and resolves when valid", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "create"
+      );
+
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.mode).to.equal("create");
+      expect(captured.hasStoredPassword).to.equal(false);
+    });
+
+    it("update mode resolves hasStoredPassword from the existing row", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 5;
+      existing.password = "stored-secret";
+
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      const getEmailService = sinon.stub().resolves(existing);
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "update",
+        5
+      );
+
+      expect(getEmailService.firstCall.args[0]).to.equal(5);
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.mode).to.equal("update");
+      expect(captured.hasStoredPassword).to.equal(true);
+    });
+
+    it("update mode treats a missing stored password as no stored password", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "update",
+        42
+      );
+
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.hasStoredPassword).to.equal(false);
+    });
+
+    it("throws a concatenated message when validation finds blocking errors (CR/LF)", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: false,
+        errors: [
+          {
+            code: "email_header_break_forbidden",
+            message: "SMTP username must not contain line breaks",
+          },
+          { code: "from_invalid", message: "From email format is invalid" },
+        ],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      let threw = false;
+      let message = "";
+      try {
+        await emailMarketingController.validateEmailServiceForSave(
+          makeEntity(),
+          "create"
+        );
+      } catch (err: unknown) {
+        threw = true;
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(threw).to.equal(true);
+      expect(message).to.contain("SMTP username must not contain line breaks");
+      expect(message).to.contain("From email format is invalid");
+    });
+
+    it("create mode never reads the existing row (no hasStoredPassword lookup)", async () => {
+      const getEmailService = sinon.stub().resolves(undefined);
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "create"
+      );
+
+      expect(getEmailService.called).to.equal(false);
+    });
+  });
 });

@@ -325,6 +325,35 @@ export class EmailMarketingController {
   ): Promise<void> {
     return await this.emailServiceModule.updateEmailService(id, entity);
   }
+
+  /**
+   * Validate an email-service entity before create/update persistence
+   * (§7.2: reject CR/LF in smtpUsername/from/replyTo before persistence,
+   * hashing, and sending). Resolves `hasStoredPassword` from the existing
+   * row on update so the empty-sentinel password rule is enforced. Throws a
+   * single concatenated message on any blocking finding so the IPC handler
+   * surfaces a clear error to the renderer without persisting unsafe input.
+   */
+  public async validateEmailServiceForSave(
+    entity: EmailServiceEntity,
+    mode: "create" | "update",
+    existingId?: number
+  ): Promise<void> {
+    let hasStoredPassword = false;
+    if (mode === "update" && existingId !== undefined) {
+      const existing = await this.emailServiceModule.getEmailService(
+        existingId
+      );
+      hasStoredPassword = Boolean(existing?.password);
+    }
+    const validation = await this.emailServiceModule.validateEmailService(
+      entity,
+      { mode, hasStoredPassword }
+    );
+    if (!validation.valid) {
+      throw new Error(validation.errors.map((e) => e.message).join("; "));
+    }
+  }
   //find email service by name
   public async findEmailServiceByName(
     name: string

@@ -55,12 +55,12 @@ export const emailMarketingUpdateInputSchema = lazySchema(() =>
  * NOTE on CR/LF (§7.2): this schema bounds LENGTH only (`.max(...)`). It
  * does NOT reject `\r`/`\n` in smtpUsername/from/replyTo — that header-
  * injection defense lives in `EmailServiceModule.validateEmailService` via
- * `containsEmailHeaderBreak`. The EMAILSERVICEUPDATE handler does NOT yet
- * call `validateEmailService` before persistence (pre-existing behavior; the
- * import path at `emailMarketingController` does validate). Wiring validation
- * into this handler is a tracked follow-up; until then a CR/LF value can be
- * persisted from the update/create path. The schema is NOT the complete
- * security boundary for identity fields.
+ * `containsEmailHeaderBreak`. The EMAILSERVICEUPDATE handler now calls
+ * `EmailMarketingController.validateEmailServiceForSave` (which delegates to
+ * `validateEmailService`) before persistence on both create and update
+ * paths, so a CR/LF value in an identity field is rejected before any row
+ * is written. The schema remains a length-bound guard, not the complete
+ * security boundary; `validateEmailService` is the authoritative check.
  */
 export const emailServiceUpdateInputSchema = lazySchema(() =>
   z.object({
