@@ -483,11 +483,15 @@ export interface AIChatQueryLoopInput {
    */
   maxToolRounds?: number;
   /**
-   * When true, hitting the per-cycle tool-round cap does not pause the turn.
-   * The loop injects an in-memory continuation prompt and starts another
-   * cycle so /goal execution keeps calling the model until a clean stop,
-   * abort, empty-stop exhaustion, or the safety cycle cap. Engine sets
-   * this for chat-mode turns that have a non-terminal conversation goal.
+   * Optional override for how many hidden continuation cycles may start
+   * after the per-cycle tool-round cap. Tests use a small value.
+   */
+  maxRoundCapContinuations?: number;
+  /**
+   * When true, the hidden round-cap continuation tells the model to keep
+   * going until the goal's completion conditions are met. All chat turns
+   * auto-continue past the cap; this only changes that in-memory prompt.
+   * Engine sets this for chat-mode turns that have a non-terminal goal.
    */
   goalAutoContinue?: boolean;
   /**

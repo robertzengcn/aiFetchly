@@ -4,10 +4,7 @@ import {
   EMPTY_STOP_AFTER_TOOLS_PROMPT,
   GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
-  MAX_STATUS_CHECK_TOOL_ROUNDS,
-  TOOL_ROUND_CAP_STATUS_CHECK_PROMPT,
-  buildEmptyStopAfterToolsPauseMessage,
-  buildMaxToolRoundsPauseMessage,
+  TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   parseTextToolCalls,
   resolveToolChoiceForRound,
   type AIChatQueryLoopDeps,
@@ -421,7 +418,7 @@ describe("AIChatQueryLoop", () => {
       expect(fakeStream).toHaveBeenCalledTimes(3);
     });
 
-    it("pauses with a visible message after empty stops following tools are exhausted", async () => {
+    it("keeps calling the model after empty stops following tools are exhausted", async () => {
       let callCount = 0;
       const fakeStream = vi.fn(
         async (
@@ -435,7 +432,14 @@ describe("AIChatQueryLoop", () => {
             );
             return;
           }
-          onChunk(makeChunk("", "stop"));
+          if (
+            callCount <=
+            1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1
+          ) {
+            onChunk(makeChunk("", "stop"));
+            return;
+          }
+          onChunk(makeChunk("Still working on the scrape.", "stop"));
         }
       );
       const fakeExecute = vi.fn().mockResolvedValue({
@@ -468,20 +472,19 @@ describe("AIChatQueryLoop", () => {
         startRound: 0,
         isActiveTurn: () => true,
       });
-      const pause = buildEmptyStopAfterToolsPauseMessage(
-        MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
-      );
       expect(result.type).toBe("completed");
       if (result.type === "completed") {
-        expect(result.fullContent).toBe(pause);
+        expect(result.fullContent).toBe("Still working on the scrape.");
+        expect(result.fullContent).not.toContain("/loop");
       }
-      expect(tokens).toContain(pause);
+      expect(tokens).toContain("Still working on the scrape.");
+      expect(tokens.some((t) => t.includes("/loop"))).toBe(false);
       expect(fakeStream).toHaveBeenCalledTimes(
-        1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1
+        1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 2
       );
     });
 
-    it("asks the model to check status after the tool-round cap", async () => {
+    it("sends a hidden continuation to the model after the tool-round cap", async () => {
       let callCount = 0;
       const fakeStream = vi.fn(
         async (
@@ -502,13 +505,8 @@ describe("AIChatQueryLoop", () => {
           const lastUser = [...req.messages]
             .reverse()
             .find((m) => m.role === "user");
-          expect(lastUser?.content).toBe(TOOL_ROUND_CAP_STATUS_CHECK_PROMPT);
-          onChunk(
-            makeChunk(
-              "Scraped 40 of 200 rows. Should I continue?",
-              "stop"
-            )
-          );
+          expect(lastUser?.content).toBe(TOOL_ROUND_CAP_CONTINUATION_PROMPT);
+          onChunk(makeChunk("Scraped 40 of 200 rows. Continuing.", "stop"));
         }
       );
       const fakeExecute = vi.fn().mockResolvedValue({
@@ -538,14 +536,15 @@ describe("AIChatQueryLoop", () => {
       expect(result.type).toBe("completed");
       if (result.type === "completed") {
         expect(result.fullContent).toBe(
-          "Scraped 40 of 200 rows. Should I continue?"
+          "Scraped 40 of 200 rows. Continuing."
         );
+        expect(result.fullContent).not.toContain("/loop");
       }
       expect(fakeStream).toHaveBeenCalledTimes(3);
       expect(fakeExecute).toHaveBeenCalledTimes(2);
     });
 
-    it("pauses when the status-check cycle still only calls tools", async () => {
+    it("does not show a canned pause when continuation cycles keep calling tools", async () => {
       let callCount = 0;
       const fakeStream = vi.fn(
         async (
@@ -569,6 +568,7 @@ describe("AIChatQueryLoop", () => {
         result: { answer: "found" },
         execution_time_ms: 10,
       });
+      const tokens: string[] = [];
       const loop = new AIChatQueryLoop({
         streamChatCompletion: fakeStream,
         executeTool: fakeExecute,
@@ -581,19 +581,26 @@ describe("AIChatQueryLoop", () => {
         request: { message: "scrape these pages" },
         openAITools: [tool("search")],
         abortController: new AbortController(),
-        eventSink: { emit: vi.fn() },
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "token" && e.contentDelta) {
+              tokens.push(e.contentDelta);
+            }
+          },
+        },
         startRound: 0,
         isActiveTurn: () => true,
         maxToolRounds: 2,
+        maxRoundCapContinuations: 1,
       });
-      const pause = buildMaxToolRoundsPauseMessage(2);
       expect(result.type).toBe("completed");
       if (result.type === "completed") {
-        expect(result.fullContent).toBe(pause);
-        expect(result.fullContent).toContain("/loop");
+        expect(result.fullContent).not.toContain("/loop");
+        expect(result.fullContent).not.toContain("Reached the maximum");
       }
-      expect(fakeStream).toHaveBeenCalledTimes(2 + MAX_STATUS_CHECK_TOOL_ROUNDS);
-      expect(fakeExecute).toHaveBeenCalledTimes(2 + MAX_STATUS_CHECK_TOOL_ROUNDS);
+      expect(tokens.some((t) => t.includes("/loop"))).toBe(false);
+      expect(fakeStream).toHaveBeenCalledTimes(4);
+      expect(fakeExecute).toHaveBeenCalledTimes(4);
     });
 
     it("auto-continues past the tool-round cap when goalAutoContinue is set", async () => {
