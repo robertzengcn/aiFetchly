@@ -669,6 +669,9 @@ export class AIChatQueryLoop {
   private readonly catalogSearchService = new ToolCatalogSearchService();
   /** One internal replay per call fingerprint, ever (FR-28 §8.7). */
   private readonly hydrationLedger = new HydrationReplayLedger();
+  /** FR-13 narrowing: active skills' allowed-tools intersection (null = off). */
+  private skillToolAllowlist: Set<string> | null = null;
+  private skillToolAllowlistDirty = true;
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -917,6 +920,57 @@ export class AIChatQueryLoop {
         // full currentTools set (TR-5, AC-10). currentTools remains the full
         // local executable set regardless.
         let exposedTools: OpenAITool[] = currentTools;
+        // FR-13/NFR-11: invoked skills' declared allowed-tools NARROW the
+        // exposed set (core tools survive; widening is impossible). The
+        // allowlist is recomputed when a use_skill round just executed.
+        if (this.skillToolAllowlistDirty) {
+          this.skillToolAllowlistDirty = false;
+          try {
+            const { PromptSkillInvocationModule } = await import(
+              "@/modules/PromptSkillInvocationModule"
+            );
+            const active = await new PromptSkillInvocationModule().listActive(
+              input.conversationId
+            );
+            const { intersectSkillToolAllowlists } = await import(
+              "@/service/PromptSkillToolNarrowing"
+            );
+            // allowedTools live on the catalog definition, keyed by the
+            // runtime id stored on each invocation row.
+            const { getDefaultPromptSkillCatalog } = await import(
+              "@/service/PromptSkillCatalog"
+            );
+            const catalog2 = getDefaultPromptSkillCatalog();
+            this.skillToolAllowlist = intersectSkillToolAllowlists(
+              active.map((row) => ({
+                runtimeId: row.runtimeId,
+                ...(catalog2.get(row.runtimeId)?.manifest.allowedTools
+                  ? {
+                      allowedTools:
+                        catalog2.get(row.runtimeId)!.manifest.allowedTools!,
+                    }
+                  : {}),
+              }))
+            );
+          } catch (narrowError) {
+            log.warn(
+              `[skill-narrowing] allowlist refresh failed, keeping prior set:`,
+              narrowError
+            );
+          }
+        }
+        if (this.skillToolAllowlist) {
+          const { applySkillToolNarrowing } = await import(
+            "@/service/PromptSkillToolNarrowing"
+          );
+          const keep = new Set(
+            applySkillToolNarrowing(
+              exposedTools.map((t) => t.function.name),
+              this.skillToolAllowlist
+            )
+          );
+          exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
+        }
         if (catalogActive && catalog && catalogModeDecision) {
           try {
             const filterResult = this.catalogService.filterForRound({
@@ -1903,6 +1957,11 @@ export class AIChatQueryLoop {
           }
 
           const toolPayload = normalizeToolResult(toolResult);
+          // FR-13: a (fresh or repeated) skill invocation may change the
+          // active allowed-tools intersection for subsequent rounds.
+          if (call.name === "use_skill") {
+            this.skillToolAllowlistDirty = true;
+          }
           if (toolResult.success) {
             lastFailedTool = null;
           } else {

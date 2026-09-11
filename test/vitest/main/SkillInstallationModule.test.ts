@@ -1245,3 +1245,68 @@ describe("precedence-aware, bounded package inspection (FR-04, NFR-04)", () => {
     }
   }, 180_000);
 });
+
+describe("skill_resource_execute: separately approved helper execution (FR-13)", () => {
+  it("runs a whitelisted helper through its interpreter inside the root; refuses other types and escapes", async () => {
+    const { executeSkillResource } = await import(
+      "@/service/PromptSkillResourceService"
+    );
+    const { getDefaultPromptSkillCatalog } = await import(
+      "@/service/PromptSkillCatalog"
+    );
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "exec-skill-"));
+    fs.mkdirSync(path.join(root, "helpers"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "helpers", "echo.js"),
+      "console.log(process.argv.slice(2).join(' '));\n"
+    );
+    fs.writeFileSync(path.join(root, "helpers", "data.bin"), "x");
+    const runtimeId = "prompt:user:exec-skill-test";
+    getDefaultPromptSkillCatalog().replaceSource("test:exec", [
+      {
+        runtimeId,
+        installationId: "exec-skill-test",
+        sourceId: "test",
+        scope: "user",
+        name: "exec-skill",
+        description: "d",
+        canonicalRoot: root,
+        skillMarkdownPath: path.join(root, "SKILL.md"),
+        contentHash: "c".repeat(64),
+        manifest: {
+          schemaVersion: 1 as const,
+          name: "exec-skill",
+          description: "d",
+          unknownFields: {},
+        },
+        enabled: true,
+      },
+    ]);
+    try {
+      // No conversation binding: the capability check is skipped; the
+      // containment + type gates still apply (pure function behavior).
+      const ok = await executeSkillResource(runtimeId, "helpers/echo.js", [
+        "hello",
+        "helper",
+      ]);
+      expect(ok.success).toBe(true);
+      expect(JSON.stringify(ok.result)).toContain("hello helper");
+
+      // Unknown extension → typed refusal.
+      const bin = await executeSkillResource(runtimeId, "helpers/data.bin", []);
+      expect(bin.success).toBe(false);
+      expect(JSON.stringify(bin.result)).toContain("not an executable helper");
+
+      // Traversal → refused.
+      const escape = await executeSkillResource(
+        runtimeId,
+        "../outside.sh",
+        []
+      );
+      expect(escape.success).toBe(false);
+    } finally {
+      getDefaultPromptSkillCatalog().remove(runtimeId);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+});

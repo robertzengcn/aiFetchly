@@ -20,6 +20,10 @@ import {
   decideDeferredToolHydration,
   stableToolCallFingerprint,
 } from "@/service/DeferredToolHydrationCoordinator";
+import {
+  intersectSkillToolAllowlists,
+  applySkillToolNarrowing,
+} from "@/service/PromptSkillToolNarrowing";
 
 // ---------------------------------------------------------------------------
 // Intent guard — FR-01 / FR-26 / FR-27 boundary matrix (design §21.1)
@@ -408,5 +412,46 @@ describe("decideDeferredToolHydration — the loop-side transparent replay gate 
     expect(decideFor("conv-a").action).toBe("execute");
     expect(decideFor("conv-b").action).toBe("execute");
     expect(decideFor("conv-a").action).toBe("exhausted");
+  });
+});
+
+describe("prompt-skill capability narrowing + helper execution (FR-13, NFR-11)", () => {
+  it("no declared allowedTools means no narrowing; declared lists intersect", () => {
+    expect(intersectSkillToolAllowlists([{ runtimeId: "a" }])).toBeNull();
+    // An invocation WITHOUT a declaration makes no reduction; a sibling
+    // that declares one still narrows.
+    const mixed = intersectSkillToolAllowlists([
+      { runtimeId: "a" },
+      { runtimeId: "b", allowedTools: ["file_read", "shell_execute"] },
+    ]);
+    expect(mixed && [...mixed].sort()).toEqual(["file_read", "shell_execute"]);
+
+    const single = intersectSkillToolAllowlists([
+      { runtimeId: "a", allowedTools: ["file_read", "file_write"] },
+    ]);
+    expect(single && [...single].sort()).toEqual(["file_read", "file_write"]);
+
+    const both = intersectSkillToolAllowlists([
+      { runtimeId: "a", allowedTools: ["file_read", "file_write"] },
+      { runtimeId: "b", allowedTools: ["file_read", "shell_execute"] },
+    ]);
+    // INTERSECTION: a tool must be allowed by EVERY active skill.
+    expect(both && [...both]).toEqual(["file_read"]);
+  });
+
+  it("narrowing keeps core tools and can never widen", () => {
+    const narrowed = intersectSkillToolAllowlists([
+      { runtimeId: "a", allowedTools: ["file_read"] },
+    ]);
+    const kept = applySkillToolNarrowing(
+      ["file_read", "file_write", "shell_execute", "use_skill", "skill_install_prepare", "skill_resource_read"],
+      narrowed
+    );
+    expect(kept).toEqual(["file_read", "use_skill", "skill_install_prepare", "skill_resource_read"]);
+    // An empty allowlist narrows to core only.
+    const coreOnly = applySkillToolNarrowing(["file_read", "use_skill"], new Set([]));
+    expect(coreOnly).toEqual(["use_skill"]);
+    // null allowlist is a no-op.
+    expect(applySkillToolNarrowing(["anything"], null)).toEqual(["anything"]);
   });
 });

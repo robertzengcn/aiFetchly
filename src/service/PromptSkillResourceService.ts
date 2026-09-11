@@ -260,3 +260,134 @@ export async function readSkillResource(
     result: { ...payload },
   };
 }
+
+// ---------------------------------------------------------------------------
+// FR-13 helper execution: separately approved, skill-root-scoped, no writes.
+// ---------------------------------------------------------------------------
+
+/** Interpreter map for helper files — anything else is not executable. */
+const HELPER_INTERPRETERS: Readonly<Record<string, readonly string[]>> = {
+  ".py": ["python3"],
+  ".js": ["node"],
+  ".mjs": ["node"],
+  ".sh": ["bash"],
+};
+
+const HELPER_EXECUTE_TIMEOUT_MS = 60_000;
+const HELPER_EXECUTE_MAX_ARGS = 20;
+const HELPER_EXECUTE_MAX_ARG_CHARS = 2_000;
+
+export interface SkillResourceExecuteResult {
+  readonly relativePath: string;
+  readonly exitCode: number | null;
+  readonly stdoutPreview: string;
+  readonly stderrPreview: string;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+}
+
+/**
+ * Execute ONE helper file inside an INVOKED prompt skill's root (FR-13 /
+ * §14.4). Every gate from the read path applies (root containment, symlink
+ * revalidation, capability check — operation "execute"), plus:
+ *   - only whitelisted script extensions run through their interpreter —
+ *     arbitrary binaries and shell text are refused;
+ *   - arguments are a bounded, plain-string list (never shell text);
+ *   - the tool itself is requiresConfirmation, so each run is separately
+ *     user-approved.
+ * The skill root grants NO write capability: this executes a declared
+ * helper, it is not a general shell.
+ */
+export async function executeSkillResource(
+  runtimeId: string,
+  relativePath: string,
+  args: readonly string[],
+  conversationId?: string
+): Promise<ToolOutcome> {
+  const err = definitionOrError(runtimeId);
+  if (err) return err;
+  const definition = getDefaultPromptSkillCatalog().get(runtimeId)!;
+
+  if (args.length > HELPER_EXECUTE_MAX_ARGS) {
+    return errorOutcome(
+      `Too many arguments (${args.length}; limit ${HELPER_EXECUTE_MAX_ARGS}).`
+    );
+  }
+  for (const arg of args) {
+    if (arg.length > HELPER_EXECUTE_MAX_ARG_CHARS) {
+      return errorOutcome("Helper arguments must each stay under 2000 chars.");
+    }
+  }
+
+  const resolved = resolveInsideRoot(definition.canonicalRoot, relativePath);
+  if (!resolved.ok) return errorOutcome(resolved.message);
+  const ext = path.extname(resolved.absolute).toLowerCase();
+  const interpreter = HELPER_INTERPRETERS[ext];
+  if (!interpreter) {
+    return errorOutcome(
+      `'${relativePath}' is not an executable helper type. Allowed extensions: ${Object.keys(
+        HELPER_INTERPRETERS
+      ).join(", ")}.`
+    );
+  }
+  if (conversationId) {
+    const denied = await capabilityCheck(
+      conversationId,
+      definition.canonicalRoot,
+      resolved.absolute,
+      "execute"
+    );
+    if (denied) return errorOutcome(denied);
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved.absolute);
+  } catch (err2) {
+    return errorOutcome(
+      `Cannot execute '${relativePath}': ${
+        err2 instanceof Error ? err2.message : String(err2)
+      }`
+    );
+  }
+  if (!stat.isFile()) {
+    return errorOutcome(`'${relativePath}' is not a regular file.`);
+  }
+  // Binary helpers are refused outright (NUL sample, same heuristic as read).
+  const sample = Buffer.from(
+    fs.readFileSync(resolved.absolute).subarray(0, BINARY_ZERO_SAMPLE)
+  );
+  if (sample.includes(0)) {
+    return errorOutcome(`'${relativePath}' looks binary and cannot run.`);
+  }
+  // Revalidate after resolving symlinks (§20.3).
+  const real = fs.realpathSync(resolved.absolute);
+  const rootWithSep = definition.canonicalRoot.endsWith(path.sep)
+    ? definition.canonicalRoot
+    : definition.canonicalRoot + path.sep;
+  if (real !== definition.canonicalRoot && !real.startsWith(rootWithSep)) {
+    return errorOutcome("Resolved path escapes the skill root.");
+  }
+
+  const { getPlatformProcessProvider } = await import("@/service/process");
+  const provider = getPlatformProcessProvider();
+  const started = Date.now();
+  const result = await provider.execute({
+    executable: interpreter[0],
+    args: [...interpreter.slice(1), real, ...args],
+    cwd: path.dirname(real),
+    environment: (await import("@/service/process")).buildChildEnvironment(),
+    timeoutMs: HELPER_EXECUTE_TIMEOUT_MS,
+    outputLimitBytes: 64 * 1024,
+  });
+
+  const payload: SkillResourceExecuteResult = {
+    relativePath,
+    exitCode: result.exitCode,
+    stdoutPreview: result.stdout.slice(0, 2_000),
+    stderrPreview: result.stderr.slice(0, 2_000),
+    timedOut: result.timedOut,
+    durationMs: Date.now() - started,
+  };
+  return { success: result.exitCode === 0, result: { ...payload } };
+}

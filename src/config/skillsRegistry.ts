@@ -2517,6 +2517,50 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "skill_resource_execute",
+    description:
+      "Run ONE helper script inside an invoked prompt skill's root (separately " +
+      "approved every call). Only whitelisted script types (.py, .js, .mjs, .sh) run " +
+      "through their interpreter with bounded plain-string arguments — never shell " +
+      "text, binaries, or writes. The skill root grants no other capability.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        path: {
+          type: "string",
+          description: "Helper file inside the skill root, e.g. 'helpers/cut.py'.",
+        },
+        args: {
+          type: "array",
+          items: { type: "string" },
+          description: "Plain-string arguments for the helper (no shell text).",
+        },
+      },
+      required: ["runtime_id", "path"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "shell",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { executeSkillResource } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const rawArgs = Array.isArray(args.args) ? args.args : [];
+      const outcome = await executeSkillResource(
+        String(args.runtime_id ?? ""),
+        String(args.path ?? ""),
+        rawArgs.map((a: unknown) => String(a ?? "")),
+        context.conversationId
+      );
+      return outcome;
+    },
+  },
+  {
     name: "check_shell_status",
     description:
       "Poll the status of a shell command that was auto-backgrounded due to timeout. " +
