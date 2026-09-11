@@ -305,10 +305,13 @@ export class OutboundEmailDeliveryService extends BaseDb {
           const v1Envelopes: BatchEnvelopeEntry[] = [];
           const v2Envelopes: BatchEnvelopeEntryV2[] = [];
           const revisions: OutboundEmailDraftRevisionEntity[] = [];
+          // Single batched read of all current revisions (avoids an N+1 query
+          // per draft inside the claim transaction).
+          const currentRevisions = await this.draftModel.readCurrentRevisions(
+            drafts.map((d) => d.id)
+          );
           for (const draft of drafts) {
-            const revision = await this.draftModel.readCurrentRevision(
-              draft.id
-            );
+            const revision = currentRevisions.get(draft.id);
             if (!revision) {
               throw new Error(
                 `missing_current_revision: draft ${draft.id} has no current revision`
@@ -421,10 +424,16 @@ export class OutboundEmailDeliveryService extends BaseDb {
           // recompute, so the bridge can correlate without re-deriving version.
           const allEnvelopes: Array<BatchEnvelopeEntry | BatchEnvelopeEntryV2> =
             [...v1Envelopes, ...v2Envelopes];
+          // Map draftId → envelope for O(1) lookup (avoids O(n²) find inside
+          // the per-draft outcome loop).
+          const envelopeByDraftId = new Map<
+            number,
+            BatchEnvelopeEntry | BatchEnvelopeEntryV2
+          >(allEnvelopes.map((e) => [e.draftId, e]));
           for (let i = 0; i < drafts.length; i++) {
             const draft = drafts[i];
             const revision = revisions[i];
-            const envForHash = allEnvelopes.find((e) => e.draftId === draft.id);
+            const envForHash = envelopeByDraftId.get(draft.id);
             if (!envForHash) {
               throw new Error(
                 `envelope_reconstruction_failed: draft ${draft.id}`
@@ -610,10 +619,22 @@ export class OutboundEmailDeliveryService extends BaseDb {
     revisions: OutboundEmailDraftRevisionEntity[]
   ): Promise<{ ok: true } | { ok: false }> {
     const emailServiceModel = new EmailServiceModel(this.dbpath);
+    // Read each distinct referenced service once (avoids re-reading the same
+    // row when many v1 envelopes share one service).
+    const identityByServiceId = new Map<
+      number,
+      Awaited<ReturnType<typeof emailServiceModel.readIdentity>>
+    >();
+    for (const serviceId of new Set(v1Envelopes.map((e) => e.emailServiceId))) {
+      identityByServiceId.set(
+        serviceId,
+        await emailServiceModel.readIdentity(serviceId)
+      );
+    }
     for (let i = 0; i < v1Envelopes.length; i++) {
       const env = v1Envelopes[i];
       const revision = revisions[i];
-      const identity = await emailServiceModel.readIdentity(env.emailServiceId);
+      const identity = identityByServiceId.get(env.emailServiceId);
       if (!identity) {
         // Service was deleted after approval — fail closed.
         return { ok: false };

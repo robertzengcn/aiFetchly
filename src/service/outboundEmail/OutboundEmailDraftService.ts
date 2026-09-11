@@ -309,8 +309,15 @@ export class OutboundEmailDraftService {
     const drafts = await this.draftModel.listDraftsByBatch(batchId);
     let changed = false;
 
+    // Single batched read of all current revisions (avoids an N+1 query per
+    // draft), plus a per-service identity cache so drafts sharing a service
+    // resolve it once.
+    const currentRevisions = await this.draftModel.readCurrentRevisions(
+      drafts.map((d) => d.id)
+    );
+    const identityCache = new Map<number, ResolvedOutboundIdentity | null>();
     for (const draft of drafts) {
-      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      const revision = currentRevisions.get(draft.id);
       if (!revision) {
         continue;
       }
@@ -318,11 +325,16 @@ export class OutboundEmailDraftService {
         continue;
       }
 
-      const resolved = await resolveOutboundIdentity({
-        dbpath: this.dbpath,
-        preferredServiceId: revision.emailServiceId,
-        serviceIds: batchServiceIds,
-      });
+      const cacheKey = revision.emailServiceId;
+      let resolved = identityCache.get(cacheKey);
+      if (resolved === undefined) {
+        resolved = await resolveOutboundIdentity({
+          dbpath: this.dbpath,
+          preferredServiceId: revision.emailServiceId,
+          serviceIds: batchServiceIds,
+        });
+        identityCache.set(cacheKey, resolved);
+      }
       if (!resolved) {
         continue;
       }
@@ -420,8 +432,13 @@ export class OutboundEmailDraftService {
     const drafts = await this.draftModel.listDraftsByBatch(batchId);
     const v1Envelopes: BatchEnvelopeEntry[] = [];
     const v2Envelopes: BatchEnvelopeEntryV2[] = [];
+    // Single batched read of all current revisions (avoids an N+1 query per
+    // draft).
+    const currentRevisions = await this.draftModel.readCurrentRevisions(
+      drafts.map((d) => d.id)
+    );
     for (const draft of drafts) {
-      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      const revision = currentRevisions.get(draft.id);
       if (!revision) {
         continue;
       }
