@@ -678,6 +678,67 @@ export class AIChatQueryLoop {
     canonicalUri: string | null;
   } | null = null;
   private installBoundaryDirty = true;
+  /** FR-30: cached manual-action approval for the active session (fail
+   *  closed until the audit lookup completes). */
+  private manualActionApprovedCache = false;
+
+  /** FR-13: async allowlist refresh — caches the intersection for later
+   *  rounds; never blocks (and never rejects) on the critical path. */
+  private async refreshSkillToolAllowlist(conversationId: string): Promise<void> {
+    try {
+      const { PromptSkillInvocationModule } = await import(
+        "@/modules/PromptSkillInvocationModule"
+      );
+      const active = await new PromptSkillInvocationModule().listActive(
+        conversationId
+      );
+      const { intersectSkillToolAllowlists } = await import(
+        "@/service/PromptSkillToolNarrowing"
+      );
+      const { getDefaultPromptSkillCatalog } = await import(
+        "@/service/PromptSkillCatalog"
+      );
+      const catalog2 = getDefaultPromptSkillCatalog();
+      this.skillToolAllowlist = intersectSkillToolAllowlists(
+        active.map((row) => ({
+          runtimeId: row.runtimeId,
+          ...(catalog2.get(row.runtimeId)?.manifest.allowedTools
+            ? {
+                allowedTools:
+                  catalog2.get(row.runtimeId)!.manifest.allowedTools!,
+              }
+            : {}),
+        }))
+      );
+    } catch (narrowError) {
+      log.warn(
+        "[skill-narrowing] allowlist refresh failed, keeping prior set:",
+        narrowError
+      );
+    }
+  }
+
+  /** FR-30: async boundary refresh — caches the active session + its
+   *  manual-action approval; never blocks the critical path. */
+  private async refreshInstallBoundary(conversationId: string): Promise<void> {
+    try {
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const module = new SkillInstallationModule();
+      this.activeInstallSession = await module.findActiveSessionRouting(
+        conversationId
+      );
+      this.manualActionApprovedCache = this.activeInstallSession
+        ? await module.hasApprovedManualAction(this.activeInstallSession.sessionId)
+        : false;
+    } catch (boundaryError) {
+      log.warn(
+        "[install-boundary] session lookup failed:",
+        boundaryError
+      );
+    }
+  }
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -928,42 +989,13 @@ export class AIChatQueryLoop {
         let exposedTools: OpenAITool[] = currentTools;
         // FR-13/NFR-11: invoked skills' declared allowed-tools NARROW the
         // exposed set (core tools survive; widening is impossible). The
-        // allowlist is recomputed when a use_skill round just executed.
+        // refresh runs OFF the critical path (fire-and-forget): an inline
+        // DB await here deadlocks environments whose persistence cannot
+        // settle (fake-timer tests, DB-less hosts). The apply below uses
+        // whatever the latest completed refresh cached.
         if (this.skillToolAllowlistDirty) {
           this.skillToolAllowlistDirty = false;
-          try {
-            const { PromptSkillInvocationModule } = await import(
-              "@/modules/PromptSkillInvocationModule"
-            );
-            const active = await new PromptSkillInvocationModule().listActive(
-              input.conversationId
-            );
-            const { intersectSkillToolAllowlists } = await import(
-              "@/service/PromptSkillToolNarrowing"
-            );
-            // allowedTools live on the catalog definition, keyed by the
-            // runtime id stored on each invocation row.
-            const { getDefaultPromptSkillCatalog } = await import(
-              "@/service/PromptSkillCatalog"
-            );
-            const catalog2 = getDefaultPromptSkillCatalog();
-            this.skillToolAllowlist = intersectSkillToolAllowlists(
-              active.map((row) => ({
-                runtimeId: row.runtimeId,
-                ...(catalog2.get(row.runtimeId)?.manifest.allowedTools
-                  ? {
-                      allowedTools:
-                        catalog2.get(row.runtimeId)!.manifest.allowedTools!,
-                    }
-                  : {}),
-              }))
-            );
-          } catch (narrowError) {
-            log.warn(
-              `[skill-narrowing] allowlist refresh failed, keeping prior set:`,
-              narrowError
-            );
-          }
+          void this.refreshSkillToolAllowlist(input.conversationId);
         }
         if (this.skillToolAllowlist) {
           const { applySkillToolNarrowing } = await import(
@@ -1894,19 +1926,9 @@ export class AIChatQueryLoop {
           if (installRouting.confidence !== "explicit") {
             if (this.installBoundaryDirty) {
               this.installBoundaryDirty = false;
-              try {
-                const { SkillInstallationModule } = await import(
-                  "@/modules/SkillInstallationModule"
-                );
-                this.activeInstallSession = await new SkillInstallationModule().findActiveSessionRouting(
-                  input.conversationId
-                );
-              } catch (boundaryError) {
-                log.warn(
-                  "[install-boundary] session lookup failed:",
-                  boundaryError
-                );
-              }
+              // Off the critical path (see the narrowing note): the cached
+              // session binds this and subsequent calls once resolved.
+              void this.refreshInstallBoundary(input.conversationId);
             }
             if (this.activeInstallSession) {
               installRouting = {
@@ -1925,20 +1947,9 @@ export class AIChatQueryLoop {
           } else {
             this.installBoundaryDirty = true;
           }
-          let manualActionApproved = false;
-          if (this.activeInstallSession) {
-            try {
-              const { SkillInstallationModule } = await import(
-                "@/modules/SkillInstallationModule"
-              );
-              manualActionApproved =
-                await new SkillInstallationModule().hasApprovedManualAction(
-                  this.activeInstallSession.sessionId
-                );
-            } catch {
-              /* boundary lookup is best-effort; default closed */
-            }
-          }
+          // Cached by refreshInstallBoundary; false (fail closed) until the
+          // audit lookup completes — never awaited inline.
+          const manualActionApproved = this.manualActionApprovedCache;
           if (
             installRouting.confidence === "explicit" &&
             !INSTALLER_TOOL_NAMES.has(call.name)
