@@ -373,14 +373,27 @@ export class AIChatContextAssembler {
     // rewrite past context.
     try {
       const invocationModule = new PromptSkillInvocationModule();
-      const active = await invocationModule.listActive(input.conversationId);
-      for (const invocation of active) {
+      // FR-23 reconciliation: only invocations whose skill is still
+      // installed, enabled, and hash-identical reattach; invalid ones are
+      // deactivated with a bounded structured diagnostic (never silently
+      // restored, never silently dropped).
+      const { reattach, diagnostics } =
+        await invocationModule.reconcileForRecovery(input.conversationId);
+      for (const invocation of reattach) {
         messages.push({
           role: "user",
           content:
             `[application:invoked-prompt-skill-reattached]\n` +
             `The following skill was invoked earlier in this conversation and ` +
             `remains applicable:\n${invocation.normalizedInstructions}`,
+        });
+      }
+      for (const diagnostic of diagnostics) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-diagnostic code="${diagnostic.code}" runtime_id="${diagnostic.runtimeId}"]\n` +
+            `${diagnostic.message}`,
         });
       }
     } catch (err) {

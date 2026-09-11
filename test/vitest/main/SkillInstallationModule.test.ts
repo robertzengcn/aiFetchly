@@ -1310,3 +1310,130 @@ describe("skill_resource_execute: separately approved helper execution (FR-13)",
     }
   }, 120_000);
 });
+
+describe("compaction recovery reconciles durable invocations (FR-23)", () => {
+  async function seedInvocation(
+    conversationId: string,
+    runtimeId: string,
+    contentHash: string
+  ): Promise<void> {
+    const { PromptSkillInvocationModule } = await import(
+      "@/modules/PromptSkillInvocationModule"
+    );
+    await new PromptSkillInvocationModule().recordInvocation({
+      conversationId,
+      agentScope: "",
+      runtimeId,
+      contentHash,
+      normalizedInstructions: "# skill\ninstructions",
+      tokenEstimate: 10,
+      invocationArgumentsJson: "{}",
+      invocationSource: "explicit",
+      invokedAt: new Date(),
+    });
+  }
+
+  it("reattaches healthy skills; uninstalled/disabled/changed ones deactivate with diagnostics", async () => {
+    const { PromptSkillInvocationModule } = await import(
+      "@/modules/PromptSkillInvocationModule"
+    );
+    const catalog = getDefaultPromptSkillCatalog();
+    catalog.replaceSource("test:recovery", [
+      {
+        runtimeId: "prompt:user:healthy",
+        installationId: "healthy",
+        sourceId: "test",
+        scope: "user",
+        name: "healthy-skill",
+        description: "d",
+        canonicalRoot: "/tmp/healthy",
+        skillMarkdownPath: "/tmp/healthy/SKILL.md",
+        contentHash: "h".repeat(64),
+        manifest: {
+          schemaVersion: 1 as const,
+          name: "healthy-skill",
+          description: "d",
+          unknownFields: {},
+        },
+        enabled: true,
+      },
+      {
+        runtimeId: "prompt:user:disabled",
+        installationId: "disabled",
+        sourceId: "test",
+        scope: "user",
+        name: "disabled-skill",
+        description: "d",
+        canonicalRoot: "/tmp/disabled",
+        skillMarkdownPath: "/tmp/disabled/SKILL.md",
+        contentHash: "d".repeat(64),
+        manifest: {
+          schemaVersion: 1 as const,
+          name: "disabled-skill",
+          description: "d",
+          unknownFields: {},
+        },
+        enabled: false,
+      },
+    ]);
+    try {
+      await seedInvocation("conv-recovery", "prompt:user:healthy", "h".repeat(64));
+      await seedInvocation("conv-recovery", "prompt:user:gone", "g".repeat(64));
+      await seedInvocation("conv-recovery", "prompt:user:disabled", "d".repeat(64));
+      // Hash mismatch: registered hash differs from the invocation's.
+      catalog.replaceSource("test:changed", [
+        {
+          runtimeId: "prompt:user:changed",
+          installationId: "changed",
+          sourceId: "test",
+          scope: "user",
+          name: "changed-skill",
+          description: "d",
+          canonicalRoot: "/tmp/changed",
+          skillMarkdownPath: "/tmp/changed/SKILL.md",
+          contentHash: "z".repeat(64),
+          manifest: {
+            schemaVersion: 1 as const,
+            name: "changed-skill",
+            description: "d",
+            unknownFields: {},
+          },
+          enabled: true,
+        },
+      ]);
+      await seedInvocation("conv-recovery", "prompt:user:changed", "y".repeat(64));
+
+      const { reattach, diagnostics } =
+        await new PromptSkillInvocationModule().reconcileForRecovery(
+          "conv-recovery"
+        );
+      expect(reattach.map((r) => r.runtimeId)).toEqual([
+        "prompt:user:healthy",
+      ]);
+      const codes = diagnostics.map((d) => d.code).sort();
+      expect(codes).toEqual([
+        "SKILL_DISABLED",
+        "SKILL_HASH_CHANGED",
+        "SKILL_UNINSTALLED",
+      ]);
+
+      // Invalid invocations are DEACTIVATED — a second reconciliation finds
+      // only the healthy one.
+      const second = await new PromptSkillInvocationModule().reconcileForRecovery(
+        "conv-recovery"
+      );
+      expect(second.reattach.map((r) => r.runtimeId)).toEqual([
+        "prompt:user:healthy",
+      ]);
+      expect(second.diagnostics).toHaveLength(0);
+    } finally {
+      for (const id of [
+        "prompt:user:healthy",
+        "prompt:user:disabled",
+        "prompt:user:changed",
+      ]) {
+        catalog.remove(id);
+      }
+    }
+  }, 120_000);
+});

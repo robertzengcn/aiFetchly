@@ -88,6 +88,82 @@ export class PromptSkillInvocationModule extends BaseModule {
     }));
   }
 
+  /**
+   * FR-23 / §14.6 compaction-recovery reconciliation: validate every ACTIVE
+   * invocation against the CURRENT installation/catalog state. Still-valid
+   * skills reattach their immutable verified snapshot; invocations whose
+   * skill is uninstalled, disabled, or hash-changed (linked source edited)
+   * are DEACTIVATED and produce a bounded structured diagnostic — never
+   * silently restored, never silently dropped.
+   */
+  async reconcileForRecovery(
+    conversationId: string,
+    agentScope = ""
+  ): Promise<{
+    readonly reattach: ActiveInvocationView[];
+    readonly diagnostics: readonly {
+      readonly runtimeId: string;
+      readonly code:
+        | "SKILL_UNINSTALLED"
+        | "SKILL_DISABLED"
+        | "SKILL_HASH_CHANGED";
+      readonly message: string;
+    }[];
+  }> {
+    const active = await this.listActive(conversationId, agentScope);
+    const { getDefaultPromptSkillCatalog } = await import(
+      "@/service/PromptSkillCatalog"
+    );
+    const catalog = getDefaultPromptSkillCatalog();
+    const reattach: ActiveInvocationView[] = [];
+    const diagnostics: {
+      runtimeId: string;
+      code: "SKILL_UNINSTALLED" | "SKILL_DISABLED" | "SKILL_HASH_CHANGED";
+      message: string;
+    }[] = [];
+    for (const invocation of active) {
+      const definition = catalog.get(invocation.runtimeId);
+      if (!definition) {
+        diagnostics.push({
+          runtimeId: invocation.runtimeId,
+          code: "SKILL_UNINSTALLED",
+          message:
+            `A skill invoked in this conversation was uninstalled; its ` +
+            `instructions are no longer active. Reinstall it and invoke it ` +
+            `again if you still need it.`,
+        });
+      } else if (!definition.enabled) {
+        diagnostics.push({
+          runtimeId: invocation.runtimeId,
+          code: "SKILL_DISABLED",
+          message:
+            `Skill '${definition.name}' was disabled; its instructions are ` +
+            `no longer active in this conversation.`,
+        });
+      } else if (definition.contentHash !== invocation.contentHash) {
+        diagnostics.push({
+          runtimeId: invocation.runtimeId,
+          code: "SKILL_HASH_CHANGED",
+          message:
+            `Skill '${definition.name}' changed since it was invoked ` +
+            `(linked installs can change externally). The previous ` +
+            `instructions were deactivated — invoke the skill again to ` +
+            `review the new content before it takes effect.`,
+        });
+      } else {
+        reattach.push(invocation);
+        continue;
+      }
+      // Deactivate the invalid invocation so recovery is not repeated.
+      await this.deactivateRuntime(
+        conversationId,
+        invocation.runtimeId,
+        agentScope
+      );
+    }
+    return { reattach, diagnostics };
+  }
+
   /** Conversation deletion clears invocation state through this module. */
   async deleteByConversation(conversationId: string): Promise<number> {
     const model = await this.getModel();
