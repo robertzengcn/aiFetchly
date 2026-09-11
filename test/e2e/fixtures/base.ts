@@ -37,7 +37,7 @@ export interface E2EFixtures {
 }
 
 export const e2eTest = base.extend<E2EFixtures>({
-  testRoot: async (use, testInfo) => {
+  testRoot: async ({}, use, testInfo) => {
     const root = createTemporaryRoot({
       testId: testInfo.titlePath.join(" "),
       workerIndex: testInfo.workerIndex,
@@ -56,7 +56,7 @@ export const e2eTest = base.extend<E2EFixtures>({
   },
 
   // Worker-scoped: start the fake AI server once per worker, share across tests.
-  fakeAi: async (use) => {
+  fakeAi: async ({}, use) => {
     const fakeAi = await startFakeOpenAiServer();
     await use(fakeAi);
     await fakeAi.stop();
@@ -97,7 +97,7 @@ export const e2eTest = base.extend<E2EFixtures>({
   },
 
   // Worker-scoped: FakePluginHub serves the community catalog + fixture zip.
-  fakeHub: async (use) => {
+  fakeHub: async ({}, use) => {
     const fakeHub = await startFakePluginHubServer();
     await use(fakeHub);
     await fakeHub.stop();

@@ -70,6 +70,16 @@ import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
+import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
+import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
+import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
+import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
+import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
+import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
+import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
@@ -488,6 +498,7 @@ export class SqliteDb {
           // RAGModelEntity,
           AIChatMessageEntity,
           AIChatAttachmentEntity,
+          AIChatPendingMessageEntity,
           AIChatConversationEntity,
           AIChatRunEntity,
           AIArtifactEntity,
@@ -512,6 +523,11 @@ export class SqliteDb {
           EmailAutoReplyRuleEntity,
           EmailReplyAuditLogEntity,
           EmailAutoReplyAuditLogEntity,
+          EmailReplyDraftRevisionEntity,
+          EmailReplyApprovalEntity,
+          EmailReplySendAttemptEntity,
+          EmailConversationEntity,
+          EmailReplyKnowledgeScopeEntity,
           AIChatPlanEntity,
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,
@@ -529,6 +545,10 @@ export class SqliteDb {
           AIMemoryConsolidationRunEntity,
           AIWorkspaceMemoryEntity,
           AIWorkspaceMemoryConsolidationRunEntity,
+          AIWorkspaceMemoryScopeEntity,
+          AIWorkspaceMemoryScopePathEntity,
+          AIWorkspaceMemoryPortableStateEntity,
+          AIWorkspaceMemorySyncAuditEntity,
           WorkspaceEntity,
           AIFetchlyWorkspaceTrustEntity,
           HookConfigEntity,

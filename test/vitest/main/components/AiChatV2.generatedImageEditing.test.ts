@@ -3,7 +3,8 @@
 // Component tests for conversation-scoped generated-image selection wiring in
 // AiChatV2.vue: message-event -> composer tray, per-conversation isolation,
 // deterministic inference preflight (ambiguity chooser / batch confirmation /
-// fusion guard), generatedImageReferences on the stream request, draft
+// fusion guard), explicit multi-selections above three routing to the batch
+// confirmation, generatedImageReferences on the stream request, draft
 // clearing on accepted turns, and localized generated_image_* error codes.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -12,14 +13,28 @@ import { computed, defineComponent } from "vue";
 import type { PropType } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
 import type {
   ChatV2StreamRequest,
 } from "@/entityTypes/aiChatV2Types";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  detachChatV2ConversationStreamListeners: vi.fn(),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
@@ -166,7 +181,7 @@ const i18n = createI18n({
             "More than 3 images were selected. Run them as a batch of independent edits instead?",
           batchConfirmTitle: "Process as batch?",
           batchConfirmBody:
-            "Each selected image will be edited independently in a background batch. This may take a while.",
+            "All {count} selected images will be edited independently in a background batch. This may take a while.",
           send: "Send",
           errors: {
             generated_image_reference_invalid:
@@ -195,6 +210,10 @@ const i18n = createI18n({
               "Some batch items failed. Keep the successes and retry the failed items.",
             generated_image_batch_cancelled:
               "Batch stopped. Completed results are kept; you can resume the remaining items.",
+            image_edit_unavailable:
+              "Image editing is unavailable: no edit-capable model is configured. Configure one and try again.",
+            image_edit_provider_failed:
+              "The AI provider failed to edit the image. Retry, or check the provider configuration.",
           },
         },
       },
@@ -243,30 +262,29 @@ const SlotPassThrough = (name: string): ReturnType<typeof defineComponent> =>
     template: "<div><slot /></div>",
   });
 
-const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> =
-  {
-    VIcon: SlotPassThrough("VIcon"),
-    VChip: SlotPassThrough("VChip"),
-    VSpacer: SlotPassThrough("VSpacer"),
-    VCardTitle: SlotPassThrough("VCardTitle"),
-    VCardText: SlotPassThrough("VCardText"),
-    VCardActions: SlotPassThrough("VCardActions"),
-    VProgressLinear: SlotPassThrough("VProgressLinear"),
-    VProgressCircular: SlotPassThrough("VProgressCircular"),
-    VDivider: SlotPassThrough("VDivider"),
-    VAlert: SlotPassThrough("VAlert"),
-    VTooltip: SlotPassThrough("VTooltip"),
-    VTextField: SlotPassThrough("VTextField"),
-    VSheet: SlotPassThrough("VSheet"),
-    VList: SlotPassThrough("VList"),
-    VListItem: SlotPassThrough("VListItem"),
-    VListItemTitle: SlotPassThrough("VListItemTitle"),
-    VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
-    VDialog: DialogStub,
-    VSnackbar: SnackbarStub,
-    VBtn: ButtonStub,
-    VCard: CardStub,
-  };
+const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> = {
+  VIcon: SlotPassThrough("VIcon"),
+  VChip: SlotPassThrough("VChip"),
+  VSpacer: SlotPassThrough("VSpacer"),
+  VCardTitle: SlotPassThrough("VCardTitle"),
+  VCardText: SlotPassThrough("VCardText"),
+  VCardActions: SlotPassThrough("VCardActions"),
+  VProgressLinear: SlotPassThrough("VProgressLinear"),
+  VProgressCircular: SlotPassThrough("VProgressCircular"),
+  VDivider: SlotPassThrough("VDivider"),
+  VAlert: SlotPassThrough("VAlert"),
+  VTooltip: SlotPassThrough("VTooltip"),
+  VTextField: SlotPassThrough("VTextField"),
+  VSheet: SlotPassThrough("VSheet"),
+  VList: SlotPassThrough("VList"),
+  VListItem: SlotPassThrough("VListItem"),
+  VListItemTitle: SlotPassThrough("VListItemTitle"),
+  VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
+  VDialog: DialogStub,
+  VSnackbar: SnackbarStub,
+  VBtn: ButtonStub,
+  VCard: CardStub,
+};
 
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
@@ -358,18 +376,36 @@ const MessagesStub = defineComponent({
     "request-plan-changes",
     "open-artifact",
     "copy-artifact-html",
+    "retry-generated-image-batch",
+    "stop-batch",
   ],
   setup(_, { emit }) {
     const useImage = (): void =>
       emit("use-generated-image", { messageId: "m1", imageIndex: 0 });
     const editImage = (): void =>
       emit("edit-generated-image", { messageId: "m1", imageIndex: 1 });
-    return { useImage, editImage };
+    const useAt = (imageIndex: number): void =>
+      emit("use-generated-image", { messageId: "m1", imageIndex });
+    const retryBatch = (): void =>
+      emit("retry-generated-image-batch", {
+        references: [
+          { messageId: "msg-gen-9", imageIndex: 0 },
+          { messageId: "msg-gen-4", imageIndex: 2 },
+        ],
+        instruction: "make the lighting warmer",
+      });
+    const stopBatch = (): void => emit("stop-batch");
+    return { useImage, editImage, useAt, retryBatch, stopBatch };
   },
   template: `<div data-testid="messages">
     <span data-testid="messages-error">{{ errorMessage ?? "" }}</span>
     <button data-testid="msg-use-img" @click="useImage">use</button>
+    <button data-testid="msg-use-img-1" @click="useAt(1)">use-1</button>
+    <button data-testid="msg-use-img-2" @click="useAt(2)">use-2</button>
+    <button data-testid="msg-use-img-3" @click="useAt(3)">use-3</button>
     <button data-testid="msg-edit-img" @click="editImage">edit</button>
+    <button data-testid="msg-retry-batch" @click="retryBatch">retry</button>
+    <button data-testid="msg-stop-batch" @click="stopBatch">stop</button>
   </div>`,
 });
 
@@ -464,11 +500,7 @@ async function mockHistoryWithImages(imageCount: number): Promise<void> {
       conversationId,
       messages:
         conversationId === "conv-A"
-          ? (assistantMessagesWithImages(
-              "conv-A",
-              "m1",
-              imageCount
-            ) as never)
+          ? (assistantMessagesWithImages("conv-A", "m1", imageCount) as never)
           : [],
       totalMessages: 1,
       runtimeStatus: "idle",
@@ -476,9 +508,34 @@ async function mockHistoryWithImages(imageCount: number): Promise<void> {
   );
 }
 
+type ChatWrapper = ReturnType<typeof mountChat>;
+
+/** Additively select `count` distinct references via the message stub. */
+async function selectReferences(
+  wrapper: ChatWrapper,
+  count: number
+): Promise<void> {
+  const selectors = [
+    '[data-testid="msg-use-img"]',
+    '[data-testid="msg-use-img-1"]',
+    '[data-testid="msg-use-img-2"]',
+    '[data-testid="msg-use-img-3"]',
+  ];
+  if (count > selectors.length) {
+    throw new Error(`cannot select more than ${selectors.length} references`);
+  }
+  for (let index = 0; index < count; index += 1) {
+    const selector = selectors[index];
+    if (!selector) break;
+    await wrapper.find(selector).trigger("click");
+    await flushPromises();
+  }
+}
+
 describe("AiChatV2 generated-image editing wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     vi.mocked(streamChatV2Message).mockImplementation(
       async (
         _request: ChatV2StreamRequest,
@@ -675,9 +732,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     // Defense in depth: even a late click on a stale candidate must not
     // replay conv-A's send into the newly active conversation.
     const chatVm = wrapper.vm as unknown as {
-      chooseAmbiguityCandidate?: (
-        view: GeneratedImageReferenceView
-      ) => void;
+      chooseAmbiguityCandidate?: (view: GeneratedImageReferenceView) => void;
     };
     expect(typeof chatVm.chooseAmbiguityCandidate).toBe("function");
     chatVm.chooseAmbiguityCandidate?.({
@@ -719,7 +774,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("0");
   });
 
-  it("batch confirmation gates the send; confirming sends plain text without references", async () => {
+  it("batch confirmation gates the send; confirming carries the confirmed set on the request", async () => {
     await mockHistoryWithImages(4);
 
     const wrapper = mountChat();
@@ -746,7 +801,15 @@ describe("AiChatV2 generated-image editing wiring", () => {
 
     expect(streamChatV2Message).toHaveBeenCalledTimes(1);
     const { request } = lastStreamCall();
+    // The confirmed set rides the trusted channel — NOT generatedImageReferences.
     expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.confirmedGeneratedImageBatch).toBeDefined();
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m1", imageIndex: 1 },
+      { messageId: "m1", imageIndex: 2 },
+      { messageId: "m1", imageIndex: 3 },
+    ]);
     expect(request.message).toContain("all of them");
   });
 
@@ -777,6 +840,79 @@ describe("AiChatV2 generated-image editing wiring", () => {
     ).toBe(false);
   });
 
+  it("retry-failed resubmits exactly the failed references with the original instruction", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="msg-retry-batch"]').trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    const { request } = lastStreamCall();
+    // Retry rides the trusted confirmed channel with ONLY the failed/cancelled
+    // references, in input order — never generatedImageReferences.
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "msg-gen-9", imageIndex: 0 },
+      { messageId: "msg-gen-4", imageIndex: 2 },
+    ]);
+    expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.message).toContain("make the lighting warmer");
+  });
+
+  it("stop-batch delegates to stopping the active conversation's turn", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="msg-stop-batch"]').trigger("click");
+    await flushPromises();
+
+    const { stopChatV2Stream } = await import("@/views/api/aiChatV2");
+    expect(vi.mocked(stopChatV2Stream)).toHaveBeenCalledWith("conv-A");
+  });
+
+  it("localizes image-edit error sentinels and codes on stream failure", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    // conv-B keeps an empty history (mockHistoryWithImages only seeds
+    // conv-A), so singular wording cannot fork into the ambiguity chooser.
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-B" },
+    });
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="composer-send-singular"]')
+      .trigger("click");
+    await flushPromises();
+    lastStreamCall().callbacks.onError(new Error("IMAGE_EDIT_UNAVAILABLE"));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="messages-error"]').text()).toContain(
+      "no edit-capable model is configured"
+    );
+
+    await wrapper
+      .find('[data-testid="composer-send-singular"]')
+      .trigger("click");
+    await flushPromises();
+    lastStreamCall().callbacks.onError(
+      Object.assign(new Error("stream failed"), {
+        errorCode: "image_edit_provider_failed",
+      })
+    );
+    await flushPromises();
+    expect(wrapper.find('[data-testid="messages-error"]').text()).toContain(
+      "failed to edit the image"
+    );
+  });
+
   it("fusion wording with more than 3 candidates shows the toast and aborts the send", async () => {
     await mockHistoryWithImages(4);
 
@@ -787,9 +923,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     });
     await flushPromises();
 
-    await wrapper
-      .find('[data-testid="composer-send-fusion"]')
-      .trigger("click");
+    await wrapper.find('[data-testid="composer-send-fusion"]').trigger("click");
     await flushPromises();
 
     expect(streamChatV2Message).not.toHaveBeenCalled();
@@ -799,5 +933,124 @@ describe("AiChatV2 generated-image editing wiring", () => {
     expect(
       wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
     ).toBe(false);
+  });
+
+  it("routes an explicit selection above three to the batch dialog instead of the limit toast", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
+
+    // Non-fusion send with an explicit 4-selection must open the paid-work
+    // batch confirmation — no stream call, no reference-limit toast.
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-error-toast"]').exists()
+    ).toBe(false);
+    const confirmDialog = wrapper.find(
+      '[data-testid="ai-chat-generated-batch-confirm"]'
+    );
+    expect(confirmDialog.exists()).toBe(true);
+    expect(confirmDialog.text()).toContain("Process as batch?");
+    // The dialog shows the selected COUNT.
+    expect(confirmDialog.text()).toContain("All 4 selected images");
+  });
+
+  it("confirming an explicit multi-selection stages the confirmed set in selection order", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="ai-chat-generated-batch-confirm-accept"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    const { request } = lastStreamCall();
+    // The confirmed set rides the trusted channel — NOT generatedImageReferences.
+    expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.confirmedGeneratedImageBatch).toBeDefined();
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m1", imageIndex: 1 },
+      { messageId: "m1", imageIndex: 2 },
+      { messageId: "m1", imageIndex: 3 },
+    ]);
+    // The message text becomes the batch instruction.
+    expect(request.message).toContain("all of them");
+  });
+
+  it("declining an explicit multi-selection keeps the tray and does not stream", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(true);
+
+    await wrapper
+      .find('[data-testid="ai-chat-generated-batch-decline"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(false);
+    // The user's selection is preserved for retry/reduction.
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
+  });
+
+  it("fusion wording with an explicit selection above three never routes to batch", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-fusion"]').trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    const toast = wrapper.find('[data-testid="ai-chat-generated-error-toast"]');
+    expect(toast.exists()).toBe(true);
+    expect(toast.text()).toContain("Combining images is limited to 3");
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
   });
 });

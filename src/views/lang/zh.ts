@@ -2216,10 +2216,34 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "已排队",
+      steering: "转向中…",
+      applied: "已应用",
+      dispatching: "发送中…",
+      sent: "已发送",
+      paused: "队列已暂停",
+      cancelled: "已移除",
+      failed: "无法发送",
+      steer: "转向",
+      steer_aria: "用此消息调整当前回复方向",
+      remove: "移除",
+      send_next: "发送下一条",
+      resume: "恢复队列",
+      direction_updated: "方向已更新",
+      recovered_after_restart: "重启后已恢复",
+      attachments_not_steerable: "带附件的消息将在当前回复完成后发送。",
+      limit_reached: "队列已达上限，请先移除一条消息。",
+      steer_failed: "无法转向此消息。",
+      queue_disabled: "消息队列当前已禁用。",
+    },
     artifactExport: {
       permissionTitle: "导出生成的工件",
       permissionDescription:
         "将这些由 AiFetchly 生成的工件复制到 {destination}。",
+      savedToWorkspace: "已将 {fileName} 保存到你的工作区。",
+      saveFailed: "无法保存到工作区。",
     },
     imageTool: {
       name: "附加本地图片",
@@ -2508,6 +2532,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "用作参考",
       edit: "编辑",
+      saveToWorkspace: "保存到工作区",
       remove: "移除",
       clearAll: "全部清除",
       moveUp: "上移",
@@ -2516,23 +2541,40 @@ export default {
       limitReached: "每次请求最多可参考 3 张图片。",
       batchOffer: "已选择超过 3 张图片。改为按批次独立处理它们吗？",
       batchConfirmTitle: "按批处理？",
-      batchConfirmBody: "每张所选图片将在后台批次中独立编辑，可能需要一些时间。",
+      batchConfirmBody:
+        "所选的 {count} 张图片将在后台批次中独立编辑，可能需要一些时间。",
       send: "发送",
+      stopBatch: "停止批次",
+      retryFailed: "重试失败项（{count}）",
       progressSummary: "已完成 {completed}/{requested} · 并发数 {concurrency}",
       errors: {
         generated_image_reference_invalid: "该图片引用已失效，请重新选择图片。",
         generated_image_not_owned: "只能引用本对话中生成的图片。",
         generated_image_missing: "原图已不存在，请重新生成或选择其他参考图。",
-        generated_image_outside_store: "图片来源不在受信任的存储区域内，无法使用。",
-        generated_image_symlink_rejected: "该文件不是常规存储图片，请选择其他生成的作品。",
-        generated_image_unsupported_type: "不支持的图片类型，请选择 PNG、JPEG 或 WebP 图片。",
-        generated_image_too_large: "该图片超过大小限制，请尝试更少或更小的图片。",
-        generated_image_dimension_limit: "该图片超过尺寸限制，请调整大小或以更小尺寸重新生成。",
-        generated_image_reference_limit: "单次请求引用的图片过多，请使用批量处理来独立编辑。",
-        generated_image_ambiguous: "有多张图片可能符合您的请求，请选择目标图片。",
-        generated_image_fusion_limit: "组合图片一次最多 3 张，其余请单独或批量编辑。",
-        generated_image_batch_partial: "部分批量任务失败，已成功的结果会保留，失败的项目可以重试。",
-        generated_image_batch_cancelled: "批次已停止，已完成的结果会保留，您可以继续处理剩余项目。",
+        generated_image_outside_store:
+          "图片来源不在受信任的存储区域内，无法使用。",
+        generated_image_symlink_rejected:
+          "该文件不是常规存储图片，请选择其他生成的作品。",
+        generated_image_unsupported_type:
+          "不支持的图片类型，请选择 PNG、JPEG 或 WebP 图片。",
+        generated_image_too_large:
+          "该图片超过大小限制，请尝试更少或更小的图片。",
+        generated_image_dimension_limit:
+          "该图片超过尺寸限制，请调整大小或以更小尺寸重新生成。",
+        generated_image_reference_limit:
+          "单次请求引用的图片过多，请使用批量处理来独立编辑。",
+        generated_image_ambiguous:
+          "有多张图片可能符合您的请求，请选择目标图片。",
+        generated_image_fusion_limit:
+          "组合图片一次最多 3 张，其余请单独或批量编辑。",
+        generated_image_batch_partial:
+          "部分批量任务失败，已成功的结果会保留，失败的项目可以重试。",
+        generated_image_batch_cancelled:
+          "批次已停止，已完成的结果会保留，您可以继续处理剩余项目。",
+        image_edit_unavailable:
+          "图片编辑功能不可用：尚未配置支持图生图的模型。请先配置后重试。",
+        image_edit_provider_failed:
+          "AI 服务商编辑图片失败。请重试，或检查服务商配置。",
       },
     },
   },

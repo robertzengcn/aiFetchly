@@ -23,6 +23,9 @@ import {
   MODELS_RESPONSE,
   toolCallChunk,
   toolCallFinishChunk,
+  textChunk,
+  imagesChunk,
+  stopChunk,
   type FakeAiScenarioName,
 } from "../scenarios/openAiProtocol";
 import { resolveScenario } from "../scenarios/aiChatScenarios";
@@ -39,6 +42,19 @@ export interface RedactedRequest {
   readonly timestamp: number;
 }
 
+/** One scripted queue entry: a tool call, or a canned scenario response. */
+export interface ScriptedToolCall {
+  readonly name?: string;
+  readonly arguments?: string;
+  /** When set, respond with this scenario instead of emitting a tool call
+   * (used to script isolated batch-worker requests that must return images). */
+  readonly scenario?: FakeAiScenarioName;
+  /** When set alongside scenario "stream-generated-image"(-delayed), override
+   * the base64 PNG payload served by that scenario so each worker request
+   * returns a distinct image. Ignored for other scenarios. */
+  readonly imageB64?: string;
+}
+
 export interface FakeOpenAiController {
   /** Provider base URL to configure in the app (ends in /v1). */
   readonly providerBaseUrl: string;
@@ -46,6 +62,27 @@ export interface FakeOpenAiController {
   setScenario(name: FakeAiScenarioName): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
+  /**
+   * Configure MULTIPLE tool calls in one response (queue/steering E2E):
+   * the app's loop executes them sequentially, so steering committed while
+   * the stream is still open lands at the after_model boundary and skips
+   * every unstarted call. `delayMs` delays before the first tool-call delta
+   * so the test can click Steer mid-stream.
+   */
+  setToolCalls(
+    calls: ReadonlyArray<{ name: string; arguments: string }>,
+    delayMs?: number
+  ): Promise<void>;
+  /**
+   * Replace the scripted tool-call queue. Each chat request (continuation or
+   * not) consumes the next entry; when the queue is empty requests fall back
+   * to the other configured tool call / active scenario. Lets a spec script a
+   * whole multi-round tool conversation (e.g. tool_catalog_search →
+   * process_artifact_batch → one streamed image per isolated batch worker →
+   * parent follow-up). Entries may carry a canned `scenario` (optionally with
+   * an `imageB64` payload override) instead of a tool call.
+   */
+  setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
   reset(): Promise<void>;
   stop(): Promise<void>;
@@ -109,6 +146,19 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  /** Optional multi-call variant (queue/steering E2E). */
+  let toolCallsConfig: {
+    calls: ReadonlyArray<{ name: string; arguments: string }>;
+    delayMs: number;
+  } | null = null;
+  /**
+   * Scripted tool-call queue. Each chat request (continuation or not)
+   * consumes the head entry; when empty, requests fall back to the default
+   * plan (configured tool call / follow-up completion / active scenario).
+   */
+  let toolCallQueue: ScriptedToolCall[] = [];
+  /** Monotonic id for scripted tool calls (unique across rounds). */
+  let scriptedCallCounter = 0;
   const requestLog: RedactedRequest[] = [];
 
   /** True when a chat request carries a tool-result message (the continuation
@@ -152,6 +202,9 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         requestLog.length = 0;
         scenario = "stream-text";
         toolCallConfig = null;
+        toolCallsConfig = null;
+        toolCallQueue = [];
+        scriptedCallCounter = 0;
         res.writeHead(204);
         res.end();
         return;
@@ -161,14 +214,69 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           const parsed = JSON.parse(body) as {
             name?: string;
             arguments?: string;
+            calls?: ReadonlyArray<{ name: string; arguments?: string }>;
+            delayMs?: number;
           };
-          if (parsed.name) {
+          toolCallQueue = [];
+          if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
+            toolCallsConfig = {
+              calls: parsed.calls.map((call) => ({
+                name: call.name,
+                arguments: call.arguments ?? "{}",
+              })),
+              delayMs: parsed.delayMs ?? 0,
+            };
+            toolCallConfig = null;
+          } else if (parsed.name) {
             toolCallConfig = {
               name: parsed.name,
               arguments: parsed.arguments ?? "{}",
             };
+            toolCallsConfig = null;
           } else {
             toolCallConfig = null;
+            toolCallsConfig = null;
+          }
+        } catch {
+          /* ignore */
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/tool-call-queue") {
+        try {
+          const parsed = JSON.parse(body) as {
+            calls?: ReadonlyArray<{
+              name?: string;
+              arguments?: string;
+              scenario?: FakeAiScenarioName;
+              imageB64?: string;
+            }>;
+          };
+          if (Array.isArray(parsed.calls)) {
+            toolCallConfig = null;
+            toolCallsConfig = null;
+            toolCallQueue = parsed.calls
+              .filter(
+                (
+                  c
+                ): c is {
+                  name?: string;
+                  arguments?: string;
+                  scenario?: FakeAiScenarioName;
+                  imageB64?: string;
+                } =>
+                  !!c &&
+                  typeof c === "object" &&
+                  (typeof c.name === "string" || typeof c.scenario === "string")
+              )
+              .map((c) => ({
+                name: c.name,
+                arguments: c.arguments ?? "{}",
+                ...(c.scenario ? { scenario: c.scenario } : {}),
+                ...(c.imageB64 ? { imageB64: c.imageB64 } : {}),
+              }));
           }
         } catch {
           /* ignore */
@@ -221,9 +329,80 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       //    flow can gate execution.
       //  - else the active scenario.
       const isContinuation = hasToolResultMessage(rawBody);
+      const scripted = toolCallQueue.length > 0 ? toolCallQueue[0] : undefined;
       let plan;
-      if (isContinuation) {
+      if (scripted && scripted.scenario) {
+        toolCallQueue = toolCallQueue.slice(1);
+        // An image override on a stream-generated-image* scenario lets each
+        // queued worker request serve a DISTINCT generated image without a
+        // new scenario name per payload. The "-delayed" variant holds the
+        // image frame behind a 4s barrier so a spec can stop mid-flight.
+        const isImageScenario =
+          (scripted.scenario === "stream-generated-image" ||
+            scripted.scenario === "stream-generated-image-delayed") &&
+          typeof scripted.imageB64 === "string";
+        if (isImageScenario) {
+          const imageDelay =
+            scripted.scenario === "stream-generated-image-delayed" ? 4_000 : 0;
+          plan = {
+            kind: "sse" as const,
+            frames: [
+              { delayMs: 0, payload: textChunk("Here is your image.") },
+              {
+                delayMs: imageDelay,
+                payload: imagesChunk([
+                  {
+                    type: "image",
+                    b64_json: scripted.imageB64,
+                    mime_type: "image/png",
+                  },
+                ]),
+              },
+              { delayMs: 0, payload: stopChunk() },
+            ],
+          };
+        } else {
+          plan = resolveScenario(scripted.scenario);
+        }
+      } else if (scripted && scripted.name) {
+        toolCallQueue = toolCallQueue.slice(1);
+        // Unique id per scripted call: the app's transcript already carries
+        // earlier rounds' tool messages, and a duplicate tool_call id makes
+        // the second round's call indistinguishable from the answered first.
+        scriptedCallCounter += 1;
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            {
+              delayMs: 0,
+              payload: toolCallChunk({
+                index: 0,
+                id: `call_e2e_${scriptedCallCounter}`,
+                name: scripted.name,
+                arguments: scripted.arguments ?? "{}",
+              }),
+            },
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
+      } else if (isContinuation) {
         plan = resolveScenario("tool-success-followup");
+      } else if (toolCallsConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            ...toolCallsConfig.calls.map((call, index) => ({
+              delayMs: index === 0 ? toolCallsConfig.delayMs : 0,
+              payload: toolCallChunk({
+                index,
+                id: `call_e2e_multi_${index}`,
+                name: call.name,
+                arguments: call.arguments,
+              }),
+            })),
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
       } else if (toolCallConfig) {
         plan = {
           kind: "sse" as const,
@@ -339,6 +518,23 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async setToolCalls(
+      calls: ReadonlyArray<{ name: string; arguments: string }>,
+      delayMs = 0
+    ): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls, delayMs }),
+      });
+    },
+    async setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void> {
+      await controlFetch("/__e2e/tool-call-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls }),
       });
     },
     async getRequests(): Promise<readonly RedactedRequest[]> {

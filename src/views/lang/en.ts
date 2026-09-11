@@ -2314,10 +2314,34 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "Queued",
+      steering: "Steering…",
+      applied: "Applied",
+      dispatching: "Sending…",
+      sent: "Sent",
+      paused: "Queue paused",
+      cancelled: "Removed",
+      failed: "Couldn't send",
+      steer: "Steer",
+      steer_aria: "Steer active response with this message",
+      remove: "Remove",
+      send_next: "Send next",
+      resume: "Resume queue",
+      direction_updated: "Direction updated",
+      recovered_after_restart: "Recovered after restart",
+      attachments_not_steerable: "Messages with attachments will send after the current response.",
+      limit_reached: "Queue limit reached. Remove a message before sending again.",
+      steer_failed: "Couldn't steer this message.",
+      queue_disabled: "The message queue is currently disabled.",
+    },
     artifactExport: {
       permissionTitle: "Export generated artifacts",
       permissionDescription:
         "Copy these AiFetchly-generated artifacts into {destination}.",
+      savedToWorkspace: "Saved {fileName} to your workspace.",
+      saveFailed: "Could not save to workspace.",
     },
     imageTool: {
       name: "Attach local images",
@@ -2616,6 +2640,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "Use as reference",
       edit: "Edit",
+      saveToWorkspace: "Save to workspace",
       remove: "Remove",
       clearAll: "Clear all",
       moveUp: "Move up",
@@ -2626,8 +2651,10 @@ export default {
         "More than 3 images were selected. Run them as a batch of independent edits instead?",
       batchConfirmTitle: "Process as batch?",
       batchConfirmBody:
-        "Each selected image will be edited independently in a background batch. This may take a while.",
+        "All {count} selected images will be edited independently in a background batch. This may take a while.",
       send: "Send",
+      stopBatch: "Stop batch",
+      retryFailed: "Retry failed items ({count})",
       progressSummary:
         "{completed} of {requested} completed · concurrency {concurrency}",
       errors: {
@@ -2657,6 +2684,10 @@ export default {
           "Some batch items failed. Keep the successes and retry the failed items.",
         generated_image_batch_cancelled:
           "Batch stopped. Completed results are kept; you can resume the remaining items.",
+        image_edit_unavailable:
+          "Image editing is unavailable: no edit-capable model is configured. Configure one and try again.",
+        image_edit_provider_failed:
+          "The AI provider failed to edit the image. Retry, or check the provider configuration.",
       },
     },
   },

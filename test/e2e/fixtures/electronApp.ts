@@ -123,6 +123,13 @@ function buildSanitizedEnv(
 
   // Explicit E2E contract.
   allowed[E2E_ENV.ENABLED] = "1";
+  // The local-AI-runtime catalog check would otherwise poll github.com in the
+  // main process mid-test (the network guard records any non-loopback fetch).
+  // Point it at the fake AI server's origin so the periodic check stays
+  // loopback-only; a 404 catalog is a benign, handled result.
+  allowed["AIFETCHLY_RUNTIME_CATALOG_URL"] = fakeAiBaseUrl
+    ? `${fakeAiBaseUrl.replace(/\/v1$/, "")}/__e2e/runtime-catalog`
+    : "http://127.0.0.1:1/local-ai-runtimes.json";
   allowed[E2E_ENV.ROOT] = testRoot.rootPath;
   allowed[E2E_ENV.STATE_FILE] = testRoot.stateFilePath;
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
@@ -150,6 +157,16 @@ function buildSanitizedEnv(
     }
   }
   allowed[E2E_ENV.ALLOWED_ORIGINS] = allowedOrigins.join(",");
+
+  // The local-AI-runtime catalog refresh otherwise fetches the public GitHub
+  // release asset whenever the AI status is polled; the E2E network guard
+  // default-denies non-loopback traffic, the violation fails teardown, and a
+  // blocked fetch can stall provider resolution. Point the catalog at an
+  // unreachable LOOPBACK port instead: loopback is guard-allowed, the fetch
+  // fails instantly (connection refused), and the runtime surface reports the
+  // catalog as unavailable — deterministically, with no external traffic.
+  allowed.AIFETCHLY_RUNTIME_CATALOG_URL =
+    "http://127.0.0.1:9/local-ai-runtimes.json";
   return allowed;
 }
 

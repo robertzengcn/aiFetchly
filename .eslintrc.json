@@ -10,7 +10,14 @@
     "eslint:recommended",
     "@vue/eslint-config-typescript/recommended"
   ],
-  "overrides": [],
+  "overrides": [
+    {
+      "files": ["test/e2e/**/*.ts"],
+      "rules": {
+        "no-empty-pattern": "off"
+      }
+    }
+  ],
   "parserOptions": {
     "ecmaVersion": "latest",
     "sourceType": "module"

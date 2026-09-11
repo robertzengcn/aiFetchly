@@ -29,10 +29,7 @@ import {
   setHookAuditLoggerForTests,
   type HookAuditLogger,
 } from "@/service/hooks/HookAuditService";
-import type {
-  CommandHookExecutionResult,
-  HookExecutionClient,
-} from "@/service/hooks/hookExecutionClient";
+import type { HookExecutionClient } from "@/service/hooks/hookExecutionClient";
 import type { ToolExecutionResult } from "@/api/aiChatApi";
 
 const NULL_LOGGER: HookAuditLogger = { log: () => undefined };
@@ -283,6 +280,9 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
     HookCommandTrustService.resetForTests();
   });
 
+  // The unwired-resolver dispatch only settles after its fallback timeout;
+  // under serial full-suite load that can exceed vitest's 5s default, so this
+  // case gets explicit margin (the only long test in the file).
   it("a skill-ref hook with no resolver wired emits skill-registry-not-available (fallback preserved)", async () => {
     const hook = skillRefHook("user:hook:unwired", "skill:anything");
     HookRegistry.replaceSource("user", [hook]);
@@ -299,5 +299,5 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
         e.message.includes("skill-registry-not-available")
       )
     ).toBe(true);
-  });
+  }, 15_000);
 });

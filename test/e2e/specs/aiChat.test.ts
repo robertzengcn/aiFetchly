@@ -27,7 +27,15 @@ function composerTextarea(app: {
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // The chat workspace is the default landing route; the dock toggle only
+  // exists when the app landed elsewhere. Handle both.
+  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  try {
+    await toggle.waitFor({ state: "visible", timeout: 5_000 });
+    await toggle.click();
+  } catch {
+    /* already on the chat workspace */
+  }
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
 }
 

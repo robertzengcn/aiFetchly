@@ -2313,10 +2313,34 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "In Warteschlange",
+      steering: "Lenkung…",
+      applied: "Angewendet",
+      dispatching: "Wird gesendet…",
+      sent: "Gesendet",
+      paused: "Warteschlange pausiert",
+      cancelled: "Entfernt",
+      failed: "Senden fehlgeschlagen",
+      steer: "Lenken",
+      steer_aria: "Aktive Antwort mit dieser Nachricht lenken",
+      remove: "Entfernen",
+      send_next: "Nächste senden",
+      resume: "Warteschlange fortsetzen",
+      direction_updated: "Richtung aktualisiert",
+      recovered_after_restart: "Nach Neustart wiederhergestellt",
+      attachments_not_steerable: "Nachrichten mit Anhängen werden nach der aktuellen Antwort gesendet.",
+      limit_reached: "Warteschlangenlimit erreicht. Entferne eine Nachricht, bevor du erneut sendest.",
+      steer_failed: "Diese Nachricht konnte nicht gelenkt werden.",
+      queue_disabled: "Die Nachrichten-Warteschlange ist deaktiviert.",
+    },
     artifactExport: {
       permissionTitle: "Generierte Artefakte exportieren",
       permissionDescription:
         "Kopiere diese von AiFetchly generierten Artefakte nach {destination}.",
+      savedToWorkspace: "{fileName} wurde in deinem Workspace gespeichert.",
+      saveFailed: "Speichern im Workspace fehlgeschlagen.",
     },
     imageTool: {
       name: "Lokale Bilder anhängen",
@@ -2632,6 +2656,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "Als Referenz verwenden",
       edit: "Bearbeiten",
+      saveToWorkspace: "Im Workspace speichern",
       remove: "Entfernen",
       clearAll: "Alle entfernen",
       moveUp: "Nach oben",
@@ -2642,8 +2667,10 @@ export default {
         "Es wurden mehr als 3 Bilder ausgewählt. Stattdessen als Stapel unabhängiger Bearbeitungen verarbeiten?",
       batchConfirmTitle: "Als Stapel verarbeiten?",
       batchConfirmBody:
-        "Jedes ausgewählte Bild wird unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
+        "Alle {count} ausgewählten Bilder werden unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
       send: "Senden",
+      stopBatch: "Stapel stoppen",
+      retryFailed: "Fehlgeschlagene Elemente wiederholen ({count})",
       progressSummary:
         "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
       errors: {
@@ -2673,6 +2700,10 @@ export default {
           "Einige Stapelelemente sind fehlgeschlagen. Erfolgreiche bleiben erhalten; fehlgeschlagene können wiederholt werden.",
         generated_image_batch_cancelled:
           "Stapel gestoppt. Abgeschlossene Ergebnisse bleiben erhalten; die übrigen Elemente können fortgesetzt werden.",
+        image_edit_unavailable:
+          "Die Bildbearbeitung ist nicht verfügbar: Es ist kein bearbeitungsfähiges Modell konfiguriert. Konfigurieren Sie eines und versuchen Sie es erneut.",
+        image_edit_provider_failed:
+          "Der KI-Anbieter konnte das Bild nicht bearbeiten. Wiederholen Sie den Vorgang oder prüfen Sie die Anbieterkonfiguration.",
       },
     },
   },

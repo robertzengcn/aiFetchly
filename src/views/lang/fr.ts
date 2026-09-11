@@ -2305,10 +2305,35 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "En file d'attente",
+      steering: "Réorientation…",
+      applied: "Appliqué",
+      dispatching: "Envoi…",
+      sent: "Envoyé",
+      paused: "File en pause",
+      cancelled: "Supprimé",
+      failed: "Échec de l'envoi",
+      steer: "Réorienter",
+      steer_aria: "Réorienter la réponse en cours avec ce message",
+      remove: "Supprimer",
+      send_next: "Envoyer le suivant",
+      resume: "Reprendre la file",
+      direction_updated: "Direction mise à jour",
+      recovered_after_restart: "Récupéré après le redémarrage",
+      attachments_not_steerable: "Les messages avec pièces jointes seront envoyés après la réponse en cours.",
+      limit_reached: "Limite de file atteinte. Supprimez un message avant de renvoyer.",
+      steer_failed: "Impossible de réorienter ce message.",
+      queue_disabled: "La file de messages est désactivée.",
+    },
     artifactExport: {
       permissionTitle: "Exporter les artefacts générés",
       permissionDescription:
         "Copiez ces artefacts générés par AiFetchly vers {destination}.",
+      savedToWorkspace:
+        "{fileName} a été enregistré dans votre espace de travail.",
+      saveFailed: "Impossible d'enregistrer dans l'espace de travail.",
     },
     imageTool: {
       name: "Joindre des images locales",
@@ -2621,6 +2646,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "Utiliser comme référence",
       edit: "Modifier",
+      saveToWorkspace: "Enregistrer dans l'espace de travail",
       remove: "Supprimer",
       clearAll: "Tout effacer",
       moveUp: "Monter",
@@ -2631,8 +2657,10 @@ export default {
         "Plus de 3 images ont été sélectionnées. Les traiter plutôt comme un lot d'éditions indépendantes ?",
       batchConfirmTitle: "Traiter par lot ?",
       batchConfirmBody:
-        "Chaque image sélectionnée sera modifiée indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
+        "Les {count} images sélectionnées seront modifiées indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
       send: "Envoyer",
+      stopBatch: "Arrêter le lot",
+      retryFailed: "Réessayer les éléments en échec ({count})",
       progressSummary:
         "{completed} sur {requested} terminées · concurrence {concurrency}",
       errors: {
@@ -2662,6 +2690,10 @@ export default {
           "Certains éléments du lot ont échoué. Conservez les réussites et réessayez les éléments échoués.",
         generated_image_batch_cancelled:
           "Lot arrêté. Les résultats terminés sont conservés ; vous pouvez reprendre les éléments restants.",
+        image_edit_unavailable:
+          "La modification d'images est indisponible : aucun modèle capable de modifier des images n'est configuré. Configurez-en un et réessayez.",
+        image_edit_provider_failed:
+          "Le fournisseur d'IA n'a pas pu modifier l'image. Réessayez ou vérifiez la configuration du fournisseur.",
       },
     },
   },

@@ -20,11 +20,14 @@ import { registerSessionRecordingIpcHandlers } from "@/main-process/communicatio
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
+import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
 import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -76,6 +79,10 @@ export function registerCommunicationIpcHandlers(
     // Register the window so scheduled-loop turn completions can broadcast a
     // narrow conversation-update refresh hint to the renderer (FR-11).
     AIChatConversationUpdateBroadcaster.getInstance().register(win);
+    // Interactive stream chunks + pending-message lifecycle broadcasts
+    // (message-queue design §14.2) — queue-dispatched turns start in the
+    // main process and must reach every live window.
+    AIChatV2EventBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
     registerYellowPagesIpcHandlers();
@@ -99,6 +106,8 @@ export function registerCommunicationIpcHandlers(
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerGeneratedImageExportIpcHandlers();
+    registerAiFileOpenIpcHandlers();
     registerAiChatWorkspaceIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();

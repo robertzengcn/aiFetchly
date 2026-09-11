@@ -2321,10 +2321,34 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "En cola",
+      steering: "Redirigiendo…",
+      applied: "Aplicado",
+      dispatching: "Enviando…",
+      sent: "Enviado",
+      paused: "Cola en pausa",
+      cancelled: "Eliminado",
+      failed: "No se pudo enviar",
+      steer: "Redirigir",
+      steer_aria: "Redirigir la respuesta activa con este mensaje",
+      remove: "Quitar",
+      send_next: "Enviar el siguiente",
+      resume: "Reanudar cola",
+      direction_updated: "Dirección actualizada",
+      recovered_after_restart: "Recuperado tras reiniciar",
+      attachments_not_steerable: "Los mensajes con adjuntos se enviarán cuando termine la respuesta actual.",
+      limit_reached: "Límite de cola alcanzado. Elimina un mensaje antes de volver a enviar.",
+      steer_failed: "No se pudo redirigir este mensaje.",
+      queue_disabled: "La cola de mensajes está deshabilitada.",
+    },
     artifactExport: {
       permissionTitle: "Exportar artefactos generados",
       permissionDescription:
         "Copia estos artefactos generados por AiFetchly en {destination}.",
+      savedToWorkspace: "Se guardó {fileName} en tu espacio de trabajo.",
+      saveFailed: "No se pudo guardar en el espacio de trabajo.",
     },
     imageTool: {
       name: "Adjuntar imágenes locales",
@@ -2641,18 +2665,22 @@ export default {
     generatedImageRefs: {
       useAsReference: "Usar como referencia",
       edit: "Editar",
+      saveToWorkspace: "Guardar en el espacio de trabajo",
       remove: "Eliminar",
       clearAll: "Borrar todo",
       moveUp: "Subir",
       moveDown: "Bajar",
       referenceTrayTitle: "Imágenes de referencia",
-      limitReached: "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
+      limitReached:
+        "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
       batchOffer:
         "Se seleccionaron más de 3 imágenes. ¿Prefieres procesarlas como un lote de ediciones independientes?",
       batchConfirmTitle: "¿Procesar como lote?",
       batchConfirmBody:
-        "Cada imagen seleccionada se editará de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
+        "Las {count} imágenes seleccionadas se editarán de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
       send: "Enviar",
+      stopBatch: "Detener lote",
+      retryFailed: "Reintentar elementos fallidos ({count})",
       progressSummary:
         "{completed} de {requested} completadas · concurrencia {concurrency}",
       errors: {
@@ -2682,6 +2710,10 @@ export default {
           "Algunos elementos del lote fallaron. Conserva los éxitos y reintenta los fallidos.",
         generated_image_batch_cancelled:
           "Lote detenido. Los resultados completados se conservan; puedes reanudar los elementos restantes.",
+        image_edit_unavailable:
+          "La edición de imágenes no está disponible: no hay ningún modelo de edición configurado. Configura uno e inténtalo de nuevo.",
+        image_edit_provider_failed:
+          "El proveedor de IA no pudo editar la imagen. Reintenta o revisa la configuración del proveedor.",
       },
     },
   },

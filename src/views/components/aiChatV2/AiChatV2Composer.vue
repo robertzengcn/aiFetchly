@@ -154,7 +154,7 @@
       max-rows="6"
       hide-details
       density="comfortable"
-      :disabled="isStreaming || isProcessing"
+      :disabled="isProcessing"
       data-testid="ai-chat-composer"
       :aria-label="t('aiChatV2.input_placeholder') || 'Send a message'"
       @keydown="onKeydown"
@@ -296,8 +296,18 @@
         >
           <v-icon size="small">mdi-volume-high</v-icon>
         </v-btn>
+        <!-- PRD §7.1: Stop stays a separate adjacent action — the composer
+             remains usable while the assistant streams, so sends queue. -->
         <v-btn
-          v-if="!isStreaming"
+          v-if="isStreaming"
+          color="error"
+          icon="mdi-stop"
+          size="small"
+          :aria-label="t('aiChatV2.stop') || 'Stop'"
+          data-testid="ai-chat-stop"
+          @click="$emit('stop')"
+        />
+        <v-btn
           color="primary"
           icon="mdi-send"
           size="small"
@@ -306,15 +316,6 @@
           :aria-label="t('aiChatV2.send') || 'Send'"
           data-testid="ai-chat-send"
           @click="onSend"
-        />
-        <v-btn
-          v-else
-          color="error"
-          icon="mdi-stop"
-          size="small"
-          :aria-label="t('aiChatV2.stop') || 'Stop'"
-          data-testid="ai-chat-stop"
-          @click="$emit('stop')"
         />
       </div>
     </div>

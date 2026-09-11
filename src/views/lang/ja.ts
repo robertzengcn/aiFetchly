@@ -2275,10 +2275,34 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+
+    queue: {
+      queued: "待機中",
+      steering: "方向転換中…",
+      applied: "適用済み",
+      dispatching: "送信中…",
+      sent: "送信済み",
+      paused: "キュー一時停止中",
+      cancelled: "削除済み",
+      failed: "送信できませんでした",
+      steer: "方向転換",
+      steer_aria: "このメッセージで現在の応答の方向を変える",
+      remove: "削除",
+      send_next: "次を送信",
+      resume: "キューを再開",
+      direction_updated: "方向を更新しました",
+      recovered_after_restart: "再起動後に復元されました",
+      attachments_not_steerable: "添付ファイル付きメッセージは現在の応答完了後に送信されます。",
+      limit_reached: "キューの上限に達しました。先にメッセージを削除してください。",
+      steer_failed: "このメッセージを方向転換できませんでした。",
+      queue_disabled: "メッセージキューは現在無効です。",
+    },
     artifactExport: {
       permissionTitle: "生成されたアーティファクトをエクスポート",
       permissionDescription:
         "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
+      savedToWorkspace: "{fileName} をワークスペースに保存しました。",
+      saveFailed: "ワークスペースに保存できませんでした。",
     },
     imageTool: {
       name: "ローカル画像を添付",
@@ -2579,6 +2603,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "参照として使用",
       edit: "編集",
+      saveToWorkspace: "ワークスペースに保存",
       remove: "削除",
       clearAll: "すべてクリア",
       moveUp: "上へ移動",
@@ -2589,9 +2614,12 @@ export default {
         "3枚を超える画像が選択されました。独立した編集のバッチとして処理しますか？",
       batchConfirmTitle: "バッチで処理しますか？",
       batchConfirmBody:
-        "選択した各画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
+        "選択した{count}枚の画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
       send: "送信",
-      progressSummary: "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
+      stopBatch: "バッチを停止",
+      retryFailed: "失敗した項目を再試行（{count}）",
+      progressSummary:
+        "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "この画像参照は無効になりました。画像を再度選択してください。",
@@ -2619,6 +2647,10 @@ export default {
           "一部のバッチ項目が失敗しました。成功分は保持され、失敗分は再試行できます。",
         generated_image_batch_cancelled:
           "バッチを停止しました。完了した結果は保持され、残りの項目は再開できます。",
+        image_edit_unavailable:
+          "画像編集は利用できません：編集対応モデルが設定されていません。設定してから再試行してください。",
+        image_edit_provider_failed:
+          "AIプロバイダーによる画像編集に失敗しました。再試行するか、プロバイダー設定を確認してください。",
       },
     },
   },
