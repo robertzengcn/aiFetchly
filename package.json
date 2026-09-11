@@ -1,6 +1,6 @@
 {
   "name": "aiFetchly",
-  "version": "1.0.11",
+  "version": "1.1.0",
   "description": "AI-powered marketing agent(aiFetchly)",
   "author": "Robert Zeng",
   "main": ".vite/build/background.js",
