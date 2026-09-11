@@ -1,8 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import AdmZip from "adm-zip";
+
+// Import auto-discovery spawns the declared stdio command (npx -y ...) to
+// list MCP tools — a network spawn that has no place in a unit test. Mock
+// MCPToolService (same shape as test/vitest/main/plugin-ipc.test.ts) so
+// plugin import persists rows without live connectivity.
+vi.mock("@/service/MCPToolService", () => ({
+  MCPToolService: class {
+    setTrust() {
+      return undefined;
+    }
+    async discoverTools() {
+      return [];
+    }
+  },
+}));
+
 import { PluginImportService } from "@/service/PluginImportService";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -44,12 +60,7 @@ describe("PluginImportService", () => {
 
   afterEach(async () => {
     // Clean up any plugins created during the test by name.
-    const names = [
-      "lead-tools",
-      "conflict-plugin",
-      "broken-skill",
-      "bad-mcp",
-    ];
+    const names = ["lead-tools", "conflict-plugin", "broken-skill", "bad-mcp"];
     for (const n of names) {
       const existing = await pluginModule.getPluginByName(n);
       if (existing) {
@@ -77,9 +88,8 @@ describe("PluginImportService", () => {
         description: "Lead tools plugin",
         skills: ["skills/lead-enrichment/manifest.json"],
       }),
-      "skills/lead-enrichment/manifest.json": JSON.stringify(
-        VALID_SKILL_MANIFEST
-      ),
+      "skills/lead-enrichment/manifest.json":
+        JSON.stringify(VALID_SKILL_MANIFEST),
       "skills/lead-enrichment/main.js": "setResult({ success: true });",
     });
 
@@ -150,7 +160,9 @@ describe("PluginImportService", () => {
     if (!result.success) {
       expect(
         result.errors.some(
-          (e) => e.code === "component-not-found" || e.code === "skill-manifest-invalid"
+          (e) =>
+            e.code === "component-not-found" ||
+            e.code === "skill-manifest-invalid"
         )
       ).toBe(true);
     }
@@ -233,7 +245,8 @@ describe("PluginImportService", () => {
     const mcpModule = new MCPToolModule();
     const all = await mcpModule.getAllMCPTools();
     const found = all.find(
-      (m) => m.serverName === "linkedin-browser" && m.pluginName === "lead-tools"
+      (m) =>
+        m.serverName === "linkedin-browser" && m.pluginName === "lead-tools"
     );
     expect(found).toBeDefined();
     expect(found?.command).toBe("npx");
