@@ -1,13 +1,18 @@
 import { describe, it, expect } from "vitest";
 import {
   hashApprovalEnvelope,
+  hashApprovalEnvelopeV2,
   canonicalizeApprovalEnvelope,
+  canonicalizeApprovalEnvelopeV2,
   normalizeEmailAddressForHash,
   buildSendIdempotencyKey,
   generateApprovalToken,
   hashApprovalToken,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
+import type {
+  EmailReplyApprovalEnvelope,
+  EmailReplyApprovalEnvelopeV2,
+} from "@/entityTypes/emailReplyReliabilityTypes";
 
 function baseEnvelope(
   over: Partial<EmailReplyApprovalEnvelope> = {}
@@ -202,5 +207,213 @@ describe("approval token helpers", () => {
     const t = generateApprovalToken();
     expect(hashApprovalToken(t)).toBe(hashApprovalToken(t));
     expect(hashApprovalToken(t)).toHaveLength(64);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Version-2 reply approval envelope tests (§18.1). The v1 tests above are
+// NOT modified — v1 and v2 paths are entirely separate.
+// ---------------------------------------------------------------------------
+
+function baseEnvelopeV2(
+  over: Partial<EmailReplyApprovalEnvelopeV2> = {}
+): EmailReplyApprovalEnvelopeV2 {
+  return {
+    version: 2,
+    draftId: 10,
+    revisionId: 2,
+    emailServiceId: 7,
+    originalMessageId: 99,
+    smtpUsername: "smtp-login@svc.com",
+    senderAddress: "Owner@Example.com",
+    replyToAddress: null,
+    recipientAddress: "prospect@example.com",
+    subject: "Re: Pricing",
+    bodyText: "Hi there",
+    bodyHtml: null,
+    policyVersion: "policy-1",
+    validationVersion: "validator-1",
+    ...over,
+  };
+}
+
+describe("hashApprovalEnvelopeV2 — pinned fixture", () => {
+  it("produces the byte-identical pinned hash for the canonical v2 fixture", () => {
+    const pinned =
+      "8555de3c7ac70dd4bec43f7a0bbd6d26b44dae4706e1fb7b7b1e997763b0f8fa";
+    expect(hashApprovalEnvelopeV2(baseEnvelopeV2())).toBe(pinned);
+  });
+
+  it("is deterministic for identical v2 input", () => {
+    const a = hashApprovalEnvelopeV2(baseEnvelopeV2());
+    const b = hashApprovalEnvelopeV2(baseEnvelopeV2());
+    expect(a).toBe(b);
+    expect(a).toHaveLength(64);
+  });
+
+  it("produces a DIFFERENT hash than v1 for the same logical envelope", () => {
+    // The v1 hash does NOT include version, smtpUsername, or replyToAddress,
+    // so it MUST differ from the v2 hash for the same content.
+    const v1 = hashApprovalEnvelope({
+      draftId: 10,
+      revisionId: 2,
+      emailServiceId: 7,
+      originalMessageId: 99,
+      senderAddress: "Owner@Example.com",
+      recipientAddress: "prospect@example.com",
+      subject: "Re: Pricing",
+      bodyText: "Hi there",
+      bodyHtml: null,
+      policyVersion: "policy-1",
+      validationVersion: "validator-1",
+    });
+    const v2 = hashApprovalEnvelopeV2(baseEnvelopeV2());
+    expect(v2).not.toBe(v1);
+  });
+});
+
+describe("hashApprovalEnvelopeV2 — identity binding (§18.2)", () => {
+  const baseline = baseEnvelopeV2();
+
+  it("changes when smtpUsername changes", () => {
+    expect(
+      hashApprovalEnvelopeV2({ ...baseline, smtpUsername: "different@svc.com" })
+    ).not.toBe(hashApprovalEnvelopeV2(baseline));
+  });
+
+  it("changes when replyToAddress changes from null to non-null", () => {
+    expect(
+      hashApprovalEnvelopeV2({
+        ...baseline,
+        replyToAddress: "replies@other.com",
+      })
+    ).not.toBe(hashApprovalEnvelopeV2(baseline));
+  });
+
+  it("changes when replyToAddress changes between two non-null values", () => {
+    const a = hashApprovalEnvelopeV2({
+      ...baseline,
+      replyToAddress: "replies@other.com",
+    });
+    const b = hashApprovalEnvelopeV2({
+      ...baseline,
+      replyToAddress: "different@other.com",
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it("distinguishes null replyTo from empty-string replyTo", () => {
+    const nullReply = hashApprovalEnvelopeV2({
+      ...baseline,
+      replyToAddress: null,
+    });
+    const emptyReply = hashApprovalEnvelopeV2({
+      ...baseline,
+      replyToAddress: "",
+    });
+    expect(nullReply).not.toBe(emptyReply);
+  });
+
+  it("changes when subject changes", () => {
+    expect(
+      hashApprovalEnvelopeV2({ ...baseline, subject: "Different" })
+    ).not.toBe(hashApprovalEnvelopeV2(baseline));
+  });
+
+  it("changes when body changes", () => {
+    expect(
+      hashApprovalEnvelopeV2({ ...baseline, bodyText: "Hi there " })
+    ).not.toBe(hashApprovalEnvelopeV2(baseline));
+  });
+});
+
+describe("hashApprovalEnvelopeV2 — normalization (§7.3)", () => {
+  const baseline = baseEnvelopeV2();
+
+  it("is insensitive to email address case in the domain only (sender)", () => {
+    const a = hashApprovalEnvelopeV2({
+      ...baseline,
+      senderAddress: "Owner@EXAMPLE.com",
+    });
+    const b = hashApprovalEnvelopeV2({
+      ...baseline,
+      senderAddress: "Owner@example.com",
+    });
+    expect(a).toBe(b);
+  });
+
+  it("preserves the local part of the sender address", () => {
+    const a = hashApprovalEnvelopeV2({
+      ...baseline,
+      senderAddress: "Owner@Example.com",
+    });
+    const b = hashApprovalEnvelopeV2({
+      ...baseline,
+      senderAddress: "owner@Example.com",
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it("is insensitive to whitespace around smtpUsername (trim-only, never lowercased)", () => {
+    const a = hashApprovalEnvelopeV2({
+      ...baseline,
+      smtpUsername: "smtp-login@svc.com",
+    });
+    const b = hashApprovalEnvelopeV2({
+      ...baseline,
+      smtpUsername: "  smtp-login@svc.com  ",
+    });
+    expect(a).toBe(b);
+  });
+
+  it("preserves the case of smtpUsername (never lowercased)", () => {
+    const a = hashApprovalEnvelopeV2({
+      ...baseline,
+      smtpUsername: "Smtp-Login@svc.com",
+    });
+    const b = hashApprovalEnvelopeV2({
+      ...baseline,
+      smtpUsername: "smtp-login@svc.com",
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it("is insensitive to CRLF vs LF in body text", () => {
+    const lf = hashApprovalEnvelopeV2({
+      ...baseline,
+      bodyText: "line1\nline2",
+    });
+    const crlf = hashApprovalEnvelopeV2({
+      ...baseline,
+      bodyText: "line1\r\nline2",
+    });
+    expect(lf).toBe(crlf);
+  });
+
+  it("distinguishes null bodyHtml from empty-string bodyHtml", () => {
+    const nullHtml = hashApprovalEnvelopeV2({ ...baseline, bodyHtml: null });
+    const emptyHtml = hashApprovalEnvelopeV2({ ...baseline, bodyHtml: "" });
+    expect(nullHtml).not.toBe(emptyHtml);
+  });
+});
+
+describe("canonicalizeApprovalEnvelopeV2 — delimiter safety", () => {
+  it("does not collide when user content contains the delimiter", () => {
+    const a = canonicalizeApprovalEnvelopeV2({
+      ...baseEnvelopeV2(),
+      subject: "ab",
+      bodyText: "c",
+    });
+    const b = canonicalizeApprovalEnvelopeV2({
+      ...baseEnvelopeV2(),
+      subject: "a",
+      bodyText: "b|c",
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it("includes the leading version:2 field", () => {
+    const canonical = canonicalizeApprovalEnvelopeV2(baseEnvelopeV2());
+    expect(canonical.startsWith("version:2|")).toBe(true);
   });
 });

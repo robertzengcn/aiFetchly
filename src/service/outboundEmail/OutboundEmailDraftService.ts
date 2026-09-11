@@ -5,6 +5,7 @@ import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import {
   OutboundEmailEnvelopeHasher,
   type BatchEnvelopeEntry,
+  type BatchEnvelopeEntryV2,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
@@ -15,7 +16,8 @@ import {
 } from "@/service/outboundEmail/outboundReliabilityVersions";
 import {
   normalizeEmailServiceIds,
-  resolveOutboundSender,
+  resolveOutboundIdentity,
+  type ResolvedOutboundIdentity,
 } from "@/service/outboundEmail/resolveOutboundSender";
 
 /** Batch statuses whose envelope is not yet authorized — safe to fill sender. */
@@ -183,7 +185,8 @@ export class OutboundEmailDraftService {
     if (!bound) {
       return { success: false, code: "sender_address_missing" };
     }
-    const { emailServiceId, senderAddress } = bound;
+    const { emailServiceId, smtpUsername, senderAddress, replyToAddress } =
+      bound;
 
     // §7.2 batch row.
     const batch = await this.draftModel.createBatch(
@@ -204,7 +207,7 @@ export class OutboundEmailDraftService {
       })
     );
 
-    const envelopes: BatchEnvelopeEntry[] = [];
+    const envelopes: BatchEnvelopeEntryV2[] = [];
 
     for (const r of materialized) {
       // §7.3 draft row.
@@ -231,18 +234,22 @@ export class OutboundEmailDraftService {
         },
       ];
 
-      // §6.2 canonical envelope + envelope hash.
-      const envelope: BatchEnvelopeEntry = {
-        version: 1,
+      // §6.2 canonical envelope v2 + envelope hash (§17.3 — new revisions
+      // always use version 2: smtpUsername + replyToAddress are bound into
+      // the hash so authorization covers the full effective identity).
+      const envelope: BatchEnvelopeEntryV2 = {
+        version: 2,
         draftId: draft.id,
         emailServiceId,
+        smtpUsername,
         senderAddress,
+        replyToAddress,
         recipientAddress: r.address,
         subject: input.subject,
         bodyText: input.bodyText,
         bodyHtml: input.bodyHtml,
       };
-      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelopeV2(envelope);
       envelopes.push(envelope);
 
       // §10.4 immutable revision (appendRevision assigns revisionNumber and
@@ -251,6 +258,9 @@ export class OutboundEmailDraftService {
         draftId: draft.id,
         actor: "ai",
         emailServiceId,
+        envelopeVersion: 2,
+        smtpUsername,
+        replyToAddress,
         senderAddress,
         recipientAddress: r.address,
         subject: input.subject,
@@ -261,8 +271,8 @@ export class OutboundEmailDraftService {
       });
     }
 
-    // §11 batch hash over the full envelope set.
-    const batchHash = OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+    // §11 batch hash over the full v2 envelope set.
+    const batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(envelopes);
     await this.draftModel.updateBatchHash(batch.id, batchHash);
     await this.draftModel.updateBatchStatus(batch.id, "draft_ready");
 
@@ -299,8 +309,15 @@ export class OutboundEmailDraftService {
     const drafts = await this.draftModel.listDraftsByBatch(batchId);
     let changed = false;
 
+    // Single batched read of all current revisions (avoids an N+1 query per
+    // draft), plus a per-service identity cache so drafts sharing a service
+    // resolve it once.
+    const currentRevisions = await this.draftModel.readCurrentRevisions(
+      drafts.map((d) => d.id)
+    );
+    const identityCache = new Map<number, ResolvedOutboundIdentity | null>();
     for (const draft of drafts) {
-      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      const revision = currentRevisions.get(draft.id);
       if (!revision) {
         continue;
       }
@@ -308,30 +325,40 @@ export class OutboundEmailDraftService {
         continue;
       }
 
-      const resolved = await resolveOutboundSender({
-        dbpath: this.dbpath,
-        preferredServiceId: revision.emailServiceId,
-        serviceIds: batchServiceIds,
-      });
+      const cacheKey = revision.emailServiceId;
+      let resolved = identityCache.get(cacheKey);
+      if (resolved === undefined) {
+        resolved = await resolveOutboundIdentity({
+          dbpath: this.dbpath,
+          preferredServiceId: revision.emailServiceId,
+          serviceIds: batchServiceIds,
+        });
+        identityCache.set(cacheKey, resolved);
+      }
       if (!resolved) {
         continue;
       }
 
-      const envelope: BatchEnvelopeEntry = {
-        version: 1,
+      const envelope: BatchEnvelopeEntryV2 = {
+        version: 2,
         draftId: draft.id,
         emailServiceId: resolved.emailServiceId,
+        smtpUsername: resolved.smtpUsername,
         senderAddress: resolved.senderAddress,
+        replyToAddress: resolved.replyToAddress,
         recipientAddress: revision.recipientAddress,
         subject: revision.subject,
         bodyText: revision.bodyText,
         bodyHtml: revision.bodyHtml,
       };
-      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelope(envelope);
+      const contentHash = OutboundEmailEnvelopeHasher.hashEnvelopeV2(envelope);
       await this.draftModel.appendRevision({
         draftId: draft.id,
         actor: "ai",
         emailServiceId: resolved.emailServiceId,
+        envelopeVersion: 2,
+        smtpUsername: resolved.smtpUsername,
+        replyToAddress: resolved.replyToAddress,
         senderAddress: resolved.senderAddress,
         recipientAddress: revision.recipientAddress,
         subject: revision.subject,
@@ -359,50 +386,105 @@ export class OutboundEmailDraftService {
 
   /**
    * Prefer an explicit caller-supplied sender (tests / already-resolved
-   * tools). Otherwise resolve from the selected SMTP service, then the first
-   * active service. Fail closed when nothing is configured.
+   * tools). Otherwise resolve from the selected SMTP service. Fail closed
+   * (return null → `sender_address_missing`) when the named service cannot
+   * resolve an identity — do NOT fabricate an identity from the caller's
+   * sender address, which would bind a wrong smtpUsername and surface as a
+   * confusing sender_identity_changed failure at delivery time.
    */
   private async bindSender(
     input: GenerateBatchInput
-  ): Promise<{ emailServiceId: number; senderAddress: string } | null> {
+  ): Promise<ResolvedOutboundIdentity | null> {
     const trimmed = (input.senderAddress ?? "").trim();
     const serviceIds = [...input.serviceIds];
     if (trimmed.length > 0) {
       const emailServiceId = serviceIds[0];
       if (typeof emailServiceId === "number" && emailServiceId > 0) {
-        return { emailServiceId, senderAddress: trimmed };
+        // Caller supplied a sender address; still resolve the full identity
+        // (smtpUsername + replyTo) for the service so the revision carries a
+        // complete envelope snapshot (§6.4). Fail closed when the service
+        // cannot resolve — the caller gets sender_address_missing.
+        const identity = await resolveOutboundIdentity({
+          dbpath: this.dbpath,
+          preferredServiceId: emailServiceId,
+          serviceIds,
+        });
+        if (identity) {
+          // Use the caller's sender address but keep the resolved smtp/replyTo.
+          return {
+            emailServiceId: identity.emailServiceId,
+            smtpUsername: identity.smtpUsername,
+            senderAddress: trimmed,
+            replyToAddress: identity.replyToAddress,
+          };
+        }
+        return null;
       }
     }
-    return await resolveOutboundSender({
+    return await resolveOutboundIdentity({
       dbpath: this.dbpath,
       preferredServiceId: serviceIds[0] ?? null,
       serviceIds,
     });
   }
 
-  private async recomputeBatchHash(batchId: number): Promise<string | null> {
+  async recomputeBatchHash(batchId: number): Promise<string | null> {
     const drafts = await this.draftModel.listDraftsByBatch(batchId);
-    const envelopes: BatchEnvelopeEntry[] = [];
+    const v1Envelopes: BatchEnvelopeEntry[] = [];
+    const v2Envelopes: BatchEnvelopeEntryV2[] = [];
+    // Single batched read of all current revisions (avoids an N+1 query per
+    // draft).
+    const currentRevisions = await this.draftModel.readCurrentRevisions(
+      drafts.map((d) => d.id)
+    );
     for (const draft of drafts) {
-      const revision = await this.draftModel.readCurrentRevision(draft.id);
+      const revision = currentRevisions.get(draft.id);
       if (!revision) {
         continue;
       }
-      envelopes.push({
-        version: 1,
-        draftId: draft.id,
-        emailServiceId: revision.emailServiceId,
-        senderAddress: revision.senderAddress,
-        recipientAddress: revision.recipientAddress,
-        subject: revision.subject,
-        bodyText: revision.bodyText,
-        bodyHtml: revision.bodyHtml,
-      });
+      const version = revision.envelopeVersion ?? 1;
+      if (version === 2) {
+        v2Envelopes.push({
+          version: 2,
+          draftId: draft.id,
+          emailServiceId: revision.emailServiceId,
+          smtpUsername: revision.smtpUsername ?? "",
+          senderAddress: revision.senderAddress,
+          replyToAddress: revision.replyToAddress,
+          recipientAddress: revision.recipientAddress,
+          subject: revision.subject,
+          bodyText: revision.bodyText,
+          bodyHtml: revision.bodyHtml,
+        });
+      } else {
+        v1Envelopes.push({
+          version: 1,
+          draftId: draft.id,
+          emailServiceId: revision.emailServiceId,
+          senderAddress: revision.senderAddress,
+          recipientAddress: revision.recipientAddress,
+          subject: revision.subject,
+          bodyText: revision.bodyText,
+          bodyHtml: revision.bodyHtml,
+        });
+      }
     }
-    if (envelopes.length === 0) {
+    if (v1Envelopes.length === 0 && v2Envelopes.length === 0) {
       return null;
     }
-    const batchHash = OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+    // New revisions are always v2, but a batch may still contain legacy v1
+    // revisions. Use the v2 batch hash when all envelopes are v2; v1 hash when
+    // all are v1. Mixed batches hash as v2 (new revisions dominate the batch
+    // state); the delivery service's §17.2 gate rejects mixed batches entirely.
+    let batchHash: string;
+    if (v2Envelopes.length > 0 && v1Envelopes.length === 0) {
+      batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes);
+    } else if (v1Envelopes.length > 0 && v2Envelopes.length === 0) {
+      batchHash = OutboundEmailEnvelopeHasher.hashBatch(v1Envelopes);
+    } else {
+      // Mixed: hash v2 envelopes (new revisions dominate the batch state).
+      batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes);
+    }
     await this.draftModel.updateBatchHash(batchId, batchHash);
     return batchHash;
   }

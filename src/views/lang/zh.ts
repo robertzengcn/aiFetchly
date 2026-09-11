@@ -1204,6 +1204,10 @@ export default {
   },
   emailservice: {
     id: "ID",
+    smtp_username: "SMTP用户名",
+    smtp_username_hint: "SMTP登录账号（默认使用发件地址）",
+    reply_to: "回复至",
+    reply_to_hint: "可选回复地址（留空表示无）",
     from: "发送者账户",
     from_hint: "输入邮件发送者账户",
     password: "密码",

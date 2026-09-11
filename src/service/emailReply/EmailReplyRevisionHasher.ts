@@ -1,5 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
+import type {
+  EmailReplyApprovalEnvelope,
+  EmailReplyApprovalEnvelopeV2,
+} from "@/entityTypes/emailReplyReliabilityTypes";
+import {
+  normalizeEmailAddressV2,
+  normalizeSmtpUsernameForHash,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 
 /**
  * Canonical SHA-256 hashing for reply approval (technical design §14.1).
@@ -89,6 +96,82 @@ export function hashApprovalEnvelope(
   envelope: EmailReplyApprovalEnvelope
 ): string {
   const canonical = canonicalizeApprovalEnvelope(envelope);
+  return createHash(REVISION_HASH_ALGORITHM)
+    .update(canonical, "utf8")
+    .digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// Version-2 reply approval envelope (§18.1).
+//
+// The v2 canonicalizer adds a leading `version:2` field and includes the
+// resolved service identity (`smtpUsername` + `replyToAddress`) BEFORE the
+// recipient, so any change to the SMTP login or Reply-To invalidates the
+// approval hash. The v1 canonicalizer and all pinned v1 fixtures remain
+// byte-identical — the v2 path is entirely separate.
+//
+// Normalization reuses the outbound v2 functions
+// (`normalizeEmailAddressV2`, `normalizeSmtpUsernameForHash`) from the
+// outbound hasher so reply and outbound sides are byte-for-byte consistent
+// (§7.3): email = trim + lowercase domain only (preserve local part); SMTP
+// username = trim only (never lowercase).
+// ---------------------------------------------------------------------------
+
+const NULL_REPLY_TO_TOKEN = "<<NULL_REPLY_TO>>";
+
+/**
+ * Build the canonical string representation of a v2 approval envelope.
+ *
+ * Format: leading `version:2`, then draftId, revisionId, emailServiceId,
+ * originalMessageId, smtpUsername (trim-normalized), sender (v2 email
+ * normalized), replyTo (v2 email normalized or `<<NULL_REPLY_TO>>`),
+ * recipient (v2 normalized), subject, bodyText, bodyHtml, policyVersion,
+ * validationVersion. Length-prefixed text fields prevent delimiter-injection
+ * ambiguity, mirroring the v1 canonicalizer.
+ */
+export function canonicalizeApprovalEnvelopeV2(
+  envelope: EmailReplyApprovalEnvelopeV2
+): string {
+  const subject = normalizeLineEndings(envelope.subject);
+  const bodyText = normalizeLineEndings(envelope.bodyText);
+  const bodyHtml =
+    envelope.bodyHtml === null
+      ? NULL_BODY_TOKEN
+      : normalizeLineEndings(envelope.bodyHtml);
+  const smtpUsername = normalizeSmtpUsernameForHash(envelope.smtpUsername);
+  const sender = normalizeEmailAddressV2(envelope.senderAddress);
+  const replyTo =
+    envelope.replyToAddress === null
+      ? null
+      : normalizeEmailAddressV2(envelope.replyToAddress);
+  const recipient = normalizeEmailAddressV2(envelope.recipientAddress);
+
+  const fields = [
+    `version:${envelope.version}`,
+    `draftId:${envelope.draftId}`,
+    `revisionId:${envelope.revisionId}`,
+    `emailServiceId:${envelope.emailServiceId}`,
+    `originalMessageId:${envelope.originalMessageId}`,
+    `smtpUsername:${len(smtpUsername)}:${smtpUsername}`,
+    `sender:${len(sender)}:${sender}`,
+    `replyTo:${
+      replyTo === null ? NULL_REPLY_TO_TOKEN : `${len(replyTo)}:${replyTo}`
+    }`,
+    `recipient:${len(recipient)}:${recipient}`,
+    `subject:${len(subject)}:${subject}`,
+    `bodyText:${len(bodyText)}:${bodyText}`,
+    `bodyHtml:${len(bodyHtml)}:${bodyHtml}`,
+    `policyVersion:${envelope.policyVersion}`,
+    `validationVersion:${envelope.validationVersion}`,
+  ];
+  return fields.join("|");
+}
+
+/** Compute the canonical SHA-256 hex digest of a v2 approval envelope. */
+export function hashApprovalEnvelopeV2(
+  envelope: EmailReplyApprovalEnvelopeV2
+): string {
+  const canonical = canonicalizeApprovalEnvelopeV2(envelope);
   return createHash(REVISION_HASH_ALGORITHM)
     .update(canonical, "utf8")
     .digest("hex");

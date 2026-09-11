@@ -163,7 +163,10 @@ describe("ObserveExecuteLoop", () => {
         }
       );
 
-      expect(requestAiSupport).toHaveBeenCalledTimes(3); // Initial + 2 iterations
+      // The loop performs exactly one observe request per iteration —
+      // maxIterations bounds the requestAiSupport call count directly
+      // (see the sibling test below: maxIterations 5 → 5 calls).
+      expect(requestAiSupport).toHaveBeenCalledTimes(2);
       expect(result.success).toBe(false);
       expect(result.errorMessage).toContain("Max observe-execute iterations");
     });
@@ -203,7 +206,7 @@ describe("ObserveExecuteLoop", () => {
       );
 
       expect(executeAction).toHaveBeenCalledTimes(5); // 5 iterations with 1 action each
-      expect(requestAiSupport).toHaveBeenCalledTimes(5); // Initial + 4 more iterations
+      expect(requestAiSupport).toHaveBeenCalledTimes(5); // one observe request per iteration
       expect(result.success).toBe(false);
       expect(result.errorMessage).toContain("Max observe-execute iterations");
     });

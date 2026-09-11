@@ -1717,7 +1717,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "skip_review=true (boolean) and the recipients plus subject/body — do NOT " +
       "call draft_outbound_email_batch first and do NOT wait for Review. " +
       "Otherwise draft first, then stop and wait for the user to click Review. " +
-      "If the user has now confirmed in chat (e.g. \"yes, send it\"), call this " +
+      'If the user has now confirmed in chat (e.g. "yes, send it"), call this ' +
       "again without re-drafting. Provide " +
       "service_ids from list_email_services plus either template_ids or " +
       "email_subject and email_html_content. Provide exactly one of emails " +
@@ -1845,11 +1845,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             success: claimed,
             result: {
               status: claim.status,
-              send_attempt_id: claim.attemptId,
+              send_attempt_id: "attemptId" in claim ? claim.attemptId : null,
               batch_id: outboundAuthorization.batchId,
               ...(claim.status === "already_processed"
                 ? {
                     note: "This batch was already claimed by an earlier send attempt; no duplicate send was started.",
+                  }
+                : {}),
+              ...(claim.status === "legacy_identity_requires_review"
+                ? {
+                    note: "This legacy batch's service identity no longer matches the approved sender. Edit the draft to create a version-2 revision and re-approve.",
+                  }
+                : {}),
+              ...(claim.status === "mixed_version_batch"
+                ? {
+                    note: "This batch mixes version-1 and version-2 revisions and cannot be sent under one canonicalization rule. Edit the drafts to materialize version-2 revisions and re-approve.",
+                  }
+                : {}),
+              ...(claim.status === "sender_identity_changed"
+                ? {
+                    note: "A referenced email service's identity changed between approval and delivery. Re-approve the batch.",
                   }
                 : {}),
             },

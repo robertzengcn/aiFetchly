@@ -26,10 +26,14 @@ import { AIRecoveryResponse } from "@/entityTypes/processMessage-type";
 import { handleAIRecoveryResponse } from "@/childprocess/utils/AIRecoveryBridge";
 import { handleAiSupportResponse } from "@/childprocess/utils/AiSupportBridge";
 import type { AiSupportResponseMessage } from "@/modules/interface/BackgroundProcessMessages";
-import { authorizedEmailWorkerPayloadV2Schema } from "@/entityTypes/outboundEmailDeliveryTypes";
+import {
+  authorizedEmailWorkerPayloadV2Schema,
+  authorizedEmailWorkerPayloadV3Schema,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
 import type {
   AuthorizedEmailWorkerEvent,
   AuthorizedEmailWorkerPayloadV2,
+  AuthorizedEmailWorkerPayloadV3,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
@@ -150,16 +154,57 @@ if (parentPort) {
         }
         case "sendAuthorizedEmails":
           {
-            // §16.1 — validate the versioned payload with the shared schema
-            // before any send. An invalid payload never reaches EmailSend.
+            // §16.1 — validate the versioned payload with the schema matching
+            // its `version` discriminant before any send. v3 carries v2
+            // identity (smtpUsername + replyToAddress); v2 is the legacy shape.
+            // An invalid payload never reaches EmailSend.
             if (!pme.data) {
               console.error("[taskCode] sendAuthorizedEmails: data is null");
               return;
             }
+            const rawData = pme.data as {
+              version?: number;
+              emailServices?: unknown[];
+            };
+            if (rawData.version === 3) {
+              const parsed = authorizedEmailWorkerPayloadV3Schema.safeParse({
+                ...rawData,
+                emailServices: rawData.emailServices,
+              });
+              if (!parsed.success) {
+                console.error(
+                  "[taskCode] sendAuthorizedEmails: v3 payload failed schema validation:",
+                  parsed.error.message
+                );
+                return;
+              }
+              const workerPayload = {
+                ...parsed.data,
+                emailServices: (pme.data as AuthorizedEmailWorkerPayloadV3)
+                  .emailServices,
+              } as AuthorizedEmailWorkerPayloadV3;
+              const emailsendModel = new EmailSend();
+              await emailsendModel
+                .sendAuthorizedEnvelopes(workerPayload, (event) => {
+                  const message: ProcessMessage<AuthorizedEmailWorkerEvent> = {
+                    action: "OutboundEmailDeliveryEvent",
+                    data: event,
+                  };
+                  parentPort.postMessage(JSON.stringify(message));
+                })
+                .catch((error: unknown) => {
+                  const message =
+                    error instanceof Error ? error.message : String(error);
+                  console.error(
+                    `[taskCode] sendAuthorizedEmails failed: ${message}`
+                  );
+                });
+              break;
+            }
+            // Default: v2 (legacy) payload.
             const parsed = authorizedEmailWorkerPayloadV2Schema.safeParse({
-              ...(pme.data as object),
-              emailServices: (pme.data as { emailServices?: unknown[] })
-                .emailServices,
+              ...rawData,
+              emailServices: rawData.emailServices,
             });
             if (!parsed.success) {
               console.error(

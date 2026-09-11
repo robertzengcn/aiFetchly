@@ -43,6 +43,7 @@ import {
   emailMarketingListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
+  emailServiceUpdateInputSchema,
   emailServiceExportInputSchema,
   emailServiceImportInputSchema,
 } from "@/schemas/ipc/emailMarketing";
@@ -271,7 +272,7 @@ export function registerEmailMarketingIpcHandlers() {
 
   registerValidatedHandler(
     EMAILSERVICEUPDATE,
-    emailMarketingUpdateInputSchema,
+    emailServiceUpdateInputSchema,
     async (input) => {
       const qdata = input as unknown as EmailServiceEntitydata;
       const emailmarketCon = new EmailMarketingController();
@@ -300,6 +301,19 @@ export function registerEmailMarketingIpcHandlers() {
         entity.host = qdata.host ?? existing.host;
         entity.port = qdata.port ?? existing.port;
         entity.from = qdata.from ?? existing.from;
+        entity.smtpUsername =
+          qdata.smtpUsername !== undefined
+            ? qdata.smtpUsername === null ||
+              qdata.smtpUsername.trim().length === 0
+              ? null
+              : qdata.smtpUsername.trim()
+            : existing.smtpUsername ?? null;
+        entity.replyTo =
+          qdata.replyTo !== undefined
+            ? qdata.replyTo === null || qdata.replyTo.trim().length === 0
+              ? null
+              : qdata.replyTo.trim()
+            : existing.replyTo ?? null;
         // Empty incoming password = keep existing (credential sentinel).
         entity.password =
           qdata.password && qdata.password.length > 0
@@ -325,10 +339,41 @@ export function registerEmailMarketingIpcHandlers() {
           qdata.receiveFolder ?? existing.receiveFolder ?? "INBOX";
         entity.receiveEnabled =
           qdata.receiveEnabled ?? existing.receiveEnabled ?? 0;
+        // §7.2: reject CR/LF in smtpUsername/from/replyTo before persistence
+        // so header injection cannot reach SMTP DATA. Mirrors the import path.
+        await emailmarketCon.validateEmailServiceForSave(
+          entity,
+          "update",
+          serviceId
+        );
         await emailmarketCon.updateEmailService(serviceId, entity);
         return { id: serviceId } satisfies CommonIdrequest<number>;
       }
 
+      // Create path: validate a representative entity before persistence.
+      // createEmailService re-derives the entity from qdata, so validate the
+      // same shape here to reject CR/LF before any row is written.
+      const createEntity = new EmailServiceEntity();
+      createEntity.name = qdata.name;
+      createEntity.host = qdata.host;
+      createEntity.port = qdata.port;
+      createEntity.from = qdata.from;
+      createEntity.smtpUsername = qdata.smtpUsername ?? null;
+      createEntity.replyTo = qdata.replyTo ?? null;
+      createEntity.password = qdata.password;
+      createEntity.ssl = qdata.ssl;
+      createEntity.receiveProtocol = qdata.receiveProtocol ?? "imap";
+      createEntity.imapHost = qdata.imapHost ?? null;
+      createEntity.imapPort = qdata.imapPort ?? null;
+      createEntity.imapSsl = qdata.imapSsl ?? 1;
+      createEntity.pop3Host = qdata.pop3Host ?? null;
+      createEntity.pop3Port = qdata.pop3Port ?? null;
+      createEntity.pop3Ssl = qdata.pop3Ssl ?? 1;
+      createEntity.receiveUsername = qdata.receiveUsername ?? null;
+      createEntity.receivePassword = qdata.receivePassword ?? null;
+      createEntity.receiveFolder = qdata.receiveFolder ?? "INBOX";
+      createEntity.receiveEnabled = qdata.receiveEnabled ?? 0;
+      await emailmarketCon.validateEmailServiceForSave(createEntity, "create");
       const createdId = await emailmarketCon.createEmailService(qdata);
       if (!createdId) {
         throw new Error("emailmarketing.create_email_service_error");

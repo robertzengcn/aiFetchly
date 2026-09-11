@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
 /** SMTPS: wrap the socket in TLS before any SMTP greeting. */
 export const SMTP_IMPLICIT_TLS_PORT = 465;
@@ -67,7 +68,10 @@ export function buildSmtpTransportOptions(
     secure: useImplicitTls,
     requireTLS: requireTls,
     auth: {
-      user: param.from,
+      user: resolveEmailServiceIdentity({
+        smtpUsername: param.smtpUsername,
+        from: param.from,
+      }).smtpUsername,
       pass: param.password,
     },
   };
@@ -162,20 +166,13 @@ export class OutboundSmtpSession {
     try {
       return await this.transporter.sendMail(mailOptions);
     } catch (error: unknown) {
-      const retryMode = shouldRetrySmtpTlsMode(
-        error,
-        this.mode,
-        this.param
-      );
+      const retryMode = shouldRetrySmtpTlsMode(error, this.mode, this.param);
       if (!retryMode) {
         throw error;
       }
       closeSmtpTransporter(this.transporter);
       this.mode = retryMode;
-      this.transporter = createOutboundSmtpTransporter(
-        this.param,
-        retryMode
-      );
+      this.transporter = createOutboundSmtpTransporter(this.param, retryMode);
       return await this.transporter.sendMail(mailOptions);
     }
   }

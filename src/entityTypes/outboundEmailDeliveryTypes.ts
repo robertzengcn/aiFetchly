@@ -270,6 +270,47 @@ export type AuthorizedEmailWorkerPayloadV2 = Omit<
 > & { emailServices: EmailServiceEntitydata[] };
 
 // ---------------------------------------------------------------------------
+// §16 Version-3 authorized envelope payload (carries v2 identity)
+// ---------------------------------------------------------------------------
+
+/** Version-3 authorized envelope (§16.1) — carries v2 identity. */
+export const authorizedOutboundEnvelopeV3Schema = z.object({
+  envelopeVersion: z.literal(2),
+  draftId: z.number().int(),
+  revisionId: z.number().int(),
+  revisionNumber: z.number().int(),
+  recipientAddress: z.string().max(320),
+  emailServiceId: z.number().int(),
+  smtpUsername: z.string().min(1).max(255),
+  senderAddress: z.string().min(1).max(320),
+  replyToAddress: z.string().max(320).nullable(),
+  subject: z.string().max(500),
+  bodyText: z.string(),
+  bodyHtml: z.string().nullable(),
+  envelopeHash: z.string().length(64),
+});
+
+/** v3 envelope carrying v2 identity (smtpUsername + replyToAddress). */
+export type AuthorizedOutboundEnvelopeV3 = z.infer<
+  typeof authorizedOutboundEnvelopeV3Schema
+>;
+
+export const authorizedEmailWorkerPayloadV3Schema = z.object({
+  version: z.literal(3),
+  mode: z.literal("authorized_envelopes"),
+  batchId: z.number().int(),
+  sendAttemptId: z.number().int(),
+  batchHash: z.string().length(64),
+  envelopes: z.array(authorizedOutboundEnvelopeV3Schema),
+  emailServices: z.array(z.unknown()),
+});
+
+export type AuthorizedEmailWorkerPayloadV3 = Omit<
+  z.infer<typeof authorizedEmailWorkerPayloadV3Schema>,
+  "emailServices"
+> & { emailServices: EmailServiceEntitydata[] };
+
+// ---------------------------------------------------------------------------
 // §6.4 Typed worker events (correlated by batch+attempt+draft+revision+hash)
 // ---------------------------------------------------------------------------
 

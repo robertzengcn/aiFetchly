@@ -68,6 +68,8 @@ import {
   EmailReplyStatus,
 } from "@/entityTypes/emailReceiveTypes";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 
 /**
  * Register IPC handlers for inbound email receive, processing state, reply
@@ -435,7 +437,13 @@ export function registerEmailReceiveIpcHandlers(): void {
       const { EmailReplyApprovalService } = await import(
         "@/service/emailReply/EmailReplyApprovalService"
       );
-      const result = await new EmailReplyApprovalService().approveDraft({
+      // Pass the resolved user DB path so the v2 envelope's identity
+      // resolution reads the real email_service row, not the BaseDb temp-dir
+      // fallback (§13.2). Mirrors OutboundEmailDeliveryIpc's resolveDbpath.
+      const approvalDbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const result = await new EmailReplyApprovalService(
+        approvalDbpath
+      ).approveDraft({
         draftId: input.draftId,
         approvedByType: "user",
       });

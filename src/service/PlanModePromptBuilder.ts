@@ -5,10 +5,19 @@ export interface BuildPlanModeSystemPromptInput {
   planState?: AIChatPlanStateView | null;
 }
 
+/**
+ * Fallback base system prompt used when the caller passes an empty/whitespace
+ * baseSystemPrompt. Exported so tests assert against the real fallback
+ * rather than a duplicated literal (which drifts when the prompt is
+ * rebranded).
+ */
+export const DEFAULT_PLAN_MODE_BASE_PROMPT =
+  "You are aiFetchly's built-in helpful assistant.";
+
 export function buildPlanModeSystemPrompt(
   input: BuildPlanModeSystemPromptInput
 ): string {
-  const base = input.baseSystemPrompt?.trim() || "You are aiFetchly's built-in helpful assistant.";
+  const base = input.baseSystemPrompt?.trim() || DEFAULT_PLAN_MODE_BASE_PROMPT;
   const stateBlock = buildPlanStateBlock(input.planState);
 
   return `${base}
@@ -48,9 +57,7 @@ ${stateBlock}
 `;
 }
 
-function buildPlanStateBlock(
-  planState?: AIChatPlanStateView | null
-): string {
+function buildPlanStateBlock(planState?: AIChatPlanStateView | null): string {
   if (!planState) {
     return "No active plan yet. Begin the Understand step.";
   }

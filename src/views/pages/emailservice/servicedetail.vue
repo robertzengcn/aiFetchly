@@ -19,9 +19,25 @@ v-model="name" :label="t('emailservice.name')" type="input"
       <v-row>
         <v-col cols="12" md="12">
           <v-text-field
+v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
+            :hint="t('emailservice.smtp_username_hint') || 'SMTP login account (defaults to the From address)'"
+            persistent-hint :readonly="loading" clearable></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
 v-model="from" :label="t('emailservice.from')" type="email"
             :hint="t('emailservice.from_hint')" :readonly="loading" clearable required
             :rules="[rules.email]"></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
+v-model="replyTo" :label="t('emailservice.reply_to') || 'Reply-To'" type="email"
+            :hint="t('emailservice.reply_to_hint') || 'Optional address for replies (leave blank for none)'"
+            persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
       <v-row>
@@ -272,6 +288,8 @@ const FakeAPI = {
 const form = ref<HTMLFormElement>();
 const testform = ref<HTMLFormElement>();
 const from = ref<string>("");
+const smtpUsername = ref<string>("");
+const replyTo = ref<string>("");
 const password = ref<string>("");
 const host = ref<string>("");
 const port = ref<string>("");
@@ -342,6 +360,10 @@ const initialize = async () => {
           Id.value = res.id;
         }
         from.value = res.from;
+        // §12.1 legacy fallback: a service created before this feature has no
+        // smtpUsername — prefill the form with From so the user sees a value.
+        smtpUsername.value = res.smtpUsername?.trim() || res.from;
+        replyTo.value = res.replyTo ?? "";
         password.value = res.password;
         host.value = res.host;
         port.value = res.port;
@@ -375,7 +397,8 @@ const initialize = async () => {
 /** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
   const missing: string[] = [];
-  const usernameForTest = receiveUsername.value || from.value;
+  const usernameForTest =
+    receiveUsername.value || smtpUsername.value || from.value;
   const passwordForTest = receivePassword.value || password.value;
   const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
@@ -448,6 +471,8 @@ async function onSubmit() {
     const soacc: EmailServiceEntitydata = {
       name: name.value,
       from: from.value,
+      smtpUsername: smtpUsername.value || null,
+      replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
       password: password.value,
       host: host.value,
       port: port.value,
@@ -540,6 +565,8 @@ const submitTestemail = async () => {
   const emailSetting: EmailServiceEntitydata = {
     name: name.value,
     from: from.value,
+    smtpUsername: smtpUsername.value || null,
+    replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
     password: password.value,
     host: host.value,
     port: port.value,

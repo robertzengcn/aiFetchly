@@ -1233,6 +1233,10 @@ export default {
   },
   emailservice: {
     id: "ID",
+    smtp_username: "SMTPユーザー名",
+    smtp_username_hint: "SMTPログインアカウント（デフォルトはFromアドレス）",
+    reply_to: "返信先",
+    reply_to_hint: "返信用のオプションアドレス（なしの場合は空欄）",
     from: "送信者アカウント",
     from_hint: "メール送信者アカウントを入力",
     password: "パスワード",

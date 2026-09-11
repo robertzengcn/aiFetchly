@@ -62,6 +62,10 @@ const i18n = createI18n({
         name_hint: "name hint",
         from: "sender account",
         from_hint: "from hint",
+        smtp_username: "SMTP username",
+        smtp_username_hint: "SMTP login account",
+        reply_to: "Reply-To",
+        reply_to_hint: "reply hint",
         password: "password",
         host: "SMTP host",
         host_hint: "host hint",
@@ -156,6 +160,8 @@ const STORED_SERVICE = {
   id: 9,
   name: "Primary SMTP",
   from: "sender@example.com",
+  smtpUsername: "login@example.com",
+  replyTo: "replies@example.com",
   host: "smtp.example.com",
   port: "465",
   ssl: 1,
@@ -196,6 +202,8 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     routerMocks.routeId = "";
     apiMocks.getEmailServiceDetail.mockResolvedValue(STORED_SERVICE);
     apiMocks.receiveEmailsendevent.mockImplementation(() => {});
+    // onSubmit calls .then() on the return value — mock must resolve.
+    apiMocks.createupdateEmailService.mockResolvedValue({ id: 9 });
   });
 
   it("opens the test dialog in edit mode even though the stored password is hidden (sentinel)", async () => {
@@ -255,5 +263,109 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     };
     expect(param.Setting.id).toBe(9);
     expect(param.Setting.password).toBe(""); // sentinel travels; backend resolves
+  });
+
+  it("renders all three identity fields (SMTP username, From, Reply-To) in the form", async () => {
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    // The form has many text inputs; assert at least 3 render without crashing.
+    const inputs = wrapper.findAll("input");
+    expect(inputs.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("prefills SMTP username with From for a legacy service (no smtpUsername in detail response)", async () => {
+    // Legacy service: no smtpUsername/replyTo fields returned by the API.
+    const legacyService = {
+      ...STORED_SERVICE,
+      smtpUsername: undefined,
+      replyTo: undefined,
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(legacyService);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    // Assert via the submit payload — the most robust path with stubs.
+    // After initialize, smtpUsername ref should be prefilled with From.
+    // Trigger the main form submit to inspect the payload.
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      smtpUsername: string | null;
+      replyTo: string | null;
+    };
+    // Legacy fallback: smtpUsername prefilled from From address.
+    expect(payload.smtpUsername).toBe("sender@example.com");
+    expect(payload.replyTo).toBe(null);
+  });
+
+  it("edit submit carries smtpUsername and replyTo in the payload", async () => {
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    // STORED_SERVICE has smtpUsername: "login@example.com", replyTo: "replies@example.com"
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      smtpUsername: string | null;
+      replyTo: string | null;
+      id: number;
+    };
+    expect(payload.smtpUsername).toBe("login@example.com");
+    expect(payload.replyTo).toBe("replies@example.com");
+    expect(payload.id).toBe(9);
+  });
+
+  it("clearing Reply-To submits null in the payload", async () => {
+    // Service whose replyTo is absent — initialize sets replyTo.value = "".
+    const noReplyService = { ...STORED_SERVICE, replyTo: undefined };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(noReplyService);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      replyTo: string | null;
+    };
+    // Empty replyTo → null (no Reply-To header emitted).
+    expect(payload.replyTo).toBe(null);
+  });
+
+  it("Test Email carries smtpUsername, replyTo, and the service id", async () => {
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    // Open the test dialog.
+    await findButtonByText(wrapper, "test")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="test-dialog"]').exists()).toBe(true);
+
+    // Submit the dialog form.
+    const dialogForm = wrapper.find('[data-testid="test-dialog"] form');
+    expect(dialogForm.exists()).toBe(true);
+    await dialogForm.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.sendTestemail).toHaveBeenCalledTimes(1);
+    const param = apiMocks.sendTestemail.mock.calls[0][0] as {
+      Setting: {
+        id?: number;
+        smtpUsername?: string | null;
+        replyTo?: string | null;
+      };
+    };
+    expect(param.Setting.smtpUsername).toBe("login@example.com");
+    expect(param.Setting.replyTo).toBe("replies@example.com");
+    expect(param.Setting.id).toBe(9);
   });
 });

@@ -1,8 +1,63 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import AdmZip from "adm-zip";
+import { SqliteDb } from "@/config/SqliteDb";
+
+// Import auto-discovery spawns the declared stdio command (npx -y ...) to
+// list MCP tools — a network spawn that has no place in a unit test. Mock
+// MCPToolService (same shape as test/vitest/main/plugin-ipc.test.ts) so
+// plugin import persists rows without live connectivity.
+vi.mock("@/service/MCPToolService", () => ({
+  MCPToolService: class {
+    setTrust() {
+      return undefined;
+    }
+    async discoverTools() {
+      return [];
+    }
+  },
+}));
+
+// The service-internal modules resolve their dbpath via
+// Token.getValue(USERSDBPATH) -> BaseModule fallback to the shared
+// `aifetchly-test` dir. Under parallel vitest workers, two workers running
+// TypeORM synchronize() DDL against that shared file throw SQLITE_BUSY. Mock
+// Token so USERSDBPATH points at an isolated per-run temp path, then reset
+// the SqliteDb singleton onto it. Mirrors EmailReplyRecovery.model.test.ts.
+const mockTokenStore = vi.hoisted(() => new Map<string, string>());
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({
+    getValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.get(key) ?? ""),
+    setValue: vi
+      .fn()
+      .mockImplementation((key: string, value: string) =>
+        mockTokenStore.set(key, value)
+      ),
+    deleteValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.delete(key)),
+    hasValue: vi
+      .fn()
+      .mockImplementation(
+        (key: string) =>
+          mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
+      ),
+  })),
+}));
+
 import { PluginImportService } from "@/service/PluginImportService";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -35,7 +90,25 @@ const VALID_SKILL_MANIFEST = {
 
 describe("PluginImportService", () => {
   let tmp: string;
+  let dbpath: string;
   let pluginModule: PluginManagementModule;
+
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-plugin-import-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    mockTokenStore.set("USERSDBPATH", dbpath);
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-import-"));
@@ -44,12 +117,7 @@ describe("PluginImportService", () => {
 
   afterEach(async () => {
     // Clean up any plugins created during the test by name.
-    const names = [
-      "lead-tools",
-      "conflict-plugin",
-      "broken-skill",
-      "bad-mcp",
-    ];
+    const names = ["lead-tools", "conflict-plugin", "broken-skill", "bad-mcp"];
     for (const n of names) {
       const existing = await pluginModule.getPluginByName(n);
       if (existing) {
@@ -77,9 +145,8 @@ describe("PluginImportService", () => {
         description: "Lead tools plugin",
         skills: ["skills/lead-enrichment/manifest.json"],
       }),
-      "skills/lead-enrichment/manifest.json": JSON.stringify(
-        VALID_SKILL_MANIFEST
-      ),
+      "skills/lead-enrichment/manifest.json":
+        JSON.stringify(VALID_SKILL_MANIFEST),
       "skills/lead-enrichment/main.js": "setResult({ success: true });",
     });
 
@@ -150,7 +217,9 @@ describe("PluginImportService", () => {
     if (!result.success) {
       expect(
         result.errors.some(
-          (e) => e.code === "component-not-found" || e.code === "skill-manifest-invalid"
+          (e) =>
+            e.code === "component-not-found" ||
+            e.code === "skill-manifest-invalid"
         )
       ).toBe(true);
     }
@@ -233,7 +302,8 @@ describe("PluginImportService", () => {
     const mcpModule = new MCPToolModule();
     const all = await mcpModule.getAllMCPTools();
     const found = all.find(
-      (m) => m.serverName === "linkedin-browser" && m.pluginName === "lead-tools"
+      (m) =>
+        m.serverName === "linkedin-browser" && m.pluginName === "lead-tools"
     );
     expect(found).toBeDefined();
     expect(found?.command).toBe("npx");

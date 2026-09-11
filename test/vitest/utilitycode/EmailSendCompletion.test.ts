@@ -10,11 +10,15 @@ const smtpMock = vi.hoisted(() => ({
   pending: [] as SmtpPending[],
   on: vi.fn(),
   close: vi.fn(),
-  sendMail: vi.fn((): Promise<{ response: string; messageId?: string }> => {
-    return new Promise((resolve, reject) => {
-      smtpMock.pending.push({ resolve, reject });
-    });
-  }),
+  sendMail: vi.fn(
+    (
+      _mailOptions?: unknown
+    ): Promise<{ response: string; messageId?: string }> => {
+      return new Promise((resolve, reject) => {
+        smtpMock.pending.push({ resolve, reject });
+      });
+    }
+  ),
 }));
 
 vi.mock("nodemailer", () => ({
@@ -185,6 +189,104 @@ describe("outbound email completion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// §13.2 — legacy services resolve the service identity and emit the
+// configured Reply-To as a header (omitted when null).
+// ---------------------------------------------------------------------------
+
+describe("legacy service Reply-To header emission", () => {
+  beforeEach(() => {
+    smtpMock.pending.length = 0;
+    smtpMock.sendMail.mockClear();
+    smtpMock.on.mockClear();
+    smtpMock.close.mockClear();
+  });
+
+  it("EmailService.sendEmail passes the configured replyTo to the SMTP transport", async () => {
+    const service = new EmailService({
+      ...serviceConfig,
+      smtpUsername: "api-login@example.com",
+      replyTo: "replies@example.com",
+    });
+    const success = vi.fn();
+
+    const sending = service.sendEmail(request, undefined, success);
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    expect(success).toHaveBeenCalledOnce();
+    expect(smtpMock.sendMail).toHaveBeenCalledTimes(1);
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      from?: string;
+      replyTo?: string;
+      to?: string;
+    };
+    expect(mailOptions.replyTo).toBe("replies@example.com");
+    expect(mailOptions.from).toBe("sender@example.com");
+    expect(mailOptions.to).toBe("buyer@example.com");
+  });
+
+  it("EmailService.sendEmail omits replyTo from the transport when it is not configured", async () => {
+    const service = new EmailService(serviceConfig);
+    const success = vi.fn();
+
+    const sending = service.sendEmail(request, undefined, success);
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      replyTo?: string;
+    };
+    expect(mailOptions.replyTo).toBeUndefined();
+  });
+
+  it("ReplyEmailService.sendReplyEmail passes the configured replyTo to the SMTP transport", async () => {
+    const service = new ReplyEmailService({
+      ...serviceConfig,
+      smtpUsername: "api-login@example.com",
+      replyTo: "replies@example.com",
+    });
+
+    const sending = service.sendReplyEmail({
+      receiver: "buyer@example.com",
+      subject: "Question about your listing",
+      text: "Hello!",
+    });
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    const result = await sending;
+
+    expect(result.status).toBe(true);
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      from?: string;
+      replyTo?: string;
+      subject?: string;
+    };
+    expect(mailOptions.replyTo).toBe("replies@example.com");
+    expect(mailOptions.from).toBe("sender@example.com");
+    expect(mailOptions.subject).toBe("Re: Question about your listing");
+  });
+
+  it("ReplyEmailService.sendReplyEmail omits replyTo when it is not configured", async () => {
+    const service = new ReplyEmailService(serviceConfig);
+
+    const sending = service.sendReplyEmail({
+      receiver: "buyer@example.com",
+      subject: "Question about your listing",
+      text: "Hello!",
+    });
+    smtpMock.pending[0].resolve({ response: "250 accepted" });
+    await sending;
+
+    const mailOptions = smtpMock.sendMail.mock.calls[0]?.[0] as {
+      replyTo?: string;
+    };
+    expect(mailOptions.replyTo).toBeUndefined();
+  });
+});
+
 describe("SMTP 535 authentication failures", () => {
   beforeEach(() => {
     smtpMock.pending.length = 0;
@@ -203,7 +305,11 @@ describe("SMTP 535 authentication failures", () => {
     const successCallback = vi.fn();
 
     const rejections = await collectUnhandledRejections(async () => {
-      const sending = service.sendEmail(request, errorCallback, successCallback);
+      const sending = service.sendEmail(
+        request,
+        errorCallback,
+        successCallback
+      );
       smtpMock.pending[0].reject(new Error(SMTP_AUTH_FAILED));
       await sending;
     });
@@ -297,7 +403,315 @@ describe("SMTP 535 authentication failures", () => {
       > => e.type === "authorized-email-failed"
     );
     expect(failures).toHaveLength(1);
-    expect(failures[0]?.errorCode).toBe("smtp_rejected");
+    // §19.2 — the production classifier maps an auth failure to the specific
+    // `smtp_auth_failed` code (retry-safe: the server never accepted the msg).
+    expect(failures[0]?.errorCode).toBe("smtp_auth_failed");
     expect(failures[0]?.retrySafety).toBe("safe");
+  });
+
+  // -------------------------------------------------------------------------
+  // §16.4 — version-3 authorized-envelope send path (v2 identity)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a valid v3 payload carrying one v2 envelope + one v3 service row.
+   * The envelope identity matches the service row so all §16.4 gates pass.
+   */
+  function buildV3Payload(opts?: {
+    replyToAddress?: string | null;
+    smtpUsername?: string;
+    senderAddress?: string;
+    serviceFrom?: string;
+    serviceReplyTo?: string | null;
+    serviceSmtpUsername?: string;
+    batchHashOverride?: string;
+    envelopeHashOverride?: string;
+    emailServiceId?: number;
+  }): {
+    payload: import("@/entityTypes/outboundEmailDeliveryTypes").AuthorizedEmailWorkerPayloadV3;
+    envelopeHash: string;
+    batchHash: string;
+  } {
+    const emailServiceId = opts?.emailServiceId ?? 1;
+    const smtpUsername = opts?.smtpUsername ?? "sender@example.com";
+    const senderAddress = opts?.senderAddress ?? "sender@example.com";
+    const replyToAddress = opts?.replyToAddress ?? null;
+    const draftId = 1;
+    const revisionId = 11;
+    const recipientAddress = "buyer@example.com";
+    const subject = "Hello";
+    const bodyText = "Hi there";
+    const bodyHtml: string | null = null;
+
+    const envelopeEntry = {
+      version: 2 as const,
+      draftId,
+      emailServiceId,
+      smtpUsername,
+      senderAddress,
+      replyToAddress,
+      recipientAddress,
+      subject,
+      bodyText,
+      bodyHtml,
+    };
+    const envelopeHash =
+      opts?.envelopeHashOverride ??
+      OutboundEmailEnvelopeHasher.hashEnvelopeV2(envelopeEntry);
+    const batchHash =
+      opts?.batchHashOverride ??
+      OutboundEmailEnvelopeHasher.hashBatchV2([envelopeEntry]);
+
+    const payload = {
+      version: 3 as const,
+      mode: "authorized_envelopes" as const,
+      batchId: 7,
+      sendAttemptId: 11,
+      batchHash,
+      envelopes: [
+        {
+          envelopeVersion: 2 as const,
+          draftId,
+          revisionId,
+          revisionNumber: 1,
+          recipientAddress,
+          emailServiceId,
+          smtpUsername,
+          senderAddress,
+          replyToAddress,
+          subject,
+          bodyText,
+          bodyHtml,
+          envelopeHash,
+        },
+      ],
+      emailServices: [
+        {
+          id: emailServiceId,
+          smtpUsername: opts?.serviceSmtpUsername ?? smtpUsername,
+          from: opts?.serviceFrom ?? senderAddress,
+          replyTo: opts?.serviceReplyTo ?? replyToAddress,
+          password: "secret",
+          host: "smtp.example.com",
+          port: "465",
+          name: "Test SMTP",
+          ssl: 1,
+        },
+      ],
+    };
+    return { payload, envelopeHash, batchHash };
+  }
+
+  it("v3: submits the envelope and emits authorized-email-submitted on success", async () => {
+    const { payload } = buildV3Payload();
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const sending = new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({
+      response: "250 OK",
+      messageId: "<msg-id@example.com>",
+    });
+    await sending;
+
+    const submitted = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-submitted" }
+      > => e.type === "authorized-email-submitted"
+    );
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.providerMessageId).toBe("<msg-id@example.com>");
+    const complete = events.some(
+      (e) => e.type === "authorized-email-worker-complete"
+    );
+    expect(complete).toBe(true);
+  });
+
+  it("v3: rejects with worker_payload_invalid when the batch hash is wrong", async () => {
+    const { payload } = buildV3Payload({
+      batchHashOverride: "a".repeat(64),
+    });
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    await new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorCode).toBe("worker_payload_hash_mismatch");
+    expect(smtpMock.pending).toHaveLength(0);
+  });
+
+  it("v3: aborts with worker_identity_mismatch when the service row's smtpUsername differs", async () => {
+    const { payload } = buildV3Payload({
+      smtpUsername: "sender@example.com",
+      serviceSmtpUsername: "different-login@example.com",
+    });
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    await new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorCode).toBe("worker_identity_mismatch");
+    expect(smtpMock.pending).toHaveLength(0);
+  });
+
+  it("v3: aborts with worker_identity_mismatch when the service row's replyTo differs (null vs non-null)", async () => {
+    const { payload } = buildV3Payload({
+      replyToAddress: null,
+      serviceReplyTo: "replies@example.com",
+    });
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    await new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    const failures = events.filter(
+      (
+        e
+      ): e is Extract<
+        AuthorizedEmailWorkerEvent,
+        { type: "authorized-email-failed" }
+      > => e.type === "authorized-email-failed"
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorCode).toBe("worker_identity_mismatch");
+    expect(smtpMock.pending).toHaveLength(0);
+  });
+
+  it("v3: main and worker compute the same v2 batch hash", async () => {
+    // This is the core integrity guarantee: the hash the main process put in
+    // the payload equals the hash the worker recomputes from the envelopes.
+    const { payload, batchHash } = buildV3Payload();
+    expect(payload.batchHash).toBe(batchHash);
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const sending = new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    smtpMock.pending[0].resolve({ response: "250 OK", messageId: "ok" });
+    await sending;
+    // No hash-mismatch failure → the worker's recomputed hash matched.
+    const hashMismatch = events.some(
+      (e) =>
+        e.type === "authorized-email-failed" &&
+        e.errorCode === "worker_payload_hash_mismatch"
+    );
+    expect(hashMismatch).toBe(false);
+  });
+
+  it("v3: all-v1 payload still uses the v2 path (version 2)", async () => {
+    // A v2 payload (version: 2) carrying v1 envelopes must route through the
+    // legacy sendAuthorizedEnvelopesV2 path (not v3). The hashes match, so the
+    // worker submits successfully. This guards against the version dispatch
+    // regressing and the v1 envelope hash staying byte-identical.
+    const envelopeBase = {
+      draftId: 1,
+      revisionId: 11,
+      revisionNumber: 1,
+      recipientAddress: "buyer@example.com",
+      emailServiceId: 1,
+      senderAddress: "sender@example.com",
+      subject: "Hello",
+      bodyText: "Hi there",
+      bodyHtml: null as string | null,
+    };
+    const envelopeHash = OutboundEmailEnvelopeHasher.hashEnvelope({
+      version: 1,
+      emailServiceId: envelopeBase.emailServiceId,
+      senderAddress: envelopeBase.senderAddress,
+      recipientAddress: envelopeBase.recipientAddress,
+      subject: envelopeBase.subject,
+      bodyText: envelopeBase.bodyText,
+      bodyHtml: envelopeBase.bodyHtml,
+    });
+    const payload = {
+      version: 2 as const,
+      mode: "authorized_envelopes" as const,
+      batchId: 7,
+      sendAttemptId: 11,
+      batchHash: OutboundEmailEnvelopeHasher.hashBatch([
+        {
+          version: 1,
+          draftId: envelopeBase.draftId,
+          emailServiceId: envelopeBase.emailServiceId,
+          senderAddress: envelopeBase.senderAddress,
+          recipientAddress: envelopeBase.recipientAddress,
+          subject: envelopeBase.subject,
+          bodyText: envelopeBase.bodyText,
+          bodyHtml: envelopeBase.bodyHtml,
+        },
+      ]),
+      envelopes: [{ ...envelopeBase, envelopeHash }],
+      emailServices: [{ id: 1, ...serviceConfig }],
+    };
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const sending = new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    // The v2 path matched hashes → it created a sender and called sendMail,
+    // which parked on the mock's pending promise. Resolve it so the worker
+    // completes.
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 OK", messageId: "ok" });
+    await sending;
+    expect(smtpMock.sendMail).toHaveBeenCalledTimes(1);
+    const submitted = events.filter(
+      (e) => e.type === "authorized-email-submitted"
+    );
+    expect(submitted).toHaveLength(1);
+    const complete = events.some(
+      (e) => e.type === "authorized-email-worker-complete"
+    );
+    expect(complete).toBe(true);
+  });
+
+  it("v3: passes a non-null Reply-To to the SMTP transport", async () => {
+    const replyTo = "replies@example.com";
+    const { payload } = buildV3Payload({ replyToAddress: replyTo });
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const sending = new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 OK", messageId: "ok" });
+    await sending;
+    // The nodemailer mock received a replyTo field in the sendMail options.
+    expect(smtpMock.sendMail).toHaveBeenCalledTimes(1);
+    const callArgs = smtpMock.sendMail.mock.calls[0]?.[0] as
+      | { replyTo?: string }
+      | undefined;
+    expect(callArgs?.replyTo).toBe(replyTo);
+  });
+
+  it("v3: omits Reply-To from the SMTP transport when replyToAddress is null", async () => {
+    const { payload } = buildV3Payload({ replyToAddress: null });
+    const events: AuthorizedEmailWorkerEvent[] = [];
+    const sending = new EmailSend().sendAuthorizedEnvelopes(payload, (e) =>
+      events.push(e)
+    );
+    expect(smtpMock.pending).toHaveLength(1);
+    smtpMock.pending[0].resolve({ response: "250 OK", messageId: "ok" });
+    await sending;
+    const callArgs = smtpMock.sendMail.mock.calls[0]?.[0] as
+      | { replyTo?: string }
+      | undefined;
+    expect(callArgs?.replyTo).toBeUndefined();
   });
 });

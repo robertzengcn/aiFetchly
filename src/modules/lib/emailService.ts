@@ -7,13 +7,21 @@ import {
   OutboundSmtpSession,
   smtpErrorMessage,
 } from "@/modules/lib/smtpTransport";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
 export class EmailService {
   private session: OutboundSmtpSession;
-  private emailSender: string;
+  private readonly fromAddress: string;
+  private readonly replyToAddress: string | null;
 
   constructor(param: EmailServiceEntitydata) {
-    this.emailSender = param.from;
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: param.smtpUsername,
+      from: param.from,
+      replyTo: param.replyTo,
+    });
+    this.fromAddress = identity.fromAddress;
+    this.replyToAddress = identity.replyToAddress;
     this.session = new OutboundSmtpSession(param);
   }
 
@@ -23,15 +31,15 @@ export class EmailService {
     successCallback?: () => void
   ): Promise<void> {
     const mailOptions: nodemailer.SendMailOptions = {
-      from: this.emailSender,
+      from: this.fromAddress,
+      ...(this.replyToAddress ? { replyTo: this.replyToAddress } : {}),
       to: param.Receiver,
       subject: param.Title,
       text: param.Content,
     };
 
     try {
-      const info = await this.session.sendMail(mailOptions);
-      console.log("Email sent:", info.response);
+      await this.session.sendMail(mailOptions);
       successCallback?.();
     } catch (error: unknown) {
       errorCallback?.(smtpErrorMessage(error));

@@ -63,9 +63,7 @@ export function canonicalizeOutboundEnvelope(
   const subject = normalizeLineEndings(envelope.subject);
   const bodyText = normalizeLineEndings(envelope.bodyText);
   const bodyHtml =
-    envelope.bodyHtml === null
-      ? null
-      : normalizeLineEndings(envelope.bodyHtml);
+    envelope.bodyHtml === null ? null : normalizeLineEndings(envelope.bodyHtml);
   const sender = normalizeAddressForHash(envelope.senderAddress);
   const recipient = normalizeAddressForHash(envelope.recipientAddress);
 
@@ -76,7 +74,9 @@ export function canonicalizeOutboundEnvelope(
     `recipient:${len(recipient)}:${recipient}`,
     `subject:${len(subject)}:${subject}`,
     `bodyText:${len(bodyText)}:${bodyText}`,
-    `bodyHtml:${bodyHtml === null ? "<<NULL_BODY_HTML>>" : `${len(bodyHtml)}:${bodyHtml}`}`,
+    `bodyHtml:${
+      bodyHtml === null ? "<<NULL_BODY_HTML>>" : `${len(bodyHtml)}:${bodyHtml}`
+    }`,
   ];
   return fields.join("|");
 }
@@ -84,6 +84,82 @@ export function canonicalizeOutboundEnvelope(
 function len(value: string): number {
   // Count UTF-16 code units consistently; only equality matters, not the unit.
   return value.length;
+}
+
+/** Version-2 outbound envelope binds SMTP username + Reply-To (§15.1). */
+export interface CanonicalOutboundEnvelopeV2 {
+  version: 2;
+  emailServiceId: number;
+  smtpUsername: string;
+  senderAddress: string;
+  replyToAddress: string | null;
+  recipientAddress: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+}
+
+/** Batch entry for v2 (adds draftId, like the v1 entry). */
+export interface BatchEnvelopeEntryV2 extends CanonicalOutboundEnvelopeV2 {
+  draftId: number;
+}
+
+const BATCH_PREFIX_V2 = "outbound-batch:v2";
+const NULL_REPLY_TO_TOKEN = "<<NULL_REPLY_TO>>";
+
+/**
+ * v2 email normalization (§7.3): trim, preserve local part, lowercase domain
+ * ONLY. Distinct from v1 whole-address lowercasing. Exported so the worker's
+ * §16.4 step-5 identity comparison uses byte-identical canonicalization to
+ * the hash function — never a divergent reimplementation.
+ */
+export function normalizeEmailAddressV2(address: string): string {
+  const trimmed = address.trim();
+  const at = trimmed.lastIndexOf("@");
+  if (at < 0) return trimmed;
+  return `${trimmed.slice(0, at)}${trimmed.slice(at).toLowerCase()}`;
+}
+
+/**
+ * SMTP username normalization for hashing: trim only (§7.3). Exported for the
+ * same reason as {@link normalizeEmailAddressV2} — the worker identity gate
+ * must canonicalize exactly as the hash does.
+ */
+export function normalizeSmtpUsernameForHash(value: string): string {
+  return value.trim();
+}
+
+export function canonicalizeOutboundEnvelopeV2(
+  envelope: CanonicalOutboundEnvelopeV2
+): string {
+  const subject = normalizeLineEndings(envelope.subject);
+  const bodyText = normalizeLineEndings(envelope.bodyText);
+  const bodyHtml =
+    envelope.bodyHtml === null ? null : normalizeLineEndings(envelope.bodyHtml);
+  const smtpUsername = normalizeSmtpUsernameForHash(envelope.smtpUsername);
+  const sender = normalizeEmailAddressV2(envelope.senderAddress);
+  const replyTo =
+    envelope.replyToAddress === null
+      ? null
+      : normalizeEmailAddressV2(envelope.replyToAddress);
+  const recipient = normalizeEmailAddressV2(envelope.recipientAddress);
+
+  const fields = [
+    `version:${envelope.version}`,
+    `emailServiceId:${envelope.emailServiceId}`,
+    `smtpUsername:${len(smtpUsername)}:${smtpUsername}`,
+    `sender:${len(sender)}:${sender}`,
+    `replyTo:${
+      replyTo === null ? NULL_REPLY_TO_TOKEN : `${len(replyTo)}:${replyTo}`
+    }`,
+    `recipient:${len(recipient)}:${recipient}`,
+    `subject:${len(subject)}:${subject}`,
+    `bodyText:${len(bodyText)}:${bodyText}`,
+    `bodyHtml:${
+      bodyHtml === null ? "<<NULL_BODY_HTML>>" : `${len(bodyHtml)}:${bodyHtml}`
+    }`,
+  ];
+  return fields.join("|");
 }
 
 export const OutboundEmailEnvelopeHasher = {
@@ -109,6 +185,25 @@ export const OutboundEmailEnvelopeHasher = {
       OutboundEmailEnvelopeHasher.hashEnvelope(e)
     );
     const payload = `${BATCH_PREFIX}\n${envelopeHashes.join("\n")}`;
+    return createHash("sha256").update(payload, "utf8").digest("hex");
+  },
+
+  hashEnvelopeV2(envelope: CanonicalOutboundEnvelopeV2): string {
+    const canonical = canonicalizeOutboundEnvelopeV2(envelope);
+    return createHash("sha256").update(canonical, "utf8").digest("hex");
+  },
+
+  hashBatchV2(envelopes: ReadonlyArray<BatchEnvelopeEntryV2>): string {
+    const sorted = [...envelopes].sort((a, b) => {
+      const ra = normalizeEmailAddressV2(a.recipientAddress);
+      const rb = normalizeEmailAddressV2(b.recipientAddress);
+      if (ra !== rb) return ra < rb ? -1 : 1;
+      return a.draftId - b.draftId;
+    });
+    const envelopeHashes = sorted.map((e) =>
+      OutboundEmailEnvelopeHasher.hashEnvelopeV2(e)
+    );
+    const payload = `${BATCH_PREFIX_V2}\n${envelopeHashes.join("\n")}`;
     return createHash("sha256").update(payload, "utf8").digest("hex");
   },
 };
