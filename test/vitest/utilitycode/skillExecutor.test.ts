@@ -71,11 +71,13 @@ describe("SkillExecutor", () => {
     });
 
     test("should execute network skill after permission granted", async () => {
-      // Grant permission first
-      SkillPermissionService.grantPermission("scrape_urls_from_google", true);
+      // Grant permission first. Use the bing alias: google/yandex invocations
+      // are gated by the mandatory tool-account workflow in the registry and
+      // fail before reaching ToolExecutor; bing needs no account.
+      SkillPermissionService.grantPermission("scrape_urls_from_bing", true);
 
       const result = await SkillExecutor.execute(
-        "scrape_urls_from_google",
+        "scrape_urls_from_bing",
         { query: "test" },
         mockContext
       );
@@ -83,8 +85,11 @@ describe("SkillExecutor", () => {
       expect(result.success).toBe(true);
       expect(ToolExecutor.execute).toHaveBeenCalledWith(
         "scrape_urls_from_search_engine",
-        { query: "test", search_engine: "google" },
-        "test-conv-123"
+        { query: "test", search_engine: "bing" },
+        "test-conv-123",
+        expect.objectContaining({
+          toolCallId: "test-tool-call-456",
+        })
       );
     });
   });
@@ -116,7 +121,10 @@ describe("SkillExecutor", () => {
       expect(ToolExecutor.execute).toHaveBeenCalledWith(
         "mcp_server1_some_tool",
         { param: "value" },
-        "test-conv-123"
+        "test-conv-123",
+        expect.objectContaining({
+          toolCallId: "test-tool-call-456",
+        })
       );
       expect(result.success).toBe(true);
     });
@@ -164,13 +172,15 @@ describe("SkillExecutor", () => {
 
   describe("execute - error handling", () => {
     test("should catch ToolExecutor exceptions and return error result", async () => {
-      SkillPermissionService.grantPermission("scrape_urls_from_google", true);
+      // bing: no mandatory tool account, so the registry pass-through reaches
+      // the mocked ToolExecutor rejection.
+      SkillPermissionService.grantPermission("scrape_urls_from_bing", true);
       vi.mocked(ToolExecutor.execute).mockRejectedValueOnce(
         new Error("Network timeout")
       );
 
       const result = await SkillExecutor.execute(
-        "scrape_urls_from_google",
+        "scrape_urls_from_bing",
         { query: "test" },
         mockContext
       );
