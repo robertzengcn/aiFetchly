@@ -277,6 +277,19 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     expect(inputs.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("uses the relabeled From copy (not 'sender account') for the From field", async () => {
+    // P0.2/P1.1: the From label and hint must use From-address wording.
+    // The i18n fixture mirrors production copy; the component reads it via t().
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const html = wrapper.html();
+    // The From hint must mention the provider allowing the address.
+    expect(html).toContain("allowed by your email provider");
+    // The stale "sender account" copy must not appear anywhere.
+    expect(html).not.toContain("sender account");
+  });
+
   it("prefills SMTP username with From for a legacy service (no smtpUsername in detail response)", async () => {
     // Legacy service: no smtpUsername/replyTo fields returned by the API.
     const legacyService = {

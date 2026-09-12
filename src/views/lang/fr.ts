@@ -1304,6 +1304,8 @@ export default {
       "L'identité d'envoi (nom d'utilisateur SMTP, From ou réponse) a changé après approbation. Une nouvelle révision est requise avant l'envoi.",
     identity_import_password_required:
       "Un mot de passe est requis pour importer cette ligne de service de messagerie.",
+    identity_header_break_forbidden:
+      "Les sauts de ligne ne sont pas autorisés dans ce champ.",
   },
   buckemailsend: {
     email_source: "Email Source",

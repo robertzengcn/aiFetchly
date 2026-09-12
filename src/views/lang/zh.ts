@@ -1253,6 +1253,7 @@ export default {
     identity_changed_after_approval:
       "审核通过后发件身份（SMTP 用户名、发件地址或回复地址）已更改。发送前需要重新审核。",
     identity_import_password_required: "导入此邮件服务记录需要提供密码。",
+    identity_header_break_forbidden: "此字段不允许包含换行符。",
   },
   buckemailsend: {
     email_source: "邮件来源",

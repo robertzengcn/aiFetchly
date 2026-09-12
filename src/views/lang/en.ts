@@ -1320,6 +1320,8 @@ export default {
       "The send identity (SMTP username, From, or Reply-To) changed after approval. Re-review is required before sending.",
     identity_import_password_required:
       "A password is required to import this email service row.",
+    identity_header_break_forbidden:
+      "Line breaks are not allowed in this field.",
   },
   buckemailsend: {
     email_source: "Email Source",

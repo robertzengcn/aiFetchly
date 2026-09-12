@@ -1290,6 +1290,7 @@ export default {
       "承認後に送信 identity（SMTPユーザー名・From・返信先）が変更されました。送信前に再確認が必要です。",
     identity_import_password_required:
       "このメールサービス行をインポートするにはパスワードが必要です。",
+    identity_header_break_forbidden: "このフィールドに改行は使用できません。",
   },
   buckemailsend: {
     email_source: "メールソース",

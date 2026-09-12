@@ -1311,6 +1311,8 @@ export default {
       "Die Sendeidentität (SMTP-Benutzername, From oder Antwort an) wurde nach der Freigabe geändert. Eine erneute Prüfung vor dem Senden ist erforderlich.",
     identity_import_password_required:
       "Zum Importieren dieser E-Mail-Dienstzeile ist ein Passwort erforderlich.",
+    identity_header_break_forbidden:
+      "Zeilenumbrüche sind in diesem Feld nicht zulässig.",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",

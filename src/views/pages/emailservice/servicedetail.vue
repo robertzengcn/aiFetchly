@@ -21,6 +21,7 @@ v-model="name" :label="t('emailservice.name')" type="input"
           <v-text-field
 v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
             :hint="t('emailservice.smtp_username_hint') || 'The mailbox account used to sign in to your SMTP server.'"
+            :rules="identityRules.smtpUsername"
             persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
@@ -29,7 +30,7 @@ v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username
           <v-text-field
 v-model="from" :label="t('emailservice.from') || 'From'" type="email"
             :hint="t('emailservice.from_hint') || 'The address recipients see. It must be allowed by your email provider.'" :readonly="loading" clearable required
-            :rules="[rules.email]"></v-text-field>
+            :rules="identityRules.from"></v-text-field>
         </v-col>
       </v-row>
       <v-row>
@@ -37,6 +38,7 @@ v-model="from" :label="t('emailservice.from') || 'From'" type="email"
           <v-text-field
 v-model="replyTo" :label="t('emailservice.reply_to') || 'Reply-To'" type="email"
             :hint="t('emailservice.reply_to_hint') || 'Replies go here. Leave empty to reply to the From address.'"
+            :rules="identityRules.replyTo"
             persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
@@ -249,6 +251,7 @@ import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 import ErrorDialog from "@/views/components/widgets/errorDialog.vue"
 import LoadingDialog from "@/views/components/widgets/loadingDialog.vue"
+import { buildIdentityRules } from "./identityValidationRules";
 const showDialog = ref<boolean>(false);
 const alertdiatext = ref<string>("")
 const alertdiatitle = ref<string>("")
@@ -266,17 +269,33 @@ watch(loadDialogshow, (newValue) => {
   setTimeout(() => (loadDialogshow.value = false), 10000)
 });
 
+// Generic rules for non-identity fields (name, host, test-email receiver).
 const rules = {
-  required: (value) => {
+  required: (value: unknown): true | string => {
     if (!value) return "The field is required";
     return true;
   },
-  email: (value) => {
+  email: (value: unknown): true | string => {
     if (!value) return "E-mail is required";
-    if (!/.+@.+\..+/.test(value)) return "E-mail must be valid.";
+    if (!/.+@.+\..+/.test(String(value))) return "E-mail must be valid.";
     return true;
   },
 };
+// Identity-field rule sets (P1.1): SMTP username is required (not email-only —
+// some logins aren't addresses); From is a required single address; Reply-To
+// is optional but non-empty must validate. All three reject CR/LF (§7.2).
+const identityRules = buildIdentityRules({
+  required:
+    t("emailservice.identity_missing_smtp_username") ||
+    "An SMTP username is required for this service.",
+  emailRequired:
+    t("emailservice.identity_from_invalid") || "From email is required.",
+  emailInvalid:
+    t("emailservice.identity_from_invalid") || "E-mail must be valid.",
+  noLineBreak:
+    t("emailservice.identity_header_break_forbidden") ||
+    "Line breaks are not allowed.",
+});
 const $route = useRoute();
 const router = useRouter();
 const FakeAPI = {

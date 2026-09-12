@@ -1315,6 +1315,8 @@ export default {
       "La identidad de envío (nombre de usuario SMTP, From o respuesta) cambió tras la aprobación. Se requiere una nueva revisión antes de enviar.",
     identity_import_password_required:
       "Se requiere una contraseña para importar esta fila de servicio de correo.",
+    identity_header_break_forbidden:
+      "No se permiten saltos de línea en este campo.",
   },
   buckemailsend: {
     email_source: "Fuente de correos",
