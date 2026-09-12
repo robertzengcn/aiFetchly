@@ -18,8 +18,7 @@
  */
 
 import { ZodError } from "zod";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { DocumentService } from "@/service/DocumentService";
 import { RagSearchModule } from "@/modules/RagSearchModule";
 import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
@@ -156,11 +155,14 @@ function matchesExpectedName(
   );
 }
 
-/** Read the AI feature gate using the project Token service. */
-function defaultIsAiEnabled(): boolean {
+/**
+ * Default AI feature gate. Lazy-reconciles once when currently disabled
+ * (PRD FR-6.1), then re-reads the flag. GET failures keep the cache, so a
+ * Community user is never falsely unlocked.
+ */
+async function defaultIsAiEnabled(): Promise<boolean> {
   try {
-    const token = new Token();
-    return token.getValue(USER_AI_ENABLED) === "true";
+    return await ensureHostedAiEnabled();
   } catch {
     return false;
   }
@@ -307,8 +309,8 @@ export interface KnowledgeLibraryAiToolsDeps {
   readonly ragSearchModule?: RagSearchModule;
   /** Website import service (URL ingest + markdown staging). */
   readonly websiteImportService?: WebsiteKnowledgeImportService;
-  /** Override the AI feature gate in tests. */
-  readonly isAiEnabled?: () => boolean;
+  /** Override the AI feature gate in tests. Async to allow a lazy reconcile. */
+  readonly isAiEnabled?: () => Promise<boolean>;
 }
 
 export class KnowledgeLibraryAiTools {
@@ -332,7 +334,7 @@ export class KnowledgeLibraryAiTools {
     );
   }
 
-  private isAiEnabled(): boolean {
+  private async isAiEnabled(): Promise<boolean> {
     return this.deps.isAiEnabled
       ? this.deps.isAiEnabled()
       : defaultIsAiEnabled();
@@ -401,7 +403,7 @@ export class KnowledgeLibraryAiTools {
       return mapError("INVALID_INPUT", error);
     }
 
-    if (!this.isAiEnabled()) {
+    if (!(await this.isAiEnabled())) {
       return toolError(
         "AI_DISABLED",
         "AI is not enabled. Importing documents requires an active AI subscription."
@@ -514,7 +516,7 @@ export class KnowledgeLibraryAiTools {
       return mapError("INVALID_INPUT", error);
     }
 
-    if (!this.isAiEnabled()) {
+    if (!(await this.isAiEnabled())) {
       return toolError(
         "AI_DISABLED",
         "AI is not enabled. Importing websites requires an active AI subscription."

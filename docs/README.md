@@ -7,6 +7,8 @@
 
 ## Product Requirements
 
+- [PRD: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-prd.md)
+- [Technical Design: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-technical-design.md)
 - [PRD: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-prd.md)
 - [Technical Design: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-technical-design.md)
 - [PRD: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-prd.md)
@@ -15,6 +17,8 @@
 - [Technical Design: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-technical-design.md)
 - [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
 - [Technical Design: Contact Verification AI Tool](./prd/contact-verification-ai-tool-technical-design.md)
+- [PRD: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-prd.md)
+- [Technical Design: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-technical-design.md)
 - [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)
 - [PRD: AI Email Receive and Auto-Reply](./prd/ai-email-receive-auto-reply-prd.md)
 - [PRD: Thread-Aware AI Email Reply Reliability](./prd/ai-email-thread-aware-reply-reliability-prd.md)

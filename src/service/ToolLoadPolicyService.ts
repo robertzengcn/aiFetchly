@@ -99,7 +99,17 @@ const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
 const CONTEXTUAL_VERIFICATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   "verify_contact_info",
 ]);
-
+/**
+ * Outbound marketing send tools. Promoted when the user asks to send new
+ * emails to contacts/customers so the model uses `start_email_send_task`
+ * instead of claiming it can only reply via `send_email_reply`, or treating
+ * an empty IMAP inbox list as "no email services connected".
+ */
+const CONTEXTUAL_EMAIL_SEND_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "list_email_services",
+  "list_email_templates",
+  "start_email_send_task",
+]);
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
@@ -218,11 +228,21 @@ const GATHER_CONTACT_INTENT_RE =
   /\b(?:get|find|extract|collect|gather|scrape|discover)\b[^.!?\n]{0,80}?\b(?:emails?|e-mails?|phones?|telephone|mobile|contacts?|contact\s+(?:info|information|method|details|list))\b/i;
 
 /**
+ * Natural-language outbound / marketing send intent.
+ * Surfaces SMTP senders + `start_email_send_task` so "write a marketing
+ * email and send it to these customers" does not leave the send tool
+ * deferred. Does NOT match inbound reply phrasing ("send a reply") or
+ * inbox checks. `send_email_reply` stays deferred on these messages.
+ */
+const EMAIL_SEND_INTENT_RE =
+  /\bmarketing\s+emails?\b|\bbulk\s+emails?\b|\bemail\s+campaign\b|\bcampaign\s+emails?\b|\boutreach\s+emails?\b|\bnewsletter\s+emails?\b|\bsend(?:ing)?\b[^.!?\n]{0,80}?\b(?:marketing|bulk|campaign|newsletter|outreach)\s+emails?\b|\bsend(?:ing)?\b[^.!?\n]{0,80}?\b(?:emails?|mails?)\b[^.!?\n]{0,80}?\b(?:customers?|contacts?|recipients?|companies|clients?|leads?)\b|\bsend\s+(?:it|them|these|those)\s+to\b[^.!?\n]{0,50}?\b(?:customers?|contacts?|recipients?|companies|clients?|leads?)\b|\b(?:write|draft|create)\b[^.!?\n]{0,50}?\bmarketing\s+emails?\b|\bsend\s+(?:the\s+|these\s+|those\s+)?(?:emails?|mails?)\b|\bemail\s+(?:these\s+|those\s+|the\s+)?(?:customers?|contacts?|recipients?)\b/i;
+/**
  * Short follow-ups that should inherit intent from recent prior user messages
- * (e.g. "continue" after an image-edit request).
+ * (e.g. "continue" after an image-edit request, or "yes, please send them"
+ * after reviewing email drafts).
  */
 const CONTINUATION_MESSAGE_RE =
-  /^(continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)\.?$/i;
+  /^(?:continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)(?:[,.]?\s+(?:please\s+)?(?:send|do)\s+(?:them|it|these|those)?)?\.?$|^(?:please\s+)?send\s+(?:them|it|these|those)(?:\s+now)?\.?$/i;
 
 /**
  * Plan-approval / begin-execution turns are not short "continue" replies, but
@@ -370,6 +390,14 @@ export class ToolLoadPolicyService {
     ) {
       return "contextual";
     }
+    if (
+      CONTEXTUAL_EMAIL_SEND_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasEmailSendIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
 
     // 10. Built-in default: specialized tools are deferred and discoverable.
     // Note: follow-up edits on AI-generated images are intentionally NOT
@@ -446,11 +474,14 @@ export class ToolLoadPolicyService {
   private hasEmailInboxIntent(message: string): boolean {
     return EMAIL_INBOX_INTENT_RE.test(message);
   }
-
   private hasVerifyContactIntent(message: string): boolean {
     return (
       VERIFY_CONTACT_INTENT_RE.test(message) ||
       GATHER_CONTACT_INTENT_RE.test(message)
     );
+  }
+
+  private hasEmailSendIntent(message: string): boolean {
+    return EMAIL_SEND_INTENT_RE.test(message);
   }
 }

@@ -451,6 +451,96 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
+  it("promotes outbound email send tools for marketing/send-to-customer intent", () => {
+    const marketingMessage =
+      "Write a marketing email introducing our new product and send it to above customer";
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_services", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_templates", "builtin", {
+        currentUserMessage: "start a bulk email marketing campaign",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "send the emails to these contacts",
+      })
+    ).toBe("contextual");
+    // Inbox/reply tools must stay deferred so the model does not conclude
+    // that empty IMAP inboxes mean it cannot send, or that send_email_reply
+    // is the only send path.
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("send_email_reply", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("create_email_reply_draft", "builtin", {
+        currentUserMessage: marketingMessage,
+      })
+    ).toBe("deferred");
+    expect(classify("start_email_send_task", "builtin")).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "send a reply to this inbound email",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "check my inbox for unread emails",
+      })
+    ).toBe("deferred");
+  });
+
+  it("promotes outbound email send tools on send-them follow-up after marketing intent", () => {
+    const recent = [
+      "Write a marketing email introducing our new product and send it to above customer",
+    ];
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_services", "builtin", {
+        currentUserMessage: "please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("contextual");
+    expect(
+      classify("send_email_reply", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: recent,
+      })
+    ).toBe("deferred");
+    expect(
+      classify("start_email_send_task", "builtin", {
+        currentUserMessage: "yes, please send them",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
   it("treats plan tools as always only in plan mode", () => {
     expect(classify("AskUserQuestion", "plan", { isPlanMode: true })).toBe(
       "always"

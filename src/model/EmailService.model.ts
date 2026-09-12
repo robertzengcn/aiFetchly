@@ -24,6 +24,30 @@ export class EmailServiceModel extends BaseDb {
     return entity;
   }
 
+  /**
+   * Envelope From address for a service. TypeORM maps `from`; the legacy SQL
+   * schema used `from_email`. Prefer the entity field, then COALESCE both
+   * columns so older rows still resolve a sender for outbound drafts.
+   */
+  async readSenderAddress(id: number): Promise<string | null> {
+    const entity = await this.read(id);
+    const fromEntity = (entity?.from ?? "").trim();
+    if (fromEntity.length > 0) {
+      return fromEntity;
+    }
+    try {
+      const rows = (await this.sqliteDb.connection.query(
+        'SELECT "from" AS fromCol, from_email AS fromEmail FROM email_service WHERE id = ? LIMIT 1',
+        [id]
+      )) as Array<{ fromCol?: string | null; fromEmail?: string | null }>;
+      const fallback = (rows[0]?.fromCol ?? rows[0]?.fromEmail ?? "").trim();
+      return fallback.length > 0 ? fallback : null;
+    } catch {
+      // from_email may not exist on TypeORM-synchronized schemas.
+      return null;
+    }
+  }
+
   async update(id: number, service: EmailServiceEntity): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;

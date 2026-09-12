@@ -149,6 +149,13 @@
         >
           <v-icon size="small">mdi-plus-circle</v-icon>
         </v-btn>
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
         <v-btn
           icon
           size="small"
@@ -181,6 +188,7 @@
         @steer-pending="onSteerPending"
         @cancel-pending="onCancelPending"
         @resume-pending="onResumePending"
+        :reported-message-ids="reportedMessageIds"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -193,6 +201,7 @@
         @save-generated-image="onSaveGeneratedImage"
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @stop-batch="onStop"
+        @report="onSingleReportRequest"
       />
 
       <!-- Managed-browser session card: shows the live social-browser
@@ -810,6 +819,20 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
+    <AIContentReportDialog
+      v-if="singleReportDialogOpen && activeSingleDescriptor"
+      v-model="singleReportDialogOpen"
+      :descriptor="activeSingleDescriptor"
+      @submitted="onSingleReportSubmitted"
+    />
+    <!-- Multi-select conversation report dialog (design §10.3). NOT AI-gated. -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      @submitted="onConversationReportSubmitted"
+    />
   </div>
 </template>
 
@@ -1016,6 +1039,15 @@ import {
   isFusionWording,
 } from "./generatedImageReferenceInference";
 import type { GeneratedImageReferenceView } from "./generatedImageReferenceView";
+import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
+import {
+  buildChatV2ConversationSnapshot,
+  hasEligibleChatV2Candidate,
+} from "@/views/components/aiContentReport/conversationReportSnapshot";
+import { useReportCapabilities } from "@/views/utils/reportCapabilities";
+import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1067,6 +1099,17 @@ const lastHandledOpenConversationRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
+// Conversation report (v2) orchestration — lifted from AiChatV2Messages
+// (design §11.1). The single-output dialog and the conversation dialog share
+// this mount point; the per-message button now emits `report` upward.
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<
+  ReturnType<typeof buildChatV2ConversationSnapshot> | null
+>(null);
+const reportedMessageIds = ref<Set<string>>(new Set());
+const singleReportDialogOpen = ref(false);
+const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
+
 const isStreaming = ref(false);
 const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
@@ -3080,6 +3123,58 @@ const streamStatus = computed<Status>(() => {
 });
 
 // truncateText + formatTimestamp extracted to aiChatV2Utils.ts
+// FR-1.3, §9.1: the header button is enabled only when the capability
+// envelope enables v2 reporting AND at least one visible message is an
+// eligible reportable AI output. With zero eligible outputs the button is
+// disabled and announces the noEligibleOutputs reason so the action is
+// stable-but-clear rather than opening an empty dialog.
+const hasReportableConversationOutput = computed(() =>
+  hasEligibleChatV2Candidate({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  })
+);
+// Capability state with retry — see the useReportCapabilities docstring
+// (src/views/utils/reportCapabilities.ts) for the bug history. The rearm
+// key makes every conversation switch restart the retry chain, including
+// switches between two conversations that both hold eligible output.
+const { capabilities: reportCapabilities, loading: reportCapabilitiesLoading } =
+  useReportCapabilities({
+    hasEligibleOutput: () => hasReportableConversationOutput.value,
+    rearmKey: () => activeConversationId.value,
+  });
+const conversationReportEnabled = computed(
+  () =>
+    reportCapabilities.value?.conversationReporting.enabled === true &&
+    hasReportableConversationOutput.value
+);
+const conversationReportDisabledReason = computed(() => {
+  if (reportCapabilities.value?.conversationReporting.enabled !== true) {
+    return (
+      t("aiConversationReport.unavailable") ||
+      "Conversation reporting is currently unavailable."
+    );
+  }
+  if (!hasReportableConversationOutput.value) {
+    return (
+      t("aiConversationReport.noEligibleOutputs") ||
+      "There are no reportable AI outputs in this conversation yet."
+    );
+  }
+  return "";
+});
+
+// Journey 11.5, §19: if the active conversation changes while the report
+// dialog is open, the frozen snapshot would describe a conversation the user
+// is no longer viewing. Close the dialog without submitting so a later open
+// rebuilds a fresh snapshot against the new conversation.
+watch(activeConversationId, () => {
+  if (!conversationReportDialogOpen.value) return;
+  conversationReportDialogOpen.value = false;
+  conversationReportSnapshot.value = null;
+});
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
@@ -3928,17 +4023,26 @@ const handleApprovePlan = async (): Promise<void> => {
       planState.value.planId,
       planState.value.currentVersion
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Approval did not take effect (no updated state came back). Do NOT
+      // send the "begin executing" message — the model would start executing
+      // a plan that was never approved. Surface the failure so the user can
+      // retry from the still-pinned card.
+      streamError.value =
+        t("aiChatV2Plan.approve_failed") ||
+        "Plan approval did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After approval, kick off a new AI round so the assistant begins
-    // executing the plan. The plan-mode system prompt now reflects the
-    // "approved" status, so high-impact tools are unblocked. This also
-    // drives the typing indicator (isStreaming + !receivedFirstResponse).
+    // executing the plan. applyPlanState above flipped the mode back to
+    // "chat" (approval ends plan mode), so this round runs with the normal
+    // chat system prompt and the full toolset. This also drives the typing
+    // indicator (isStreaming + !receivedFirstResponse).
     const continueText =
       t("aiChatV2Plan.approved_continue_message") ||
       "Plan approved. Please begin executing the plan now.";
@@ -3958,12 +4062,19 @@ const handleRejectPlan = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // Rejection did not take effect. Do not send the revise message —
+      // the plan status is unchanged and the model must not be told the
+      // user rejected it. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.reject_failed") ||
+        "Plan rejection did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After rejection, send the feedback to the LLM so it can revise
     // the plan or respond accordingly.
@@ -3989,12 +4100,19 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
       planState.value.currentVersion,
       feedback
     );
-    if (updated) {
-      applyPlanState(updated);
-      // Move the card out of the pinned panel into the message flow.
-      pendingPlanApproval.value = null;
-      upsertPlanMessage(updated);
+    if (!updated) {
+      // The change request did not take effect. Do not send the update
+      // message — the plan status is unchanged and the model must not be
+      // told the user requested changes. The card stays pinned for a retry.
+      streamError.value =
+        t("aiChatV2Plan.changes_request_failed") ||
+        "Requesting plan changes did not complete. Please try again.";
+      return;
     }
+    applyPlanState(updated);
+    // Move the card out of the pinned panel into the message flow.
+    pendingPlanApproval.value = null;
+    upsertPlanMessage(updated);
 
     // After requesting changes, send the feedback to the LLM so it can
     // update the plan accordingly.
@@ -5625,6 +5743,46 @@ onMounted(() => {
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
 });
+
+// --- Conversation + single-output report orchestration (design §11.1) -----
+// `streamStatus` is a computed<Status> (line ~2550); `visibleMessages` is a
+// computed<ChatV2MessageView[]> (line ~2210). The snapshot is captured at open
+// time from the current visible messages so a streaming response is frozen.
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildChatV2ConversationSnapshot({
+    conversationId: activeConversationId.value ?? "",
+    messages: visibleMessages.value,
+    activeAssistantMessageId: activeAssistantMessageId.value,
+    streamStatus: streamStatus.value,
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  reportedMessageIds.value = new Set([
+    ...reportedMessageIds.value,
+    ...payload.selectedMessageIds,
+  ]);
+  // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
+  // and copy the report reference; the dialog itself owns closing on dismiss.
+}
+
+function onSingleReportRequest(
+  descriptor: ReportableOutputDescriptor
+): void {
+  activeSingleDescriptor.value = descriptor;
+  singleReportDialogOpen.value = true;
+}
+
+function onSingleReportSubmitted(): void {
+  const id = activeSingleDescriptor.value?.context.messageId;
+  if (id) {
+    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+  }
+}
 
 onBeforeUnmount(() => {
   unsubscribePendingEvents?.();

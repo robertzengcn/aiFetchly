@@ -1,6 +1,5 @@
 import { ipcMain } from "electron";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import {
   AI_CHAT_V2_GOAL_CREATE,
   AI_CHAT_V2_GOAL_GET,
@@ -27,11 +26,6 @@ function ok<T>(data: T): CommonMessage<T> {
 }
 function denied<T>(msg: string): CommonMessage<T> {
   return { status: false, msg, data: undefined };
-}
-
-/** AI-enablement gate — checked before parsing request data or doing work. */
-function isAiEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
 function parsePayload(data: unknown): Record<string, unknown> | null {
@@ -125,7 +119,7 @@ function buildPlanPrompt(objective: string): string {
 async function handleGoalCreate(
   data: unknown
 ): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied("AI functionality is only available to subscribers.");
   }
   const p = parsePayload(data);
@@ -164,7 +158,7 @@ async function handleGoalCreate(
 }
 
 async function handleGoalGet(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied("AI functionality is only available to subscribers.");
   }
   const p = parsePayload(data);
@@ -182,7 +176,7 @@ async function handleGoalGet(data: unknown): Promise<CommonMessage<unknown>> {
 }
 
 async function handleLoopStart(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied("AI functionality is only available to subscribers.");
   }
   const p = parsePayload(data);
@@ -229,7 +223,7 @@ async function handleLoopStart(data: unknown): Promise<CommonMessage<unknown>> {
 }
 
 async function handleLoopStop(data: unknown): Promise<CommonMessage<unknown>> {
-  if (!isAiEnabled()) {
+  if (!(await ensureHostedAiEnabled())) {
     return denied("AI functionality is only available to subscribers.");
   }
   const p = parsePayload(data);

@@ -96,6 +96,7 @@ import type {
   OpenAIImageUrlContentPart,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
@@ -104,14 +105,26 @@ import type {
 } from "@/entityTypes/toolCatalogTypes";
 import { log } from "@/modules/Logger";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { OutboundEmailIntentResolver } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { hashUserAuthoredText } from "@/service/outboundEmail/OutboundEmailIntentResolver";
+import { buildResolverInput } from "@/service/outboundEmail/OutboundEmailPreviousAssistantContext";
+import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 
+/**
+ * Mirrors the renderer's isPlanStateActive (planStateUtil.ts): a plan is
+ * plan-mode active while it is being drafted, clarified, or awaiting
+ * approval. Once the user approves the plan, execution runs in chat mode
+ * with the normal system prompt and full tool access — so "approved" is
+ * NOT plan-mode active here either. Both predicates delegate to the shared
+ * isPlanStatusPlanningActive (aiChatPlanTypes.ts) so the renderer and main
+ * process can never disagree about which prompt/toolset a round uses after
+ * approval.
+ */
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
-  return (
-    plan.status !== "completed" &&
-    plan.status !== "cancelled" &&
-    plan.status !== "rejected"
-  );
+  return isPlanStatusPlanningActive(plan.status);
 }
 
 /**
@@ -754,6 +767,8 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let messages: OpenAIChatMessage[];
     let textApprovedPlanState: AIChatPlanStateView | null = null;
+    let intentDecisionId: number | null = null;
+    let sourceUserMessageId: string | undefined;
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -961,6 +976,77 @@ export class AIChatQueryEngine {
         );
       }
 
+      // Resolve and persist the outbound-email delivery intent for this turn
+      // from TRUSTED user-authored text only (technical design §9): raw user
+      // message, never tool args / retrieved content / assistant statements.
+      // Idempotent across stream retries via the (conversationId, sourceUserMessageId)
+      // unique index. Failures resolve to draft_only and never break chat.
+      sourceUserMessageId = savedUser.messageId;
+      try {
+        const intentModule = new OutboundEmailIntentModule();
+        const existing = await intentModule.findBySource(
+          conversationId,
+          savedUser.messageId
+        );
+        // Re-verify the cached decision against the CURRENT user-authored
+        // text before reusing it (technical design §9): the (conversationId,
+        // sourceUserMessageId) row is only a valid cache hit when its stored
+        // sourceTextHash still matches this turn's text and it was produced
+        // by the current resolver version. A mismatch (text changed or the
+        // resolver was upgraded) re-resolves and overwrites the stale row.
+        const userAuthoredText = request.message || "";
+        const currentHash = hashUserAuthoredText(userAuthoredText);
+        if (
+          existing &&
+          existing.sourceTextHash === currentHash &&
+          existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+        ) {
+          intentDecisionId = existing.id;
+        } else {
+          // Load the conversation's messages (chronological ASC) so the
+          // resolver can evaluate the contextual-affirmation path (§9.1/§9.4):
+          // a short "yes, send it" authorizes a send ONLY when the immediately
+          // preceding assistant message asked an explicit send-confirmation
+          // question. Passing null here (the prior bug, RC3) made that path
+          // dead and forced every affirmation back to draft_only.
+          const priorMessages = await module.getConversationMessages(
+            conversationId
+          );
+          const decision = OutboundEmailIntentResolver.resolve(
+            buildResolverInput(
+              {
+                conversationId,
+                sourceUserMessageId: savedUser.messageId,
+                userAuthoredText,
+              },
+              priorMessages
+            )
+          );
+          const decisionFields = {
+            mode: decision.mode,
+            reasonCode: decision.reasonCode,
+            confidence: decision.confidence,
+            evidenceJson: JSON.stringify(decision.evidence),
+            sourceTextHash: decision.sourceTextHash,
+            resolverVersion: decision.resolverVersion,
+          };
+          if (existing) {
+            await intentModule.updateDecision(existing.id, decisionFields);
+            intentDecisionId = existing.id;
+          } else {
+            const persisted = await intentModule.create({
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              ...decisionFields,
+            } as OutboundEmailIntentEntity);
+            intentDecisionId = persisted.id;
+          }
+        }
+      } catch (err) {
+        console.error("[outbound-email-intent] resolve failed:", err);
+        intentDecisionId = null;
+      }
+
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
@@ -1058,6 +1144,8 @@ export class AIChatQueryEngine {
       isPlanMode,
       planState,
       textApprovedPlanState,
+      sourceUserMessageId,
+      intentDecisionId,
     });
     if (terminal.type === "conversation_busy") {
       // The legacy direct path cannot queue; surface a clear error instead of
@@ -1099,8 +1187,64 @@ export class AIChatQueryEngine {
       // ignore lookup failures
     }
     const isPlanMode = request.mode === "plan" || isActivePlanState(planState);
-
     const module = new AIChatV2Module();
+
+    // Queue-dispatched turns bypass submitMessage's persistence path, so bind
+    // outbound-email intent here as well. This preserves the trusted
+    // user-message/decision chain for the normal queued UI flow.
+    let queuedIntentDecisionId: number | null = null;
+    try {
+      const intentModule = new OutboundEmailIntentModule();
+      const existing = await intentModule.findBySource(
+        conversationId,
+        savedUser.messageId
+      );
+      const userAuthoredText = request.message || modelContent;
+      const currentHash = hashUserAuthoredText(userAuthoredText);
+      if (
+        existing &&
+        existing.sourceTextHash === currentHash &&
+        existing.resolverVersion === OUTBOUND_RESOLVER_VERSION
+      ) {
+        queuedIntentDecisionId = existing.id;
+      } else {
+        const priorMessages = await module.getConversationMessages(
+          conversationId
+        );
+        const decision = OutboundEmailIntentResolver.resolve(
+          buildResolverInput(
+            {
+              conversationId,
+              sourceUserMessageId: savedUser.messageId,
+              userAuthoredText,
+            },
+            priorMessages
+          )
+        );
+        const decisionFields = {
+          mode: decision.mode,
+          reasonCode: decision.reasonCode,
+          confidence: decision.confidence,
+          evidenceJson: JSON.stringify(decision.evidence),
+          sourceTextHash: decision.sourceTextHash,
+          resolverVersion: decision.resolverVersion,
+        };
+        if (existing) {
+          await intentModule.updateDecision(existing.id, decisionFields);
+          queuedIntentDecisionId = existing.id;
+        } else {
+          const persisted = await intentModule.create({
+            conversationId,
+            sourceUserMessageId: savedUser.messageId,
+            ...decisionFields,
+          } as OutboundEmailIntentEntity);
+          queuedIntentDecisionId = persisted.id;
+        }
+      }
+    } catch (err) {
+      log.error("[outbound-email-intent] queued resolve failed:", err);
+    }
+
     let messages: OpenAIChatMessage[];
     try {
       const basePrompt =
@@ -1185,6 +1329,8 @@ export class AIChatQueryEngine {
       planState,
       textApprovedPlanState: null,
       scheduledContext: undefined,
+      sourceUserMessageId: savedUser.messageId,
+      intentDecisionId: queuedIntentDecisionId,
     });
   }
 
@@ -1252,6 +1398,8 @@ export class AIChatQueryEngine {
     readonly planState: AIChatPlanStateView | null;
     readonly textApprovedPlanState: AIChatPlanStateView | null;
     readonly scheduledContext?: AIChatScheduledTurnContext;
+    readonly sourceUserMessageId?: string;
+    readonly intentDecisionId?: number | null;
   }): Promise<AIChatTurnTerminalEvent> {
     const {
       conversationId,
@@ -1262,6 +1410,8 @@ export class AIChatQueryEngine {
       isPlanMode,
       planState,
       textApprovedPlanState,
+      sourceUserMessageId,
+      intentDecisionId,
     } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
@@ -1318,9 +1468,15 @@ export class AIChatQueryEngine {
     // Resolve auto-plan config. Only active in plain chat mode (not when the
     // conversation is already in plan mode), only when AI is enabled, and only
     // when USER_AI_AUTO_PLAN is not explicitly "false" (default-on).
+    // An approved plan also blocks auto-entry: its execution rounds run in
+    // chat mode (isActivePlanState is false), but EnterPlanMode would be
+    // guaranteed to fail there — ensurePlanForConversation resolves the
+    // approved plan and handleEnterPlanMode rejects re-entry — so advertising
+    // the tool mid-execution only invites a doomed call.
     const tokenService = new Token();
     const autoPlanEnabled =
       !isPlanMode &&
+      planState?.status !== "approved" &&
       tokenService.getValue(USER_AI_ENABLED) === "true" &&
       tokenService.getValue(USER_AI_AUTO_PLAN) !== "false";
 
@@ -1451,6 +1607,8 @@ export class AIChatQueryEngine {
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
       ...(control ? { steeringControl: control } : {}),
+      sourceUserMessageId,
+      intentDecisionId,
     };
 
     try {
@@ -1640,6 +1798,16 @@ export class AIChatQueryEngine {
           toolCallId: matchedByToolId.toolCallId,
           args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
+          // Trusted intent context (technical design §9/§14.2): re-thread the
+          // originating turn's persisted user-message id + intent decision id
+          // so outbound-email tools bind the draft to the exact user message
+          // even when executed via the permission-resume path.
+          sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+          intentDecisionId: matchedByToolId.intentDecisionId,
+          // Re-thread the gate-resolved outbound authorization (§14.2/§15.1)
+          // so the approved send claims the draft batch instead of silently
+          // falling to the legacy send path (RC4).
+          outboundAuthorization: matchedByToolId.outboundAuthorization,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.
@@ -1748,6 +1916,12 @@ export class AIChatQueryEngine {
         // be folded into the turn's result.images. Seed them here — the loop
         // merges them with anything its own rounds produce (FR-4).
         seededToolImages: extractToolResultImages(toolResult),
+        // Keep the originating user turn attached to every round after a
+        // permission resume. Without these fields, a successfully approved
+        // draft is followed by a send round with no trusted intent, so the
+        // outbound gate incorrectly falls back to `draft_required`.
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
       };
 
       void this.loop

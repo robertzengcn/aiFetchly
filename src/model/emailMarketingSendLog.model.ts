@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, Like } from "typeorm";
+import { Repository } from "typeorm";
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
 //import { EmailMarketingSendLogEntity as EmailMarketingSendLogInterface } from "./emailMarketingSendLogdb";
 import { SortBy } from "@/entityTypes/commonType";
@@ -120,6 +120,69 @@ export class EmailMarketingSendLogModel extends BaseDb {
     let queryBuilder = this.repository
       .createQueryBuilder("log")
       .where("log.task_id = :taskid", { taskid });
+
+    if (where) {
+      queryBuilder = queryBuilder.andWhere(
+        "(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)",
+        { search: `%${where}%` }
+      );
+    }
+
+    return await queryBuilder.getCount();
+  }
+
+  /**
+   * Recent send-log rows across ALL tasks (no task_id filter). Backs the
+   * unified send-log view that aggregates legacy bulk-task sends with
+   * authorized outbound sends. Mirrors listEmailMarketingSendLog's
+   * where/sort allow-list, but omits the task_id predicate.
+   */
+  async listAllRecentEmailMarketingSendLog(
+    page: number,
+    limit: number,
+    where?: string,
+    sort?: SortBy
+  ): Promise<EmailMarketingSendLogEntity[]> {
+    let queryBuilder = this.repository.createQueryBuilder("log");
+
+    if (where) {
+      queryBuilder = queryBuilder.andWhere(
+        "(log.receiver LIKE :search OR log.title LIKE :search OR log.content LIKE :search)",
+        { search: `%${where}%` }
+      );
+    }
+
+    if (sort?.key && sort?.order) {
+      const lowsersortkey = sort.key.toLowerCase();
+      const lowsersortorder = sort.order.toLowerCase();
+      const allowsortkey = ["id", "record_time", "status"];
+      const allowsortorder = ["asc", "desc"];
+
+      if (!allowsortkey.includes(lowsersortkey)) {
+        throw new Error("not allow sort key");
+      }
+      if (!allowsortorder.includes(lowsersortorder)) {
+        throw new Error("not allow sort order");
+      }
+
+      queryBuilder = queryBuilder.orderBy(
+        `log.${lowsersortkey}`,
+        lowsersortorder.toUpperCase() as "ASC" | "DESC"
+      );
+    } else {
+      queryBuilder = queryBuilder.orderBy("log.id", "DESC");
+    }
+
+    queryBuilder = queryBuilder.skip(page).take(limit);
+    return await queryBuilder.getMany();
+  }
+
+  /**
+   * Count of recent send-log rows across ALL tasks (no task_id filter).
+   * Mirrors countEmailMarketingSendLog minus the task_id predicate.
+   */
+  async countAllRecent(where?: string): Promise<number> {
+    let queryBuilder = this.repository.createQueryBuilder("log");
 
     if (where) {
       queryBuilder = queryBuilder.andWhere(

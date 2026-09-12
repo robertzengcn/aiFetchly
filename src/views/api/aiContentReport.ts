@@ -1,6 +1,13 @@
 import { windowInvoke } from "@/views/utils/apirequest";
-import { AI_CONTENT_REPORT_CREATE } from "@/config/channellist";
-import type { CreateAIContentReportRequest, CreateAIContentReportResponse } from "@/entityTypes/aiContentReportTypes";
+import {
+  AI_CONTENT_REPORT_CREATE,
+  AI_CONTENT_REPORT_CAPABILITIES,
+} from "@/config/channellist";
+import type {
+  AIContentReportCapabilities,
+  CreateAIContentReportResponse,
+  CreateAnyAIContentReportRequest,
+} from "@/entityTypes/aiContentReportTypes";
 
 /**
  * Renderer → main IPC wrapper for AI-content-report submission.
@@ -13,7 +20,18 @@ import type { CreateAIContentReportRequest, CreateAIContentReportResponse } from
  * this call remains available when hosted AI is disabled (PRD FR-4.4, §14.9).
  */
 export async function createAIContentReport(
-  request: CreateAIContentReportRequest
+  request: CreateAnyAIContentReportRequest
 ): Promise<CreateAIContentReportResponse> {
   return await windowInvoke(AI_CONTENT_REPORT_CREATE, request);
+}
+
+/**
+ * Fetch the backend's content-report capabilities (design §14). The dialog
+ * gates the "Report conversation" UI on `conversationReporting.enabled`.
+ * NOT AI-gated: uses `registerValidatedHandler`, works when AI is disabled.
+ */
+export async function getAIContentReportCapabilities(): Promise<AIContentReportCapabilities> {
+  return await windowInvoke(AI_CONTENT_REPORT_CAPABILITIES, {
+    schemaVersion: 1,
+  });
 }

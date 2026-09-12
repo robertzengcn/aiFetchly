@@ -29,6 +29,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "export_generated_artifacts",
       "list_email_inboxes",
       "fetch_unread_emails",
+      "list_email_services",
+      "start_email_send_task",
       "create_email_reply_draft",
       "send_email_reply",
       "list_schedules",
@@ -82,7 +84,6 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     // call this out so the model loads them via search rather than failing.
     expect(s.toLowerCase()).toContain("not auto-promoted");
   });
-
   it("routes generated-image edits to direct attachment, not export+attach", () => {
     const s = buildBuiltInToolCapabilitiesSection();
     // The obsolete two-step workflow (export to workspace, then attach) must
@@ -112,5 +113,19 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s).toContain("product photo");
     // Background operations are still mentioned but not the only focus.
     expect(s).toContain("background");
+  });
+
+  it("routes new marketing/outbound mail to start_email_send_task, not send_email_reply", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    expect(s).toContain("start_email_send_task");
+    expect(s).toContain("draft_outbound_email_batch");
+    expect(s).toContain("list_email_services");
+    expect(s.toLowerCase()).toContain("outbound");
+    expect(s.toLowerCase()).toContain("wait for the user to click review");
+    expect(s.toLowerCase()).toContain("marketing");
+    // The model previously treated an empty IMAP inbox list as "cannot send".
+    expect(s.toLowerCase()).toContain("empty inbox");
+    expect(s).toContain("send_email_reply");
+    expect(s.toLowerCase()).toContain("not inbox replies");
   });
 });
