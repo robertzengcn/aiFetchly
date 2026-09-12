@@ -42,19 +42,19 @@ These items are required before the feature can be called complete.
 Test Email still reports raw SMTP text via `smtpErrorMessage()`. The shared
 classifier exists but is only used by the authorized worker.
 
-- [ ] Use `classifySmtpFailure()` in `EmailService.sendEmail()` (Test Email and
+- [x] Use `classifySmtpFailure()` in `EmailService.sendEmail()` (Test Email and
       standard send).
-- [ ] Use `classifySmtpFailure()` in `ReplyEmailService` so reply failures use
+- [x] Use `classifySmtpFailure()` in `ReplyEmailService` so reply failures use
       the same categories.
-- [ ] Map `smtp_auth_failed` and `smtp_from_rejected` to distinct, localized
+- [x] Map `smtp_auth_failed` and `smtp_from_rejected` to distinct, localized
       UI messages.
-- [ ] From-alias rejection must tell the user to verify the alias with their
+- [x] From-alias rejection must tell the user to verify the alias with their
       email provider (PRD §15).
-- [ ] Do not recommend changing TLS settings when the SMTP response is already
+- [x] Do not recommend changing TLS settings when the SMTP response is already
       authentication or sender-policy.
-- [ ] Do not present receive/connection-only verification as proof that an
+- [x] Do not present receive/connection-only verification as proof that an
       alias may send.
-- [ ] Add tests: AUTH/535 → auth category; MAIL FROM / sender rejected →
+- [x] Add tests: AUTH/535 → auth category; MAIL FROM / sender rejected →
       From-alias category; Test Email UI shows the mapped message, not only
       the raw provider string.
 
@@ -66,14 +66,14 @@ Field labels for SMTP username and Reply-To exist. Validation, provider, and
 approval errors do not. The From field still uses the old “sender account”
 label.
 
-- [ ] Relabel `emailservice.from` away from “sender account” in all six
+- [x] Relabel `emailservice.from` away from “sender account” in all six
       languages. Use From-address wording such as “The address recipients see.
       It must be allowed by your email provider.”
-- [ ] Update `emailservice.smtp_username_hint` to mailbox-login wording such as
+- [x] Update `emailservice.smtp_username_hint` to mailbox-login wording such as
       “The mailbox account used to sign in to your SMTP server.”
-- [ ] Update `emailservice.reply_to_hint` to “Replies go here. Leave empty to
+- [x] Update `emailservice.reply_to_hint` to “Replies go here. Leave empty to
       reply to the From address.”
-- [ ] Add localized keys for every PRD §15 category:
+- [x] Add localized keys for every PRD §15 category:
       - missing SMTP username
       - invalid From
       - invalid Reply-To
@@ -81,8 +81,8 @@ label.
       - From alias rejected
       - identity changed after approval
       - import password required for a new row
-- [ ] Keep SMTP username from being called “From” or “sender account.”
-- [ ] Add a component or i18n test that the new keys exist in en/zh/es/fr/de/ja.
+- [x] Keep SMTP username from being called “From” or “sender account.”
+- [x] Add a component or i18n test that the new keys exist in en/zh/es/fr/de/ja.
 
 **Covers:** FR-001, PRD §15, Definition of Done (six languages).
 
@@ -91,16 +91,19 @@ label.
 Vitest covers resolver, worker, and mocked Nodemailer headers. `test/e2e/specs/`
 has no identity scenario.
 
-- [ ] Create a service whose SMTP username differs from From, send a test
+- [x] Create a service whose SMTP username differs from From, send a test
       message, and assert the fake SMTP server saw AUTH user, From, and
-      optional Reply-To separately.
-- [ ] Import two aliases that share one SMTP login and send through each.
+      optional Reply-To separately. _(scenario 1, emailIdentity.test.ts)_
+- [x] Import two aliases that share one SMTP login and send through each.
+      _(scenario 2, emailIdentity.test.ts)_
 - [ ] Approve an outbound draft, change Reply-To, and assert delivery is
-      blocked until re-review.
+      blocked until re-review. _(out of scope: requires unimplemented seed
+      channels for outbound drafts + approval tokens)_
 - [ ] Reply to a received message and assert inbound recipient selection stays
-      independent from configured outbound Reply-To.
-- [ ] Simulate MAIL FROM rejection on Test Email and assert alias guidance
-      (depends on P0.1).
+      independent from configured outbound Reply-To. _(out of scope: requires
+      unimplemented seed channels for received messages)_
+- [x] Simulate MAIL FROM rejection on Test Email and assert alias guidance
+      (depends on P0.1). _(scenario 5, emailIdentity.test.ts)_
 
 **Covers:** PRD §17.4; technical design §23.8, §26.4.
 
@@ -114,15 +117,15 @@ The Vue form does not mark SMTP username required and has no CR/LF or length
 rules. Reply-To has `type="email"` but no `:rules`. Backend fallback currently
 treats blank SMTP username as From (technical design §9.2).
 
-- [ ] Decide and document one rule: either the form requires SMTP username
+- [x] Decide and document one rule: either the form requires SMTP username
       (FR-001 / FR-005) or blank continues to fall back to From (technical
       design §9.2). Do not leave the PRD and UI disagreeing.
-- [ ] Reject CR and LF in SMTP username, From, and Reply-To in the form (or
+- [x] Reject CR and LF in SMTP username, From, and Reply-To in the form (or
       surface the module `email_header_break_forbidden` error immediately).
-- [ ] From and non-empty Reply-To keep single-address email validation.
-- [ ] SMTP username uses required/length validation without email-only syntax
+- [x] From and non-empty Reply-To keep single-address email validation.
+- [x] SMTP username uses required/length validation without email-only syntax
       if the chosen rule is “required.”
-- [ ] Extend `EmailServiceDetail.test.ts` for the chosen validation behavior.
+- [x] Extend `EmailServiceDetail.test.ts` for the chosen validation behavior.
 
 **Covers:** FR-001, FR-005.
 
@@ -132,14 +135,14 @@ Reply-To and SMTP username mismatches currently share
 `reply_identity_mismatch`. Missing service is a thrown Error, not a stable
 code.
 
-- [ ] Keep `sender_mismatch` for From mismatch.
-- [ ] Add or reuse a distinct code for Reply-To mismatch.
-- [ ] Add or reuse a distinct code for SMTP username mismatch.
-- [ ] Keep `service_inactive` for disabled services.
-- [ ] Use a stable `service_missing` (or equivalent) code when the bound
+- [x] Keep `sender_mismatch` for From mismatch.
+- [x] Add or reuse a distinct code for Reply-To mismatch.
+- [x] Add or reuse a distinct code for SMTP username mismatch.
+- [x] Keep `service_inactive` for disabled services.
+- [x] Use a stable `service_missing` (or equivalent) code when the bound
       service cannot be loaded.
-- [ ] Localize those messages (depends on P0.2).
-- [ ] Extend `EmailReplySendBinding.test.ts`.
+- [x] Localize those messages (depends on P0.2).
+- [x] Extend `EmailReplySendBinding.test.ts`.
 
 **Covers:** FR-013.
 
@@ -149,11 +152,11 @@ Authorized outbound logs can show `revision.senderAddress`. Legacy
 `emailmarketing_send_log` has no email-service id, From, Reply-To, or SMTP
 username.
 
-- [ ] Send logs identify the email-service record and visible From address.
-- [ ] Where identity metadata is stored, Reply-To and SMTP username may be
+- [x] Send logs identify the email-service record and visible From address.
+- [x] Where identity metadata is stored, Reply-To and SMTP username may be
       recorded as non-secret values.
-- [ ] Passwords and decrypted credentials must never appear in logs.
-- [ ] Provider failures retain sanitized SMTP details sufficient to tell
+- [x] Passwords and decrypted credentials must never appear in logs.
+- [x] Provider failures retain sanitized SMTP details sufficient to tell
       authentication, sender rejection, recipient rejection, TLS, and
       uncertain-delivery apart (depends on P0.1 for standard/reply paths).
 
