@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   resolveEmailServiceIdentity,
   containsEmailHeaderBreak,
@@ -51,8 +53,7 @@ describe("EmailServiceIdentityResolver", () => {
 
   it("receive username follows explicit, SMTP, From order", () => {
     expect(
-      resolveEmailServiceIdentity({ from: "sales@example.com" })
-        .receiveUsername
+      resolveEmailServiceIdentity({ from: "sales@example.com" }).receiveUsername
     ).toBe("sales@example.com");
 
     expect(
@@ -103,5 +104,62 @@ describe("EmailServiceIdentityResolver", () => {
     expect(containsEmailHeaderBreak("a\u2029b")).toBe(true);
     // A clean multi-word string is still allowed.
     expect(containsEmailHeaderBreak("hello world")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AD-003 drift detection: the `smtpUsername ?? from` fallback rule MUST live
+// in exactly one place \u2014 resolveEmailServiceIdentity. No delivery, binding, or
+// IPC site may re-inline the fallback. This test scans the known offender
+// files and fails if anyone reintroduces an inline `?? from` / `?? senderAddress`
+// fallback for the SMTP username. (P2.2, technical design \u00a77.1/\u00a721.)
+// ---------------------------------------------------------------------------
+describe("EmailServiceIdentityResolver \u2014 single-source fallback (AD-003 drift guard)", () => {
+  const offenderFiles = [
+    "src/service/emailReply/EmailReplySendBinding.ts",
+    "src/service/outboundEmail/OutboundEmailDeliveryService.ts",
+    "src/service/outboundEmail/OutboundEmailWorkerStarter.ts",
+    "src/childprocess/emailSend.ts",
+    "src/main-process/communication/outboundEmailDelivery-ipc.ts",
+  ];
+
+  /**
+   * Strip line comments (// ...) and block comments (/* ... *\u200b/) so that
+   * explanatory comments mentioning the fallback rule do not count as
+   * violations. Only real code is scanned.
+   */
+  function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, "");
+  }
+
+  /**
+   * Match an inline SMTP-username-to-From fallback: `x.smtpUsername ?? y.from`
+   * or `x.smtpUsername ?? y.senderAddress`. The resolver call itself never uses
+   * `??` on smtpUsername, so it is not a match. A bare `?? ""` (normalization
+   * coalesce) is intentionally NOT matched — only the identity fallback rule.
+   */
+  const inlineFallback = /\.smtpUsername\s*\?\?\s*\w+\.(from|senderAddress)/;
+
+  it("no offender file inlines `smtpUsername ?? from` outside the resolver", () => {
+    for (const relPath of offenderFiles) {
+      const absPath = path.resolve(process.cwd(), relPath);
+      const source = fs.readFileSync(absPath, "utf8");
+      const code = stripComments(source);
+      expect(
+        code,
+        `${relPath} must not inline the smtpUsername fallback`
+      ).not.toMatch(inlineFallback);
+    }
+  });
+
+  it("every offender file imports resolveEmailServiceIdentity", () => {
+    for (const relPath of offenderFiles) {
+      const absPath = path.resolve(process.cwd(), relPath);
+      const source = fs.readFileSync(absPath, "utf8");
+      expect(
+        source,
+        `${relPath} must import resolveEmailServiceIdentity`
+      ).toContain("resolveEmailServiceIdentity");
+    }
   });
 });

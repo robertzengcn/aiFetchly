@@ -3,6 +3,7 @@ import {
   normalizeEmailAddressV2,
   normalizeSmtpUsernameForHash,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
 /**
  * Pure mailbox + envelope binding validation for an approved send (FR-017,
@@ -193,7 +194,14 @@ export function validateSendBinding(input: SendBindingInput): void {
     // hash function so the comparison is byte-identical. Each identity field
     // fails with its own code (P1.2) so the UI can tell the user exactly
     // which part of the identity changed after approval.
-    const effectiveSmtp = service.smtpUsername ?? service.from;
+    // Effective SMTP username resolved through the shared resolver (AD-003) so
+    // the `smtpUsername ?? from` fallback lives in exactly one place. The v2
+    // comparison below normalizes exactly as the hash does (byte-identical).
+    const effectiveSmtp = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+    }).smtpUsername;
     if (
       normalizeSmtpUsernameForHash(revision.smtpUsername ?? "") !==
       normalizeSmtpUsernameForHash(effectiveSmtp)
@@ -233,7 +241,14 @@ export function validateSendBinding(input: SendBindingInput): void {
     // effective SMTP username equals its From AND configured Reply-To is null.
     // Otherwise, the identity the v1 hash implicitly assumed no longer holds;
     // invalidate and require a fresh v2 revision + re-approval.
-    const effectiveSmtp = service.smtpUsername ?? service.from;
+    // Effective SMTP username via the shared resolver (AD-003): the legacy
+    // gate treats `smtpUsername == from` (after normalization) as the
+    // pre-identity-split invariant a v1 approval implicitly assumed.
+    const effectiveSmtp = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+    }).smtpUsername;
     const smtpMatchesLegacy =
       normalizeSmtpUsernameForHash(effectiveSmtp) ===
       normalizeSmtpUsernameForHash(service.from);

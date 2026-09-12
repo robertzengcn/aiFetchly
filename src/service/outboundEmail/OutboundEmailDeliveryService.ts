@@ -22,6 +22,7 @@ import type {
   BatchEnvelopeEntryV2,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { EmailServiceModel } from "@/model/EmailService.model";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import {
   OUTBOUND_POLICY_VERSION,
   OUTBOUND_VALIDATION_VERSION,
@@ -639,9 +640,18 @@ export class OutboundEmailDeliveryService extends BaseDb {
         // Service was deleted after approval — fail closed.
         return { ok: false };
       }
-      const effectiveFrom = identity.from ?? "";
-      const effectiveSmtpUsername = identity.smtpUsername ?? effectiveFrom;
-      const effectiveReplyTo = identity.replyTo ?? null;
+      // Effective identity resolved through the shared resolver (AD-003) so
+      // the `smtpUsername ?? from` fallback lives in exactly one place. The
+      // §17.1 conditions below use the same byte-identical normalization as
+      // the hash function for an authoritative comparison.
+      const resolved = resolveEmailServiceIdentity({
+        smtpUsername: identity.smtpUsername,
+        from: identity.from,
+        replyTo: identity.replyTo,
+      });
+      const effectiveFrom = resolved.fromAddress;
+      const effectiveSmtpUsername = resolved.smtpUsername;
+      const effectiveReplyTo = resolved.replyToAddress;
       // §17.1 conditions — approved sender = revision.senderAddress.
       if (
         normalizeEmailAddressV2(effectiveFrom) !==
@@ -691,11 +701,27 @@ export class OutboundEmailDeliveryService extends BaseDb {
         if (revision.emailServiceId !== id) continue;
         const version = revision.envelopeVersion ?? 1;
         if (version !== 2) continue;
+        // Effective service SMTP username via the shared resolver (AD-003):
+        // `smtpUsername ?? from` lives in one place. Normalized byte-identically
+        // to the hash so the comparison is authoritative.
         const svcSmtp = normalizeSmtpUsernameForHash(
-          identity.smtpUsername ?? identity.from ?? ""
+          resolveEmailServiceIdentity({
+            smtpUsername: identity.smtpUsername,
+            from: identity.from,
+            replyTo: identity.replyTo,
+          }).smtpUsername
         );
+        // The revision is an immutable frozen snapshot; its smtpUsername is
+        // already the value captured at approval time. A null/empty frozen
+        // value falls back to the frozen senderAddress (the From at capture).
+        // Routed through the shared resolver (AD-003) so the fallback rule
+        // lives in one place even for the revision shape (senderAddress → from).
         const revSmtp = normalizeSmtpUsernameForHash(
-          revision.smtpUsername ?? revision.senderAddress
+          resolveEmailServiceIdentity({
+            smtpUsername: revision.smtpUsername,
+            from: revision.senderAddress,
+            replyTo: revision.replyToAddress,
+          }).smtpUsername
         );
         if (svcSmtp !== revSmtp) {
           throw new SenderIdentityChangedError();

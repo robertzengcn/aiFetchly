@@ -7,6 +7,7 @@ import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model"
 import { OutboundEmailWorkerEventBridge } from "@/service/outboundEmail/OutboundEmailWorkerEventBridge";
 import { broadcastOutboundEmailProgress } from "@/main-process/communication/outboundEmailDelivery-ipc";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import {
   resolvePackagedWorkerPath,
   buildPackagedWorkerEnv,
@@ -214,6 +215,10 @@ export class OutboundEmailWorkerStarter extends BaseDb {
     // batch has some v1 revisions, §17.2 blocks mixed-version delivery; the
     // delivery service rejects mixed batches before calling the starter, so
     // reaching this branch with a v1 revision is unreachable in practice.
+    // v3 payload — every envelope carries v2 identity (§16.1). The frozen
+    // revision's effective smtpUsername is resolved through the shared resolver
+    // (AD-003): a null/empty frozen value falls back to the frozen senderAddress
+    // (the From captured at approval), which is the same rule the resolver owns.
     const v3Envelopes = drafts.map(({ draft, revision }) => ({
       envelopeVersion: 2 as const,
       draftId: draft.id,
@@ -221,7 +226,11 @@ export class OutboundEmailWorkerStarter extends BaseDb {
       revisionNumber: revision.revisionNumber,
       recipientAddress: revision.recipientAddress,
       emailServiceId: revision.emailServiceId,
-      smtpUsername: revision.smtpUsername ?? revision.senderAddress,
+      smtpUsername: resolveEmailServiceIdentity({
+        smtpUsername: revision.smtpUsername,
+        from: revision.senderAddress,
+        replyTo: revision.replyToAddress,
+      }).smtpUsername,
       senderAddress: revision.senderAddress,
       replyToAddress: revision.replyToAddress,
       subject: revision.subject,
@@ -265,14 +274,21 @@ export class OutboundEmailWorkerStarter extends BaseDb {
           `service_not_found: email_service ${id} could not be loaded`
         );
       }
+      // §16.2 — effective, non-null smtpUsername resolved through the shared
+      // resolver (AD-003) so the `smtpUsername ?? from` fallback lives in one
+      // place. Legacy rows that never had the column populated fall back to
+      // `from`. The worker validates this against the envelope identity before
+      // sending.
+      const resolvedService = resolveEmailServiceIdentity({
+        smtpUsername: service.smtpUsername,
+        from: service.from,
+        replyTo: service.replyTo,
+      });
       resolved.push({
         id: service.id,
-        // §16.2 — effective, non-null smtpUsername (fallback to `from` for
-        // legacy rows that never had the column populated). The worker
-        // validates this against the envelope identity before sending.
-        smtpUsername: service.smtpUsername ?? service.from,
-        from: service.from,
-        replyTo: service.replyTo ?? null,
+        smtpUsername: resolvedService.smtpUsername,
+        from: resolvedService.fromAddress,
+        replyTo: resolvedService.replyToAddress,
         password: service.password,
         host: service.host,
         port: service.port,

@@ -21,6 +21,7 @@ import type {
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { OUTBOUND_EMAIL_BATCH_LIMITS } from "@/service/outboundEmail/outboundEmailLimits";
 import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import {
   authorizedEmailWorkerPayloadV2Schema,
   authorizedEmailWorkerPayloadV3Schema,
@@ -595,24 +596,30 @@ export class EmailSend {
         identityMismatch = true;
         continue;
       }
-      const svcSmtp = normalizeSmtpUsernameForHash(
-        svc.smtpUsername ?? svc.from ?? ""
-      );
+      // Effective service identity via the shared resolver (AD-003): the
+      // `smtpUsername ?? from` fallback lives in exactly one place. The
+      // comparison normalizes byte-identically to the hash (authoritative).
+      const resolvedSvc = resolveEmailServiceIdentity({
+        smtpUsername: svc.smtpUsername,
+        from: svc.from,
+        replyTo: svc.replyTo,
+      });
+      const svcSmtp = normalizeSmtpUsernameForHash(resolvedSvc.smtpUsername);
       const envSmtp = normalizeSmtpUsernameForHash(env.smtpUsername);
       if (svcSmtp !== envSmtp) {
         identityMismatch = true;
         continue;
       }
-      const svcFrom = normalizeEmailAddressV2(svc.from ?? "");
+      const svcFrom = normalizeEmailAddressV2(resolvedSvc.fromAddress);
       const envFrom = normalizeEmailAddressV2(env.senderAddress);
       if (svcFrom !== envFrom) {
         identityMismatch = true;
         continue;
       }
       const svcReplyTo =
-        svc.replyTo === null || svc.replyTo === undefined
+        resolvedSvc.replyToAddress === null
           ? null
-          : normalizeEmailAddressV2(svc.replyTo);
+          : normalizeEmailAddressV2(resolvedSvc.replyToAddress);
       const envReplyTo =
         env.replyToAddress === null
           ? null

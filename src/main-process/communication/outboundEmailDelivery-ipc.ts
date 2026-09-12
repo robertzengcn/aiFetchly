@@ -32,6 +32,7 @@ import type {
   BatchEnvelopeEntryV2,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { resolveOutboundIdentity } from "@/service/outboundEmail/resolveOutboundSender";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import type { AuthorizedEmailWorkerEvent } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
@@ -154,14 +155,22 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       // Resolve the full effective identity for the service so the new
       // revision carries a complete v2 envelope snapshot (§6.4). The renderer
       // only sends the From address; smtpUsername/replyTo come from the
-      // service row via the resolver.
+      // service row via the resolver. When the service cannot be resolved
+      // (deleted mid-edit), the envelope degrades to the renderer-supplied
+      // From — still routed through the shared resolver so the
+      // `smtpUsername ?? from` fallback lives in exactly one place (AD-003).
       const identity = await resolveOutboundIdentity({
         dbpath,
         preferredServiceId: input.emailServiceId,
         serviceIds: [input.emailServiceId],
       });
-      const smtpUsername = identity?.smtpUsername ?? input.senderAddress;
-      const replyToAddress = identity?.replyToAddress ?? null;
+      const resolvedEnvelope = resolveEmailServiceIdentity({
+        smtpUsername: identity?.smtpUsername ?? null,
+        from: input.senderAddress,
+        replyTo: identity?.replyToAddress ?? null,
+      });
+      const smtpUsername = resolvedEnvelope.smtpUsername;
+      const replyToAddress = resolvedEnvelope.replyToAddress;
       const envelope: BatchEnvelopeEntryV2 = {
         version: 2,
         draftId: draft.id,
