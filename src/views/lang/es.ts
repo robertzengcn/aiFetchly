@@ -1257,12 +1257,13 @@ export default {
     id: "ID",
     smtp_username: "Nombre de usuario SMTP",
     smtp_username_hint:
-      "Cuenta de inicio de sesión SMTP (por defecto la dirección From)",
+      "La cuenta de buzón utilizada para iniciar sesión en su servidor SMTP.",
     reply_to: "Responder a",
     reply_to_hint:
-      "Dirección opcional para respuestas (déjelo en blanco para ninguna)",
-    from: "Cuenta de remitente",
-    from_hint: "Ingrese la cuenta del remitente",
+      "Las respuestas van aquí. Déjelo vacío para responder a la dirección From.",
+    from: "From",
+    from_hint:
+      "La dirección que ven los destinatarios. Debe estar permitida por su proveedor de correo.",
     password: "Contraseña",
     password_hint: "Ingrese la contraseña del correo",
     host: "Servidor SMTP",
@@ -1304,6 +1305,16 @@ export default {
       "El servidor SMTP rechazó el envío del mensaje.",
     smtp_error_unknown:
       "No se pudo enviar el correo por un motivo desconocido. La respuesta del servidor se muestra a continuación.",
+    identity_missing_smtp_username:
+      "Se requiere un nombre de usuario SMTP para este servicio.",
+    identity_from_invalid:
+      "La dirección From no es una dirección de correo válida.",
+    identity_reply_to_invalid:
+      "La dirección de respuesta no es una dirección de correo válida.",
+    identity_changed_after_approval:
+      "La identidad de envío (nombre de usuario SMTP, From o respuesta) cambió tras la aprobación. Se requiere una nueva revisión antes de enviar.",
+    identity_import_password_required:
+      "Se requiere una contraseña para importar esta fila de servicio de correo.",
   },
   buckemailsend: {
     email_source: "Fuente de correos",

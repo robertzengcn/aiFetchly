@@ -1245,12 +1245,14 @@ export default {
   emailservice: {
     id: "id",
     smtp_username: "Nom d'utilisateur SMTP",
-    smtp_username_hint: "Compte de connexion SMTP (par défaut l'adresse From)",
+    smtp_username_hint:
+      "Le compte de messagerie utilisé pour vous connecter à votre serveur SMTP.",
     reply_to: "Répondre à",
     reply_to_hint:
-      "Adresse facultative pour les réponses (laisser vide pour aucune)",
-    from: "sender account",
-    from_hint: "input email sender account",
+      "Les réponses vont ici. Laisser vide pour répondre à l'adresse From.",
+    from: "From",
+    from_hint:
+      "L'adresse que voient les destinataires. Elle doit être autorisée par votre fournisseur de messagerie.",
     password: "password",
     password_hint: "input email password",
     host: "Hôte SMTP",
@@ -1292,6 +1294,16 @@ export default {
       "Le serveur SMTP a rejeté l'envoi du message.",
     smtp_error_unknown:
       "L'e-mail n'a pas pu être envoyé pour une raison inconnue. La réponse du serveur est affichée ci-dessous.",
+    identity_missing_smtp_username:
+      "Un nom d'utilisateur SMTP est requis pour ce service.",
+    identity_from_invalid:
+      "L'adresse From n'est pas une adresse e-mail valide.",
+    identity_reply_to_invalid:
+      "L'adresse de réponse n'est pas une adresse e-mail valide.",
+    identity_changed_after_approval:
+      "L'identité d'envoi (nom d'utilisateur SMTP, From ou réponse) a changé après approbation. Une nouvelle révision est requise avant l'envoi.",
+    identity_import_password_required:
+      "Un mot de passe est requis pour importer cette ligne de service de messagerie.",
   },
   buckemailsend: {
     email_source: "Email Source",

@@ -1255,11 +1255,13 @@ export default {
   emailservice: {
     id: "id",
     smtp_username: "SMTP username",
-    smtp_username_hint: "SMTP login account (defaults to the From address)",
+    smtp_username_hint:
+      "The mailbox account used to sign in to your SMTP server.",
     reply_to: "Reply-To",
-    reply_to_hint: "Optional address for replies (leave blank for none)",
-    from: "sender account",
-    from_hint: "input email sender account",
+    reply_to_hint: "Replies go here. Leave empty to reply to the From address.",
+    from: "From",
+    from_hint:
+      "The address recipients see. It must be allowed by your email provider.",
     password: "password",
     password_hint: "input email password",
     host: "SMTP Host",
@@ -1306,6 +1308,18 @@ export default {
       "The SMTP server rejected the message submission.",
     smtp_error_unknown:
       "The email could not be sent for an unknown reason. The server response is shown below.",
+    // §15 identity validation and approval categories — distinct from the
+    // SMTP transport codes above. These surface validation/approval outcomes
+    // rather than provider responses.
+    identity_missing_smtp_username:
+      "An SMTP username is required for this service.",
+    identity_from_invalid: "The From address is not a valid email address.",
+    identity_reply_to_invalid:
+      "The Reply-To address is not a valid email address.",
+    identity_changed_after_approval:
+      "The send identity (SMTP username, From, or Reply-To) changed after approval. Re-review is required before sending.",
+    identity_import_password_required:
+      "A password is required to import this email service row.",
   },
   buckemailsend: {
     email_source: "Email Source",

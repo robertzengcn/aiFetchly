@@ -60,12 +60,15 @@ const i18n = createI18n({
       emailservice: {
         name: "name",
         name_hint: "name hint",
-        from: "sender account",
-        from_hint: "from hint",
+        from: "From",
+        from_hint:
+          "The address recipients see. It must be allowed by your email provider.",
         smtp_username: "SMTP username",
-        smtp_username_hint: "SMTP login account",
+        smtp_username_hint:
+          "The mailbox account used to sign in to your SMTP server.",
         reply_to: "Reply-To",
-        reply_to_hint: "reply hint",
+        reply_to_hint:
+          "Replies go here. Leave empty to reply to the From address.",
         password: "password",
         host: "SMTP host",
         host_hint: "host hint",

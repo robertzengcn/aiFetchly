@@ -1205,11 +1205,11 @@ export default {
   emailservice: {
     id: "ID",
     smtp_username: "SMTP用户名",
-    smtp_username_hint: "SMTP登录账号（默认使用发件地址）",
+    smtp_username_hint: "用于登录 SMTP 服务器的邮箱账号。",
     reply_to: "回复至",
-    reply_to_hint: "可选回复地址（留空表示无）",
-    from: "发送者账户",
-    from_hint: "输入邮件发送者账户",
+    reply_to_hint: "回复将发送到此地址。留空则回复至发件地址。",
+    from: "发件地址",
+    from_hint: "收件人看到的地址。该地址必须已获邮件服务商允许发信。",
     password: "密码",
     password_hint: "输入邮件密码",
     host: "SMTP 主机",
@@ -1247,6 +1247,12 @@ export default {
       "无法连接到 SMTP 服务器。请检查主机、端口和网络。",
     smtp_error_submission_failed: "SMTP 服务器拒绝了邮件提交。",
     smtp_error_unknown: "因未知原因无法发送邮件。服务器响应如下。",
+    identity_missing_smtp_username: "此邮件服务必须填写 SMTP 用户名。",
+    identity_from_invalid: "发件地址不是有效的邮箱地址。",
+    identity_reply_to_invalid: "回复地址不是有效的邮箱地址。",
+    identity_changed_after_approval:
+      "审核通过后发件身份（SMTP 用户名、发件地址或回复地址）已更改。发送前需要重新审核。",
+    identity_import_password_required: "导入此邮件服务记录需要提供密码。",
   },
   buckemailsend: {
     email_source: "邮件来源",

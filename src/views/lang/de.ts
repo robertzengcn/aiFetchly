@@ -1253,11 +1253,14 @@ export default {
   emailservice: {
     id: "ID",
     smtp_username: "SMTP-Benutzername",
-    smtp_username_hint: "SMTP-Anmeldekonto (standardmäßig die From-Adresse)",
+    smtp_username_hint:
+      "Das E-Mail-Konto, mit dem Sie sich bei Ihrem SMTP-Server anmelden.",
     reply_to: "Antwort an",
-    reply_to_hint: "Optionale Adresse für Antworten (leer lassen für keine)",
-    from: "Absenderkonto",
-    from_hint: "E-Mail-Absenderkonto eingeben",
+    reply_to_hint:
+      "Antworten gehen hier ein. Leer lassen, um auf die From-Adresse zu antworten.",
+    from: "From",
+    from_hint:
+      "Die Adresse, die Empfänger sehen. Sie muss von Ihrem E-Mail-Anbieter zugelassen sein.",
     password: "Passwort",
     password_hint: "E-Mail-Passwort eingeben",
     host: "SMTP-Host",
@@ -1299,6 +1302,15 @@ export default {
       "Der SMTP-Server hat die Nachrichtenübermittlung abgelehnt.",
     smtp_error_unknown:
       "Die E-Mail konnte aus unbekanntem Grund nicht gesendet werden. Die Serverantwort wird unten angezeigt.",
+    identity_missing_smtp_username:
+      "Für diesen Dienst ist ein SMTP-Benutzername erforderlich.",
+    identity_from_invalid: "Die From-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_reply_to_invalid:
+      "Die Antwort-An-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_changed_after_approval:
+      "Die Sendeidentität (SMTP-Benutzername, From oder Antwort an) wurde nach der Freigabe geändert. Eine erneute Prüfung vor dem Senden ist erforderlich.",
+    identity_import_password_required:
+      "Zum Importieren dieser E-Mail-Dienstzeile ist ein Passwort erforderlich.",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",

@@ -20,15 +20,15 @@ v-model="name" :label="t('emailservice.name')" type="input"
         <v-col cols="12" md="12">
           <v-text-field
 v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
-            :hint="t('emailservice.smtp_username_hint') || 'SMTP login account (defaults to the From address)'"
+            :hint="t('emailservice.smtp_username_hint') || 'The mailbox account used to sign in to your SMTP server.'"
             persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
           <v-text-field
-v-model="from" :label="t('emailservice.from')" type="email"
-            :hint="t('emailservice.from_hint')" :readonly="loading" clearable required
+v-model="from" :label="t('emailservice.from') || 'From'" type="email"
+            :hint="t('emailservice.from_hint') || 'The address recipients see. It must be allowed by your email provider.'" :readonly="loading" clearable required
             :rules="[rules.email]"></v-text-field>
         </v-col>
       </v-row>
@@ -36,7 +36,7 @@ v-model="from" :label="t('emailservice.from')" type="email"
         <v-col cols="12" md="12">
           <v-text-field
 v-model="replyTo" :label="t('emailservice.reply_to') || 'Reply-To'" type="email"
-            :hint="t('emailservice.reply_to_hint') || 'Optional address for replies (leave blank for none)'"
+            :hint="t('emailservice.reply_to_hint') || 'Replies go here. Leave empty to reply to the From address.'"
             persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>

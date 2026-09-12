@@ -1234,11 +1234,13 @@ export default {
   emailservice: {
     id: "ID",
     smtp_username: "SMTPユーザー名",
-    smtp_username_hint: "SMTPログインアカウント（デフォルトはFromアドレス）",
+    smtp_username_hint: "SMTPサーバーへのログインに使用するメールアカウント。",
     reply_to: "返信先",
-    reply_to_hint: "返信用のオプションアドレス（なしの場合は空欄）",
-    from: "送信者アカウント",
-    from_hint: "メール送信者アカウントを入力",
+    reply_to_hint:
+      "返信はここに送信されます。空欄の場合はFromアドレスに返信します。",
+    from: "From",
+    from_hint:
+      "受信者が表示するアドレス。メールプロバイダーで送信が許可されている必要があります。",
     password: "パスワード",
     password_hint: "メールパスワードを入力",
     host: "SMTP ホスト",
@@ -1279,6 +1281,15 @@ export default {
       "SMTPサーバーがメッセージの送信を拒否しました。",
     smtp_error_unknown:
       "不明な理由によりメールを送信できませんでした。サーバーの応答を以下に示します。",
+    identity_missing_smtp_username:
+      "このサービスにはSMTPユーザー名が必要です。",
+    identity_from_invalid: "Fromアドレスが有効なメールアドレスではありません。",
+    identity_reply_to_invalid:
+      "返信先アドレスが有効なメールアドレスではありません。",
+    identity_changed_after_approval:
+      "承認後に送信 identity（SMTPユーザー名・From・返信先）が変更されました。送信前に再確認が必要です。",
+    identity_import_password_required:
+      "このメールサービス行をインポートするにはパスワードが必要です。",
   },
   buckemailsend: {
     email_source: "メールソース",
