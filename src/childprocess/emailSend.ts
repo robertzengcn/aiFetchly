@@ -1028,24 +1028,9 @@ export class EmailSend {
       };
       //replace variable in email template
       const emailTpldata = convertVariableInTemplate(previewData);
-      //send email
-      // Create a transporter object
-      // const transporter = nodemailer.createTransport({
-      //     host: randomEmailservice.host,
-      //     port: Number(randomEmailservice.port) || 0,
-      //     secure: randomEmailservice.ssl, // true for 465, false for other ports
-      //     auth: {
-      //         user: randomEmailservice.from, // your SMTP username
-      //         pass: randomEmailservice.password, // your SMTP password
-      //     }
-      // } as nodemailer.TransportOptions);
-      // // Configure the mailoptions object
-      // const mailOptions = {
-      //     from: randomEmailservice.from,
-      //     to: item.address,
-      //     subject: emailTpldata.TplTitle,
-      //     text: emailTpldata.TplContent
-      // };
+      // Build the service identity and send through the EmailService class,
+      // which resolves AUTH user (smtpUsername → from) and the conditional
+      // Reply-To header via resolveEmailServiceIdentity (§7.1, AD-003).
       const emailserviceenditydata: EmailServiceEntitydata = {
         name: randomEmailservice.name,
         from: randomEmailservice.from,

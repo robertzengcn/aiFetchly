@@ -68,7 +68,11 @@ export class EmailServiceEntity extends AuditableEntity {
   @Column({ type: "integer", default: 1 })
   pop3Ssl: number;
 
-  /** Receive username. Falls back to SMTP `from` when null (common for shared mailboxes). */
+  /**
+   * Receive username. Falls back to `smtpUsername` then `from` when null
+   * (common for shared mailboxes) — see `resolveEmailServiceIdentity` for the
+   * authoritative three-step chain (§6.1/§14).
+   */
   @Column({ type: "varchar", length: 255, nullable: true })
   receiveUsername: string | null;
 
