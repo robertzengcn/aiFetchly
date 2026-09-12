@@ -9,13 +9,28 @@ import { Token } from "@/modules/token";
 const mockPostJsonShared = vi.fn();
 const mockGetShared = vi.fn();
 const mockPostStreamShared = vi.fn();
-vi.mock("@/modules/lib/httpclient", () => ({
-  HttpClient: vi.fn().mockImplementation(() => ({
-    postJson: mockPostJsonShared,
-    get: mockGetShared,
-    postStream: mockPostStreamShared,
-  })),
-}));
+vi.mock("@/modules/lib/httpclient", () => {
+  // Mirror of the real HttpResponseError so `instanceof` checks in the
+  // module under test evaluate instead of throwing.
+  class HttpResponseError extends Error {
+    readonly status: number;
+    readonly statusText: string;
+    constructor(status: number, statusText: string) {
+      super(statusText || `HTTP ${status}`);
+      this.name = "HttpResponseError";
+      this.status = status;
+      this.statusText = statusText;
+    }
+  }
+  return {
+    HttpClient: vi.fn().mockImplementation(() => ({
+      postJson: mockPostJsonShared,
+      get: mockGetShared,
+      postStream: mockPostStreamShared,
+    })),
+    HttpResponseError,
+  };
+});
 
 // Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
 // USER_AI_ENABLED constant from @/config/usersetting is 'user_ai_enabled'

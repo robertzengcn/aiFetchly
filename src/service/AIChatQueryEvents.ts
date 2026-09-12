@@ -478,6 +478,23 @@ export interface AIChatQueryLoopInput {
     baseDelayMs?: number;
   };
   /**
+   * Optional override for the per-turn model→tool→model round cap.
+   * Tests use a small value; production omits this and uses the default.
+   */
+  maxToolRounds?: number;
+  /**
+   * Optional override for how many hidden continuation cycles may start
+   * after the per-cycle tool-round cap. Tests use a small value.
+   */
+  maxRoundCapContinuations?: number;
+  /**
+   * When true, the hidden round-cap continuation tells the model to keep
+   * going until the goal's completion conditions are met. All chat turns
+   * auto-continue past the cap; this only changes that in-memory prompt.
+   * Engine sets this for chat-mode turns that have a non-terminal goal.
+   */
+  goalAutoContinue?: boolean;
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.

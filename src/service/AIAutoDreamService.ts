@@ -17,6 +17,7 @@ import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
 } from "@/api/aiChatApi";
+import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES = 5;
@@ -46,9 +47,12 @@ export class AIAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; sent as the fallback when the
+     * hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[ai-auto-dream] chat trigger failed:", err);
     }
@@ -57,9 +61,12 @@ export class AIAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, used as the fallback when
+     * the hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[ai-auto-dream] agent trigger failed:", err);
     }
@@ -68,11 +75,15 @@ export class AIAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Explicit fallback model for the "small"-alias retry. When omitted the
+     * retry (if needed) carries no model and the server applies its default. */
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Auto-dream run skipped");
@@ -97,6 +108,7 @@ export class AIAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -111,6 +123,7 @@ export class AIAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
@@ -153,6 +166,13 @@ export class AIAutoDreamService {
       });
 
       const req: OpenAIChatCompletionRequest = {
+        // Route background consolidation through the hosted server's virtual
+        // "small" alias (cheap model). `fallbackModel` carries the triggering
+        // turn/task model for the single retry when the server has no small
+        // row flagged; local providers ignore the alias and use their
+        // configured default model instead.
+        model: SMALL_MODEL_ALIAS,
+        ...(input.model ? { fallbackModel: input.model } : {}),
         messages: [
           { role: "system", content: buildAutoDreamSystemPrompt() },
           {

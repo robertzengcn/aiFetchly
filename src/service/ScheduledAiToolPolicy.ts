@@ -65,6 +65,7 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // General read-only
   "open_app_page",
   "knowledge_library_search",
+  "conversation_tool_history",
   "file_read",
   "glob_files",
   "grep_files",
@@ -116,6 +117,7 @@ export function hasScheduledLoopEmailInboxIntent(prompt: string): boolean {
 export function suggestScheduledLoopAutomationTools(
   _prompt: string
 ): readonly string[] {
+  void _prompt;
   return [];
 }
 

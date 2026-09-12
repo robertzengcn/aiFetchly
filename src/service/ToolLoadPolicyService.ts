@@ -36,6 +36,7 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_attachment_content",
   "knowledge_library_search",
   "run_subagent",
+  "conversation_tool_history",
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([

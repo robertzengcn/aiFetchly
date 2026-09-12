@@ -117,12 +117,16 @@ export function registerAIUserMemoryIpcHandlers(): void {
       return denied("AI functionality is only available to subscribers.");
     }
     try {
-      const req = (safeParse<{ force?: boolean }>(data) ?? {}) as {
+      const req = (safeParse<{ force?: boolean; model?: string }>(data) ??
+        {}) as {
         force?: boolean;
+        model?: string;
       };
+      const model = typeof req.model === "string" ? req.model.trim() : "";
       const result = await getSharedAutoDreamService().runNow({
         force: req.force === true,
         reason: "manual_ipc",
+        ...(model.length > 0 ? { model } : {}),
       });
       return ok(result);
     } catch (err) {

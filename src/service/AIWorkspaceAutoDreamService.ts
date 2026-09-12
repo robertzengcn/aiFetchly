@@ -20,6 +20,7 @@ import type {
   OpenAIChatCompletionResponse,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -66,9 +67,12 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; sent as the fallback when the
+     * hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[workspace-auto-dream] chat trigger failed:", err);
     }
@@ -77,9 +81,12 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, used as the fallback when
+     * the hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       console.error("[workspace-auto-dream] agent trigger failed:", err);
     }
@@ -88,11 +95,15 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Explicit fallback model for the "small"-alias retry. When omitted the
+     * retry (if needed) carries no model and the server applies its default. */
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -117,6 +128,7 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -131,6 +143,7 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
@@ -158,7 +171,8 @@ export class AIWorkspaceAutoDreamService {
       const view = await this.runForGroup(
         group,
         reviewedSince,
-        input.force === true
+        input.force === true,
+        input.model
       );
       if (view) results.push(view);
     }
@@ -187,7 +201,8 @@ export class AIWorkspaceAutoDreamService {
   private async runForGroup(
     group: WorkspacePacketGroup,
     reviewedSince: Date | null,
-    force: boolean
+    force: boolean,
+    model?: string
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
     const scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
@@ -231,6 +246,13 @@ export class AIWorkspaceAutoDreamService {
 
       const validWorkspaceKeys = new Set([group.workspaceKey]);
       const req: OpenAIChatCompletionRequest = {
+        // Route background consolidation through the hosted server's virtual
+        // "small" alias (cheap model). `fallbackModel` carries the triggering
+        // turn/task model for the single retry when the server has no small
+        // row flagged; local providers ignore the alias and use their
+        // configured default model instead.
+        model: SMALL_MODEL_ALIAS,
+        ...(model ? { fallbackModel: model } : {}),
         messages: [
           { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
           {
