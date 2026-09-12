@@ -191,13 +191,13 @@ FR list, but they should still be closed on this branch.
 
 ### P2.1 Observability counters
 
-- [ ] Emit `email_service_identity_legacy_fallback`.
-- [ ] Emit `email_service_import_password_preserved`.
-- [ ] Emit `email_service_import_new_password_missing`.
-- [ ] Align outbound identity-change naming: design says
-      `outbound_identity_changed`; code uses `sender_identity_changed`. Pick
+- [x] Emit `email_service_identity_legacy_fallback`.
+- [x] Emit `email_service_import_password_preserved`.
+- [x] Emit `email_service_import_new_password_missing`.
+- [x] Align outbound identity-change naming: design says
+      `sender_identity_changed` (code already uses it everywhere; aligned the 2 doc lines that said `outbound_identity_changed`). Pick
       one and use it in metrics, status, and tests.
-- [ ] Do not use SMTP username or email address as a metric label.
+- [x] Do not use SMTP username or email address as a metric label.
 
 **Covers:** technical design §21.
 
@@ -206,19 +206,19 @@ FR list, but they should still be closed on this branch.
 Several delivery/compare sites still inline `smtpUsername ?? from` instead of
 calling `resolveEmailServiceIdentity()`.
 
-- [ ] Replace inline fallbacks in `EmailReplySendBinding`,
+- [x] Replace inline fallbacks in `EmailReplySendBinding`,
       `OutboundEmailDeliveryService`, `OutboundEmailWorkerStarter`, and
-      `emailSend.ts` with the shared resolver.
-- [ ] Add or extend tests so a drift in fallback rules would fail.
+      `emailSend.ts` with the shared resolver (also `outboundEmailDelivery-ipc.ts`).
+- [x] Add or extend tests so a drift in fallback rules would fail (EmailServiceIdentityResolver drift guard).
 
 **Covers:** technical design AD-003, §7.1.
 
 ### P2.3 Hygiene
 
-- [ ] Update the `receiveUsername` entity comment: fallback is
+- [x] Update the `receiveUsername` entity comment: fallback is
       `receiveUsername → smtpUsername → from`, not From only.
-- [ ] Remove or replace the commented-out `user: randomEmailservice.from`
-      block in `src/childprocess/emailSend.ts` so it cannot be copied back in.
+- [x] Remove or replace the commented-out `user: randomEmailservice.from`
+      block in `src/childprocess/emailSend.ts` so it cannot be copied back in (removed).
 
 **Covers:** technical design §6.1, §14.
 

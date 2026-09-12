@@ -7,7 +7,15 @@
  * (providers may treat non-email logins as case-sensitive), and never mutates
  * its input. It does not repair invalid From/Reply-To addresses; validation owns
  * that decision.
+ *
+ * The only side effect is a best-effort observability counter
+ * (`email_service_identity_legacy_fallback_total`, §21) fired when the fallback
+ * path is taken. The metrics emitter swallows all errors, so this never affects
+ * the resolved value or breaks callers — it keeps the fallback detection in the
+ * single place that owns the rule (AD-003).
  */
+import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
+
 export interface EmailServiceIdentityInput {
   readonly smtpUsername?: string | null;
   readonly from: string;
@@ -35,7 +43,15 @@ export function resolveEmailServiceIdentity(
   input: EmailServiceIdentityInput
 ): ResolvedEmailServiceIdentity {
   const fromAddress = input.from.trim();
-  const smtpUsername = input.smtpUsername?.trim() || fromAddress;
+  const trimmedSmtp = input.smtpUsername?.trim();
+  const smtpUsername = trimmedSmtp || fromAddress;
+  // §21 observability: when no explicit smtpUsername is configured, the
+  // identity falls back to the From address (legacy compatibility path).
+  // Emit a counter so a migration away from this fallback is visible. The
+  // emitter swallows errors, so this never affects the resolved value.
+  if (!trimmedSmtp) {
+    incrementEmailServiceMetric("identity_legacy_fallback");
+  }
   const replyToAddress = input.replyTo?.trim() || null;
   const receiveUsername =
     input.receiveUsername?.trim() || smtpUsername || fromAddress;

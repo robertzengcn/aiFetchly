@@ -55,6 +55,11 @@ const validateStub = vi.hoisted(() =>
   )
 );
 
+// Hoisted metrics stub so the P2.1 counters fired inside importEmailServices
+// are observable without depending on the real logger. Each call pushes the
+// metric name into this array; tests assert on the counts.
+const metricsStub = vi.hoisted(() => vi.fn((_name: string) => {}));
+
 vi.mock("@/modules/emailServiceModule", () => ({
   EmailServiceModule: class {
     async createEmailService(entity: EmailServiceEntity): Promise<number> {
@@ -121,6 +126,13 @@ vi.mock("@/modules/EmailFilterModule", () => ({
 }));
 vi.mock("@/modules/EmailFilterDetailModule", () => ({
   EmailFilterDetailModule: class {},
+}));
+
+// Mock the metrics module so the P2.1 counters fired during import are
+// observable without going through the real logger. Delegates to the hoisted
+// stub so beforeEach can reset call history between tests.
+vi.mock("@/modules/lib/EmailServiceMetrics", () => ({
+  incrementEmailServiceMetric: (name: string) => metricsStub(name),
 }));
 
 import { EmailMarketingController } from "@/controller/emailMarketingController";
@@ -217,6 +229,8 @@ describe("EmailMarketingController.importEmailServices — Scenario D aliases on
     // per-test override (e.g. the blank-password rejection) does not leak.
     validateStub.mockReset();
     validateStub.mockResolvedValue({ valid: true, errors: [] });
+    // Reset the metrics stub so counter-call counts are per-test.
+    metricsStub.mockReset();
   });
 
   it("imports three aliases sharing one SMTP login as three independent records", async () => {
@@ -344,5 +358,70 @@ describe("EmailMarketingController.importEmailServices — Scenario D aliases on
     // The rejected password value must never appear in the error message.
     expect(result.errors[0]).not.toContain(sharedPassword);
     expect(created).toHaveLength(0);
+  });
+
+  // P2.1 (§21): the two import password counters must fire on the right
+  // conditions and never carry the password or any identity value (the stub
+  // only receives the metric name, never a label with private content).
+  it("fires import_password_preserved when an update row omits the password (P2.1)", async () => {
+    const controller = new EmailMarketingController();
+    const rows = scenarioDRows();
+    // Seed the store so all three rows hit the update path.
+    existingByName = new Map(
+      rows.map((r, i) => {
+        const existing = new EmailServiceEntity();
+        existing.id = i + 1;
+        existing.name = r.name;
+        existing.from = r.from;
+        existing.smtpUsername = r.smtpUsername;
+        existing.replyTo = r.replyTo ?? null;
+        existing.password = "old-stored-pass";
+        existing.host = r.host;
+        existing.port = r.port;
+        existing.ssl = r.ssl;
+        return [r.name, existing] as const;
+      })
+    );
+    // Re-import WITHOUT passwords — every row must preserve the stored one.
+    const noPwRows = rows.map(({ password: _password, ...rest }) => ({
+      ...rest,
+      password: "",
+    }));
+    // The scenario rows carry an explicit smtpUsername, so the legacy-fallback
+    // counter should NOT fire here — only import_password_preserved.
+    const result = await controller.importEmailServices(
+      rowsToCsv(noPwRows),
+      "csv"
+    );
+    expect(result.imported).toBe(3);
+    const names = metricsStub.mock.calls.map((c) => c[0]);
+    expect(names.filter((n) => n === "import_password_preserved")).toHaveLength(
+      3
+    );
+    expect(names).not.toContain("import_new_password_missing");
+  });
+
+  it("fires import_new_password_missing when a create row has no password (P2.1)", async () => {
+    const controller = new EmailMarketingController();
+    const rows: AliasRow[] = [
+      {
+        name: "No Password",
+        from: "nopw@example.com",
+        smtpUsername: sharedSmtpUsername,
+        password: "", // blank — create mode requires it
+        host: sharedHost,
+        port: sharedPort,
+        ssl: 0,
+      },
+    ];
+    // Reject the blank password the way the production validator does.
+    validateStub.mockResolvedValue({
+      valid: false,
+      errors: [{ code: "password_required", message: "Password is required" }],
+    });
+    await controller.importEmailServices(rowsToCsv(rows), "csv");
+    const names = metricsStub.mock.calls.map((c) => c[0]);
+    expect(names).toContain("import_new_password_missing");
+    expect(names).not.toContain("import_password_preserved");
   });
 });

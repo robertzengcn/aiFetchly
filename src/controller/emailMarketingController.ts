@@ -12,6 +12,7 @@ import {
 } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
 import { EmailTemplateModuleInterface } from "@/modules/interface/EmailTemplateModuleInterface";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterTaskRelationModule } from "@/modules/EmailFilterTaskRelationModule";
@@ -507,6 +508,12 @@ export class EmailMarketingController {
           values.password && values.password.length > 0
             ? values.password
             : ex.password; // blank/absent password NEVER clears on update (§10.4)
+        // §21 observability: an import update that kept the stored password
+        // because the import row omitted/blanked it. No labels — the counter
+        // never carries the password or any identity value.
+        if (!(values.password && values.password.length > 0)) {
+          incrementEmailServiceMetric("import_password_preserved");
+        }
         candidate.receiveProtocol =
           present.has("receiveProtocol") && values.receiveProtocol
             ? values.receiveProtocol
@@ -543,6 +550,13 @@ export class EmailMarketingController {
         candidate.from = (values.from ?? "") as string;
         candidate.ssl = (values.ssl ?? 1) as number;
         candidate.password = (values.password ?? "") as string;
+        // §21 observability: an import create row that arrived without a
+        // password (FR-002 requires one in create mode). Validation below will
+        // reject it; this counter makes the gap visible before that. No labels
+        // — never carries the password or any identity value.
+        if (!values.password || values.password.length === 0) {
+          incrementEmailServiceMetric("import_new_password_missing");
+        }
         candidate.receiveProtocol = values.receiveProtocol ?? "imap";
         candidate.imapHost = values.imapHost ?? null;
         candidate.imapPort = values.imapPort ?? null;
