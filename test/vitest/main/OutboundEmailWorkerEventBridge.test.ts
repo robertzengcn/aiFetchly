@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { OutboundEmailWorkerEventBridge } from "@/service/outboundEmail/OutboundEmailWorkerEventBridge";
 import { OutboundEmailDeliveryService } from "@/service/outboundEmail/OutboundEmailDeliveryService";
+import type { ClaimResult } from "@/service/outboundEmail/OutboundEmailDeliveryService";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
 import { OutboundEmailDraftService } from "@/service/outboundEmail/OutboundEmailDraftService";
 import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model";
@@ -8,6 +9,12 @@ import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailAuditLogModel } from "@/model/OutboundEmailAuditLog.model";
 import { SqliteDb } from "@/config/SqliteDb";
 import type { EmailItem } from "@/entityTypes/emailmarketingType";
+
+/** Narrow a ClaimResult to its attemptId-carrying statuses. */
+function attemptIdOf(claim: ClaimResult): number {
+  if ("attemptId" in claim) return claim.attemptId;
+  throw new Error(`expected claim to carry an attemptId, got ${claim.status}`);
+}
 import type {
   AuthorizedEmailWorkerEvent,
   AuthorizedEmailWorkerEventSubmitted,
@@ -41,6 +48,35 @@ function recipients(): EmailItem[] {
   return [{ address: "a@example.com", title: "A", source: "direct" }];
 }
 
+/**
+ * Seed an email-service row with id=1 whose resolved identity matches what
+ * `generateBatch` freezes into the revision (from=sender@example.com,
+ * smtpUsername=null→resolves to from, replyTo=null). The §15.5 identity-reload
+ * gate reads this row at claim time; without it, `readIdentity(1)` returns
+ * null and the claim aborts with `sender_identity_changed`.
+ */
+async function seedEmailService(overrides?: {
+  from?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
+}): Promise<void> {
+  const { EmailServiceModel } = await import("@/model/EmailService.model");
+  const { EmailServiceEntity } = await import("@/entity/EmailService.entity");
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.id = 1;
+  entity.name = "Primary";
+  entity.from = overrides?.from ?? "sender@example.com";
+  entity.smtpUsername = overrides?.smtpUsername ?? null;
+  entity.replyTo = overrides?.replyTo ?? null;
+  entity.password = "secret";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  await model.create(entity);
+}
+
 async function seedAndClaim(): Promise<{
   batchId: number;
   attemptId: number;
@@ -51,6 +87,7 @@ async function seedAndClaim(): Promise<{
 }> {
   SqliteDb.getInstance(tmpDir);
   await SqliteDb.ensureInitialized();
+  await seedEmailService();
 
   const draftService = new OutboundEmailDraftService(tmpDir, {
     aiEnabledOverride: true,
@@ -131,14 +168,14 @@ async function seedAndClaim(): Promise<{
   // The outcome's envelopeHash is the one the bridge must match against.
   const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
   const outcome = await deliveryModel.findOutcomeByAttemptAndDraft(
-    result.attemptId!,
+    attemptIdOf(result),
     drafts[0].id
   );
   expect(outcome).not.toBeNull();
 
   return {
     batchId: generated.batchId!,
-    attemptId: result.attemptId!,
+    attemptId: attemptIdOf(result),
     draftId: drafts[0].id,
     revisionId: revision!.id,
     envelopeHash: outcome!.envelopeHash,

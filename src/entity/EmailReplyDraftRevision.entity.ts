@@ -49,6 +49,28 @@ export class EmailReplyDraftRevisionEntity extends AuditableEntity {
   @Column("varchar", { length: 64 })
   contentHash: string;
 
+  /**
+   * Envelope schema version bound to this revision (1 = legacy, 2 = identity-bound).
+   * Defaults to 1 so existing rows and callers that don't set it stay on the v1
+   * hash path (additive, no data loss under TypeORM synchronize).
+   */
+  @Column("integer", { default: 1 })
+  envelopeVersion: 1 | 2;
+
+  /**
+   * Effective SMTP login username frozen on this revision (§18.1). Null for v1
+   * revisions; populated for v2 revisions by the materializer.
+   */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  smtpUsername: string | null;
+
+  /**
+   * Effective Reply-To frozen on this revision (§18.1). Null for v1 revisions
+   * and for v2 revisions where the service has no configured Reply-To.
+   */
+  @Column({ type: "varchar", length: 320, nullable: true })
+  replyToAddress: string | null;
+
   /** Sanitized generation metadata (versions, truncation/summary flags). No prompts. */
   @Column("text", { nullable: true })
   generationMetadataJson: string | null;

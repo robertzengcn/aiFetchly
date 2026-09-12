@@ -63,6 +63,22 @@ async function seedSmtpService(): Promise<number> {
   return await model.create(entity);
 }
 
+/** A service with a separated identity: SMTP login ≠ From, and a Reply-To. */
+async function seedAliasLoginService(): Promise<number> {
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.name = "Sales alias";
+  entity.from = "sales@svc.com";
+  entity.smtpUsername = "login@svc.com";
+  entity.replyTo = "replies@svc.com";
+  entity.password = "smtp-secret";
+  entity.host = "smtp.svc.com";
+  entity.port = "587";
+  entity.ssl = 0;
+  entity.status = 1;
+  return await model.create(entity);
+}
+
 async function seedTemplate(): Promise<number> {
   const model = new EmailTemplateModel(tmpDir);
   const entity = new EmailTemplateEntity();
@@ -199,5 +215,28 @@ describe("BuckEmailTaskModule.prepareData local SMTP services", () => {
         content: "competitor\\.com",
       }),
     ]);
+  });
+
+  it("passes the service identity (smtpUsername/replyTo) to the worker for send-log identity (FR-014)", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const serviceId = await seedAliasLoginService();
+
+    const module = new BuckEmailTaskModule();
+    await module.ensureConnection();
+    const taskId = await module.createBuckEmailTask(
+      skipReviewCampaign(serviceId)
+    );
+
+    const prepared = await module.prepareData(taskId);
+
+    // The child must receive the separated identity so it authenticates as
+    // the SMTP login and logs what it presented (FR-014).
+    expect(prepared.Emailservicelist[0]).toMatchObject({
+      id: serviceId,
+      from: "sales@svc.com",
+      smtpUsername: "login@svc.com",
+      replyTo: "replies@svc.com",
+    });
   });
 });

@@ -1,7 +1,48 @@
-import { describe, it, expect, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+  vi,
+} from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { SqliteDb } from "@/config/SqliteDb";
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
+
+// PluginManagementModule resolves its dbpath via Token.getValue(USERSDBPATH)
+// -> BaseModule fallback to the shared `aifetchly-test` dir. Under parallel
+// vitest workers, two workers running TypeORM synchronize() DDL against that
+// shared file throw SQLITE_BUSY. Mock Token so USERSDBPATH points at an
+// isolated per-run temp path, then reset the SqliteDb singleton onto it.
+// Mirrors the Token-mock isolation in EmailReplyRecovery.model.test.ts.
+const mockTokenStore = vi.hoisted(() => new Map<string, string>());
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({
+    getValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.get(key) ?? ""),
+    setValue: vi
+      .fn()
+      .mockImplementation((key: string, value: string) =>
+        mockTokenStore.set(key, value)
+      ),
+    deleteValue: vi
+      .fn()
+      .mockImplementation((key: string) => mockTokenStore.delete(key)),
+    hasValue: vi
+      .fn()
+      .mockImplementation(
+        (key: string) =>
+          mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
+      ),
+  })),
+}));
 
 afterEach(() => {
   // Singleton store — keep cases isolated.
@@ -9,6 +50,29 @@ afterEach(() => {
 });
 
 describe("PluginDiagnosticsService redaction", () => {
+  beforeAll(async () => {
+    const dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-plugin-diag-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    mockTokenStore.set("USERSDBPATH", dbpath);
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+  });
+
+  afterAll(async () => {
+    const dbpath = mockTokenStore.get("USERSDBPATH");
+    await SqliteDb.destroyInstance();
+    if (dbpath) {
+      try {
+        fs.rmSync(dbpath, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  });
+
   it("redacts api keys, bearer tokens, passwords, and JWTs from string fields", async () => {
     const name = "diag-redact-test";
     const module = new PluginManagementModule();

@@ -13,6 +13,22 @@ export class EmailServiceEntity extends AuditableEntity {
   @Column({ type: "varchar", length: 255 })
   from: string;
 
+  /**
+   * SMTP login username (authentication identity). Nullable for legacy
+   * compatibility (AD-002): a NULL value resolves at runtime to `from`.
+   * NOT email-validated — providers may accept non-email login identifiers.
+   */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  smtpUsername: string | null;
+
+  /**
+   * Optional Reply-To address (where responses go). Nullable: NULL means
+   * no Reply-To header is emitted. Resolved at runtime, never eagerly
+   * backfilled during startup.
+   */
+  @Column({ type: "varchar", length: 320, nullable: true })
+  replyTo: string | null;
+
   @Column({ type: "varchar", length: 255 })
   password: string;
 
@@ -52,7 +68,11 @@ export class EmailServiceEntity extends AuditableEntity {
   @Column({ type: "integer", default: 1 })
   pop3Ssl: number;
 
-  /** Receive username. Falls back to SMTP `from` when null (common for shared mailboxes). */
+  /**
+   * Receive username. Falls back to `smtpUsername` then `from` when null
+   * (common for shared mailboxes) — see `resolveEmailServiceIdentity` for the
+   * authoritative three-step chain (§6.1/§14).
+   */
   @Column({ type: "varchar", length: 255, nullable: true })
   receiveUsername: string | null;
 

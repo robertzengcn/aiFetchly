@@ -120,12 +120,24 @@ treats blank SMTP username as From (technical design §9.2).
 - [x] Decide and document one rule: either the form requires SMTP username
       (FR-001 / FR-005) or blank continues to fall back to From (technical
       design §9.2). Do not leave the PRD and UI disagreeing.
+      **Decision:** the form **requires** SMTP username (FR-001/FR-005). The
+      feature's premise — separate SMTP login from From — means the login must
+      be explicit. The resolver's `smtpUsername ?? from` fallback (§9.2) stays
+      as defense-in-depth for legacy rows and the receive-username path, but
+      the UI no longer lets a user submit a blank SMTP username.
 - [x] Reject CR and LF in SMTP username, From, and Reply-To in the form (or
       surface the module `email_header_break_forbidden` error immediately).
+      Implemented via `identityValidationRules.ts` `noLineBreakRule` (rejects
+      \r, \n, U+2028, U+2029), wired to all three fields.
 - [x] From and non-empty Reply-To keep single-address email validation.
+      From uses `emailRequiredRule`; Reply-To uses `emailOrEmptyRule`.
 - [x] SMTP username uses required/length validation without email-only syntax
-      if the chosen rule is “required.”
+      if the chosen rule is "required."
+      `requiredRule` (non-empty after trim) + `noLineBreakRule`. No email-shape
+      rule — some SMTP logins are not email addresses.
 - [x] Extend `EmailServiceDetail.test.ts` for the chosen validation behavior.
+      Added a From-relabeled-copy assertion; the rule functions are covered by
+      `identityValidationRules.test.ts` (18 cases).
 
 **Covers:** FR-001, FR-005.
 
@@ -168,8 +180,8 @@ Behavior is allowed (duplicate detection uses name, then host+From). There is
 no dedicated test that three rows with unique names/From and the same SMTP
 username/host/password all import as separate records.
 
-- [ ] Add an import test for Scenario D (Sales / Support / Billing aliases).
-- [ ] Assert they remain independently selectable by service id.
+- [x] Add an import test for Scenario D (Sales / Support / Billing aliases).
+- [x] Assert they remain independently selectable by service id.
 
 **Covers:** FR-002, Scenario D; technical design §23.3.
 
@@ -182,13 +194,13 @@ FR list, but they should still be closed on this branch.
 
 ### P2.1 Observability counters
 
-- [ ] Emit `email_service_identity_legacy_fallback`.
-- [ ] Emit `email_service_import_password_preserved`.
-- [ ] Emit `email_service_import_new_password_missing`.
-- [ ] Align outbound identity-change naming: design says
-      `outbound_identity_changed`; code uses `sender_identity_changed`. Pick
+- [x] Emit `email_service_identity_legacy_fallback`.
+- [x] Emit `email_service_import_password_preserved`.
+- [x] Emit `email_service_import_new_password_missing`.
+- [x] Align outbound identity-change naming: design says
+      `sender_identity_changed` (code already uses it everywhere; aligned the 2 doc lines that said `outbound_identity_changed`). Pick
       one and use it in metrics, status, and tests.
-- [ ] Do not use SMTP username or email address as a metric label.
+- [x] Do not use SMTP username or email address as a metric label.
 
 **Covers:** technical design §21.
 
@@ -197,19 +209,19 @@ FR list, but they should still be closed on this branch.
 Several delivery/compare sites still inline `smtpUsername ?? from` instead of
 calling `resolveEmailServiceIdentity()`.
 
-- [ ] Replace inline fallbacks in `EmailReplySendBinding`,
+- [x] Replace inline fallbacks in `EmailReplySendBinding`,
       `OutboundEmailDeliveryService`, `OutboundEmailWorkerStarter`, and
-      `emailSend.ts` with the shared resolver.
-- [ ] Add or extend tests so a drift in fallback rules would fail.
+      `emailSend.ts` with the shared resolver (also `outboundEmailDelivery-ipc.ts`).
+- [x] Add or extend tests so a drift in fallback rules would fail (EmailServiceIdentityResolver drift guard).
 
 **Covers:** technical design AD-003, §7.1.
 
 ### P2.3 Hygiene
 
-- [ ] Update the `receiveUsername` entity comment: fallback is
+- [x] Update the `receiveUsername` entity comment: fallback is
       `receiveUsername → smtpUsername → from`, not From only.
-- [ ] Remove or replace the commented-out `user: randomEmailservice.from`
-      block in `src/childprocess/emailSend.ts` so it cannot be copied back in.
+- [x] Remove or replace the commented-out `user: randomEmailservice.from`
+      block in `src/childprocess/emailSend.ts` so it cannot be copied back in (removed).
 
 **Covers:** technical design §6.1, §14.
 

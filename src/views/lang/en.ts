@@ -1254,8 +1254,14 @@ export default {
   },
   emailservice: {
     id: "id",
-    from: "sender account",
-    from_hint: "input email sender account",
+    smtp_username: "SMTP username",
+    smtp_username_hint:
+      "The mailbox account used to sign in to your SMTP server.",
+    reply_to: "Reply-To",
+    reply_to_hint: "Replies go here. Leave empty to reply to the From address.",
+    from: "From",
+    from_hint:
+      "The address recipients see. It must be allowed by your email provider.",
     password: "password",
     password_hint: "input email password",
     host: "SMTP Host",
@@ -1283,6 +1289,67 @@ export default {
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
     required_fields_missing: "Please fill in all required fields",
+    // §19.2 SMTP failure categories — distinct, localized messages so the
+    // Test Email dialog and reply send show actionable guidance instead of
+    // raw provider text. From-alias rejection tells the user to verify the
+    // alias with their email provider (PRD §15); auth/recipient/TLS/connection
+    // are NOT treated as alias issues.
+    smtp_error_auth_failed:
+      "SMTP authentication failed. Check the SMTP username and password for this service.",
+    smtp_error_from_rejected:
+      "The From address was rejected by your email provider. Verify this alias is allowed to send on this login.",
+    smtp_error_recipient_rejected:
+      "The recipient address was rejected by the email provider.",
+    smtp_error_tls_failed:
+      "TLS or certificate error connecting to the SMTP server. Check the SSL/TLS setting and port (465 uses implicit SSL, 587 uses STARTTLS).",
+    smtp_error_connection_failed:
+      "Could not connect to the SMTP server. Check the host, port, and network.",
+    smtp_error_submission_failed:
+      "The SMTP server rejected the message submission.",
+    smtp_error_unknown:
+      "The email could not be sent for an unknown reason. The server response is shown below.",
+    // §15 identity validation and approval categories — distinct from the
+    // SMTP transport codes above. These surface validation/approval outcomes
+    // rather than provider responses.
+    identity_missing_smtp_username:
+      "An SMTP username is required for this service.",
+    identity_from_invalid: "The From address is not a valid email address.",
+    identity_reply_to_invalid:
+      "The Reply-To address is not a valid email address.",
+    identity_changed_after_approval:
+      "The send identity (SMTP username, From, or Reply-To) changed after approval. Re-review is required before sending.",
+    identity_import_password_required:
+      "A password is required to import this email service row.",
+    identity_header_break_forbidden:
+      "Line breaks are not allowed in this field.",
+  },
+  // Approved-reply send binding failures (P1.2, FR-013). Distinct messages so
+  // the user can tell exactly which binding check failed.
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "The send approval does not match this draft. Approve the reply again.",
+    approval_stale:
+      "The reply was edited after approval. Review and approve it again.",
+    hash_mismatch:
+      "The approved reply content no longer matches. Review and approve it again.",
+    revision_hash_mismatch:
+      "The reply revision no longer matches the approved envelope. Review and approve it again.",
+    mailbox_mismatch:
+      "The reply draft, original message, and email service do not share one mailbox.",
+    service_inactive:
+      "The email service for this reply is disabled. Enable it and try again.",
+    service_missing:
+      "The email service for this reply could not be found. Re-select the service in the draft.",
+    sender_mismatch:
+      "The From address changed after approval. Review and approve the reply again.",
+    recipient_mismatch:
+      "The recipient no longer matches the original sender or their Reply-To address.",
+    smtp_username_mismatch:
+      "The SMTP username changed after approval. Review and approve the reply again.",
+    reply_to_mismatch:
+      "The Reply-To address changed after approval. Review and approve the reply again.",
+    legacy_reply_identity_requires_review:
+      "The email service identity changed after this approval was created. Review and approve the reply again.",
   },
   buckemailsend: {
     email_source: "Email Source",
@@ -1337,6 +1404,10 @@ export default {
     draft_id: "draft id",
     revision_id: "revision id",
     attempt_id: "send attempt id",
+    from_address: "From address",
+    email_service: "email service",
+    smtp_username: "SMTP username",
+    reply_to: "Reply-To",
     detail_not_found: "Send log record not found",
   },
   socialaccount: {

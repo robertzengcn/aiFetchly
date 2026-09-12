@@ -16,6 +16,12 @@ const mockExportEmailServices = vi.hoisted(() => vi.fn());
 const mockShowSaveDialog = vi.hoisted(() => vi.fn());
 const mockImportEmailServices = vi.hoisted(() => vi.fn());
 const mockShowOpenDialog = vi.hoisted(() => vi.fn());
+// EMAILSERVICEUPDATE handler deps.
+const mockGetEmailServiceEntity = vi.hoisted(() => vi.fn());
+const mockFindEmailServiceByName = vi.hoisted(() => vi.fn());
+const mockValidateEmailServiceForSave = vi.hoisted(() => vi.fn());
+const mockUpdateEmailService = vi.hoisted(() => vi.fn());
+const mockCreateEmailService = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   app: { getPath: vi.fn().mockReturnValue(os.tmpdir()) },
@@ -27,6 +33,11 @@ vi.mock("@/controller/emailMarketingController", () => ({
   EmailMarketingController: vi.fn().mockImplementation(() => ({
     exportEmailServices: mockExportEmailServices,
     importEmailServices: mockImportEmailServices,
+    getEmailServiceEntity: mockGetEmailServiceEntity,
+    findEmailServiceByName: mockFindEmailServiceByName,
+    validateEmailServiceForSave: mockValidateEmailServiceForSave,
+    updateEmailService: mockUpdateEmailService,
+    createEmailService: mockCreateEmailService,
   })),
 }));
 
@@ -41,8 +52,13 @@ vi.mock("@/service/dialogs/NativeDialogServiceProvider", () => ({
 }));
 
 import { registerEmailMarketingIpcHandlers } from "@/main-process/communication/emailMarketingIpc";
-import { EMAILSERVICEEXPORT, EMAILSERVICEIMPORT } from "@/config/channellist";
+import {
+  EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
+  EMAILSERVICEUPDATE,
+} from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
+import { EmailServiceEntity } from "@/entity/EmailService.entity";
 
 describe("Email Marketing IPC Handlers", () => {
   const tmpExportPath = path.join(
@@ -370,6 +386,268 @@ describe("Email Marketing IPC Handlers", () => {
       expect(result.status).toBe(false);
       expect(result.msg).toBe("import_failed");
       expect(mockImportEmailServices).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("update (EMAILSERVICEUPDATE)", () => {
+    /** Existing row the update handler resolves + merges into. */
+    function makeExistingEntity(): EmailServiceEntity {
+      const entity = new EmailServiceEntity();
+      entity.id = 5;
+      entity.name = "Primary";
+      entity.from = "sender@example.com";
+      entity.smtpUsername = "legacy-login@example.com";
+      entity.replyTo = "replies@example.com";
+      entity.password = "stored-secret";
+      entity.host = "smtp.example.com";
+      entity.port = "465";
+      entity.ssl = 1;
+      return entity;
+    }
+
+    beforeEach(() => {
+      mockGetEmailServiceEntity.mockResolvedValue(makeExistingEntity());
+      mockFindEmailServiceByName.mockResolvedValue(
+        Object.assign(makeExistingEntity(), { id: 5 })
+      );
+      mockValidateEmailServiceForSave.mockResolvedValue(undefined);
+      mockUpdateEmailService.mockResolvedValue(undefined);
+      mockCreateEmailService.mockResolvedValue(9);
+    });
+
+    test("registers the update channel", () => {
+      expect(mockIpcMain.getRegisteredChannels()).toContain(EMAILSERVICEUPDATE);
+    });
+
+    test("updates by id: merges smtpUsername/replyTo, keeps stored password when incoming is blank, validates before persist", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          // Blank incoming values clear the identity fields to null.
+          smtpUsername: "   ",
+          replyTo: "",
+          // Blank password = keep existing (credential sentinel).
+          password: "",
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      expect(result.data!.id).toBe(5);
+
+      // The handler resolved the raw entity and validated the MERGED shape
+      // BEFORE the update call (§7.2 pre-persistence gate).
+      expect(mockGetEmailServiceEntity).toHaveBeenCalledWith(5);
+      expect(mockValidateEmailServiceForSave).toHaveBeenCalledTimes(1);
+      const [entityArg, modeArg, existingIdArg] =
+        mockValidateEmailServiceForSave.mock.calls[0] as [
+          EmailServiceEntity,
+          "update" | "create",
+          number | undefined
+        ];
+      expect(modeArg).toBe("update");
+      expect(existingIdArg).toBe(5);
+      expect(entityArg.smtpUsername).toBeNull();
+      expect(entityArg.replyTo).toBeNull();
+      // Blank password preserved the stored credential.
+      expect(entityArg.password).toBe("stored-secret");
+      // Untouched identity fields preserved from the existing row.
+      expect(entityArg.from).toBe("sender@example.com");
+
+      expect(mockUpdateEmailService).toHaveBeenCalledTimes(1);
+      const [updatedId, updatedEntity] = mockUpdateEmailService.mock
+        .calls[0] as [number, EmailServiceEntity];
+      expect(updatedId).toBe(5);
+      expect(updatedEntity.smtpUsername).toBeNull();
+      expect(updatedEntity.replyTo).toBeNull();
+      expect(mockCreateEmailService).not.toHaveBeenCalled();
+    });
+
+    test("preserves existing smtpUsername/replyTo when the fields are absent from the payload", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          // smtpUsername/replyTo omitted entirely → preserve existing row.
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      const [entityArg] = mockValidateEmailServiceForSave.mock.calls[0] as [
+        EmailServiceEntity
+      ];
+      expect(entityArg.smtpUsername).toBe("legacy-login@example.com");
+      expect(entityArg.replyTo).toBe("replies@example.com");
+      expect(mockUpdateEmailService).toHaveBeenCalledWith(
+        5,
+        expect.objectContaining({
+          smtpUsername: "legacy-login@example.com",
+          replyTo: "replies@example.com",
+        })
+      );
+    });
+
+    test("trims non-blank smtpUsername/replyTo before persisting", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          smtpUsername: "  api-login@example.com  ",
+          replyTo: "  replies@example.com  ",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      const [updatedId, updatedEntity] = mockUpdateEmailService.mock
+        .calls[0] as [number, EmailServiceEntity];
+      expect(updatedId).toBe(5);
+      expect(updatedEntity.smtpUsername).toBe("api-login@example.com");
+      expect(updatedEntity.replyTo).toBe("replies@example.com");
+    });
+
+    test("rejects CR/LF in smtpUsername via validateEmailServiceForSave and never persists (§7.2 header injection)", async () => {
+      // The controller's validation gate throws for header-break input; the
+      // handler must surface status:false and skip the update entirely.
+      mockValidateEmailServiceForSave.mockRejectedValue(
+        new Error("SMTP username must not contain CR or LF characters")
+      );
+
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          smtpUsername: "evil\r\nBcc: victim@example.com",
+          replyTo: "replies@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(result.msg).toContain("CR or LF");
+      expect(mockValidateEmailServiceForSave).toHaveBeenCalledTimes(1);
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+    });
+
+    test("falls back to name lookup when the payload has no usable id", async () => {
+      mockGetEmailServiceEntity.mockClear();
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      // No id → resolved by name, then the same update path.
+      expect(mockFindEmailServiceByName).toHaveBeenCalledWith("Primary");
+      expect(mockGetEmailServiceEntity).toHaveBeenCalledWith(5);
+      expect(mockUpdateEmailService).toHaveBeenCalledTimes(1);
+    });
+
+    test("creates (validates a representative entity) when no existing service matches", async () => {
+      mockFindEmailServiceByName.mockResolvedValue(undefined);
+
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          name: "Brand New",
+          from: "new@example.com",
+          smtpUsername: "new-login@example.com",
+          replyTo: null,
+          password: "fresh-secret",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      expect(result.data!.id).toBe(9);
+
+      // The create path validated a representative entity BEFORE writing.
+      const [createEntity, createMode, createExistingId] =
+        mockValidateEmailServiceForSave.mock.calls[0] as [
+          EmailServiceEntity,
+          "update" | "create",
+          number | undefined
+        ];
+      expect(createMode).toBe("create");
+      expect(createExistingId).toBeUndefined();
+      expect(createEntity.smtpUsername).toBe("new-login@example.com");
+      expect(createEntity.replyTo).toBeNull();
+      expect(createEntity.password).toBe("fresh-secret");
+      expect(mockCreateEmailService).toHaveBeenCalledTimes(1);
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+    });
+
+    test("returns status:false when the resolved service no longer exists", async () => {
+      mockGetEmailServiceEntity.mockResolvedValue(undefined);
+
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 404,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(result.msg).toBe("Email service not found");
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
+    });
+
+    test("denies a payload failing the schema (missing required from) without touching the controller", async () => {
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          // `from` is required by emailServiceUpdateInputSchema.
+        })
+      )) as CommonMessage<null>;
+
+      expect(result.status).toBe(false);
+      expect(mockGetEmailServiceEntity).not.toHaveBeenCalled();
+      expect(mockValidateEmailServiceForSave).not.toHaveBeenCalled();
+      expect(mockUpdateEmailService).not.toHaveBeenCalled();
     });
   });
 });

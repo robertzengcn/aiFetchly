@@ -1244,8 +1244,15 @@ export default {
   },
   emailservice: {
     id: "id",
-    from: "sender account",
-    from_hint: "input email sender account",
+    smtp_username: "Nom d'utilisateur SMTP",
+    smtp_username_hint:
+      "Le compte de messagerie utilisé pour vous connecter à votre serveur SMTP.",
+    reply_to: "Répondre à",
+    reply_to_hint:
+      "Les réponses vont ici. Laisser vide pour répondre à l'adresse From.",
+    from: "From",
+    from_hint:
+      "L'adresse que voient les destinataires. Elle doit être autorisée par votre fournisseur de messagerie.",
     password: "password",
     password_hint: "input email password",
     host: "Hôte SMTP",
@@ -1273,6 +1280,58 @@ export default {
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
     required_fields_missing: "Veuillez remplir tous les champs obligatoires",
+    smtp_error_auth_failed:
+      "Échec de l'authentification SMTP. Vérifiez le nom d'utilisateur et le mot de passe SMTP de ce service.",
+    smtp_error_from_rejected:
+      "L'adresse From a été rejetée par votre fournisseur de messagerie. Vérifiez que cet alias est autorisé à envoyer avec cette connexion.",
+    smtp_error_recipient_rejected:
+      "L'adresse du destinataire a été rejetée par le fournisseur de messagerie.",
+    smtp_error_tls_failed:
+      "Erreur TLS ou de certificat lors de la connexion au serveur SMTP. Vérifiez le paramètre SSL/TLS et le port (465 utilise SSL implicite, 587 utilise STARTTLS).",
+    smtp_error_connection_failed:
+      "Impossible de se connecter au serveur SMTP. Vérifiez l'hôte, le port et le réseau.",
+    smtp_error_submission_failed:
+      "Le serveur SMTP a rejeté l'envoi du message.",
+    smtp_error_unknown:
+      "L'e-mail n'a pas pu être envoyé pour une raison inconnue. La réponse du serveur est affichée ci-dessous.",
+    identity_missing_smtp_username:
+      "Un nom d'utilisateur SMTP est requis pour ce service.",
+    identity_from_invalid:
+      "L'adresse From n'est pas une adresse e-mail valide.",
+    identity_reply_to_invalid:
+      "L'adresse de réponse n'est pas une adresse e-mail valide.",
+    identity_changed_after_approval:
+      "L'identité d'envoi (nom d'utilisateur SMTP, From ou réponse) a changé après approbation. Une nouvelle révision est requise avant l'envoi.",
+    identity_import_password_required:
+      "Un mot de passe est requis pour importer cette ligne de service de messagerie.",
+    identity_header_break_forbidden:
+      "Les sauts de ligne ne sont pas autorisés dans ce champ.",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "L'approbation d'envoi ne correspond pas à ce brouillon. Approuvez à nouveau la réponse.",
+    approval_stale:
+      "La réponse a été modifiée après approbation. Révisez-la et approuvez-la à nouveau.",
+    hash_mismatch:
+      "Le contenu approuvé de la réponse ne correspond plus. Révisez-la et approuvez-la à nouveau.",
+    revision_hash_mismatch:
+      "La révision de la réponse ne correspond plus à l'enveloppe approuvée. Révisez-la et approuvez-la à nouveau.",
+    mailbox_mismatch:
+      "Le brouillon de réponse, le message d'origine et le service de messagerie ne partagent pas la même boîte.",
+    service_inactive:
+      "Le service de messagerie de cette réponse est désactivé. Activez-le et réessayez.",
+    service_missing:
+      "Le service de messagerie de cette réponse est introuvable. Resélectionnez le service dans le brouillon.",
+    sender_mismatch:
+      "L'adresse From a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    recipient_mismatch:
+      "Le destinataire ne correspond plus à l'expéditeur d'origine ou à son adresse de réponse.",
+    smtp_username_mismatch:
+      "Le nom d'utilisateur SMTP a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    reply_to_mismatch:
+      "L'adresse de réponse a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    legacy_reply_identity_requires_review:
+      "L'identité du service de messagerie a changé après la création de cette approbation. Révisez et approuvez à nouveau la réponse.",
   },
   buckemailsend: {
     email_source: "Email Source",
@@ -1327,6 +1386,10 @@ export default {
     draft_id: "id de brouillon",
     revision_id: "id de révision",
     attempt_id: "id de tentative d’envoi",
+    from_address: "adresse From",
+    email_service: "service de messagerie",
+    smtp_username: "utilisateur SMTP",
+    reply_to: "adresse de réponse",
     detail_not_found: "Enregistrement du journal d’envoi introuvable",
   },
   socialaccount: {

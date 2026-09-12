@@ -12,14 +12,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AIFETCHLY_CONFIG_LIMITS,
   DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
@@ -29,6 +22,11 @@ import { resolveConfigRelativePath } from "@/service/aifetchlyConfig/resolveConf
 
 describe("resolveConfigRelativePath (CFG-05)", () => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-path-"));
+  // resolveConfigRelativePath canonicalizes the root before comparing (CFG-05
+  // symlink fix), so ok:true results carry the realpath'd root. On macOS,
+  // os.tmpdir() is lexical /var/... while its realpath is /private/var/... —
+  // assert against the canonical root, not the lexical mkdtemp path.
+  const canonicalRoot = fs.realpathSync(tmpRoot);
 
   afterAll(() => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -38,7 +36,7 @@ describe("resolveConfigRelativePath (CFG-05)", () => {
     const r = resolveConfigRelativePath(tmpRoot, "AGENTS.md");
     expect(r).toEqual({
       ok: true,
-      absolutePath: path.join(tmpRoot, "AGENTS.md"),
+      absolutePath: path.join(canonicalRoot, "AGENTS.md"),
     });
   });
 
@@ -46,7 +44,7 @@ describe("resolveConfigRelativePath (CFG-05)", () => {
     const r = resolveConfigRelativePath(tmpRoot, "commands/review.md");
     expect(r).toEqual({
       ok: true,
-      absolutePath: path.join(tmpRoot, "commands", "review.md"),
+      absolutePath: path.join(canonicalRoot, "commands", "review.md"),
     });
   });
 
@@ -125,7 +123,9 @@ describe("AIFetchlyConfigLoader (CFG-01, CFG-03, CFG-04, CFG-06, DX-01)", () => 
   });
 
   it("CFG-01: missing global config folder returns an empty snapshot, source 'user', no diagnostics", async () => {
-    const loader = new AIFetchlyConfigLoader(path.join(tmpRoot, "does-not-exist"));
+    const loader = new AIFetchlyConfigLoader(
+      path.join(tmpRoot, "does-not-exist")
+    );
     const snap = await loader.scanGlobalRoot();
     expect(snap.source).toBe("user");
     expect(snap.sourceId).toBe("user");
@@ -182,7 +182,9 @@ describe("AIFetchlyConfigLoader (CFG-01, CFG-03, CFG-04, CFG-06, DX-01)", () => 
     fs.writeFileSync(path.join(tmpRoot, "settings.json"), "{ not valid json");
     const loader = new AIFetchlyConfigLoader(tmpRoot);
     const snap = await loader.scanGlobalRoot();
-    const diag = snap.diagnostics.find((d) => d.code === "settings-json-invalid");
+    const diag = snap.diagnostics.find(
+      (d) => d.code === "settings-json-invalid"
+    );
     expect(diag).toBeDefined();
     expect(diag!.severity).toBe("warning");
     expect(loader.getSettings()).toEqual(DEFAULT_AIFETCHLY_CONFIG_SETTINGS);

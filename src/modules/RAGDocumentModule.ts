@@ -227,9 +227,15 @@ export class RAGDocumentModule extends BaseModule {
       fs.mkdirSync(stagingRoot, { recursive: true });
     }
 
-    // If the source is already contained under staging root, no-op.
+    // If the source is already contained under staging root, no-op. Compare
+    // against the CANONICAL staging root — resolvedSource is realpath'd, and
+    // a lexical root false-negatives under symlinked userData paths (macOS
+    // tmpdirs), re-copying every already-staged file.
     const resolvedSource = fs.realpathSync(sourcePath);
-    const rel = path.relative(stagingRoot, resolvedSource);
+    const rel = path.relative(
+      this.getCanonicalUploadStagingDir(),
+      resolvedSource
+    );
     const alreadyStaged =
       !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
     if (alreadyStaged) {
@@ -262,13 +268,25 @@ export class RAGDocumentModule extends BaseModule {
   }
 
   /**
+   * Canonical staging root for containment comparisons. Callers resolve
+   * candidate paths with realpathSync, so the root must be canonical too —
+   * comparing a realpath'd candidate against a LEXICAL root false-positives
+   * whenever the userData path contains a symlink (macOS tmpdirs:
+   * /tmp → /private/tmp). The dir is created by getUploadStagingDir first,
+   * so realpathSync cannot throw here.
+   */
+  private getCanonicalUploadStagingDir(): string {
+    return fs.realpathSync(this.getUploadStagingDir());
+  }
+
+  /**
    * F2/F10 fix — return true iff `target` resolves strictly under the
    * app-owned upload staging directory.
    */
   private isPathUnderUploadStaging(target: string): boolean {
     try {
       const resolved = fs.realpathSync(target);
-      const stagingRoot = this.getUploadStagingDir();
+      const stagingRoot = this.getCanonicalUploadStagingDir();
       const rel = path.relative(stagingRoot, resolved);
       return !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
     } catch {

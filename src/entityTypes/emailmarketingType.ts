@@ -3,6 +3,7 @@ import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
+import type { SmtpFailureCode } from "@/modules/lib/smtpErrorClassifier";
 
 /**
  * AI Email Template tone options
@@ -156,7 +157,9 @@ export type EmailFilterDetialdata = {
 };
 export type EmailServiceEntitydata = {
   id?: number;
+  smtpUsername?: string | null;
   from: string;
+  replyTo?: string | null;
   password: string;
   host: string;
   port: string;
@@ -186,10 +189,28 @@ export type EmailServiceListdata = {
   create_time: string;
 };
 
+/**
+ * Safe (secret-free) single projection of one email service for both CSV and
+ * JSON export (§11.1). Uses the EFFECTIVE smtpUsername so legacy rows export a
+ * usable login identifier. Never contains SMTP or receive passwords.
+ */
+export type SafeEmailServiceExportRow = {
+  id: number;
+  name: string;
+  smtpUsername: string;
+  from: string;
+  replyTo: string | null;
+  host: string;
+  port: string;
+  ssl: number;
+  receiveProtocol: EmailReceiveProtocol;
+  create_time: string;
+};
+
 /** JSON export envelope for the email service list (safe fields only). */
 export type EmailServiceExportPayload = {
   total: number;
-  services: EmailServiceListdata[];
+  services: SafeEmailServiceExportRow[];
   exportDate: string;
 };
 
@@ -321,6 +342,17 @@ export type EmailSendResult = {
   title: string;
   content: string;
   info?: string;
+  /** Structured SMTP failure category (§19.2) when status is false; absent on success or unclassified throws. */
+  failureCode?: SmtpFailureCode;
+  /**
+   * Identity metadata for the send log (FR-014). All optional and non-secret:
+   * which email-service record sent, and the From / SMTP username / Reply-To
+   * it presented. Absent when the worker could not resolve a service.
+   */
+  emailServiceId?: number;
+  fromAddress?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
 };
 export type EmailSendParam = {
   Setting: EmailServiceEntitydata;
@@ -331,4 +363,14 @@ export type EmailRequestData = {
   Receiver: string;
   Title: string;
   Content: string;
+};
+
+/**
+ * Structured error payload returned by `EmailService.sendEmail()` (§19).
+ * `code` is null when the failure was a resolution/setup error rather than a
+ * classified SMTP rejection (e.g. missing service, no stored password).
+ */
+export type SendEmailError = {
+  readonly message: string;
+  readonly code: SmtpFailureCode | null;
 };

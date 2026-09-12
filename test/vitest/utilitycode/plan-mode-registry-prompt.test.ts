@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
-import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
+import {
+  buildPlanModeSystemPrompt,
+  DEFAULT_PLAN_MODE_BASE_PROMPT,
+} from "@/service/PlanModePromptBuilder";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 describe("PlanModeToolRegistry", () => {
@@ -86,7 +89,10 @@ describe("buildPlanModeSystemPrompt", () => {
       baseSystemPrompt: "",
       planState: null,
     });
-    expect(prompt).toContain("You are a helpful assistant.");
+    // Assert against the exported production constant so the test tracks
+    // the real fallback instead of a duplicated literal that drifts when
+    // the prompt is rebranded.
+    expect(prompt).toContain(DEFAULT_PLAN_MODE_BASE_PROMPT);
   });
 
   it("includes workflow steps", () => {

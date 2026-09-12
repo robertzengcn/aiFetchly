@@ -1252,8 +1252,15 @@ export default {
   },
   emailservice: {
     id: "ID",
-    from: "Absenderkonto",
-    from_hint: "E-Mail-Absenderkonto eingeben",
+    smtp_username: "SMTP-Benutzername",
+    smtp_username_hint:
+      "Das E-Mail-Konto, mit dem Sie sich bei Ihrem SMTP-Server anmelden.",
+    reply_to: "Antwort an",
+    reply_to_hint:
+      "Antworten gehen hier ein. Leer lassen, um auf die From-Adresse zu antworten.",
+    from: "From",
+    from_hint:
+      "Die Adresse, die Empfänger sehen. Sie muss von Ihrem E-Mail-Anbieter zugelassen sein.",
     password: "Passwort",
     password_hint: "E-Mail-Passwort eingeben",
     host: "SMTP-Host",
@@ -1281,6 +1288,57 @@ export default {
     send_test_email_error: "Fehler beim Senden der Test-E-Mail",
     email_send_success: "E-Mail erfolgreich gesendet",
     required_fields_missing: "Bitte füllen Sie alle Pflichtfelder aus",
+    smtp_error_auth_failed:
+      "SMTP-Authentifizierung fehlgeschlagen. Prüfen Sie SMTP-Benutzername und Passwort für diesen Dienst.",
+    smtp_error_from_rejected:
+      "Die From-Adresse wurde von Ihrem E-Mail-Anbieter abgelehnt. Prüfen Sie, dass dieser Alias für diese Anmeldung zum Senden zugelassen ist.",
+    smtp_error_recipient_rejected:
+      "Die Empfängeradresse wurde vom E-Mail-Anbieter abgelehnt.",
+    smtp_error_tls_failed:
+      "TLS- oder Zertifikatsfehler beim Verbinden mit dem SMTP-Server. Prüfen Sie die SSL/TLS-Einstellung und den Port (465 verwendet implizites SSL, 587 verwendet STARTTLS).",
+    smtp_error_connection_failed:
+      "Verbindung zum SMTP-Server nicht möglich. Prüfen Sie Host, Port und Netzwerk.",
+    smtp_error_submission_failed:
+      "Der SMTP-Server hat die Nachrichtenübermittlung abgelehnt.",
+    smtp_error_unknown:
+      "Die E-Mail konnte aus unbekanntem Grund nicht gesendet werden. Die Serverantwort wird unten angezeigt.",
+    identity_missing_smtp_username:
+      "Für diesen Dienst ist ein SMTP-Benutzername erforderlich.",
+    identity_from_invalid: "Die From-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_reply_to_invalid:
+      "Die Antwort-An-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_changed_after_approval:
+      "Die Sendeidentität (SMTP-Benutzername, From oder Antwort an) wurde nach der Freigabe geändert. Eine erneute Prüfung vor dem Senden ist erforderlich.",
+    identity_import_password_required:
+      "Zum Importieren dieser E-Mail-Dienstzeile ist ein Passwort erforderlich.",
+    identity_header_break_forbidden:
+      "Zeilenumbrüche sind in diesem Feld nicht zulässig.",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "Die Sendefreigabe passt nicht zu diesem Entwurf. Genehmigen Sie die Antwort erneut.",
+    approval_stale:
+      "Die Antwort wurde nach der Freigabe bearbeitet. Prüfen und genehmigen Sie sie erneut.",
+    hash_mismatch:
+      "Der genehmigte Antwortinhalt stimmt nicht mehr überein. Prüfen und genehmigen Sie sie erneut.",
+    revision_hash_mismatch:
+      "Die Antwortrevision stimmt nicht mehr mit dem genehmigten Umschlag überein. Prüfen und genehmigen Sie sie erneut.",
+    mailbox_mismatch:
+      "Antwortentwurf, Originalnachricht und E-Mail-Dienst teilen sich nicht dasselbe Postfach.",
+    service_inactive:
+      "Der E-Mail-Dienst dieser Antwort ist deaktiviert. Aktivieren Sie ihn und versuchen Sie es erneut.",
+    service_missing:
+      "Der E-Mail-Dienst dieser Antwort wurde nicht gefunden. Wählen Sie den Dienst im Entwurf erneut aus.",
+    sender_mismatch:
+      "Die From-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    recipient_mismatch:
+      "Der Empfänger stimmt nicht mehr mit dem ursprünglichen Absender oder dessen Antwortadresse überein.",
+    smtp_username_mismatch:
+      "Der SMTP-Benutzername wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    reply_to_mismatch:
+      "Die Antwort-An-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    legacy_reply_identity_requires_review:
+      "Die Identität des E-Mail-Dienstes hat sich seit dieser Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",
@@ -1335,6 +1393,10 @@ export default {
     draft_id: "Entwurfs-ID",
     revision_id: "Revisions-ID",
     attempt_id: "Sendeversuchs-ID",
+    from_address: "From-Adresse",
+    email_service: "E-Mail-Dienst",
+    smtp_username: "SMTP-Benutzername",
+    reply_to: "Antwortadresse",
     detail_not_found: "Sendeprotokoll-Eintrag nicht gefunden",
   },
   socialaccount: {

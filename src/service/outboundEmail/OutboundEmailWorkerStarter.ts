@@ -7,6 +7,7 @@ import { OutboundEmailDeliveryModel } from "@/model/OutboundEmailDelivery.model"
 import { OutboundEmailWorkerEventBridge } from "@/service/outboundEmail/OutboundEmailWorkerEventBridge";
 import { broadcastOutboundEmailProgress } from "@/main-process/communication/outboundEmailDelivery-ipc";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 import {
   resolvePackagedWorkerPath,
   buildPackagedWorkerEnv,
@@ -20,6 +21,7 @@ import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
 import { authorizedEmailWorkerEventSchema } from "@/entityTypes/outboundEmailDeliveryTypes";
 import type {
   AuthorizedEmailWorkerPayloadV2,
+  AuthorizedEmailWorkerPayloadV3,
   AuthorizedOutboundEnvelope,
   AuthorizedEmailWorkerEvent,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
@@ -160,10 +162,15 @@ export class OutboundEmailWorkerStarter extends BaseDb {
   // -- payload construction --------------------------------------------------
 
   /**
-   * §15.2 — build the v2 authorized-envelopes payload. The envelope hash is the
-   * revision's stored `contentHash` (the canonical envelope hash computed at
-   * draft time); the sender address is the revision's frozen sender. Service
-   * rows are deduped by id and carry decrypted credentials.
+   * §15.2 — build the versioned authorized-envelopes payload. The envelope hash
+   * is the revision's stored `contentHash` (the canonical envelope hash
+   * computed at draft time); the sender address is the revision's frozen sender.
+   * Service rows are deduped by id and carry decrypted credentials.
+   *
+   * Version selection (§16.1, §17.3): when ANY current revision is v2, emit a
+   * version-3 payload carrying v2 identity (smtpUsername + replyToAddress) in
+   * every envelope. Only when ALL current revisions are v1 does the payload
+   * stay version-2 (the legacy shape).
    */
   private async buildPayload(
     attemptId: number,
@@ -172,31 +179,72 @@ export class OutboundEmailWorkerStarter extends BaseDb {
       draft: OutboundEmailDraftEntity;
       revision: OutboundEmailDraftRevisionEntity;
     }>
-  ): Promise<AuthorizedEmailWorkerPayloadV2> {
-    const envelopes: AuthorizedOutboundEnvelope[] = drafts.map(
-      ({ draft, revision }) => ({
-        draftId: draft.id,
-        revisionId: revision.id,
-        revisionNumber: revision.revisionNumber,
-        recipientAddress: revision.recipientAddress,
-        emailServiceId: revision.emailServiceId,
-        senderAddress: revision.senderAddress,
-        subject: revision.subject,
-        bodyText: revision.bodyText,
-        bodyHtml: revision.bodyHtml,
-        envelopeHash: revision.contentHash,
-      })
-    );
-
+  ): Promise<AuthorizedEmailWorkerPayloadV2 | AuthorizedEmailWorkerPayloadV3> {
+    const hasV2 = drafts.some((d) => (d.revision.envelopeVersion ?? 1) === 2);
     const emailServices = await this.resolveEmailServices(drafts);
 
-    const payload: AuthorizedEmailWorkerPayloadV2 = {
-      version: 2,
+    if (!hasV2) {
+      // All-v1 batch → legacy v2 payload (§17.1 path).
+      const envelopes: AuthorizedOutboundEnvelope[] = drafts.map(
+        ({ draft, revision }) => ({
+          draftId: draft.id,
+          revisionId: revision.id,
+          revisionNumber: revision.revisionNumber,
+          recipientAddress: revision.recipientAddress,
+          emailServiceId: revision.emailServiceId,
+          senderAddress: revision.senderAddress,
+          subject: revision.subject,
+          bodyText: revision.bodyText,
+          bodyHtml: revision.bodyHtml,
+          envelopeHash: revision.contentHash,
+        })
+      );
+      const payload: AuthorizedEmailWorkerPayloadV2 = {
+        version: 2,
+        mode: "authorized_envelopes",
+        batchId: batch.id,
+        sendAttemptId: attemptId,
+        batchHash: batch.batchHash ?? "",
+        envelopes,
+        emailServices,
+      };
+      return payload;
+    }
+
+    // v3 payload — every envelope carries v2 identity (§16.1). Even if a
+    // batch has some v1 revisions, §17.2 blocks mixed-version delivery; the
+    // delivery service rejects mixed batches before calling the starter, so
+    // reaching this branch with a v1 revision is unreachable in practice.
+    // v3 payload — every envelope carries v2 identity (§16.1). The frozen
+    // revision's effective smtpUsername is resolved through the shared resolver
+    // (AD-003): a null/empty frozen value falls back to the frozen senderAddress
+    // (the From captured at approval), which is the same rule the resolver owns.
+    const v3Envelopes = drafts.map(({ draft, revision }) => ({
+      envelopeVersion: 2 as const,
+      draftId: draft.id,
+      revisionId: revision.id,
+      revisionNumber: revision.revisionNumber,
+      recipientAddress: revision.recipientAddress,
+      emailServiceId: revision.emailServiceId,
+      smtpUsername: resolveEmailServiceIdentity({
+        smtpUsername: revision.smtpUsername,
+        from: revision.senderAddress,
+        replyTo: revision.replyToAddress,
+      }).smtpUsername,
+      senderAddress: revision.senderAddress,
+      replyToAddress: revision.replyToAddress,
+      subject: revision.subject,
+      bodyText: revision.bodyText,
+      bodyHtml: revision.bodyHtml,
+      envelopeHash: revision.contentHash,
+    }));
+    const payload: AuthorizedEmailWorkerPayloadV3 = {
+      version: 3,
       mode: "authorized_envelopes",
       batchId: batch.id,
       sendAttemptId: attemptId,
       batchHash: batch.batchHash ?? "",
-      envelopes,
+      envelopes: v3Envelopes,
       emailServices,
     };
     return payload;
@@ -226,9 +274,21 @@ export class OutboundEmailWorkerStarter extends BaseDb {
           `service_not_found: email_service ${id} could not be loaded`
         );
       }
+      // §16.2 — effective, non-null smtpUsername resolved through the shared
+      // resolver (AD-003) so the `smtpUsername ?? from` fallback lives in one
+      // place. Legacy rows that never had the column populated fall back to
+      // `from`. The worker validates this against the envelope identity before
+      // sending.
+      const resolvedService = resolveEmailServiceIdentity({
+        smtpUsername: service.smtpUsername,
+        from: service.from,
+        replyTo: service.replyTo,
+      });
       resolved.push({
         id: service.id,
-        from: service.from,
+        smtpUsername: resolvedService.smtpUsername,
+        from: resolvedService.fromAddress,
+        replyTo: resolvedService.replyToAddress,
         password: service.password,
         host: service.host,
         port: service.port,
@@ -264,7 +324,7 @@ export class OutboundEmailWorkerStarter extends BaseDb {
    */
   private postPayload(
     child: ForkedChild,
-    payload: AuthorizedEmailWorkerPayloadV2
+    payload: AuthorizedEmailWorkerPayloadV2 | AuthorizedEmailWorkerPayloadV3
   ): void {
     const { port } = this.resolveForkContext();
     child.postMessage(

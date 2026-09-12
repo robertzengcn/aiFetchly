@@ -45,3 +45,44 @@ export const emailMarketingByIdInputSchema = lazySchema(() =>
 export const emailMarketingUpdateInputSchema = lazySchema(() =>
   z.object({}).passthrough()
 );
+
+/**
+ * EMAILSERVICEUPDATE — dedicated schema bounding the security-relevant
+ * identity fields (§12.4). The shared passthrough schema above stays for
+ * TEMPUPDATE/FILTERUPDATE; the email-service update must NOT rely on
+ * `.passthrough()` for smtpUsername/from/replyTo.
+ *
+ * NOTE on CR/LF (§7.2): this schema bounds LENGTH only (`.max(...)`). It
+ * does NOT reject `\r`/`\n` in smtpUsername/from/replyTo — that header-
+ * injection defense lives in `EmailServiceModule.validateEmailService` via
+ * `containsEmailHeaderBreak`. The EMAILSERVICEUPDATE handler now calls
+ * `EmailMarketingController.validateEmailServiceForSave` (which delegates to
+ * `validateEmailService`) before persistence on both create and update
+ * paths, so a CR/LF value in an identity field is rejected before any row
+ * is written. The schema remains a length-bound guard, not the complete
+ * security boundary; `validateEmailService` is the authoritative check.
+ */
+export const emailServiceUpdateInputSchema = lazySchema(() =>
+  z.object({
+    id: z.union([z.number(), z.string().min(1)]).optional(),
+    name: z.string().max(255).optional(),
+    smtpUsername: z.string().max(255).nullable().optional(),
+    from: z.string().min(1).max(255),
+    replyTo: z.string().max(320).nullable().optional(),
+    password: z.string().optional(),
+    host: z.string().max(255).optional(),
+    port: z.string().max(10).optional(),
+    ssl: z.number().optional(),
+    receiveProtocol: z.string().max(10).optional(),
+    imapHost: z.string().max(255).nullable().optional(),
+    imapPort: z.string().max(10).nullable().optional(),
+    imapSsl: z.number().optional(),
+    pop3Host: z.string().max(255).nullable().optional(),
+    pop3Port: z.string().max(10).nullable().optional(),
+    pop3Ssl: z.number().optional(),
+    receiveUsername: z.string().max(255).nullable().optional(),
+    receivePassword: z.string().nullable().optional(),
+    receiveFolder: z.string().max(255).optional(),
+    receiveEnabled: z.number().optional(),
+  })
+);

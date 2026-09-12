@@ -1204,8 +1204,12 @@ export default {
   },
   emailservice: {
     id: "ID",
-    from: "发送者账户",
-    from_hint: "输入邮件发送者账户",
+    smtp_username: "SMTP用户名",
+    smtp_username_hint: "用于登录 SMTP 服务器的邮箱账号。",
+    reply_to: "回复至",
+    reply_to_hint: "回复将发送到此地址。留空则回复至发件地址。",
+    from: "发件地址",
+    from_hint: "收件人看到的地址。该地址必须已获邮件服务商允许发信。",
     password: "密码",
     password_hint: "输入邮件密码",
     host: "SMTP 主机",
@@ -1232,6 +1236,39 @@ export default {
     send_test_email_error: "发送测试邮件错误",
     email_send_success: "邮件发送成功",
     required_fields_missing: "请填写所有必填字段",
+    smtp_error_auth_failed:
+      "SMTP 身份验证失败。请检查此服务的 SMTP 用户名和密码。",
+    smtp_error_from_rejected:
+      "发件人地址被邮件服务商拒绝。请确认该别名在此登录账号下已获准发送。",
+    smtp_error_recipient_rejected: "收件人地址被邮件服务商拒绝。",
+    smtp_error_tls_failed:
+      "连接 SMTP 服务器时出现 TLS 或证书错误。请检查 SSL/TLS 设置和端口（465 使用隐式 SSL，587 使用 STARTTLS）。",
+    smtp_error_connection_failed:
+      "无法连接到 SMTP 服务器。请检查主机、端口和网络。",
+    smtp_error_submission_failed: "SMTP 服务器拒绝了邮件提交。",
+    smtp_error_unknown: "因未知原因无法发送邮件。服务器响应如下。",
+    identity_missing_smtp_username: "此邮件服务必须填写 SMTP 用户名。",
+    identity_from_invalid: "发件地址不是有效的邮箱地址。",
+    identity_reply_to_invalid: "回复地址不是有效的邮箱地址。",
+    identity_changed_after_approval:
+      "审核通过后发件身份（SMTP 用户名、发件地址或回复地址）已更改。发送前需要重新审核。",
+    identity_import_password_required: "导入此邮件服务记录需要提供密码。",
+    identity_header_break_forbidden: "此字段不允许包含换行符。",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch: "发送审批与该草稿不匹配。请重新审批此回复。",
+    approval_stale: "回复在审批后已被编辑。请重新审核并审批。",
+    hash_mismatch: "已审批的回复内容不再匹配。请重新审核并审批。",
+    revision_hash_mismatch: "回复版本与审批信封不再匹配。请重新审核并审批。",
+    mailbox_mismatch: "回复草稿、原始邮件与邮件服务不属于同一邮箱。",
+    service_inactive: "此回复的邮件服务已停用。请启用后重试。",
+    service_missing: "找不到此回复的邮件服务。请在草稿中重新选择服务。",
+    sender_mismatch: "审批后发件地址已更改。请重新审核并审批。",
+    recipient_mismatch: "收件人与原始发件人或其回复地址不再匹配。",
+    smtp_username_mismatch: "审批后 SMTP 用户名已更改。请重新审核并审批。",
+    reply_to_mismatch: "审批后回复地址已更改。请重新审核并审批。",
+    legacy_reply_identity_requires_review:
+      "创建此审批后邮件服务身份已更改。请重新审核并审批该回复。",
   },
   buckemailsend: {
     email_source: "邮件来源",
@@ -1286,6 +1323,10 @@ export default {
     draft_id: "草稿ID",
     revision_id: "修订版本ID",
     attempt_id: "发送尝试ID",
+    from_address: "发件地址",
+    email_service: "邮件服务",
+    smtp_username: "SMTP 用户名",
+    reply_to: "回复地址",
     detail_not_found: "未找到发送日志记录",
   },
   socialaccount: {
