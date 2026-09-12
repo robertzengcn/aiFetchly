@@ -857,7 +857,25 @@ watch(
   [() => selectedStore.activeAssistantMessageId, () => selectedStore.messages],
   () => {
     const id = selectedStore.activeAssistantMessageId;
-    if (!id) return;
+    if (!id) {
+      // Terminal flush (review fix): completion can clear the active id in
+      // the SAME batched update as the final text — the loop above would
+      // return and short replies would stay silent. Feed the completed
+      // message's remainder through the tracked id before forgetting it.
+      if (fedMessageId !== null) {
+        const message = selectedStore.messages.find(
+          (m) => m.id === fedMessageId
+        );
+        const content = message?.content ?? "";
+        if (content.length > fedLength) {
+          voice.pushAssistantDelta(content.slice(fedLength));
+          fedLength = content.length;
+        }
+        voice.completeAssistantResponse();
+        fedMessageId = null;
+      }
+      return;
+    }
     if (id !== fedMessageId) {
       fedMessageId = id;
       fedLength = 0;
@@ -1220,6 +1238,10 @@ onMounted(async () => {
  */
 onUnmounted(() => {
   voice.dispose();
+  // Release the conversation's filesystem-watch claim (review fix): this
+  // surface owns the composable instance; without disposal an inner-page
+  // route change leaked the main-process watcher until the next selection.
+  conversationWorkspace.dispose().catch(() => undefined);
 });
 </script>
 

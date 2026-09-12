@@ -235,6 +235,18 @@ export class AIChatCoordinator {
       return { cancelled: true };
     }
 
+    // Detached RUNNING turn (review fix): a permission grant / question
+    // answer resumed the engine turn AFTER executeDispatch returned, so the
+    // scheduler entry is already released — the isActive check above misses
+    // it and the resumed tool/model would be uncancellable. Route it through
+    // the same detached path; the engine's `cancelled` terminal settles via
+    // settleDetachedTerminal.
+    if (engineStatus === "running" && live.dispatchSettled) {
+      live.cancelRequested = true;
+      this.deps.engine.stopActiveTurn(conversationId);
+      return { cancelled: true };
+    }
+
     return { cancelled: false };
   }
 

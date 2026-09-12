@@ -29,6 +29,15 @@
       <v-icon icon="mdi-menu" size="20" aria-hidden="true" />
     </button>
     <AppCenterRouteHost />
+    <!-- System-message toasts (ported host from the legacy layout). -->
+    <v-snackbar
+      :model-value="systemNotice !== null"
+      :timeout="4000"
+      location="bottom right"
+      @update:model-value="systemNotice = null"
+    >
+      {{ systemNotice }}
+    </v-snackbar>
   </AppWorkspaceShell>
 </template>
 
@@ -55,10 +64,19 @@ import {
   trackShellMounted,
   trackShellUnmounted,
 } from "@/views/utils/shellDiagnostics";
+import { useInnerPageShellFlag } from "@/views/composables/useInnerPageShellFlag";
+import { getIpcTransport } from "@/views/utils/ipcTransport";
+import {
+  AI_CHAT_V2_OPEN_FROM_NOTIFY,
+  SYSTEM_MESSAGE,
+} from "@/config/channellist";
+import { windowReceive, windowRemoveListener } from "@/views/utils/apirequest";
+import type { CommonDialogMsg } from "@/entityTypes/commonType";
 
 const router = useRouter();
 const { t } = useI18n();
 const shell = useAppShellStore();
+const innerPageShell = useInnerPageShellFlag();
 const chatWorkspace = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
 
@@ -116,6 +134,11 @@ async function onToggleMode(): Promise<void> {
   try {
     await setWorkspaceRedesignEnabled(next);
     redesignDefault.value = next;
+    // The layout BOUNDARY selects the shell through the localStorage
+    // `aifetchly.innerPageShellV2` flag — the durable redesign preference
+    // alone never remounts the classic layout. Write BOTH so the toggle
+    // actually switches the active shell (review: rollback-path fix).
+    innerPageShell.setShellEnabled(next);
   } catch {
     // Flag write failed — mode stays unchanged.
   }
@@ -124,8 +147,64 @@ async function onToggleMode(): Promise<void> {
   }
 }
 
+// --- Application-level chat integrations (ported from the legacy layout) ----
+// The classic layout.vue was the only listener for the dashboard "ask AI"
+// entry, desktop-notification chat clicks, and system-message toasts. The
+// persistent shell owns them now (review: lost-integration fix).
+
+const systemNotice = ref<string | null>(null);
+let systemNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showSystemNotice(text: string): void {
+  systemNotice.value = text;
+  if (systemNoticeTimer !== null) clearTimeout(systemNoticeTimer);
+  systemNoticeTimer = setTimeout(() => {
+    systemNotice.value = null;
+  }, 4_000);
+}
+
+function openAiChatFromDashboard(event: Event): void {
+  const detail = (event as CustomEvent<{ prompt?: string }>).detail;
+  const text = detail?.prompt?.trim();
+  if (!text) return;
+  void router.push({ path: "/aiworkspace", query: { prompt: text } });
+}
+
+function handleOpenFromNotify(raw: unknown): void {
+  const payload =
+    raw && typeof raw === "object"
+      ? (raw as { conversationId?: string | null })
+      : null;
+  const conversationId =
+    typeof payload?.conversationId === "string"
+      ? payload.conversationId.trim()
+      : "";
+  if (!conversationId) return;
+  void openConversation(conversationId);
+}
+
+function handleSystemMessage(res: CommonDialogMsg): void {
+  if (!res.data) return;
+  showSystemNotice(`${t(res.data.title)}: ${t(res.data.content)}`);
+}
+
+function onRawSystemMessage(raw: unknown): void {
+  if (typeof raw !== "string") return;
+  try {
+    handleSystemMessage(JSON.parse(raw) as CommonDialogMsg);
+  } catch {
+    // Malformed system message — ignore.
+  }
+}
+
 onMounted(() => {
   emitShellDiagnostic({ type: "shell.mounted", duplicateCount: trackShellMounted().duplicates });
+  window.addEventListener("aifetchly:open-ai-chat", openAiChatFromDashboard);
+  getIpcTransport().receive(
+    AI_CHAT_V2_OPEN_FROM_NOTIFY,
+    handleOpenFromNotify as (value: unknown) => void
+  );
+  windowReceive(SYSTEM_MESSAGE, onRawSystemMessage);
   // Application-scoped bootstrap: exactly one summary subscription for the
   // authenticated lifetime (design §8.3), torn down only when the
   // authenticated application unmounts — never on center-route changes.
@@ -141,7 +220,18 @@ onMounted(() => {
 
 onUnmounted(() => {
   trackShellUnmounted();
+  window.removeEventListener("aifetchly:open-ai-chat", openAiChatFromDashboard);
+  getIpcTransport().removeListener(
+    AI_CHAT_V2_OPEN_FROM_NOTIFY,
+    handleOpenFromNotify as (value: unknown) => void
+  );
+  windowRemoveListener(SYSTEM_MESSAGE, onRawSystemMessage);
+  if (systemNoticeTimer !== null) clearTimeout(systemNoticeTimer);
   chatWorkspace.teardown();
+  // Authentication ended (expiry / account switch in the same renderer):
+  // clear the selected conversation's buffers and detail subscription so the
+  // next account never sees this transcript (review: auth-lifecycle fix).
+  selectedStore.teardown();
 });
 </script>
 

@@ -622,12 +622,6 @@ function resetPastedState(): void {
 // pinia-less legacy mounts are unaffected.
 const draftStore = props.draftKey ? useComposerDraftStore() : null;
 
-function clearStoredDraft(): void {
-  if (draftStore && props.draftKey) {
-    draftStore.clearDraft(props.draftKey);
-  }
-}
-
 function loadDraftFromStore(): void {
   if (!draftStore || !props.draftKey) return;
   const saved = draftStore.getDraft(props.draftKey);
@@ -1365,13 +1359,26 @@ const onSend = (): void => {
     Object.keys(pastedContentsById.value).length > 0
       ? { ...pastedContentsById.value }
       : undefined;
+  // Capture the ORIGINATING draft key: acceptance may return after the user
+  // switched conversations — clearing then would wipe the OTHER conversation's
+  // draft (and the stored draft for the wrong key). Clear the stored draft for
+  // the originating key always; touch the visible composer only when it still
+  // shows that same conversation (review: cross-conversation accept fix).
+  const originatingDraftKey = props.draftKey ?? null;
   emit("send", text, files, {
     pastedContents,
     onAccepted: () => {
-      draft.value = "";
-      selectedFiles.value = [];
-      resetPastedState();
-      clearStoredDraft(); // FR-COMP-011: clear only on the accepted send
+      if (draftStore && originatingDraftKey !== null) {
+        draftStore.clearDraft(originatingDraftKey);
+      }
+      if (
+        originatingDraftKey === null ||
+        (props.draftKey ?? null) === originatingDraftKey
+      ) {
+        draft.value = "";
+        selectedFiles.value = [];
+        resetPastedState();
+      }
       closeSlash();
     },
   });

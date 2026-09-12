@@ -91,6 +91,8 @@ export function useConversationWorkspace(
 
   /** Monotonic refresh generation — stale responses are dropped. */
   let refreshGeneration = 0;
+  /** True once the owning surface disposed: late acquisitions self-release. */
+  let disposed = false;
 
   async function refreshMemoryCount(): Promise<void> {
     const id = conversationId.value;
@@ -201,6 +203,7 @@ export function useConversationWorkspace(
   async function acquireWatch(id: string): Promise<void> {
     // Release any previous watch first (covers workspace switch).
     await releaseWatch();
+    if (disposed) return; // owner unmounted while acquisition was starting
     workspaceHasAgents.value = false;
     pathUnavailable.value = false;
     try {
@@ -224,6 +227,11 @@ export function useConversationWorkspace(
         workspaceHasAgents.value = content.length > 0;
       } catch {
         workspaceHasAgents.value = false;
+      }
+      // Owner unmounted while the acquisition was in flight — release the
+      // claim immediately instead of leaking the main-process watcher.
+      if (disposed) {
+        await releaseWatch();
       }
     } catch (err) {
       // Non-fatal: chat still works without live workspace updates.
@@ -270,7 +278,16 @@ export function useConversationWorkspace(
     dismissTrustCard();
   }
 
+  /** Conversation SWITCH cleanup: release + clear flags, stays usable. */
+  async function resetForConversationSwitch(): Promise<void> {
+    await releaseWatch();
+    workspaceHasAgents.value = false;
+    pathUnavailable.value = false;
+  }
+
+  /** FINAL disposal (owning surface unmounted): no further acquisition. */
   async function dispose(): Promise<void> {
+    disposed = true;
     await releaseWatch();
     workspaceHasAgents.value = false;
     pathUnavailable.value = false;
@@ -278,16 +295,20 @@ export function useConversationWorkspace(
 
   // Conversation changes release the previous watch and refresh the badge.
   watch(conversationId, () => {
-    void dispose().finally(() => {
+    void resetForConversationSwitch().finally(() => {
       void refresh();
     });
   });
 
   // Workspace material changes (switch / approval flip) re-acquire the watch.
+  // An UNCHANGED identity also re-acquires when no watch exists (review fix):
+  // after an unavailable-path failure the Retry refresh resolves the same
+  // workspace, and the identity-only early return would leave the error
+  // stuck forever.
   watch(workspace, (next, prev) => {
     const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
     const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
-    if (prevKey === nextKey) return;
+    if (prevKey === nextKey && watchId.value !== null) return;
     if (!next || next.approvalState !== "approved") {
       void releaseWatch();
       return;

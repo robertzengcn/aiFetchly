@@ -31,15 +31,18 @@ function writeFlag(key: string, value: boolean): void {
   }
 }
 
+// Module-scope SHARED state: every caller (the layout boundary, the route
+// host, the shell toggle) must observe the same refs so a runtime toggle
+// reactively switches the shell (review: rollback-path reactivity fix).
+const shellEnabled = ref(readFlag(SHELL_FLAG_KEY));
+const scheduleEnabled = ref(readFlag(SCHEDULE_FLAG_KEY));
+
 export function useInnerPageShellFlag(): {
   shellEnabled: ReturnType<typeof ref<boolean>>;
   scheduleEnabled: ReturnType<typeof ref<boolean>>;
   setShellEnabled(value: boolean): void;
   setScheduleEnabled(value: boolean): void;
 } {
-  const shellEnabled = ref(readFlag(SHELL_FLAG_KEY));
-  const scheduleEnabled = ref(readFlag(SCHEDULE_FLAG_KEY));
-
   return {
     shellEnabled,
     scheduleEnabled,
