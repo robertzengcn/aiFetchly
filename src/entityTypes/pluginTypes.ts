@@ -174,6 +174,16 @@ export type PluginErrorCode =
   | "agent-name-conflict"
   | "agent-path-invalid"
   | "agent-unsupported-field"
+  // Git-free GitHub plugin installation (PRD §14 / design §11): stable,
+  // machine-readable acquisition + native-Git diagnostics.
+  | "git-not-installed"
+  | "github-repository-unavailable"
+  | "github-ref-not-found"
+  | "github-rate-limited"
+  | "source-timeout"
+  | "source-download-failed"
+  | "source-redirect-rejected"
+  | "source-cancelled"
   | "unknown";
 
 export interface PluginError {
@@ -184,6 +194,27 @@ export interface PluginError {
   readonly path?: string;
   readonly message: string;
   readonly recoverable: boolean;
+}
+
+/**
+ * Renderer-safe install-from-source result (design §12.1): expected domain
+ * failures ride the OUTER IPC success envelope as data — the union member
+ * describes the plugin-install outcome, not whether IPC worked. Unexpected
+ * exceptions remain outer status:false via registerValidatedHandler.
+ */
+export type PluginInstallFromSourceResult =
+  | {
+      readonly success: true;
+      readonly plugin: PluginSummary;
+    }
+  | {
+      readonly success: false;
+      readonly errors: readonly PluginError[];
+    };
+
+/** Renderer-visible install capability flags (design §12.4). */
+export interface PluginInstallCapabilities {
+  readonly githubArchiveInstallEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------

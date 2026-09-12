@@ -33,6 +33,24 @@ export interface PluginSourceRequest {
   readonly npmAuthToken?: string;
   /** Optional progress reporter (best-effort, may be ignored). */
   readonly onProgress?: (msg: string, pct?: number) => void;
+  /**
+   * Main-process-created cancellation signal (design §10.1). NEVER crosses
+   * IPC — plugin-ipc.ts creates it from the validated operationId and
+   * hands it to PluginInstallService.
+   */
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Trusted acquisition provenance (design §10.2): produced by the FETCHER
+ * from verified transport data. PluginInstallService gives these keys
+ * precedence over renderer-supplied sourceMeta so a caller can never
+ * spoof resolvedCommitSha or acquisition.
+ */
+export interface PluginAcquisitionProvenance {
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly sourceMeta?: Readonly<Record<string, unknown>>;
 }
 
 export interface FetchedPluginSource {
@@ -40,6 +58,7 @@ export interface FetchedPluginSource {
   readonly localRoot: string;
   /** Caller MUST invoke after install/rollback, even on failure. */
   readonly cleanup: () => Promise<void>;
+  readonly provenance?: PluginAcquisitionProvenance;
 }
 
 export type PluginAcquireResult =
