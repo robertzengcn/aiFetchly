@@ -177,8 +177,8 @@ Behavior is allowed (duplicate detection uses name, then host+From). There is
 no dedicated test that three rows with unique names/From and the same SMTP
 username/host/password all import as separate records.
 
-- [ ] Add an import test for Scenario D (Sales / Support / Billing aliases).
-- [ ] Assert they remain independently selectable by service id.
+- [x] Add an import test for Scenario D (Sales / Support / Billing aliases).
+- [x] Assert they remain independently selectable by service id.
 
 **Covers:** FR-002, Scenario D; technical design §23.3.
 
