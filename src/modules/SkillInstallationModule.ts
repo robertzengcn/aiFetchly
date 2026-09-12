@@ -611,15 +611,19 @@ export class SkillInstallationModule extends BaseModule {
       );
       // FR-19: plugins persist the SAME lifecycle identity prompt skills
       // use, so update/repair/disable/uninstall address them uniformly.
+      // (The plugin summary is optional — a minimal plugin import result
+      // carries no summary; the row then falls back to the plan name.)
       await this.persistRoutedInstallationRow({
         sessions,
         sessionId,
         kind: "plugin",
-        name: result.plugin.name,
+        name: result.plugin?.name ?? plan.discoveredSkills[0]?.name ?? "plugin",
         plan,
         metadata: {
-          pluginId: result.plugin.id,
-          pluginVersion: result.plugin.version,
+          ...(result.plugin ? { pluginId: result.plugin.id } : {}),
+          ...(result.plugin?.version !== undefined
+            ? { pluginVersion: result.plugin.version }
+            : {}),
         },
       });
       const ready = await sessions.findBySessionId(sessionId);
@@ -1458,7 +1462,9 @@ export class SkillInstallationModule extends BaseModule {
         checks.push({
           name: "link-target-present",
           passed: false,
-          detail: `Linked target is missing (${err instanceof Error ? err.message : String(err)}). Restore the folder or reinstall.`,
+          detail: `Linked target is missing (${
+            err instanceof Error ? err.message : String(err)
+          }). Restore the folder or reinstall.`,
         });
       }
     }
@@ -1621,9 +1627,7 @@ export class SkillInstallationModule extends BaseModule {
    * runtime catalog when the content changed. Never deletes or rewrites the
    * external target; never silently updates the recorded revision.
    */
-  async refreshLinkedInstallation(
-    installationId: string
-  ): Promise<
+  async refreshLinkedInstallation(installationId: string): Promise<
     | {
         readonly ok: true;
         readonly status: "unchanged" | "changed";
@@ -1647,7 +1651,8 @@ export class SkillInstallationModule extends BaseModule {
       return {
         ok: false,
         code: "LINK_UNSUPPORTED",
-        message: "Only linked installations can be refreshed from their source.",
+        message:
+          "Only linked installations can be refreshed from their source.",
       };
     }
     try {
@@ -1670,8 +1675,7 @@ export class SkillInstallationModule extends BaseModule {
       return {
         ok: false,
         code: "SKILL_FORMAT_INVALID",
-        message:
-          "The linked source no longer contains a readable SKILL.md.",
+        message: "The linked source no longer contains a readable SKILL.md.",
       };
     }
     // Content change detection against the recorded activation baseline.
@@ -1681,9 +1685,11 @@ export class SkillInstallationModule extends BaseModule {
         "@/childprocess/skill-installation/stagePackage"
       );
       const current = hashTree(entity.activationPath);
-      const recorded = (JSON.parse(entity.metadataJson ?? "{}") as {
-        activationContentHash?: string;
-      }).activationContentHash;
+      const recorded = (
+        JSON.parse(entity.metadataJson ?? "{}") as {
+          activationContentHash?: string;
+        }
+      ).activationContentHash;
       contentChanged = recorded !== undefined && current !== recorded;
     } catch {
       /* hashing is best-effort; the refresh itself already succeeded */

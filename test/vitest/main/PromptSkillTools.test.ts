@@ -82,10 +82,15 @@ describe("skillsRegistry prompt-skill tools", () => {
   it("use_skill execute returns a short ack and carries the hidden attachment", async () => {
     const skill = SkillRegistry.getSkill("use_skill");
     expect(skill).not.toBeNull();
+    // Unique per run: use_skill persists a durable invocation row keyed by
+    // (conversationId, runtimeId, contentHash) in the environment's real
+    // store — a fixed id makes the SECOND run report already-loaded.
     const outcome = await skill!.execute(
       { skill: "video-use" },
       {
-        conversationId: "conv-tools",
+        conversationId: `conv-tools-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
         toolCallId: "tc-1",
       } as never
     );
