@@ -14,6 +14,8 @@ vi.mock("electron", () => ({
 const isAiEnabledMock = vi.fn(() => true);
 vi.mock("@/service/AiFeatureGate", () => ({
   isAiEnabled: () => isAiEnabledMock(),
+  // dev's AI-gate wrapper consults the hosted reconcile; mirror the toggle.
+  ensureHostedAiEnabled: async () => isAiEnabledMock(),
 }));
 
 // Fake the browser module singleton (spies; no DB, no worker).
