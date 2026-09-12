@@ -344,6 +344,15 @@ export type EmailSendResult = {
   info?: string;
   /** Structured SMTP failure category (§19.2) when status is false; absent on success or unclassified throws. */
   failureCode?: SmtpFailureCode;
+  /**
+   * Identity metadata for the send log (FR-014). All optional and non-secret:
+   * which email-service record sent, and the From / SMTP username / Reply-To
+   * it presented. Absent when the worker could not resolve a service.
+   */
+  emailServiceId?: number;
+  fromAddress?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
 };
 export type EmailSendParam = {
   Setting: EmailServiceEntitydata;

@@ -1323,6 +1323,10 @@ export default {
     draft_id: "草稿ID",
     revision_id: "修订版本ID",
     attempt_id: "发送尝试ID",
+    from_address: "发件地址",
+    email_service: "邮件服务",
+    smtp_username: "SMTP 用户名",
+    reply_to: "回复地址",
     detail_not_found: "未找到发送日志记录",
   },
   socialaccount: {

@@ -1371,6 +1371,10 @@ export default {
     draft_id: "ドラフトID",
     revision_id: "リビジョンID",
     attempt_id: "送信試行ID",
+    from_address: "差出人アドレス",
+    email_service: "メールサービス",
+    smtp_username: "SMTPユーザー名",
+    reply_to: "返信先アドレス",
     detail_not_found: "送信ログ記録が見つかりません",
   },
   socialaccount: {

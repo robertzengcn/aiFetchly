@@ -9,6 +9,7 @@ import {
   EmailServiceEntitydata,
   EmailRequestData,
 } from "@/entityTypes/emailmarketingType";
+import type { SmtpFailureCode } from "@/modules/lib/smtpErrorClassifier";
 import {
   OutboundEmailEnvelopeHasher,
   normalizeEmailAddressV2,
@@ -31,6 +32,21 @@ import type {
   AuthorizedOutboundEnvelope,
   AuthorizedOutboundEnvelopeV3,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
+
+/**
+ * Non-secret identity metadata for one bulk send (FR-014): which
+ * email-service record sent, and the From / SMTP username / Reply-To it
+ * presented. Carried on the success/error callbacks so the main process can
+ * persist it on `emailmarketing_send_log` without re-reading the service.
+ * Never includes a password — the worker holds no credential copy in this
+ * structure.
+ */
+export interface SendIdentityMetadata {
+  readonly emailServiceId?: number;
+  readonly fromAddress?: string;
+  readonly smtpUsername?: string | null;
+  readonly replyTo?: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // §16.2 authorized exact-envelope send path
@@ -912,13 +928,16 @@ export class EmailSend {
     successCallback?: (
       receiver: string,
       title: string,
-      content: string
+      content: string,
+      identity: SendIdentityMetadata
     ) => void | undefined | null,
     errorCallback?: (
       receiver: string,
       info: string,
       title: string,
-      content: string
+      content: string,
+      identity: SendIdentityMetadata,
+      failureCode?: SmtpFailureCode
     ) => void | undefined | null
   ): Promise<void> {
     const totalfilter: string[] = [];
@@ -992,7 +1011,9 @@ export class EmailSend {
           item.address,
           "No email service is available for this task",
           param.email_subject ?? "",
-          param.email_html_content ?? ""
+          param.email_html_content ?? "",
+          // No service was resolved, so no identity metadata exists.
+          {}
         );
         return;
       }
@@ -1042,6 +1063,14 @@ export class EmailSend {
         Title: emailTpldata.TplTitle,
         Content: emailTpldata.TplContent,
       };
+      // FR-014: non-secret identity metadata rides on both callbacks so the
+      // main process can log which service sent and what identity it showed.
+      const sendIdentity: SendIdentityMetadata = {
+        emailServiceId: randomEmailservice.id,
+        fromAddress: randomEmailservice.from,
+        smtpUsername: randomEmailservice.smtpUsername ?? null,
+        replyTo: randomEmailservice.replyTo ?? null,
+      };
       sendPromises.push(
         emailServie.sendEmail(
           emailRequestdata,
@@ -1051,7 +1080,9 @@ export class EmailSend {
                 item.address,
                 sendEmailError.message,
                 emailTpldata.TplTitle,
-                emailTpldata.TplContent
+                emailTpldata.TplContent,
+                sendIdentity,
+                sendEmailError.code ?? undefined
               );
             }
           },
@@ -1060,7 +1091,8 @@ export class EmailSend {
               successCallback(
                 item.address,
                 emailTpldata.TplTitle,
-                emailTpldata.TplContent
+                emailTpldata.TplContent,
+                sendIdentity
               );
             }
           }

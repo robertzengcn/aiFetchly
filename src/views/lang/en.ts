@@ -1404,6 +1404,10 @@ export default {
     draft_id: "draft id",
     revision_id: "revision id",
     attempt_id: "send attempt id",
+    from_address: "From address",
+    email_service: "email service",
+    smtp_username: "SMTP username",
+    reply_to: "Reply-To",
     detail_not_found: "Send log record not found",
   },
   socialaccount: {

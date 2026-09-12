@@ -1399,6 +1399,10 @@ export default {
     draft_id: "id de borrador",
     revision_id: "id de revisión",
     attempt_id: "id de intento de envío",
+    from_address: "dirección From",
+    email_service: "servicio de correo",
+    smtp_username: "usuario SMTP",
+    reply_to: "dirección de respuesta",
     detail_not_found: "No se encontró el registro de envío",
   },
   socialaccount: {

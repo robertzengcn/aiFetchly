@@ -1393,6 +1393,10 @@ export default {
     draft_id: "Entwurfs-ID",
     revision_id: "Revisions-ID",
     attempt_id: "Sendeversuchs-ID",
+    from_address: "From-Adresse",
+    email_service: "E-Mail-Dienst",
+    smtp_username: "SMTP-Benutzername",
+    reply_to: "Antwortadresse",
     detail_not_found: "Sendeprotokoll-Eintrag nicht gefunden",
   },
   socialaccount: {

@@ -149,8 +149,28 @@ export class BuckEmailTaskModule extends BaseModule {
       `Title: ${result.title}`,
       `Error: ${result.info ?? ""}`,
     ];
+    if (result.failureCode) {
+      lines.push(`Failure code: ${result.failureCode}`);
+    }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Copy the non-secret identity metadata carried on the child-process send
+   * result (FR-014) onto the send-log row: which email-service record sent
+   * and the From / SMTP username / Reply-To it presented. Never copies a
+   * password — the result type carries none. Legacy results without the
+   * fields leave the columns null.
+   */
+  private applySendLogIdentity(
+    log: EmailMarketingSendLogEntity,
+    result: EmailSendResult
+  ): void {
+    log.email_service_id = result.emailServiceId ?? null;
+    log.from_address = result.fromAddress ?? null;
+    log.smtp_username = result.smtpUsername ?? null;
+    log.reply_to = result.replyTo ?? null;
   }
 
   //convert local number array to list
@@ -211,9 +231,7 @@ export class BuckEmailTaskModule extends BaseModule {
     const emailFilterModule = new EmailFilterModule();
     const emailFilterDetailModule = new EmailFilterDetailModule();
     const filterDetails =
-      await emailFilterDetailModule.getEmailFilterDetailsByFilterIds(
-        filterIds
-      );
+      await emailFilterDetailModule.getEmailFilterDetailsByFilterIds(filterIds);
     const detailsByFilterId = new Map<
       number,
       Array<{ id: number; content: string }>
@@ -260,6 +278,8 @@ export class BuckEmailTaskModule extends BaseModule {
       emailservicelist.push({
         id: decrypted.id,
         from: decrypted.from,
+        smtpUsername: decrypted.smtpUsername ?? null,
+        replyTo: decrypted.replyTo ?? null,
         password: decrypted.password,
         host: decrypted.host,
         port: decrypted.port,
@@ -648,6 +668,7 @@ export class BuckEmailTaskModule extends BaseModule {
               emailMarketLog.log = childdata.data.info
                 ? childdata.data.info
                 : "";
+              this.applySendLogIdentity(emailMarketLog, childdata.data);
               //update send log
               this.emailMarketingSendlogModule.createItem(emailMarketLog);
             }
@@ -680,6 +701,7 @@ export class BuckEmailTaskModule extends BaseModule {
               emailMarketLog.log = childdata.data.info
                 ? childdata.data.info
                 : "";
+              this.applySendLogIdentity(emailMarketLog, childdata.data);
               WriteLog(
                 errorLogfile,
                 this.formatEmailSendFailureLog(childdata.data)

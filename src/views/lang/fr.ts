@@ -1386,6 +1386,10 @@ export default {
     draft_id: "id de brouillon",
     revision_id: "id de révision",
     attempt_id: "id de tentative d’envoi",
+    from_address: "adresse From",
+    email_service: "service de messagerie",
+    smtp_username: "utilisateur SMTP",
+    reply_to: "adresse de réponse",
     detail_not_found: "Enregistrement du journal d’envoi introuvable",
   },
   socialaccount: {

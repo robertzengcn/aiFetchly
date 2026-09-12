@@ -161,11 +161,11 @@ Authorized outbound logs can show `revision.senderAddress`. Legacy
 `emailmarketing_send_log` has no email-service id, From, Reply-To, or SMTP
 username.
 
-- [ ] Send logs identify the email-service record and visible From address.
-- [ ] Where identity metadata is stored, Reply-To and SMTP username may be
+- [x] Send logs identify the email-service record and visible From address.
+- [x] Where identity metadata is stored, Reply-To and SMTP username may be
       recorded as non-secret values.
-- [ ] Passwords and decrypted credentials must never appear in logs.
-- [ ] Provider failures retain sanitized SMTP details sufficient to tell
+- [x] Passwords and decrypted credentials must never appear in logs.
+- [x] Provider failures retain sanitized SMTP details sufficient to tell
       authentication, sender rejection, recipient rejection, TLS, and
       uncertain-delivery apart (depends on P0.1 for standard/reply paths).
 

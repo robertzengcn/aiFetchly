@@ -248,12 +248,16 @@ if (parentPort) {
             await emailsendModel
               .send(
                 pme.data as Buckemailremotedata,
-                (receiver, title, content) => {
+                (receiver, title, content, identity) => {
                   const senddata: EmailSendResult = {
                     receiver: receiver,
                     status: true,
                     title: title,
                     content: content,
+                    emailServiceId: identity?.emailServiceId,
+                    fromAddress: identity?.fromAddress,
+                    smtpUsername: identity?.smtpUsername ?? null,
+                    replyTo: identity?.replyTo ?? null,
                   };
                   const message: ProcessMessage<EmailSendResult> = {
                     action: "EmailSendSuccess",
@@ -261,13 +265,18 @@ if (parentPort) {
                   };
                   parentPort.postMessage(JSON.stringify(message));
                 },
-                (receiver, info, title, content) => {
+                (receiver, info, title, content, identity, failureCode) => {
                   const senddata: EmailSendResult = {
                     receiver: receiver,
                     status: false,
                     info: info,
                     title: title,
                     content: content,
+                    failureCode: failureCode,
+                    emailServiceId: identity?.emailServiceId,
+                    fromAddress: identity?.fromAddress,
+                    smtpUsername: identity?.smtpUsername ?? null,
+                    replyTo: identity?.replyTo ?? null,
                   };
                   const message: ProcessMessage<EmailSendResult> = {
                     action: "EmailSendFailure",
