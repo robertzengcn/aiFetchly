@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import type { BrowserWindow } from "electron";
 import { createWindowStatusSink } from "@/main-process/communication/about-ipc";
 import { APP_UPDATE_STATUS_EVENT } from "@/config/channellist";
@@ -14,10 +14,7 @@ interface FakeWindow {
   webContents: { send: (channel: string, payload: unknown) => void };
 }
 
-function fakeWindow(
-  destroyed: boolean,
-  send: ReturnType<typeof vi.fn>
-): FakeWindow {
+function fakeWindow(destroyed: boolean, send: Mock): FakeWindow {
   return { isDestroyed: () => destroyed, webContents: { send } };
 }
 

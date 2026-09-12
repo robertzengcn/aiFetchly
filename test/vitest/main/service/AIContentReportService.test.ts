@@ -1,5 +1,5 @@
 "use strict";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 
 // --- Mocks ----------------------------------------------------------------
 
@@ -54,9 +54,7 @@ function imagePreview(
   };
 }
 
-function makeService(
-  postJson: ReturnType<typeof vi.fn>
-): AIContentReportService {
+function makeService(postJson: Mock): AIContentReportService {
   return new AIContentReportService({
     httpClient: { postJson, get: vi.fn() },
     appVersion: () => "9.9.9-test",
@@ -65,7 +63,7 @@ function makeService(
 }
 
 describe("AIContentReportService wire contract (backend v1)", () => {
-  let postJson: ReturnType<typeof vi.fn>;
+  let postJson: Mock;
 
   beforeEach(() => {
     postJson = vi.fn().mockResolvedValue({

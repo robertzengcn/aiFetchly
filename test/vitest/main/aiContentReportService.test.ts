@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 // Mock Electron so the real electron binary is never loaded. The service
 // imports `app` for app-version resolution, but tests inject a custom
@@ -350,8 +350,8 @@ describe("AIContentReportService", () => {
 // ---------------------------------------------------------------------------
 
 function makeStubClient(): {
-  postJson: ReturnType<typeof vi.fn>;
-  get: ReturnType<typeof vi.fn>;
+  postJson: Mock;
+  get: Mock;
 } {
   return { postJson: vi.fn(), get: vi.fn() };
 }
