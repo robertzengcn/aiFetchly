@@ -1314,6 +1314,32 @@ export default {
     identity_header_break_forbidden:
       "Zeilenumbrüche sind in diesem Feld nicht zulässig.",
   },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "Die Sendefreigabe passt nicht zu diesem Entwurf. Genehmigen Sie die Antwort erneut.",
+    approval_stale:
+      "Die Antwort wurde nach der Freigabe bearbeitet. Prüfen und genehmigen Sie sie erneut.",
+    hash_mismatch:
+      "Der genehmigte Antwortinhalt stimmt nicht mehr überein. Prüfen und genehmigen Sie sie erneut.",
+    revision_hash_mismatch:
+      "Die Antwortrevision stimmt nicht mehr mit dem genehmigten Umschlag überein. Prüfen und genehmigen Sie sie erneut.",
+    mailbox_mismatch:
+      "Antwortentwurf, Originalnachricht und E-Mail-Dienst teilen sich nicht dasselbe Postfach.",
+    service_inactive:
+      "Der E-Mail-Dienst dieser Antwort ist deaktiviert. Aktivieren Sie ihn und versuchen Sie es erneut.",
+    service_missing:
+      "Der E-Mail-Dienst dieser Antwort wurde nicht gefunden. Wählen Sie den Dienst im Entwurf erneut aus.",
+    sender_mismatch:
+      "Die From-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    recipient_mismatch:
+      "Der Empfänger stimmt nicht mehr mit dem ursprünglichen Absender oder dessen Antwortadresse überein.",
+    smtp_username_mismatch:
+      "Der SMTP-Benutzername wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    reply_to_mismatch:
+      "Die Antwort-An-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    legacy_reply_identity_requires_review:
+      "Die Identität des E-Mail-Dienstes hat sich seit dieser Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+  },
   buckemailsend: {
     email_source: "E-Mail-Quelle",
     email_template: "E-Mail-Vorlage",

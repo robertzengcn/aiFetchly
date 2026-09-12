@@ -1307,6 +1307,32 @@ export default {
     identity_header_break_forbidden:
       "Les sauts de ligne ne sont pas autorisés dans ce champ.",
   },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "L'approbation d'envoi ne correspond pas à ce brouillon. Approuvez à nouveau la réponse.",
+    approval_stale:
+      "La réponse a été modifiée après approbation. Révisez-la et approuvez-la à nouveau.",
+    hash_mismatch:
+      "Le contenu approuvé de la réponse ne correspond plus. Révisez-la et approuvez-la à nouveau.",
+    revision_hash_mismatch:
+      "La révision de la réponse ne correspond plus à l'enveloppe approuvée. Révisez-la et approuvez-la à nouveau.",
+    mailbox_mismatch:
+      "Le brouillon de réponse, le message d'origine et le service de messagerie ne partagent pas la même boîte.",
+    service_inactive:
+      "Le service de messagerie de cette réponse est désactivé. Activez-le et réessayez.",
+    service_missing:
+      "Le service de messagerie de cette réponse est introuvable. Resélectionnez le service dans le brouillon.",
+    sender_mismatch:
+      "L'adresse From a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    recipient_mismatch:
+      "Le destinataire ne correspond plus à l'expéditeur d'origine ou à son adresse de réponse.",
+    smtp_username_mismatch:
+      "Le nom d'utilisateur SMTP a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    reply_to_mismatch:
+      "L'adresse de réponse a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    legacy_reply_identity_requires_review:
+      "L'identité du service de messagerie a changé après la création de cette approbation. Révisez et approuvez à nouveau la réponse.",
+  },
   buckemailsend: {
     email_source: "Email Source",
     email_template: "Email Template",

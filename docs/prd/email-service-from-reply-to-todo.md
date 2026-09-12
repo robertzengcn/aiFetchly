@@ -144,14 +144,14 @@ Reply-To and SMTP username mismatches currently share
 `reply_identity_mismatch`. Missing service is a thrown Error, not a stable
 code.
 
-- [ ] Keep `sender_mismatch` for From mismatch.
-- [ ] Add or reuse a distinct code for Reply-To mismatch.
-- [ ] Add or reuse a distinct code for SMTP username mismatch.
-- [ ] Keep `service_inactive` for disabled services.
-- [ ] Use a stable `service_missing` (or equivalent) code when the bound
+- [x] Keep `sender_mismatch` for From mismatch.
+- [x] Add or reuse a distinct code for Reply-To mismatch.
+- [x] Add or reuse a distinct code for SMTP username mismatch.
+- [x] Keep `service_inactive` for disabled services.
+- [x] Use a stable `service_missing` (or equivalent) code when the bound
       service cannot be loaded.
-- [ ] Localize those messages (depends on P0.2).
-- [ ] Extend `EmailReplySendBinding.test.ts`.
+- [x] Localize those messages (depends on P0.2).
+- [x] Extend `EmailReplySendBinding.test.ts`.
 
 **Covers:** FR-013.
 

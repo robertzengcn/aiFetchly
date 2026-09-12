@@ -1323,6 +1323,34 @@ export default {
     identity_header_break_forbidden:
       "Line breaks are not allowed in this field.",
   },
+  // Approved-reply send binding failures (P1.2, FR-013). Distinct messages so
+  // the user can tell exactly which binding check failed.
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "The send approval does not match this draft. Approve the reply again.",
+    approval_stale:
+      "The reply was edited after approval. Review and approve it again.",
+    hash_mismatch:
+      "The approved reply content no longer matches. Review and approve it again.",
+    revision_hash_mismatch:
+      "The reply revision no longer matches the approved envelope. Review and approve it again.",
+    mailbox_mismatch:
+      "The reply draft, original message, and email service do not share one mailbox.",
+    service_inactive:
+      "The email service for this reply is disabled. Enable it and try again.",
+    service_missing:
+      "The email service for this reply could not be found. Re-select the service in the draft.",
+    sender_mismatch:
+      "The From address changed after approval. Review and approve the reply again.",
+    recipient_mismatch:
+      "The recipient no longer matches the original sender or their Reply-To address.",
+    smtp_username_mismatch:
+      "The SMTP username changed after approval. Review and approve the reply again.",
+    reply_to_mismatch:
+      "The Reply-To address changed after approval. Review and approve the reply again.",
+    legacy_reply_identity_requires_review:
+      "The email service identity changed after this approval was created. Review and approve the reply again.",
+  },
   buckemailsend: {
     email_source: "Email Source",
     email_template: "Email Template",

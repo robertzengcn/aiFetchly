@@ -1292,6 +1292,32 @@ export default {
       "このメールサービス行をインポートするにはパスワードが必要です。",
     identity_header_break_forbidden: "このフィールドに改行は使用できません。",
   },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "送信承認がこの下書きと一致しません。返信を再度承認してください。",
+    approval_stale:
+      "返信は承認後に編集されました。再確認して再度承認してください。",
+    hash_mismatch:
+      "承認された返信の内容が一致しなくなりました。再確認して再度承認してください。",
+    revision_hash_mismatch:
+      "返信リビジョンが承認済みエンベロープと一致しなくなりました。再確認して再度承認してください。",
+    mailbox_mismatch:
+      "返信下書き・元メッセージ・メールサービスが同じメールボックスを共有していません。",
+    service_inactive:
+      "この返信のメールサービスは無効です。有効にして再試行してください。",
+    service_missing:
+      "この返信のメールサービスが見つかりません。下書きでサービスを再選択してください。",
+    sender_mismatch:
+      "承認後にFromアドレスが変更されました。再確認して返信を再度承認してください。",
+    recipient_mismatch:
+      "受信者が元の差出人またはその返信先アドレスと一致しなくなりました。",
+    smtp_username_mismatch:
+      "承認後にSMTPユーザー名が変更されました。再確認して返信を再度承認してください。",
+    reply_to_mismatch:
+      "承認後に返信先アドレスが変更されました。再確認して返信を再度承認してください。",
+    legacy_reply_identity_requires_review:
+      "この承認の作成後にメールサービスの identity が変更されました。返信を再確認して再度承認してください。",
+  },
   buckemailsend: {
     email_source: "メールソース",
     email_template: "メールテンプレート",

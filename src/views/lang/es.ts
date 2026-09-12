@@ -1318,6 +1318,32 @@ export default {
     identity_header_break_forbidden:
       "No se permiten saltos de línea en este campo.",
   },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "La aprobación de envío no coincide con este borrador. Apruebe la respuesta de nuevo.",
+    approval_stale:
+      "La respuesta fue editada tras la aprobación. Revísela y apruébela de nuevo.",
+    hash_mismatch:
+      "El contenido aprobado de la respuesta ya no coincide. Revísela y apruébela de nuevo.",
+    revision_hash_mismatch:
+      "La revisión de la respuesta ya no coincide con el sobre aprobado. Revísela y apruébela de nuevo.",
+    mailbox_mismatch:
+      "El borrador de respuesta, el mensaje original y el servicio de correo no comparten un mismo buzón.",
+    service_inactive:
+      "El servicio de correo de esta respuesta está deshabilitado. Actívelo e inténtelo de nuevo.",
+    service_missing:
+      "No se pudo encontrar el servicio de correo de esta respuesta. Vuelva a seleccionar el servicio en el borrador.",
+    sender_mismatch:
+      "La dirección From cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    recipient_mismatch:
+      "El destinatario ya no coincide con el remitente original o su dirección de respuesta.",
+    smtp_username_mismatch:
+      "El nombre de usuario SMTP cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    reply_to_mismatch:
+      "La dirección de respuesta cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    legacy_reply_identity_requires_review:
+      "La identidad del servicio de correo cambió tras crear esta aprobación. Revise y apruebe la respuesta de nuevo.",
+  },
   buckemailsend: {
     email_source: "Fuente de correos",
     email_template: "Plantilla de correo",

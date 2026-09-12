@@ -1255,6 +1255,21 @@ export default {
     identity_import_password_required: "导入此邮件服务记录需要提供密码。",
     identity_header_break_forbidden: "此字段不允许包含换行符。",
   },
+  emailReplyBinding: {
+    draft_token_mismatch: "发送审批与该草稿不匹配。请重新审批此回复。",
+    approval_stale: "回复在审批后已被编辑。请重新审核并审批。",
+    hash_mismatch: "已审批的回复内容不再匹配。请重新审核并审批。",
+    revision_hash_mismatch: "回复版本与审批信封不再匹配。请重新审核并审批。",
+    mailbox_mismatch: "回复草稿、原始邮件与邮件服务不属于同一邮箱。",
+    service_inactive: "此回复的邮件服务已停用。请启用后重试。",
+    service_missing: "找不到此回复的邮件服务。请在草稿中重新选择服务。",
+    sender_mismatch: "审批后发件地址已更改。请重新审核并审批。",
+    recipient_mismatch: "收件人与原始发件人或其回复地址不再匹配。",
+    smtp_username_mismatch: "审批后 SMTP 用户名已更改。请重新审核并审批。",
+    reply_to_mismatch: "审批后回复地址已更改。请重新审核并审批。",
+    legacy_reply_identity_requires_review:
+      "创建此审批后邮件服务身份已更改。请重新审核并审批该回复。",
+  },
   buckemailsend: {
     email_source: "邮件来源",
     email_template: "邮件模板",

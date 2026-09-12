@@ -283,7 +283,7 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
       baseV2Input({
         service: { ...base.service, smtpUsername: "different@svc.com" },
       }),
-      "reply_identity_mismatch"
+      "smtp_username_mismatch"
     );
   });
 
@@ -293,7 +293,7 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
       baseV2Input({
         revision: { ...base.revision, smtpUsername: "different@svc.com" },
       }),
-      "reply_identity_mismatch"
+      "smtp_username_mismatch"
     );
   });
 
@@ -303,7 +303,7 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
       baseV2Input({
         service: { ...base.service, replyTo: "replies@other.com" },
       }),
-      "reply_identity_mismatch"
+      "reply_to_mismatch"
     );
   });
 
@@ -313,7 +313,7 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
       baseV2Input({
         service: { ...base.service, replyTo: "replies@other.com" },
       }),
-      "reply_identity_mismatch"
+      "reply_to_mismatch"
     );
   });
 
@@ -333,7 +333,7 @@ describe("validateSendBinding — v2 identity binding (§18.2)", () => {
         },
         recomputedHash: hash,
       }),
-      "reply_identity_mismatch"
+      "reply_to_mismatch"
     );
   });
 

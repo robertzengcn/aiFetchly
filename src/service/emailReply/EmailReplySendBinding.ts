@@ -61,15 +61,35 @@ export interface SendBindingInput {
   recomputedHash: string;
 }
 
+/**
+ * Stable error codes emitted by {@link validateSendBinding} (P1.2). Each code
+ * identifies exactly one binding failure so the UI can show a distinct,
+ * localized message. `service_missing` is also used by the delivery service
+ * when the bound email-service row cannot be loaded.
+ */
+export type SendBindingErrorCode =
+  | "draft_token_mismatch"
+  | "approval_stale"
+  | "hash_mismatch"
+  | "revision_hash_mismatch"
+  | "mailbox_mismatch"
+  | "service_inactive"
+  | "service_missing"
+  | "sender_mismatch"
+  | "recipient_mismatch"
+  | "smtp_username_mismatch"
+  | "reply_to_mismatch"
+  | "legacy_reply_identity_requires_review";
+
 /** Thrown when an approved-send envelope binding check fails. */
 export class SendBindingError extends Error {
-  constructor(message: string, public readonly code: string) {
+  constructor(message: string, public readonly code: SendBindingErrorCode) {
     super(message);
     this.name = "SendBindingError";
   }
 }
 
-function fail(code: string, message: string): never {
+function fail(code: SendBindingErrorCode, message: string): never {
   throw new SendBindingError(message, code);
 }
 
@@ -170,14 +190,16 @@ export function validateSendBinding(input: SendBindingInput): void {
   const version = revision.envelopeVersion ?? 1;
   if (version === 2) {
     // §18.2 — v2 identity comparison. Uses the same v2 normalization as the
-    // hash function so the comparison is byte-identical.
+    // hash function so the comparison is byte-identical. Each identity field
+    // fails with its own code (P1.2) so the UI can tell the user exactly
+    // which part of the identity changed after approval.
     const effectiveSmtp = service.smtpUsername ?? service.from;
     if (
       normalizeSmtpUsernameForHash(revision.smtpUsername ?? "") !==
       normalizeSmtpUsernameForHash(effectiveSmtp)
     ) {
       fail(
-        "reply_identity_mismatch",
+        "smtp_username_mismatch",
         "Send rejected: revision SMTP username does not match the current effective login"
       );
     }
@@ -188,7 +210,7 @@ export function validateSendBinding(input: SendBindingInput): void {
       normalizeEmailAddressV2(service.from)
     ) {
       fail(
-        "reply_identity_mismatch",
+        "sender_mismatch",
         "Send rejected: revision sender does not match the current From address"
       );
     }
@@ -202,7 +224,7 @@ export function validateSendBinding(input: SendBindingInput): void {
         : normalizeEmailAddressV2(service.replyTo);
     if (revisionReplyTo !== serviceReplyTo) {
       fail(
-        "reply_identity_mismatch",
+        "reply_to_mismatch",
         "Send rejected: revision Reply-To does not match the current configured Reply-To (null must match null)"
       );
     }

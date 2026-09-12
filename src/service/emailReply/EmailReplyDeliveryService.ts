@@ -13,7 +13,10 @@ import {
   hashApprovalEnvelope,
   hashApprovalEnvelopeV2,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
+import {
+  SendBindingError,
+  validateSendBinding,
+} from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
 import {
   incrementReplyMetric,
@@ -138,7 +141,12 @@ export class EmailReplyDeliveryService {
     const emailServiceId = draft.emailServiceId ?? message.emailServiceId;
     const service = await this.serviceLoader(emailServiceId);
     if (!service) {
-      throw new Error("Send rejected: bound email service not found");
+      // Stable code (P1.2) so the UI can distinguish a deleted/unreadable
+      // service from other pre-send failures.
+      throw new SendBindingError(
+        "Send rejected: bound email service not found",
+        "service_missing"
+      );
     }
 
     // Recompute the envelope hash from trusted state. Version-aware (§18.1):
