@@ -637,8 +637,7 @@ export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
 export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
 export const MANAGED_BROWSER_STOP = "managed-browser:stop";
 export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
-export const MANAGED_BROWSER_CANCEL_ACTIVE =
-  "managed-browser:cancel-active";
+export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
 export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
   "managed-browser:capture-screenshot";
 export const MANAGED_BROWSER_EXTEND_HANDOFF = "managed-browser:extend-handoff";
@@ -853,6 +852,23 @@ export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
 export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
 export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
 export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== Application lifecycle (exit & system tray) channels ========
+// PRD: docs/prd/application-exit-and-system-tray-prd.md; design §10.
+// Lifecycle IPC is NOT an AI feature — no AI entitlement check.
+// CLOSE_CHOICE_* events are main↔renderer dialog plumbing; the lifecycle
+// state channels let the renderer reflect shutdown progress and block new
+// task actions while the main process is quitting.
+export const APPLICATION_LIFECYCLE_GET_STATE =
+  "application:lifecycle:get-state";
+export const APPLICATION_CLOSE_CHOICE_REQUEST =
+  "application:lifecycle:close-choice:request";
+export const APPLICATION_CLOSE_CHOICE_ACK =
+  "application:lifecycle:close-choice:ack";
+export const APPLICATION_CLOSE_CHOICE_SUBMIT =
+  "application:lifecycle:close-choice:submit";
+export const APPLICATION_LIFECYCLE_STATE_CHANGED =
+  "application:lifecycle:state-changed";
 
 // ======== E2E test-support channels ========
 // Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).
