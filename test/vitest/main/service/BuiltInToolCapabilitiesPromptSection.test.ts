@@ -37,6 +37,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "knowledge_library_import_attachment",
       "scrape_urls_from_search_engine",
       "shell_execute",
+      "conversation_tool_history",
     ];
     for (const name of must) {
       expect(s).toContain(name);

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
 
 const smtpMock = vi.hoisted(() => ({
@@ -38,7 +38,7 @@ function service(
   };
 }
 
-function fakeTransporter(sendMail: ReturnType<typeof vi.fn>) {
+function fakeTransporter(sendMail: Mock) {
   return {
     on: vi.fn(),
     close: vi.fn(),

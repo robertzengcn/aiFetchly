@@ -36,6 +36,20 @@ describe("SkillRegistry", () => {
       expect(SkillRegistry.isRegistered("mcp_some_tool")).toBe(false);
     });
 
+    test("should return true for conversation_tool_history", () => {
+      expect(SkillRegistry.isRegistered("conversation_tool_history")).toBe(
+        true
+      );
+    });
+
+    test("conversation_tool_history is a confirmation-free pure lookup", () => {
+      const skill = SkillRegistry.getSkill("conversation_tool_history");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("pure");
+      expect(skill!.requiresConfirmation).toBe(false);
+      expect(skill!.timeoutClass).toBe("fast");
+    });
+
     test("should return true for search_maps_businesses", () => {
       expect(SkillRegistry.isRegistered("search_maps_businesses")).toBe(true);
     });
@@ -94,6 +108,7 @@ describe("SkillRegistry", () => {
       expect(names).toContain("generate_keywords");
       expect(names).toContain("extract_contact_info");
       expect(names).toContain("search_maps_businesses");
+      expect(names).toContain("conversation_tool_history");
     });
 
     test("should return ToolFunction with correct shape", async () => {

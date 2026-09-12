@@ -105,14 +105,56 @@ import {
 } from "@/entityTypes/hookTypes";
 
 /**
- * Max model→tool→model rounds per user turn. Must be high enough to
- * accommodate plan-mode flows where each AskUserQuestion pauses and
- * resumes (consuming one round per question). A typical planning turn
+ * Max model→tool→model rounds per cycle inside one user turn. Must be high
+ * enough to accommodate plan-mode flows where each AskUserQuestion pauses
+ * and resumes (consuming one round per question). A typical planning turn
  * uses 1 (EnterPlanMode) + N (AskUserQuestion) + 1 (SubmitPlanForApproval)
  * + execution rounds. 8 was too low and dead-ended conversations after
  * ~7 questions.
+ *
+ * Hitting this cap used to return `completed` with empty `fullContent`
+ * after the last tool result. The engine then skipped persisting an
+ * assistant row, so plan execution looked like a silent stop. The loop
+ * now injects an in-memory continuation and starts another cycle for
+ * every chat turn — no canned pause is shown in the UI. Stop still aborts.
  */
-const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * How many extra 30-round cycles a turn may start after hitting the cap.
+ * This is a runaway guard (Stop still aborts). 200 cycles × 30 rounds is
+ * enough for long scrapes without an unbounded loop if the model never
+ * stops calling tools.
+ */
+export const MAX_TOOL_ROUND_CAP_CONTINUATIONS = 200;
+
+/**
+ * How many times to nudge the model after it returns finish_reason=stop
+ * with no text and no tool calls, but this turn already executed tools.
+ * Empty stop after tools is not a finished plan — it is a premature end.
+ */
+export const MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS = 3;
+
+/** In-memory (not persisted) nudge sent when the model empty-stops after tools. */
+export const EMPTY_STOP_AFTER_TOOLS_PROMPT =
+  "Continue the current plan now. Call the next tool or write a short progress update with blockers. Do not end the turn with an empty reply.";
+
+/**
+ * In-memory (not persisted) prompt injected when /goal hits the per-cycle
+ * tool-round cap and should keep executing instead of pausing.
+ */
+export const GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT =
+  "The current tool-round cycle ended, but the goal is not finished. Continue executing the plan now. Call the next tool or write a short progress update with blockers. Do not stop until the goal's completion conditions are met.";
+
+/**
+ * In-memory (not persisted) prompt injected when a normal chat hits the
+ * per-cycle tool-round cap. Sent only to the model; not shown as a user
+ * or assistant bubble.
+ */
+export const TOOL_ROUND_CAP_CONTINUATION_PROMPT =
+  "The current tool-round cycle ended, but the task is not finished. " +
+  "Continue now. Call the next tool or write a short progress update with blockers. " +
+  "Do not end with an empty reply, and do not ask the user whether to continue.";
 
 /**
  * Polling interval for async tool jobs. The loop sleeps this long between
@@ -912,6 +954,12 @@ export class AIChatQueryLoop {
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
     let textToolCallMarkerRetryCount = 0;
+    let executedToolRound = false;
+    let emptyStopContinuations = 0;
+    let roundCapContinuations = 0;
+    const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
+    const maxRoundCapContinuations =
+      input.maxRoundCapContinuations ?? MAX_TOOL_ROUND_CAP_CONTINUATIONS;
     // Ensure a generous token budget so large tool-call arguments (e.g.
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
@@ -942,11 +990,43 @@ export class AIChatQueryLoop {
       // any other generated image.
       const collectedToolImages: OpenAIChatImage[] = [];
 
-      for (
-        let round = input.startRound;
-        round < CHAT_V2_MAX_TOOL_ROUNDS;
-        round += 1
-      ) {
+      for (let round = input.startRound; ; round += 1) {
+        if (round >= maxToolRounds) {
+          const canKeepGoing =
+            executedToolRound &&
+            !input.abortController.signal.aborted &&
+            input.isActiveTurn() &&
+            roundCapContinuations < maxRoundCapContinuations;
+          if (canKeepGoing) {
+            roundCapContinuations += 1;
+            emptyStopContinuations = 0;
+            const continuationPrompt = input.goalAutoContinue
+              ? GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+              : TOOL_ROUND_CAP_CONTINUATION_PROMPT;
+            messages.push({
+              role: "user",
+              content: continuationPrompt,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "persistent_retry",
+              reason: "server_error",
+              attempt: roundCapContinuations,
+              maxAttempts: maxRoundCapContinuations,
+              message: "Continuing after tool-round cap",
+            });
+            console.log(
+              `[ai-chat-v2] auto-continue after ${maxToolRounds}-round cap; cycle ${roundCapContinuations}/${maxRoundCapContinuations}`
+            );
+            // for-loop increment runs after continue, so -1 → 0 next cycle.
+            round = -1;
+            continue;
+          }
+          break;
+        }
+
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);
@@ -1361,6 +1441,67 @@ export class AIChatQueryLoop {
                 "Plan submitted for approval. Please review the plan card.";
             }
           }
+
+          // After tools already ran this turn, finish_reason=stop with no
+          // text is a premature end, not a finished plan. Nudge the model
+          // to continue instead of persisting an empty completion.
+          const emptyAfterTools =
+            executedToolRound &&
+            lastFailedTool === null &&
+            accumulator.state.fullContent.trim().length === 0;
+          if (emptyAfterTools) {
+            if (
+              emptyStopContinuations < MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
+            ) {
+              emptyStopContinuations += 1;
+              messages.push({
+                role: "user",
+                content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: emptyStopContinuations,
+                maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+                message: "Continuing after empty model stop",
+              });
+              console.log(
+                `[ai-chat-v2] empty stop after tools; continuation ${emptyStopContinuations}/${MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS}`
+              );
+              continue;
+            }
+            if (
+              roundCapContinuations < maxRoundCapContinuations &&
+              !input.abortController.signal.aborted &&
+              input.isActiveTurn()
+            ) {
+              roundCapContinuations += 1;
+              emptyStopContinuations = 0;
+              messages.push({
+                role: "user",
+                content: TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: roundCapContinuations,
+                maxAttempts: maxRoundCapContinuations,
+                message: "Continuing after empty model stop",
+              });
+              console.log(
+                `[ai-chat-v2] empty-stop exhausted; hidden continue ${roundCapContinuations}/${maxRoundCapContinuations}`
+              );
+              continue;
+            }
+            break;
+          }
+
           break;
         }
 
@@ -1393,6 +1534,7 @@ export class AIChatQueryLoop {
         // delivered content so a later transient failure is not retried
         // (which would duplicate those events and orphan the persisted rows).
         tracker.delivered = true;
+        executedToolRound = true;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,

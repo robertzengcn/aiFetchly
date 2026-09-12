@@ -17,6 +17,13 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import {
+  buildToolHistoryIndexBlock,
+  collectConversationToolPairs,
+  filterPairsAfterBoundary,
+  interleaveReplayWithText,
+  selectReplayPairs,
+} from "@/service/ConversationToolHistoryService";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -28,6 +35,7 @@ import type {
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
+/** Recent-history window counted in text (`message`) rows, not raw DB rows. */
 const DEFAULT_RECENT_MESSAGE_WINDOW = 30;
 
 const COMPACT_PREAMBLE =
@@ -110,7 +118,11 @@ export class AIChatContextAssembler {
       return t !== 0 ? t : a.id - b.id;
     });
     const window = input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW;
-    const recent = sorted.slice(-window).filter(isMessageRow);
+    // Count the window in TEXT messages, not raw DB rows. A long tool-calling
+    // turn persists dozens of tool_call/tool_result rows; slicing the raw
+    // row list first then dropping those rows leaves only the last assistant
+    // fragment, so "please continue" forgets the original user task.
+    const recent = sorted.filter(isMessageRow).slice(-window);
 
     // Drop any recent message that is already covered by an active full
     // compact boundary. Session memory is advisory and may overlap with
@@ -354,9 +366,24 @@ export class AIChatContextAssembler {
       });
     }
 
-    for (const r of trimmedRecent) {
-      messages.push({ role: roleOf(r.role), content: r.content });
+    const compactMs = fullCompact
+      ? new Date(fullCompact.throughTimestamp).getTime()
+      : null;
+    const toolPairs = filterPairsAfterBoundary(
+      collectConversationToolPairs(sorted),
+      compactMs
+    );
+    const toolIndex = buildToolHistoryIndexBlock(toolPairs);
+    if (toolIndex) {
+      messages.push({ role: "system", content: toolIndex });
     }
+
+    const historyMessages = interleaveReplayWithText({
+      textRows: trimmedRecent,
+      replayPairs: selectReplayPairs(toolPairs),
+      roleOf,
+    });
+    messages.push(...historyMessages);
 
     messages.push({
       role: "user",

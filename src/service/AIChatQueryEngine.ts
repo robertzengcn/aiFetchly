@@ -1,6 +1,7 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import { AIChatGoalModule } from "@/modules/AIChatGoalModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import {
@@ -308,6 +309,27 @@ export class AIChatQueryEngine {
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
     this.toolFilter = deps?.toolFilter;
+  }
+
+  /**
+   * /goal execution should keep calling the model past the per-cycle tool
+   * cap. Plan-mode turns still pause (AskUserQuestion must not be skipped).
+   * Lookup failures must not fail the turn.
+   */
+  private async shouldAutoContinueGoal(
+    conversationId: string,
+    isPlanMode: boolean
+  ): Promise<boolean> {
+    if (isPlanMode || !conversationId) {
+      return false;
+    }
+    try {
+      const goal = await new AIChatGoalModule().getActiveGoal(conversationId);
+      return goal !== null;
+    } catch (err) {
+      console.warn("[ai-chat-v2] goal lookup for auto-continue failed:", err);
+      return false;
+    }
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -1025,6 +1047,10 @@ export class AIChatQueryEngine {
       toolCatalogState: persistedToolCatalogState,
       sourceUserMessageId,
       intentDecisionId,
+      goalAutoContinue: await this.shouldAutoContinueGoal(
+        conversationId,
+        isPlanMode
+      ),
     };
 
     try {
@@ -1309,6 +1335,10 @@ export class AIChatQueryEngine {
         // outbound gate incorrectly falls back to `draft_required`.
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          matchedByToolId.conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
       };
 
       void this.loop
@@ -1458,6 +1488,10 @@ export class AIChatQueryEngine {
       toolCatalog: resumePlanCatalogContext.toolCatalog,
       toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
       toolCatalogState: pending.toolCatalogState,
+      goalAutoContinue: await this.shouldAutoContinueGoal(
+        pending.conversationId,
+        Boolean(planContext)
+      ),
     };
 
     const module = new AIChatV2Module();
@@ -1575,6 +1609,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               console.error("[ai-auto-dream] chat trigger failed:", err)
@@ -1585,6 +1620,7 @@ export class AIChatQueryEngine {
             .evaluateAfterChatTurn({
               conversationId,
               reason: "assistant_turn_completed",
+              model: result.model,
             })
             .catch((err) =>
               console.error("[workspace-auto-dream] chat trigger failed:", err)

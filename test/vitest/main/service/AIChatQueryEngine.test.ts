@@ -57,6 +57,13 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
   })),
 }));
 
+const mockGetActiveGoal = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AIChatGoalModule", () => ({
+  AIChatGoalModule: vi.fn().mockImplementation(() => ({
+    getActiveGoal: mockGetActiveGoal,
+  })),
+}));
+
 // --- Mock compact modules (used by default AIChatContextAssembler) -----
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -150,6 +157,7 @@ describe("AIChatQueryEngine", () => {
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockApprovePlan.mockReset();
+    mockGetActiveGoal.mockResolvedValue(null);
     HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
@@ -653,6 +661,68 @@ describe("AIChatQueryEngine", () => {
       expect(loopInput.planContext).toBeUndefined();
       // …and autoPlan stays off so the loop would reject any stray call.
       expect(loopInput.autoPlan).toBeUndefined();
+    });
+
+    it("sets goalAutoContinue in chat mode when a conversation goal is active", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(true);
+    });
+
+    it("does not set goalAutoContinue in plan mode even with an active goal", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "plan",
+          message: "Plan how to accomplish this goal",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(false);
     });
 
     it("advertises EnterPlanMode in plain chat mode with no approved plan", async () => {

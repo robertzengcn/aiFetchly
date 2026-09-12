@@ -72,6 +72,7 @@ import {
   importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
+import { CONVERSATION_TOOL_HISTORY_TOOL_NAME } from "@/entityTypes/conversationToolHistoryTypes";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1102,6 +1103,50 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         }
       );
       return { success: true, result };
+    },
+  },
+  {
+    name: CONVERSATION_TOOL_HISTORY_TOOL_NAME,
+    description:
+      "Look up tools already run in this conversation (name, status, receipt, truncated result). " +
+      "Use before repeating a side-effecting tool (email send, file write, scrape) or when " +
+      "the user asks to continue an interrupted task. Filter with query (tool name or text) " +
+      "or fetch one full truncated result with tool_call_id from the prior-tool-activity index.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Filter receipts by tool name, tool_call_id, or summary text.",
+        },
+        tool_call_id: {
+          type: "string",
+          description:
+            "Fetch one prior tool result by id from the prior-tool-activity index.",
+        },
+        limit: {
+          type: "number",
+          description: "Max receipts to return (default 30, max 50).",
+        },
+        include_content: {
+          type: "boolean",
+          description:
+            "If true, include truncated result bodies in the list. " +
+            "tool_call_id fetches always include truncated content.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { handleConversationToolHistory } = await import(
+        "@/service/agentTools/conversationToolHistoryTool"
+      );
+      return handleConversationToolHistory(args, context.conversationId);
     },
   },
   {
