@@ -11,6 +11,8 @@ import { PluginSourceRegistry } from "@/service/pluginSources/PluginSourceRegist
 import { LocalFolderPluginFetcher } from "@/service/pluginSources/LocalFolderPluginFetcher";
 import { LocalZipPluginFetcher } from "@/service/pluginSources/LocalZipPluginFetcher";
 import { GitPluginFetcher } from "@/service/pluginSources/GitPluginFetcher";
+import { PluginHttpDownloadService } from "@/service/pluginSources/PluginHttpDownloadService";
+import { GitHubArchiveClient } from "@/service/pluginSources/GitHubArchiveClient";
 import { GitHubPluginFetcher } from "@/service/pluginSources/GitHubPluginFetcher";
 import { NpmPluginFetcher } from "@/service/pluginSources/NpmPluginFetcher";
 import { UrlPluginFetcher } from "@/service/pluginSources/UrlPluginFetcher";
@@ -41,11 +43,17 @@ export class PluginInstallService {
   ) {}
 
   static defaultRegistry(): PluginSourceRegistry {
+    // Shared dependency composition (design §10.6): ONE transport + ONE
+    // archive client + ONE zip fetcher, so limits, redirects, cancellation,
+    // and cleanup behave identically across GitHub and URL sources.
+    const http = new PluginHttpDownloadService();
+    const zip = new LocalZipPluginFetcher();
+    const archiveClient = new GitHubArchiveClient({ http, appVersion: "1.0.0" });
     const reg = new PluginSourceRegistry();
-    reg.register(new LocalZipPluginFetcher());
+    reg.register(zip);
     reg.register(new LocalFolderPluginFetcher());
     reg.register(new GitPluginFetcher());
-    reg.register(new GitHubPluginFetcher());
+    reg.register(new GitHubPluginFetcher({ archiveClient, zip, git: new GitPluginFetcher() }));
     reg.register(new NpmPluginFetcher());
     reg.register(new UrlPluginFetcher());
     return reg;
@@ -80,14 +88,26 @@ export class PluginInstallService {
 
     const { localRoot, cleanup } = acquired.source;
     try {
+      // Trusted provenance merge (design §10.3): FETCHER-generated keys
+      // (canonical URI, resolved SHA, acquisition kind) win over renderer
+      // request values, so a caller can never spoof resolvedCommitSha or
+      // acquisition. sourceKind/source stay request-controlled (validated
+      // upstream).
+      const acquiredProvenance = acquired.source.provenance;
       const provenance: PluginSourceProvenance = {
         sourceKind: req.kind,
-        sourceUri: req.uri ?? req.zipPath ?? req.folderPath ?? req.npmPackage,
-        sourceRef: req.ref ?? req.npmVersion,
+        sourceUri:
+          acquiredProvenance?.sourceUri ??
+          req.uri ??
+          req.zipPath ??
+          req.folderPath ??
+          req.npmPackage,
+        sourceRef: acquiredProvenance?.sourceRef ?? req.ref ?? req.npmVersion,
         source: req.source,
         sourceMeta: {
           ...(req.npmRegistry ? { registry: req.npmRegistry } : {}),
           ...(req.sourceMeta ?? {}),
+          ...(acquiredProvenance?.sourceMeta ?? {}),
         },
       };
       const r = await this.installFromLocalRoot(localRoot, {

@@ -30,10 +30,13 @@ export type UrlClass = "zip" | "git" | "github" | "rejected" | "unknown";
 export function classifyUrlKind(raw: string): UrlClass {
   if (!raw) return "unknown";
   if (raw.startsWith("http://")) return "rejected";
+  // GitHub FIRST (git-free GitHub plugin installation design §6.3): an
+  // eligible github.com URL — including a trailing .git — must take the
+  // archive path, never native Git. Non-GitHub .git stays Git.
+  if (/^https:\/\/github\.com\//i.test(raw)) return "github";
   if (/^git@/.test(raw) || /^ssh:\/\//.test(raw) || raw.endsWith(".git")) {
     return "git";
   }
-  if (/^https:\/\/github\.com\//i.test(raw)) return "github";
   if (/\.zip(\?.*)?$/i.test(raw)) return "zip";
   return "unknown";
 }
@@ -47,6 +50,8 @@ export class UrlPluginFetcher implements PluginSourceFetcher {
       git: GitPluginFetcher;
       github: GitHubPluginFetcher;
     } = {
+      // Shared-instance composition happens in PluginInstallService's
+      // defaultRegistry; these defaults stay for isolated construction.
       zip: new LocalZipPluginFetcher(),
       git: new GitPluginFetcher(),
       github: new GitHubPluginFetcher(),

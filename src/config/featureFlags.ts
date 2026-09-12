@@ -37,6 +37,14 @@ export function isBrowserProfileImportEnabled(): boolean {
  */
 export const EMAIL_REPLY_KILL_SWITCH_FLAG = "email_reply_kill_switch";
 
+/** Git-free GitHub plugin installation rollback flag (design §17.1):
+ *  archive acquisition is ENABLED unless the main-process Token store holds
+ *  the exact value "false" — read failures also leave it enabled, because
+ *  installation safety comes from the archive controls while a corrupt
+ *  settings store must not silently restore the native-Git dependency.
+ *  Remove after two stable releases. */
+export const GITHUB_ARCHIVE_INSTALL_FLAG = "github_archive_install_enabled";
+
 export function isEmailReplyKillSwitchOn(): boolean {
   try {
     return new Token().getValue(EMAIL_REPLY_KILL_SWITCH_FLAG) === "true";
