@@ -2,12 +2,11 @@ import nodemailer from "nodemailer";
 import {
   EmailRequestData,
   EmailServiceEntitydata,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
-import {
-  OutboundSmtpSession,
-  smtpErrorMessage,
-} from "@/modules/lib/smtpTransport";
+import { OutboundSmtpSession } from "@/modules/lib/smtpTransport";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
 
 export class EmailService {
   private session: OutboundSmtpSession;
@@ -27,7 +26,7 @@ export class EmailService {
 
   public async sendEmail(
     param: EmailRequestData,
-    errorCallback?: (errorMessage: string) => void,
+    errorCallback?: (error: SendEmailError) => void,
     successCallback?: () => void
   ): Promise<void> {
     const mailOptions: nodemailer.SendMailOptions = {
@@ -42,7 +41,11 @@ export class EmailService {
       await this.session.sendMail(mailOptions);
       successCallback?.();
     } catch (error: unknown) {
-      errorCallback?.(smtpErrorMessage(error));
+      const classified = classifySmtpFailure(error);
+      errorCallback?.({
+        message: classified.sanitizedMessage,
+        code: classified.code,
+      });
     }
   }
 }

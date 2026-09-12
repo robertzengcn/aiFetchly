@@ -1236,6 +1236,17 @@ export default {
     send_test_email_error: "发送测试邮件错误",
     email_send_success: "邮件发送成功",
     required_fields_missing: "请填写所有必填字段",
+    smtp_error_auth_failed:
+      "SMTP 身份验证失败。请检查此服务的 SMTP 用户名和密码。",
+    smtp_error_from_rejected:
+      "发件人地址被邮件服务商拒绝。请确认该别名在此登录账号下已获准发送。",
+    smtp_error_recipient_rejected: "收件人地址被邮件服务商拒绝。",
+    smtp_error_tls_failed:
+      "连接 SMTP 服务器时出现 TLS 或证书错误。请检查 SSL/TLS 设置和端口（465 使用隐式 SSL，587 使用 STARTTLS）。",
+    smtp_error_connection_failed:
+      "无法连接到 SMTP 服务器。请检查主机、端口和网络。",
+    smtp_error_submission_failed: "SMTP 服务器拒绝了邮件提交。",
+    smtp_error_unknown: "因未知原因无法发送邮件。服务器响应如下。",
   },
   buckemailsend: {
     email_source: "邮件来源",

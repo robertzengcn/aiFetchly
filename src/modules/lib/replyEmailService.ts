@@ -3,11 +3,9 @@ import type {
   EmailServiceEntitydata,
   EmailSendResult,
 } from "@/entityTypes/emailmarketingType";
-import {
-  OutboundSmtpSession,
-  smtpErrorMessage,
-} from "@/modules/lib/smtpTransport";
+import { OutboundSmtpSession } from "@/modules/lib/smtpTransport";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
 
 /** Reply payload with thread-tracking headers preserved where available. */
 export interface ReplyEmailRequestData {
@@ -70,12 +68,14 @@ export class ReplyEmailService {
         info: typeof info === "object" && info ? info.messageId : undefined,
       };
     } catch (error: unknown) {
+      const classified = classifySmtpFailure(error);
       return {
         receiver: data.receiver,
         status: false,
         title: subject,
         content: data.text,
-        info: smtpErrorMessage(error),
+        info: classified.sanitizedMessage,
+        failureCode: classified.code,
       };
     }
   }

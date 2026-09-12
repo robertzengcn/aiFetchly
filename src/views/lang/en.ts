@@ -1287,6 +1287,25 @@ export default {
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
     required_fields_missing: "Please fill in all required fields",
+    // §19.2 SMTP failure categories — distinct, localized messages so the
+    // Test Email dialog and reply send show actionable guidance instead of
+    // raw provider text. From-alias rejection tells the user to verify the
+    // alias with their email provider (PRD §15); auth/recipient/TLS/connection
+    // are NOT treated as alias issues.
+    smtp_error_auth_failed:
+      "SMTP authentication failed. Check the SMTP username and password for this service.",
+    smtp_error_from_rejected:
+      "The From address was rejected by your email provider. Verify this alias is allowed to send on this login.",
+    smtp_error_recipient_rejected:
+      "The recipient address was rejected by the email provider.",
+    smtp_error_tls_failed:
+      "TLS or certificate error connecting to the SMTP server. Check the SSL/TLS setting and port (465 uses implicit SSL, 587 uses STARTTLS).",
+    smtp_error_connection_failed:
+      "Could not connect to the SMTP server. Check the host, port, and network.",
+    smtp_error_submission_failed:
+      "The SMTP server rejected the message submission.",
+    smtp_error_unknown:
+      "The email could not be sent for an unknown reason. The server response is shown below.",
   },
   buckemailsend: {
     email_source: "Email Source",

@@ -111,4 +111,29 @@ describe("classifySmtpFailure (§19)", () => {
     const r = classifySmtpFailure({ code: "ECONNREFUSED", message: "connect" });
     expect(r.code).toBe("smtp_connection_failed");
   });
+
+  it("classifies WRONG_VERSION_NUMBER as smtp_tls_failed (STARTTLS/implicit-TLS mismatch)", () => {
+    const r = classifySmtpFailure({
+      message:
+        "write EPROTO 4368:error:1408F10B:SSL routines:ssl3_get_record:wrong version number",
+    });
+    expect(r.code).toBe("smtp_tls_failed");
+    expect(r.retrySafety).toBe("safe");
+  });
+
+  it("classifies a plain 535 AUTH response string as smtp_auth_failed", () => {
+    const r = classifySmtpFailure(
+      new Error("Invalid login: 535 5.7.8 Error: authentication failed")
+    );
+    expect(r.code).toBe("smtp_auth_failed");
+  });
+
+  it("classifies MAIL FROM sender-policy rejection as smtp_from_rejected", () => {
+    const r = classifySmtpFailure({
+      command: "MAIL",
+      message: "550 5.1.0 Sender address rejected: not allowed by policy",
+    });
+    expect(r.code).toBe("smtp_from_rejected");
+    expect(r.retrySafety).toBe("safe");
+  });
 });

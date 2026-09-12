@@ -8,6 +8,7 @@ import {
   EmailServiceExportPayload,
   EmailServiceImportResult,
   SafeEmailServiceExportRow,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
@@ -806,7 +807,7 @@ export class EmailMarketingController {
   //send email
   public async sendEmail(
     param: EmailSendParam,
-    errorCall?: (errorMessage: string) => void,
+    errorCall?: (error: SendEmailError) => void,
     successCallback?: () => void
   ): Promise<void> {
     try {
@@ -814,9 +815,9 @@ export class EmailMarketingController {
       const emailService = new EmailService(setting);
       await emailService.sendEmail(
         param.EmailRequestData,
-        function (errorString) {
+        function (sendEmailError: SendEmailError) {
           if (errorCall) {
-            errorCall(errorString);
+            errorCall(sendEmailError);
           }
         },
         function () {
@@ -828,10 +829,11 @@ export class EmailMarketingController {
     } catch (error: unknown) {
       // Resolution failures (missing service / no stored password) surface
       // through the same error channel as SMTP failures so the test-email
-      // dialog reports them instead of crashing the IPC handler.
+      // dialog reports them instead of crashing the IPC handler. These are
+      // setup errors, not classified SMTP rejections, so `code` is null.
       const message = error instanceof Error ? error.message : String(error);
       if (errorCall) {
-        errorCall(message);
+        errorCall({ message, code: null });
         return;
       }
       throw error;

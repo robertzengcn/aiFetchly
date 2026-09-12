@@ -108,8 +108,15 @@ export function classifySmtpFailure(error: unknown): ClassifiedSmtpFailure {
     };
   }
 
-  // TLS / certificate before submission.
-  if (/certificate|self-signed|unable_to_verify|cert_/i.test(combined)) {
+  // TLS / certificate before submission. Includes the BoringSSL
+  // WRONG_VERSION_NUMBER mismatch (STARTTLS vs implicit TLS on the wrong port).
+  // OpenSSL renders it with spaces ("wrong version number"); the code constant
+  // uses underscores, so match either form.
+  if (
+    /certificate|self-signed|unable_to_verify|cert_|wrong[ _]version[ _]number/i.test(
+      combined
+    )
+  ) {
     return {
       code: "smtp_tls_failed",
       retrySafety: "safe",

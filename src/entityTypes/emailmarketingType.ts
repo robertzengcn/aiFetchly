@@ -3,6 +3,7 @@ import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
+import type { SmtpFailureCode } from "@/modules/lib/smtpErrorClassifier";
 
 /**
  * AI Email Template tone options
@@ -341,6 +342,8 @@ export type EmailSendResult = {
   title: string;
   content: string;
   info?: string;
+  /** Structured SMTP failure category (§19.2) when status is false; absent on success or unclassified throws. */
+  failureCode?: SmtpFailureCode;
 };
 export type EmailSendParam = {
   Setting: EmailServiceEntitydata;
@@ -351,4 +354,14 @@ export type EmailRequestData = {
   Receiver: string;
   Title: string;
   Content: string;
+};
+
+/**
+ * Structured error payload returned by `EmailService.sendEmail()` (§19).
+ * `code` is null when the failure was a resolution/setup error rather than a
+ * classified SMTP rejection (e.g. missing service, no stored password).
+ */
+export type SendEmailError = {
+  readonly message: string;
+  readonly code: SmtpFailureCode | null;
 };

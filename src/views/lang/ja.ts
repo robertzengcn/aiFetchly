@@ -1265,6 +1265,20 @@ export default {
     send_test_email_error: "テストメール送信エラー",
     email_send_success: "メール送信成功",
     required_fields_missing: "すべての必須項目を入力してください",
+    smtp_error_auth_failed:
+      "SMTP認証に失敗しました。このサービスのSMTPユーザー名とパスワードを確認してください。",
+    smtp_error_from_rejected:
+      "Fromアドレスがメールプロバイダーによって拒否されました。このログインでこのエイリアスの送信が許可されていることを確認してください。",
+    smtp_error_recipient_rejected:
+      "受信者アドレスがメールプロバイダーによって拒否されました。",
+    smtp_error_tls_failed:
+      "SMTPサーバーへの接続でTLSまたは証明書エラーが発生しました。SSL/TLS設定とポートを確認してください（465は暗黙的SSL、587はSTARTTLSを使用）。",
+    smtp_error_connection_failed:
+      "SMTPサーバーに接続できませんでした。ホスト、ポート、ネットワークを確認してください。",
+    smtp_error_submission_failed:
+      "SMTPサーバーがメッセージの送信を拒否しました。",
+    smtp_error_unknown:
+      "不明な理由によりメールを送信できませんでした。サーバーの応答を以下に示します。",
   },
   buckemailsend: {
     email_source: "メールソース",

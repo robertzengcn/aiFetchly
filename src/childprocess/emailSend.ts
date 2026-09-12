@@ -1045,11 +1045,11 @@ export class EmailSend {
       sendPromises.push(
         emailServie.sendEmail(
           emailRequestdata,
-          function (error) {
+          function (sendEmailError) {
             if (errorCallback) {
               errorCallback(
                 item.address,
-                error,
+                sendEmailError.message,
                 emailTpldata.TplTitle,
                 emailTpldata.TplContent
               );

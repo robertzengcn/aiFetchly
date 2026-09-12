@@ -1290,6 +1290,20 @@ export default {
     send_test_email_error: "Error al enviar correo de prueba",
     email_send_success: "Correo enviado correctamente",
     required_fields_missing: "Complete todos los campos obligatorios",
+    smtp_error_auth_failed:
+      "Error de autenticación SMTP. Compruebe el nombre de usuario y la contraseña SMTP de este servicio.",
+    smtp_error_from_rejected:
+      "La dirección From fue rechazada por su proveedor de correo. Verifique que este alias esté autorizado para enviar con este inicio de sesión.",
+    smtp_error_recipient_rejected:
+      "La dirección del destinatario fue rechazada por el proveedor de correo.",
+    smtp_error_tls_failed:
+      "Error de TLS o certificado al conectar al servidor SMTP. Compruebe el ajuste SSL/TLS y el puerto (465 usa SSL implícito, 587 usa STARTTLS).",
+    smtp_error_connection_failed:
+      "No se pudo conectar al servidor SMTP. Compruebe el host, el puerto y la red.",
+    smtp_error_submission_failed:
+      "El servidor SMTP rechazó el envío del mensaje.",
+    smtp_error_unknown:
+      "No se pudo enviar el correo por un motivo desconocido. La respuesta del servidor se muestra a continuación.",
   },
   buckemailsend: {
     email_source: "Fuente de correos",

@@ -33,7 +33,9 @@ import {
   EmailFilterDetialdata,
   EmailTemplateRespdata,
   EmailServiceImportResult,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
+import { smtpFailureI18nKey } from "@/service/emailService/SmtpFailureMessageMap";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterEntity } from "@/entity/EmailFilter.entity";
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
@@ -494,14 +496,17 @@ export function registerEmailMarketingIpcHandlers() {
     await emailmarketCon
       .sendEmail(
         qdata,
-        (errorMessage: string) => {
+        (sendEmailError: SendEmailError) => {
+          const errorKey =
+            smtpFailureI18nKey(sendEmailError.code) ??
+            "emailservice.send_test_email_error";
           const resp: CommonDialogMsg = {
             status: false,
             code: 202411141455379,
             data: {
               action: "error",
-              title: "emailservice.send_test_email_error",
-              content: errorMessage,
+              title: errorKey,
+              content: sendEmailError.message,
             },
           };
           (

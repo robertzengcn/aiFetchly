@@ -299,7 +299,7 @@ describe("SMTP 535 authentication failures", () => {
     expect(smtpMock.on).toHaveBeenCalledWith("error", expect.any(Function));
   });
 
-  it("invokes EmailService errorCallback with Invalid login and does not throw", async () => {
+  it("invokes EmailService errorCallback with classified Invalid login and does not throw", async () => {
     const service = new EmailService(serviceConfig);
     const errorCallback = vi.fn();
     const successCallback = vi.fn();
@@ -316,7 +316,15 @@ describe("SMTP 535 authentication failures", () => {
 
     expect(rejections).toEqual([]);
     expect(successCallback).not.toHaveBeenCalled();
-    expect(errorCallback).toHaveBeenCalledWith(SMTP_AUTH_FAILED);
+    // §19.2 — sendEmail now classifies the SMTP failure and passes a structured
+    // SendEmailError (code + sanitized message) rather than a raw string.
+    expect(errorCallback).toHaveBeenCalledTimes(1);
+    const errorArg = errorCallback.mock.calls[0]?.[0] as {
+      message: string;
+      code: string;
+    };
+    expect(errorArg.code).toBe("smtp_auth_failed");
+    expect(errorArg.message).toContain("Invalid login");
   });
 
   it("returns ReplyEmailService failure so the classifier treats 535 as rejected", async () => {
@@ -331,7 +339,9 @@ describe("SMTP 535 authentication failures", () => {
       smtpMock.pending[0].reject(new Error(SMTP_AUTH_FAILED));
       const raw = await sending;
       expect(raw.status).toBe(false);
-      expect(raw.info).toBe(SMTP_AUTH_FAILED);
+      expect(raw.info).toContain("Invalid login");
+      // §19.2 — ReplyEmailService now attaches the structured failure code.
+      expect(raw.failureCode).toBe("smtp_auth_failed");
       const classified = classifySubmissionResult(raw);
       expect(classified.certainty).toBe("definitely_rejected");
       expect(classified.accepted).toBe(false);
