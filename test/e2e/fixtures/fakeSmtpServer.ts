@@ -58,6 +58,15 @@ interface InFlight {
   inData: boolean;
   /** True once the blank line separating headers from body has been seen. */
   seenBlankLine: boolean;
+  /**
+   * AUTH LOGIN is a multi-step challenge/response: the server sends a `334`
+   * prompt, the client replies with one base64 chunk (username, then password).
+   * The username/password matchers below must ONLY consume a line while such a
+   * challenge is in flight — otherwise any short base64-looking command
+   * (`DATA`, `QUIT`) is misread as the AUTH LOGIN password and the DATA branch
+   * never runs, so no message is ever recorded.
+   */
+  authLoginPending: "username" | "password" | null;
 }
 
 const CRLF = "\r\n";
@@ -110,6 +119,7 @@ export function startFakeSmtpServer(): Promise<FakeSmtpServer> {
       bodyLines: [],
       inData: false,
       seenBlankLine: false,
+      authLoginPending: null,
     };
 
     const write = (line: string): void => {
@@ -197,34 +207,37 @@ export function startFakeSmtpServer(): Promise<FakeSmtpServer> {
         return;
       }
       if (upper.startsWith("AUTH LOGIN")) {
+        // Begin the challenge/response: prompt for the username, then expect
+        // a base64 line in the pending-username state below.
+        state.authLoginPending = "username";
         write("334 " + Buffer.from("Username:").toString("base64"));
         return;
       }
-      // AUTH LOGIN username response (base64).
-      if (
-        state.authUser === null &&
-        /^[A-Za-z0-9+/]+=*$/.test(line) &&
-        line.length > 2
-      ) {
-        try {
-          const decoded = decodeAuthLoginValue(line);
-          if (decoded.includes("@") || decoded.length < 100) {
-            state.authUser = decoded;
-            write("334 " + Buffer.from("Password:").toString("base64"));
-            return;
-          }
-        } catch {
-          // fall through
-        }
+      // AUTH LOGIN username response: only consume a line as the username
+      // while a username challenge is in flight. Without the pending-state
+      // gate, any short base64-looking command (`DATA`, `QUIT`) after a
+      // successful AUTH PLAIN would match the old `authUser !== null` guard
+      // and be misread as the AUTH LOGIN password — swallowing `DATA` so the
+      // DATA branch never runs and no message is ever recorded.
+      if (state.authLoginPending === "username") {
+        state.authUser = decodeAuthLoginValue(line);
+        state.authLoginPending = "password";
+        write("334 " + Buffer.from("Password:").toString("base64"));
+        return;
       }
-      // AUTH LOGIN password response — accept and mark auth done.
-      if (state.authUser !== null && /^[A-Za-z0-9+/]+=*$/.test(line)) {
+      // AUTH LOGIN password response: accept and mark auth done.
+      if (state.authLoginPending === "password") {
+        state.authLoginPending = null;
         write("235 2.7.0 Authentication successful");
         return;
       }
       if (upper.startsWith("MAIL FROM")) {
         if (mode === "reject_mail_from") {
-          write("535 5.7.0 Sender address rejected: not authorized");
+          // 550 (not 535): the classifier checks the AUTH regex (/535/) before
+          // the MAIL FROM branch, so a 535 here would be misclassified as
+          // smtp_auth_failed. 550 5.7.1 is the canonical sender-rejection
+          // code and matches /sender address rejected/ in the MAIL FROM branch.
+          write("550 5.7.1 Sender address rejected: not authorized");
           return;
         }
         const match = line.match(/MAIL FROM:\s*<([^>]*)>/i);
