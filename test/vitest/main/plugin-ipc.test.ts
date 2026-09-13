@@ -448,6 +448,7 @@ describe("plugin-ipc", () => {
     const result = await fn(
       {},
       {
+        operationId: "11111111-2222-3333-4444-555555555555",
         kind: "git",
         uri: "https://example.com/x.git\r\n--upload-pack=evil",
       }
@@ -479,7 +480,11 @@ describe("plugin-ipc", () => {
     const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
     const result = await fn(
       {},
-      { kind: "local-folder", folderPath: "/tmp/plugin" }
+      {
+        operationId: "11111111-2222-3333-4444-555555555556",
+        kind: "local-folder",
+        folderPath: "/tmp/plugin",
+      }
     );
     expect(result).toMatchObject({ status: true });
     expect(applySpy).toHaveBeenCalledTimes(1);

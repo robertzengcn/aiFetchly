@@ -433,6 +433,24 @@ export function registerPluginIpcHandlers(): void {
       ) {
         throw new Error("uri is required for this source kind.");
       }
+      // Reject CRLF / control chars in any string field that may reach a
+      // fetcher/spawn (carried over from the pre-strict-schema handler; the
+      // zod bounds cover length, not control characters).
+      const stringFields = [
+        data.uri,
+        data.zipPath,
+        data.folderPath,
+        data.npmPackage,
+        data.npmVersion,
+        data.npmRegistry,
+        data.npmAuthScope,
+        data.ref,
+      ];
+      for (const v of stringFields) {
+        if (typeof v === "string" && /[\r\n]/.test(v)) {
+          throw new Error("Invalid characters in source field.");
+        }
+      }
       if (activePluginInstalls.has(data.operationId)) {
         throw new Error("An install with this operationId is already active.");
       }
