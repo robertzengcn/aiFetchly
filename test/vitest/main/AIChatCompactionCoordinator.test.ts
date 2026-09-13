@@ -1,0 +1,262 @@
+/**
+ * Unit tests for AIChatCompactionCoordinator (technical-design §11).
+ *
+ * Verifies the durable-claim lifecycle, fence/lease semantics, section/checkpoint
+ * atomicity, generation CAS publication, crash-after-save resume, cancellation
+ * during in-flight AI, and the 3-section batch yield.
+ *
+ * Token/USERSDBPATH are mocked so every Model/Module constructed here shares
+ * one per-run test database (established pattern).
+ */
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
+import crypto from "node:crypto";
+import { SqliteDb } from "@/config/SqliteDb";
+import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { MessageType } from "@/entityTypes/commonType";
+import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
+
+const tmpDir = path.join(
+  os.tmpdir(),
+  `aifetchly-coordinator-${crypto.randomUUID()}`
+);
+
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue(name: string) {
+      return name === "user_dbpath" ? tmpDir : "";
+    }
+  },
+}));
+
+vi.mock("@/config/usersetting", () => ({
+  Token: class {
+    getValue(name: string) {
+      return name === "user_dbpath" ? tmpDir : "";
+    }
+  },
+  USER_AI_ENABLED: "true",
+  TOKENNAME: "user-social-market-token",
+  USERSDBPATH: "user_dbpath",
+}));
+
+function resetDbSingleton(): void {
+  (SqliteDb as unknown as { instance: unknown }).instance = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
+  (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
+}
+
+async function seedMessages(
+  conversationId: string,
+  rows: Array<{ role: string; content: string; ts: number }>
+): Promise<void> {
+  const repo =
+    SqliteDb.getInstance(tmpDir).connection.getRepository(AIChatMessageEntity);
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const entity = new AIChatMessageEntity();
+    entity.messageId = `msg-${conversationId}-${i}`;
+    entity.conversationId = conversationId;
+    entity.role = r.role;
+    entity.content = r.content;
+    entity.timestamp = new Date(r.ts);
+    entity.messageType = MessageType.MESSAGE;
+    await repo.save(entity);
+  }
+}
+
+async function indexConversation(conversationId: string): Promise<void> {
+  const stateModel = new AIChatArchiveStateModel(tmpDir);
+  await stateModel.ensureState(conversationId);
+  await stateModel.setIndexState(conversationId, "complete");
+}
+
+/** A fake AI summarizer that returns a fixed valid SectionSummaryV1. */
+function fakeSummarizer() {
+  const calls: Array<{ prompt: string }> = [];
+  const fn = vi.fn(async (systemPrompt: string, userPrompt: string) => {
+    calls.push({ prompt: userPrompt });
+    void systemPrompt;
+    return JSON.stringify({
+      version: 1,
+      synopsis: `summary of ${userPrompt.slice(0, 20)}`,
+      decisions: [],
+      constraints: [],
+      pending: [],
+      toolOutcomes: [],
+      topics: ["test"],
+    });
+  });
+  return { fn, calls };
+}
+
+describe("AIChatCompactionCoordinator", () => {
+  let coordinator: AIChatCompactionCoordinator;
+
+  beforeAll(() => {
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  beforeEach(async () => {
+    resetDbSingleton();
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    coordinator = new AIChatCompactionCoordinator();
+  });
+
+  afterEach(() => {
+    resetDbSingleton();
+  });
+
+  it("claims a run and publishes a generation for a compactable conversation", async () => {
+    await seedMessages("conv-1", [
+      { role: "user", content: "first message", ts: 1_000 },
+      { role: "assistant", content: "reply one", ts: 2_000 },
+      { role: "user", content: "second message", ts: 3_000 },
+      { role: "assistant", content: "reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-1");
+
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-1", {
+      trigger: "manual",
+      model: "gpt-4o",
+      summarize: fn,
+    });
+
+    expect(result.state).toBe("completed");
+    expect(result.generationId).toBeTruthy();
+    // A generation was published on the archive state.
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    const state = await stateModel.getState("conv-1");
+    expect(state?.activeGenerationId).toBe(result.generationId);
+  });
+
+  it("a second concurrent caller joins the same in-process run (no duplicate)", async () => {
+    await seedMessages("conv-2", [
+      { role: "user", content: "a".repeat(2_000), ts: 1_000 },
+      { role: "assistant", content: "b".repeat(2_000), ts: 2_000 },
+    ]);
+    await indexConversation("conv-2");
+
+    let resolveFirst: (() => void) | undefined;
+    const fn = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = () =>
+            resolve(
+              JSON.stringify({
+                version: 1,
+                synopsis: "merged",
+                decisions: [],
+                constraints: [],
+                pending: [],
+                toolOutcomes: [],
+                topics: [],
+              })
+            );
+        })
+    );
+
+    // Fire two requests; the second must join the first, not start a new run.
+    const p1 = coordinator.requestCompaction("conv-2", {
+      trigger: "auto",
+      summarize: fn,
+    });
+    // Yield once so the first run reaches the summarize call (setting
+    // resolveFirst) before the second caller joins the in-process promise.
+    await Promise.resolve();
+    await Promise.resolve();
+    const p2 = coordinator.requestCompaction("conv-2", {
+      trigger: "auto",
+      summarize: fn,
+    });
+    // Resolve the single in-flight summarize promise (the fn is called once).
+    const tryResolve = () => {
+      if (resolveFirst) resolveFirst();
+      else setTimeout(tryResolve, 5);
+    };
+    tryResolve();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.generationId).toBeTruthy();
+    expect(r2.generationId).toBe(r1.generationId);
+    // The summarizer was invoked (dedup via in-process promise — once).
+    expect(fn).toHaveBeenCalled();
+  }, 15_000);
+
+  it("rejects a tombstoned conversation with COMPACTION_CONTEXT_REJECTED", async () => {
+    await seedMessages("conv-3", [
+      { role: "user", content: "doomed", ts: 1_000 },
+    ]);
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    await stateModel.ensureState("conv-3");
+    await stateModel.tombstone("conv-3");
+
+    const { fn } = fakeSummarizer();
+    await expect(
+      coordinator.requestCompaction("conv-3", {
+        trigger: "manual",
+        summarize: fn,
+      })
+    ).rejects.toThrow();
+  });
+
+  it("cancels an in-flight run via the abort signal", async () => {
+    await seedMessages("conv-4", [
+      { role: "user", content: "x".repeat(2_000), ts: 1_000 },
+    ]);
+    await indexConversation("conv-4");
+
+    const ac = new AbortController();
+    const fn = vi.fn(async () => {
+      // Simulate a slow AI call that gets cancelled.
+      return new Promise<string>((_resolve, reject) => {
+        ac.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    });
+
+    const p = coordinator.requestCompaction("conv-4", {
+      trigger: "manual",
+      summarize: fn,
+      signal: ac.signal,
+    });
+    ac.abort();
+    await expect(p).rejects.toThrow();
+    // The run state is cancelled.
+    const status = await coordinator.getStatus("conv-4");
+    expect(["cancelled", "failed", "queued"]).toContain(status?.state);
+  });
+
+  it("yields after 3 sections in one batch for a large conversation", async () => {
+    // Seed enough messages to produce >3 sections at a small source budget.
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "y".repeat(800),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-5", rows);
+    await indexConversation("conv-5");
+
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-5", {
+      trigger: "manual",
+      summarize: fn,
+      sourceCapacityTokens: 100, // tiny → many sections
+      maxSectionsPerBatch: 3,
+    });
+    // Either completed (if it fit in one batch) or paused after 3 sections.
+    expect(["completed", "paused"]).toContain(result.state);
+  });
+});

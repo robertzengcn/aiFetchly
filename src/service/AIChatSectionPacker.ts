@@ -304,9 +304,12 @@ export class AIChatSectionPacker extends BaseModule {
     });
 
     // Filter to rows strictly before the retained suffix (snapshot end).
+    // When endSnapshotTimestampMs is 0, there is no retained suffix — keep all.
+    const hasSnapshotEnd = input.endSnapshotTimestampMs > 0;
     const eligible = page.records.filter((r) => {
       const ts = Date.parse(r.timestamp);
       if (Number.isNaN(ts)) return false;
+      if (!hasSnapshotEnd) return true;
       if (ts >= input.endSnapshotTimestampMs) return false;
       // Within the same timestamp, retain rows at/after the snapshot rowId.
       if (ts === input.endSnapshotTimestampMs && input.endSnapshotRowId > 0) {

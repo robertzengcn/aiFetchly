@@ -20,6 +20,7 @@ import type {
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
+import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 
 const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
@@ -56,6 +57,11 @@ export interface AIChatCompactAgentDeps {
   /** Notified after a successful automatic full compact so the renderer can
    * drop the context badge immediately (mirrors the manual compact flow). */
   onAutoCompacted?(summary: AIChatCompactSummaryView): void;
+  /** Optional: the new durable incremental-compaction coordinator (design §11).
+   * When present, runFullCompact delegates to coordinator.requestCompaction
+   * instead of the legacy all-history model call. When absent, the legacy
+   * path is used unchanged. */
+  compactionCoordinator?: AIChatCompactionCoordinator;
 }
 
 export interface SessionMemoryUpdateInput {
@@ -187,16 +193,12 @@ export class AIChatCompactAgentService {
     );
     if (input.promptTokens < threshold) {
       console.log(
-        `[ai-chat-compact] auto compact skipped (below threshold) conv=${
-          input.conversationId
-        } promptTokens=${input.promptTokens} threshold=${threshold}`
+        `[ai-chat-compact] auto compact skipped (below threshold) conv=${input.conversationId} promptTokens=${input.promptTokens} threshold=${threshold}`
       );
       return false;
     }
     console.log(
-      `[ai-chat-compact] auto compact triggered conv=${
-        input.conversationId
-      } promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
+      `[ai-chat-compact] auto compact triggered conv=${input.conversationId} promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
     );
     let compacted = false;
     const p = this.runAutoCompact(input)
@@ -432,6 +434,51 @@ export class AIChatCompactAgentService {
     }
     if (!this.deps.isEnabled()) {
       throw new Error("AI is not enabled");
+    }
+    // Delegate to the durable incremental-compaction coordinator when wired
+    // (design §11.1). The coordinator owns packing, summarization, validation,
+    // and CAS publication; this service no longer constructs an all-history
+    // input for the new engine.
+    if (this.deps.compactionCoordinator) {
+      const result = await this.deps.compactionCoordinator.requestCompaction(
+        input.conversationId,
+        {
+          trigger: "manual",
+          model: input.model,
+          summarize: async (systemPrompt: string, userPrompt: string) => {
+            const resp = await this.deps.completeChat({
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt },
+              ],
+              ...(input.model ? { model: input.model } : {}),
+            });
+            return openAIContentToString(resp.choices?.[0]?.message?.content);
+          },
+        }
+      );
+      // Return a legacy-compatible view. The new engine stores structured
+      // summaries in context_generations; this view is a thin adapter so the
+      // renderer badge drop + onAutoCompacted hook still fire.
+      const view: AIChatCompactSummaryView = {
+        compactId: result.runId,
+        conversationId: input.conversationId,
+        summary: result.generationId
+          ? `compaction generation ${result.generationId}`
+          : "compaction paused",
+        fromMessageId: "",
+        throughMessageId: "",
+        throughTimestamp: new Date().toISOString(),
+        sourceMessageCount: result.sectionsPacked,
+        inputTokenEstimate: 0,
+        outputTokenEstimate: 0,
+        model: input.model ?? "",
+        status: result.state === "completed" ? "active" : "failed",
+      };
+      if (result.state === "completed") {
+        this.deps.onAutoCompacted?.(view);
+      }
+      return view;
     }
     const rows = await this.v2.getConversationMessages(input.conversationId);
     const sorted = [...rows].filter(isMessageRow).sort((a, b) => {
