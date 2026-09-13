@@ -82,6 +82,12 @@ import {
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
+import {
+  AIChatRequestBudgetService,
+  type ModelLimitResolver,
+} from "@/service/AIChatRequestBudgetService";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
@@ -636,6 +642,21 @@ export interface AIChatQueryLoopDeps {
     currentModel?: string;
     reason: AIChatRecoveryReason;
   }): Promise<{ model?: string; source: string }>;
+
+  /**
+   * Optional: complete-request token-budget service (technical-design §8.5).
+   * When present, the loop runs a final preflight immediately before
+   * `streamChatCompletion` and throws `RecoverableHistoryError` on rejection.
+   * When omitted, no budget enforcement is applied (legacy behavior).
+   */
+  requestBudgetService?: AIChatRequestBudgetService;
+
+  /**
+   * Optional: model-limit resolver for the budget service. When omitted, the
+   * loop constructs one from `AIChatModelCatalogService`. Exposed for tests
+   * that want to inject deterministic limits without the live catalog.
+   */
+  resolveModelLimits?: ModelLimitResolver;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -727,6 +748,37 @@ export class AIChatQueryLoop {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
+  private readonly modelCatalogService = new AIChatModelCatalogService();
+
+  /**
+   * Build a ModelLimitResolver backed by the live AIChatModelCatalogService
+   * (§8.1). Unknown models resolve to the conservative 8,192/1,024 fallback.
+   * Synchronous in shape — the catalog is loaded lazily on first budget
+   * preflight; when unloaded the fallback applies. Memoized per instance.
+   */
+  getDefaultModelLimitResolver(): ModelLimitResolver {
+    return (model?: string) => {
+      // The catalog methods are async but we need a sync resolver for the
+      // budget preflight. Use the cached entries directly when loaded; fall
+      // back to the §8.1 provisional limits otherwise.
+      const entries = this.modelCatalogService.entries();
+      if (model) {
+        const entry = entries.find((e) => e.id === model);
+        if (entry) {
+          return {
+            contextLimit: entry.contextWindow,
+            outputLimit: entry.maxOutputTokens ?? 1_024,
+            limitSource: "provider",
+          };
+        }
+      }
+      return {
+        contextLimit: 8_192,
+        outputLimit: 1_024,
+        limitSource: "fallback",
+      };
+    };
+  }
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -1078,6 +1130,27 @@ export class AIChatQueryLoop {
               : currentTools.length
           }`
         );
+
+        // §8.5 dispatch enforcement: validate the final request immediately
+        // before streaming. When a budget service is wired, an oversized
+        // request throws a recoverable error instead of dispatching.
+        if (this.deps.requestBudgetService) {
+          const resolver: ModelLimitResolver =
+            this.deps.resolveModelLimits ?? this.getDefaultModelLimitResolver();
+          const budget = this.deps.requestBudgetService.preflight({
+            messages,
+            tools: hasExposedTools ? exposedTools : [],
+            model: input.request.model,
+            outputReserve: currentMaxTokens,
+            modelLimitResolver: resolver,
+          });
+          if (!budget.ok) {
+            throw new RecoverableHistoryError(
+              budget.errorCode ?? "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+              `request budget rejected: ${budget.reason ?? "over capacity"}`
+            );
+          }
+        }
 
         await this.deps.streamChatCompletion(
           {
@@ -2801,11 +2874,7 @@ export class AIChatQueryLoop {
           const gateIntent = honorModelSkipReview
             ? { mode: "send_now" as const }
             : intentDecision;
-          return OutboundEmailToolGate.evaluate(
-            gateIntent,
-            auth,
-            auth.batchId
-          );
+          return OutboundEmailToolGate.evaluate(gateIntent, auth, auth.batchId);
         }
         if (honorModelSkipReview) {
           return { allowed: true, skipReviewDirectSend: true };
