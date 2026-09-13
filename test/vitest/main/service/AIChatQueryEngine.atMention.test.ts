@@ -18,7 +18,8 @@ const ws = vi.hoisted(() => ({ rootPath: "" }));
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     saveUserMessage: mockSaveUserMessage,
     getConversationMessages: vi.fn().mockResolvedValue([]),
     saveAssistantMessage: vi.fn().mockResolvedValue({}),
@@ -26,21 +27,26 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     saveToolResultMessage: vi.fn().mockResolvedValue({}),
     createConversationIfNeeded: vi.fn().mockReturnValue("v2-test-conv"),
     getDefaultSystemPrompt: vi.fn().mockReturnValue("You are helpful."),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
     getPlanState: vi.fn().mockResolvedValue(null),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
+  WorkspaceResolver: vi.fn().mockImplementation(function () {
+    return {
     resolve: vi
       .fn()
       .mockResolvedValue({ workspaceId: 1, rootPath: ws.rootPath }),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/config/skillsRegistry", () => ({
@@ -55,9 +61,11 @@ vi.mock("@/service/SkillExecutor", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: vi.fn().mockImplementation(function () {
+    return {
     getValue: vi.fn().mockReturnValue("true"),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/api/aiChatApi", async (importOriginal) => {

@@ -13,13 +13,15 @@ const mockRecordFailure = vi.fn();
 const mockResetFailures = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
     getByConversation: mockGetByConversation,
     upsertMemory: mockUpsertMemory,
     markUpdating: mockMarkUpdating,
     recordFailure: mockRecordFailure,
     resetFailures: mockResetFailures,
-  })),
+  };
+  }),
 }));
 
 const mockGetConversationMessages = vi.fn();
@@ -28,23 +30,29 @@ const mockSaveFullCompact = vi.fn();
 const mockMarkSuperseded = vi.fn();
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     getConversationMessages: mockGetConversationMessages,
     getDefaultSystemPrompt: vi.fn().mockReturnValue("sysp"),
     createConversationIfNeeded: vi.fn((id?: string) => id ?? "v2-x"),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
     getActiveSummary: mockGetActiveSummary,
     saveFullCompact: mockSaveFullCompact,
     markSuperseded: mockMarkSuperseded,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn() };
+  }),
 }));
 
 import { Token } from "@/modules/token";
