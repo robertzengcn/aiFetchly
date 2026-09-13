@@ -2196,6 +2196,7 @@ export class AIChatQueryLoop {
                 outboundAuthorization,
                 planContext,
                 eventSink: eventSink,
+                turnId: input.turnId,
                 toolCatalogState: catalogActive
                   ? snapshotToolCatalogState(
                       discoveredToolNames,
@@ -2503,6 +2504,7 @@ export class AIChatQueryLoop {
         questionId: questionView.questionId,
         planId: input.planContext.planState.planId,
         eventSink: eventSink,
+        turnId: input.turnId,
       },
     };
   }

@@ -477,6 +477,9 @@ describe("AIChatQueryEngine", () => {
         toolCallId: "call-1",
         toolName: "get_time",
         toolArguments: { timezone: "UTC" },
+        turnId: expect.any(String),
+        model: undefined,
+        tokensUsed: undefined,
       });
       expect(mockSaveToolResultMessage).toHaveBeenCalledWith({
         conversationId: "v2-test-conv",
@@ -486,6 +489,7 @@ describe("AIChatQueryEngine", () => {
         content: '{"success":true}',
         toolResult: { success: true, summary: "12:00 UTC" },
         replacesPermissionPromptForToolId: undefined,
+        turnId: expect.any(String),
       });
     });
 

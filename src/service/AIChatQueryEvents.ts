@@ -324,6 +324,11 @@ export interface PendingPermissionTurn {
   toolName: string;
   toolArguments: Record<string, unknown>;
   /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
+  /**
    * Trusted intent context (technical design §9/§14.2): the persisted user
    * message id + outbound intent decision id from the originating turn. The
    * permission-resume re-execution must carry them so outbound-email tools
@@ -364,6 +369,11 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user answers the plan question (AC-8). Present only when deferred
@@ -515,6 +525,13 @@ export interface AIChatQueryLoopInput {
    * or the resolver failed. Supplied by the main process, not tool arguments.
    */
   intentDecisionId?: number | null;
+  /**
+   * Turn association (technical-design §4.3). The engine stamps this when it
+   * accepts a user request; the loop threads it into paused-for-permission /
+   * paused-for-plan-question pending state so resumed-flow saves stay
+   * grouped by turn.
+   */
+  turnId?: string;
 }
 
 /** Request payload for resumeToolAfterPermission. */

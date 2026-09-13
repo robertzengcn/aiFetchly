@@ -54,6 +54,7 @@ export class AIChatV2Module extends BaseModule {
     messageId?: string;
     timestamp?: Date;
     metadata?: ChatV2MessageMetadata;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     return this.chatModule.saveMessage({
       messageId: params.messageId ?? `user-${uuid()}`,
@@ -64,6 +65,7 @@ export class AIChatV2Module extends BaseModule {
       metadata: {
         source: "chat-v2",
         ...(params.metadata ?? {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
@@ -80,6 +82,7 @@ export class AIChatV2Module extends BaseModule {
     messageId: string;
     timestamp?: Date;
     metadata?: ChatV2MessageMetadata;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     return this.chatModule.saveMessageIfAbsent({
       messageId: params.messageId,
@@ -90,6 +93,7 @@ export class AIChatV2Module extends BaseModule {
       metadata: {
         source: "chat-v2",
         ...(params.metadata ?? {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
@@ -103,10 +107,12 @@ export class AIChatV2Module extends BaseModule {
     tokensUsed?: number;
     metadata?: ChatV2MessageMetadata;
     timestamp?: Date;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const meta: ChatV2MessageMetadata = {
       source: "chat-v2",
       ...(params.metadata ?? {}),
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
     return this.chatModule.saveMessage({
       messageId: params.messageId ?? `assistant-${uuid()}`,
@@ -130,12 +136,14 @@ export class AIChatV2Module extends BaseModule {
     timestamp?: Date;
     model?: string;
     tokensUsed?: number;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
       toolCallId: params.toolCallId,
       toolName: params.toolName,
       toolArguments: params.toolArguments,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
     return this.chatModule.saveMessage({
       messageId: `tool-call-${params.toolCallId}`,
@@ -159,6 +167,7 @@ export class AIChatV2Module extends BaseModule {
     toolResult: Record<string, unknown>;
     replacesPermissionPromptForToolId?: string;
     timestamp?: Date;
+    turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const toolResult = params.toolResult;
     const metadata: ChatV2MessageMetadata = {
@@ -181,6 +190,7 @@ export class AIChatV2Module extends BaseModule {
         typeof toolResult.summary === "string" ? toolResult.summary : undefined,
       error:
         typeof toolResult.error === "string" ? toolResult.error : undefined,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
     };
     return this.chatModule.saveMessage({
       messageId: `tool-result-${

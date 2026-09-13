@@ -22,6 +22,7 @@ import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { DesktopNotifyService } from "@/service/DesktopNotifyService";
@@ -236,6 +237,11 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine enqueues session memory updates
    * after each completed assistant turn. */
   compactAgent?: AIChatCompactAgentService;
+  /** Optional. When provided, the engine routes post-turn compaction through
+   * the durable incremental coordinator (technical-design §11) instead of the
+   * legacy compact agent's all-history path. The coordinator is opt-in so
+   * existing tests and the legacy flow remain unchanged when absent. */
+  compactionCoordinator?: AIChatCompactionCoordinator;
   /** Optional. When provided, the engine triggers auto-dream consolidation
    * after each completed assistant turn. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
@@ -267,6 +273,10 @@ export interface AIChatQueryEngineDeps {
 interface ActiveTurnState {
   abortController: AbortController;
   assistantMessageId: string;
+  /** Turn association (technical-design §4.3). Generated at turn-accept and
+   * propagated to every assistant/tool save so the archive can group rows.
+   * Optional because legacy rows / resumed flows may carry no association. */
+  turnId?: string;
   eventSink: AIChatQueryEventSink;
 }
 
@@ -283,6 +293,7 @@ export class AIChatQueryEngine {
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
+  private readonly compactionCoordinator?: AIChatCompactionCoordinator;
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
@@ -305,6 +316,7 @@ export class AIChatQueryEngine {
     this.contextAssembler =
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
+    this.compactionCoordinator = deps?.compactionCoordinator;
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
@@ -605,6 +617,7 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     let conversationId: string;
     let assistantMessageId: string;
+    let turnId: string;
     let messages: OpenAIChatMessage[];
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
@@ -614,6 +627,12 @@ export class AIChatQueryEngine {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
+      // Generate the turn id once, at accept time (technical-design §4.3).
+      // Scheduled turns reuse the stable scheduled id so a crash-retry stamps
+      // the same turn association on replayed rows (§14.2).
+      turnId = scheduledContext
+        ? scheduledContext.userMessageId
+        : `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -747,11 +766,13 @@ export class AIChatQueryEngine {
             content: messageToSave,
             messageId: scheduledContext.userMessageId,
             metadata: userMetadata,
+            turnId,
           })
         : await module.saveUserMessage({
             conversationId,
             content: messageToSave,
             metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+            turnId,
           });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
@@ -959,6 +980,7 @@ export class AIChatQueryEngine {
     this.activeTurns.set(conversationId, {
       abortController,
       assistantMessageId,
+      turnId,
       eventSink,
     });
     this.pendingPermissions.delete(conversationId);
@@ -1047,6 +1069,7 @@ export class AIChatQueryEngine {
       toolCatalogState: persistedToolCatalogState,
       sourceUserMessageId,
       intentDecisionId,
+      turnId,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         conversationId,
         isPlanMode
@@ -1202,6 +1225,7 @@ export class AIChatQueryEngine {
     this.activeTurns.set(conversationId, {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
       eventSink: matchedByToolId.eventSink,
     });
     const module = new AIChatV2Module();
@@ -1335,6 +1359,7 @@ export class AIChatQueryEngine {
         // outbound gate incorrectly falls back to `draft_required`.
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           matchedByToolId.conversationId,
           Boolean(matchedByToolId.planContext)
@@ -1406,6 +1431,7 @@ export class AIChatQueryEngine {
     this.activeTurns.set(request.conversationId, {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
+      turnId: pending.turnId,
       eventSink: pending.eventSink,
     });
 
@@ -1488,6 +1514,7 @@ export class AIChatQueryEngine {
       toolCatalog: resumePlanCatalogContext.toolCatalog,
       toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
       toolCatalogState: pending.toolCatalogState,
+      turnId: pending.turnId,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         pending.conversationId,
         Boolean(planContext)
@@ -1543,6 +1570,8 @@ export class AIChatQueryEngine {
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const completedTurnId = activeTurn?.turnId;
         const generatedImages = await this.storeGeneratedImages({
           conversationId,
           assistantMessageId,
@@ -1563,6 +1592,7 @@ export class AIChatQueryEngine {
               generatedImages,
               recovery: result.recoveryMetadata,
             },
+            turnId: completedTurnId,
           });
         }
         eventSink.emit({
@@ -1577,8 +1607,26 @@ export class AIChatQueryEngine {
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
         });
-        const compactAgent = this.compactAgent;
-        if (compactAgent) {
+        // Post-turn compaction. The durable incremental coordinator (§11) takes
+        // precedence when injected — it dedups concurrent requests, acquires a
+        // durable claim with fence/lease, and atomically saves/publishes the
+        // bounded representation. Fall back to the legacy in-memory auto-compact
+        // + session-memory advisory update when only the legacy agent is present.
+        const coordinator = this.compactionCoordinator;
+        if (coordinator) {
+          Promise.resolve(
+            coordinator.requestCompactionForTurn(conversationId, {
+              trigger: "auto",
+              model: result.model,
+            })
+          ).catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compaction] post-turn coordinator request failed:",
+              err
+            )
+          );
+        } else if (this.compactAgent) {
+          const compactAgent = this.compactAgent;
           const compactInput = {
             conversationId,
             reason: "assistant_turn_completed",
@@ -1642,6 +1690,8 @@ export class AIChatQueryEngine {
       }
       case "cancelled": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const cancelledTurnId = activeTurn?.turnId;
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1655,6 +1705,7 @@ export class AIChatQueryEngine {
               cancelled: true,
               ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
+            turnId: cancelledTurnId,
           });
         }
         eventSink.emit({
@@ -1670,6 +1721,8 @@ export class AIChatQueryEngine {
       }
       case "failed": {
         const { conversationId, assistantMessageId } = result;
+        const activeTurn = this.activeTurns.get(conversationId);
+        const failedTurnId = activeTurn?.turnId;
         void redirectToLoginOnAuthExpired(result.error);
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
@@ -1684,6 +1737,7 @@ export class AIChatQueryEngine {
               error: userSafeError(result.error),
               ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
+            turnId: failedTurnId,
           });
         }
         eventSink.emit({
@@ -1790,6 +1844,7 @@ export class AIChatQueryEngine {
           };
         }
         if (event.type === "tool_call") {
+          const toolTurnId = this.activeTurns.get(event.conversationId)?.turnId;
           saves.push(
             module
               .saveToolCallMessage({
@@ -1800,6 +1855,7 @@ export class AIChatQueryEngine {
                 toolArguments: event.toolArguments,
                 model: latestUsage?.model,
                 tokensUsed: latestUsage?.totalTokens,
+                turnId: toolTurnId,
               })
               .catch((err: unknown) => {
                 console.error("[ai-chat-v2] save tool call failed:", err);
@@ -1807,6 +1863,7 @@ export class AIChatQueryEngine {
           );
         }
         if (event.type === "tool_result") {
+          const toolTurnId = this.activeTurns.get(event.conversationId)?.turnId;
           saves.push(
             module
               .saveToolResultMessage({
@@ -1818,6 +1875,7 @@ export class AIChatQueryEngine {
                 toolResult: event.toolResult,
                 replacesPermissionPromptForToolId:
                   event.replacesPermissionPromptForToolId,
+                turnId: toolTurnId,
               })
               .catch((err: unknown) => {
                 console.error("[ai-chat-v2] save tool result failed:", err);

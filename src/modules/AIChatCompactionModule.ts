@@ -99,6 +99,24 @@ export class AIChatCompactionModule extends BaseModule {
     return this.generationModel.getActiveGeneration(conversationId, epoch);
   }
 
+  /**
+   * Get the active generation for a conversation, resolving the current epoch
+   * from archive state. Returns null when the conversation has no archive
+   * state (never compacted / tombstoned) or no published generation. Used by
+   * the context assembler's compaction reader (§12).
+   */
+  async getActiveGenerationForConversation(
+    conversationId: string
+  ): Promise<AIChatContextGenerationEntity | null> {
+    await this.ensureConnection();
+    const state = await this.stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return null;
+    return this.generationModel.getActiveGeneration(
+      conversationId,
+      state.epoch
+    );
+  }
+
   /** Get archive state (epoch/revision/fence) for the coordinator. */
   async getState(conversationId: string) {
     await this.ensureConnection();

@@ -41,6 +41,26 @@ const DEFAULT_RECENT_MESSAGE_WINDOW = 30;
 const COMPACT_PREAMBLE =
   "Conversation compact context:\nThe following summary is a point-in-time memory of earlier conversation messages.\nUse it as context, but prefer recent messages when there is a conflict.\n\n";
 
+/**
+ * Optional compaction-reader dep (opt-in pattern). When injected and the
+ * conversation has a published active generation, the assembler uses the
+ * generation's bounded overview + composite boundary (timestamp + rowId)
+ * instead of the legacy timestamp-only compact trim (technical-design §12).
+ */
+export interface AIChatContextCompactionReader {
+  /** Active generation for the conversation, or null when none published. */
+  getActiveGenerationForConversation(conversationId: string): Promise<{
+    coveredThroughTimestampMs: number;
+    coveredThroughRowId: number;
+    overviewJson: string;
+  } | null>;
+}
+
+/** Optional constructor deps for the assembler. */
+export interface AIChatContextAssemblerDeps {
+  readonly compactionReader?: AIChatContextCompactionReader;
+}
+
 export interface AIChatContextAssembleInput {
   readonly conversationId: string;
   readonly currentUserMessage: string;
@@ -89,6 +109,83 @@ export class AIChatContextAssembler {
   private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
   private readonly systemSettings = new SystemSettingModule();
   private readonly aifetchlyContext = new AIFetchlyContextLoader();
+  /** Opt-in compaction reader (new §12 path); absent → legacy behavior. */
+  private readonly compactionReader?: AIChatContextCompactionReader;
+
+  constructor(deps?: AIChatContextAssemblerDeps) {
+    this.compactionReader = deps?.compactionReader;
+  }
+
+  /**
+   * Render a published generation's bounded overview (§12.4). The overview is
+   * the latest section summary JSON (Synopsis/Decisions/Constraints/Pending/
+   * ToolOutcomes/Topics) — a compact structured digest of everything covered
+   * by the generation's sections.
+   */
+  private renderOverviewBlock(overviewJson: string): string | null {
+    if (!overviewJson || overviewJson.trim().length === 0) return null;
+    try {
+      const parsed = JSON.parse(overviewJson) as unknown;
+      if (typeof parsed !== "object" || parsed === null) return null;
+      const o = parsed as {
+        synopsis?: unknown;
+        decisions?: unknown;
+        constraints?: unknown;
+        pending?: unknown;
+        toolOutcomes?: unknown;
+        topics?: unknown;
+      };
+      const lines: string[] = [];
+      if (typeof o.synopsis === "string" && o.synopsis.length > 0) {
+        lines.push(`## Earlier conversation overview\n${o.synopsis}`);
+      }
+      const factText = (facts: unknown): string[] => {
+        if (!Array.isArray(facts)) return [];
+        const out: string[] = [];
+        for (const f of facts) {
+          if (typeof f === "object" && f !== null) {
+            const text = (f as { text?: unknown }).text;
+            if (typeof text === "string" && text.length > 0) {
+              out.push(`- ${text}`);
+            }
+          }
+        }
+        return out;
+      };
+      const decisions = factText(o.decisions);
+      if (decisions.length > 0) {
+        lines.push(`## Key decisions\n${decisions.join("\n")}`);
+      }
+      const constraints = factText(o.constraints);
+      if (constraints.length > 0) {
+        lines.push(`## Constraints\n${constraints.join("\n")}`);
+      }
+      const pending = factText(o.pending);
+      if (pending.length > 0) {
+        lines.push(`## Pending items\n${pending.join("\n")}`);
+      }
+      const outcomes = factText(o.toolOutcomes);
+      if (outcomes.length > 0) {
+        lines.push(`## Tool outcomes\n${outcomes.join("\n")}`);
+      }
+      if (Array.isArray(o.topics) && o.topics.length > 0) {
+        const topics = o.topics
+          .filter((t): t is string => typeof t === "string")
+          .join(", ");
+        if (topics.length > 0) {
+          lines.push(`## Topics: ${topics}`);
+        }
+      }
+      if (lines.length === 0) return null;
+      return COMPACT_PREAMBLE + lines.join("\n\n");
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to parse compaction overview JSON:",
+        err
+      );
+      return null;
+    }
+  }
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -110,6 +207,41 @@ export class AIChatContextAssembler {
       input.conversationId
     );
 
+    // New §12 path: when the opt-in compaction reader is injected and the
+    // conversation has a published active generation, use its composite
+    // boundary (timestamp + rowId) to trim recent history and tool pairs,
+    // and its bounded overview instead of the legacy compact summary block.
+    // The legacy full compact (when present) still wins — it represents the
+    // user-facing compact action; the generation only applies when there is
+    // no legacy compact for this conversation.
+    let generationBoundary: {
+      coveredThroughTimestampMs: number;
+      coveredThroughRowId: number;
+    } | null = null;
+    let generationOverview: string | null = null;
+    if (this.compactionReader) {
+      try {
+        const generation =
+          await this.compactionReader.getActiveGenerationForConversation(
+            input.conversationId
+          );
+        if (generation && !fullCompact) {
+          generationBoundary = {
+            coveredThroughTimestampMs: generation.coveredThroughTimestampMs,
+            coveredThroughRowId: generation.coveredThroughRowId,
+          };
+          generationOverview = this.renderOverviewBlock(
+            generation.overviewJson
+          );
+        }
+      } catch (err) {
+        console.error(
+          "[ai-chat-context] compaction generation lookup failed:",
+          err
+        );
+      }
+    }
+
     const historyRows = await this.v2.getConversationMessages(
       input.conversationId
     );
@@ -126,11 +258,22 @@ export class AIChatContextAssembler {
 
     // Drop any recent message that is already covered by an active full
     // compact boundary. Session memory is advisory and may overlap with
-    // recent history.
+    // recent history. A published generation (§12) trims by the composite
+    // boundary (timestamp + rowId): rows strictly after the boundary remain;
+    // rows at the boundary timestamp with rowId <= coveredThroughRowId are
+    // covered (excluded).
     const withoutCurrent = input.currentUserMessageId
       ? recent.filter((r) => r.messageId !== input.currentUserMessageId)
       : recent;
-    const trimmedRecent = fullCompact
+    const trimmedRecent = generationBoundary
+      ? withoutCurrent.filter((r) => {
+          const ts = r.timestamp.getTime();
+          if (ts > generationBoundary!.coveredThroughTimestampMs) return true;
+          if (ts < generationBoundary!.coveredThroughTimestampMs) return false;
+          // Same timestamp: keep only rows strictly after the covered row id.
+          return r.id > generationBoundary!.coveredThroughRowId;
+        })
+      : fullCompact
       ? withoutCurrent.filter(
           (r) =>
             r.timestamp.getTime() >
@@ -359,6 +502,11 @@ export class AIChatContextAssembler {
         role: "system",
         content: COMPACT_PREAMBLE + fullCompact.summary,
       });
+    } else if (generationOverview) {
+      // Published §12 generation overview — bounded structured digest of the
+      // compacted sections (synopsis / decisions / constraints / pending /
+      // tool outcomes / topics).
+      messages.push({ role: "system", content: generationOverview });
     } else if (sessionMemory) {
       messages.push({
         role: "system",
@@ -368,7 +516,7 @@ export class AIChatContextAssembler {
 
     const compactMs = fullCompact
       ? new Date(fullCompact.throughTimestamp).getTime()
-      : null;
+      : generationBoundary?.coveredThroughTimestampMs ?? null;
     const toolPairs = filterPairsAfterBoundary(
       collectConversationToolPairs(sorted),
       compactMs
@@ -395,8 +543,8 @@ export class AIChatContextAssembler {
     return {
       messages,
       tokenEstimate,
-      usedSessionMemory: !fullCompact && !!sessionMemory,
-      usedFullCompact: !!fullCompact,
+      usedSessionMemory: !fullCompact && !generationOverview && !!sessionMemory,
+      usedFullCompact: !!fullCompact || !!generationOverview,
       usedWorkspaceMemory: workspaceMemoryCount > 0,
       workspaceMemoryCount,
       usedDurableMemory: durableMemoryCount > 0,

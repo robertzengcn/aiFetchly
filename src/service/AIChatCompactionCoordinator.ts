@@ -40,6 +40,16 @@ export type SummarizeFn = (
   userPrompt: string
 ) => Promise<string>;
 
+/** Optional constructor deps for the coordinator (opt-in pattern). */
+export interface AIChatCompactionCoordinatorDeps {
+  /**
+   * A bound summarize callback delegating to the real AI provider. When set,
+   * `requestCompactionForTurn` can trigger compaction without the caller
+   * supplying a summarizer each time. Absent in tests / legacy wiring.
+   */
+  readonly summarize?: SummarizeFn;
+}
+
 /** Input to requestCompaction. */
 export interface RequestCompactionInput {
   readonly trigger: "auto" | "manual" | "session-memory" | "reactive-overflow";
@@ -54,7 +64,7 @@ export interface RequestCompactionInput {
 
 /** Result of requestCompaction. */
 export interface RequestCompactionResult {
-  readonly state: "completed" | "paused" | "cancelled" | "failed";
+  readonly state: "completed" | "paused" | "cancelled" | "failed" | "skipped";
   readonly generationId?: string;
   readonly sectionsPacked: number;
   readonly runId: string;
@@ -79,10 +89,12 @@ export class AIChatCompactionCoordinator extends BaseModule {
   private readonly validator: AIChatSummaryValidator;
   private readonly promptBuilder: AIChatCompactionPromptBuilder;
   private readonly budgetService: AIChatRequestBudgetService;
+  /** Bound provider-backed summarizer, when injected via deps. */
+  private readonly summarizeFn?: SummarizeFn;
   /** In-process promise per conversation (§11.1 dedup). */
   private readonly inFlight = new Map<string, InFlightRun>();
 
-  constructor() {
+  constructor(deps?: AIChatCompactionCoordinatorDeps) {
     super();
     this.module = new AIChatCompactionModule();
     this.archive = new AIChatArchiveModule();
@@ -90,6 +102,36 @@ export class AIChatCompactionCoordinator extends BaseModule {
     this.validator = new AIChatSummaryValidator();
     this.promptBuilder = new AIChatCompactionPromptBuilder();
     this.budgetService = new AIChatRequestBudgetService();
+    this.summarizeFn = deps?.summarize;
+  }
+
+  /**
+   * Convenience entry for the query engine's post-turn hook (§11). Uses the
+   * injected summarize callback so the engine only supplies trigger + model.
+   * No-op (resolves to a skipped result) when no summarizer was injected,
+   * preserving the opt-in pattern for legacy / test wiring.
+   */
+  requestCompactionForTurn(
+    conversationId: string,
+    input: {
+      readonly trigger: RequestCompactionInput["trigger"];
+      readonly model?: string;
+      readonly signal?: AbortSignal;
+    }
+  ): Promise<RequestCompactionResult> {
+    if (!this.summarizeFn) {
+      return Promise.resolve({
+        state: "skipped" as const,
+        sectionsPacked: 0,
+        runId: "",
+      });
+    }
+    return this.requestCompaction(conversationId, {
+      trigger: input.trigger,
+      model: input.model,
+      summarize: this.summarizeFn,
+      signal: input.signal,
+    });
   }
 
   /**
@@ -235,7 +277,10 @@ export class AIChatCompactionCoordinator extends BaseModule {
           startCursor: cursor,
         });
 
-        if (packResult.fragments.length === 0 && packResult.receipts.length === 0) {
+        if (
+          packResult.fragments.length === 0 &&
+          packResult.receipts.length === 0
+        ) {
           // No more source to pack.
           break;
         }
@@ -268,17 +313,20 @@ export class AIChatCompactionCoordinator extends BaseModule {
         if (!validation.ok || !validation.summary) {
           throw new RecoverableHistoryError(
             "COMPACTION_OUTPUT_INVALID",
-            `section ${ordinal} summary validation failed: ${validation.errors.join("; ")}`
+            `section ${ordinal} summary validation failed: ${validation.errors.join(
+              "; "
+            )}`
           );
         }
         lastSummary = validation.summary;
 
         // Determine the section's covered-through boundary.
-        const lastFrag =
-          packResult.fragments[packResult.fragments.length - 1];
-        lastCoveredThroughTs = packResult.exclusionBoundary?.timestampMs ??
+        const lastFrag = packResult.fragments[packResult.fragments.length - 1];
+        lastCoveredThroughTs =
+          packResult.exclusionBoundary?.timestampMs ??
           (lastFrag ? Date.parse(lastFrag.timestamp) : 0);
-        lastCoveredThroughRowId = packResult.exclusionBoundary?.rowId ??
+        lastCoveredThroughRowId =
+          packResult.exclusionBoundary?.rowId ??
           (lastFrag ? lastFrag.sourceRowId : 0);
 
         // Save section + checkpoint atomically (§11.4).
@@ -395,7 +443,13 @@ export class AIChatCompactionCoordinator extends BaseModule {
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new RecoverableHistoryError("COMPACTION_CONTEXT_REJECTED", `summarize timed out after ${timeoutMs}ms`)),
+        () =>
+          reject(
+            new RecoverableHistoryError(
+              "COMPACTION_CONTEXT_REJECTED",
+              `summarize timed out after ${timeoutMs}ms`
+            )
+          ),
         timeoutMs
       );
       p.then(
@@ -412,7 +466,12 @@ export class AIChatCompactionCoordinator extends BaseModule {
         "abort",
         () => {
           clearTimeout(timer);
-          reject(new RecoverableHistoryError("COMPACTION_CONTEXT_REJECTED", "compaction cancelled by signal"));
+          reject(
+            new RecoverableHistoryError(
+              "COMPACTION_CONTEXT_REJECTED",
+              "compaction cancelled by signal"
+            )
+          );
         },
         { once: true }
       );
