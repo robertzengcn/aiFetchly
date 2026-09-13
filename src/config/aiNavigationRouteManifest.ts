@@ -57,21 +57,29 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
         "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
     },
     {
-      routeName: "CommunityPluginsList",
-      path: "/community-plugins/list",
-      titleKey: "route.community_plugins",
+      // Unified Plugin page (community discovery + installed + sources +
+      // issues). Replaces the deprecated CommunityPluginsList manifest
+      // entry — the legacy route name still resolves via an invisible
+      // redirect, but AI navigation now targets the canonical route
+      // (unified plugin page tech design §12.4).
+      routeName: "PluginsManagement",
+      path: "/plugins/management",
+      titleKey: "route.plugins",
       visible: true,
       aiNavigable: true,
       aiAliases: [
+        "plugins",
+        "plugin management",
         "community plugins",
         "plugin store",
         "plugin hub",
         "community plugin page",
         "browse plugins",
+        "discover plugins",
         "plugin marketplace page",
       ],
       aiDescription:
-        "Browse and install community plugins from the AiFetchly Plugin Hub catalog",
+        "Discover community plugins and manage installed plugins and sources",
     },
     {
       routeName: "Email_Marketing_Service_LIST",
@@ -161,6 +169,21 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       aiDescription: "View and manage bulk email sending tasks",
     },
     {
+      routeName: "UNIFIED_EMAIL_SEND_LOG",
+      path: "/emailmarketing/buckemailtask/sendlog",
+      titleKey: "route.email_send_log",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "email send log",
+        "send log",
+        "email log",
+        "unified send log",
+      ],
+      aiDescription:
+        "Review all email send log entries — legacy bulk-task sends and AI-authorized outbound sends in one timeline",
+    },
+    {
       routeName: "CampaignList",
       path: "/campaign/list",
       titleKey: "route.campaign_list",
@@ -219,6 +242,22 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
         "configuration",
       ],
       aiDescription: "Configure application-wide system settings",
+    },
+    {
+      routeName: "system_setting_managed_browser",
+      path: "/systemsetting/managed-browser",
+      titleKey: "route.managed_browser",
+      visible: false,
+      aiNavigable: true,
+      aiAliases: [
+        "managed browser settings",
+        "browser settings",
+        "browser cache settings",
+        "clear browser cache",
+        "social browser settings",
+      ],
+      aiDescription:
+        "Configure the managed social browser enablement and cache; clear the browser cache",
     },
     {
       routeName: "Searchform",

@@ -297,9 +297,10 @@ describe("PortableWorkspaceMemoryModule", () => {
       message: "scan finished",
     });
     const dbFile = path.join(tmpDir, "scraper.db");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    /* eslint-disable @typescript-eslint/no-var-requires */
     const Database =
       require("better-sqlite3") as typeof import("better-sqlite3");
+    /* eslint-enable @typescript-eslint/no-var-requires */
     const db = new Database(dbFile, { readonly: true });
     try {
       const rows = db

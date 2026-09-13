@@ -31,8 +31,16 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
-import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  buildAppContentSecurityPolicy,
+  shouldApplyAppContentSecurityPolicy,
+} from "@/service/AppContentSecurityPolicy";
+import {
+  isAppPermissionCheckAllowed,
+  isAppPermissionRequestAllowed,
+} from "@/service/AppSessionPermissions";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
@@ -63,7 +71,6 @@ import {
   shouldShowUncleanShutdownPrompt,
 } from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
-import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
@@ -77,6 +84,34 @@ import {
 import { cleanupContactExtractionWorker } from "@/main-process/communication/contactExtraction-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
+import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
+import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
+import * as os from "node:os";
+import * as fsMod from "node:fs";
+import * as pathMod from "node:path";
+
+/** Best-effort removal of aifetchly-managed-browser-* temp profiles >24h old. */
+async function sweepStaleManagedBrowserProfiles(): Promise<void> {
+  const dir = os.tmpdir();
+  const entries = await fsMod.promises.readdir(dir).catch(() => [] as string[]);
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const entry of entries) {
+    if (!entry.startsWith("aifetchly-managed-browser-")) {
+      continue;
+    }
+    const target = pathMod.join(dir, entry);
+    try {
+      const stat = await fsMod.promises.stat(target);
+      if (stat.mtimeMs < cutoff) {
+        await fsMod.promises.rm(target, { recursive: true, force: true });
+      }
+    } catch {
+      /* raced or unreadable — next sweep retries */
+    }
+  }
+}
+import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 import {
@@ -480,25 +515,38 @@ function initialize() {
         app.setAsDefaultProtocolClient(protocolScheme);
       }
     } else {
-      console.log("protocolScheme:", protocolScheme);
-      console.log("process.execPath:", process.execPath);
-      console.log(
-        "path.resolve(process.argv[1]):",
-        path.resolve(process.argv[1])
-      );
-      console.log("path:", path.resolve(process.argv[1]));
-      ProtocolRegistry.register(
-        protocolScheme,
-        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-        {
-          override: true,
-          appName: appName,
-          terminal: true,
+      // Dev-only best-effort protocol registration. We previously used the
+      // `protocol-registry` npm package here, but on macOS Sequoia+ its
+      // deRegister step rewrites another app bundle's Info.plist, which the
+      // App Management TCC protection blocks (EPERM). It also bundled its own
+      // platform templates into the build output that nothing read. We now use
+      // Electron's native API (same as the packaged path above), which is a
+      // best-effort hint in dev — the auth flow's primary loopback-callback
+      // path does not depend on the scheme being registered. Failures are
+      // non-fatal and only logged.
+      const devEntry = path.resolve(process.argv[1]);
+      log.info("[dev] protocolScheme:", protocolScheme);
+      log.info("[dev] process.execPath:", process.execPath);
+      log.info("[dev] entry:", devEntry);
+      try {
+        const registered = app.setAsDefaultProtocolClient(
+          protocolScheme,
+          process.execPath,
+          [devEntry]
+        );
+        if (registered) {
+          log.info("[dev] protocol registered successfully");
+        } else {
+          log.warn(
+            "[dev] protocol registration returned false; deep links may not route to this dev process"
+          );
         }
-      )
-        .then(() => console.log("Successfully registered"))
-        .catch((e) => console.error(e));
-      // app.setAsDefaultProtocolClient(protocolScheme);
+      } catch (e: unknown) {
+        log.warn(
+          "[dev] protocol registration failed (non-fatal):",
+          e instanceof Error ? e.message : String(e)
+        );
+      }
     }
   }
   if (startupPolicy.acquireSingleInstanceLock) {
@@ -793,6 +841,26 @@ function initialize() {
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win, () => win);
 
+      // Managed-browser cache: retry leftover deletion-queue entries from a
+      // previous crash (design §13.8 — queue entries are crash-recognizable).
+      void getDefaultManagedBrowserCacheModule()
+        .resumePendingDeletions()
+        .catch((err: unknown) => {
+          log.warn(
+            "[startup] managed-browser cache recovery failed",
+            err instanceof Error ? err.message : String(err)
+          );
+        });
+
+      // Managed-browser cache: enforce the configured limits on a bounded
+      // cadence — one startup pass, then at most once per 24h (GAP-10).
+      getDefaultManagedBrowserCacheMaintenanceScheduler().start();
+
+      // Managed-browser: sweep stale session temp profiles left behind by
+      // crashed workers (a start-timeout kill can orphan the profile dir in
+      // the OS temp dir; anything older than a day is definitively dead).
+      void sweepStaleManagedBrowserProfiles().catch(() => undefined);
+
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
 
@@ -1070,6 +1138,29 @@ function initialize() {
       console.error("[shutdown] ToolJobRegistry shutdown failed", err);
     }
 
+    // Managed-browser supervisor: graceful session stops + verified orphan
+    // Chrome cleanup within a global deadline (design §8.5 / FR-RUNTIME-015).
+    try {
+      const supervisor = getDefaultManagedBrowserSupervisor();
+      if (supervisor.listSessions().length > 0) {
+        await supervisor.shutdownAll(5_000);
+        log.info("Managed browser supervisor shutdown completed");
+      }
+    } catch (err) {
+      log.warn("[shutdown] managed-browser supervisor failed", err);
+    }
+
+    // Managed-browser cache: clear-on-exit preference (FR-CACHE-014).
+    // Runs AFTER the supervisor stopped sessions so scopes are released.
+    try {
+      const settings = await new ManagedBrowserSettingsModule().getEffectiveSettings();
+      if (settings.clearCacheOnExit) {
+        await getDefaultManagedBrowserCacheModule().queueAllForShutdown();
+      }
+    } catch (err) {
+      log.warn("[shutdown] managed-browser cache clear-on-exit failed", err);
+    }
+
     // WS-4 R4.5: clean up the contact-extraction worker on app quit
     try {
       cleanupContactExtractionWorker();
@@ -1341,8 +1432,33 @@ function initialize() {
         }
       }
 
-      // Initialize WebSocket connection to marketing server
-      // This enables real-time notifications and updates
+      // FR-2.1 / design §7.1: boot order for a logged-in user is
+      //   1. refresh access token (if expired),
+      //   2. reconcile entitlement (needs a valid Bearer),
+      //   3. connect WebSocket (the fast notify path),
+      //   4. start the background auto-refresh timer.
+      // A logged-in user with an expired JWT would otherwise issue the startup
+      // GET with a stale token and fail; the reconcile would keep the stale
+      // Community cache and the socket would be skipped forever.
+      try {
+        await TokenRefreshService.performAutoRefreshCheck();
+      } catch (err) {
+        log.error("[entitlement] startup token refresh check failed:", err);
+      }
+
+      // FR-2.1: Reconcile entitlement from GET /api/user/info at startup.
+      // Runs after the token refresh so the GET has a valid Bearer. If the WS
+      // "connected" welcome arrives shortly after, ws_connect coalesces
+      // within STARTUP_CONNECT_COALESCE_MS (10s). Failures keep the cache.
+      SubscriptionEntitlementService.getInstance()
+        .reconcile("startup")
+        .catch((err) => {
+          log.error("[entitlement] startup reconcile failed:", err);
+        });
+
+      // Initialize WebSocket connection to marketing server.
+      // This enables real-time notifications and updates. Runs after the
+      // token refresh so connect()'s hasValidToken() succeeds.
       if (startupPolicy.connectMarketingWebSocket && win) {
         try {
           await initializeWebSocketConnection(win);
@@ -1409,13 +1525,8 @@ function configureContentSecurityPolicy() {
   // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
   // (video). Other permissions use a minimal allowlist instead of blanket-
   // approving, so unexpected requests (geolocation, midi, etc.) are denied.
-  const ALLOWED_PERMISSIONS = new Set([
-    "clipboard-sanitized",
-    "clipboard-read",
-    "fullscreen",
-    "window-management",
-    "openExternal",
-  ]);
+  // Clipboard copy uses clipboard-sanitized-write; Chromium checks AND
+  // requests it, so both handlers must allow it.
   defaultSession.setPermissionRequestHandler(
     (
       _wc: unknown,
@@ -1423,15 +1534,17 @@ function configureContentSecurityPolicy() {
       callback: (permissionGranted: boolean) => void,
       details: { mediaTypes?: string[] } | undefined
     ) => {
-      if (permission === "media") {
-        const wantsVideo =
-          (
-            details as { mediaTypes?: string[] } | undefined
-          )?.mediaTypes?.includes("video") ?? false;
-        callback(!wantsVideo);
-        return;
-      }
-      callback(ALLOWED_PERMISSIONS.has(permission));
+      callback(isAppPermissionRequestAllowed(permission, details));
+    }
+  );
+  defaultSession.setPermissionCheckHandler(
+    (
+      _wc: unknown,
+      permission: string,
+      _requestingOrigin: string,
+      details: { mediaType?: string } | undefined
+    ) => {
+      return isAppPermissionCheckAllowed(permission, details);
     }
   );
 
@@ -1441,11 +1554,15 @@ function configureContentSecurityPolicy() {
 
   defaultSession.webRequest.onHeadersReceived(
     (
-      details: { responseHeaders?: Record<string, string[]> },
+      details: { url: string; responseHeaders?: Record<string, string[]> },
       callback: (response: {
         responseHeaders: Record<string, string[]>;
       }) => void
     ) => {
+      if (!shouldApplyAppContentSecurityPolicy(details.url)) {
+        callback({ responseHeaders: details.responseHeaders ?? {} });
+        return;
+      }
       callback({
         responseHeaders: {
           ...details.responseHeaders,

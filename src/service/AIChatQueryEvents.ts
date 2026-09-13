@@ -4,7 +4,11 @@ import type {
   OpenAIChatMessage,
   OpenAITool,
 } from "@/api/aiChatApi";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatSafeBoundary,
+  ChatV2DirectionTransition,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
   AIChatPlanStateView,
@@ -240,10 +244,25 @@ export type AIChatQueryEvent =
   | AIChatQueryAskUserQuestionEvent
   | AIChatQueryPlanSubmittedEvent
   | AIChatQueryPlanStateEvent
+  | AIChatQueryDirectionUpdatedEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
   | AIChatQueryUsageUpdateEvent;
+
+/**
+ * Emitted when a steering batch is applied at a safe boundary. Carries ids
+ * and offsets only — never steering content (the pending-message event and
+ * history already carry the user-visible text).
+ */
+export interface AIChatQueryDirectionUpdatedEvent {
+  type: "direction_updated";
+  conversationId: string;
+  messageId: string;
+  boundary: AIChatSafeBoundary;
+  pendingMessageIds: readonly string[];
+  contentOffset: number;
+}
 
 /**
  * Result returned by AIChatQueryLoop.run().
@@ -274,6 +293,9 @@ export type AIChatQueryLoopResult =
       /** Recovery metadata accumulated during the turn, if any recovery
        * layers were activated. Persisted on the assistant row metadata. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /** Present when steering was applied mid-turn: offsets where the
+       * visible content changed direction (design §11.6). */
+      directionTransitions?: readonly ChatV2DirectionTransition[];
     }
   | {
       type: "cancelled";
@@ -326,6 +348,25 @@ export interface PendingPermissionTurn {
   toolCallId: string;
   toolName: string;
   toolArguments: Record<string, unknown>;
+  /**
+   * Trusted intent context (technical design §9/§14.2): the persisted user
+   * message id + outbound intent decision id from the originating turn. The
+   * permission-resume re-execution must carry them so outbound-email tools
+   * still bind the draft to the exact user message after approval.
+   */
+  sourceUserMessageId?: string;
+  intentDecisionId?: number | null;
+  /**
+   * Trusted outbound-email authorization triple resolved by the tool gate
+   * (§14.2) when it allowed the send. The permission-resume re-execution
+   * must carry it so the send tool claims the batch (§15.1) instead of
+   * silently falling to the legacy send path after the user approves.
+   */
+  outboundAuthorization?: {
+    batchId: number;
+    authorizationId: number;
+    batchHash: string;
+  };
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
   /**
@@ -470,7 +511,57 @@ export interface AIChatQueryLoopInput {
   toolCatalog?: ToolCatalog;
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
+  /**
+   * Generated/edited image descriptors already produced by a tool that
+   * executed OUTSIDE this loop run — used by the engine's permission-resume
+   * path, which re-executes the approved tool directly. The loop folds them
+   * into the turn's result.images (alongside any images harvested from tools
+   * executed inside this run) so the engine persists + renders them.
+   */
+  seededToolImages?: readonly OpenAIChatImage[];
+  /**
+   * Per-turn steering mailbox. When present the loop checks it at the five
+   * safe boundaries and applies committed instructions between tool calls
+   * (message-queue design §11). The loop never imports a Model or Module —
+   * persistence happens inside the control's `consume()`.
+   */
+  steeringControl?: import("@/service/AIChatTurnControl").AIChatTurnControl;
+  /**
+   * Trusted current-turn user message id, supplied by the main process (never
+   * by tool arguments). Threads into OutboundEmailIntentResolver so the intent
+   * decision is bound to the exact user message that requested the work.
+   */
+  sourceUserMessageId?: string;
+  /**
+   * Persisted outbound-email intent decision id for this turn. Null when the
+   * turn did not resolve an outbound-email intent (e.g. not marketing-related)
+   * or the resolver failed. Supplied by the main process, not tool arguments.
+   */
+  intentDecisionId?: number | null;
 }
+
+/**
+ * Narrow terminal classification returned by
+ * `AIChatQueryEngine.submitPersistedUserMessage()` after persistence and
+ * terminal event emission are complete (design §9.5). The queue service
+ * drains/pauses on this — the engine never imports the queue service.
+ */
+export type AIChatTurnTerminalEvent =
+  | {
+      readonly type: "completed" | "cancelled" | "failed";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      readonly type: "paused_for_permission" | "paused_for_plan_question";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      /** An active/pending turn already owns the conversation (§12.3). */
+      readonly type: "conversation_busy";
+      readonly conversationId: string;
+    };
 
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {

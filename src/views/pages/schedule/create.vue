@@ -23,6 +23,7 @@
       :loading="loading"
       @submit="handleSubmit"
       @cancel="goBack"
+      @error="handleFormError"
     />
 
     <!-- Alert Dialog -->
@@ -101,6 +102,10 @@ const handleSubmit = async (data: ScheduleCreateRequest | ScheduleUpdateRequest)
   }
 }
 
+const handleFormError = (message: string): void => {
+  showAlert(t('common.error'), message, 'error')
+}
+
 const goBack = () => {
   router.push('/schedule/list')
 }
@@ -144,4 +149,4 @@ const getAlertIcon = (type: string) => {
 .v-card {
   border-radius: 8px;
 }
-</style> 
+</style>

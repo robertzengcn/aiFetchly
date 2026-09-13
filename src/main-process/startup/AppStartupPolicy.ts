@@ -19,7 +19,7 @@
  */
 
 export interface AppStartupPolicy {
-  /** Register the custom protocol scheme with the OS / ProtocolRegistry. */
+  /** Register the custom protocol scheme with the OS (Electron setAsDefaultProtocolClient). */
   readonly registerProtocol: boolean;
   /** Acquire the production single-instance lock and listen for second-instance. */
   readonly acquireSingleInstanceLock: boolean;

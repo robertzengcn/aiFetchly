@@ -16,7 +16,7 @@ import type {
   CreateAiMessageTaskRequest,
   UpdateAiMessageTaskRequest,
 } from "@/entityTypes/aiMessageTaskTypes";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   aiMessageTaskWriteInputSchema,
   aiMessageTaskByIdInputSchema,
@@ -26,15 +26,20 @@ import {
 } from "@/schemas/ipc/aiMessageTask";
 
 /**
- * AI Message Task IPC handlers — all 8 migrated to registerAiValidatedHandler.
+ * AI Message Task IPC handlers.
  *
- * Original code had a bespoke isAiEnabled() check at the top of every handler;
- * now centralized in the wrapper.
+ * All of these are local SQLite / SkillRegistry lookups. They do not call
+ * hosted AI APIs, so they stay on registerValidatedHandler — same pattern as
+ * RAG document CRUD and SKILL_LIST_INSTALLED. The schedule create/edit form
+ * and run history need this even when hosted AI is off (local provider).
+ *
+ * Actual model invocation is gated in ScheduledAiMessageRunner via
+ * AIProviderResolver.resolveForChat() (hosted subscription OR local provider).
  */
 export function registerAiMessageTaskIpcHandlers(): void {
   log.info("AI Message Task IPC handlers registered");
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_CREATE,
     aiMessageTaskWriteInputSchema,
     async (input) => {
@@ -43,7 +48,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_UPDATE,
     aiMessageTaskWriteInputSchema,
     async (input) => {
@@ -53,7 +58,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_DELETE,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -63,7 +68,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_LIST,
     aiMessageTaskListInputSchema,
     async (input) => {
@@ -72,7 +77,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_DETAIL,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -85,7 +90,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_RUN_LIST,
     aiMessageTaskRunListInputSchema,
     async (input) => {
@@ -94,7 +99,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_RUN_DETAIL,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -107,7 +112,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
     aiMessageTaskListToolsInputSchema,
     async () => {

@@ -154,6 +154,27 @@ export const authenticatedFeatureRoutes: RouteRecordRaw[] = [
       children: [],
     },
     {
+      path: "managed-browser",
+      name: "system_setting_managed_browser",
+      meta: {
+        title: "route.managed_browser",
+        icon: "mdi-monitor",
+        keepAlive: false,
+        visible: false,
+        aiNavigable: true,
+        aiAliases: [
+          "managed browser settings",
+          "browser settings",
+          "browser cache settings",
+          "social browser settings",
+        ],
+        aiDescription:
+          "Configure the managed social browser and its cache; clear browser cache",
+      },
+      component: () => import("@/views/pages/systemsetting/managed_browser.vue"),
+      children: [],
+    },
+    {
       path: "plugins",
       name: "system_setting_plugins",
       meta: {
@@ -619,6 +640,37 @@ export const authenticatedFeatureRoutes: RouteRecordRaw[] = [
         visible: false,
         title: "route.email_marketing",
         icon: "mdi-email-multiple",
+      },
+    },
+    {
+      path: "buckemailtask/sendlog/",
+      component: () =>
+        import("@/views/pages/emailSendTaskLog/unifiedList.vue"),
+      name: "UNIFIED_EMAIL_SEND_LOG",
+      meta: {
+        visible: true,
+        title: "route.email_send_log",
+        icon: "mdi-file-document-multiple",
+        aiNavigable: true,
+        aiAliases: [
+          "email send log",
+          "send log",
+          "email log",
+          "unified send log",
+        ],
+        aiDescription:
+          "Review all email send log entries — legacy bulk-task sends and AI-authorized outbound sends in one timeline",
+      },
+    },
+    {
+      path: "buckemailtask/sendlog/detail/:source/:id(\\d+)",
+      component: () =>
+        import("@/views/pages/emailSendTaskLog/detail.vue"),
+      name: "UNIFIED_EMAIL_SEND_LOG_DETAIL",
+      meta: {
+        visible: false,
+        title: "route.email_send_log_detail",
+        icon: "mdi-file-document-outline",
       },
     },
     {

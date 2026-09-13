@@ -262,6 +262,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   submit: [data: ScheduleCreateRequest | ScheduleUpdateRequest]
   cancel: []
+  error: [message: string]
 }>()
 
 // Form ref
@@ -516,6 +517,9 @@ const handleSubmit = async () => {
       }
     } catch (error) {
       console.error('Failed to create/update AI message task:', error)
+      const message =
+        error instanceof Error ? error.message : String(error)
+      emit('error', message)
       return
     }
   }

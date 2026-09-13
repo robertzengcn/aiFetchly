@@ -26,6 +26,8 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
+import type { ChatV2DirectionTransition } from "@/entityTypes/aiChatV2Types";
+import type { AIChatSteeringBatch } from "@/service/AIChatTurnControl";
 import {
   OpenAIStreamAccumulator,
   type ParsedToolCallResult,
@@ -37,7 +39,11 @@ import {
   isAIChatRecoverableError,
   type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
-import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
+import {
+  isContentLevelTransientError,
+  isQuotaError,
+} from "@/service/AIChatErrorMapper";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
 import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
@@ -49,6 +55,18 @@ import {
   isEnterPlanModeToolName,
   sanitizeEnterPlanModeArgs,
 } from "@/service/EnterPlanModeTool";
+import { OutboundEmailToolGate } from "@/service/outboundEmail/OutboundEmailToolGate";
+import {
+  allowsOutboundDirectSendAuthorization,
+  type OutboundEmailToolGateResult,
+} from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OutboundEmailIntentModule } from "@/modules/OutboundEmailIntentModule";
+import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
+import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
+
+/** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
+const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
+const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -64,7 +82,7 @@ import {
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { VERIFY_CONTACT_INFO_TOOL_NAME } from "@/config/contactVerification";
@@ -73,6 +91,7 @@ import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
@@ -98,6 +117,35 @@ import { log } from "@/modules/Logger";
  * ~7 questions.
  */
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * Synthetic result for every tool call skipped because user steering
+ * superseded the model's decision (FR-21/22). No tool arguments or hidden
+ * policy data are included.
+ */
+const SKIPPED_BY_STEERING_TOOL_RESULT = {
+  success: false,
+  skipped: true,
+  reason: "superseded_by_user_steering",
+} as const;
+
+/**
+ * Wrapper marking a steering instruction in model context. User-originated
+ * guidance stays BELOW system, workspace, policy, and permission
+ * instructions (PRD §13.1) — it is never sent as a system message.
+ */
+const STEERING_MODEL_PREFIX =
+  "[User steering update received while this response was running]";
+
+/** Controlled failure when no model round remains to apply steering (§11.5). */
+export class AIChatSteeringRoundLimitError extends Error {
+  constructor() {
+    super(
+      "STEERING_ROUND_LIMIT: no model round remains to apply the steering message. It stays available as a normal next message."
+    );
+    this.name = "AIChatSteeringRoundLimitError";
+  }
+}
 
 /**
  * Polling interval for async tool jobs. The loop sleeps this long between
@@ -152,6 +200,13 @@ const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
  */
 interface RoundContentTracker {
   delivered: boolean;
+  /**
+   * Set once any steering batch has been accepted/applied for this turn.
+   * A pristine-transcript retry after steering would omit or duplicate the
+   * steering instruction, so the retry wrapper must stop retrying once this
+   * is true (design §11.7).
+   */
+  steeringObserved?: boolean;
 }
 
 /**
@@ -301,6 +356,18 @@ interface PreparedToolCall {
     arguments?: Record<string, unknown>;
   };
   blockedResult?: ToolExecutionResult;
+  /**
+   * Trusted outbound-email authorization triple, resolved by the tool gate
+   * (§14.2) for an allowed `start_email_send_task` call. Threaded through to
+   * the send tool's execution context so it can claim the batch via
+   * `OutboundEmailDeliveryService.claim` (§15.1) instead of the legacy path.
+   * Present only when the gate allowed the send; undefined otherwise.
+   */
+  outboundAuthorization?: {
+    batchId: number;
+    authorizationId: number;
+    batchHash: string;
+  };
 }
 
 /**
@@ -774,6 +841,12 @@ export class AIChatQueryLoop {
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
     const tracker: RoundContentTracker = { delivered: false };
+    // FR-6.3: a hosted 402 / quota-exhausted error may be a stale-cache lag
+    // (user just paid while a call was in flight). Lazy-reconcile entitlement
+    // ONCE before surfacing the error; if USER_AI_ENABLED flips true, retry the
+    // call once. Bounded by ensureHostedAiEnabled's 30s cooldown so a user
+    // mashing send can't stampede /api/user/info. Do not loop.
+    let quotaRetried = false;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
       const attemptInput: AIChatQueryLoopInput =
@@ -785,11 +858,33 @@ export class AIChatQueryLoop {
         return result;
       }
 
+      // FR-6.3: quota error + no content delivered + not already retried ->
+      // lazy-reconcile once; if entitlement is now unlocked, retry this attempt.
+      if (
+        !quotaRetried &&
+        !tracker.delivered &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        isQuotaError(result.error)
+      ) {
+        quotaRetried = true;
+        const unlocked = await ensureHostedAiEnabled();
+        if (unlocked) {
+          // Entitlement flipped to active (the user just paid). Re-run this
+          // same attempt once: the for-loop's `attempt += 1` is offset by the
+          // decrement here so the next iteration re-runs the same attempt
+          // number with a pristine transcript snapshot.
+          attempt -= 1;
+          continue;
+        }
+      }
+
       const canRetry =
         attempt < maxAttempts &&
         !input.abortController.signal.aborted &&
         input.isActiveTurn() &&
         !tracker.delivered &&
+        !tracker.steeringObserved &&
         isContentLevelTransientError(result.error);
 
       if (!canRetry) {
@@ -885,8 +980,19 @@ export class AIChatQueryLoop {
       // FR-4: images contributed by tool results this turn (e.g. a
       // run_subagent batch worker's edited outputs). Folded into the
       // completed result.images so the engine persists + renders them like
-      // any other generated image.
-      const collectedToolImages: OpenAIChatImage[] = [];
+      // any other generated image. seededToolImages carries images from a
+      // tool the engine executed outside this run (permission-resume path).
+      const collectedToolImages: OpenAIChatImage[] = [
+        ...(input.seededToolImages ?? []),
+      ];
+
+      // Steering state (message-queue design §11): the mailbox is drained
+      // only at safe boundaries; skipped tool calls get synthetic results;
+      // direction transitions record where the visible content changed.
+      const steeringControl = input.steeringControl;
+      const directionTransitions: ChatV2DirectionTransition[] = [];
+      let visibleContent = "";
+      let steeringApplied = false;
 
       for (
         let round = input.startRound;
@@ -896,6 +1002,24 @@ export class AIChatQueryLoop {
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);
+
+        // Safe boundary 1 — before_model (design §11.1): the request for
+        // this round has not started yet, so committed steering joins the
+        // transcript without consuming an extra round.
+        if (steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("before_model");
+          if (batch) {
+            this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+          }
+        }
 
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
@@ -1027,6 +1151,9 @@ export class AIChatQueryLoop {
         );
 
         finalAccumulator = accumulator;
+        // Accumulate every round's delivered text once so steering offsets
+        // and the final persisted content stay in visible order (§11.6).
+        visibleContent += accumulator.state.fullContent ?? "";
 
         // Surface token usage from THIS round so (a) the UI can render a
         // live context-usage indicator and (b) the persisting event sink can
@@ -1229,6 +1356,36 @@ export class AIChatQueryLoop {
           throw new Error(detail);
         }
 
+        // Safe boundary 2 — after_model (design §11.1): the response is
+        // complete and steering is available, so NONE of its tool calls may
+        // start. Each call receives one protocol-valid synthetic result.
+        if (willContinue && steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("after_model");
+          if (batch) {
+            this.assertSteeringRoundBudget(round);
+            messages.push(
+              buildAssistantToolCallMessage(
+                parsedCalls,
+                textualParsedCalls.length > 0
+                  ? ""
+                  : accumulator.state.fullContent
+              )
+            );
+            this.emitSkippedToolResults(input, messages, parsedCalls);
+            this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+            tracker.delivered = true;
+            continue;
+          }
+        }
+
         if (!willContinue) {
           if (isTextToolCallMarker(accumulator.state.fullContent)) {
             if (
@@ -1277,6 +1434,25 @@ export class AIChatQueryLoop {
                   )
                 : undefined,
             };
+          }
+
+          // Safe boundary 5 — before_complete (design §11.1): steering
+          // preempts the terminal answer and forces one more model round.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_complete");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              continue;
+            }
           }
 
           // Detect truncated/empty responses: the server closed the stream
@@ -1415,6 +1591,27 @@ export class AIChatQueryLoop {
           if (!call.ok || !call.id || !call.name) {
             continue;
           }
+
+          // Safe boundary 3 — before_tool (design §11.1): this call has not
+          // started. Steering skips it and every other unstarted call.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.emitSkippedToolResults(input, messages, parsedCalls);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
+
           const callId = call.id;
           const callName = call.name;
 
@@ -1769,6 +1966,66 @@ export class AIChatQueryLoop {
             }
           }
 
+          // Outbound-email intent gate: enforce the "model proposes, trusted
+          // app code authorizes" rule (technical design §14.2) BEFORE the send
+          // tool executes. The gate resolves a request-scoped authorization
+          // from the turn's intent + draft batch (§13.1); only an allowed
+          // decision lets the send tool proceed, carrying the claim triple.
+          let outboundAuthorization:
+            | {
+                batchId: number;
+                authorizationId: number;
+                batchHash: string;
+              }
+            | undefined;
+          if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
+            const gateDecision = await this.evaluateOutboundEmailGate(input);
+            if (!gateDecision.allowed) {
+              await emitToolCall(call.arguments ?? {});
+              // Actionable reason text (§19): tell the model how to unblock so
+              // it stops re-drafting. draft_required → draft first;
+              // review_required → the user must review; authorization_missing
+              // → the user must confirm sending for this turn.
+              const blockedReason = explainOutboundGateBlock(
+                gateDecision.code,
+                gateDecision.batchId
+              );
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                outboundGateBlocked: true,
+                code: gateDecision.code,
+                reason: blockedReason,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  outboundGateBlocked: true,
+                  code: gateDecision.code,
+                },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            }
+            // Gate allowed: thread the trusted authorization triple through
+            // to the send tool so it claims the batch (§15.1) instead of the
+            // legacy path.
+            outboundAuthorization = {
+              batchId: gateDecision.batchId,
+              authorizationId: gateDecision.authorizationId,
+              batchHash: gateDecision.batchHash,
+            };
+          }
+
           const executableCall = {
             id: call.id,
             name: call.name,
@@ -1776,7 +2033,8 @@ export class AIChatQueryLoop {
           };
           const preparedCall = await this.prepareToolCall(
             input,
-            executableCall
+            executableCall,
+            outboundAuthorization
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           await emitToolCall(effectiveArguments);
@@ -1865,6 +2123,14 @@ export class AIChatQueryLoop {
                 toolCallId: call.id,
                 toolName: call.name,
                 toolArguments: effectiveArguments,
+                // Trusted intent context must survive the permission pause so
+                // the resume re-execution can still bind the draft batch to
+                // the originating user message (technical design §9). The
+                // gate-resolved authorization must survive too — losing it
+                // would make the resumed send fall to the legacy path (RC4).
+                sourceUserMessageId: input.sourceUserMessageId,
+                intentDecisionId: input.intentDecisionId,
+                outboundAuthorization,
                 planContext,
                 eventSink: eventSink,
                 toolCatalogState: catalogActive
@@ -1906,6 +2172,26 @@ export class AIChatQueryLoop {
           log.info(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
+
+          // Safe boundary 4 — after_tool (design §11.1): this call's result
+          // is in the transcript; remaining unstarted calls are skipped.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("after_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              this.emitSkippedToolResults(input, messages, parsedCalls);
+              this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
         }
       }
 
@@ -1950,6 +2236,13 @@ export class AIChatQueryLoop {
       // the recovered content from earlier in the turn.
       if (recoveryState.recoveredContentPrefix) {
         fullContent = recoveryState.recoveredContentPrefix + fullContent;
+      }
+      // Steering turns persist the FULL visible content across rounds in
+      // delivery order (§11.6) — the final round alone would drop the
+      // pre-steering text the user already saw.
+      if (steeringApplied) {
+        fullContent =
+          (recoveryState.recoveredContentPrefix || "") + visibleContent;
       }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
@@ -2017,6 +2310,7 @@ export class AIChatQueryLoop {
             )
           : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
+        ...(steeringApplied ? { directionTransitions } : {}),
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -2111,6 +2405,110 @@ export class AIChatQueryLoop {
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Steering boundary helpers (message-queue design §11)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Applying steering requires another model round (§11.5). When the round
+   * budget is exhausted the turn fails cleanly with STEERING_ROUND_LIMIT;
+   * the pending items stay `steering` and are paused by terminal handling,
+   * so the user can resume them as a normal next message.
+   */
+  private assertSteeringRoundBudget(round: number): void {
+    if (round + 1 >= CHAT_V2_MAX_TOOL_ROUNDS) {
+      throw new AIChatSteeringRoundLimitError();
+    }
+  }
+
+  /**
+   * Append one protocol-valid synthetic tool result for every parsed call
+   * that does not already have a `tool` message (FR-22). Ids mirror
+   * buildAssistantToolCallMessage (including its `call_${index}` fallback)
+   * so every assistant tool_call_id receives exactly one result.
+   */
+  private emitSkippedToolResults(
+    input: AIChatQueryLoopInput,
+    messages: OpenAIChatMessage[],
+    parsedCalls: readonly ParsedToolCallResult[]
+  ): void {
+    const resulted = new Set<string>();
+    for (const message of messages) {
+      if (message.role === "tool" && message.tool_call_id) {
+        resulted.add(message.tool_call_id);
+      }
+    }
+    const skippedContent = serializeToolResultContent({
+      ...SKIPPED_BY_STEERING_TOOL_RESULT,
+    });
+    let skippedCount = 0;
+    for (const call of parsedCalls) {
+      const id = call.id ?? `call_${parsedCalls.indexOf(call)}`;
+      if (resulted.has(id)) continue;
+      if (!call.name && !call.id) continue;
+      input.eventSink.emit({
+        type: "tool_result",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        toolCallId: id,
+        toolName: call.name ?? "unknown_tool",
+        fullContent: skippedContent,
+        toolResult: { ...SKIPPED_BY_STEERING_TOOL_RESULT },
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: id,
+        content: skippedContent,
+      });
+      resulted.add(id);
+      skippedCount += 1;
+    }
+    if (skippedCount > 0) {
+      aiChatQueueCounters.increment(
+        "ai_chat_steering_skipped_tools_total",
+        skippedCount
+      );
+    }
+  }
+
+  /**
+   * Append the persisted steering instructions as consecutive user messages
+   * (wrapped, below system/policy authority — §10.4), emit one
+   * direction_updated event carrying ids/offset only, and record the
+   * transition for the final assistant row (§11.5).
+   */
+  private applySteeringToTranscript(
+    input: AIChatQueryLoopInput,
+    messages: OpenAIChatMessage[],
+    batch: AIChatSteeringBatch,
+    contentOffset: number,
+    transitions: ChatV2DirectionTransition[]
+  ): void {
+    for (const instruction of batch.instructions) {
+      messages.push({
+        role: "user",
+        content: `${STEERING_MODEL_PREFIX}\n${instruction.modelContent}`,
+      });
+    }
+    input.eventSink.emit({
+      type: "direction_updated",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      contentOffset,
+    });
+    transitions.push({
+      contentOffset,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      occurredAt: new Date().toISOString(),
+    });
+    log.info(
+      `[ai-chat-v2] steering applied boundary=${batch.boundary} count=${batch.instructions.length} offset=${contentOffset}`
+    );
   }
 
   private async handlePlanToolAskUserQuestion(
@@ -2212,6 +2610,11 @@ export class AIChatQueryLoop {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
+    },
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
     }
   ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
@@ -2238,6 +2641,21 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              // Registry-owned abort signal: cancelling the job (user Stop,
+              // shutdown) reaches the actual underlying tool work instead of
+              // only relabelling the registry entry (FR-36, design §17.2).
+              signal: handle.signal,
+              // Trusted intent context (technical design §9/§14.2): binds the
+              // draft to the exact user message + persisted intent decision
+              // so authorization is never derived from tool arguments.
+              sourceUserMessageId: input.sourceUserMessageId,
+              intentDecisionId: input.intentDecisionId,
+              // Trusted gate-resolved authorization for an allowed send
+              // (§15.1); threaded for uniformity with the foreground path.
+              outboundAuthorization,
+              // Draft generation only persists reviewable local state; it
+              // does not contact recipients. The send tool remains gated.
+              skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -2459,12 +2877,95 @@ export class AIChatQueryLoop {
     }
   }
 
+  /**
+   * Evaluate the outbound-email delivery gate for the current turn (technical
+   * design §14.2). Loads the persisted intent decision threaded into the loop
+   * input by the query engine. Ordinary `send_now` only looks up an already-
+   * persisted authorization (Review approval) — auto-creating one is what let
+   * the model send in the same turn as the draft. The exception is
+   * `explicit_skip_review` or `contextual_affirmation`: the user waived
+   * Review or confirmed the presented draft in chat, so a direct-send
+   * authorization is created after a draft exists.
+   *
+   * Fail-closed: any unreadable intent, missing turn identity, or resolver
+   * failure yields a blocking code — a send is never authorized on error.
+   */
+  private async evaluateOutboundEmailGate(
+    input: AIChatQueryLoopInput
+  ): Promise<OutboundEmailToolGateResult> {
+    // Without a trusted intent decision for this turn's user message there is
+    // no evidence the user asked to send at all — blocked as draft_required.
+    if (input.intentDecisionId == null) {
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+    // The authorization binds to the exact user message (AD-001/AD-005). No
+    // trusted source message id means no binding is possible — block.
+    if (!input.sourceUserMessageId) {
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+
+    try {
+      const intentDecision = await new OutboundEmailIntentModule().read(
+        input.intentDecisionId
+      );
+      if (!intentDecision) {
+        return OutboundEmailToolGate.evaluate(null, null, null);
+      }
+
+      // Resolve the DB path from the Token service (matching the draft tool
+      // and outbound IPC layer): passing no dbpath would make the models fall
+      // back to the os.tmpdir() test database, flipping SqliteDb.getInstance
+      // to a different path and destroying the live connection mid-conversation.
+      const dbpath = new Token().getValue(USERSDBPATH) ?? "";
+      const authService = new OutboundEmailAuthorizationService(dbpath);
+
+      if (
+        intentDecision.mode === "send_now" &&
+        allowsOutboundDirectSendAuthorization(intentDecision.reasonCode)
+      ) {
+        const auth = await authService.resolveDirectSendForTurn({
+          conversationId: input.conversationId,
+          sourceUserMessageId: input.sourceUserMessageId,
+          intentDecisionId: intentDecision.id,
+          inheritConversationDraft: true,
+        });
+        if (auth) {
+          return OutboundEmailToolGate.evaluate(
+            intentDecision,
+            auth,
+            auth.batchId
+          );
+        }
+      }
+
+      const lookup = await authService.lookupTurnAuthorization({
+        conversationId: input.conversationId,
+        sourceUserMessageId: input.sourceUserMessageId,
+      });
+
+      return OutboundEmailToolGate.evaluate(
+        intentDecision,
+        lookup.authorization,
+        lookup.batchId
+      );
+    } catch (err) {
+      console.error("[outbound-email-intent] gate lookup failed:", err);
+      // Fail closed: an unreadable decision must never authorize a send.
+      return OutboundEmailToolGate.evaluate(null, null, null);
+    }
+  }
+
   private async prepareToolCall(
     input: AIChatQueryLoopInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
+    },
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
     }
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
@@ -2489,6 +2990,7 @@ export class AIChatQueryLoop {
           preAggregate,
           Date.now() - startedAt
         ),
+        outboundAuthorization,
       };
     }
 
@@ -2502,6 +3004,7 @@ export class AIChatQueryLoop {
       descriptor,
       preAggregate,
       effectiveCall,
+      outboundAuthorization,
     };
   }
 
@@ -2509,7 +3012,13 @@ export class AIChatQueryLoop {
     input: AIChatQueryLoopInput,
     prepared: PreparedToolCall
   ): Promise<ToolExecutionResult> {
-    const { descriptor, effectiveCall, preAggregate, startedAt } = prepared;
+    const {
+      descriptor,
+      effectiveCall,
+      preAggregate,
+      startedAt,
+      outboundAuthorization,
+    } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);
@@ -2525,7 +3034,11 @@ export class AIChatQueryLoop {
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(input, effectiveCall);
+      const { jobId } = await this.executeAsyncTool(
+        input,
+        effectiveCall,
+        outboundAuthorization
+      );
       toolResult = await this.pollAsyncJobToCompletion(
         input,
         effectiveCall,
@@ -2537,7 +3050,8 @@ export class AIChatQueryLoop {
         effectiveCall,
         skill,
         timeoutMs,
-        startedAt
+        startedAt,
+        outboundAuthorization
       );
     }
 
@@ -2577,7 +3091,12 @@ export class AIChatQueryLoop {
     },
     skill: SkillDefinition | null | undefined,
     timeoutMs: number,
-    startedAt: number
+    startedAt: number,
+    outboundAuthorization?: {
+      batchId: number;
+      authorizationId: number;
+      batchHash: string;
+    }
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
@@ -2590,6 +3109,18 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         args: call.arguments,
         model: input.request.model,
+        // Trusted intent context (technical design §9/§14.2): binds the
+        // draft to the exact user message + persisted intent decision
+        // so authorization is never derived from tool arguments.
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
+        // Trusted outbound-email authorization triple for an allowed send
+        // (§14.2/§15.1). The send tool claims the batch via this; never
+        // sourced from tool arguments (AD-003).
+        outboundAuthorization,
+        // Preparing reviewable local drafts must not create a second user
+        // decision before the separately protected outbound send action.
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

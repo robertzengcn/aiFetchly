@@ -959,6 +959,14 @@ module.exports = {
             config: "vite.skillWorker.config.mjs",
           },
           {
+            entry: "src/childprocess/managed-browser/index.ts",
+            config: "vite.managedBrowserWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/managed-browser-cache/index.ts",
+            config: "vite.managedBrowserCacheWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/PythonRuntimeWorker.ts",
             config: "vite.pythonRuntimeWorker.config.mjs",
           },

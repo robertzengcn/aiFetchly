@@ -21,6 +21,17 @@
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
           <strong>{{ t("aiChatV2.tool_call_title") || "Tool Call" }}</strong>
+          <button
+            v-if="batchStopAvailable"
+            type="button"
+            class="v2-message__batch-stop"
+            :aria-label="
+              t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+            "
+            @click="emit('stop-batch')"
+          >
+            {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+          </button>
         </div>
         <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
           <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
@@ -82,6 +93,17 @@
             <strong :class="{ 'v2-message__tool-running': executionPending }">
               {{ executionPending ? t("aiChatV2.tool_running") || "Running..." : t("aiChatV2.tool_result_title") || "Tool Result" }}
             </strong>
+            <button
+              v-if="batchStopAvailable"
+              type="button"
+              class="v2-message__batch-stop"
+              :aria-label="
+                t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+              "
+              @click="emit('stop-batch')"
+            >
+              {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+            </button>
           </div>
           <AiArtifactCard
             v-if="message.metadata?.artifact"
@@ -89,6 +111,21 @@
             :disabled="disabled"
             @open="(id: string) => emit('open-artifact', id)"
             @copy-html="(id: string) => emit('copy-artifact-html', id)"
+          />
+          <OutboundEmailBatchCard
+            v-if="outboundBatch"
+            :batch-id="outboundBatch.batchId"
+            :mode="outboundBatch.mode"
+            :recipient-count="outboundBatch.recipientCount"
+            :batch-status="outboundBatch.batchStatus"
+            :reason-code="outboundBatch.reasonCode"
+            :sent-count="outboundBatch.sentCount"
+            @review-requested="reviewOutboundBatchId = $event"
+          />
+          <OutboundEmailReviewDialog
+            v-if="reviewOutboundBatchId !== null"
+            v-model="reviewDialogOpen"
+            :batch-id="reviewOutboundBatchId"
           />
           <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
@@ -119,6 +156,29 @@
               <span class="v2-message__batch-status">{{
                 batchProgressView.status
               }}</span>
+            </div>
+            <div
+              v-if="batchRetryAvailable"
+              class="v2-message__batch-actions"
+            >
+              <button
+                type="button"
+                class="v2-message__batch-retry"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.retryFailed', {
+                    count: batchProgressView.retryableReferences.length,
+                  }) || 'Retry failed items'
+                "
+                :disabled="disabled"
+                @click="emitRetryGeneratedImageBatch"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.retryFailed", {
+                    count: batchProgressView.retryableReferences.length,
+                  }) ||
+                  `Retry failed items (${batchProgressView.retryableReferences.length})`
+                }}
+              </button>
             </div>
             <details
               v-if="batchProgressView.failures.length > 0"
@@ -169,7 +229,22 @@
       </template>
       <template v-else>
         <div v-if="message.content" class="v2-message__content">
-          {{ message.content }}
+          <template v-if="directionSegments.length > 1">
+            <template
+              v-for="(segment, index) in directionSegments"
+              :key="`dir-seg-${index}`"
+            >
+              <span v-if="index > 0" class="v2-message__direction-marker">
+                <v-icon size="x-small" class="mr-1"
+                  >mdi-directions-fork</v-icon
+                >{{
+                  t("aiChatV2.queue.direction_updated") || "Direction updated"
+                }}
+              </span>
+              <span>{{ segment }}</span>
+            </template>
+          </template>
+          <template v-else>{{ message.content }}</template>
         </div>
         <details
           v-if="hasReasoning"
@@ -238,6 +313,20 @@
                 @click="emitEditGeneratedImage(image)"
               >
                 {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
+              </button>
+              <button
+                type="button"
+                class="v2-message__save-image-btn"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.saveToWorkspace') ||
+                  'Save to workspace'
+                "
+                @click="emitSaveGeneratedImage(image)"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.saveToWorkspace") ||
+                  "Save to workspace"
+                }}
               </button>
             </div>
           </div>
@@ -365,7 +454,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
@@ -380,6 +469,8 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
+import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -429,6 +520,18 @@ const emit = defineEmits<{
     e: "edit-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
 }>();
 const { t, te } = useI18n();
 
@@ -513,6 +616,13 @@ function emitUseGeneratedImage(image: RenderableGeneratedImage): void {
 
 function emitEditGeneratedImage(image: RenderableGeneratedImage): void {
   emit("edit-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitSaveGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("save-generated-image", {
     messageId: image.messageId,
     imageIndex: image.imageIndex,
   });
@@ -627,6 +737,62 @@ const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
 
+// ---------------------------------------------------------------------------
+// Outbound-email batch summary (§18). When the draft_outbound_email_batch tool
+// succeeds, its returned batch_id surfaces a review card inline in the chat
+// result so the user can review/approve/send or see the direct-send outcome.
+// ---------------------------------------------------------------------------
+interface OutboundBatchCardModel {
+  readonly batchId: number;
+  readonly mode: string;
+  readonly recipientCount: number;
+  readonly batchStatus: string;
+  readonly reasonCode: string;
+  readonly sentCount: number;
+}
+
+const outboundBatch = computed<OutboundBatchCardModel | null>(() => {
+  if (String(props.message.metadata?.toolName || "") !== "draft_outbound_email_batch") {
+    return null;
+  }
+  const batchId = toolResult.value.batchId;
+  if (typeof batchId !== "number") return null;
+  return {
+    batchId,
+    mode:
+      typeof toolResult.value.mode === "string"
+        ? (toolResult.value.mode as string)
+        : "review_first",
+    recipientCount:
+      typeof toolResult.value.draftCount === "number"
+        ? (toolResult.value.draftCount as number)
+        : 0,
+    batchStatus:
+      typeof toolResult.value.batchStatus === "string"
+        ? (toolResult.value.batchStatus as string)
+        : "draft_ready",
+    reasonCode:
+      typeof toolResult.value.reasonCode === "string"
+        ? (toolResult.value.reasonCode as string)
+        : "explicit_review_instruction",
+    sentCount:
+      typeof toolResult.value.sentCount === "number"
+        ? (toolResult.value.sentCount as number)
+        : 0,
+  };
+});
+
+const reviewOutboundBatchId = ref<number | null>(null);
+const reviewDialogOpen = ref<boolean>(true);
+
+// When the review dialog closes, clear the batch id so the card can be
+// re-opened (and so a stale dialog does not linger after the batch changes).
+watch(reviewDialogOpen, (open) => {
+  if (!open) {
+    reviewOutboundBatchId.value = null;
+  }
+});
+
 // Map attach_local_images result codes to localized messages. Codes are stable
 // English identifiers (PRD FR12); the UI shows the localized text.
 const ATTACH_LOCAL_IMAGES_ERROR_KEY: Record<string, string> = {
@@ -682,6 +848,31 @@ const executionPending = computed(
 const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
+/**
+ * Direction marker segments (FR-29/30): the persisted assistant row carries
+ * metadata.directionTransitions[].contentOffset — split the visible content
+ * there and insert a localized marker. Presentation-only: the marker text
+ * never enters model context.
+ */
+const directionSegments = computed<string[]>(() => {
+  const content = props.message.content ?? "";
+  const transitions = props.message.metadata?.directionTransitions;
+  if (!transitions || transitions.length === 0) return [content];
+  const offsets = [...transitions]
+    .map((transition) => transition.contentOffset)
+    .filter((offset) => offset > 0 && offset < content.length)
+    .sort((a, b) => a - b);
+  if (offsets.length === 0) return [content];
+  const segments: string[] = [];
+  let previous = 0;
+  for (const offset of offsets) {
+    segments.push(content.slice(previous, offset));
+    previous = offset;
+  }
+  segments.push(content.slice(previous));
+  return segments;
+});
+
 const hasReasoning = computed(
   () =>
     props.message.role === "assistant" &&
@@ -804,6 +995,10 @@ interface BatchProgressView {
   readonly completedCount: number;
   readonly concurrency: number;
   readonly failures: readonly BatchFailureRowView[];
+  /** Safe instruction echo (≤500 chars) for the Retry-failed action. */
+  readonly instruction: string;
+  /** Failed/cancelled generated-image references, in input order. */
+  readonly retryableReferences: readonly ChatV2GeneratedImageReference[];
 }
 
 function asNonNegativeInteger(value: unknown): number | null {
@@ -871,6 +1066,7 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
     ? record.items
     : [];
   const failures: BatchFailureRowView[] = [];
+  const retryableReferences: ChatV2GeneratedImageReference[] = [];
   items.forEach((item, index) => {
     if (!item || typeof item !== "object") return;
     const itemRecord = item as Record<string, unknown>;
@@ -879,6 +1075,13 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
       itemRecord.status !== "cancelled"
     ) {
       return;
+    }
+    // Retry-failed only applies to generated-image inputs: opaque references
+    // can be resubmitted via the trusted batch channel, while workspace files
+    // keep their model-driven flow.
+    const retryReference = retryableReferenceFromInput(itemRecord.input);
+    if (retryReference) {
+      retryableReferences.push(retryReference);
     }
     const errorCode =
       typeof itemRecord.errorCode === "string" ? itemRecord.errorCode : "";
@@ -904,8 +1107,85 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
       errorText,
     });
   });
-  return { status, requestedCount, completedCount, concurrency, failures };
+  const instruction =
+    typeof record.instruction === "string" ? record.instruction.trim() : "";
+  return {
+    status,
+    requestedCount,
+    completedCount,
+    concurrency,
+    failures,
+    instruction,
+    retryableReferences,
+  };
 });
+
+/** Extract a valid opaque reference from a failed item input, or null. */
+function retryableReferenceFromInput(
+  input: unknown
+): ChatV2GeneratedImageReference | null {
+  if (!input || typeof input !== "object") return null;
+  const inputRecord = input as Record<string, unknown>;
+  if (inputRecord.kind !== "generated_image") return null;
+  const reference = inputRecord.reference;
+  if (!reference || typeof reference !== "object") return null;
+  const refRecord = reference as Record<string, unknown>;
+  if (
+    typeof refRecord.messageId !== "string" ||
+    refRecord.messageId.length === 0
+  ) {
+    return null;
+  }
+  if (
+    typeof refRecord.imageIndex !== "number" ||
+    !Number.isInteger(refRecord.imageIndex) ||
+    refRecord.imageIndex < 0
+  ) {
+    return null;
+  }
+  return { messageId: refRecord.messageId, imageIndex: refRecord.imageIndex };
+}
+
+/** True for the batch tool_call card (async execution in flight, carries
+ *  live toolProgress) OR a pending batch tool_result. */
+const isBatchToolCard = computed(
+  () =>
+    (props.message.messageType === MessageType.TOOL_CALL ||
+      props.message.messageType === MessageType.TOOL_RESULT) &&
+    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
+);
+
+/** Stop renders while the batch tool is still executing: either a tool_call
+ *  card with live progress (the async-job phase), or a tool_result card that
+ *  is still pending. NOTE: the card-level `disabled` prop mirrors isStreaming
+ *  — exactly the state in which Stop must stay clickable — so it is
+ *  deliberately NOT part of this condition. */
+const batchStopAvailable = computed(
+  () =>
+    isBatchToolCard.value &&
+    (executionPending.value || toolProgress.value !== null)
+);
+
+/** Retry renders only on a settled batch with retryable generated refs and a
+ * usable instruction echo; successful items are never included. */
+const batchRetryAvailable = computed(() => {
+  const view = batchProgressView.value;
+  return (
+    view !== null &&
+    !executionPending.value &&
+    view.retryableReferences.length > 0 &&
+    view.instruction.length > 0
+  );
+});
+
+function emitRetryGeneratedImageBatch(): void {
+  const view = batchProgressView.value;
+  if (!view || view.retryableReferences.length === 0) return;
+  emit("retry-generated-image-batch", {
+    references: [...view.retryableReferences],
+    instruction: view.instruction,
+  });
+}
 
 interface MentionChip {
   variant: "resolved" | "warning";

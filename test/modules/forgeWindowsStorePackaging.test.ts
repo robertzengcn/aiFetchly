@@ -266,14 +266,10 @@ describe("Windows Store packaging", (): void => {
       readFileSync(releaseWorkflowPath, "utf8")
     ) as ReleaseWorkflow;
 
-    const assertChecksumPublishJob = (
-      jobName: keyof NonNullable<ReleaseWorkflow["jobs"]>
-    ): void => {
-      // Only some job variants declare `steps`; probe defensively so the
-      // union resolves without narrowing the whole workflow type.
-      const steps =
-        (workflow.jobs?.[jobName] as { steps?: WorkflowStep[] } | undefined)
-          ?.steps ?? [];
+
+    const assertChecksumPublishJob = (jobName: string): void => {
+      const job = workflow.jobs?.[jobName as keyof typeof workflow.jobs];
+      const steps = (job && "steps" in job ? job.steps : undefined) ?? [];
       const checksumStep = steps.find(
         (candidate: WorkflowStep): boolean =>
           candidate.name === "Generate SHA-256 checksums"

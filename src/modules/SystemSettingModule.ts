@@ -21,6 +21,13 @@ export class SystemSettingModule extends BaseModule {
     return this.systemSettingModel.updateSystemSetting(settingId, settingValue);
   }
 
+  /** Look up the raw setting row by key (for id-based updates). */
+  public async getSettingItem(
+    key: string
+  ): Promise<SystemSettingEntity | null> {
+    return this.systemSettingModel.getSettingItem(key);
+  }
+
   /**
    * Look up a setting value by key. Returns null when the setting row is
    * absent. Callers decide their own default. Used for user-controllable
@@ -72,7 +79,9 @@ export class SystemSettingModule extends BaseModule {
     }
 
     // Combine modelName and dimension into the required format
-    const combinedModelName = `${normalizeEmbeddingModelId(modelName)}:${dimension}`;
+    const combinedModelName = `${normalizeEmbeddingModelId(
+      modelName
+    )}:${dimension}`;
 
     return this.systemSettingModel.updateDefaultEmbeddingModel(
       combinedModelName,

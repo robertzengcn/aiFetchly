@@ -20,11 +20,14 @@ import { registerSessionRecordingIpcHandlers } from "@/main-process/communicatio
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
+import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
 import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -38,6 +41,7 @@ import { registerYandexMapsHandlers } from "@/main-process/communication/yandexM
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
+import { registerManagedBrowserIpcHandlers } from "@/main-process/communication/managed-browser-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
@@ -56,6 +60,10 @@ import { registerWorkspaceWatchHandlers } from "@/main-process/communication/wor
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 import { registerAIContentReportIpcHandlers } from "@/main-process/communication/ai-content-report-ipc";
+import { registerOutboundEmailDeliveryIpcHandlers } from "@/main-process/communication/outboundEmailDelivery-ipc";
+import { registerE2ESeedIpcHandlers } from "@/main-process/e2e/E2ESeedIpc";
+import { EmailReplyReliabilityStartup } from "@/service/emailReply/EmailReplyReliabilityStartup";
+import { OutboundEmailReliabilityStartup } from "@/service/outboundEmail/OutboundEmailReliabilityStartup";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -76,6 +84,10 @@ export function registerCommunicationIpcHandlers(
     // Register the window so scheduled-loop turn completions can broadcast a
     // narrow conversation-update refresh hint to the renderer (FR-11).
     AIChatConversationUpdateBroadcaster.getInstance().register(win);
+    // Interactive stream chunks + pending-message lifecycle broadcasts
+    // (message-queue design §14.2) — queue-dispatched turns start in the
+    // main process and must reach every live window.
+    AIChatV2EventBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
     registerYellowPagesIpcHandlers();
@@ -99,6 +111,8 @@ export function registerCommunicationIpcHandlers(
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerGeneratedImageExportIpcHandlers();
+    registerAiFileOpenIpcHandlers();
     registerAiChatWorkspaceIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
@@ -116,6 +130,7 @@ export function registerCommunicationIpcHandlers(
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
     registerAgentDefinitionIpcHandlers();
+    registerManagedBrowserIpcHandlers(win);
     registerPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
@@ -127,6 +142,18 @@ export function registerCommunicationIpcHandlers(
     registerAIWorkspaceMemoryIpcHandlers();
     registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
+    // Best-effort reply-reliability startup: lift legacy drafts onto immutable
+    // revisions and sweep stale in-flight send attempts to delivery_unknown.
+    // Fire-and-forget; never blocks app startup.
+    new EmailReplyReliabilityStartup()
+      .start()
+      .catch((e) => console.error("[reply-reliability] startup failed:", e));
+    // Best-effort outbound-reliability startup (technical design §21): expire
+    // stale authorizations and conservatively reconcile in-flight send attempts
+    // (failed only with proof, delivery_unknown otherwise). Fire-and-forget.
+    new OutboundEmailReliabilityStartup()
+      .start()
+      .catch((e) => console.error("[outbound-reliability] startup failed:", e));
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
@@ -134,6 +161,21 @@ export function registerCommunicationIpcHandlers(
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
     registerAIContentReportIpcHandlers();
+    // Intent-Aware Outbound Email Delivery (§17). Plain handlers — not
+    // AI-gated (they operate on already-authorized state and must stay usable
+    // for inspection even when AI is disabled). BATCH_SEND wires the production
+    // OutboundEmailWorkerStarter (v2 payload + decrypted service credentials +
+    // taskCode.js utility-process fork); a start failure is recorded as
+    // worker_start_failed by the delivery service.
+    registerOutboundEmailDeliveryIpcHandlers();
+    // E2E-only seed channels (Playwright harness): registered solely under
+    // AIFETCHLY_E2E=1 and double-gated inside registerE2ESeedIpcHandlers. They
+    // exist because the sanitized E2E environment cannot run the production
+    // email-service create path (credential encryption needs the remote
+    // secret-key backend); see src/main-process/e2e/E2ESeedIpc.ts.
+    if (process.env.AIFETCHLY_E2E === "1") {
+      registerE2ESeedIpcHandlers();
+    }
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

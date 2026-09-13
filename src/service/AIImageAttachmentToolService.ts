@@ -32,7 +32,6 @@ import type {
   ImageModelArtifact,
   ModelArtifact,
   PermissionPreview,
-  PreparedImageMimeType,
   SupportedImageMimeType,
 } from "@/entityTypes/aiImageAttachmentToolTypes";
 import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
@@ -50,6 +49,7 @@ import type {
   SkillExecutionResult,
 } from "@/entityTypes/skillTypes";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { log } from "@/modules/Logger";
 
 /**
  * Structural port for the normalizer so tests can inject a fake without the
@@ -88,6 +88,12 @@ export interface AIImageAttachmentToolDeps {
    * read cannot change what bytes we actually read (TOCTOU mitigation).
    */
   readonly openForRead: (filePath: string) => Promise<OpenedReadFile>;
+  /**
+   * Canonical-path resolver used to deduplicate inputs that resolve to the
+   * same file (relative/absolute aliases, guard-permitted symlinks).
+   * Injectable for tests.
+   */
+  readonly realpath: (filePath: string) => Promise<string>;
   /** Label of the configured AI server destination (no credentials), for previews. */
   readonly destinationLabel: string;
 }
@@ -291,6 +297,12 @@ export class AIImageAttachmentToolService {
     const prepared: Prepared[] = [];
     const fileErrors: AttachLocalImagesFileError[] = [];
     let totalDataUrlChars = context.currentRequestImageDataUrlChars ?? 0;
+    // Canonical duplicate detection: distinct inputs resolving to the same
+    // file (relative/absolute aliases, guard-permitted symlinks) attach once;
+    // the first occurrence wins and order is preserved.
+    const seenCanonicalPaths = new Set<string>();
+    let duplicateCount = 0;
+    let consumedInputs = 0;
 
     // 6. Validate + read + normalize each path.
     for (const inputPath of paths) {
@@ -316,6 +328,21 @@ export class AIImageAttachmentToolService {
         break; // atomic: first failure stops the batch
       }
 
+      let canonicalPath: string;
+      try {
+        canonicalPath = await this.deps.realpath(step.resolvedPath);
+      } catch {
+        // File vanished between open and canonicalization; fall back to the
+        // lexical resolution so the dedupe set stays consistent.
+        canonicalPath = step.resolvedPath;
+      }
+      if (seenCanonicalPaths.has(canonicalPath)) {
+        duplicateCount += 1;
+        consumedInputs += 1;
+        continue; // first occurrence already attached this exact file
+      }
+      seenCanonicalPaths.add(canonicalPath);
+
       // 7. Cumulative data-URL budget.
       // The artifact's dataUrl is exactly the string sent as image_url.url;
       // its character length is the precise (not estimated) budget cost.
@@ -329,10 +356,11 @@ export class AIImageAttachmentToolService {
         break;
       }
       prepared.push({ meta: step.meta, artifact: step.artifact });
+      consumedInputs += 1;
     }
 
     // 8. Atomic failure — release any prepared artifacts.
-    if (fileErrors.length > 0 || prepared.length !== paths.length) {
+    if (fileErrors.length > 0 || consumedInputs !== paths.length) {
       const code: AttachLocalImagesErrorCode =
         fileErrors[0]?.code ?? "image_processing_failed";
       return toSkillExecutionFailure(
@@ -344,18 +372,38 @@ export class AIImageAttachmentToolService {
       );
     }
 
-    // 9. Success — safe metadata result + transient artifacts.
+    // 9. Late-cancellation race: nothing may emit artifacts or start another
+    // AI-server request after the signal aborted, even if every normalization
+    // attempt already resolved successfully.
+    if (context.signal?.aborted) {
+      return toSkillExecutionFailure(
+        failureResult("cancelled", "Attachment cancelled before completion.")
+      );
+    }
+
+    // 10. Success — safe metadata result + transient artifacts.
+    const modelArtifacts: readonly ModelArtifact[] = prepared.map(
+      (p) => p.artifact
+    );
+    log.info(
+      `[attach_local_images] prepared summary=${JSON.stringify(
+        summarizeModelArtifacts(modelArtifacts)
+      )}`
+    );
     const result: AttachLocalImagesResult = {
       success: true,
       attached_count: prepared.length,
       attachments: prepared.map((p) => p.meta),
       summary: `Prepared ${prepared.length} image${
         prepared.length === 1 ? "" : "s"
-      } for the next AI request.`,
+      } for the next AI request.${
+        duplicateCount > 0
+          ? ` Skipped ${duplicateCount} duplicate path alias${
+              duplicateCount === 1 ? "" : "es"
+            }.`
+          : ""
+      }`,
     };
-    const modelArtifacts: readonly ModelArtifact[] = prepared.map(
-      (p) => p.artifact
-    );
     return {
       success: true,
       result: result as unknown as Record<string, unknown>,
@@ -374,7 +422,13 @@ export class AIImageAttachmentToolService {
     detail: ImageDetail,
     context: SkillExecutionContext
   ): Promise<
-    | { ok: true; meta: AttachedImageMetadata; artifact: ImageModelArtifact }
+    | {
+        ok: true;
+        meta: AttachedImageMetadata;
+        artifact: ImageModelArtifact;
+        /** Lexically resolved workspace path — canonicalized by the caller. */
+        resolvedPath: string;
+      }
     | { ok: false; code: AttachLocalImagesErrorCode; error: string }
   > {
     // Path safety.
@@ -518,6 +572,16 @@ export class AIImageAttachmentToolService {
         error: `Failed to process image: ${relativePath}`,
       };
     }
+    // Late-cancellation race: a normalizer that resolves AFTER the signal
+    // aborted must not contribute artifacts — the turn is already gone, and
+    // emitting a handoff would start another AI-server request for it.
+    if (context.signal?.aborted) {
+      return {
+        ok: false,
+        code: "cancelled",
+        error: "Attachment cancelled during normalization.",
+      };
+    }
 
     const fileName = path.basename(resolvedPath);
     const meta: AttachedImageMetadata = {
@@ -542,7 +606,7 @@ export class AIImageAttachmentToolService {
       detail,
       dataUrl: normalized.dataUrl,
     };
-    return { ok: true, meta, artifact };
+    return { ok: true, meta, artifact, resolvedPath };
   }
 }
 
@@ -554,6 +618,46 @@ function relativeForDisplay(p: string): string {
   // Only show the basename for an absolute path outside the workspace, to avoid
   // leaking unrelated filesystem structure in failure messages.
   return path.isAbsolute(p) ? path.basename(p) : p;
+}
+
+// ---------------------------------------------------------------------------
+// Safe artifact summary (P1-7): counts, MIME types, dimensions, and sizes
+// ONLY — never data URLs, base64, buffers, file contents, or credentials.
+// ---------------------------------------------------------------------------
+
+/** Safe, loggable aggregate over prepared model artifacts. */
+export interface ModelArtifactsSummary {
+  readonly count: number;
+  readonly mimeTypes: readonly string[];
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly totalPreparedBytes: number;
+}
+
+/**
+ * Summarize prepared model artifacts for diagnostics. The output is
+ * intentionally a tiny aggregate: every field is safe to log verbatim.
+ */
+export function summarizeModelArtifacts(
+  artifacts: readonly ModelArtifact[]
+): ModelArtifactsSummary {
+  let maxWidth = 0;
+  let maxHeight = 0;
+  let totalPreparedBytes = 0;
+  const mimeTypes = new Set<string>();
+  for (const artifact of artifacts) {
+    mimeTypes.add(artifact.mimeType);
+    maxWidth = Math.max(maxWidth, artifact.width);
+    maxHeight = Math.max(maxHeight, artifact.height);
+    totalPreparedBytes += artifact.sizeBytes;
+  }
+  return {
+    count: artifacts.length,
+    mimeTypes: [...mimeTypes],
+    maxWidth,
+    maxHeight,
+    totalPreparedBytes,
+  };
 }
 
 function mimeFromExtension(filePath: string): SupportedImageMimeType | null {
@@ -653,6 +757,7 @@ export function createDefaultAIImageAttachmentToolDeps(options: {
         close: () => fileHandle.close(),
       };
     },
+    realpath: (p) => fs.promises.realpath(p),
     destinationLabel: options.destinationLabel,
   };
 }

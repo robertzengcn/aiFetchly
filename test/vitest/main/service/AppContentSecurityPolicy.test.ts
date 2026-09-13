@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  buildAppContentSecurityPolicy,
+  shouldApplyAppContentSecurityPolicy,
+} from "@/service/AppContentSecurityPolicy";
 
 function getDirective(policy: string, name: string): string | undefined {
   return policy
@@ -22,12 +25,40 @@ describe("buildAppContentSecurityPolicy", () => {
     expect(getDirective(policy, "default-src")).toBe("default-src 'self'");
   });
 
-  it("keeps production script policy stricter than development", () => {
-    expect(getDirective(buildAppContentSecurityPolicy(false), "script-src")).toBe(
-      "script-src 'self'"
+  it("does not apply app CSP to extension and devtools documents", () => {
+    expect(
+      shouldApplyAppContentSecurityPolicy(
+        "chrome-extension://lojjpkpnigleikjdhnceipeamjchmacb/pages/devtools-background.html"
+      )
+    ).toBe(false);
+    expect(
+      shouldApplyAppContentSecurityPolicy("devtools://devtools/bundled/")
+    ).toBe(false);
+    expect(shouldApplyAppContentSecurityPolicy("http://localhost:5173/")).toBe(
+      true
     );
-    expect(getDirective(buildAppContentSecurityPolicy(true), "script-src")).toBe(
+  });
+
+  it("keeps production script policy stricter than development", () => {
+    expect(
+      getDirective(buildAppContentSecurityPolicy(false), "script-src")
+    ).toBe("script-src 'self'");
+    expect(
+      getDirective(buildAppContentSecurityPolicy(true), "script-src")
+    ).toBe(
       "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*"
     );
+  });
+
+  it("allows blob worker URLs in development so Vite HMR workers load", () => {
+    const policy = buildAppContentSecurityPolicy(true);
+    expect(getDirective(policy, "worker-src")).toBe(
+      "worker-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:* blob:"
+    );
+  });
+
+  it("keeps blob out of worker-src in production", () => {
+    const policy = buildAppContentSecurityPolicy(false);
+    expect(getDirective(policy, "worker-src")).toBe("worker-src 'self'");
   });
 });

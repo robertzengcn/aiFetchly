@@ -63,7 +63,7 @@
               <v-switch
 :model-value="p.enabled" color="success" hide-details density="compact"
                 @click.stop @update:model-value="(v) => $emit('toggle', p.name, v === true)" />
-              <v-btn icon size="x-small" variant="text" color="error" @click.stop="$emit('uninstall', p.name)">
+              <v-btn icon size="x-small" variant="text" color="error" :data-testid="`installed-uninstall-${p.name}`" @click.stop="$emit('uninstall', p.name)">
                 <v-icon>mdi-delete</v-icon>
                 <v-tooltip activator="parent" location="top">{{ t("plugins.uninstall_button") }}</v-tooltip>
               </v-btn>

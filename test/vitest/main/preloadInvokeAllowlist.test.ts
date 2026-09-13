@@ -37,4 +37,38 @@ describe("preload invoke allowlist", () => {
     // assertion checks for the identifier token.
     expect(preloadInvokeWhitelistSource()).toContain("RAG_IMPORT_WEBSITE");
   });
+
+  it("allows the entitlement reconciliation invoke channels (FR-1/FR-3)", () => {
+    const src = preloadInvokeWhitelistSource();
+    expect(src).toContain("USER_REFRESH_ENTITLEMENT");
+    expect(src).toContain("USER_OPEN_PRICING_PLAN");
+  });
+
+  it("allows UNIFIED_EMAIL_SEND_LOG (unified send-log view reads via invoke)", () => {
+    // The unified send-log channel was registered in buckEmail-ipc.ts and
+    // invoked by UnifiedEmailSendLogTable via windowInvoke, but was missing
+    // from the preload invoke allowlist — the call silently returned
+    // undefined and windowInvoke threw "unknow error". This pins it.
+    expect(preloadInvokeWhitelistSource()).toContain("UNIFIED_EMAIL_SEND_LOG");
+  });
+
+  it("allows UNIFIED_EMAIL_SEND_LOG_DETAIL (detail view read via invoke)", () => {
+    // Same bug class as UNIFIED_EMAIL_SEND_LOG above: the detail channel is
+    // registered in buckEmail-ipc.ts and invoked by the detail page via
+    // windowInvoke — a missing allowlist entry silently returns undefined
+    // and windowInvoke throws "unknow error". This pins it.
+    expect(preloadInvokeWhitelistSource()).toContain(
+      "UNIFIED_EMAIL_SEND_LOG_DETAIL"
+    );
+  });
+
+  it("allows USER_INFO_UPDATED on the receive allowlist (FR-7 broadcast)", () => {
+    // USER_INFO_UPDATED is a main->renderer push channel, allowlisted in the
+    // `receive` method body (and removeAllListeners), not `invoke`.
+    const marker = "receive: (channel, func) =>";
+    const idx = PRELOAD_SRC.indexOf(marker);
+    expect(idx).toBeGreaterThan(-1);
+    const receiveSrc = PRELOAD_SRC.slice(idx, PRELOAD_SRC.indexOf("invoke:"));
+    expect(receiveSrc).toContain("USER_INFO_UPDATED");
+  });
 });

@@ -12,11 +12,17 @@ import { log } from "@/modules/Logger";
 import {
   QUOTA_EXHAUSTED_SENTINEL,
   AUTH_EXPIRED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  type ImageEditErrorCode,
 } from "./AIChatErrorSentinels";
 export {
   QUOTA_EXHAUSTED_SENTINEL,
   AUTH_EXPIRED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
 } from "./AIChatErrorSentinels";
+export type { ImageEditErrorCode } from "./AIChatErrorSentinels";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
@@ -26,6 +32,38 @@ export {
  *
  * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
+
+/**
+ * Pattern for HTTP 402 / payment-required / quota-exhausted errors. A hosted
+ * AI call returning 402 means the user's subscription token quota is exhausted
+ * OR the plan is no longer active. Used to decide whether to lazy-reconcile
+ * entitlement once before surfacing the error (PRD FR-6.3).
+ */
+const QUOTA_ERROR_PATTERN =
+  /\b402\b|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i;
+
+/**
+ * True when the error represents a hosted 402 / payment-required / quota
+ * exhaustion. Detects both classified {@link AIChatRecoverableError} reasons
+ * (`"quota"`) and raw error messages that carry the HTTP status / quota
+ * string. Local-provider {@link AIProviderError}s are excluded — a local
+ * API key quota is not a hosted-entitlement problem.
+ */
+export function isQuotaError(err: unknown): boolean {
+  if (err instanceof AIProviderError) {
+    return false;
+  }
+  if (isAIChatRecoverableError(err) && err.reason === "quota") {
+    return true;
+  }
+  if (err instanceof Error) {
+    return QUOTA_ERROR_PATTERN.test(err.message || "");
+  }
+  if (typeof err === "string") {
+    return QUOTA_ERROR_PATTERN.test(err);
+  }
+  return false;
+}
 
 /**
  * Broad pattern for transient, retryable server-side failures: empty
@@ -188,6 +226,59 @@ export function describeErrorDetail(err: unknown): string {
 }
 
 /**
+ * Server/transport phrasings meaning "no edit-capable (image-to-image) model
+ * is configured" — the edit request cannot succeed until model configuration
+ * changes, so it must be distinguishable from transient failures.
+ */
+const IMAGE_EDIT_UNAVAILABLE_PATTERN =
+  /image_edit_unavailable|no image[- ]to[- ]image|edit[- ]capable model|image edit model (is )?(not |un)configured|edit model unavailable|image editing (is )?not (configured|available|enabled)/i;
+
+/**
+ * Server/transport phrasings meaning the provider rejected or failed the
+ * image edit operation itself (distinct from invalid local references).
+ */
+const IMAGE_EDIT_PROVIDER_FAILED_PATTERN =
+  /image_edit_provider_failed|image (generation|edit(ting)?) failed|failed to (edit|generate) (the )?image|edit_image failed|image edit (was )?rejected/i;
+
+/**
+ * Classify a chat image-edit failure from server/transport error text.
+ * Returns the stable code used for renderer localization and telemetry, or
+ * null when the error is not image-edit-specific. Quota and auth failures
+ * are never classified as image-edit failures regardless of wording.
+ */
+export function imageEditErrorCode(err: unknown): ImageEditErrorCode | null {
+  const message =
+    err instanceof Error
+      ? err.message || ""
+      : typeof err === "string"
+      ? err
+      : "";
+  if (message.length === 0) return null;
+  if (
+    /402|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i.test(
+      message
+    ) ||
+    /401|403|unauthorized|forbidden|auth(session)? expired|token expired|api[- ]?key|invalid key|permission denied/i.test(
+      message
+    )
+  ) {
+    return null;
+  }
+  if (IMAGE_EDIT_UNAVAILABLE_PATTERN.test(message)) {
+    return "image_edit_unavailable";
+  }
+  if (IMAGE_EDIT_PROVIDER_FAILED_PATTERN.test(message)) {
+    return "image_edit_provider_failed";
+  }
+  // Provider rejection of an image operation: both words present, e.g.
+  // "provider error while editing the attached image".
+  if (/provider/i.test(message) && /\bimage\b/i.test(message)) {
+    return "image_edit_provider_failed";
+  }
+  return null;
+}
+
+/**
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
@@ -196,6 +287,17 @@ export function userSafeError(err: unknown): string {
   if (err instanceof Error) {
     if (err.name === "AbortError") {
       return "Generation stopped.";
+    }
+    // Image-edit failures keep actionable, distinguishable messages instead
+    // of the provider direct-surface and generic fallbacks below. Must run
+    // BEFORE the AIProviderError branch: the server reports edit-model
+    // gaps and provider rejections through provider error messages too.
+    const imageEditCode = imageEditErrorCode(err);
+    if (imageEditCode === "image_edit_unavailable") {
+      return IMAGE_EDIT_UNAVAILABLE_SENTINEL;
+    }
+    if (imageEditCode === "image_edit_provider_failed") {
+      return IMAGE_EDIT_PROVIDER_FAILED_SENTINEL;
     }
     // AIProviderError messages are crafted to be user-safe (auth, network,
     // model-unavailable, etc.). Surface them directly instead of letting the

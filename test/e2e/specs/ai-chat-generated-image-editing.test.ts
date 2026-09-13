@@ -2,7 +2,8 @@
  * Workspace-less generated-image editing flow (E2E, task 14).
  *
  * Covers the UI-level contract of "Use as reference" on rendered generated
- * images without any workspace tools involved:
+ * images without any workspace tools involved (seeding helpers live in
+ * ../support/generatedImageSeed.ts):
  *   - a seeded history assistant message carrying
  *     `metadata.generatedImages` renders numbered image tiles with
  *     Use-as-reference / Edit actions;
@@ -15,18 +16,10 @@
  *     `metadata.generatedImageReferences` on the user turn, never surfaces a
  *     workspace_required tool card, and clears the tray on success.
  *
- * Seeding strategy (deterministic, no live image backend): the harness's
- * FakeOpenAI scenarios stream text only — there is no `delta.images`
- * scenario. A real streamed turn creates the conversation + assistant row,
- * then the spec writes valid PNG files under the redirected userData root and
- * rewrites that row's `metadata.generatedImages` via better-sqlite3 in the
- * Electron MAIN process (correct ABI; test process never loads the native
- * module). Rendering, reference resolution (GeneratedImageReferenceService
- * reads those exact files from disk) and persistence all run through the real
- * production paths.
- *
- * The full generate→edit round-trip (live/stubbed IMAGE generation) is marked
- * `test.fixme` below — see the comment on that test for what is missing.
+ * The full generate→edit round-trip and provider-request image assertions
+ * live in ai-chat-generated-image-roundtrip.test.ts (the fake server now has
+ * a "stream-generated-image" scenario and image-part hashes in its redacted
+ * request log).
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
@@ -535,35 +528,9 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     expect(persistedRefs[persistedRefs.length - 1]).toEqual(1);
   });
 
-  // TODO(task-14): enable once the FakeOpenAI harness gains an IMAGE scenario
-  // (e.g. "stream-generated-image" emitting a delta.images b64_json frame).
-  // The current fake server streams text/tool calls only, so the live
-  // generate→edit round-trip cannot run deterministically here.
-  //
-  // MANUAL VERIFICATION (performed on the feature branch): generate an image
-  // from a plain conversation, click "Use as reference" on the rendered
-  // image, send "add a dog beside the lion" and confirm (a) no
-  // workspace_required tool card appears, (b) a second image renders, and
-  // (c) selecting two images before sending yields tray badges ①② in
-  // selection order.
-  //
-  // Steps the enabled test will drive (all stubbed, no live backend):
-  // 1. setScenario("stream-generated-image"); send "draw a lion".
-  // 2. Expect one .v2-message__generated-image tile with actions visible.
-  // 3. Click "Use as reference"; assert the tray chip appears.
-  // 4. Send "add a dog beside the lion"; poll fakeAi.getRequests() and assert
-  //    the second request carries the reference (messageCount grows and the
-  //    engine logs generated_image_references) once the redacted request log
-  //    exposes reference counts.
-  // 5. Assert no workspace_required text and a SECOND image tile renders.
-  test.fixme(
-    "full generate → use-as-reference → edit round-trip",
-    async ({ aiApp, fakeAi }) => {
-      await fakeAi.setScenario("stream-text"); // placeholder until an image scenario exists
-      await createConversationWithStreamedTurn(
-        aiApp,
-        `e2e-genimg-roundtrip-${Date.now()}`
-      );
-    }
-  );
+
+  // The full generate→edit round-trip (live fake-server image output,
+  // provider-request image-part assertions, forged references, and the
+  // attach_local_images handoff flow) lives in
+  // ai-chat-generated-image-roundtrip.test.ts.
 });

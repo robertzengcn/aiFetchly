@@ -51,14 +51,6 @@ export const SCHEDULE_FAMILY = "scheduling";
  * - `converged` — full template migration complete.
  */
 export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
-  // --- Chat center (chat-first shell design §8) ----------------------------
-  {
-    surfaceId: "chat-center",
-    family: "chat",
-    template: "landing",
-    state: "converged",
-    routeNames: ["AI_Chat_Workspace"],
-  },
   // --- Insights and discovery (1) ------------------------------------------
   {
     surfaceId: "insights-home",
@@ -88,6 +80,13 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     template: "settings",
     state: "shell",
     routeNames: ["system_setting_ai_provider"],
+  },
+  {
+    surfaceId: "settings-managed-browser",
+    family: "settings",
+    template: "settings",
+    state: "shell",
+    routeNames: ["system_setting_managed_browser"],
   },
   {
     surfaceId: "settings-skills",
@@ -260,7 +259,7 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     routeNames: ["MapScraper", "GoogleMapsScraper", "YandexMapsScraper"],
     supportingTemplates: ["task-state", "results"],
   },
-  // --- Email marketing (14) --------------------------------------------------
+  // --- Email marketing (16) --------------------------------------------------
   {
     surfaceId: "email-overview",
     family: "email-marketing",
@@ -283,6 +282,21 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
     state: "shell",
     routeNames: ["BUCK_Email_TASK_LOG_LIST"],
     supportingTemplates: ["detail"],
+  },
+  {
+    surfaceId: "email-unified-send-logs",
+    family: "email-marketing",
+    template: "collection",
+    state: "shell",
+    routeNames: ["UNIFIED_EMAIL_SEND_LOG"],
+    supportingTemplates: ["detail"],
+  },
+  {
+    surfaceId: "email-unified-send-log-detail",
+    family: "email-marketing",
+    template: "detail",
+    state: "shell",
+    routeNames: ["UNIFIED_EMAIL_SEND_LOG_DETAIL"],
   },
   {
     surfaceId: "email-send-form",
@@ -446,6 +460,7 @@ export const uiMigrationRegistry: readonly UiMigrationEntry[] = [
 
 /** Explicitly out-of-scope routes with their PRD treatments (§4.2). */
 export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
+  { routeName: "AI_Chat_Workspace", reason: "parent-prd" },
   { routeName: "Dashboard", reason: "layout-parent" },
   { routeName: "home", reason: "parent-prd" },
   { routeName: "Insights", reason: "layout-parent" },
@@ -471,8 +486,9 @@ export const uiExcludedRoutes: readonly UiExcludedRoute[] = [
   { routeName: "d404", reason: "not-found" },
 ];
 
-/** Total in-scope surface count (PRD acceptance criterion 3). */
-export const IN_SCOPE_SURFACE_COUNT = 51;
+/** Total in-scope surface count, including the unified send-log surfaces
+ * (dev) and the managed-browser settings surface (this branch). */
+export const IN_SCOPE_SURFACE_COUNT = 53;
 
 /** Look up the registry entry owning a route name. */
 export function findSurfaceByRouteName(

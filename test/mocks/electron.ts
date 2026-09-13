@@ -130,7 +130,11 @@ export const app = {
   isDefaultProtocolClient(_protocol: string): boolean {
     return false;
   },
-  setAsDefaultProtocolClient(_protocol: string): boolean {
+  setAsDefaultProtocolClient(
+    _protocol: string,
+    _path?: string,
+    _args?: string[]
+  ): boolean {
     return true;
   },
   disableHardwareAcceleration(): void {

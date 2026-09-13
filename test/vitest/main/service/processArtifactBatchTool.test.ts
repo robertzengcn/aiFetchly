@@ -3,6 +3,8 @@ import type { OpenAIChatImage } from "@/api/aiChatApi";
 import type { AgentResult } from "@/entityTypes/agentTypes";
 import type { ChatV2GeneratedImageReference } from "@/entityTypes/aiChatV2Types";
 import type { ImageDetail } from "@/entityTypes/aiImageAttachmentToolTypes";
+import type { ToolExecutionResult } from "@/api/aiChatApi";
+import { normalizeToolResult } from "@/service/AIChatQueryLoop";
 import {
   GeneratedImageReferenceError,
   type AuthorizedGeneratedImageSource,
@@ -234,10 +236,7 @@ describe("ArtifactBatchProcessingService", () => {
       },
       context()
     );
-    const neither = await service.execute(
-      { instruction: "edit" },
-      context()
-    );
+    const neither = await service.execute({ instruction: "edit" }, context());
 
     expect(both.success).toBe(false);
     expect(both.result).toMatchObject({
@@ -302,9 +301,7 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
         if (source.kind !== "generated_image") throw new Error("unexpected");
         return agentResult({
           id: `task-${referenceKey(source.authorized.reference)}`,
-          images: [
-            image(`${referenceKey(source.authorized.reference)}.png`),
-          ],
+          images: [image(`${referenceKey(source.authorized.reference)}.png`)],
         });
       }
     );
@@ -322,7 +319,12 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
     const resolveWorkspace = vi.fn(async () => null);
     return {
-      deps: { resolveWorkspace, runAgent, authorizeReferences, prepareReferences },
+      deps: {
+        resolveWorkspace,
+        runAgent,
+        authorizeReferences,
+        prepareReferences,
+      },
       runAgent,
       authorizeReferences,
       prepareReferences,
@@ -350,30 +352,59 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
 
     expect(harness.resolveWorkspace).not.toHaveBeenCalled();
-    expect(harness.authorizeReferences).toHaveBeenCalledWith(
-      "conversation-1",
-      [
-        { messageId: "m1", imageIndex: 0 },
-        { messageId: "m2", imageIndex: 1 },
-      ]
-    );
+    expect(harness.authorizeReferences).toHaveBeenCalledWith("conversation-1", [
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
     expect(response.success).toBe(true);
     const result = response.result as ArtifactBatchResult;
     expect(result.status).toBe("completed");
     expect(result.completedCount).toBe(2);
     expect(result.items.map((item) => item.input)).toEqual([
-      { kind: "generated_image", reference: { messageId: "m1", imageIndex: 0 } },
-      { kind: "generated_image", reference: { messageId: "m2", imageIndex: 1 } },
+      {
+        kind: "generated_image",
+        reference: { messageId: "m1", imageIndex: 0 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "m2", imageIndex: 1 },
+      },
     ]);
     const firstInput = harness.runAgent.mock
       .calls[0][0] as ArtifactBatchWorkerInput;
     expect(firstInput.source.kind).toBe("generated_image");
     if (firstInput.source.kind === "generated_image") {
       expect(firstInput.source.authorized.absolutePath).toContain("m1");
-      expect(firstInput.source.artifact.dataUrl.startsWith("data:image/png")).toBe(
-        true
-      );
+      expect(
+        firstInput.source.artifact.dataUrl.startsWith("data:image/png")
+      ).toBe(true);
     }
+  });
+
+  it("echoes the shared instruction (trimmed, bounded) for retry reuse", async () => {
+    const harness = generatedDeps();
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      {
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+        instruction: "  add a dog beside the lion  ",
+      },
+      context()
+    );
+    const result = response.result as ArtifactBatchResult;
+    expect(result.instruction).toBe("add a dog beside the lion");
+
+    const long = await service.execute(
+      {
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+        instruction: `add a dog ${"x".repeat(600)}`,
+      },
+      context()
+    );
+    const longResult = long.result as ArtifactBatchResult;
+    expect(longResult.instruction?.length).toBe(500);
+    expect(longResult.instruction?.startsWith("add a dog ")).toBe(true);
   });
 
   it("bounds inflight provider work and keeps results in input order", async () => {
@@ -428,7 +459,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     const harness = generatedDeps();
     const events: string[] = [];
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         if (sources.length !== 1) {
           throw new Error(`expected one source, got ${sources.length}`);
         }
@@ -456,7 +490,9 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
 
     expect(response.success).toBe(true);
-    expect(events.filter((event) => event.startsWith("prepare:"))).toHaveLength(5);
+    expect(events.filter((event) => event.startsWith("prepare:"))).toHaveLength(
+      5
+    );
     const firstRunsAt = events.findIndex((event) => event.startsWith("run:"));
     expect(events.slice(0, firstRunsAt)).toHaveLength(3);
     expect(events.indexOf("run:message-0")).toBeLessThan(
@@ -467,7 +503,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
   it("isolates a per-item preparation failure and reports its mapped errorCode", async () => {
     const harness = generatedDeps();
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         const failing = sources.find(
           (source) => source.reference.messageId === "message-2"
         );
@@ -548,7 +587,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
   it("emits evolving progress events with counts and no path-like strings", async () => {
     const harness = generatedDeps();
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         const failing = sources.find(
           (source) => source.reference.messageId === "message-1"
         );
@@ -575,15 +617,16 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     expect(response.success).toBe(true);
     expect(emitProgress.mock.calls.length).toBeGreaterThanOrEqual(3);
     const events = emitProgress.mock.calls.map(
-      (call) => call[0] as {
-        phase: string;
-        message: string;
-        expectedCount: number;
-        completedCount: number;
-        failedCount: number;
-        cancelledCount: number;
-        runningCount: number;
-      }
+      (call) =>
+        call[0] as {
+          phase: string;
+          message: string;
+          expectedCount: number;
+          completedCount: number;
+          failedCount: number;
+          cancelledCount: number;
+          runningCount: number;
+        }
     );
     const last = events[events.length - 1];
     expect(last.expectedCount).toBe(4);
@@ -691,6 +734,163 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
       error: expect.stringContaining("Too many generated image references"),
     });
   });
+
+  it("never leaks application paths or bytes in generated batch results", async () => {
+    const base64Fixture = "QUJDREVGR0hJSktMTU5PUg==";
+    const harness = generatedDeps();
+    harness.runAgent.mockImplementation(
+      async ({ source }: { source: ArtifactBatchWorkerSource }) => {
+        if (source.kind !== "generated_image") throw new Error("unexpected");
+        return agentResult({
+          id: `task-${referenceKey(source.authorized.reference)}`,
+          images: [
+            {
+              type: "image",
+              delivery: "local_file",
+              url: "aifetchly-generated-image://local/u/c/m1/0-out.png",
+              original_url: "https://provider.example/original.png",
+              local_path: "/tmp/app-store/u/c/m1/0-out.png",
+              file_name: "0-out.png",
+              b64_json: base64Fixture,
+              expires_at: "2026-01-01T00:00:00Z",
+              download_required: false,
+              mime_type: "image/png",
+              width: 64,
+              height: 64,
+              metadata: { internalStorageKey: "app-secret" },
+            },
+          ],
+        });
+      }
+    );
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      {
+        generatedImageReferences: refs(2),
+        instruction: "add a hat",
+        concurrency: 2,
+      },
+      context()
+    );
+
+    expect(response.success).toBe(true);
+    const result = response.result as ArtifactBatchResult;
+    for (const item of result.items) {
+      expect(item).not.toHaveProperty("outputFilePaths");
+    }
+    const serialized = JSON.stringify(response);
+    expect(serialized).not.toContain("outputFilePaths");
+    expect(serialized).not.toContain("local_path");
+    expect(serialized).not.toContain("/tmp");
+    expect(serialized).not.toContain("data:image/");
+    expect(serialized).not.toContain(base64Fixture);
+    expect(serialized).not.toContain("original_url");
+    expect(serialized).not.toContain("expires_at");
+    expect(serialized).not.toContain("app-store");
+    expect(result.items[0].outputImages).toEqual([
+      {
+        url: "aifetchly-generated-image://local/u/c/m1/0-out.png",
+        file_name: "0-out.png",
+        mime_type: "image/png",
+        width: 64,
+        height: 64,
+        delivery: "local_file",
+      },
+    ]);
+    expect(result.outputImages).toEqual([
+      result.items[0].outputImages[0],
+      result.items[1].outputImages[0],
+    ]);
+  });
+
+  it("keeps workspace batch paths on the legacy contract", async () => {
+    const deps: ArtifactBatchProcessingDeps = {
+      resolveWorkspace: vi.fn(async () => ({ rootPath: "/workspace" })),
+      runAgent: vi.fn(
+        async ({ source }: { source: ArtifactBatchWorkerSource }) => {
+          if (source.kind !== "workspace_file") throw new Error("unexpected");
+          return agentResult({
+            id: `task-${source.file}`,
+            images: [image(`${source.file}.png`)],
+          });
+        }
+      ),
+    };
+    const service = new ArtifactBatchProcessingService(deps);
+
+    const response = await service.execute(
+      { files: ["a.jpg"], instruction: "edit" },
+      context()
+    );
+
+    expect(response.success).toBe(true);
+    const result = response.result as ArtifactBatchResult;
+    expect(result.outputFilePaths).toEqual(["/generated/a.jpg.png"]);
+    expect(
+      result.outputFilePaths?.some((path) => path.startsWith("/tmp"))
+    ).toBe(false);
+    expect(result.items[0].input).toEqual({
+      kind: "workspace_file",
+      path: "a.jpg",
+    });
+    if (!("outputFilePaths" in result.items[0])) {
+      throw new Error("workspace items must carry outputFilePaths");
+    }
+    expect(result.items[0].outputFilePaths).toEqual(["/generated/a.jpg.png"]);
+  });
+
+  it("normalizeToolResult spread of a sanitized generated payload stays clean", async () => {
+    const base64Fixture = "QUJDREVGR0hJSktMTU5PUw==";
+    const harness = generatedDeps();
+    harness.runAgent.mockImplementation(
+      async ({ source }: { source: ArtifactBatchWorkerSource }) => {
+        if (source.kind !== "generated_image") throw new Error("unexpected");
+        return agentResult({
+          id: `task-${referenceKey(source.authorized.reference)}`,
+          images: [
+            {
+              type: "image",
+              delivery: "local_file",
+              url: "aifetchly-generated-image://local/u/c/m9/9-out.png",
+              local_path: "/tmp/app-store/u/c/m9/9-out.png",
+              file_name: "9-out.png",
+              b64_json: base64Fixture,
+              original_url: "https://provider.example/original.png",
+              metadata: { internalStorageKey: "app-secret" },
+              mime_type: "image/png",
+              width: 32,
+              height: 32,
+            },
+          ],
+        });
+      }
+    );
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      { generatedImageReferences: refs(1), instruction: "edit" },
+      context()
+    );
+
+    const toolResult: ToolExecutionResult = {
+      tool_call_id: "call-1",
+      tool_name: "process_artifact_batch",
+      success: response.success,
+      result: response.result as unknown as Record<string, unknown>,
+      execution_time_ms: 5,
+    };
+    const normalized = normalizeToolResult(toolResult);
+    const serialized = JSON.stringify(normalized);
+    expect(serialized).not.toContain("outputFilePaths");
+    expect(serialized).not.toContain("local_path");
+    expect(serialized).not.toContain("/tmp");
+    expect(serialized).not.toContain("data:image/");
+    expect(serialized).not.toContain(base64Fixture);
+    expect(serialized).not.toContain("original_url");
+    expect(serialized).not.toContain("app-store");
+    expect(normalized.success).toBe(true);
+  });
 });
 
 describe("PROCESS_ARTIFACT_BATCH_TOOL", () => {
@@ -735,6 +935,198 @@ describe("PROCESS_ARTIFACT_BATCH_TOOL", () => {
   });
 
   it("returns no preview without a recognizable source", () => {
-    expect(PROCESS_ARTIFACT_BATCH_TOOL.buildPermissionPreview?.({})).toBeUndefined();
+    expect(
+      PROCESS_ARTIFACT_BATCH_TOOL.buildPermissionPreview?.({})
+    ).toBeUndefined();
+  });
+});
+
+describe("ArtifactBatchProcessingService user-confirmed reference staging", () => {
+  function authorizedFor(
+    reference: ChatV2GeneratedImageReference
+  ): AuthorizedGeneratedImageSource {
+    return {
+      reference,
+      conversationId: "conversation-1",
+      sourceMessageId: reference.messageId,
+      protocolUrl: `aifetchly-generated-image://local/u/c/${reference.messageId}/${reference.imageIndex}.png`,
+      fileName: `${reference.messageId}-${reference.imageIndex}.png`,
+      absolutePath: `/store/u/c/${reference.messageId}/${reference.imageIndex}.png`,
+    };
+  }
+
+  function artifactFor(
+    authorized: AuthorizedGeneratedImageSource,
+    detail: ImageDetail
+  ): PreparedGeneratedImageArtifact {
+    return {
+      reference: authorized.reference,
+      fileName: authorized.fileName,
+      mimeType: "image/png",
+      width: 64,
+      height: 64,
+      preparedSizeBytes: 128,
+      dataUrl: `data:image/png;base64,${authorized.reference.messageId}:${authorized.reference.imageIndex}`,
+      detail,
+    };
+  }
+
+  function stagedHarness(
+    stagedQueue: Array<readonly ChatV2GeneratedImageReference[] | null>
+  ): {
+    deps: ArtifactBatchProcessingDeps;
+    runAgent: ReturnType<typeof vi.fn>;
+    authorizeReferences: ReturnType<typeof vi.fn>;
+    consumeConfirmedReferences: ReturnType<typeof vi.fn>;
+  } {
+    const runAgent = vi.fn(
+      async ({ source }: { source: ArtifactBatchWorkerSource }) => {
+        if (source.kind !== "generated_image") throw new Error("unexpected");
+        const ref = source.authorized.reference;
+        return agentResult({
+          id: `task-${ref.messageId}-${ref.imageIndex}`,
+          images: [image(`${ref.messageId}-${ref.imageIndex}.png`)],
+        });
+      }
+    );
+    const authorizeReferences = vi.fn(
+      async (
+        _conversationId: string,
+        references: readonly ChatV2GeneratedImageReference[]
+      ) => references.map((ref) => authorizedFor(ref))
+    );
+    const consumeConfirmedReferences = vi.fn(
+      (_conversationId: string) => stagedQueue.shift() ?? null
+    );
+    return {
+      deps: {
+        resolveWorkspace: vi.fn(async () => null),
+        runAgent,
+        authorizeReferences,
+        prepareReferences: vi.fn(
+          async (
+            sources: readonly AuthorizedGeneratedImageSource[],
+            detail: ImageDetail
+          ) => sources.map((source) => artifactFor(source, detail))
+        ),
+        consumeConfirmedReferences,
+      },
+      runAgent,
+      authorizeReferences,
+      consumeConfirmedReferences,
+    };
+  }
+
+  it("a staged confirmed set wins over conflicting model args, order and identity verbatim", async () => {
+    const confirmedSet: ChatV2GeneratedImageReference[] = [
+      { messageId: "confirmed-b", imageIndex: 7 },
+      { messageId: "confirmed-a", imageIndex: 3 },
+    ];
+    const modelArgs = [
+      { messageId: "model-x", imageIndex: 0 },
+      { messageId: "model-y", imageIndex: 1 },
+    ];
+    const harness = stagedHarness([confirmedSet]);
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      { generatedImageReferences: modelArgs, instruction: "edit all" },
+      context()
+    );
+
+    // The staged set — not the model's array — was consumed and authorized.
+    expect(harness.consumeConfirmedReferences).toHaveBeenCalledTimes(1);
+    expect(harness.consumeConfirmedReferences).toHaveBeenCalledWith(
+      "conversation-1"
+    );
+    expect(harness.authorizeReferences).toHaveBeenCalledTimes(1);
+    expect(harness.authorizeReferences).toHaveBeenCalledWith(
+      "conversation-1",
+      confirmedSet
+    );
+
+    expect(response.success).toBe(true);
+    const result = response.result as ArtifactBatchResult;
+    expect(result.status).toBe("completed");
+    expect(result.completedCount).toBe(2);
+    // Order + identity of the confirmed set preserved verbatim into results.
+    expect(result.items.map((item) => item.input)).toEqual([
+      {
+        kind: "generated_image",
+        reference: { messageId: "confirmed-b", imageIndex: 7 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "confirmed-a", imageIndex: 3 },
+      },
+    ]);
+    for (const call of harness.runAgent.mock.calls as unknown as [
+      ArtifactBatchWorkerInput
+    ][]) {
+      expect(call[0].source.kind).toBe("generated_image");
+      if (call[0].source.kind === "generated_image") {
+        expect(confirmedSet).toContainEqual(
+          call[0].source.authorized.reference
+        );
+        expect(modelArgs).not.toContainEqual(
+          call[0].source.authorized.reference
+        );
+      }
+    }
+  });
+
+  it("falls back to model-supplied references when nothing is staged", async () => {
+    const modelArgs = [
+      { messageId: "model-x", imageIndex: 0 },
+      { messageId: "model-y", imageIndex: 4 },
+    ];
+    const harness = stagedHarness([]);
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      { generatedImageReferences: modelArgs, instruction: "edit" },
+      context()
+    );
+
+    expect(harness.consumeConfirmedReferences).toHaveBeenCalledTimes(1);
+    expect(response.success).toBe(true);
+    const result = response.result as ArtifactBatchResult;
+    expect(result.items.map((item) => item.input)).toEqual([
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-x", imageIndex: 0 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-y", imageIndex: 4 },
+      },
+    ]);
+  });
+
+  it("consume is one-shot: the second execute sees no staged set and uses model refs", async () => {
+    const confirmedSet: ChatV2GeneratedImageReference[] = [
+      { messageId: "confirmed-only", imageIndex: 9 },
+    ];
+    const modelArgs = [{ messageId: "model-z", imageIndex: 1 }];
+    const harness = stagedHarness([confirmedSet]);
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    await service.execute(
+      { generatedImageReferences: modelArgs, instruction: "edit" },
+      context()
+    );
+    const second = await service.execute(
+      { generatedImageReferences: modelArgs, instruction: "edit again" },
+      context()
+    );
+
+    expect(harness.consumeConfirmedReferences).toHaveBeenCalledTimes(2);
+    const secondResult = second.result as ArtifactBatchResult;
+    expect(secondResult.items.map((item) => item.input)).toEqual([
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-z", imageIndex: 1 },
+      },
+    ]);
   });
 });

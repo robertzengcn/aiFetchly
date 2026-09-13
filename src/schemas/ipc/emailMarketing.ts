@@ -1,9 +1,27 @@
-import { z } from 'zod'
-import { lazySchema } from '@/utils/lazySchema'
-import { itemSearchParamSchema } from '@/schemas/ipc/_shared/pagination'
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
+import { itemSearchParamSchema } from "@/schemas/ipc/_shared/pagination";
 
 /** LIST handlers (TPL/FILTER/SERVICE): pagination */
-export const emailMarketingListInputSchema = itemSearchParamSchema
+export const emailMarketingListInputSchema = itemSearchParamSchema;
+
+/**
+ * EMAILSERVICEEXPORT: optional format enum; renderer may send {}.
+ */
+export const emailServiceExportInputSchema = lazySchema(() =>
+  z.strictObject({
+    format: z.enum(["csv", "json"]).optional(),
+  })
+);
+
+/**
+ * EMAILSERVICEIMPORT: the renderer sends no data — the file path is chosen
+ * via the native open dialog in the main process. An empty strict object
+ * validates that no unexpected payload crosses the boundary.
+ */
+export const emailServiceImportInputSchema = lazySchema(() =>
+  z.strictObject({})
+);
 
 /**
  * By-id handlers (REMOVE/DETAIL/DELETE).
@@ -14,8 +32,8 @@ export const emailMarketingListInputSchema = itemSearchParamSchema
 export const emailMarketingByIdInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.union([z.number(), z.string().min(1)]),
-  }),
-)
+  })
+);
 
 /**
  * UPDATE handlers — 3 个不同 entity 的 update，统一用 passthrough。
@@ -25,5 +43,5 @@ export const emailMarketingByIdInputSchema = lazySchema(() =>
  * schema 只保证对象非空，透传给 controller 内部消费。
  */
 export const emailMarketingUpdateInputSchema = lazySchema(() =>
-  z.object({}).passthrough(),
-)
+  z.object({}).passthrough()
+);

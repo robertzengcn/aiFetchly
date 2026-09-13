@@ -47,6 +47,26 @@ export function isEmailReplyKillSwitchOn(): boolean {
   }
 }
 
+/**
+ * Managed-browser APPLICATION RELEASE FLAG (PRD FR-SETTING-002). Separate from
+ * the user preference `managed-browser-enabled` (system_setting): this flag is
+ * the emergency rollout control. Effective enablement requires BOTH; neither
+ * can be overridden by renderer or LLM arguments. Default ON; the Token store
+ * may suspend new sessions with the explicit value "false" without rewriting
+ * the stored user preference.
+ */
+export const MANAGED_BROWSER_ENABLED_FLAG = "managed_browser_release_enabled";
+
+export function isManagedBrowserReleaseFlagEnabled(): boolean {
+  try {
+    return new Token().getValue(MANAGED_BROWSER_ENABLED_FLAG) !== "false";
+  } catch {
+    // Unreadable store: keep the release flag enabled; the user preference
+    // and remaining gates still apply.
+    return true;
+  }
+}
+
 // Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
   /* no-op: flag is read live and not cached. */

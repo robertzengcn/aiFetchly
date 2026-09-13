@@ -21,6 +21,12 @@ import {
 } from "@/service/AIImageAttachmentToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { normalizeGeneratedImageReferences } from "@/service/generatedImageReferenceNormalize";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { log } from "@/modules/Logger";
+import {
+  slimOutputImage,
+  type SlimmedOutputImage,
+} from "@/service/persistAgentImages";
 
 const PROCESSOR_IMAGE_EDIT = "image_edit";
 const DEFAULT_CONCURRENCY = 3;
@@ -71,17 +77,32 @@ interface ParsedBatchArgs {
   detail: ImageDetail;
 }
 
-interface ArtifactBatchItemResult {
+interface ArtifactBatchItemBase {
   input: ArtifactBatchInputIdentity;
   status: "completed" | "failed" | "cancelled";
   agentTaskId?: string;
-  outputFilePaths: string[];
-  outputImages: OpenAIChatImage[];
   error?: string;
   errorCode?: GeneratedImageReferenceErrorCode;
   storageWarning?: string;
   durationMs: number;
 }
+
+/** Workspace-branch item. Legacy shape retained deliberately: workspace file
+ * paths are user-visible inputs, not application-internal paths. */
+interface WorkspaceBatchItemResult extends ArtifactBatchItemBase {
+  outputFilePaths: string[];
+  outputImages: OpenAIChatImage[];
+}
+
+/** Generated-image branch item. Never carries application paths or bytes:
+ * outputFilePaths is omitted entirely and descriptors are slimmed. */
+interface GeneratedBatchItemResult extends ArtifactBatchItemBase {
+  outputImages: SlimmedOutputImage[];
+}
+
+type ArtifactBatchItemResult =
+  | WorkspaceBatchItemResult
+  | GeneratedBatchItemResult;
 
 export interface ArtifactBatchResult {
   status: "completed" | "partial" | "failed" | "cancelled";
@@ -92,8 +113,14 @@ export interface ArtifactBatchResult {
   cancelledCount: number;
   concurrency: number;
   items: ArtifactBatchItemResult[];
+  /**
+   * Safe echo of the shared batch instruction (trimmed, ≤500 chars) so the
+   * renderer's Retry-failed action can resubmit exactly the original
+   * instruction without the model reconstructing it.
+   */
+  instruction?: string;
   outputFilePaths?: string[];
-  outputImages?: OpenAIChatImage[];
+  outputImages?: Array<OpenAIChatImage | SlimmedOutputImage>;
 }
 
 export interface ArtifactBatchProcessingDeps {
@@ -110,6 +137,15 @@ export interface ArtifactBatchProcessingDeps {
     detail: "auto" | "low" | "high",
     signal?: AbortSignal
   ) => Promise<PreparedGeneratedImageArtifact[]>;
+  /**
+   * Trusted consume of the user-confirmed reference set staged by the IPC
+   * layer (ConfirmedBatchReferenceRegistry). Returns the confirmed list, or
+   * `null` when nothing is staged for this conversation. When a set is
+   * returned it IS the input list: model-supplied references are ignored.
+   */
+  consumeConfirmedReferences?: (
+    conversationId: string
+  ) => readonly ChatV2GeneratedImageReference[] | null;
 }
 
 interface ScheduledItem {
@@ -132,7 +168,12 @@ interface ArtifactBatchProgressSnapshot {
  * five verbatim; counters stay readable by direct consumers and tests.
  * Deliberately numbers + strings only — no paths, no references. */
 interface ArtifactBatchProgressEvent extends ArtifactBatchProgressSnapshot {
-  readonly phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  readonly phase:
+    | "queued"
+    | "running"
+    | "fetching"
+    | "extracting"
+    | "finalizing";
   readonly message: string;
   readonly progress: number;
   readonly partialCount: number;
@@ -180,7 +221,10 @@ function parseArgs(
     const files: string[] = [];
     for (const file of args.files) {
       if (typeof file !== "string" || file.trim().length === 0) {
-        return { ok: false, error: "Every `files` entry must be a path string." };
+        return {
+          ok: false,
+          error: "Every `files` entry must be a path string.",
+        };
       }
       if (!files.includes(file)) files.push(file);
     }
@@ -349,6 +393,8 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
     resolveWorkspace: (conversationId) => resolver.resolve(conversationId),
     authorizeReferences: createDefaultAuthorizeReferences(),
     prepareReferences: createDefaultPrepareReferences(),
+    consumeConfirmedReferences: (conversationId) =>
+      getConfirmedBatchReferenceRegistry().consume(conversationId),
     runAgent: async (input) => {
       // Lazy imports break the registry cycle:
       // skillsRegistry -> this tool -> AgentRuntime -> skillsRegistry.
@@ -425,22 +471,35 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
   };
 }
 
+/** Longest instruction echo kept in results — retry reuse only needs the
+ * operative text, and this keeps persisted tool results bounded. */
+const RESULT_INSTRUCTION_ECHO_MAX_CHARS = 500;
+
+function safeInstructionEcho(instruction: string): string | undefined {
+  const trimmed = instruction.trim();
+  return trimmed.length > 0
+    ? trimmed.slice(0, RESULT_INSTRUCTION_ECHO_MAX_CHARS)
+    : undefined;
+}
+
 function summarize(
   results: readonly ArtifactBatchItemResult[],
   processor: typeof PROCESSOR_IMAGE_EDIT,
-  concurrency: number
+  concurrency: number,
+  instruction: string
 ): { success: boolean; result: ArtifactBatchResult } {
   const completedCount = results.filter(
     (item) => item.status === "completed"
   ).length;
-  const failedCount = results.filter(
-    (item) => item.status === "failed"
-  ).length;
+  const failedCount = results.filter((item) => item.status === "failed").length;
   const cancelledCount = results.filter(
     (item) => item.status === "cancelled"
   ).length;
-  const outputImages = results.flatMap((item) => item.outputImages);
-  const outputFilePaths = results.flatMap((item) => item.outputFilePaths);
+  const outputImages: Array<OpenAIChatImage | SlimmedOutputImage> =
+    results.flatMap((item) => item.outputImages);
+  const outputFilePaths = results.flatMap((item) =>
+    "outputFilePaths" in item ? item.outputFilePaths : []
+  );
   const status: ArtifactBatchResult["status"] =
     cancelledCount === results.length
       ? "cancelled"
@@ -449,6 +508,7 @@ function summarize(
       : completedCount > 0
       ? "partial"
       : "failed";
+  const instructionEcho = safeInstructionEcho(instruction);
   return {
     success: completedCount > 0,
     result: {
@@ -460,6 +520,7 @@ function summarize(
       cancelledCount,
       concurrency,
       items: [...results],
+      ...(instructionEcho ? { instruction: instructionEcho } : {}),
       ...(outputFilePaths.length > 0 ? { outputFilePaths } : {}),
       ...(outputImages.length > 0 ? { outputImages } : {}),
     },
@@ -478,7 +539,6 @@ function failedReferenceItems(
   return references.map((reference) => ({
     input: { kind: "generated_image", reference },
     status: "failed",
-    outputFilePaths: [],
     outputImages: [],
     error,
     errorCode,
@@ -502,7 +562,24 @@ export class ArtifactBatchProcessingService {
     if (!parsed.ok) return { success: false, result: { error: parsed.error } };
     const batch = parsed.value;
     if (batch.source.kind === "generated_images") {
-      return this.executeGeneratedSources(batch.source.references, batch, context);
+      // Consume the user-confirmed reference set FIRST. Once present it is
+      // the authoritative input list: model-supplied generatedImageReferences
+      // are ignored entirely (they may conflict, be reordered, or omit items
+      // the user confirmed). The staged set still goes through authorization.
+      // Code-only note — never logs reference identities or user content.
+      const staged =
+        this.deps.consumeConfirmedReferences?.(context.conversationId) ?? null;
+      if (staged !== null && staged.length > 0) {
+        log.info(
+          `[process_artifact_batch] using user-confirmed reference set count=${staged.length} conversation=${context.conversationId} (model-supplied generatedImageReferences ignored)`
+        );
+        return this.executeGeneratedSources(staged, batch, context);
+      }
+      return this.executeGeneratedSources(
+        batch.source.references,
+        batch,
+        context
+      );
     }
 
     const workspace = await this.deps.resolveWorkspace(context.conversationId);
@@ -531,7 +608,13 @@ export class ArtifactBatchProcessingService {
           signal: context.signal,
         }),
     }));
-    return this.processItems(items, batch.processor, batch.concurrency, context);
+    return this.processItems(
+      items,
+      batch.processor,
+      batch.concurrency,
+      context,
+      batch.instruction
+    );
   }
 
   private async executeGeneratedSources(
@@ -551,7 +634,8 @@ export class ArtifactBatchProcessingService {
           "generated_image_reference_invalid"
         ),
         batch.processor,
-        batch.concurrency
+        batch.concurrency,
+        batch.instruction
       );
     }
     let authorizedSources: readonly AuthorizedGeneratedImageSource[];
@@ -569,13 +653,17 @@ export class ArtifactBatchProcessingService {
       return summarize(
         failedReferenceItems(references, message, code),
         batch.processor,
-        batch.concurrency
+        batch.concurrency,
+        batch.instruction
       );
     }
     const prepare =
       this.deps.prepareReferences ?? createDefaultPrepareReferences();
     const authorizedByKey = new Map(
-      authorizedSources.map((source) => [referenceKey(source.reference), source])
+      authorizedSources.map((source) => [
+        referenceKey(source.reference),
+        source,
+      ])
     );
     const items: ScheduledItem[] = references.map((reference) => ({
       identity: { kind: "generated_image", reference },
@@ -588,7 +676,11 @@ export class ArtifactBatchProcessingService {
         }
         // JIT preparation inside the bounded slot: one artifact at a time,
         // scoped to this iteration so it is collectible once runSync resolves.
-        const [artifact] = await prepare([authorized], batch.detail, context.signal);
+        const [artifact] = await prepare(
+          [authorized],
+          batch.detail,
+          context.signal
+        );
         if (!artifact) {
           throw new GeneratedImageReferenceError(
             "generated_image_reference_invalid"
@@ -604,14 +696,21 @@ export class ArtifactBatchProcessingService {
         });
       },
     }));
-    return this.processItems(items, batch.processor, batch.concurrency, context);
+    return this.processItems(
+      items,
+      batch.processor,
+      batch.concurrency,
+      context,
+      batch.instruction
+    );
   }
 
   private async processItems(
     items: readonly ScheduledItem[],
     processor: typeof PROCESSOR_IMAGE_EDIT,
     concurrency: number,
-    context: SkillExecutionContext
+    context: SkillExecutionContext,
+    instruction: string
   ): Promise<{ success: boolean; result: ArtifactBatchResult }> {
     const snapshot = {
       expectedCount: items.length,
@@ -633,7 +732,9 @@ export class ArtifactBatchProcessingService {
           ` failed=${snapshot.failedCount}` +
           ` cancelled=${snapshot.cancelledCount}` +
           ` running=${snapshot.runningCount}`,
-        progress: Math.round((settled / Math.max(1, snapshot.expectedCount)) * 100) / 100,
+        progress:
+          Math.round((settled / Math.max(1, snapshot.expectedCount)) * 100) /
+          100,
         partialCount: snapshot.completedCount,
         expectedCount: snapshot.expectedCount,
         completedCount: snapshot.completedCount,
@@ -659,17 +760,24 @@ export class ArtifactBatchProcessingService {
         if (context.signal?.aborted) {
           snapshot.cancelledCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
-            input: item.identity,
-            status: "cancelled",
-            outputFilePaths: [],
-            outputImages: [],
-            error: "Batch processing was cancelled.",
-            ...(item.identity.kind === "generated_image"
-              ? { errorCode: "generated_image_batch_cancelled" }
-              : {}),
-            durationMs: 0,
-          };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  input: item.identity,
+                  status: "cancelled",
+                  outputImages: [],
+                  error: "Batch processing was cancelled.",
+                  errorCode: "generated_image_batch_cancelled",
+                  durationMs: 0,
+                }
+              : {
+                  input: item.identity,
+                  status: "cancelled",
+                  outputFilePaths: [],
+                  outputImages: [],
+                  error: "Batch processing was cancelled.",
+                  durationMs: 0,
+                };
           continue;
         }
         const startedAt = Date.now();
@@ -678,7 +786,6 @@ export class ArtifactBatchProcessingService {
         try {
           const agent = await item.launch();
           const outputImages = agent.outputImages ?? [];
-          const outputFilePaths = agent.outputFilePaths ?? [];
           const completed =
             agent.status === "completed" && outputImages.length > 0;
           const status: ArtifactBatchItemResult["status"] = completed
@@ -691,12 +798,10 @@ export class ArtifactBatchProcessingService {
           else if (status === "cancelled") snapshot.cancelledCount += 1;
           else snapshot.failedCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
+          const base = {
             input: item.identity,
             status,
             agentTaskId: agent.agentTaskId,
-            outputFilePaths,
-            outputImages,
             ...(!completed
               ? {
                   error:
@@ -710,35 +815,55 @@ export class ArtifactBatchProcessingService {
               : {}),
             durationMs: Date.now() - startedAt,
           };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  ...base,
+                  outputImages: outputImages.map(slimOutputImage),
+                }
+              : {
+                  ...base,
+                  outputFilePaths: agent.outputFilePaths ?? [],
+                  outputImages,
+                };
         } catch (error) {
           const cancelled = context.signal?.aborted === true;
           snapshot.runningCount -= 1;
           if (cancelled) snapshot.cancelledCount += 1;
           else snapshot.failedCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
-            input: item.identity,
-            status: cancelled ? "cancelled" : "failed",
-            outputFilePaths: [],
-            outputImages: [],
-            error: error instanceof Error ? error.message : String(error),
-            ...(!cancelled && error instanceof GeneratedImageReferenceError
-              ? { errorCode: error.code }
-              : {}),
-            durationMs: Date.now() - startedAt,
-          };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  input: item.identity,
+                  status: cancelled ? "cancelled" : "failed",
+                  outputImages: [],
+                  error: error instanceof Error ? error.message : String(error),
+                  ...(!cancelled &&
+                  error instanceof GeneratedImageReferenceError
+                    ? { errorCode: error.code }
+                    : {}),
+                  durationMs: Date.now() - startedAt,
+                }
+              : {
+                  input: item.identity,
+                  status: cancelled ? "cancelled" : "failed",
+                  outputFilePaths: [],
+                  outputImages: [],
+                  error: error instanceof Error ? error.message : String(error),
+                  durationMs: Date.now() - startedAt,
+                };
         }
       }
     };
 
     await Promise.all(
-      Array.from(
-        { length: Math.min(concurrency, items.length) },
-        () => runNext()
+      Array.from({ length: Math.min(concurrency, items.length) }, () =>
+        runNext()
       )
     );
     emitProgressEvent("finalizing");
-    return summarize(results, processor, concurrency);
+    return summarize(results, processor, concurrency, instruction);
   }
 }
 

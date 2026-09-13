@@ -1,0 +1,643 @@
+/**
+ * Versioned phrase dictionaries for the deterministic outbound-email intent
+ * resolver (technical design §9.2). These are code/config data with their own
+ * tests — they are deliberately NOT part of the UI translation files.
+ *
+ * Dictionary rules:
+ *  - Phrases are matched against NFKC-normalized, lowercased,
+ *    whitespace-collapsed user text.
+ *  - Every phrase must be unambiguous on its own: a send phrase asserts the
+ *    user wants delivery NOW; a review phrase asserts the user wants to see
+ *    drafts before delivery; a negation phrase asserts no delivery.
+ *  - Longer/more-specific phrases are preferred at match time, so include
+ *    multi-word variants (e.g. "do not send" before "send").
+ *
+ * NOTE on matching safety: detection is plain substring matching after
+ * normalization. A phrase must therefore only be added when its presence in a
+ * user-authored marketing request reliably implies the intent. When in doubt,
+ * leave it out — ambiguity resolves to `draft_only`, which is the safe
+ * default (AD-001).
+ */
+
+export type OutboundIntentPhraseLang = "en" | "zh" | "es" | "fr" | "de" | "ja";
+
+/** Phrases asserting the user explicitly wants emails sent now. */
+export const SEND_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "send now",
+    "send these emails",
+    "send the emails",
+    "send this email",
+    "send these now",
+    "send them now",
+    "send it now",
+    "go ahead and send",
+    "send the campaign",
+    "send the campaign now",
+    "send the batch",
+    "send the batch now",
+    "send out the emails",
+    "send out these emails",
+    "email them now",
+    "email these contacts now",
+    "immediately send",
+    "send immediately",
+    "right now send",
+    // Direct "send a/an … email" instructions: the user is asking for the send
+    // to happen, not merely to draft. "please send a test email to …" is the
+    // canonical direct-send phrasing that previously fell through to draft_only
+    // (RC2). Only add forms whose presence reliably implies send intent — see
+    // the dictionary rule above ("when in doubt, leave it out").
+    "send a test email",
+    "send an email",
+    "send a test email to",
+    "send an email to",
+    "send a email",
+    "send it to",
+    "send directly",
+    "send it directly",
+    "send them directly",
+    "send without review",
+  ],
+  zh: [
+    "立即发送",
+    "现在发送",
+    "马上发送",
+    "直接发送",
+    "发送这些邮件",
+    "把这些邮件发出去",
+    "把邮件发出去",
+    "现在就发",
+    "立即发出",
+    "现在发出",
+    "直接发出去",
+  ],
+  es: [
+    "envía estos correos",
+    "envia estos correos",
+    "envía los correos",
+    "envia los correos",
+    "envíalos ahora",
+    "envialos ahora",
+    "envía ahora",
+    "envia ahora",
+    "mandar los correos ahora",
+    "manda los correos ahora",
+    "envíalo ahora",
+    "envialo ahora",
+  ],
+  fr: [
+    "envoie ces e-mails",
+    "envoie ces emails",
+    "envoie les e-mails",
+    "envoie les emails",
+    "envoie-les maintenant",
+    "envoie maintenant",
+    "envoyer maintenant",
+    "envoyer ces e-mails maintenant",
+    "envoie tout de suite",
+  ],
+  de: [
+    "sende diese e-mails",
+    "sende diese emails",
+    "sende die e-mails",
+    "sende die emails",
+    "sende sie jetzt",
+    "sende jetzt",
+    "schicke die e-mails jetzt",
+    "schicke sie jetzt",
+    "sende sie sofort",
+    "verschicke die e-mails jetzt",
+  ],
+  ja: [
+    "今すぐ送信",
+    "今すぐこれらのメールを送信",
+    "これらのメールを送信して",
+    "メールを送信して",
+    "送信してください",
+    "今すぐメールを送って",
+    "メールを送って",
+    "直ちに送信",
+    "送信を開始して",
+  ],
+};
+
+/**
+ * Phrases asserting the user wants to compose/write an email. These are NOT
+ * send instructions on their own ("write an email" drafts). They authorize
+ * send_now only when combined with {@link SKIP_REVIEW_PHRASES}.
+ */
+export const COMPOSE_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "create a test email",
+    "create an email",
+    "create a test email to",
+    "create an email to",
+    "write a test email",
+    "write an email",
+    "write a test email to",
+    "write an email to",
+    "compose a test email",
+    "compose an email",
+  ],
+  zh: [
+    "写一封测试邮件",
+    "写一封邮件",
+    "写测试邮件",
+    "写封测试邮件",
+    "写封邮件",
+    "创建一封测试邮件",
+    "创建测试邮件",
+  ],
+  es: [
+    "escribe un correo de prueba",
+    "escribe un email de prueba",
+    "escribe un correo",
+    "escribe un email",
+    "redacta un correo",
+  ],
+  fr: [
+    "écris un e-mail de test",
+    "ecris un e-mail de test",
+    "écris un email de test",
+    "ecris un email de test",
+    "écris un e-mail",
+    "ecris un email",
+    "rédige un e-mail",
+  ],
+  de: [
+    "schreibe eine test-email",
+    "schreibe eine test-e-mail",
+    "schreibe eine e-mail",
+    "schreibe eine email",
+    "verfasse eine e-mail",
+  ],
+  ja: [
+    "テストメールを書いて",
+    "テストメールを書いてください",
+    "メールを書いて",
+    "メールを書いてください",
+    "メールを作成して",
+  ],
+};
+
+/**
+ * Phrases asserting the user explicitly waived Review before send.
+ * Leading-space latin forms (" directly") match "send it to bob directly"
+ * without matching the substring inside "indirectly". Skip-review alone
+ * never authorizes a send — it must combine with a send or compose phrase.
+ */
+export const SKIP_REVIEW_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "without review",
+    "without a review",
+    "skip review",
+    "skip the review",
+    "no review needed",
+    "no need to review",
+    "don't review",
+    "do not review",
+    "dont review",
+    "send directly",
+    "send it directly",
+    "send them directly",
+    "send without review",
+    "directly without review",
+    "directly, without review",
+    " directly",
+  ],
+  zh: [
+    "无需审核",
+    "不用审核",
+    "不需要审核",
+    "跳过审核",
+    "无需审阅",
+    "不用审阅",
+    "不用预览",
+    "无需预览",
+    "跳过预览",
+    "不用检查",
+    "直接发送",
+    "直接发出去",
+    "直接",
+  ],
+  es: [
+    "sin revisión",
+    "sin revision",
+    "sin revisar",
+    "omite la revisión",
+    "omite la revision",
+    "envía directamente",
+    "envia directamente",
+    "enviar directamente",
+    "envíalo directamente",
+    "envialo directamente",
+    " directamente",
+  ],
+  fr: [
+    "sans révision",
+    "sans revision",
+    "sans relecture",
+    "sans vérifier",
+    "sans verifier",
+    "envoie directement",
+    "envoyer directement",
+    "envoie-le directement",
+    " directement",
+  ],
+  de: [
+    "ohne prüfung",
+    "ohne review",
+    "ohne überprüfung",
+    "überspringe die prüfung",
+    "ueberspringe die pruefung",
+    "direkt senden",
+    "sende direkt",
+    "ohne zu prüfen senden",
+    " direkt",
+  ],
+  ja: [
+    "確認なし",
+    "レビューなし",
+    "確認せずに",
+    "レビューせず",
+    "確認をスキップ",
+    "直接送信",
+    "確認なしで送信",
+    "直接",
+  ],
+};
+
+/**
+ * Phrases asserting the user wants to inspect/approve drafts before anything
+ * is sent. Review always overrides a send phrase (AD-002).
+ */
+export const REVIEW_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "let me review",
+    "let me see",
+    "show me first",
+    "show me the emails first",
+    "show me before sending",
+    "for review",
+    "for my review",
+    "before sending",
+    "before you send",
+    "review before",
+    "review them first",
+    "review it first",
+    "wait for my approval",
+    "wait for approval",
+    "i want to review",
+    "i want to check",
+    "let me check",
+    "let me approve",
+    "draft them for review",
+    "draft first",
+    "prepare for review",
+    "hold for review",
+  ],
+  zh: [
+    "发送前让我",
+    "让我先看看",
+    "让我先审",
+    "让我审核",
+    "先给我看看",
+    "等我确认",
+    "等我确认后再发",
+    "审核后再发",
+    "先确认再发",
+    "先审核",
+    "需要我确认",
+    "先草稿",
+    "先给我审阅",
+    "我确认后再发送",
+  ],
+  es: [
+    "quiero revisar",
+    "déjame revisar",
+    "dejame revisar",
+    "déjame ver",
+    "dejame ver",
+    "antes de enviar",
+    "revisar antes",
+    "para mi revisión",
+    "para mi revision",
+    "espera mi aprobación",
+    "espera mi aprobacion",
+    "muestrame primero",
+    "muéstrame primero",
+    "primero reviso",
+  ],
+  fr: [
+    "je veux vérifier",
+    "je veux verifier",
+    "laissez-moi vérifier",
+    "laissez-moi verifier",
+    "laisse-moi voir",
+    "avant l'envoi",
+    "avant envoi",
+    "vérifier avant",
+    "verifier avant",
+    "pour ma vérification",
+    "pour ma verification",
+    "attends ma validation",
+    "attends mon approbation",
+    "montre-moi d'abord",
+  ],
+  de: [
+    "ich möchte sie prüfen",
+    "ich möchte sie pruefen",
+    "ich will sie prüfen",
+    "ich will sie pruefen",
+    "lass mich prüfen",
+    "lass mich pruefen",
+    "lass mich sehen",
+    "bevor du sendest",
+    "vor dem senden",
+    "zum prüfen",
+    "zum pruefen",
+    "warte auf meine freigabe",
+    "zeige sie mir zuerst",
+    "erst prüfen",
+  ],
+  ja: [
+    "送信前に確認",
+    "送信前に見せて",
+    "確認させて",
+    "確認してから送信",
+    "私が確認",
+    "レビューしてから",
+    "承認を待って",
+    "私の承認",
+    "確認したい",
+    "まず見せて",
+  ],
+};
+
+/**
+ * Phrases asserting the user does NOT want anything sent. Negation always
+ * overrides a send phrase (AD-002) and wins over review wording as well —
+ * nothing goes out at all.
+ */
+export const NEGATION_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "don't send",
+    "dont send",
+    "do not send",
+    "don't send yet",
+    "do not send yet",
+    "don't send them",
+    "do not send them",
+    "don't send it",
+    "do not send it",
+    "no emails",
+    "don't email",
+    "do not email",
+    "not yet",
+    "hold off",
+    "hold off on sending",
+    "stop sending",
+    "don't send anything",
+    "do not send anything",
+    "never send",
+    "without sending",
+  ],
+  zh: [
+    "不要发送",
+    "先不要发",
+    "暂不发送",
+    "暂时不要发送",
+    "先别发",
+    "别发送",
+    "不发邮件",
+    "不要发邮件",
+    "停止发送",
+    "还不能发送",
+    "尚不要发送",
+  ],
+  es: [
+    "no envíes",
+    "no envies",
+    "no lo envíes",
+    "no lo envies",
+    "no los envíes",
+    "no los envies",
+    "no enviar todavía",
+    "no enviar todavia",
+    "aún no",
+    "aun no",
+    "no mandes",
+    "detén el envío",
+    "deten el envio",
+    "sin enviar",
+  ],
+  fr: [
+    "n'envoie pas",
+    "n'envoie pas encore",
+    "ne pas envoyer",
+    "ne rien envoyer",
+    "pas encore",
+    "n'envoie rien",
+    "arrête l'envoi",
+    "arrete l'envoi",
+    "sans envoyer",
+    "n'envoie surtout pas",
+  ],
+  de: [
+    "nicht senden",
+    "nicht versenden",
+    "sende nicht",
+    "sende noch nicht",
+    "noch nicht senden",
+    "schicke nicht",
+    "schicke nichts",
+    "nichts senden",
+    "versende nicht",
+    "ohne zu senden",
+    "senden stoppen",
+  ],
+  ja: [
+    "送信しないで",
+    "送らないで",
+    "まだ送らないで",
+    "送信はまだ",
+    "送るな",
+    "送信中止",
+    "まだ送信しない",
+    "送信しないこと",
+  ],
+};
+
+/**
+ * Short affirmative replies that may authorize a send ONLY when the
+ * immediately preceding assistant message asked a single explicit
+ * send-confirmation question (technical design §9.2 stage 6, §9.4).
+ */
+export const AFFIRMATION_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
+  en: [
+    "yes",
+    "yes, send it",
+    "yes, please send it",
+    "yes please send it",
+    "yes send",
+    "please send it",
+    "confirmed",
+    "confirm",
+    "go ahead",
+    "ok send",
+    "approve",
+    "approved",
+    "sure",
+    "send them",
+  ],
+  zh: [
+    "是",
+    "是的",
+    "好",
+    "好的",
+    "可以",
+    "确认",
+    "发吧",
+    "发送吧",
+    "同意",
+    "没问题",
+    "确认发送",
+  ],
+  es: [
+    "sí",
+    "si",
+    "sí, envíalos",
+    "si, envialos",
+    "confirmo",
+    "confirmar",
+    "claro",
+    "vale",
+    "envíalos",
+    "envialos",
+    "adelante",
+  ],
+  fr: [
+    "oui",
+    "oui, envoie",
+    "confirme",
+    "confirmer",
+    "d'accord",
+    "d'accord, envoie",
+    "envoie",
+    "vas-y",
+    "c'est bon",
+    "ça marche",
+    "ca marche",
+  ],
+  de: [
+    "ja",
+    "ja, sende",
+    "bestätigt",
+    "bestatigt",
+    "bestätigen",
+    "bestatigen",
+    "ok sende",
+    "gerne",
+    "schick sie",
+    "sende sie",
+    "einverstanden",
+  ],
+  ja: [
+    "はい",
+    "うん",
+    "確認しました",
+    "承認",
+    "承認します",
+    "送って",
+    "送信して",
+    "いいです",
+    "お願いします",
+    "進めて",
+  ],
+};
+
+/**
+ * Substrings that mark the previous assistant message as an explicit
+ * send-confirmation question (§9.2 stage 6). The prior message must BOTH
+ * contain one of these AND look like a question (or be an imperative
+ * confirmation request) for a short affirmation to authorize anything.
+ */
+export const CONFIRMATION_QUESTION_MARKERS: Record<
+  OutboundIntentPhraseLang,
+  string[]
+> = {
+  en: [
+    "send batch",
+    "send the batch",
+    "send these emails",
+    "send the emails",
+    "send now",
+    "confirm to send",
+    "shall i send",
+    "should i send",
+    "do you want me to send",
+    "ready to send",
+    // After review_required, the model presents the draft and asks the user
+    // to approve. Those phrasings must count as a send-confirmation question
+    // so "yes, send it" authorizes delivery (chat confirmation, not a tool
+    // argument). Do NOT add bare "review" — "The drafts are ready for your
+    // review." must remain a non-question.
+    "review and approve",
+    "please review and approve",
+    "click review",
+    'click "review"',
+    "explicit approval",
+    "approve this draft",
+    "approve the draft",
+    "before it can be sent",
+    "requires your explicit approval",
+    "requires you to click",
+  ],
+  zh: [
+    "发送吗",
+    "发送吗？",
+    "现在发送",
+    "确认发送",
+    "是否发送",
+    "可以发送",
+    "要发送",
+    "发送这些邮件吗",
+  ],
+  es: [
+    "¿envío",
+    "envio batch",
+    "enviar ahora",
+    "¿confirmas el envío",
+    "¿enviar",
+    "confirmar el envío",
+    "envío ahora",
+  ],
+  fr: [
+    "envoyer ?",
+    "envoyer maintenant",
+    "confirmer l'envoi",
+    "je dois envoyer",
+    "puis-je envoyer",
+    "on envoie",
+    "envoyer le batch",
+  ],
+  de: [
+    "senden?",
+    "jetzt senden",
+    "soll ich senden",
+    "senden bestätigen",
+    "versenden?",
+    "batch senden",
+    "sollen ich senden",
+    "senden wir",
+  ],
+  ja: [
+    "送信しますか",
+    "送信してもよろしい",
+    "送信してよい",
+    "送信します？",
+    "今すぐ送信しますか",
+    "送信してもいい",
+  ],
+};

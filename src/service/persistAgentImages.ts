@@ -31,6 +31,34 @@ export interface PersistAgentImagesResult {
   storageWarning?: string;
 }
 
+/** Tool-result-safe descriptor for a persisted output image: protocol URL +
+ * display metadata only. Never carries local_path, b64_json, original_url,
+ * metadata, or expires_at. */
+export interface SlimmedOutputImage {
+  url?: string;
+  file_name?: string;
+  mime_type?: string;
+  width?: number | null;
+  height?: number | null;
+  delivery?: string;
+}
+
+/**
+ * Reduce an image descriptor to its tool-result-safe fields, dropping
+ * local_path, b64_json, original_url, metadata, and expires_at so application
+ * paths and bytes never cross the tool-result boundary.
+ */
+export function slimOutputImage(image: OpenAIChatImage): SlimmedOutputImage {
+  const slimmed: SlimmedOutputImage = {};
+  if (image.url !== undefined) slimmed.url = image.url;
+  if (image.file_name !== undefined) slimmed.file_name = image.file_name;
+  if (image.mime_type !== undefined) slimmed.mime_type = image.mime_type;
+  if (image.width !== undefined) slimmed.width = image.width;
+  if (image.height !== undefined) slimmed.height = image.height;
+  if (image.delivery !== undefined) slimmed.delivery = image.delivery;
+  return slimmed;
+}
+
 /**
  * Persist a sub-agent's edited images to local storage and derive the
  * path/descriptor outputs for {@link AgentResult}. Bytes are never persisted

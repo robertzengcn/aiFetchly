@@ -1,22 +1,54 @@
 import { ipcMain } from "electron";
+import {
+  AIChatTurnQueueService,
+  AIChatTurnQueueError,
+  createSteeringPromoter,
+} from "@/service/AIChatTurnQueueService";
+import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import {
+  AI_CHAT_MESSAGE_QUEUE_ENABLED,
+  AI_CHAT_MESSAGE_STEERING_ENABLED,
+} from "@/config/usersetting";
+import {
+  aiChatPendingCreateInputSchema,
+  aiChatPendingListInputSchema,
+  aiChatPendingSteerInputSchema,
+  aiChatPendingCancelInputSchema,
+  aiChatPendingResumeInputSchema,
+} from "@/schemas/ipc/aiChatPendingMessage";
+import {
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+} from "@/config/channellist";
+import type { ZodType } from "zod/v4";
+import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
-import {
-  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
-  normalizeGeneratedImageReferences,
-} from "@/service/generatedImageReferenceNormalize";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import { getSharedLightweightCompletionService } from "@/service/AIChatLightweightCompletionFactory";
+import {
+  getSharedLightweightCompletionService,
+  resetLightweightRuntime,
+} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
@@ -70,17 +102,32 @@ import type {
   ChatV2UploadedAttachment,
   ChatV2AttachmentKind,
   ChatToolApprovalMode,
+  ChatV2GeneratedImageReference,
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
+import {
+  normalizeGeneratedImageReferences,
+  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+  GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+} from "@/service/generatedImageReferenceNormalize";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+
+/** Cap for the user-confirmed batch reference set. Matches the batch tool's
+ * MAX_BATCH_ITEMS so a confirmed set is never rejected downstream. */
+const CONFIRMED_BATCH_MAX_REFERENCES = 50;
 
 /**
  * Minimal structural type for the IPC event object.
  * Mirrors the inline cast pattern used in ai-chat-ipc.ts (v1 handler).
  */
 type IpcEventLike = {
-  sender: { send: (channel: string, message: string) => void };
+  sender: {
+    isDestroyed?: () => boolean;
+    send: (channel: string, message: string) => void;
+  };
 };
 
 // -------------------------------------------------------------------------
@@ -89,11 +136,6 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
-/**
- * Per-request image budget shared by generated-image references and uploaded
- * image attachments (PRD §12.4 — mirrors the composer tray limit).
- */
-const MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST = 3;
 /** Shared model catalog for auto-compact context-window lookups. The catalog
  * caches the /api/ai/v1/models response in-process, so the lookup is free
  * after the first fetch. Provider-level state — not DB-bound. */
@@ -163,6 +205,13 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   if (queryEngine) {
     queryEngine.stopActiveTurn();
   }
+  if (queueService) {
+    // Rows stay durable in each database; only in-memory drain chains and
+    // event associations are dropped (message-queue design §16.2). The next
+    // database runs its own recovery on first use.
+    queueService = null;
+  }
+  queueServiceRecovered = false;
   queryEngine = null;
   compactAgent = null;
   queryEngineDbPath = null;
@@ -172,6 +221,12 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
+  // Clear the shared lightweight route cooldowns so one account/provider
+  // cannot suppress another (tech-design §12).
+  resetLightweightRuntime();
+  // Staged confirmed reference sets belong to the previous account's
+  // conversations; drop them so they can never feed a new account's batch.
+  getConfirmedBatchReferenceRegistry().clearAll();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -188,14 +243,19 @@ function getCompactAgent(): AIChatCompactAgentService {
       compactModelCatalog = new AIChatModelCatalogService();
     }
     compactAgent = new AIChatCompactAgentService(tokenService, {
-      // Session-memory summaries and hierarchical compact run through the
-      // shared small-model router (kill-switch gated; optional background
-      // workloads never fall back to the normal model — tech-design §8.1).
+      // Route session-memory and full-compact workloads through the shared
+      // lightweight completion service so the hosted provider (when the kill
+      // switch is enabled) sends model: "small" (tech-design §5.2).
       completeLightweight: (input) =>
         getSharedLightweightCompletionService().complete(input),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
+      // Capability gate for full compact: absent metadata means the small
+      // route is not eligible and compact goes to the normal model
+      // (tech-design §16.1).
+      getSmallModelCapability: () =>
+        compactModelCatalog!.getSmallModelCapability(),
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
@@ -229,10 +289,85 @@ export function getQueryEngine(): AIChatQueryEngine {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+      // Turn mailboxes persist steering via the pending Module (design §10).
+      steeringPromoter: createSteeringPromoter(
+        new AIChatPendingMessageModule()
+      ),
     });
     queryEngineDbPath = dbPath;
   }
   return queryEngine;
+}
+
+// -------------------------------------------------------------------------
+// Pending-message queue service (message-queue design §9)
+// -------------------------------------------------------------------------
+
+let queueService: AIChatTurnQueueService | null = null;
+let queueServiceRecovered = false;
+
+function isQueueFeatureEnabled(): boolean {
+  return new Token().getValue(AI_CHAT_MESSAGE_QUEUE_ENABLED) !== "false";
+}
+
+function isSteeringFeatureEnabled(): boolean {
+  return (
+    isQueueFeatureEnabled() &&
+    new Token().getValue(AI_CHAT_MESSAGE_STEERING_ENABLED) !== "false"
+  );
+}
+
+/**
+ * Broadcaster-backed stream sink for queue-dispatched turns: reuses the
+ * shared createChatV2StreamSink mapping and fans it out to every live
+ * window, since queue turns start in the main process (design §14.2).
+ */
+function createBroadcastEventSink(): AIChatQueryEventSink {
+  const broadcaster = AIChatV2EventBroadcaster.getInstance();
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => broadcaster.emitStreamChunk(chunk),
+    sendComplete: (chunk) => broadcaster.emitStreamComplete(chunk),
+  });
+}
+
+function getQueueService(): AIChatTurnQueueService {
+  if (!queueService) {
+    const pendingModule = new AIChatPendingMessageModule();
+    queueService = new AIChatTurnQueueService({
+      engine: getQueryEngine(),
+      pendingModule,
+      eventSink: {
+        emit: (event) =>
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
+      },
+      streamSinkFactory: () => createBroadcastEventSink(),
+      tryAcquireLease: ({ conversationId }) =>
+        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
+          conversationId,
+          owner: "interactive",
+          ownerId: "pending-queue",
+        }),
+      isAiEnabled: () => canUseChat().ok,
+      isQueueEnabled: isQueueFeatureEnabled,
+      isSteeringEnabled: isSteeringFeatureEnabled,
+    });
+  }
+  return queueService;
+}
+
+/**
+ * Run startup/database-switch recovery exactly once per queue-service
+ * instance (design §16.1). Reconciliation only pauses/deduplicates durable
+ * rows — it never starts provider work.
+ */
+async function ensureQueueRecovered(): Promise<void> {
+  if (queueServiceRecovered) return;
+  queueServiceRecovered = true;
+  try {
+    await getQueueService().recoverOnStartup();
+  } catch (err) {
+    log.error("[ai-chat-v2] pending queue recovery failed:", err);
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -255,13 +390,46 @@ function getChatResolver(): AIProviderResolver {
   return chatResolver;
 }
 
-/** Chat availability gate shared with the workspace coordinator. */
+/**
+ * Provider-aware Chat V2 availability gate. Exported so sibling AI-chat
+ * handler files (e.g. generated-image export, workspace coordinator) enforce
+ * the SAME gate FIRST, before parsing payloads or touching the filesystem.
+ */
 export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };
   }
   return { ok: false, message: provider.message };
+}
+
+/**
+ * Async chat-availability check with a lazy entitlement reconcile (PRD FR-6.1
+ * / FR-6.2). When the denial is `hosted_subscription_required` (hosted mode +
+ * USER_AI_ENABLED off), runs one `gated_feature` reconcile (30s cooldown) then
+ * re-resolves — so a user who just paid but whose notify/cache hasn't caught
+ * up is unlocked without a remount. Local-provider mode is untouched.
+ *
+ * GET failures keep the cache, so a Community user is never falsely unlocked.
+ */
+async function canUseChatWithReconcile(): Promise<
+  { ok: true } | { ok: false; message: string }
+> {
+  const first = getChatResolver().resolveForChat();
+  if (first.canUse) {
+    return { ok: true };
+  }
+  // Only attempt a lazy reconcile for the hosted-subscription denial. Other
+  // denials (local provider misconfigured) are not entitlement problems.
+  if ("reason" in first && first.reason === "hosted_subscription_required") {
+    await ensureHostedAiEnabled();
+    const second = getChatResolver().resolveForChat();
+    if (second.canUse) {
+      return { ok: true };
+    }
+    return { ok: false, message: second.message };
+  }
+  return { ok: false, message: first.message };
 }
 
 /**
@@ -304,7 +472,28 @@ function sendChunk(
   chunk: ChatV2StreamChunk,
   channel: string = AI_CHAT_V2_STREAM_CHUNK
 ): void {
-  event.sender.send(channel, JSON.stringify(chunk));
+  sendToRenderer(event, channel, JSON.stringify(chunk));
+}
+
+function sendToRenderer(
+  event: IpcEventLike,
+  channel: string,
+  message: string
+): void {
+  if (event.sender.isDestroyed?.()) {
+    return;
+  }
+
+  try {
+    event.sender.send(channel, message);
+  } catch (error) {
+    // The renderer can be destroyed between isDestroyed() and send(). That is
+    // expected during window/app shutdown and must not become a chat error.
+    if (error instanceof Error && error.message === "Object has been destroyed") {
+      return;
+    }
+    throw error;
+  }
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
@@ -317,7 +506,11 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
       chunk.errorMessage ? "yes" : "no"
     }`
   );
-  event.sender.send(AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
+  sendToRenderer(
+    event,
+    AI_CHAT_V2_STREAM_COMPLETE,
+    JSON.stringify(chunk)
+  );
 }
 
 /**
@@ -338,12 +531,15 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
 
 /** Stream request validation shared with the workspace coordinator. */
 export function validateStreamRequest(
-  req: Partial<ChatV2StreamRequest>,
-  generatedImageReferenceCount = 0
+  req: Partial<ChatV2StreamRequest>
 ): string | null {
   const hasFiles =
     Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
-  const hasReferences = generatedImageReferenceCount > 0;
+  // Generated-image references count as message content: the engine supplies
+  // a neutral instruction when the text is blank.
+  const hasReferences =
+    Array.isArray(req.generatedImageReferences) &&
+    req.generatedImageReferences.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
@@ -553,9 +749,142 @@ export function normalizeChatV2UploadedFiles(
 }
 
 //handleStream is the main function that handles the stream request
+/**
+ * Result of validating a chat request's generated-image fields.
+ *  - ok: the normalized fields (references possibly empty; the confirmed
+ *    batch staged into trusted main-process state when present) plus the
+ *    request with those fields replaced/stripped for engine consumption.
+ *  - !ok: a typed error to report on whichever surface the caller owns.
+ */
+type GeneratedImageValidationResult =
+  | {
+      ok: true;
+      request: ChatV2StreamRequest;
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+      errorCode?: string;
+    };
+
+/**
+ * Shared validation + trusted staging for generated-image request fields —
+ * used by BOTH the direct stream handler and the pending-message queue path
+ * (every renderer send now creates a pending row first, so the queue path
+ * must enforce the exact same contract):
+ *
+ *  1. uploaded image attachments + direct generated-image references share
+ *     one per-request budget (CHAT_IMAGE_LIMITS);
+ *  2. the user-confirmed batch reference set is normalized and STAGED into
+ *     ConfirmedBatchReferenceRegistry under the conversation id, then the
+ *     field is stripped so the stored request / engine / model never see it.
+ *
+ * Never trusts renderer-supplied shapes; rejects before any provider work.
+ */
+function validateAndStageGeneratedImageFields(
+  uploadedFiles: readonly { kind: string }[],
+  req: ChatV2StreamRequest
+): GeneratedImageValidationResult {
+  const uploadedImageCount = uploadedFiles.filter(
+    (file) => file.kind === "image"
+  ).length;
+
+  // Validate opaque generated-image references (never trust the renderer).
+  const normalizedReferences = normalizeGeneratedImageReferences(
+    req.generatedImageReferences,
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  );
+  if (!normalizedReferences.ok) {
+    return {
+      ok: false,
+      errorMessage: normalizedReferences.reason,
+      errorCode: normalizedReferences.errorCode,
+    };
+  }
+
+  // Combined image cap: uploaded image attachments + referenced generated
+  // images share one per-request budget.
+  if (
+    uploadedImageCount + normalizedReferences.references.length >
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  ) {
+    return {
+      ok: false,
+      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
+      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+    };
+  }
+
+  // User-confirmed batch reference set: normalized here and staged into
+  // trusted main-process state under this conversation's id. Staging runs
+  // AFTER every other validation so no earlier failure leaves a stale set
+  // behind, and the field is stripped from the request so the engine/model
+  // never see it.
+  const confirmedBatch = req.confirmedGeneratedImageBatch as
+    | { references?: unknown }
+    | undefined;
+  if (confirmedBatch !== undefined) {
+    const batchRecord =
+      typeof confirmedBatch === "object" &&
+      confirmedBatch !== null &&
+      !Array.isArray(confirmedBatch)
+        ? confirmedBatch
+        : undefined;
+    if (
+      !batchRecord ||
+      !Array.isArray(batchRecord.references) ||
+      typeof req.conversationId !== "string" ||
+      req.conversationId.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage:
+          "confirmedGeneratedImageBatch requires a conversationId and a non-empty references array",
+        errorCode: GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    const normalizedConfirmed = normalizeGeneratedImageReferences(
+      batchRecord.references,
+      CONFIRMED_BATCH_MAX_REFERENCES
+    );
+    if (
+      !normalizedConfirmed.ok ||
+      normalizedConfirmed.references.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage: normalizedConfirmed.ok
+          ? "confirmedGeneratedImageBatch.references must contain at least one reference"
+          : normalizedConfirmed.reason,
+        errorCode: normalizedConfirmed.ok
+          ? GENERATED_IMAGE_REFERENCE_INVALID_CODE
+          : normalizedConfirmed.errorCode ??
+            GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    getConfirmedBatchReferenceRegistry().stage(
+      req.conversationId,
+      normalizedConfirmed.references
+    );
+  }
+
+  return {
+    ok: true,
+    request: {
+      ...req,
+      generatedImageReferences:
+        normalizedReferences.references.length > 0
+          ? normalizedReferences.references
+          : undefined,
+      // Trusted channel only: never stored, forwarded, or model-visible.
+      confirmedGeneratedImageBatch: undefined,
+    },
+  };
+}
+
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // Chat availability gate FIRST, before parsing request data.
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     sendComplete(event, {
       eventType: "error",
@@ -577,48 +906,7 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     return;
   }
 
-  // Normalize uploaded files
-  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
-
-  // Generated-image reference boundary (PRD §12.4): validate opaque
-  // references at the IPC edge — dedupe first-wins, strip extra fields,
-  // reject malformed entries with a bounded machine code the renderer can
-  // localize. Uploaded images share the same per-request image budget.
-  const normalizedReferences = normalizeGeneratedImageReferences(
-    req.generatedImageReferences,
-    MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST
-  );
-  if (!normalizedReferences.ok) {
-    sendComplete(event, {
-      eventType: "error",
-      conversationId: req.conversationId ?? "",
-      errorMessage: normalizedReferences.reason,
-      errorCode: normalizedReferences.errorCode,
-    });
-    return;
-  }
-  const imageUploadCount = uploadedFiles.filter(
-    (file) => file.kind === "image"
-  ).length;
-  if (
-    normalizedReferences.references.length + imageUploadCount >
-    MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST
-  ) {
-    sendComplete(event, {
-      eventType: "error",
-      conversationId: req.conversationId ?? "",
-      errorMessage: `Too many images for one request: at most ${MAX_GENERATED_IMAGE_REFERENCES_PER_REQUEST} combined uploads and references.`,
-      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
-    });
-    return;
-  }
-
-  // Valid references count as sendable content (a reference-only turn is a
-  // legitimate edit request even with blank text).
-  const validationError = validateStreamRequest(
-    req,
-    normalizedReferences.references.length
-  );
+  const validationError = validateStreamRequest(req);
   if (validationError) {
     sendComplete(event, {
       eventType: "error",
@@ -631,13 +919,22 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
 
-  const processedReq = {
-    ...req,
+  // Normalize uploaded files
+  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
+  const validated = validateAndStageGeneratedImageFields(uploadedFiles, req);
+  if (!validated.ok) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId:
+        typeof req.conversationId === "string" ? req.conversationId : "",
+      errorMessage: validated.errorMessage,
+      ...(validated.errorCode ? { errorCode: validated.errorCode } : {}),
+    });
+    return;
+  }
+  const processedReq: ChatV2StreamRequest = {
+    ...validated.request,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
-    generatedImageReferences:
-      normalizedReferences.references.length > 0
-        ? normalizedReferences.references
-        : undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });
@@ -664,6 +961,14 @@ function handleStop(data?: unknown): void {
     const value = (raw as { conversationId?: unknown }).conversationId;
     conversationId = typeof value === "string" ? value : undefined;
   }
+  // A staged confirmed reference set belongs to the turn being stopped:
+  // dropping it prevents a cancelled turn from feeding a later batch run.
+  const registry = getConfirmedBatchReferenceRegistry();
+  if (conversationId !== undefined) {
+    registry.clear(conversationId);
+  } else {
+    registry.clearAll();
+  }
   getQueryEngine().stopActiveTurn(conversationId);
 }
 
@@ -674,7 +979,7 @@ function handleStop(data?: unknown): void {
 async function handleResumeToolAfterPermission(
   data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -725,7 +1030,7 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -753,7 +1058,7 @@ async function handleHistory(
   _e: IpcEventLike,
   data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -779,12 +1084,20 @@ async function handleHistory(
       tokensUsed: r.tokensUsed,
       metadata: parseMetadata(r.metadata),
     }));
+    let pendingMessages: AIChatPendingMessageView[] | undefined;
+    try {
+      pendingMessages = await getQueueService().list(conversationId);
+    } catch (err) {
+      // Pending listing must never break history rendering.
+      log.error("[ai-chat-v2] pending list failed:", err);
+    }
     return ok({
       conversationId,
       messages: views,
       totalMessages: views.length,
       runtimeStatus:
         getQueryEngine().getConversationRuntimeStatus(conversationId),
+      pendingMessages,
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -795,7 +1108,7 @@ async function handleClearConversation(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -807,6 +1120,13 @@ async function handleClearConversation(
     const conversationId: string = req.conversationId;
     if (!conversationId) {
       return denied("conversationId is required");
+    }
+    // Queue cascade FIRST (FR-44): stop the runtime, delete pending rows
+    // and their staged attachment bytes before the transcript goes away.
+    try {
+      await getQueueService().clearConversation(conversationId);
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearConversation failed:", err);
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
@@ -826,11 +1146,16 @@ async function handleClearConversation(
 async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
   try {
+    try {
+      await getQueueService().clearAll();
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearAll failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
@@ -840,13 +1165,113 @@ async function handleClearAll(): Promise<
 }
 
 // -------------------------------------------------------------------------
+// Pending-message queue handlers (message-queue PRD §12)
+// -------------------------------------------------------------------------
+
+/**
+ * registerValidatedHandler-style wrapper that checks CHAT availability
+ * before parsing — the queue serves the same users the chat stream does
+ * (hosted subscription OR valid local provider), so canUseChat is the
+ * correct gate rather than the hosted-only USER_AI_ENABLED check.
+ */
+function registerChatValidatedHandler<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput>,
+  handler: (input: TInput) => Promise<TOutput>
+): void {
+  ipcMain.handle(channel, async (_event, raw) => {
+    const chatAccess = canUseChat();
+    if (!chatAccess.ok) {
+      return { status: false, msg: chatAccess.message, data: null };
+    }
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((issue) => issue.message).join("; ");
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+    try {
+      const data = await handler(parsed.data);
+      return { status: true, msg: "ok", data };
+    } catch (err) {
+      const msg =
+        err instanceof AIChatTurnQueueError
+          ? `[${err.code}] ${err.message}`
+          : err instanceof Error
+          ? err.message
+          : "Unknown error";
+      log.warn(`[${channel}] handler error: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+  });
+}
+
+async function handlePendingCreate(input: {
+  clientRequestId: string;
+  request: ChatV2StreamRequest;
+}): Promise<AIChatPendingCreateResult> {
+  void ensureQueueRecovered();
+  // Same generated-image contract as the direct stream handler (every send
+  // now queues first): validate reference shapes + combined image cap, stage
+  // the user-confirmed batch set into trusted main-process state, and strip
+  // the trusted field so neither the stored row nor the engine/model see it.
+  const uploadedFiles = normalizeChatV2UploadedFiles(
+    input.request.uploadedFiles
+  );
+  const validated = validateAndStageGeneratedImageFields(
+    uploadedFiles,
+    input.request
+  );
+  if (!validated.ok) {
+    throw new AIChatTurnQueueError("INVALID_REQUEST", validated.errorMessage);
+  }
+  return await getQueueService().submit({
+    clientRequestId: input.clientRequestId,
+    request: {
+      ...validated.request,
+      uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    },
+  });
+}
+
+async function handlePendingList(input: {
+  conversationId: string;
+}): Promise<AIChatPendingMessageView[]> {
+  void ensureQueueRecovered();
+  return await getQueueService().list(input.conversationId);
+}
+
+async function handlePendingSteer(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  void ensureQueueRecovered();
+  return await getQueueService().steer(input);
+}
+
+async function handlePendingCancel(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  return await getQueueService().cancel(input);
+}
+
+async function handlePendingResume(input: {
+  conversationId: string;
+}): Promise<{ resumed: number }> {
+  await getQueueService().resumeConversation(input.conversationId);
+  return { resumed: 1 };
+}
+
+// -------------------------------------------------------------------------
 // Plan Mode IPC handlers
 // -------------------------------------------------------------------------
 
 async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -866,7 +1291,7 @@ async function handlePlanState(
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -899,7 +1324,7 @@ async function handleAnswerQuestion(
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -935,7 +1360,7 @@ async function handleApprovePlan(
 async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -973,7 +1398,7 @@ async function handleRejectPlan(
 async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1014,7 +1439,7 @@ async function handleRequestPlanChanges(
 async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1034,7 +1459,7 @@ async function handlePlanVersions(
 async function handleCompactConversation(
   data: string
 ): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1092,7 +1517,7 @@ function parseSetApprovalModePayload(
 async function handleGetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1112,7 +1537,7 @@ async function handleGetToolApprovalMode(
 async function handleSetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1194,7 +1619,7 @@ export function parseMetadata(
 async function handleReadPasteCache(
   data: unknown
 ): Promise<CommonMessage<string | null>> {
-  const chatAccess = canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1289,4 +1714,35 @@ export function registerAiChatV2IpcHandlers(): void {
     }
   });
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
+
+  // Pending-message queue (message-queue PRD §12). Handlers call the queue
+  // service only — never a Model or repository.
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CREATE,
+    aiChatPendingCreateInputSchema,
+    handlePendingCreate
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_LIST,
+    aiChatPendingListInputSchema,
+    handlePendingList
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_STEER,
+    aiChatPendingSteerInputSchema,
+    handlePendingSteer
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CANCEL,
+    aiChatPendingCancelInputSchema,
+    handlePendingCancel
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_RESUME,
+    aiChatPendingResumeInputSchema,
+    handlePendingResume
+  );
+  // Startup reconciliation (design §16.1): reconcile durable rows once the
+  // handlers exist; it only pauses/deduplicates — never dispatches.
+  void ensureQueueRecovered();
 }

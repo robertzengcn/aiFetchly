@@ -36,6 +36,7 @@
       :ai-message-task-data="aiMessageTask"
       @submit="handleSubmit"
       @cancel="goBack"
+      @error="handleFormError"
     />
 
     <!-- Alert Dialog -->
@@ -165,6 +166,10 @@ const handleSubmit = async (data: ScheduleUpdateRequest) => {
   }
 }
 
+const handleFormError = (message: string): void => {
+  showAlert('Error', message, 'error')
+}
+
 const goBack = () => {
   router.push('/schedule/list')
 }
@@ -213,4 +218,4 @@ onMounted(() => {
 .v-card {
   border-radius: 8px;
 }
-</style> 
+</style>

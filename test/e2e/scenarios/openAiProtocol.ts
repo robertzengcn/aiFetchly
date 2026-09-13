@@ -20,6 +20,8 @@ export interface SseFrame {
 export type FakeAiScenarioName =
   | "stream-text"
   | "stream-delayed"
+  | "stream-generated-image"
+  | "stream-generated-image-delayed"
   | "tool-requires-permission"
   | "tool-success-followup"
   | "http-500"
@@ -52,6 +54,31 @@ export function stopChunk(model = FAKE_MODEL_ID): string {
   });
 }
 
+/** Wire image shape accepted by the production accumulator (`delta.images`).
+ * `type: "image"` is REQUIRED — the accumulator drops objects without it. */
+export interface FakeStreamImage {
+  readonly type: "image";
+  readonly b64_json: string;
+  readonly mime_type?: string;
+}
+
+/**
+ * Build a chunk carrying generated images in `delta.images` — the streaming
+ * metadata path OpenAIStreamAccumulator collects into message.images.
+ */
+export function imagesChunk(
+  images: readonly FakeStreamImage[],
+  model = FAKE_MODEL_ID
+): string {
+  return JSON.stringify({
+    id: "chatcmpl-e2e",
+    object: "chat.completion.chunk",
+    created: 0,
+    model,
+    choices: [{ index: 0, delta: { images } as never, finish_reason: null }],
+  });
+}
+
 /** Build a tool-call delta chunk (streaming tool_calls, OpenAI shape). */
 export function toolCallChunk(args: {
   index: number;
@@ -76,7 +103,9 @@ export function toolCallChunk(args: {
               type: "function",
               function: {
                 ...(args.name !== undefined ? { name: args.name } : {}),
-                ...(args.arguments !== undefined ? { arguments: args.arguments } : {}),
+                ...(args.arguments !== undefined
+                  ? { arguments: args.arguments }
+                  : {}),
               },
             },
           ],

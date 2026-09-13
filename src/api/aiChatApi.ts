@@ -562,15 +562,19 @@ export interface OpenAIModel {
 }
 
 /**
- * Server-reported capability metadata for the hosted virtual `small` model
- * alias (small-model routing PRD). Absent on servers that do not advertise
- * a small model; malformed payloads are dropped during normalization.
+ * Capability metadata for the hosted virtual `small` model route. All fields
+ * are optional except `available`; malformed values are ignored by
+ * `normalizeModelsResponse` rather than rejecting the whole model list.
  */
 export interface OpenAISmallModelCapability {
-  available: boolean;
-  resolved_model?: string;
-  context_size?: number;
-  max_tokens?: number;
+  /** Whether a small model is configured and healthy in the current environment. */
+  readonly available: boolean;
+  /** The real model id that the `small`/`haiku` alias currently resolves to. */
+  readonly resolved_model?: string;
+  /** Usable input-plus-output context window for the resolved model. */
+  readonly context_size?: number;
+  /** Maximum supported output tokens for the resolved model. */
+  readonly max_tokens?: number;
 }
 
 /** OpenAI-compatible models list response */
@@ -583,7 +587,14 @@ export interface OpenAIModelsResponse {
    * the frontend uses it to seed the model selector on first use.
    */
   default_model?: string;
-  /** Small-model capability metadata, when the server advertises one. */
+  /**
+   * Hosted AiFetchly small-model route capability, when reported by the
+   * server's `/api/ai/v1/models` endpoint. The `small`/`haiku` alias is a
+   * virtual route resolved server-side to the best healthy small setting;
+   * this metadata lets AiFetchly budget lightweight background workloads
+   * against the resolved model's real context window before sending.
+   * Absent on older servers and on local/custom providers.
+   */
   small_model?: OpenAISmallModelCapability;
 }
 
@@ -2110,27 +2121,22 @@ export class AiChatApi {
     const raw = response.small_model;
     if (!this.isRecord(raw)) return undefined;
     if (typeof raw.available !== "boolean") return undefined;
-    const capability: OpenAISmallModelCapability = {
+    return {
       available: raw.available,
-    };
-    if (typeof raw.resolved_model === "string" && raw.resolved_model) {
-      capability.resolved_model = raw.resolved_model;
-    }
-    if (
-      typeof raw.context_size === "number" &&
+      ...(typeof raw.resolved_model === "string" && raw.resolved_model
+        ? { resolved_model: raw.resolved_model }
+        : {}),
+      ...(typeof raw.context_size === "number" &&
       Number.isFinite(raw.context_size) &&
       raw.context_size > 0
-    ) {
-      capability.context_size = raw.context_size;
-    }
-    if (
-      typeof raw.max_tokens === "number" &&
+        ? { context_size: raw.context_size }
+        : {}),
+      ...(typeof raw.max_tokens === "number" &&
       Number.isFinite(raw.max_tokens) &&
       raw.max_tokens > 0
-    ) {
-      capability.max_tokens = raw.max_tokens;
-    }
-    return capability;
+        ? { max_tokens: raw.max_tokens }
+        : {}),
+    };
   }
 
   /**
@@ -2191,7 +2197,11 @@ export class AiChatApi {
       data.user = request.user;
     }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson("/api/ai/v1/chat/completions", data, signal ? { signal } : {});
+    return this._httpClient.postJson(
+      "/api/ai/v1/chat/completions",
+      data,
+      signal ? { signal } : {}
+    );
   }
 
   /**

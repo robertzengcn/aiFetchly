@@ -1,6 +1,4 @@
 import { Token } from "@/modules/token";
-import { log } from "@/modules/Logger";
-import { USERSDBPATH } from "@/config/usersetting";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
@@ -29,7 +27,6 @@ import { v4 as uuidv4 } from "uuid";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import { SendStatus } from "@/model/emailMarketingSendLog.model";
@@ -119,14 +116,14 @@ export class BuckEmailTaskModule extends BaseModule {
     try {
       parsed = JSON.parse(emailListJson);
     } catch {
-      log.warn(
+      console.warn(
         "parseEmailListJson: failed to parse email_list_json, returning empty list"
       );
       return [];
     }
 
     if (!Array.isArray(parsed)) {
-      log.warn(
+      console.warn(
         "parseEmailListJson: email_list_json is not an array, returning empty list"
       );
       return [];
@@ -142,7 +139,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     }
     if (droppedCount > 0) {
-      log.warn(
+      console.warn(
         `parseEmailListJson: dropped ${droppedCount} invalid email item(s) from stored JSON`
       );
     }
@@ -308,6 +305,45 @@ export class BuckEmailTaskModule extends BaseModule {
     return await this.buckEmailsend(taskId, options);
   }
 
+  /**
+   * Start a campaign from the full struct so SMTP services, templates, and
+   * filters are persisted as task relations. The entity-only path used by
+   * {@link startBuckEmailTask} drops those lists, leaving the worker with
+   * no senders. waitForExit defaults to false so AI chat / UI return as
+   * soon as the worker is forked instead of blocking until SMTP finishes.
+   */
+  public async startBuckEmailCampaign(
+    param: Buckemailstruct,
+    options?: { waitForExit?: boolean }
+  ): Promise<number> {
+    const taskId = await this.createBuckEmailTask(param);
+    const sendPromise = this.buckEmailsend(taskId, options);
+
+    if (options?.waitForExit === true) {
+      return await sendPromise;
+    }
+
+    void sendPromise.catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `Failed to start background email task ${taskId}: ${message}`
+      );
+      try {
+        await this.updateTaskStatus(taskId, TaskStatus.Error);
+      } catch (statusError: unknown) {
+        const statusMessage =
+          statusError instanceof Error
+            ? statusError.message
+            : String(statusError);
+        console.error(
+          `Failed to mark email task ${taskId} as errored: ${statusMessage}`
+        );
+      }
+    });
+
+    return taskId;
+  }
+
   //create buck email task from entity (direct DB entity)
   private async createBuckEmailTaskFromEntity(
     param: BuckemailTaskEntity
@@ -446,7 +482,7 @@ export class BuckEmailTaskModule extends BaseModule {
         `child js path not exist. Tried: ${candidates.join(", ")}`
       );
     }
-    const { port1, port2 } = new MessageChannelMain();
+    const { port1 } = new MessageChannelMain();
 
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
@@ -460,7 +496,7 @@ export class BuckEmailTaskModule extends BaseModule {
     });
 
     child.on("spawn", () => {
-      log.info("child process satart, pid is" + child.pid);
+      console.log("child process satart, pid is" + child.pid);
       child.postMessage(JSON.stringify({ action: "sendEmail", data: data }), [
         port1,
       ]);
@@ -484,6 +520,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     });
     const waitForExit = options?.waitForExit === true;
+    let sendFailure: Error | undefined;
     let settled = false;
     let resolveWait: ((taskId: number) => void) | undefined;
     let rejectWait: ((error: Error) => void) | undefined;
@@ -512,7 +549,7 @@ export class BuckEmailTaskModule extends BaseModule {
       : undefined;
 
     child.on("error", (error) => {
-      log.error("Child process failed:", error);
+      console.error("Child process failed:", error);
       WriteLog(errorLogfile, `Child process failed: ${error.message}`);
       this.updateTaskErrorFile(taskId, errorLogfile);
       this.updateTaskStatus(taskId, TaskStatus.Error);
@@ -522,22 +559,27 @@ export class BuckEmailTaskModule extends BaseModule {
     child.on("exit", (code) => {
       if (code !== 0) {
         const message = `Child process exited with code ${code}`;
-        log.error(message);
+        console.error(message);
         WriteLog(errorLogfile, message);
         this.updateTaskErrorFile(taskId, errorLogfile);
         this.updateTaskStatus(taskId, TaskStatus.Error);
         settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
-        log.info("Child process exited successfully");
-        this.updateTaskStatus(taskId, TaskStatus.Complete);
-        settleSuccess();
+        if (sendFailure) {
+          this.updateTaskStatus(taskId, TaskStatus.Error);
+          settleFailure(sendFailure);
+        } else {
+          console.log("Child process exited successfully");
+          this.updateTaskStatus(taskId, TaskStatus.Complete);
+          settleSuccess();
+        }
       }
     });
     child.on("message", async (message: unknown) => {
       try {
         const result = parseChildMessage<EmailSendResult>(message);
         if (result.kind === "error") {
-          log.error(
+          console.error(
             `Invalid message from child process (${result.reason}):`,
             message
           );
@@ -545,8 +587,8 @@ export class BuckEmailTaskModule extends BaseModule {
         }
         const childdata = result.data;
 
-        log.info("get message from child");
-        log.info("Message from child:", childdata);
+        console.log("get message from child");
+        console.log("Message from child:", childdata);
         switch (childdata.action) {
           case "EmailSendSuccess":
             {
@@ -558,7 +600,7 @@ export class BuckEmailTaskModule extends BaseModule {
               //     content: message.data.content,
               // }
               if (!childdata.data) {
-                log.error("EmailSendSuccess: childdata.data is undefined");
+                console.error("EmailSendSuccess: childdata.data is undefined");
                 break;
               }
               const emailMarketLog = new EmailMarketingSendLogEntity();
@@ -585,9 +627,14 @@ export class BuckEmailTaskModule extends BaseModule {
               //     log: message.data.info
               // }
               if (!childdata.data) {
-                log.error("EmailSendFailure: childdata.data is undefined");
+                console.error("EmailSendFailure: childdata.data is undefined");
                 break;
               }
+              sendFailure ??= new Error(
+                `Email delivery to ${childdata.data.receiver} failed: ${
+                  childdata.data.info || "Unknown SMTP error"
+                }`
+              );
               const emailMarketLog = new EmailMarketingSendLogEntity();
               emailMarketLog.task_id = taskId;
               emailMarketLog.status = SendStatus.Failure;
@@ -608,15 +655,20 @@ export class BuckEmailTaskModule extends BaseModule {
             break;
           case "sendEmailEnd":
             {
-              this.updateTaskStatus(taskId, TaskStatus.Complete);
-              settleSuccess();
+              if (sendFailure) {
+                await this.updateTaskStatus(taskId, TaskStatus.Error);
+                settleFailure(sendFailure);
+              } else {
+                await this.updateTaskStatus(taskId, TaskStatus.Complete);
+                settleSuccess();
+              }
             }
             break;
         }
       } catch (error) {
-        log.error("Failed to parse message from child process:", error);
+        console.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          log.error("Error details:", error.message);
+          console.error("Error details:", error.message);
         }
       }
     });

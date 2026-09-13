@@ -192,7 +192,10 @@ export class HttpClient {
     const target = absolute ? endpoint : this.baseUrl + endpoint;
     const res = await fetch(target, {
       ...options,
-      headers: this._headers,
+      headers: {
+        ...this._headers,
+        ...(options.headers as Record<string, string>),
+      },
     });
 
     // Handle 401 Unauthorized and 403 Forbidden - Token might be expired.
@@ -458,8 +461,9 @@ export class HttpClient {
     data: unknown,
     options = {}
   ): Promise<T> {
-    // this.setHeader('Accept', 'application/json')
-    // this.setHeader('Content-Type', 'application/json')
+    // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
+    // default to the standard JSON accept/content-type. The hard-coded
+    // defaults win only when the caller did not set them.
     return (await this._fetchJSON(endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -467,8 +471,8 @@ export class HttpClient {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        ...((options as { headers?: Record<string, string> }).headers ?? {}),
       },
-      // headers: this._headers,
     })) as T;
   }
 

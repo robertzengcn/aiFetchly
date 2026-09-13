@@ -41,6 +41,8 @@ import {
   EMAILSERVICEDETAIL,
   EMAILSERVICELIST,
   EMAILSERVICEDELETE,
+  EMAILSERVICEEXPORT,
+  EMAILSERVICEIMPORT,
   EMAILFILTERDELETE,
   BUCKEMAILSEND,
   BUCKEMAILSENDMESSAGE,
@@ -48,6 +50,8 @@ import {
   RECEIVESENDTESTEMAILMESSAGE,
   BUCKEMAILTASKLIST,
   BUCKEMAILTASKSENDLOG,
+  UNIFIED_EMAIL_SEND_LOG,
+  UNIFIED_EMAIL_SEND_LOG_DETAIL,
   EMAIL_RECEIVE_SYNC,
   EMAIL_RECEIVE_CONNECTION_TEST,
   EMAIL_RECEIVE_MESSAGE_LIST,
@@ -96,6 +100,9 @@ import {
   SYSTEM_SETTING_UPDATE,
   VIDEO_INFORMATION_TRANSLATE,
   QUERY_USER_INFO,
+  USER_REFRESH_ENTITLEMENT,
+  USER_OPEN_PRICING_PLAN,
+  USER_INFO_UPDATED,
   OPENLOGINPAGE,
   NATIVATECOMMAND,
   LOGIN_STATUS,
@@ -231,6 +238,12 @@ import {
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_HISTORY,
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+  AI_CHAT_V2_PENDING_EVENT,
   AI_CHAT_V2_STREAM,
   AI_CHAT_V2_STREAM_STOP,
   AI_CHAT_V2_STREAM_CHUNK,
@@ -262,6 +275,7 @@ import {
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_AT_MENTION_SUGGEST,
+  AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
   AI_CHAT_V2_GOAL_CREATE,
   AI_CHAT_V2_GOAL_GET,
   AI_CHAT_V2_GOAL_LOOP_START,
@@ -499,6 +513,43 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // Managed Browser Channels (design §22)
+  MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+  MANAGED_BROWSER_LIST_ACTIVE,
+  MANAGED_BROWSER_START,
+  MANAGED_BROWSER_STATUS,
+  MANAGED_BROWSER_HANDOFF,
+  MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+  MANAGED_BROWSER_RESUME,
+  MANAGED_BROWSER_STOP,
+  MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_CANCEL_ACTIVE,
+  MANAGED_BROWSER_CAPTURE_SCREENSHOT,
+  MANAGED_BROWSER_EXTEND_HANDOFF,
+  MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+  MANAGED_BROWSER_GET_CACHE_STATUS,
+  MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+  MANAGED_BROWSER_CLEAR_CACHE,
+  MANAGED_BROWSER_UPDATE_SETTINGS,
+  MANAGED_BROWSER_STATUS_EVENT,
+  MANAGED_BROWSER_PROGRESS_EVENT,
+  MANAGED_BROWSER_APPROVAL_EVENT,
+  MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+  // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+  AI_CONTENT_REPORT_CAPABILITIES,
+  // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle
+  OUTBOUND_EMAIL_BATCH_GET,
+  OUTBOUND_EMAIL_DRAFT_UPDATE,
+  OUTBOUND_EMAIL_BATCH_APPROVE,
+  OUTBOUND_EMAIL_BATCH_SEND,
+  OUTBOUND_EMAIL_BATCH_DISCARD,
+  OUTBOUND_EMAIL_BATCH_STATUS,
+  OUTBOUND_EMAIL_BATCH_PROGRESS,
+  // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
+  // a production/dev invoke always fails with "No handler registered" (see
+  // src/main-process/e2e/E2ESeedIpc.ts).
+  E2E_SEED_EMAIL_SERVICE,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -617,6 +668,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
@@ -649,6 +701,16 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_PROGRESS,
       // Portable workspace memory sync summary (main -> renderer)
       AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -698,6 +760,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
@@ -728,6 +791,14 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -746,6 +817,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
@@ -769,6 +841,16 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+      // Subscription entitlement snapshot broadcast (main -> renderer)
+      USER_INFO_UPDATED,
+      // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
+      OUTBOUND_EMAIL_BATCH_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -835,9 +917,13 @@ contextBridge.exposeInMainWorld("api", {
       EMAILSERVICEDETAIL,
       EMAILSERVICELIST,
       EMAILSERVICEDELETE,
+      EMAILSERVICEEXPORT,
+      EMAILSERVICEIMPORT,
       EMAILFILTERDELETE,
       BUCKEMAILTASKLIST,
       BUCKEMAILTASKSENDLOG,
+      UNIFIED_EMAIL_SEND_LOG,
+      UNIFIED_EMAIL_SEND_LOG_DETAIL,
       EMAIL_RECEIVE_SYNC,
       EMAIL_RECEIVE_CONNECTION_TEST,
       EMAIL_RECEIVE_MESSAGE_LIST,
@@ -870,6 +956,8 @@ contextBridge.exposeInMainWorld("api", {
       "session-recording:clear",
       "session-recording:get-directory",
       QUERY_USER_INFO,
+      USER_REFRESH_ENTITLEMENT,
+      USER_OPEN_PRICING_PLAN,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,
       CHOOSEFILEDIALOG,
@@ -979,6 +1067,11 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_MODELS,
       AI_CHAT_V2_CONVERSATIONS,
       AI_CHAT_V2_HISTORY,
+      AI_CHAT_V2_PENDING_CREATE,
+      AI_CHAT_V2_PENDING_LIST,
+      AI_CHAT_V2_PENDING_STEER,
+      AI_CHAT_V2_PENDING_CANCEL,
+      AI_CHAT_V2_PENDING_RESUME,
       AI_CHAT_V2_CLEAR_CONVERSATION,
       AI_CHAT_V2_CLEAR_ALL,
       AI_CHAT_V2_COMPACT_CONVERSATION,
@@ -1004,6 +1097,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_REQUEST_PLAN_CHANGES,
       AI_CHAT_V2_PLAN_VERSIONS,
       AI_CHAT_V2_AT_MENTION_SUGGEST,
+      AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
       AI_CHAT_V2_GOAL_CREATE,
       AI_CHAT_V2_GOAL_GET,
       AI_CHAT_V2_GOAL_LOOP_START,
@@ -1242,6 +1336,37 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // Managed Browser Channels (design §22)
+      MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+      MANAGED_BROWSER_LIST_ACTIVE,
+      MANAGED_BROWSER_START,
+      MANAGED_BROWSER_STATUS,
+      MANAGED_BROWSER_HANDOFF,
+      MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+      MANAGED_BROWSER_RESUME,
+      MANAGED_BROWSER_STOP,
+      MANAGED_BROWSER_APPROVE,
+      MANAGED_BROWSER_CANCEL_ACTIVE,
+      MANAGED_BROWSER_CAPTURE_SCREENSHOT,
+      MANAGED_BROWSER_EXTEND_HANDOFF,
+      MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+      MANAGED_BROWSER_GET_CACHE_STATUS,
+      MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+      MANAGED_BROWSER_CLEAR_CACHE,
+      MANAGED_BROWSER_UPDATE_SETTINGS,
+      // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
+      AI_CONTENT_REPORT_CAPABILITIES,
+      // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
+      // Plain handlers (not AI-gated): operate on already-authorized state.
+      OUTBOUND_EMAIL_BATCH_GET,
+      OUTBOUND_EMAIL_DRAFT_UPDATE,
+      OUTBOUND_EMAIL_BATCH_APPROVE,
+      OUTBOUND_EMAIL_BATCH_SEND,
+      OUTBOUND_EMAIL_BATCH_DISCARD,
+      OUTBOUND_EMAIL_BATCH_STATUS,
+      // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
+      // elsewhere this invoke fails with "No handler registered".
+      E2E_SEED_EMAIL_SERVICE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
