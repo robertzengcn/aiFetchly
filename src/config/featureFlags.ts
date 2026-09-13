@@ -1,4 +1,5 @@
 import { Token } from "@/modules/token";
+import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
 
 /**
  * Feature flags evaluated in the Electron MAIN process only (design §15).
@@ -43,6 +44,73 @@ export function isEmailReplyKillSwitchOn(): boolean {
   } catch {
     // Unreadable store: treat as NOT killed so a storage hiccup doesn't paralyze
     // the feature. Operators who want the switch on set it explicitly.
+    return false;
+  }
+}
+
+/**
+ * Recoverable-history rollout flags (technical-design §18: "Rollout flags:
+ * archive reads, history tools, new compaction publication, and UI").
+ *
+ * Each flag gates one rollout stage. All four DEFAULT OFF and FAIL CLOSED:
+ * the new code path is opt-in per stage so a broken Token store never
+ * silently enables archive reads, history tools, new compaction publication,
+ * or the history UI. Operators set a flag's Token value to "true" to enable
+ * its stage; any other value (including an unreadable store) keeps it off.
+ *
+ * Staged deployment (§18.1):
+ *   1. archiveReads  — archive reads/indexing (compare pagination with fixtures)
+ *   2. newCompaction — bounded compaction for test profiles
+ *   3. historyTools + historyUi — tools/UI together with new publication
+ *   4. expand only after acceptance tests + recall targets pass
+ *
+ * Operational rollback disables new publication first; it retains the last
+ * valid overview and archive tools where safe. It never selects the previous
+ * all-history compaction implementation.
+ *
+ * Read live on each call (Token is a local electron-store file, invoked per
+ * user action not on a hot path) so a runtime toggle by support staff takes
+ * effect without an app restart.
+ */
+
+/** Stage 1: archive reads + indexing (read-only enhancement). */
+export function isArchiveReadsEnabled(): boolean {
+  try {
+    return (
+      new Token().getValue(AI_CHAT_RECOVERABLE_FLAGS.archiveReads) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 2: bounded compaction publication. */
+export function isNewCompactionEnabled(): boolean {
+  try {
+    return (
+      new Token().getValue(AI_CHAT_RECOVERABLE_FLAGS.newCompaction) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 3: history retrieval tools. */
+export function isHistoryToolsEnabled(): boolean {
+  try {
+    return (
+      new Token().getValue(AI_CHAT_RECOVERABLE_FLAGS.historyTools) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 3: history UI (selected-context submission, history views). */
+export function isHistoryUiEnabled(): boolean {
+  try {
+    return new Token().getValue(AI_CHAT_RECOVERABLE_FLAGS.historyUi) === "true";
+  } catch {
     return false;
   }
 }
