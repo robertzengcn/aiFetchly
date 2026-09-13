@@ -5,6 +5,7 @@ import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
 import { encodeCursor, decodeCursor } from "@/service/AIChatArchiveCursorCodec";
 import { sliceByCodePoints } from "@/service/AIChatArchiveTextUtil";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type { Repository } from "typeorm";
 import { Brackets } from "typeorm";
 
@@ -71,7 +72,10 @@ export class AIChatMessageArchiveModel extends BaseDb {
     if (input.cursor) {
       const decoded = decodeCursor(input.cursor, input.conversationId, epoch);
       if (!decoded) {
-        throw new Error("HISTORY_SCOPE_INVALID: invalid cursor");
+        throw new RecoverableHistoryError(
+          "HISTORY_SCOPE_INVALID",
+          "cursor failed scope validation (conversation/epoch mismatch or malformed payload)"
+        );
       }
       lastTimestampMs = decoded.lastTimestampMs;
       lastRowId = decoded.lastRowId;
@@ -215,6 +219,82 @@ export class AIChatMessageArchiveModel extends BaseDb {
    */
   async readMessageByRowId(rowId: number): Promise<AIChatMessageEntity | null> {
     return this.repository.findOne({ where: { id: rowId } });
+  }
+
+  /**
+   * Look up messages by public messageId within a conversation. §7.2: an
+   * ambiguous public messageId returns candidate source references instead of
+   * selecting an arbitrary row — the caller decides when more than one row
+   * shares the messageId.
+   */
+  async findByMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity[]> {
+    return this.repository.find({
+      where: { conversationId, messageId },
+      order: { timestamp: "ASC", id: "ASC" },
+      take: 20,
+    });
+  }
+
+  /**
+   * Bounded neighbor read around a (timestamp, rowId) anchor: up to `before`
+   * rows strictly before the anchor and `after` rows strictly after it,
+   * returned in chronological (ASC) order. Excludes the anchor itself —
+   * callers already hold it. Both counts are clamped by the metadata page cap.
+   */
+  async readNeighbors(
+    conversationId: string,
+    anchorTimestampMs: number,
+    anchorRowId: number,
+    before: number,
+    after: number
+  ): Promise<AIChatMessageEntity[]> {
+    const anchorDate = new Date(anchorTimestampMs);
+    const pageCap = AI_CHAT_RECOVERABLE_DEFAULTS.metadataPageRows;
+    const beforeCount = Math.min(Math.max(before, 0), pageCap);
+    const afterCount = Math.min(Math.max(after, 0), pageCap);
+
+    const beforeRows =
+      beforeCount > 0
+        ? await this.repository
+            .createQueryBuilder("m")
+            .where("m.conversationId = :conversationId", { conversationId })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where("m.timestamp < :ts", { ts: anchorDate }).orWhere(
+                  "m.timestamp = :ts2 AND m.id < :id",
+                  { ts2: anchorDate, id: anchorRowId }
+                );
+              })
+            )
+            .orderBy("m.timestamp", "DESC")
+            .addOrderBy("m.id", "DESC")
+            .take(beforeCount)
+            .getMany()
+        : [];
+
+    const afterRows =
+      afterCount > 0
+        ? await this.repository
+            .createQueryBuilder("m")
+            .where("m.conversationId = :conversationId", { conversationId })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where("m.timestamp > :ts", { ts: anchorDate }).orWhere(
+                  "m.timestamp = :ts2 AND m.id > :id",
+                  { ts2: anchorDate, id: anchorRowId }
+                );
+              })
+            )
+            .orderBy("m.timestamp", "ASC")
+            .addOrderBy("m.id", "ASC")
+            .take(afterCount)
+            .getMany()
+        : [];
+
+    return [...beforeRows.reverse(), ...afterRows];
   }
 
   /** Expose the archive state for the cursor epoch lookup. */

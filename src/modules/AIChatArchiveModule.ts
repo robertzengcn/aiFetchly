@@ -14,10 +14,11 @@ import {
 } from "@/service/AIChatArchiveTextUtil";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
-import type {
-  ArchiveReadPage,
-  ArchivePageRequest,
-  HistoryExcerpt,
+import {
+  RecoverableHistoryError,
+  type ArchiveReadPage,
+  type ArchivePageRequest,
+  type HistoryExcerpt,
 } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
@@ -113,15 +114,13 @@ export class AIChatArchiveModule extends BaseModule {
         state.epoch
       );
       if (!decoded) {
-        return {
-          records: [],
-          nextCursor: null,
-          truncated: false,
-          sourceRevision: state.sourceRevision,
-          scanComplete: true,
-          indexComplete: state.indexState === "complete",
-          // Indicate a scope problem to the caller via an empty final page.
-        };
+        // A modified/foreign cursor must not widen scope — reject loudly
+        // (§7.1: "A caller-modified cursor must never widen conversation
+        // scope") so the retrieval service maps HISTORY_SCOPE_INVALID.
+        throw new RecoverableHistoryError(
+          "HISTORY_SCOPE_INVALID",
+          "search cursor failed scope validation (conversation/epoch mismatch or malformed payload)"
+        );
       }
       afterRowId = decoded.lastSourceRowId;
       afterStart = decoded.lastStartCodePoint;
@@ -197,6 +196,92 @@ export class AIChatArchiveModule extends BaseModule {
     await this.ensureConnection();
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
     return msgModel.readSourceSlice(rowId, startCodePoint, endCodePoint);
+  }
+
+  /**
+   * Archive metadata for the retrieval service: epoch, revision, and index
+   * state. Null when the conversation was never archived.
+   */
+  async getArchiveMeta(
+    conversationId: string
+  ): Promise<{ epoch: string; revision: number; indexState: string } | null> {
+    await this.ensureConnection();
+    const stateModel = new AIChatArchiveStateModel(this.dbpath);
+    const state = await stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return null;
+    return {
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      indexState: state.indexState,
+    };
+  }
+
+  /**
+   * Look up messages by public messageId (§7.2). An ambiguous messageId
+   * returns ALL candidate rows — the retrieval service decides between
+   * returning candidate source references (ambiguity) vs a single read.
+   */
+  async findByMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity[]> {
+    await this.ensureConnection();
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    return msgModel.findByMessageId(conversationId, messageId);
+  }
+
+  /**
+   * Bounded neighbor read around a (timestamp, rowId) anchor (§7.2). Up to
+   * `before` rows strictly before the anchor and `after` rows strictly after
+   * it, chronological order, excluding the anchor itself. The caller already
+   * holds the anchor row.
+   */
+  async readNeighbors(
+    conversationId: string,
+    anchorTimestampMs: number,
+    anchorRowId: number,
+    before: number,
+    after: number
+  ): Promise<AIChatMessageEntity[]> {
+    await this.ensureConnection();
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    return msgModel.readNeighbors(
+      conversationId,
+      anchorTimestampMs,
+      anchorRowId,
+      before,
+      after
+    );
+  }
+
+  /**
+   * Resolve one opaque source ID against the current epoch/revision.
+   * Returns the message row (or null when the row is gone) plus whether the
+   * reference was refreshed (revision changed — SOURCE_CHANGED per §4.2).
+   */
+  async resolveOne(
+    conversationId: string,
+    sourceId: string
+  ): Promise<{
+    message: AIChatMessageEntity | null;
+    refreshed: boolean;
+    epoch: string;
+    revision: number;
+  } | null> {
+    await this.ensureConnection();
+    const stateModel = new AIChatArchiveStateModel(this.dbpath);
+    const state = await stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return null;
+    const payload = decodeSourceId(sourceId, state.epoch);
+    if (!payload) return null;
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    const message = await msgModel.readMessageByRowId(payload.rowId);
+    return {
+      message,
+      refreshed: payload.revision !== state.sourceRevision,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+    };
   }
 
   /**
