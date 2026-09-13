@@ -27,6 +27,8 @@ import {
   type ContactExtractionWorkerOutbound,
 } from "@/schemas/worker/contactExtraction";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
+import { isSpawnAllowed } from "@/main-process/lifecycle/spawnGate";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 
@@ -151,6 +153,16 @@ function spawnWorker(): ChildProcess {
     }),
   });
 
+  // Track the real process in the owned-process registry so the shutdown
+  // force-phase can verify termination even if this module's pointer is
+  // dropped first (application-exit design §2/§6). The registry attaches
+  // its own exit listener — observation is automatic.
+  getOwnedProcessRegistry().register({
+    ownerId: "contact-extraction",
+    pid: worker.pid ?? undefined,
+    handle: worker,
+  });
+
   // Handle worker output
   worker.stdout?.on("data", (data) => {
     log.info(`Worker stdout: ${data}`);
@@ -163,6 +175,14 @@ function spawnWorker(): ChildProcess {
   // Handle worker crashes — WS-4 R4.2: bounded restart with exponential backoff + circuit-breaker
   worker.on("exit", (code, signal) => {
     log.info(`Worker exited with code ${code}, signal ${signal}`);
+    // No restarts once a shutdown is in progress (spawn gate, AC-05).
+    if (!isSpawnAllowed("contact-extraction")) {
+      log.info(
+        "[contact-extraction] shutdown in progress; worker will not be restarted"
+      );
+      contactExtractionWorker = null;
+      return;
+    }
     if (code !== 0 && code !== null && contactExtractionWorker) {
       if (shouldRestart()) {
         const delay = getRestartDelay();
@@ -691,12 +711,42 @@ export function registerContactExtractionHandlers(): void {
 }
 
 /**
- * Cleanup function to close worker process
+ * Cleanup function to close worker process.
+ *
+ * @param observeMs when > 0, wait up to this long for OBSERVED exit (a sent
+ *   signal is not exit proof — application-exit design §2/§6). Resolves
+ *   false if the worker is still alive when the budget expires; the
+ *   shutdown force-phase then handles it via the owned-process registry.
  */
-export function cleanupContactExtractionWorker(): void {
-  if (contactExtractionWorker) {
+export async function cleanupContactExtractionWorker(
+  observeMs = 0
+): Promise<boolean> {
+  const worker = contactExtractionWorker;
+  if (worker) {
     log.info("Closing contact extraction worker...");
-    contactExtractionWorker.kill();
     contactExtractionWorker = null;
+    const registry = getOwnedProcessRegistry();
+    const record = registry
+      .listByOwner("contact-extraction")
+      .find((r) => r.pid === worker.pid);
+    try {
+      worker.kill();
+    } catch (err) {
+      log.warn(
+        "contact-extraction worker kill failed:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    if (observeMs > 0 && record) {
+      const exited = await registry.observeExit(record.id, observeMs);
+      if (!exited) {
+        log.warn(
+          `[contact-extraction] worker pid=${worker.pid} did not exit within ${observeMs}ms; force-phase will verify`
+        );
+      }
+      return exited;
+    }
+    return true;
   }
+  return true;
 }
