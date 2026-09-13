@@ -2862,6 +2862,16 @@ export default {
       url_hint:
         "Auto-detected: .zip downloads, git URLs clone, GitHub URLs use the release flow.",
       install_failed: "Install failed.",
+      github_helper: "Public repositories install without Git or a GitHub token. Leave the revision empty for the default branch.",
+      git_helper: "A local Git installation may be required for this source. Public GitHub repositories do not need Git — choose GitHub instead.",
+      "error_git-not-installed": "Git is not installed or cannot be found. Choose GitHub for a public repository, import a ZIP, or install Git and restart AiFetchly.",
+      "error_github-repository-unavailable": "The repository was not found or is not publicly accessible. Check the URL and access.",
+      "error_github-ref-not-found": "This branch, tag, or commit was not found. Check the ref, or leave it empty for the default branch.",
+      "error_github-rate-limited": "GitHub's public request limit was reached. Wait a moment and retry.",
+      "error_source-timeout": "The download timed out. Check your connection and retry.",
+      "error_source-download-failed": "The plugin could not be downloaded. Retry later.",
+      "error_source-redirect-rejected": "The download was redirected to an untrusted location and was stopped.",
+      "error_source-cancelled": "Installation cancelled.",
       source_kind: "Install source",
     },
     marketplace: {

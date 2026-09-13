@@ -2747,6 +2747,16 @@ export default {
       url_hint:
         "自动识别：.zip 下载，git 地址克隆，GitHub 地址走 release 流程。",
       install_failed: "安装失败。",
+      github_helper: "公共仓库无需 Git 或 GitHub 令牌即可安装。留空版本即可使用默认分支。",
+      git_helper: "此来源可能需要本地安装 Git。公共 GitHub 仓库无需 Git——请改用 GitHub 来源。",
+      "error_git-not-installed": "未安装或找不到 Git。公共仓库请选择 GitHub，导入 ZIP，或安装 Git 后重启 AiFetchly。",
+      "error_github-repository-unavailable": "未找到该仓库，或该仓库不公开。请检查网址和访问权限。",
+      "error_github-ref-not-found": "未找到该分支、标签或提交。请检查版本，或留空以使用默认分支。",
+      "error_github-rate-limited": "已达到 GitHub 公共请求上限。请稍后重试。",
+      "error_source-timeout": "下载超时。请检查网络后重试。",
+      "error_source-download-failed": "无法下载该插件。请稍后重试。",
+      "error_source-redirect-rejected": "下载被重定向到不受信任的位置，已停止。",
+      "error_source-cancelled": "安装已取消。",
       source_kind: "安装来源",
     },
     marketplace: {

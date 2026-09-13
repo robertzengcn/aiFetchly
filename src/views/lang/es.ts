@@ -2889,6 +2889,16 @@ export default {
       url_hint:
         "Detección automática: descarga .zip, clona URLs git, las URLs de GitHub usan el flujo de releases.",
       install_failed: "Falló la instalación.",
+      github_helper: "Los repositorios públicos se instalan sin Git ni token de GitHub. Deja la revisión vacía para usar la rama predeterminada.",
+      git_helper: "Este origen puede requerir Git instalado localmente. Los repositorios públicos de GitHub no necesitan Git: elige GitHub.",
+      "error_git-not-installed": "Git no está instalado o no se encuentra. Elige GitHub para un repositorio público, importa un ZIP, o instala Git y reinicia AiFetchly.",
+      "error_github-repository-unavailable": "El repositorio no se encontró o no es accesible públicamente. Comprueba la URL y el acceso.",
+      "error_github-ref-not-found": "No se encontró la rama, etiqueta o commit. Comprueba el ref, o déjalo vacío para la rama predeterminada.",
+      "error_github-rate-limited": "Se alcanzó el límite público de GitHub. Espera e inténtalo de nuevo.",
+      "error_source-timeout": "La descarga caducó. Comprueba la conexión y reintenta.",
+      "error_source-download-failed": "No se pudo descargar el plugin. Reintenta más tarde.",
+      "error_source-redirect-rejected": "La descarga fue redirigida a una ubicación no confiable y se detuvo.",
+      "error_source-cancelled": "Instalación cancelada.",
       source_kind: "Origen de instalación",
     },
     marketplace: {

@@ -21,6 +21,8 @@ import type {
 import type { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
 import {
   PLUGIN_IMPORT,
+  PLUGIN_CANCEL_INSTALL,
+  PLUGIN_GET_INSTALL_CAPABILITIES,
   PLUGIN_INSTALL_FROM_SOURCE,
   PLUGIN_VALIDATE_PACKAGE,
   PLUGIN_LIST,
@@ -44,6 +46,7 @@ import {
   pluginByNameInputSchema,
   pluginImportInputSchema,
   pluginInstallFromSourceInputSchema,
+  pluginCancelInstallInputSchema,
   pluginValidatePackageInputSchema,
   pluginToggleInputSchema,
   pluginToggleSkillInputSchema,
@@ -377,91 +380,104 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  // Install from various sources (zip, folder, git, github, npm, url)
-  // Merged from dev branch. Uses registerValidatedHandler + passthrough schema.
+  // ------------------------------------------------------------------
+  // Install operations (git-free GitHub plugin installation design §12):
+  // UUID-keyed AbortController registry + typed domain results.
+  // ------------------------------------------------------------------
+  const activePluginInstalls = new Map<string, AbortController>();
+
+  // Best-effort, idempotent, scoped to ONE operation (design §12.4).
+  registerValidatedHandler(
+    PLUGIN_CANCEL_INSTALL,
+    pluginCancelInstallInputSchema,
+    async (input) => {
+      const controller = activePluginInstalls.get(input.operationId);
+      if (!controller) return false;
+      controller.abort();
+      return true;
+    }
+  );
+
+  // Capability flags for capability-aware dialog copy (design §12.4).
+  registerValidatedHandler(
+    PLUGIN_GET_INSTALL_CAPABILITIES,
+    pluginNoInputSchema,
+    async () => {
+      const { isGitHubArchiveInstallEnabled } = await import(
+        "@/service/pluginSources/GitHubPluginFetcher"
+      );
+      return { githubArchiveInstallEnabled: isGitHubArchiveInstallEnabled() };
+    }
+  );
+
+  // Install from various sources (zip, folder, git, github, npm, url).
+  // STRICT schema (operationId + kind enum + bounded strings); expected
+  // domain failures return as DATA inside the success envelope (§12.1).
   registerValidatedHandler(
     PLUGIN_INSTALL_FROM_SOURCE,
     pluginInstallFromSourceInputSchema,
-    async (input) => {
-      const data = input as {
-        kind: string;
-        overwrite?: boolean;
-        zipPath?: string;
-        folderPath?: string;
-        uri?: string;
-        ref?: string;
-        npmPackage?: string;
-        npmVersion?: string;
-        npmRegistry?: string;
-        npmAuthScope?: string;
-        npmAuthToken?: string;
-      };
-
-      const ALLOWED_KINDS = [
-        "local-zip",
-        "local-folder",
-        "git",
-        "github",
-        "npm",
-        "url",
-      ];
-      if (!ALLOWED_KINDS.includes(data.kind)) {
-        throw new Error("Invalid or missing source kind.");
+    async (data) => {
+      // Kind-specific required fields (the strict schema fixed the shape).
+      if (data.kind === "local-zip" && !data.zipPath) {
+        throw new Error("zipPath is required for local-zip.");
       }
-
-      // Reject CRLF / control chars in any string field that may reach spawn.
-      const stringFields = [
-        data.uri,
-        data.zipPath,
-        data.folderPath,
-        data.npmPackage,
-        data.npmVersion,
-        data.npmRegistry,
-        data.npmAuthScope,
-        data.ref,
-      ];
-      for (const v of stringFields) {
-        if (typeof v === "string" && /[\r\n]/.test(v)) {
-          throw new Error("Invalid characters in source field.");
-        }
+      if (data.kind === "local-folder" && !data.folderPath) {
+        throw new Error("folderPath is required for local-folder.");
       }
-
-      const { PluginInstallService } = await import(
-        "@/service/PluginInstallService"
-      );
-      const svc = new PluginInstallService();
-      const r = await svc.installFromSource({
-        kind: data.kind as PluginSourceKind,
-        overwrite: data.overwrite === true,
-        zipPath: data.zipPath,
-        folderPath: data.folderPath,
-        uri: data.uri,
-        ref: data.ref,
-        npmPackage: data.npmPackage,
-        npmVersion: data.npmVersion,
-        npmRegistry: data.npmRegistry,
-        npmAuthScope: data.npmAuthScope,
-        npmAuthToken: data.npmAuthToken,
-      });
-      if (!r.success) {
-        throw new Error(r.errors.map((e) => e.message).join("; "));
+      if (data.kind === "npm" && !data.npmPackage) {
+        throw new Error("npmPackage is required for npm.");
       }
-      // Promote the plugin's commands/agents immediately so they are usable in
-      // AiChatV2 without an app restart or manual reload (PRD §9.4 / design
-      // §11). Recoverable: a promotion failure must NOT fail an otherwise-
-      // successful install — the plugin is already persisted and a subsequent
-      // reload re-promotes.
+      if (
+        (data.kind === "git" || data.kind === "github" || data.kind === "url") &&
+        !data.uri
+      ) {
+        throw new Error("uri is required for this source kind.");
+      }
+      if (activePluginInstalls.has(data.operationId)) {
+        throw new Error("An install with this operationId is already active.");
+      }
+      const controller = new AbortController();
+      activePluginInstalls.set(data.operationId, controller);
       try {
-        await PluginComponentRegistryService.applyLoadedPlugins();
-      } catch (promotionError) {
-        log.warn(
-          "[plugin-ipc] command promotion after install-from-source failed (recoverable):",
-          promotionError
+        const { PluginInstallService } = await import(
+          "@/service/PluginInstallService"
         );
+        const svc = new PluginInstallService();
+        const r = await svc.installFromSource({
+          kind: data.kind as PluginSourceKind,
+          overwrite: data.overwrite === true,
+          zipPath: data.zipPath,
+          folderPath: data.folderPath,
+          uri: data.uri,
+          ref: data.ref,
+          npmPackage: data.npmPackage,
+          npmVersion: data.npmVersion,
+          npmRegistry: data.npmRegistry,
+          npmAuthScope: data.npmAuthScope,
+          npmAuthToken: data.npmAuthToken,
+          signal: controller.signal,
+        });
+        if (!r.success) {
+          // Typed domain failure — outer envelope stays success (§12.1).
+          return { success: false, errors: r.errors };
+        }
+        // Promote the plugin's commands/agents immediately so they are usable
+        // in AiChatV2 without an app restart or manual reload (PRD §9.4 /
+        // design §11). Recoverable: a promotion failure must NOT fail an
+        // otherwise-successful install.
+        try {
+          await PluginComponentRegistryService.applyLoadedPlugins();
+        } catch (promotionError) {
+          log.warn(
+            "[plugin-ipc] command promotion after install-from-source failed (recoverable):",
+            promotionError
+          );
+        }
+        broadcastAifetchlyConfigChanged({ source: "plugin" });
+        return { success: true, plugin: r.plugin };
+      } finally {
+        activePluginInstalls.delete(data.operationId);
       }
-      // Plugin set changed — refresh any open slash suggestions (PRD Problem 2).
-      broadcastAifetchlyConfigChanged({ source: "plugin" });
-      return r.plugin;
     }
   );
 

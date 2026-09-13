@@ -2826,6 +2826,16 @@ export default {
       url_hint:
         "自動検出: .zip はダウンロード、git URL はクローン、GitHub URL はリリース フローを使用。",
       install_failed: "インストールに失敗しました。",
+      github_helper: "公開リポジトリは Git も GitHub トークンも不要でインストールできます。リビジョンを空にするとデフォルトブランチになります。",
+      git_helper: "このソースにはローカルの Git が必要な場合があります。公開 GitHub リポジトリには Git 不要です — GitHub を選択してください。",
+      "error_git-not-installed": "Git がインストールされていないか見つかりません。公開リポジトリには GitHub を選ぶか、ZIP をインポートするか、Git をインストールして AiFetchly を再起動してください。",
+      "error_github-repository-unavailable": "リポジトリが見つからないか、公開されていません。URL とアクセス権を確認してください。",
+      "error_github-ref-not-found": "このブランチ・タグ・コミットは見つかりませんでした。リビジョンを確認するか、空にしてデフォルトブランチを使用してください。",
+      "error_github-rate-limited": "GitHub の公開リクエスト上限に達しました。しばらく待って再試行してください。",
+      "error_source-timeout": "ダウンロードがタイムアウトしました。接続を確認して再試行してください。",
+      "error_source-download-failed": "プラグインをダウンロードできませんでした。後でもう一度お試しください。",
+      "error_source-redirect-rejected": "ダウンロードが信頼できない場所へリダイレクトされたため停止しました。",
+      "error_source-cancelled": "インストールをキャンセルしました。",
       source_kind: "インストール元",
     },
     marketplace: {

@@ -84,13 +84,28 @@ export class GitPluginFetcher implements PluginSourceFetcher {
     if (req.ref) args.push("--branch", req.ref);
     args.push(uri, target);
 
-    await runUntilSettled(
+    const settle = await runUntilSettled(
       this.spawnFn("git", args, { cwd: tmp, env: process.env }),
       DEFAULT_TIMEOUT_MS
     );
 
     if (!fs.existsSync(target)) {
       fs.rmSync(tmp, { recursive: true, force: true });
+      // FR-17 / design §11.3: a missing Git executable is a SPECIFIC,
+      // recoverable condition — never a generic clone failure. Other spawn
+      // errors and non-zero exits remain safe generic install failures.
+      if (settle.kind === "spawn-error" && settle.errorCode === "ENOENT") {
+        return {
+          success: false,
+          errors: [
+            err(
+              "git-not-installed",
+              "Git is not installed or cannot be found. Choose the GitHub source for a public repository (no Git needed), import a ZIP, or install Git and restart AiFetchly.",
+              { recoverable: true }
+            ),
+          ],
+        };
+      }
       return {
         success: false,
         errors: [
@@ -153,20 +168,29 @@ function hasRootManifest(dir: string): boolean {
 }
 
 /**
+ * WHY the process settled (design §11.3): closed, spawn-error (with the
+ * error code so ENOENT = missing Git), or timeout. The caller combines
+ * this with on-disk state to produce a typed result.
+ */
+export type GitProcessResult =
+  | { readonly kind: "closed"; readonly exitCode: number | null }
+  | { readonly kind: "spawn-error"; readonly errorCode?: string }
+  | { readonly kind: "timeout" };
+
+/**
  * Resolve when the child either closes or errors, OR when the timeout fires
- * (whichever first). The caller then judges success by checking on-disk
- * state, so we don't care which path fired.
+ * (whichever first), reporting WHICH path fired.
  */
 function runUntilSettled(
   child: SpawnChildLike,
   timeoutMs: number
-): Promise<void> {
-  return new Promise<void>((resolve) => {
+): Promise<GitProcessResult> {
+  return new Promise<GitProcessResult>((resolve) => {
     let settled = false;
-    const finish = () => {
+    const finish = (result: GitProcessResult) => {
       if (!settled) {
         settled = true;
-        resolve();
+        resolve(result);
       }
     };
     const timer = setTimeout(() => {
@@ -176,7 +200,7 @@ function runUntilSettled(
       } catch {
         /* best-effort */
       }
-      finish();
+      finish({ kind: "timeout" });
     }, timeoutMs);
     // Capture stderr so it never reaches the renderer or logs unfiltered,
     // but we deliberately ignore the content here.
@@ -186,13 +210,16 @@ function runUntilSettled(
     child.stdout?.on("data", () => {
       /* swallow */
     });
-    child.on("close", () => {
+    child.on("close", (e) => {
       clearTimeout(timer);
-      finish();
+      finish({ kind: "closed", exitCode: e?.code ?? null });
     });
-    child.on("error", () => {
+    child.on("error", (e: Error) => {
       clearTimeout(timer);
-      finish();
+      finish({
+        kind: "spawn-error",
+        errorCode: (e as { code?: string }).code,
+      });
     });
   });
 }

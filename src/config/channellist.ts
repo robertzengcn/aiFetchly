@@ -615,6 +615,11 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+// Git-free GitHub plugin installation (design §12.4): renderer-driven
+// cancellation keyed by install operationId + main-process capability flags.
+export const PLUGIN_CANCEL_INSTALL = "plugin:cancel-install";
+export const PLUGIN_GET_INSTALL_CAPABILITIES =
+  "plugin:get-install-capabilities";
 export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
 export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 
