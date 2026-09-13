@@ -72,7 +72,11 @@ import {
   importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
-import { CONVERSATION_TOOL_HISTORY_TOOL_NAME } from "@/entityTypes/conversationToolHistoryTypes";
+import {
+  CONVERSATION_TOOL_HISTORY_TOOL_NAME,
+  CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+  CONVERSATION_HISTORY_READ_TOOL_NAME,
+} from "@/entityTypes/conversationToolHistoryTypes";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1147,6 +1151,108 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         "@/service/agentTools/conversationToolHistoryTool"
       );
       return handleConversationToolHistory(args, context.conversationId);
+    },
+  },
+  {
+    name: CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+    description:
+      "Search the recoverable conversation history archive for a literal phrase (1–200 chars). " +
+      "Returns excerpts with opaque source_id references the model can pass to conversation_history_read. " +
+      "No-match is final only when scan_complete is true; otherwise resume with next_cursor. " +
+      "The active conversation is bound by trusted context — never pass it as an argument. " +
+      "Use this before quoting historical details you are not certain about; report missing/partial sources honestly.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Literal user text to search for (1–200 characters). Never raw FTS/SQL syntax.",
+          minLength: 1,
+          maxLength: 200,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+        },
+        limit: {
+          type: "number",
+          description: "Max records to return (default 10, max 20).",
+          default: 10,
+          minimum: 1,
+          maximum: 20,
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { handleConversationHistorySearch } = await import(
+        "@/service/agentTools/conversationHistorySearchTool"
+      );
+      return handleConversationHistorySearch(args, context);
+    },
+  },
+  {
+    name: CONVERSATION_HISTORY_READ_TOOL_NAME,
+    description:
+      "Read exact source content from the recoverable history archive by opaque source_id (from search), " +
+      "by public message_id, or as a range from_source_id→to_source_id. Returns exact excerpts and a " +
+      "continuation cursor for large messages/ranges. Pass neighbors 0–2 to include surrounding rows. " +
+      "An ambiguous message_id returns candidate source references — re-read by source_id to disambiguate. " +
+      "The active conversation is bound by trusted context — never pass it as an argument.",
+    parameters: {
+      type: "object",
+      properties: {
+        source_id: {
+          type: "string",
+          description:
+            "Opaque source reference from a search result. Reads that exact slice.",
+        },
+        message_id: {
+          type: "string",
+          description:
+            "Public message id. Ambiguous ids return all candidate source references.",
+        },
+        from_source_id: {
+          type: "string",
+          description: "Range start (inclusive). Use with to_source_id only.",
+        },
+        to_source_id: {
+          type: "string",
+          description: "Range end (inclusive). Use with from_source_id only.",
+        },
+        neighbors: {
+          type: "number",
+          description:
+            "Include 0–2 surrounding rows (single-point modes only).",
+          minimum: 0,
+          maximum: 2,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+        },
+      },
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { handleConversationHistoryRead } = await import(
+        "@/service/agentTools/conversationHistoryReadTool"
+      );
+      return handleConversationHistoryRead(args, context);
     },
   },
   {

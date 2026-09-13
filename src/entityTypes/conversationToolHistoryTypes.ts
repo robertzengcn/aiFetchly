@@ -4,8 +4,16 @@
  * tool_call/tool_result payload into the prompt.
  */
 
-export const CONVERSATION_TOOL_HISTORY_TOOL_NAME =
-  "conversation_tool_history";
+export const CONVERSATION_TOOL_HISTORY_TOOL_NAME = "conversation_tool_history";
+
+/**
+ * Recoverable-history retrieval tools (technical-design §7.1 / §7.2). These
+ * are the public tool names exposed to the model; the active conversation is
+ * supplied by trusted tool context, never as a model argument.
+ */
+export const CONVERSATION_HISTORY_SEARCH_TOOL_NAME =
+  "conversation_history_search";
+export const CONVERSATION_HISTORY_READ_TOOL_NAME = "conversation_history_read";
 
 /** Max receipts in the always-injected system index. */
 export const TOOL_HISTORY_INDEX_LIMIT = 30;

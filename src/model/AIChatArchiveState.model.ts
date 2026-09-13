@@ -39,9 +39,7 @@ export class AIChatArchiveStateModel extends BaseDb {
    * resurrected — a new row with a new epoch is created so prior references
    * (cursors, source IDs, generations) remain invalid.
    */
-  async ensureState(
-    conversationId: string
-  ): Promise<AIChatArchiveStateEntity> {
+  async ensureState(conversationId: string): Promise<AIChatArchiveStateEntity> {
     return this.sqliteDb.connection.transaction(async (manager) => {
       const repo = manager.getRepository(AIChatArchiveStateEntity);
       const existing = await repo.findOne({ where: { conversationId } });
@@ -95,6 +93,24 @@ export class AIChatArchiveStateModel extends BaseDb {
     });
     if (!state) return;
     state.sourceRevision = state.sourceRevision + 1;
+    await this.repository.save(state);
+  }
+
+  /**
+   * Update the index state for a conversation (absent → indexing → complete,
+   * or → stale when the source changes under a still-valid index). Used by
+   * the indexing job to signal readiness/staleness so the retrieval service
+   * can report `index_complete` accurately.
+   */
+  async setIndexState(
+    conversationId: string,
+    indexState: "absent" | "indexing" | "complete" | "stale"
+  ): Promise<void> {
+    const state = await this.repository.findOne({
+      where: { conversationId },
+    });
+    if (!state) return;
+    state.indexState = indexState;
     await this.repository.save(state);
   }
 }
