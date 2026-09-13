@@ -2,7 +2,10 @@ import { BaseDb } from "@/model/Basedb";
 import { AIChatArchiveTurnEntity } from "@/entity/AIChatArchiveTurn.entity";
 import type { Repository } from "typeorm";
 import { Brackets } from "typeorm";
-import type { ArchiveTurnStatus } from "@/entityTypes/aiChatArchiveTypes";
+import type {
+  ArchiveTurnStatus,
+  ArchiveTurnUpsertInput,
+} from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Data access for archive turns: the [first..last] (timestamp, rowId) range of
@@ -35,9 +38,7 @@ export class AIChatArchiveTurnModel extends BaseDb {
    * is unique, so re-projection is a safe overwrite of mutable fields.
    */
   async upsertTurn(
-    input: Omit<AIChatArchiveTurnEntity, "id" | "createdAt" | "updatedAt"> & {
-      id?: number;
-    }
+    input: ArchiveTurnUpsertInput
   ): Promise<AIChatArchiveTurnEntity> {
     const existing = await this.repository.findOne({
       where: {

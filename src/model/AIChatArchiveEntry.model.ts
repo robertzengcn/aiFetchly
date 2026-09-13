@@ -2,6 +2,7 @@ import { BaseDb } from "@/model/Basedb";
 import { AIChatArchiveEntryEntity } from "@/entity/AIChatArchiveEntry.entity";
 import type { Repository } from "typeorm";
 import { Brackets } from "typeorm";
+import type { ArchiveEntryUpsertInput } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Data access for archive entry projections: the lightweight index of source
@@ -19,13 +20,15 @@ export class AIChatArchiveEntryModel extends BaseDb {
 
   constructor(dbpath: string) {
     super(dbpath);
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIChatArchiveEntryEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIChatArchiveEntryEntity
+    );
   }
 
   protected onSqliteDbRebound(): void {
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIChatArchiveEntryEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIChatArchiveEntryEntity
+    );
   }
 
   /**
@@ -34,10 +37,7 @@ export class AIChatArchiveEntryModel extends BaseDb {
    * re-projection of the same row is a safe no-op overwrite.
    */
   async upsertEntry(
-    input: Omit<
-      AIChatArchiveEntryEntity,
-      "id" | "createdAt" | "updatedAt"
-    > & { id?: number }
+    input: ArchiveEntryUpsertInput
   ): Promise<AIChatArchiveEntryEntity> {
     const existing = await this.repository.findOne({
       where: {
@@ -114,8 +114,7 @@ export class AIChatArchiveEntryModel extends BaseDb {
       where: { conversationId, epoch, toolCallId },
       take: 8,
     });
-    const callEntry =
-      rows.find((r) => r.messageType === "tool_call") ?? null;
+    const callEntry = rows.find((r) => r.messageType === "tool_call") ?? null;
     const resultEntry =
       rows.find((r) => r.messageType === "tool_result") ?? null;
     return { callEntry, resultEntry };
@@ -134,6 +133,32 @@ export class AIChatArchiveEntryModel extends BaseDb {
     return this.repository.findOne({
       where: { conversationId, epoch, sourceRowId },
     });
+  }
+
+  /**
+   * Count all entries for a conversation (any epoch) — used to verify that the
+   * indexer projected a row for every source message in tests/diagnostics.
+   */
+  async countByConversation(conversationId: string): Promise<number> {
+    return this.repository.count({ where: { conversationId } });
+  }
+
+  /**
+   * Set the paired tool row id on an entry after its counterpart is projected.
+   * The forward indexer walk projects a tool_call before its tool_result
+   * exists, so the call's pair can only be resolved when the result arrives.
+   * This targeted update establishes the backward link without re-upserting.
+   */
+  async setPairedSourceRowId(
+    conversationId: string,
+    epoch: string,
+    sourceRowId: number,
+    pairedSourceRowId: number
+  ): Promise<void> {
+    await this.repository.update(
+      { conversationId, epoch, sourceRowId },
+      { pairedSourceRowId }
+    );
   }
 
   /**

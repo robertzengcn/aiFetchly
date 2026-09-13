@@ -113,4 +113,53 @@ export class AIChatArchiveStateModel extends BaseDb {
     state.indexState = indexState;
     await this.repository.save(state);
   }
+
+  /**
+   * Atomically persist index progress: the resumable cursor, the high-water
+   * compaction boundary (end of the last complete turn), and the index state.
+   * Called by the indexer after each bounded batch so a crash mid-backfill
+   * resumes from the last fully-processed row (§15: "resumable batches").
+   *
+   * The high-water doubles as the compaction snapshot end / retained-suffix
+   * start (§11.2): the coordinator reads it to know where the compactable
+   * prefix ends. Only advance it to the end of a *complete* turn — the live
+   * turn must remain in the retained suffix.
+   */
+  async updateIndexProgress(
+    conversationId: string,
+    progress: {
+      indexCursorJson: string;
+      highWaterTimestampMs: number;
+      highWaterRowId: number;
+      indexState: "indexing" | "complete" | "stale";
+    }
+  ): Promise<void> {
+    const state = await this.repository.findOne({
+      where: { conversationId },
+    });
+    if (!state) return;
+    state.indexCursorJson = progress.indexCursorJson;
+    state.highWaterTimestampMs = progress.highWaterTimestampMs;
+    state.highWaterRowId = progress.highWaterRowId;
+    state.indexState = progress.indexState;
+    await this.repository.save(state);
+  }
+
+  /**
+   * List archive states whose index is not yet complete (absent/indexing/
+   * stale). Used by the startup bootstrap to find conversations that still
+   * need backfill. Bounded by `limit` so a huge legacy archive does not load
+   * every row at once.
+   */
+  async listIncomplete(
+    limit: number = 100
+  ): Promise<AIChatArchiveStateEntity[]> {
+    return this.repository
+      .createQueryBuilder("s")
+      .where("s.indexState != :complete", { complete: "complete" })
+      .andWhere("s.deletedAt IS NULL")
+      .orderBy("s.updatedAt", "DESC")
+      .take(Math.min(Math.max(limit, 1), 500))
+      .getMany();
+  }
 }

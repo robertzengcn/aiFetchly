@@ -51,6 +51,43 @@ export interface CompactionClaim {
   readonly fence: number;
 }
 
+/**
+ * Input shape for AIChatArchiveEntryModel.upsertEntry. Explicitly listed
+ * (rather than Omit<Entity, ...>) so plain object literals satisfy it —
+ * TypeORM entity classes inherit instance methods (save/remove/recover) that
+ * an `Omit` of the column set still carries, making object literals
+ * unassignable.
+ */
+export interface ArchiveEntryUpsertInput {
+  conversationId: string;
+  epoch: string;
+  sourceRowId: number;
+  timestampMs: number;
+  sourceRevision: number;
+  turnId?: string;
+  messageType: string;
+  toolCallId?: string;
+  pairedSourceRowId?: number;
+  contentCodePointLength: number;
+  messageId: string;
+}
+
+/**
+ * Input shape for AIChatArchiveTurnModel.upsertTurn (see note above).
+ */
+export interface ArchiveTurnUpsertInput {
+  conversationId: string;
+  epoch: string;
+  turnId: string;
+  firstTimestampMs: number;
+  firstRowId: number;
+  lastTimestampMs: number;
+  lastRowId: number;
+  status: ArchiveTurnStatus;
+  completedAt?: Date;
+  confidence: string;
+}
+
 export type ArchiveTurnStatus =
   | "open"
   | "completed"
@@ -68,10 +105,7 @@ export type CompactionRunState =
 
 export type CompactionSectionStatus = "staged" | "published" | "invalidated";
 
-export type ContextGenerationStatus =
-  | "active"
-  | "superseded"
-  | "invalidated";
+export type ContextGenerationStatus = "active" | "superseded" | "invalidated";
 
 export type ArchiveIndexState = "absent" | "indexing" | "complete" | "stale";
 

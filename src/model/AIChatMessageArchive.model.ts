@@ -304,4 +304,74 @@ export class AIChatMessageArchiveModel extends BaseDb {
     const stateModel = new AIChatArchiveStateModel(this.dbPath);
     return stateModel.getState(conversationId);
   }
+
+  /**
+   * Bounded keyset walk of raw source rows above a (timestamp, id) resume
+   * cursor, in ASC order. Used by the indexer to backfill entries/turns/
+   * search fragments in resumable batches (§15). Unlike readPageForward, this
+   * walk is NOT cursor-epoch-scoped (the indexer owns the resume cursor via
+   * the archive state's indexCursorJson) and returns raw rows so the indexer
+   * can project entries/turns/fragments. Bounded by `batchRows`.
+   */
+  async readBatchAboveCursor(input: {
+    conversationId: string;
+    afterTimestampMs: number;
+    afterRowId: number;
+    batchRows: number;
+  }): Promise<{ rows: AIChatMessageEntity[]; hasMore: boolean }> {
+    const limit = Math.min(
+      Math.max(input.batchRows, 1),
+      AI_CHAT_RECOVERABLE_DEFAULTS.metadataPageRows
+    );
+    const qb = this.repository
+      .createQueryBuilder("m")
+      .where("m.conversationId = :conversationId", {
+        conversationId: input.conversationId,
+      })
+      .andWhere(
+        new Brackets((b) => {
+          b.where("m.timestamp > :ts", {
+            ts: new Date(input.afterTimestampMs),
+          }).orWhere("m.timestamp = :ts2 AND m.id > :rid", {
+            ts2: new Date(input.afterTimestampMs),
+            rid: input.afterRowId,
+          });
+        })
+      )
+      .orderBy("m.timestamp", "ASC")
+      .addOrderBy("m.id", "ASC")
+      .take(limit + 1); // +1 to detect hasMore without a second round-trip
+
+    const rows = await qb.getMany();
+    const hasMore = rows.length > limit;
+    return { rows: hasMore ? rows.slice(0, limit) : rows, hasMore };
+  }
+
+  /**
+   * Count raw source rows for a conversation above a resume cursor. Used by
+   * the indexer to report remaining backfill work (telemetry), bounded to a
+   * single COUNT query.
+   */
+  async countAboveCursor(input: {
+    conversationId: string;
+    afterTimestampMs: number;
+    afterRowId: number;
+  }): Promise<number> {
+    return this.repository
+      .createQueryBuilder("m")
+      .where("m.conversationId = :conversationId", {
+        conversationId: input.conversationId,
+      })
+      .andWhere(
+        new Brackets((b) => {
+          b.where("m.timestamp > :ts", {
+            ts: new Date(input.afterTimestampMs),
+          }).orWhere("m.timestamp = :ts2 AND m.id > :rid", {
+            ts2: new Date(input.afterTimestampMs),
+            rid: input.afterRowId,
+          });
+        })
+      )
+      .getCount();
+  }
 }
