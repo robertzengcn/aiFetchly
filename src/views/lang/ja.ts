@@ -2342,7 +2342,6 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
-
     queue: {
       queued: "待機中",
       steering: "方向転換中…",
@@ -2359,8 +2358,10 @@ export default {
       resume: "キューを再開",
       direction_updated: "方向を更新しました",
       recovered_after_restart: "再起動後に復元されました",
-      attachments_not_steerable: "添付ファイル付きメッセージは現在の応答完了後に送信されます。",
-      limit_reached: "キューの上限に達しました。先にメッセージを削除してください。",
+      attachments_not_steerable:
+        "添付ファイル付きメッセージは現在の応答完了後に送信されます。",
+      limit_reached:
+        "キューの上限に達しました。先にメッセージを削除してください。",
       steer_failed: "このメッセージを方向転換できませんでした。",
       queue_disabled: "メッセージキューは現在無効です。",
     },
@@ -3114,7 +3115,8 @@ export default {
   portableMemory: {
     banner: "ポータブルメモリ",
     enable: "ポータブルメモリを有効化",
-    disabledHint: "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
+    disabledHint:
+      "メモリはAiFetchly内にプライベートに保存されています。ポータブルメモリを有効にすると、プロジェクトのコンテキストを他のエージェントと共有できます。",
     gitState: "Git",
     pendingReview: "レビュー待ち",
     rejected: "拒否済み",
@@ -3124,13 +3126,17 @@ export default {
     loadingPreview: "プレビューを読み込み中…",
     plannedFiles: "作成されるファイル",
     existingRecords: "既存のメモリファイルを検出",
-    identityInvalid: "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
+    identityInvalid:
+      "ワークスペースIDファイルが無効です。先に .aifetchly/workspace.json を修復または削除してください。",
     visibility: "共有モード",
     visibilityLocal: "ローカルのみ",
-    visibilityLocalHint: "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
+    visibilityLocalHint:
+      "ファイルはこのマシンにのみ保存され、Gitでは通常無視されます。",
     visibilityTeam: "チーム共有可",
-    visibilityTeamHint: "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
-    teamWarning: "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
+    visibilityTeamHint:
+      "ファイルをGitにコミットして、チームメイトや他のエージェントと共有できます。",
+    teamWarning:
+      "コミットされたメモリは、後から削除してもGit履歴に残ります。コミット前に差分を確認してください。シークレットフィルターはリスクを減らしますが、すべての機密値を検出できるわけではありません。",
     importPolicy: "外部変更のレビュー",
     policyReviewNew: "新規レコードをレビュー",
     policyAutomatic: "自動的にインポート",
@@ -3140,7 +3146,8 @@ export default {
     exportActive: "アクティブなメモリをエクスポート",
     exportAll: "アクティブとアーカイブ済みをエクスポート",
     bridges: "エージェント指示ブリッジ",
-    bridgesHint: "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
+    bridgesHint:
+      "Claude CodeやCodexなどのエージェントにメモリインデックスの読み取りを指示する、オプションの管理ブロックです。",
     enableConfirm: "有効化",
     bridgeAction: {
       create: "作成されます",
@@ -3154,8 +3161,10 @@ export default {
     storagePortableLocal: "ポータブル — ローカル",
     storagePortableTeam: "ポータブル — チーム",
     regenerateIdentity: "IDを再生成",
-    regenerateIdentityWarning: "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
-    regenerateGitWarning: "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
+    regenerateIdentityWarning:
+      "ワークスペースIDを再生成すると、意図的なフォーク用の新しいポータブルUUIDが作成されます。レコードIDはスコープ付き一意性の下で保持されます。元とフォークは共有変更なしに共存します。",
+    regenerateGitWarning:
+      "現在のIDはGitで追跡されています。再生成するとすべてのクローンのコミット済みIDが変更されます。チームと調整してください。",
     regenerateConfirm: "再生成",
     sync: {
       synced: "同期済み",
@@ -3186,7 +3195,8 @@ export default {
     conflictTitle: "競合を解決",
     loadingConflict: "競合を読み込み中…",
     noConflict: "競合が見つかりません。",
-    conflictWarning: "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
+    conflictWarning:
+      "読み取りから保存までの間に、ファイルが外部で編集されました。保持するバージョンを選んでください。",
     aiFetchlyVersion: "AiFetchly プロジェクション",
     fileVersion: "現在のファイル",
     fileAbsent: "(ファイル不在)",
@@ -3361,7 +3371,8 @@ export default {
       delete: "チャットを削除",
       export: "会話をエクスポート",
       duplicate: "会話を複製",
-      deleteConfirm: "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
+      deleteConfirm:
+        "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
     },
     runStrip: {
       goal: "ゴール：{objective}",
@@ -3387,7 +3398,8 @@ export default {
     },
     artifacts: {
       selectConversation: "会話を選択すると生成物が表示されます。",
-      empty: "生成されたレポートやページはここに表示されます。HTML レポートを依頼すると作成されます。",
+      empty:
+        "生成されたレポートやページはここに表示されます。HTML レポートを依頼すると作成されます。",
     },
     activity: {
       goal: "ゴール",
@@ -3429,7 +3441,7 @@ export default {
       runningTool: "{tool} を実行中",
       legacyReceipt: "以前のツール活動",
       artifactCreated: "HTML レポートを作成しました — アーティファクトで開く",
-        openArtifact: "開く",
+      openArtifact: "開く",
       imagesGenerated: "画像を生成しました",
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
@@ -3622,17 +3634,19 @@ export default {
     unknown_account: "不明なアカウント",
     proxy_active: "プロキシ",
     screenshot: {
-        capture: "サムネイルを更新",
-        alt: "最新のブラウザのスクリーンショット",
-      },
+      capture: "サムネイルを更新",
+      alt: "最新のブラウザのスクリーンショット",
+    },
     start: {
       title: "管理ブラウザを起動",
-      empty: "利用できるアカウントがまだありません。保存済みログインのアカウントを先に追加してください。",
+      empty:
+        "利用できるアカウントがまだありません。保存済みログインのアカウントを先に追加してください。",
       account_label: "アカウント",
       purpose_placeholder: "ブラウザに何をさせますか？",
       start: "ブラウザを起動",
       confirm_title: "管理ブラウザを起動しますか？",
-      confirm_body: "{account} の保存済みログインで可視の Chrome ウィンドウを開きます。",
+      confirm_body:
+        "{account} の保存済みログインで可視の Chrome ウィンドウを開きます。",
     },
     approval: {
       title: "ブラウザ操作の承認が必要です",
@@ -3656,7 +3670,8 @@ export default {
       cache_clear_deferred: "セッション終了後にキャッシュを削除します",
       cache_clear_completed: "ブラウザキャッシュを削除しました",
       cache_clear_failed: "ブラウザキャッシュの削除に失敗しました",
-      browser_state_blocked: "ブラウザのプロンプト（ダイアログ・ポップアップ・ダウンロード）を安全にブロックしました",
+      browser_state_blocked:
+        "ブラウザのプロンプト（ダイアログ・ポップアップ・ダウンロード）を安全にブロックしました",
     },
     states: {
       starting: "起動中",
@@ -3697,7 +3712,8 @@ export default {
       managed_browser_disabled: "管理ブラウザは無効です",
       account_in_use: "このアカウントは使用中です",
       global_session_limit: "セッション上限に達しました",
-      browser_dependency_missing: "ブラウザが未インストールまたは利用できません",
+      browser_dependency_missing:
+        "ブラウザが未インストールまたは利用できません",
       worker_exited: "ブラウザプロセスが予期せず終了しました",
       worker_start_timeout: "ブラウザの起動がタイムアウトしました",
       challenge_requires_handoff: "このページには確認が必要です",
@@ -3723,19 +3739,24 @@ export default {
         password_field: "パスワード欄はあなたが入力する必要があります。",
         recovery_flow: "アカウントが復旧フローに入りました。",
         account_selection_ambiguous: "使用するアカウントが不明です。",
-        browser_permission_prompt: "ブラウザがあなたにしか許可できない権限を要求しました。",
-        destructive_action_unclear: "この操作は破壊的な可能性があるため確認が必要です。",
-        repeated_action_failure: "ステップが繰り返し失敗しました。手動で完了してください。",
+        browser_permission_prompt:
+          "ブラウザがあなたにしか許可できない権限を要求しました。",
+        destructive_action_unclear:
+          "この操作は破壊的な可能性があるため確認が必要です。",
+        repeated_action_failure:
+          "ステップが繰り返し失敗しました。手動で完了してください。",
         user_requested: "あなたがこのステップの引き継ぎを要求しました。",
         challenge_unresolved: "認証チャレンジを自動解決できませんでした。",
       },
     },
     settings: {
       title: "管理ブラウザ",
-      description: "AIがログイン済みタスクで使用する内蔵ソーシャルブラウザとキャッシュを管理します。",
+      description:
+        "AIがログイン済みタスクで使用する内蔵ソーシャルブラウザとキャッシュを管理します。",
       browser_enabled: "管理ブラウザを有効にする",
       active_session_title: "ブラウザセッションが実行中です",
-      active_session_body: "管理ブラウザを無効にする前に、実行中のセッションの扱いを決めてください。",
+      active_session_body:
+        "管理ブラウザを無効にする前に、実行中のセッションの扱いを決めてください。",
       active_finish: "現在のセッションを完了",
       clear_account_label: "アカウント",
       clear_selected: "選択したアカウントを削除",
@@ -3747,20 +3768,24 @@ export default {
       cache_phase_done: "完了",
       cache_phase_failed: "失敗",
       active_stop_now: "今すぐ停止",
-      stop_failed: "実行中のセッションを停止できませんでした。設定は有効のままです。再試行するか、チャットカードからブラウザを停止してください。",
+      stop_failed:
+        "実行中のセッションを停止できませんでした。設定は有効のままです。再試行するか、チャットカードからブラウザを停止してください。",
       cache_enabled: "セッション間でディスクキャッシュを保持",
       clear_cache_on_exit: "アプリ終了時にキャッシュを削除",
       cache_size: "キャッシュサイズ：{size}",
       last_cleared: "最終削除 {when}",
       clear_all: "キャッシュを削除",
-      clear_preserves_logins: "キャッシュ削除では保存されたログインとアカウントデータは保持されます。",
+      clear_preserves_logins:
+        "キャッシュ削除では保存されたログインとアカウントデータは保持されます。",
       clear_confirm_title: "ブラウザキャッシュを削除しますか？",
       clear_confirm_body: "約 {size} のキャッシュファイルが削除されます。",
-      clear_confirm_preserved: "保存されたログインセッションとアカウントデータは保持されます。",
+      clear_confirm_preserved:
+        "保存されたログインセッションとアカウントデータは保持されます。",
       clear_confirm_ok: "キャッシュを削除",
       disabled_reasons: {
         user_setting_disabled: "管理ブラウザはこの設定でオフになっています。",
-        release_flag_disabled: "管理ブラウザはリリースフラグにより一時的に無効です。",
+        release_flag_disabled:
+          "管理ブラウザはリリースフラグにより一時的に無効です。",
       },
     },
   },
@@ -3811,5 +3836,22 @@ export default {
       unsupportedSchema:
         "この報告タイプは対応していません。アプリを更新してください。",
     },
+  },
+  // アプリケーション終了とシステムトレイ（PRD FR-08）
+  applicationLifecycle: {
+    closeTitle: "AiFetchly を閉じますか？",
+    closeDescription:
+      "終了すると実行中のタスクが停止します。「システムトレイで実行を続ける」はウィンドウを非表示にし、タスクはシステムトレイで続行されます。",
+    activeTasks: "{n} 件のタスクが実行中です。",
+    keepRunning: "システムトレイで実行を続ける",
+    exitApplication: "アプリケーションを終了",
+    cancel: "キャンセル",
+    exiting: "AiFetchly を終了しています…",
+    stoppingTasks: "実行中のタスクを停止しています…",
+    trayUnavailable:
+      "システムトレイを利用できません。ウィンドウは開いたままになります。終了するには「終了」を使用してください。",
+    trayOpen: "AiFetchly を開く",
+    trayExit: "アプリケーションを終了",
+    trayTooltip: "AiFetchly",
   },
 };

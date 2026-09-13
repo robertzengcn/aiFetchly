@@ -546,6 +546,13 @@ import {
   OUTBOUND_EMAIL_BATCH_DISCARD,
   OUTBOUND_EMAIL_BATCH_STATUS,
   OUTBOUND_EMAIL_BATCH_PROGRESS,
+  // Application lifecycle (exit & system tray) — plain channels, NOT
+  // AI-gated (design §10). Events flow main→renderer; choices flow back.
+  APPLICATION_LIFECYCLE_GET_STATE,
+  APPLICATION_CLOSE_CHOICE_REQUEST,
+  APPLICATION_CLOSE_CHOICE_ACK,
+  APPLICATION_CLOSE_CHOICE_SUBMIT,
+  APPLICATION_LIFECYCLE_STATE_CHANGED,
   // E2E test-support channel — no handler exists outside AIFETCHLY_E2E=1, so
   // a production/dev invoke always fails with "No handler registered" (see
   // src/main-process/e2e/E2ESeedIpc.ts).
@@ -711,6 +718,9 @@ contextBridge.exposeInMainWorld("api", {
       USER_INFO_UPDATED,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -799,6 +809,9 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -851,6 +864,9 @@ contextBridge.exposeInMainWorld("api", {
       USER_INFO_UPDATED,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -1367,6 +1383,10 @@ contextBridge.exposeInMainWorld("api", {
       // E2E test-support: handler registered only under AIFETCHLY_E2E=1;
       // elsewhere this invoke fails with "No handler registered".
       E2E_SEED_EMAIL_SERVICE,
+      // Application lifecycle (exit & system tray, design §10) — NOT AI-gated
+      APPLICATION_LIFECYCLE_GET_STATE,
+      APPLICATION_CLOSE_CHOICE_ACK,
+      APPLICATION_CLOSE_CHOICE_SUBMIT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

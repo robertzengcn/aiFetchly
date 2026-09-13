@@ -2389,7 +2389,6 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
-
     queue: {
       queued: "En cola",
       steering: "Redirigiendo…",
@@ -2406,8 +2405,10 @@ export default {
       resume: "Reanudar cola",
       direction_updated: "Dirección actualizada",
       recovered_after_restart: "Recuperado tras reiniciar",
-      attachments_not_steerable: "Los mensajes con adjuntos se enviarán cuando termine la respuesta actual.",
-      limit_reached: "Límite de cola alcanzado. Elimina un mensaje antes de volver a enviar.",
+      attachments_not_steerable:
+        "Los mensajes con adjuntos se enviarán cuando termine la respuesta actual.",
+      limit_reached:
+        "Límite de cola alcanzado. Elimina un mensaje antes de volver a enviar.",
       steer_failed: "No se pudo redirigir este mensaje.",
       queue_disabled: "La cola de mensajes está deshabilitada.",
     },
@@ -3180,7 +3181,8 @@ export default {
   portableMemory: {
     banner: "Memoria portátil",
     enable: "Activar memoria portátil",
-    disabledHint: "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
+    disabledHint:
+      "Las memorias se guardan de forma privada en AiFetchly. Activa la memoria portátil para compartir el contexto del proyecto con otros agentes.",
     gitState: "Git",
     pendingReview: "Pendiente de revisión",
     rejected: "Rechazada",
@@ -3190,13 +3192,17 @@ export default {
     loadingPreview: "Cargando vista previa…",
     plannedFiles: "Archivos que se crearán",
     existingRecords: "Archivos de memoria existentes detectados",
-    identityInvalid: "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
+    identityInvalid:
+      "El archivo de identidad del espacio de trabajo no es válido. Corrige o elimina .aifetchly/workspace.json primero.",
     visibility: "Modo de uso compartido",
     visibilityLocal: "Solo local",
-    visibilityLocalHint: "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
+    visibilityLocalHint:
+      "Los archivos permanecen en esta máquina; normalmente se ignoran en Git.",
     visibilityTeam: "Compartible con el equipo",
-    visibilityTeamHint: "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
-    teamWarning: "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
+    visibilityTeamHint:
+      "Los archivos pueden confirmarse en Git para compañeros y otros agentes.",
+    teamWarning:
+      "La memoria confirmada permanece en el historial de Git incluso después de eliminarla. Revisa los diffs antes de confirmar. El filtro de secretos reduce el riesgo pero no detecta todos los valores sensibles.",
     importPolicy: "Revisión de cambios externos",
     policyReviewNew: "Revisar registros nuevos",
     policyAutomatic: "Importar automáticamente",
@@ -3206,7 +3212,8 @@ export default {
     exportActive: "Exportar memorias activas",
     exportAll: "Exportar activas y archivadas",
     bridges: "Puentes de instrucciones para agentes",
-    bridgesHint: "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
+    bridgesHint:
+      "Bloques gestionados opcionales que indican a agentes como Claude Code y Codex que lean el índice de memoria.",
     enableConfirm: "Activar",
     bridgeAction: {
       create: "se creará",
@@ -3220,8 +3227,10 @@ export default {
     storagePortableLocal: "Portátil — local",
     storagePortableTeam: "Portátil — equipo",
     regenerateIdentity: "Regenerar identidad",
-    regenerateIdentityWarning: "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
-    regenerateGitWarning: "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
+    regenerateIdentityWarning:
+      "Regenerar la identidad del espacio de trabajo crea un nuevo UUID portátil para una bifurcación intencional. Los IDs de registro se conservan con unicidad por ámbito. El original y la bifurcación coexisten sin mutación compartida.",
+    regenerateGitWarning:
+      "La identidad actual está seguida por Git. Regenerar cambia la identidad confirmada para todos los clones; coordina con tu equipo.",
     regenerateConfirm: "Regenerar",
     sync: {
       synced: "Sincronizado",
@@ -3247,12 +3256,14 @@ export default {
     revealFile: "Mostrar archivo",
     diagnosticsTitle: "Diagnósticos de memoria portátil",
     loadingDiagnostics: "Cargando diagnósticos…",
-    noDiagnostics: "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
+    noDiagnostics:
+      "Sin diagnósticos. Todos los archivos de memoria portátil son válidos.",
     notRecoverable: "no recuperable",
     conflictTitle: "Resolver conflicto",
     loadingConflict: "Cargando conflicto…",
     noConflict: "No se encontró conflicto.",
-    conflictWarning: "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
+    conflictWarning:
+      "El archivo fue editado externamente entre tu lectura y guardado. Elige una versión a conservar.",
     aiFetchlyVersion: "Proyección de AiFetchly",
     fileVersion: "Archivo actual",
     fileAbsent: "(archivo ausente)",
@@ -3426,7 +3437,8 @@ export default {
       clearConfirm: "¿Borrar todos los mensajes de esta conversación?",
       export: "Exportar conversación",
       duplicate: "Duplicar conversación",
-      deleteConfirm: "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
+      deleteConfirm:
+        "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
       delete: "Eliminar chat",
     },
     runStrip: {
@@ -3452,8 +3464,10 @@ export default {
       resize: "Cambiar tamaño del inspector",
     },
     artifacts: {
-      selectConversation: "Selecciona una conversación para ver sus resultados generados.",
-      empty: "Los informes y páginas generados aparecen aquí. Pide un informe HTML para crear uno.",
+      selectConversation:
+        "Selecciona una conversación para ver sus resultados generados.",
+      empty:
+        "Los informes y páginas generados aparecen aquí. Pide un informe HTML para crear uno.",
     },
     activity: {
       goal: "Objetivo",
@@ -3466,7 +3480,8 @@ export default {
       nextRun: "Próxima ejecución",
       execution: "Ejecución",
       runs: "Ejecuciones",
-      selectConversation: "Selecciona una conversación para ver sus ejecuciones.",
+      selectConversation:
+        "Selecciona una conversación para ver sus ejecuciones.",
       empty: "Aún no hay actividad",
       owner: {
         interactive: "Chat",
@@ -3495,7 +3510,7 @@ export default {
       runningTool: "Ejecutando {tool}",
       legacyReceipt: "Actividad de herramientas anterior",
       artifactCreated: "Informe HTML creado — ábrelo en Artefactos",
-        openArtifact: "Abrir",
+      openArtifact: "Abrir",
       imagesGenerated: "Imágenes generadas",
       filesChanged: "Archivos modificados — ver Actividad",
       permissionNeeded: "Se requiere decisión de permiso",
@@ -3645,7 +3660,8 @@ export default {
       emptyTitle: "Aún no hay nada aquí",
       emptyBody: "Comienza creando tu primer registro.",
       noResultsTitle: "No hay registros coincidentes",
-      noResultsBody: "Los registros pueden estar ocultos por los filtros actuales.",
+      noResultsBody:
+        "Los registros pueden estar ocultos por los filtros actuales.",
       clearFilters: "Borrar filtros",
       errorTitle: "Algo salió mal",
       errorBody: "La operación falló. Inténtalo de nuevo.",
@@ -3688,17 +3704,19 @@ export default {
     unknown_account: "Cuenta desconocida",
     proxy_active: "Proxy",
     screenshot: {
-        capture: "Actualizar miniatura",
-        alt: "Última captura del navegador",
-      },
+      capture: "Actualizar miniatura",
+      alt: "Última captura del navegador",
+    },
     start: {
       title: "Iniciar navegador gestionado",
-      empty: "Aún no hay cuentas elegibles. Añade una cuenta con sesión guardada primero.",
+      empty:
+        "Aún no hay cuentas elegibles. Añade una cuenta con sesión guardada primero.",
       account_label: "Cuenta",
       purpose_placeholder: "¿Qué debe hacer el navegador?",
       start: "Iniciar navegador",
       confirm_title: "¿Iniciar el navegador gestionado?",
-      confirm_body: "Se abrirá una ventana de Chrome visible para {account} con su sesión guardada.",
+      confirm_body:
+        "Se abrirá una ventana de Chrome visible para {account} con su sesión guardada.",
     },
     approval: {
       title: "La acción del navegador necesita aprobación",
@@ -3710,19 +3728,24 @@ export default {
       login_required: "Se necesita inicio de sesión — la ventana te espera",
       login_verifying: "Verificando tu inicio de sesión…",
       login_verified: "Inicio de sesión verificado — sesión guardada",
-      login_verification_failed: "No se pudo verificar el inicio de sesión todavía",
+      login_verification_failed:
+        "No se pudo verificar el inicio de sesión todavía",
       session_persistence_failed: "No se pudo guardar la sesión renovada",
       challenge_detected: "Desafío de verificación detectado — te toca",
-      challenge_provider_started: "Intentando resolver el desafío automáticamente…",
+      challenge_provider_started:
+        "Intentando resolver el desafío automáticamente…",
       challenge_resolved: "Desafío resuelto",
       challenge_failed: "El desafío no pudo resolverse automáticamente",
-      challenge_manual_action_required: "El desafío requiere tu acción en la ventana",
+      challenge_manual_action_required:
+        "El desafío requiere tu acción en la ventana",
       task_resuming: "Reanudando la tarea",
       browser_crashed: "La sesión del navegador terminó inesperadamente",
-      cache_clear_deferred: "La limpieza de caché se ejecutará al terminar la sesión",
+      cache_clear_deferred:
+        "La limpieza de caché se ejecutará al terminar la sesión",
       cache_clear_completed: "Caché del navegador limpiada",
       cache_clear_failed: "Falló la limpieza de la caché",
-      browser_state_blocked: "Se bloqueó de forma segura un aviso del navegador (diálogo, popup o descarga)",
+      browser_state_blocked:
+        "Se bloqueó de forma segura un aviso del navegador (diálogo, popup o descarga)",
     },
     states: {
       starting: "Iniciando",
@@ -3763,7 +3786,8 @@ export default {
       managed_browser_disabled: "El navegador gestionado está desactivado",
       account_in_use: "Esta cuenta ya está en uso",
       global_session_limit: "Se alcanzó el límite de sesiones",
-      browser_dependency_missing: "El navegador no está instalado o no está disponible",
+      browser_dependency_missing:
+        "El navegador no está instalado o no está disponible",
       worker_exited: "El proceso del navegador terminó inesperadamente",
       worker_start_timeout: "El navegador tardó demasiado en iniciar",
       challenge_requires_handoff: "Esta página necesita tu confirmación",
@@ -3789,11 +3813,15 @@ export default {
         password_field: "Un campo de contraseña debe completarlo tú.",
         recovery_flow: "La cuenta entró en un flujo de recuperación.",
         account_selection_ambiguous: "No está claro qué cuenta usar.",
-        browser_permission_prompt: "El navegador pidió un permiso que solo tú puedes conceder.",
-        destructive_action_unclear: "Esta acción podría ser destructiva y necesita tu confirmación.",
-        repeated_action_failure: "El paso falló repetidamente; termínalo manualmente.",
+        browser_permission_prompt:
+          "El navegador pidió un permiso que solo tú puedes conceder.",
+        destructive_action_unclear:
+          "Esta acción podría ser destructiva y necesita tu confirmación.",
+        repeated_action_failure:
+          "El paso falló repetidamente; termínalo manualmente.",
         user_requested: "Pediste tomar el control de este paso.",
-        challenge_unresolved: "Un desafío de verificación no pudo resolverse automáticamente.",
+        challenge_unresolved:
+          "Un desafío de verificación no pudo resolverse automáticamente.",
       },
     },
     settings: {
@@ -3802,7 +3830,8 @@ export default {
         "Controla el navegador social integrado que la IA usa para tareas con sesión iniciada y gestiona su caché.",
       browser_enabled: "Habilitar el navegador gestionado",
       active_session_title: "Hay sesiones del navegador activas",
-      active_session_body: "Para desactivar el navegador gestionado debes decidir qué hacer con la sesión activa.",
+      active_session_body:
+        "Para desactivar el navegador gestionado debes decidir qué hacer con la sesión activa.",
       active_finish: "Terminar la sesión actual",
       clear_account_label: "Cuenta",
       clear_selected: "Limpiar la cuenta seleccionada",
@@ -3814,20 +3843,25 @@ export default {
       cache_phase_done: "Hecho",
       cache_phase_failed: "Fallido",
       active_stop_now: "Detener ahora",
-      stop_failed: "No se pudo detener una sesión activa; el ajuste sigue habilitado. Reintenta o detén el navegador desde la tarjeta del chat.",
+      stop_failed:
+        "No se pudo detener una sesión activa; el ajuste sigue habilitado. Reintenta o detén el navegador desde la tarjeta del chat.",
       cache_enabled: "Conservar caché en disco entre sesiones",
       clear_cache_on_exit: "Limpiar la caché al salir de la aplicación",
       cache_size: "Tamaño de caché: {size}",
       last_cleared: "Limpiada por última vez {when}",
       clear_all: "Limpiar caché",
-      clear_preserves_logins: "Limpiar la caché conserva tus inicios de sesión y datos de cuentas.",
+      clear_preserves_logins:
+        "Limpiar la caché conserva tus inicios de sesión y datos de cuentas.",
       clear_confirm_title: "¿Limpiar la caché del navegador?",
       clear_confirm_body: "Se eliminarán unos {size} de archivos en caché.",
-      clear_confirm_preserved: "Tus sesiones guardadas y datos de cuentas se conservan.",
+      clear_confirm_preserved:
+        "Tus sesiones guardadas y datos de cuentas se conservan.",
       clear_confirm_ok: "Limpiar caché",
       disabled_reasons: {
-        user_setting_disabled: "El navegador gestionado está desactivado en estos ajustes.",
-        release_flag_disabled: "El navegador gestionado está desactivado temporalmente por una bandera de versión.",
+        user_setting_disabled:
+          "El navegador gestionado está desactivado en estos ajustes.",
+        release_flag_disabled:
+          "El navegador gestionado está desactivado temporalmente por una bandera de versión.",
       },
     },
   },
@@ -3883,5 +3917,22 @@ export default {
       unsupportedSchema:
         "Este tipo de informe no es compatible. Actualiza la aplicación.",
     },
+  },
+  // Salida de la aplicación y bandeja del sistema (PRD FR-08)
+  applicationLifecycle: {
+    closeTitle: "¿Cerrar AiFetchly?",
+    closeDescription:
+      "Salir detiene las tareas en ejecución. Mantener en ejecución oculta la ventana y las tareas continúan en la bandeja del sistema.",
+    activeTasks: "{n} tarea en ejecución. | {n} tareas en ejecución.",
+    keepRunning: "Mantener en la bandeja del sistema",
+    exitApplication: "Salir de la aplicación",
+    cancel: "Cancelar",
+    exiting: "Saliendo de AiFetchly…",
+    stoppingTasks: "Deteniendo las tareas en ejecución…",
+    trayUnavailable:
+      "La bandeja del sistema no está disponible. La ventana permanecerá abierta; usa Salir para cerrar.",
+    trayOpen: "Abrir AiFetchly",
+    trayExit: "Salir de la aplicación",
+    trayTooltip: "AiFetchly",
   },
 };

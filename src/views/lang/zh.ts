@@ -2280,7 +2280,6 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
-
     queue: {
       queued: "已排队",
       steering: "转向中…",
@@ -3020,7 +3019,8 @@ export default {
   portableMemory: {
     banner: "便携记忆",
     enable: "启用便携记忆",
-    disabledHint: "记忆目前仅保存在 AiFetchly 内部。启用便携记忆后可与其它智能体共享项目上下文。",
+    disabledHint:
+      "记忆目前仅保存在 AiFetchly 内部。启用便携记忆后可与其它智能体共享项目上下文。",
     gitState: "Git",
     pendingReview: "待审核",
     rejected: "已拒绝",
@@ -3030,13 +3030,15 @@ export default {
     loadingPreview: "正在加载预览…",
     plannedFiles: "将要创建的文件",
     existingRecords: "检测到已有的记忆文件",
-    identityInvalid: "工作区身份文件无效。请先修复或删除 .aifetchly/workspace.json。",
+    identityInvalid:
+      "工作区身份文件无效。请先修复或删除 .aifetchly/workspace.json。",
     visibility: "共享模式",
     visibilityLocal: "仅本地",
     visibilityLocalHint: "文件仅保留在本机，通常在 Git 中忽略。",
     visibilityTeam: "可共享给团队",
     visibilityTeamHint: "文件可提交到 Git，供团队成员和其它智能体使用。",
-    teamWarning: "已提交的记忆即使之后删除也会留在 Git 历史中。提交前请检查差异。密钥过滤器可降低风险，但无法识别所有敏感内容。",
+    teamWarning:
+      "已提交的记忆即使之后删除也会留在 Git 历史中。提交前请检查差异。密钥过滤器可降低风险，但无法识别所有敏感内容。",
     importPolicy: "外部更改审核",
     policyReviewNew: "审核新记录",
     policyAutomatic: "自动导入",
@@ -3046,7 +3048,8 @@ export default {
     exportActive: "导出活跃记忆",
     exportAll: "导出活跃和已归档记忆",
     bridges: "智能体说明桥接",
-    bridgesHint: "可选的托管区块，引导 Claude Code、Codex 等智能体读取记忆索引。",
+    bridgesHint:
+      "可选的托管区块，引导 Claude Code、Codex 等智能体读取记忆索引。",
     enableConfirm: "启用",
     bridgeAction: {
       create: "将创建",
@@ -3060,8 +3063,10 @@ export default {
     storagePortableLocal: "便携 — 本地",
     storagePortableTeam: "便携 — 团队",
     regenerateIdentity: "重新生成身份",
-    regenerateIdentityWarning: "重新生成工作区身份会为有意的分叉创建新的便携 UUID。记录 ID 在作用域唯一性下保留。原始与分叉将共存，无共享变更。",
-    regenerateGitWarning: "当前身份被 Git 跟踪。重新生成会更改所有克隆的已提交身份；请与团队协调。",
+    regenerateIdentityWarning:
+      "重新生成工作区身份会为有意的分叉创建新的便携 UUID。记录 ID 在作用域唯一性下保留。原始与分叉将共存，无共享变更。",
+    regenerateGitWarning:
+      "当前身份被 Git 跟踪。重新生成会更改所有克隆的已提交身份；请与团队协调。",
     regenerateConfirm: "重新生成",
     sync: {
       synced: "已同步",
@@ -3092,7 +3097,8 @@ export default {
     conflictTitle: "解决冲突",
     loadingConflict: "正在加载冲突…",
     noConflict: "未找到冲突。",
-    conflictWarning: "在你读取与保存之间，记忆文件被外部编辑过。请选择要保留的版本。",
+    conflictWarning:
+      "在你读取与保存之间，记忆文件被外部编辑过。请选择要保留的版本。",
     aiFetchlyVersion: "AiFetchly 投影",
     fileVersion: "当前文件",
     fileAbsent: "(文件缺失)",
@@ -3330,7 +3336,7 @@ export default {
       runningTool: "正在运行 {tool}",
       legacyReceipt: "历史工具活动",
       artifactCreated: "HTML 报告已生成 — 可在“产物”中打开",
-        openArtifact: "打开",
+      openArtifact: "打开",
       imagesGenerated: "已生成图片",
       filesChanged: "文件已更改 — 见“活动”",
       permissionNeeded: "需要权限决定",
@@ -3514,9 +3520,9 @@ export default {
     unknown_account: "未知账号",
     proxy_active: "代理",
     screenshot: {
-        capture: "刷新缩略图",
-        alt: "最新浏览器截图",
-      },
+      capture: "刷新缩略图",
+      alt: "最新浏览器截图",
+    },
     start: {
       title: "启动托管浏览器",
       empty: "暂无可用账号。请先添加已保存登录的账号。",
@@ -3524,7 +3530,8 @@ export default {
       purpose_placeholder: "浏览器要做什么？",
       start: "启动浏览器",
       confirm_title: "启动托管浏览器？",
-      confirm_body: "将为 {account} 打开一个可见的 Chrome 窗口，并使用其已保存的登录会话。",
+      confirm_body:
+        "将为 {account} 打开一个可见的 Chrome 窗口，并使用其已保存的登录会话。",
     },
     approval: {
       title: "浏览器操作需要确认",
@@ -3624,7 +3631,8 @@ export default {
     },
     settings: {
       title: "托管浏览器",
-      description: "控制 AI 执行已登录任务时使用的内置社交浏览器，并管理其缓存。",
+      description:
+        "控制 AI 执行已登录任务时使用的内置社交浏览器，并管理其缓存。",
       browser_enabled: "启用托管浏览器",
       active_session_title: "浏览器会话正在进行",
       active_session_body: "禁用托管浏览器前，需要决定如何处理进行中的会话。",
@@ -3639,7 +3647,8 @@ export default {
       cache_phase_done: "完成",
       cache_phase_failed: "失败",
       active_stop_now: "立即停止",
-      stop_failed: "无法停止进行中的会话——设置保持启用。请重试或在聊天卡片中停止浏览器。",
+      stop_failed:
+        "无法停止进行中的会话——设置保持启用。请重试或在聊天卡片中停止浏览器。",
       cache_enabled: "在会话之间保留磁盘缓存",
       clear_cache_on_exit: "应用退出时清理缓存",
       cache_size: "缓存大小：{size}",
@@ -3699,5 +3708,21 @@ export default {
       relatedMessageUnavailable: "所选输出没有可用的相关消息。",
       unsupportedSchema: "不支持此举报类型。请更新应用。",
     },
+  },
+  // 应用退出与系统托盘（PRD application-exit-and-system-tray FR-08）
+  applicationLifecycle: {
+    closeTitle: "关闭 AiFetchly？",
+    closeDescription:
+      "退出将停止正在运行的任务。保持运行会隐藏窗口，任务继续在系统托盘中运行。",
+    activeTasks: "{n} 个任务正在运行。",
+    keepRunning: "保持在系统托盘运行",
+    exitApplication: "退出应用程序",
+    cancel: "取消",
+    exiting: "正在退出 AiFetchly…",
+    stoppingTasks: "正在停止运行中的任务…",
+    trayUnavailable: "系统托盘不可用。窗口将保持打开，请使用“退出”关闭应用。",
+    trayOpen: "打开 AiFetchly",
+    trayExit: "退出应用程序",
+    trayTooltip: "AiFetchly",
   },
 };

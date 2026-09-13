@@ -2380,7 +2380,6 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
-
     queue: {
       queued: "Queued",
       steering: "Steering…",
@@ -2397,8 +2396,10 @@ export default {
       resume: "Resume queue",
       direction_updated: "Direction updated",
       recovered_after_restart: "Recovered after restart",
-      attachments_not_steerable: "Messages with attachments will send after the current response.",
-      limit_reached: "Queue limit reached. Remove a message before sending again.",
+      attachments_not_steerable:
+        "Messages with attachments will send after the current response.",
+      limit_reached:
+        "Queue limit reached. Remove a message before sending again.",
       steer_failed: "Couldn't steer this message.",
       queue_disabled: "The message queue is currently disabled.",
     },
@@ -3147,7 +3148,8 @@ export default {
   portableMemory: {
     banner: "Portable memory",
     enable: "Enable portable memory",
-    disabledHint: "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
+    disabledHint:
+      "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.",
     gitState: "Git",
     pendingReview: "Pending review",
     rejected: "Rejected",
@@ -3157,13 +3159,16 @@ export default {
     loadingPreview: "Loading preview…",
     plannedFiles: "Files that will be created",
     existingRecords: "Existing memory files detected",
-    identityInvalid: "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
+    identityInvalid:
+      "The workspace identity file is invalid. Fix or remove .aifetchly/workspace.json first.",
     visibility: "Sharing mode",
     visibilityLocal: "Local only",
     visibilityLocalHint: "Files stay on this machine; usually ignored in Git.",
     visibilityTeam: "Team shareable",
-    visibilityTeamHint: "Files may be committed to Git for teammates and other agents.",
-    teamWarning: "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
+    visibilityTeamHint:
+      "Files may be committed to Git for teammates and other agents.",
+    teamWarning:
+      "Committed memory stays in Git history even after later deletion. Review diffs before committing. The secret filter reduces risk but cannot catch every sensitive value.",
     importPolicy: "External change review",
     policyReviewNew: "Review new records",
     policyAutomatic: "Import automatically",
@@ -3173,7 +3178,8 @@ export default {
     exportActive: "Export active memories",
     exportAll: "Export active and archived",
     bridges: "Agent instruction bridges",
-    bridgesHint: "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
+    bridgesHint:
+      "Optional managed blocks that tell agents like Claude Code and Codex to read the memory index.",
     enableConfirm: "Enable",
     bridgeAction: {
       create: "will be created",
@@ -3187,8 +3193,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — team",
     regenerateIdentity: "Regenerate identity",
-    regenerateIdentityWarning: "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
-    regenerateGitWarning: "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
+    regenerateIdentityWarning:
+      "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation.",
+    regenerateGitWarning:
+      "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team.",
     regenerateConfirm: "Regenerate",
     sync: {
       synced: "Synced",
@@ -3219,7 +3227,8 @@ export default {
     conflictTitle: "Resolve conflict",
     loadingConflict: "Loading conflict…",
     noConflict: "No conflict found.",
-    conflictWarning: "The memory file was edited externally between your read and save. Choose a version to keep.",
+    conflictWarning:
+      "The memory file was edited externally between your read and save. Choose a version to keep.",
     aiFetchlyVersion: "AiFetchly projection",
     fileVersion: "Current file",
     fileAbsent: "(file absent)",
@@ -3392,7 +3401,8 @@ export default {
       delete: "Delete chat",
       export: "Export conversation",
       duplicate: "Duplicate conversation",
-      deleteConfirm: "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
+      deleteConfirm:
+        "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
     },
     runStrip: {
       goal: "Goal: {objective}",
@@ -3418,7 +3428,8 @@ export default {
     },
     artifacts: {
       selectConversation: "Select a conversation to see its generated outputs.",
-      empty: "Generated reports and pages appear here. Ask for an HTML report to create one.",
+      empty:
+        "Generated reports and pages appear here. Ask for an HTML report to create one.",
     },
     activity: {
       goal: "Goal",
@@ -3460,7 +3471,7 @@ export default {
       runningTool: "Running {tool}",
       legacyReceipt: "Previous tool activity",
       artifactCreated: "HTML report created — open it in Artifacts",
-        openArtifact: "Open",
+      openArtifact: "Open",
       imagesGenerated: "Images generated",
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
@@ -3652,17 +3663,19 @@ export default {
     unknown_account: "Unknown account",
     proxy_active: "Proxy",
     screenshot: {
-        capture: "Refresh thumbnail",
-        alt: "Latest browser screenshot",
-      },
+      capture: "Refresh thumbnail",
+      alt: "Latest browser screenshot",
+    },
     start: {
       title: "Start managed browser",
-      empty: "No eligible social accounts yet. Add an account with a saved login first.",
+      empty:
+        "No eligible social accounts yet. Add an account with a saved login first.",
       account_label: "Account",
       purpose_placeholder: "What should the browser do?",
       start: "Start browser",
       confirm_title: "Start managed browser?",
-      confirm_body: "A visible Chrome window will open for {account} using its saved login session.",
+      confirm_body:
+        "A visible Chrome window will open for {account} using its saved login session.",
     },
     approval: {
       title: "Browser action needs approval",
@@ -3680,13 +3693,15 @@ export default {
       challenge_provider_started: "Attempting automatic challenge resolution…",
       challenge_resolved: "Challenge resolved",
       challenge_failed: "Challenge could not be resolved automatically",
-      challenge_manual_action_required: "The challenge needs your action in the browser window",
+      challenge_manual_action_required:
+        "The challenge needs your action in the browser window",
       task_resuming: "Resuming the task",
       browser_crashed: "The browser session ended unexpectedly",
       cache_clear_deferred: "Cache clear will run when the session ends",
       cache_clear_completed: "Browser cache cleared",
       cache_clear_failed: "Browser cache clear failed",
-      browser_state_blocked: "A browser prompt was blocked (dialog, popup, or download) and safely dismissed",
+      browser_state_blocked:
+        "A browser prompt was blocked (dialog, popup, or download) and safely dismissed",
     },
     states: {
       starting: "Starting",
@@ -3757,9 +3772,11 @@ export default {
           "The browser asked for a permission only you can grant.",
         destructive_action_unclear:
           "This action could be destructive and needs your confirmation.",
-        repeated_action_failure: "The step kept failing; please finish it manually.",
+        repeated_action_failure:
+          "The step kept failing; please finish it manually.",
         user_requested: "You asked to take over this step.",
-        challenge_unresolved: "A verification challenge could not be resolved automatically.",
+        challenge_unresolved:
+          "A verification challenge could not be resolved automatically.",
       },
     },
     settings: {
@@ -3768,7 +3785,8 @@ export default {
         "Control the built-in social browser the AI uses for logged-in tasks, and manage its cache.",
       browser_enabled: "Enable the managed browser",
       active_session_title: "Browser sessions are active",
-      active_session_body: "Disabling the managed browser requires deciding what to do with the active session.",
+      active_session_body:
+        "Disabling the managed browser requires deciding what to do with the active session.",
       active_finish: "Finish current session",
       clear_account_label: "Account",
       clear_selected: "Clear selected account",
@@ -3780,7 +3798,8 @@ export default {
       cache_phase_done: "Done",
       cache_phase_failed: "Failed",
       active_stop_now: "Stop now",
-      stop_failed: "Could not stop a live session — the setting stays enabled. Try again or stop the browser from the chat card.",
+      stop_failed:
+        "Could not stop a live session — the setting stays enabled. Try again or stop the browser from the chat card.",
       cache_enabled: "Keep a disk cache between sessions",
       clear_cache_on_exit: "Clear the cache when the app exits",
       cache_size: "Cache size: {size}",
@@ -3794,7 +3813,8 @@ export default {
         "Your saved login sessions and account data are preserved.",
       clear_confirm_ok: "Clear cache",
       disabled_reasons: {
-        user_setting_disabled: "The managed browser is turned off in these settings.",
+        user_setting_disabled:
+          "The managed browser is turned off in these settings.",
         release_flag_disabled:
           "The managed browser is temporarily disabled by a release flag.",
       },
@@ -3850,5 +3870,22 @@ export default {
       unsupportedSchema:
         "This report type is not supported. Please update the app.",
     },
+  },
+  // Application exit & system tray (PRD application-exit-and-system-tray FR-08)
+  applicationLifecycle: {
+    closeTitle: "Close AiFetchly?",
+    closeDescription:
+      "Exit stops running tasks. Keep running hides the window and lets tasks continue in the system tray.",
+    activeTasks: "{n} task is running. | {n} tasks are running.",
+    keepRunning: "Keep running in system tray",
+    exitApplication: "Exit application",
+    cancel: "Cancel",
+    exiting: "Exiting AiFetchly…",
+    stoppingTasks: "Stopping running tasks…",
+    trayUnavailable:
+      "System tray is unavailable. The window will stay open — use Exit to quit.",
+    trayOpen: "Open AiFetchly",
+    trayExit: "Exit application",
+    trayTooltip: "AiFetchly",
   },
 };

@@ -2374,7 +2374,6 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
-
     queue: {
       queued: "En file d'attente",
       steering: "Réorientation…",
@@ -2391,8 +2390,10 @@ export default {
       resume: "Reprendre la file",
       direction_updated: "Direction mise à jour",
       recovered_after_restart: "Récupéré après le redémarrage",
-      attachments_not_steerable: "Les messages avec pièces jointes seront envoyés après la réponse en cours.",
-      limit_reached: "Limite de file atteinte. Supprimez un message avant de renvoyer.",
+      attachments_not_steerable:
+        "Les messages avec pièces jointes seront envoyés après la réponse en cours.",
+      limit_reached:
+        "Limite de file atteinte. Supprimez un message avant de renvoyer.",
       steer_failed: "Impossible de réorienter ce message.",
       queue_disabled: "La file de messages est désactivée.",
     },
@@ -3162,7 +3163,8 @@ export default {
   portableMemory: {
     banner: "Mémoire portable",
     enable: "Activer la mémoire portable",
-    disabledHint: "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
+    disabledHint:
+      "Les mémoires sont stockées en privé dans AiFetchly. Activez la mémoire portable pour partager le contexte du projet avec d'autres agents.",
     gitState: "Git",
     pendingReview: "En attente de revue",
     rejected: "Rejetée",
@@ -3172,13 +3174,17 @@ export default {
     loadingPreview: "Chargement de l'aperçu…",
     plannedFiles: "Fichiers qui seront créés",
     existingRecords: "Fichiers de mémoire existants détectés",
-    identityInvalid: "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
+    identityInvalid:
+      "Le fichier d'identité de l'espace de travail est invalide. Corrigez ou supprimez .aifetchly/workspace.json d'abord.",
     visibility: "Mode de partage",
     visibilityLocal: "Local uniquement",
-    visibilityLocalHint: "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
+    visibilityLocalHint:
+      "Les fichiers restent sur cette machine ; généralement ignorés dans Git.",
     visibilityTeam: "Partageable avec l'équipe",
-    visibilityTeamHint: "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
-    teamWarning: "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
+    visibilityTeamHint:
+      "Les fichiers peuvent être commités dans Git pour les coéquipiers et d'autres agents.",
+    teamWarning:
+      "La mémoire commitée reste dans l'historique Git même après suppression. Vérifiez les diffs avant de commiter. Le filtre de secrets réduit le risque mais ne détecte pas toutes les valeurs sensibles.",
     importPolicy: "Revue des changements externes",
     policyReviewNew: "Examiner les nouveaux enregistrements",
     policyAutomatic: "Importer automatiquement",
@@ -3188,7 +3194,8 @@ export default {
     exportActive: "Exporter les mémoires actives",
     exportAll: "Exporter actives et archivées",
     bridges: "Ponts d'instructions pour agents",
-    bridgesHint: "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
+    bridgesHint:
+      "Blocs gérés optionnels indiquant aux agents comme Claude Code et Codex de lire l'index de mémoire.",
     enableConfirm: "Activer",
     bridgeAction: {
       create: "sera créé",
@@ -3202,8 +3209,10 @@ export default {
     storagePortableLocal: "Portable — local",
     storagePortableTeam: "Portable — équipe",
     regenerateIdentity: "Régénérer l'identité",
-    regenerateIdentityWarning: "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
-    regenerateGitWarning: "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
+    regenerateIdentityWarning:
+      "Régénérer l'identité de l'espace de travail crée un nouvel UUID portable pour un fork intentionnel. Les IDs d'enregistrement sont conservés avec l'unicité par portée. L'original et le fork coexistent sans mutation partagée.",
+    regenerateGitWarning:
+      "L'identité actuelle est suivie par Git. La régénération change l'identité commitée pour tous les clones ; coordonnez avec votre équipe.",
     regenerateConfirm: "Régénérer",
     sync: {
       synced: "Synchronisé",
@@ -3229,12 +3238,14 @@ export default {
     revealFile: "Révéler le fichier",
     diagnosticsTitle: "Diagnostics de la mémoire portable",
     loadingDiagnostics: "Chargement des diagnostics…",
-    noDiagnostics: "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
+    noDiagnostics:
+      "Aucun diagnostic. Tous les fichiers de mémoire portable sont valides.",
     notRecoverable: "non récupérable",
     conflictTitle: "Résoudre le conflit",
     loadingConflict: "Chargement du conflit…",
     noConflict: "Aucun conflit trouvé.",
-    conflictWarning: "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
+    conflictWarning:
+      "Le fichier a été modifié extérieurement entre votre lecture et votre sauvegarde. Choisissez une version à conserver.",
     aiFetchlyVersion: "Projection AiFetchly",
     fileVersion: "Fichier actuel",
     fileAbsent: "(fichier absent)",
@@ -3412,7 +3423,8 @@ export default {
       delete: "Supprimer la discussion",
       export: "Exporter la conversation",
       duplicate: "Dupliquer la conversation",
-      deleteConfirm: "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
+      deleteConfirm:
+        "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
     },
     runStrip: {
       goal: "Objectif : {objective}",
@@ -3437,8 +3449,10 @@ export default {
       resize: "Redimensionner l'inspecteur",
     },
     artifacts: {
-      selectConversation: "Sélectionnez une conversation pour voir ses contenus générés.",
-      empty: "Les rapports et pages générés apparaissent ici. Demandez un rapport HTML pour en créer un.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir ses contenus générés.",
+      empty:
+        "Les rapports et pages générés apparaissent ici. Demandez un rapport HTML pour en créer un.",
     },
     activity: {
       goal: "Objectif",
@@ -3451,7 +3465,8 @@ export default {
       nextRun: "Prochaine exécution",
       execution: "Exécution",
       runs: "Exécutions",
-      selectConversation: "Sélectionnez une conversation pour voir ses exécutions.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir ses exécutions.",
       empty: "Aucune activité pour le moment",
       owner: {
         interactive: "Discussion",
@@ -3461,14 +3476,16 @@ export default {
       },
     },
     context: {
-      selectConversation: "Sélectionnez une conversation pour voir son contexte.",
+      selectConversation:
+        "Sélectionnez une conversation pour voir son contexte.",
       workspace: "Espace de travail",
       noWorkspace: "Aucun espace de travail n'est lié à cette discussion.",
       usage: "Utilisation du contexte",
       used: "Utilisé",
       tokens: "jetons",
       attachmentsSection: "Contexte joint",
-      noAttachments: "Cette conversation n'a pas encore de pièces jointes ni de mentions.",
+      noAttachments:
+        "Cette conversation n'a pas encore de pièces jointes ni de mentions.",
       atMention: "Fichier mentionné",
       compact: "Compresser la conversation",
       trusted: "Approuvé",
@@ -3480,7 +3497,7 @@ export default {
       runningTool: "Exécution de {tool}",
       legacyReceipt: "Activité d'outils précédente",
       artifactCreated: "Rapport HTML créé — ouvrez-le dans Artefacts",
-        openArtifact: "Ouvrir",
+      openArtifact: "Ouvrir",
       imagesGenerated: "Images générées",
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
@@ -3631,7 +3648,8 @@ export default {
       emptyTitle: "Rien ici pour le moment",
       emptyBody: "Commencez par créer votre premier enregistrement.",
       noResultsTitle: "Aucun enregistrement correspondant",
-      noResultsBody: "Des enregistrements peuvent être masqués par les filtres actuels.",
+      noResultsBody:
+        "Des enregistrements peuvent être masqués par les filtres actuels.",
       clearFilters: "Effacer les filtres",
       errorTitle: "Une erreur est survenue",
       errorBody: "L'opération a échoué. Réessayez.",
@@ -3674,17 +3692,19 @@ export default {
     unknown_account: "Compte inconnu",
     proxy_active: "Proxy",
     screenshot: {
-        capture: "Actualiser la miniature",
-        alt: "Dernière capture du navigateur",
-      },
+      capture: "Actualiser la miniature",
+      alt: "Dernière capture du navigateur",
+    },
     start: {
       title: "Démarrer le navigateur géré",
-      empty: "Aucun compte éligible pour l'instant. Ajoutez d'abord un compte avec une session enregistrée.",
+      empty:
+        "Aucun compte éligible pour l'instant. Ajoutez d'abord un compte avec une session enregistrée.",
       account_label: "Compte",
       purpose_placeholder: "Que doit faire le navigateur ?",
       start: "Démarrer le navigateur",
       confirm_title: "Démarrer le navigateur géré ?",
-      confirm_body: "Une fenêtre Chrome visible s'ouvrira pour {account} avec sa session enregistrée.",
+      confirm_body:
+        "Une fenêtre Chrome visible s'ouvrira pour {account} avec sa session enregistrée.",
     },
     approval: {
       title: "Action du navigateur nécessitant une approbation",
@@ -3697,18 +3717,23 @@ export default {
       login_verifying: "Vérification de votre connexion…",
       login_verified: "Connexion vérifiée — session enregistrée",
       login_verification_failed: "La connexion n'a pas encore pu être vérifiée",
-      session_persistence_failed: "Impossible d'enregistrer la session actualisée",
+      session_persistence_failed:
+        "Impossible d'enregistrer la session actualisée",
       challenge_detected: "Défi de vérification détecté — à vous",
-      challenge_provider_started: "Tentative de résolution automatique du défi…",
+      challenge_provider_started:
+        "Tentative de résolution automatique du défi…",
       challenge_resolved: "Défi résolu",
       challenge_failed: "Le défi n'a pas pu être résolu automatiquement",
-      challenge_manual_action_required: "Le défi requiert votre action dans la fenêtre",
+      challenge_manual_action_required:
+        "Le défi requiert votre action dans la fenêtre",
       task_resuming: "Reprise de la tâche",
       browser_crashed: "La session du navigateur s'est arrêtée inopinément",
-      cache_clear_deferred: "Le vidage du caché s'exécutera à la fin de la session",
+      cache_clear_deferred:
+        "Le vidage du caché s'exécutera à la fin de la session",
       cache_clear_completed: "Cache du navigateur vidé",
       cache_clear_failed: "Échec du vidage du cache",
-      browser_state_blocked: "Une invite du navigateur a été bloquée en sécurité (dialogue, popup ou téléchargement)",
+      browser_state_blocked:
+        "Une invite du navigateur a été bloquée en sécurité (dialogue, popup ou téléchargement)",
     },
     states: {
       starting: "Démarrage",
@@ -3749,7 +3774,8 @@ export default {
       managed_browser_disabled: "Le navigateur géré est désactivé",
       account_in_use: "Ce compte est déjà utilisé",
       global_session_limit: "Limite de sessions atteinte",
-      browser_dependency_missing: "Le navigateur n'est pas installé ou indisponible",
+      browser_dependency_missing:
+        "Le navigateur n'est pas installé ou indisponible",
       worker_exited: "Le processus du navigateur s'est arrêté inopinément",
       worker_start_timeout: "Le navigateur a mis trop de temps à démarrer",
       challenge_requires_handoff: "Cette page nécessite votre confirmation",
@@ -3775,11 +3801,15 @@ export default {
         password_field: "Un champ de mot de passe doit être rempli par vous.",
         recovery_flow: "Le compte est entré dans un flux de récupération.",
         account_selection_ambiguous: "Le compte à utiliser n'est pas clair.",
-        browser_permission_prompt: "Le navigateur a demandé une permission que vous seul pouvez accorder.",
-        destructive_action_unclear: "Cette action pourrait être destructive et nécessite votre confirmation.",
-        repeated_action_failure: "L'étape a échoué à plusieurs reprises ; terminez-la manuellement.",
+        browser_permission_prompt:
+          "Le navigateur a demandé une permission que vous seul pouvez accorder.",
+        destructive_action_unclear:
+          "Cette action pourrait être destructive et nécessite votre confirmation.",
+        repeated_action_failure:
+          "L'étape a échoué à plusieurs reprises ; terminez-la manuellement.",
         user_requested: "Vous avez demandé à prendre la main.",
-        challenge_unresolved: "Un défi de vérification n'a pas pu être résolu automatiquement.",
+        challenge_unresolved:
+          "Un défi de vérification n'a pas pu être résolu automatiquement.",
       },
     },
     settings: {
@@ -3788,7 +3818,8 @@ export default {
         "Contrôlez le navigateur social intégré utilisé par l'IA pour les tâches connectées et gérez son cache.",
       browser_enabled: "Activer le navigateur géré",
       active_session_title: "Des sessions du navigateur sont actives",
-      active_session_body: "Désactiver le navigateur géré exige de décider du sort de la session active.",
+      active_session_body:
+        "Désactiver le navigateur géré exige de décider du sort de la session active.",
       active_finish: "Terminer la session en cours",
       clear_account_label: "Compte",
       clear_selected: "Vider le compte sélectionné",
@@ -3800,20 +3831,26 @@ export default {
       cache_phase_done: "Terminé",
       cache_phase_failed: "Échec",
       active_stop_now: "Arrêter maintenant",
-      stop_failed: "Impossible d'arrêter une session active ; le réglage reste activé. Réessayez ou arrêtez le navigateur depuis la carte du chat.",
+      stop_failed:
+        "Impossible d'arrêter une session active ; le réglage reste activé. Réessayez ou arrêtez le navigateur depuis la carte du chat.",
       cache_enabled: "Conserver un cache disque entre les sessions",
       clear_cache_on_exit: "Vider le cache à la fermeture de l'application",
       cache_size: "Taille du cache : {size}",
       last_cleared: "Dernier vidage {when}",
       clear_all: "Vider le cache",
-      clear_preserves_logins: "Vider le cache conserve vos connexions et données de comptes.",
+      clear_preserves_logins:
+        "Vider le cache conserve vos connexions et données de comptes.",
       clear_confirm_title: "Vider le cache du navigateur ?",
-      clear_confirm_body: "Environ {size} de fichiers en cache seront supprimés.",
-      clear_confirm_preserved: "Vos sessions enregistrées et données de comptes sont conservées.",
+      clear_confirm_body:
+        "Environ {size} de fichiers en cache seront supprimés.",
+      clear_confirm_preserved:
+        "Vos sessions enregistrées et données de comptes sont conservées.",
       clear_confirm_ok: "Vider le cache",
       disabled_reasons: {
-        user_setting_disabled: "Le navigateur géré est désactivé dans ces paramètres.",
-        release_flag_disabled: "Le navigateur géré est temporairement désactivé par un indicateur de version.",
+        user_setting_disabled:
+          "Le navigateur géré est désactivé dans ces paramètres.",
+        release_flag_disabled:
+          "Le navigateur géré est temporairement désactivé par un indicateur de version.",
       },
     },
   },
@@ -3868,5 +3905,22 @@ export default {
       unsupportedSchema:
         "Ce type de signalement n'est pas pris en charge. Veuillez mettre à jour l'application.",
     },
+  },
+  // Fermeture de l'application et barre système (PRD FR-08)
+  applicationLifecycle: {
+    closeTitle: "Fermer AiFetchly ?",
+    closeDescription:
+      "Quitter arrête les tâches en cours. Continuer en arrière-plan masque la fenêtre et les tâches continuent dans la barre système.",
+    activeTasks: "{n} tâche en cours. | {n} tâches en cours.",
+    keepRunning: "Continuer dans la barre système",
+    exitApplication: "Quitter l'application",
+    cancel: "Annuler",
+    exiting: "Fermeture d'AiFetchly…",
+    stoppingTasks: "Arrêt des tâches en cours…",
+    trayUnavailable:
+      "La barre système est indisponible. La fenêtre restera ouverte ; utilisez Quitter pour fermer.",
+    trayOpen: "Ouvrir AiFetchly",
+    trayExit: "Quitter l'application",
+    trayTooltip: "AiFetchly",
   },
 };
