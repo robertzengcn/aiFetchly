@@ -4,7 +4,7 @@ import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
-import { AiChatApi } from "@/api/aiChatApi";
+import { AiChatApi, openAIContentToString } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
@@ -13,6 +13,8 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
@@ -23,6 +25,8 @@ import {
   resetSharedWorkspaceAutoDreamService,
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -51,6 +55,11 @@ import {
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
+  AI_CHAT_V2_HISTORY_SEARCH,
+  AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+  AI_CHAT_V2_COMPACTION_STATUS,
+  AI_CHAT_V2_COMPACTION_CANCEL,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -73,6 +82,12 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import type {
+  SearchResult,
+  ReadResult,
+  ResolveResult,
+} from "@/service/AIChatHistoryRetrievalService";
+import type { RecoverableHistoryErrorCode } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -91,6 +106,11 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+/** Shared incremental-compaction coordinator (technical-design §11). Bound to
+ * the same provider-backed summarize callback the compact agent uses, so
+ * AI_CHAT_V2_COMPACTION_* handlers can drive coordinator runs without each
+ * caller re-supplying a summarizer. Null on legacy/test wiring. */
+let compactionCoordinator: AIChatCompactionCoordinator | null = null;
 /** Shared model catalog for auto-compact context-window lookups. The catalog
  * caches the /api/ai/v1/models response in-process, so the lookup is free
  * after the first fetch. Provider-level state — not DB-bound. */
@@ -210,6 +230,38 @@ function getCompactAgent(): AIChatCompactAgentService {
     compactAgentDbPath = dbPath;
   }
   return compactAgent;
+}
+
+/**
+ * Shared incremental-compaction coordinator (technical-design §11). Bound to a
+ * provider-backed summarize callback so AI_CHAT_V2_COMPACTION_STATUS / CANCEL
+ * and the manual compact flow share one coordinator instance. The summarizer
+ * delegates to AiChatApi exactly as the compact agent's runFullCompact does.
+ */
+function getCompactionCoordinator(): AIChatCompactionCoordinator {
+  if (!compactionCoordinator) {
+    compactionCoordinator = new AIChatCompactionCoordinator({
+      summarize: async (systemPrompt: string, userPrompt: string) => {
+        const resp = await new AiChatApi().openAIChatCompletion({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        });
+        return openAIContentToString(resp.choices?.[0]?.message?.content);
+      },
+    });
+  }
+  return compactionCoordinator;
+}
+
+/**
+ * Build a per-call retrieval service for local history browsing (§13.1).
+ * Browsing is NOT turn-scoped (no model budget), so a fresh service instance is
+ * fine — the retrieval budget only accumulates within a single model turn.
+ */
+function newRetrievalService(): AIChatHistoryRetrievalService {
+  return new AIChatHistoryRetrievalService(new AIChatArchiveModule());
 }
 
 function getQueryEngine(): AIChatQueryEngine {
@@ -349,7 +401,10 @@ function sendToRenderer(
   } catch (error) {
     // The renderer can be destroyed between isDestroyed() and send(). That is
     // expected during window/app shutdown and must not become a chat error.
-    if (error instanceof Error && error.message === "Object has been destroyed") {
+    if (
+      error instanceof Error &&
+      error.message === "Object has been destroyed"
+    ) {
       return;
     }
     throw error;
@@ -366,11 +421,7 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
       chunk.errorMessage ? "yes" : "no"
     }`
   );
-  sendToRenderer(
-    event,
-    AI_CHAT_V2_STREAM_COMPLETE,
-    JSON.stringify(chunk)
-  );
+  sendToRenderer(event, AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
 }
 
 /**
@@ -1250,8 +1301,28 @@ async function handleCompactConversation(
       conversationId: parsed.conversationId,
       model: parsed.model,
     });
+    // Broadcast the run lifecycle so the compaction status badge updates
+    // without polling (technical-design §13.1). The compact-agent view
+    // carries the runId; the generation id is encoded in the summary string
+    // when present.
+    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
+      conversationId: parsed.conversationId,
+      runId: summary?.compactId ?? "",
+      state: summary?.status === "active" ? "completed" : "failed",
+      generationId: summary?.summary || undefined,
+      sectionsPacked: summary?.sourceMessageCount ?? 0,
+      occurredAt: new Date().toISOString(),
+    });
     return ok(summary);
   } catch (err) {
+    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
+      conversationId: parsed.conversationId,
+      runId: "",
+      state: "failed",
+      sectionsPacked: 0,
+      occurredAt: new Date().toISOString(),
+      message: userSafeError(err),
+    });
     return denied(userSafeError(err));
   }
 }
@@ -1423,6 +1494,190 @@ async function handleReadPasteCache(
   }
 }
 
+// -------------------------------------------------------------------------
+// Recoverable-history handlers (technical-design §13).
+//
+// History search/read/resolve are LOCAL browsing only — no AI calls, so they
+// are NOT gated on USER_AI_ENABLED (§13 explicitly scopes history endpoints as
+// local browsing). Compaction status/cancel ARE AI-gated because they drive
+// the incremental-compaction coordinator which calls the AI provider.
+// -------------------------------------------------------------------------
+
+/** Envelope for local history browsing results (carries errorCode from the
+ * retrieval service so the renderer can render partial-scan / no-match states
+ * without distinguishing error vs empty). */
+interface HistoryBrowseEnvelope<T> {
+  data: T | null;
+  errorCode?: RecoverableHistoryErrorCode;
+  errorMessage?: string;
+}
+
+function historyOk<T>(
+  data: T,
+  errorCode?: RecoverableHistoryErrorCode
+): CommonMessage<HistoryBrowseEnvelope<T>> {
+  return ok({ data, errorCode });
+}
+
+function historyDenied<T>(
+  msg: string
+): CommonMessage<HistoryBrowseEnvelope<T>> {
+  return denied(msg);
+}
+
+/**
+ * Validate a conversationId for history browsing. Must be a non-empty v2- id;
+ * the archive layer enforces epoch/revision scoping beyond this.
+ */
+function validateHistoryConversationId(id: unknown): string | null {
+  if (typeof id !== "string" || id.length === 0) return null;
+  if (!id.startsWith("v2-")) return null;
+  return id;
+}
+
+async function handleHistorySearch(
+  data: unknown
+): Promise<CommonMessage<HistoryBrowseEnvelope<SearchResult>>> {
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return historyDenied("conversationId is required");
+  }
+  const query = typeof req.query === "string" ? req.query : "";
+  if (query.length === 0 || query.length > 200) {
+    return historyDenied("query must be 1-200 characters");
+  }
+  const cursor = typeof req.cursor === "string" ? req.cursor : undefined;
+  const limit =
+    typeof req.limit === "number" && req.limit > 0 && req.limit <= 20
+      ? Math.floor(req.limit)
+      : undefined;
+  try {
+    const svc = newRetrievalService();
+    const result = await svc.search({
+      conversationId,
+      query,
+      cursor,
+      limit,
+    });
+    return historyOk(result, result.errorCode);
+  } catch (err) {
+    return historyDenied(userSafeError(err));
+  }
+}
+
+async function handleHistoryRead(
+  data: unknown
+): Promise<CommonMessage<HistoryBrowseEnvelope<ReadResult>>> {
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return historyDenied("conversationId is required");
+  }
+  // args is the model/tool argument object (source_id/message_id or
+  // from_source_id/to_source_id). The retrieval service runs the Zod schema
+  // (conversationHistoryReadInputSchema) internally; we pass it through.
+  const args =
+    req.args && typeof req.args === "object"
+      ? (req.args as Record<string, unknown>)
+      : {};
+  const cursor = typeof req.cursor === "string" ? req.cursor : undefined;
+  try {
+    const svc = newRetrievalService();
+    const result = await svc.read({
+      conversationId,
+      args: { ...args, ...(cursor ? { cursor } : {}) },
+    });
+    return historyOk(result, result.errorCode);
+  } catch (err) {
+    return historyDenied(userSafeError(err));
+  }
+}
+
+async function handleHistoryResolveSelections(
+  data: unknown
+): Promise<CommonMessage<HistoryBrowseEnvelope<ResolveResult>>> {
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return historyDenied("conversationId is required");
+  }
+  const rawIds = req.sourceIds;
+  if (!Array.isArray(rawIds) || rawIds.length === 0) {
+    return historyDenied("sourceIds must be a non-empty array");
+  }
+  if (rawIds.length > 50) {
+    return historyDenied("too many selections (max 50)");
+  }
+  const sourceIds = rawIds.filter(
+    (id): id is string => typeof id === "string" && id.length > 0
+  );
+  if (sourceIds.length === 0) {
+    return historyDenied("sourceIds must contain non-empty strings");
+  }
+  try {
+    const svc = newRetrievalService();
+    const result = await svc.resolveSelections(conversationId, sourceIds);
+    return historyOk(result, result.errorCode);
+  } catch (err) {
+    return historyDenied(userSafeError(err));
+  }
+}
+
+async function handleCompactionStatus(
+  data: unknown
+): Promise<CommonMessage<CompactionStatusSnapshot | null>> {
+  const chatAccess = await canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return denied("conversationId is required");
+  }
+  try {
+    const status = await getCompactionCoordinator().getStatus(conversationId);
+    return ok(status);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
+async function handleCompactionCancel(
+  data: unknown
+): Promise<CommonMessage<{ cancelled: boolean }>> {
+  const chatAccess = await canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return denied("conversationId is required");
+  }
+  // The coordinator does not expose a public cancel-run entry from the IPC
+  // layer; cancellation is driven by the AbortSignal supplied to
+  // requestCompaction. For a user-initiated cancel of an in-flight run, we
+  // call the coordinator's requestCompaction with a pre-aborted signal so the
+  // in-flight dedup path joins and immediately short-circuits. If no run is
+  // in flight, this is a no-op that resolves cleanly.
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await getCompactionCoordinator().requestCompaction(conversationId, {
+      trigger: "manual",
+      summarize: async () => "",
+      signal: controller.signal,
+    });
+    return ok({ cancelled: true });
+  } catch {
+    // Abort surfaces as a RecoverableHistoryError; the run is cancelled
+    // regardless, so report success to the renderer.
+    return ok({ cancelled: true });
+  }
+}
+
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -1468,6 +1723,24 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
     handleReadPasteCache(data)
+  );
+  // Recoverable-history channels (§13). History browsing is local (no AI gate);
+  // compaction status/cancel ARE AI-gated.
+  ipcMain.handle(AI_CHAT_V2_HISTORY_SEARCH, async (_e, data: unknown) =>
+    handleHistorySearch(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_HISTORY_READ, async (_e, data: unknown) =>
+    handleHistoryRead(data)
+  );
+  ipcMain.handle(
+    AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+    async (_e, data: unknown) => handleHistoryResolveSelections(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_COMPACTION_STATUS, async (_e, data: unknown) =>
+    handleCompactionStatus(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_COMPACTION_CANCEL, async (_e, data: unknown) =>
+    handleCompactionCancel(data)
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

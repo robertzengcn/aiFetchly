@@ -381,3 +381,25 @@ export interface ChatV2AutoCompactedEvent {
   readonly model?: string;
   readonly occurredAt: string;
 }
+
+/**
+ * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
+ * Emitted on AI_CHAT_V2_COMPACTION_PROGRESS whenever a run starts, packs a
+ * section, publishes a generation, pauses, fails, or is cancelled. The
+ * renderer uses it to drive the compaction status badge without polling.
+ */
+export interface ChatV2CompactionProgressEvent {
+  readonly conversationId: string;
+  /** Run id assigned by the coordinator. */
+  readonly runId: string;
+  /** Current run state: queued|running|paused|cancelled|failed|completed. */
+  readonly state: string;
+  /** Generation id, once a generation is published. */
+  readonly generationId?: string;
+  /** Sections packed so far in this run. */
+  readonly sectionsPacked: number;
+  /** Epoch-ms of the event (trusted main-process timestamp). */
+  readonly occurredAt: string;
+  /** Optional human-readable message (i18n key or English fallback). */
+  readonly message?: string;
+}

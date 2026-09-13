@@ -87,6 +87,10 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
+        <AiChatCompactionStatus
+          :status="compactionStatus"
+          class="mx-1"
+        />
         <v-btn
           icon
           size="small"
@@ -120,6 +124,17 @@
           "
         >
           <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          data-testid="ai-history-drawer-toggle"
+          :disabled="!activeConversationId"
+          @click="showHistoryDrawer = true"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+        >
+          <v-icon size="small">mdi-book-search-outline</v-icon>
         </v-btn>
         <v-btn
           icon
@@ -414,6 +429,12 @@
         </v-btn>
       </div>
 
+      <AiChatSelectedContext
+        :selections="selectedContextItems"
+        @remove="removeSelectedContext"
+        @clear="clearSelectedContext"
+      />
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -674,6 +695,13 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Recoverable-history browser drawer (technical-design §13.1). -->
+    <AiChatHistoryDrawer
+      v-if="activeConversationId"
+      v-model="showHistoryDrawer"
+      :conversation-id="activeConversationId"
+      @select="handleHistorySelect"
+    />
     <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
     <AIContentReportDialog
       v-if="singleReportDialogOpen && activeSingleDescriptor"
@@ -716,6 +744,7 @@ import type {
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -748,6 +777,9 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
+  getCompactionStatus,
+  subscribeCompactionProgress,
+  unsubscribeCompactionProgress,
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
@@ -795,6 +827,12 @@ import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
+import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
+import AiChatSelectedContext from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -983,6 +1021,10 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+// Recoverable-history + incremental-compaction state (technical-design §13).
+const showHistoryDrawer = ref(false);
+const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+const selectedContextItems = ref<SelectedContextItem[]>([]);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 interface MessageListController {
@@ -1560,6 +1602,72 @@ function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
 }
 
 /**
+ * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
+ * Updates the status badge for the active conversation; ignored for other
+ * conversations (the badge is per-conversation, not global).
+ */
+function handleCompactionProgress(
+  event: ChatV2CompactionProgressEvent
+): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  compactionStatus.value = {
+    state: event.state,
+    runId: event.runId,
+    generationId: event.generationId,
+  };
+}
+
+/**
+ * Build a SelectedContextItem from a resolved history excerpt (§13.3). The
+ * preview text is display-only — the backend re-resolves the opaque sourceId
+ * on submit; renderer text is never trusted as the original quote.
+ */
+function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  const existing = selectedContextItems.value.find(
+    (item) => item.sourceId === excerpt.sourceId
+  );
+  if (existing) return; // dedup: a passage can be selected only once
+  const preview =
+    excerpt.text.length > 80
+      ? excerpt.text.slice(0, 77) + "…"
+      : excerpt.text;
+  const estimatedTokens = Math.ceil(excerpt.text.length / 4);
+  selectedContextItems.value = [
+    ...selectedContextItems.value,
+    { sourceId: excerpt.sourceId, preview, estimatedTokens },
+  ];
+}
+
+function removeSelectedContext(sourceId: string): void {
+  selectedContextItems.value = selectedContextItems.value.filter(
+    (item) => item.sourceId !== sourceId
+  );
+}
+
+function clearSelectedContext(): void {
+  selectedContextItems.value = [];
+}
+
+/**
+ * Load the current compaction status when switching conversations so the
+ * badge reflects the active run (if any) for the focused conversation.
+ */
+async function refreshCompactionStatus(): Promise<void> {
+  if (!activeConversationId.value) {
+    compactionStatus.value = null;
+    return;
+  }
+  try {
+    compactionStatus.value = await getCompactionStatus(
+      activeConversationId.value
+    );
+  } catch {
+    // Status is best-effort; a failure leaves the prior badge (or null).
+    compactionStatus.value = null;
+  }
+}
+
+/**
  * Handle a scheduled-turn completion broadcast (refresh hint only). Reloads the
  * authoritative history when the originating conversation is active and idle;
  * defers until the active stream ends so scheduled tokens never merge into an
@@ -1733,6 +1841,10 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Drafted history selections are per-conversation (§13.3); switching
+    // conversations discards them so selections never leak across chats.
+    selectedContextItems.value = [];
+    void refreshCompactionStatus();
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
@@ -3648,6 +3760,12 @@ const onSend = async (
   // before acknowledgement would silently discard a rejected message.
   options?.onAccepted?.();
   streamError.value = null;
+  // Drafted history selections are consumed on submit (§13.3). The backend
+  // re-resolves the opaque source ids against the current epoch; clear the
+  // draft here so they don't persist into the next turn.
+  if (selectedContextItems.value.length > 0) {
+    selectedContextItems.value = [];
+  }
 
   attachmentError.value = null;
   voicePlaybackError.value = null;
@@ -4924,6 +5042,8 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
+  // Incremental-compaction run lifecycle updates the status badge (§13.1).
+  subscribeCompactionProgress(handleCompactionProgress);
 });
 
 // --- Conversation + single-output report orchestration (design §11.1) -----
@@ -4995,6 +5115,7 @@ onBeforeUnmount(() => {
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
   unsubscribeAutoCompacted();
+  unsubscribeCompactionProgress();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;

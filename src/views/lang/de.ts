@@ -2871,6 +2871,44 @@ export default {
     status_completed: "Abgeschlossen",
     status_cancelled: "Abgebrochen",
   },
+  aiChatHistory: {
+    drawer_title: "Unterhaltungsverlauf",
+    search_placeholder: "Archivierten Verlauf durchsuchen…",
+    search_query_too_long: "Die Suche darf höchstens 200 Zeichen lang sein.",
+    no_match: "Keine übereinstimmenden Nachrichten gefunden.",
+    partial_scan:
+      "Teilergebnisse — der vollständige Scan ist noch nicht abgeschlossen.",
+    index_incomplete:
+      "Die Verlaufsindexierung läuft noch; Ergebnisse können unvollständig sein.",
+    read_more: "Mehr lesen",
+    select_passage: "Abschnitt auswählen",
+    selected_context: "Ausgewählter Kontext",
+    estimated_cost: "Geschätzte Kosten: {tokens} Tokens",
+    clear_selections: "Auswahl löschen",
+    source_changed:
+      "Dieser Abschnitt hat sich seit der Auswahl geändert und wurde aktualisiert.",
+    source_unavailable: "Dieser Abschnitt ist nicht mehr verfügbar.",
+    scope_invalid: "Ungültiger Verlaufsbereich. Bitte erneut versuchen.",
+    load_error: "Verlauf konnte nicht geladen werden. {message}",
+    empty: "Noch kein archivierter Verlauf für diese Unterhaltung.",
+  },
+  aiChatCompaction: {
+    status_idle: "Inaktiv",
+    status_queued: "In Warteschlange",
+    status_running: "Komprimierung…",
+    status_paused: "Pausiert",
+    status_completed: "Komprimiert",
+    status_failed: "Komprimierung fehlgeschlagen",
+    status_cancelled: "Abgebrochen",
+    compaction_in_progress:
+      "Komprimierung läuft ({packed} Abschnitte gepackt).",
+    compaction_paused:
+      "Komprimierung pausiert. Sie wird automatisch fortgesetzt.",
+    compaction_failed: "Komprimierung fehlgeschlagen: {message}",
+    compaction_retry: "Erneut versuchen",
+    compaction_cancel: "Komprimierung abbrechen",
+    cancel_failed: "Komprimierung konnte nicht abgebrochen werden. {message}",
+  },
   subagents: {
     title: "Unteragenten",
     tab_subagents: "Unteragenten",

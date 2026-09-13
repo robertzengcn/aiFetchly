@@ -380,6 +380,24 @@ export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
  * drops the context badge immediately (mirrors the manual compact flow). */
 export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
 
+// ==================== AiChatV2 Recoverable History Channels ====================
+// Recoverable conversation history + incremental compaction (technical-design
+// §13). History browsing is LOCAL-only (no AI calls, no AI-enable gate);
+// compaction status/cancel mirror the AI-gated compact flow.
+/** Renderer->Main: search archived history excerpts (local index scan, §13.1). */
+export const AI_CHAT_V2_HISTORY_SEARCH = "ai-chat-v2:history-search";
+/** Renderer->Main: read archived history source slices (§13.1). */
+export const AI_CHAT_V2_HISTORY_READ = "ai-chat-v2:history-read";
+/** Renderer->Main: resolve user-selected passages to exact excerpts (§13.1). */
+export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
+  "ai-chat-v2:history-resolve-selections";
+/** Renderer->Main: read the active compaction run status (§13.1). */
+export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
+/** Renderer->Main: cancel the active compaction run (§13.1). */
+export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
+/** Main->renderer compaction run lifecycle/progress broadcast (§13.1). */
+export const AI_CHAT_V2_COMPACTION_PROGRESS = "ai-chat-v2:compaction-progress";
+
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See
 // docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §6.

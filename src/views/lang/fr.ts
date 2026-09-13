@@ -2859,6 +2859,43 @@ export default {
     status_completed: "Terminé",
     status_cancelled: "Annulé",
   },
+  aiChatHistory: {
+    drawer_title: "Historique de conversation",
+    search_placeholder: "Rechercher dans l'historique archivé…",
+    search_query_too_long: "La recherche ne doit pas dépasser 200 caractères.",
+    no_match: "Aucun message correspondant trouvé.",
+    partial_scan:
+      "Affichage partiel des résultats — l'analyse complète n'est pas terminée.",
+    index_incomplete:
+      "L'indexation de l'historique est en cours ; les résultats peuvent être incomplets.",
+    read_more: "Lire la suite",
+    select_passage: "Sélectionner le passage",
+    selected_context: "Contexte sélectionné",
+    estimated_cost: "Coût estimé : {tokens} tokens",
+    clear_selections: "Effacer la sélection",
+    source_changed:
+      "Ce passage a été modifié depuis la sélection et a été actualisé.",
+    source_unavailable: "Ce passage n'est plus disponible.",
+    scope_invalid: "Portée de l'historique invalide. Veuillez réessayer.",
+    load_error: "Échec du chargement de l'historique. {message}",
+    empty: "Aucun historique archivé pour cette conversation.",
+  },
+  aiChatCompaction: {
+    status_idle: "Inactif",
+    status_queued: "En file",
+    status_running: "Compactage…",
+    status_paused: "En pause",
+    status_completed: "Compacté",
+    status_failed: "Échec du compactage",
+    status_cancelled: "Annulé",
+    compaction_in_progress:
+      "Compactage en cours ({packed} sections empaquetées).",
+    compaction_paused: "Compactage en pause. Il reprendra automatiquement.",
+    compaction_failed: "Échec du compactage : {message}",
+    compaction_retry: "Réessayer",
+    compaction_cancel: "Annuler le compactage",
+    cancel_failed: "Impossible d'annuler le compactage. {message}",
+  },
   subagents: {
     title: "Sous-agents",
     tab_subagents: "Sous-agents",
