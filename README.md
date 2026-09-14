@@ -299,6 +299,8 @@ The settings screen can refresh available models, test chat and streaming suppor
 
 Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
 
+Workspace chat generator streaming proposal: [product requirements](docs/prd/ai-chat-workspace-generator-streaming-prd.md) and [technical design](docs/prd/ai-chat-workspace-generator-streaming-technical-design.md).
+
 The official application website is [sellart-online.com](https://www.sellart-online.com).
 
 ## Support aiFetchly
