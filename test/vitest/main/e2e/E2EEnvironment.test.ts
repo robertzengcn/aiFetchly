@@ -201,5 +201,76 @@ describe("E2EEnvironment", () => {
       );
       expect(() => parseStateManifest(file)).toThrow(E2EEnvironmentError);
     });
+
+    it("parses tokenOverrides restricted to the recoverable-history flags", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          tokenOverrides: {
+            ai_chat_archive_reads_flag: "true",
+            ai_chat_new_compaction_flag: "true",
+          },
+        }),
+        "utf8"
+      );
+      const m = parseStateManifest(file);
+      expect(m.tokenOverrides).toEqual({
+        ai_chat_archive_reads_flag: "true",
+        ai_chat_new_compaction_flag: "true",
+      });
+    });
+
+    it("rejects a tokenOverrides key that is not a rollout flag", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          tokenOverrides: { USER_AI_ENABLED: "true" },
+        }),
+        "utf8"
+      );
+      expect(() => parseStateManifest(file)).toThrow(E2EEnvironmentError);
+    });
+
+    it("rejects a tokenOverrides value that is not true/false", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          tokenOverrides: { ai_chat_archive_reads_flag: "yes" },
+        }),
+        "utf8"
+      );
+      expect(() => parseStateManifest(file)).toThrow(E2EEnvironmentError);
+    });
+
+    it("rejects a non-object tokenOverrides", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          tokenOverrides: ["ai_chat_archive_reads_flag"],
+        }),
+        "utf8"
+      );
+      expect(() => parseStateManifest(file)).toThrow(E2EEnvironmentError);
+    });
   });
 });
