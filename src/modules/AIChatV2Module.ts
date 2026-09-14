@@ -8,6 +8,8 @@ import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN } from "@/config/usersetting";
 import { buildAutoPlanPromptSection } from "@/service/ChatModePromptSection";
+import { AIChatArchiveAppendCoupler } from "@/service/AIChatArchiveAppendCoupler";
+import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
@@ -32,12 +34,29 @@ export class AIChatV2Module extends BaseModule {
   private chatModule: AIChatModule;
   private sessionMemoryModule: AIChatSessionMemoryModule;
   private compactModule: AIChatCompactModule;
+  private archiveCoupler: AIChatArchiveAppendCoupler;
 
   constructor() {
     super();
     this.chatModule = new AIChatModule();
     this.sessionMemoryModule = new AIChatSessionMemoryModule();
     this.compactModule = new AIChatCompactModule();
+    this.archiveCoupler = new AIChatArchiveAppendCoupler();
+  }
+
+  /**
+   * Fire-and-forget archive index coupling after a v2 message is appended
+   * (technical-design §5.1 line 149). The coupler is flag-gated and never
+   * throws, so the save path is unaffected when archive reads are off or the
+   * DB is not ready. Must run AFTER the source row is committed so the
+   * backfill read sees it.
+   */
+  private coupleArchiveAppend(conversationId: string): void {
+    // void: fire-and-forget; errors are logged inside the coupler.
+    void this.archiveCoupler.coupleAppend(conversationId).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[ai-chat-v2] archive append coupling failed: ${msg}`);
+    });
   }
 
   /** Create (or reuse) a v2 conversation id. */
@@ -56,7 +75,7 @@ export class AIChatV2Module extends BaseModule {
     metadata?: ChatV2MessageMetadata;
     turnId?: string;
   }): Promise<AIChatMessageEntity> {
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: params.messageId ?? `user-${uuid()}`,
       conversationId: params.conversationId,
       role: "user",
@@ -69,6 +88,8 @@ export class AIChatV2Module extends BaseModule {
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
+    this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   /**
@@ -84,7 +105,7 @@ export class AIChatV2Module extends BaseModule {
     metadata?: ChatV2MessageMetadata;
     turnId?: string;
   }): Promise<AIChatMessageEntity> {
-    return this.chatModule.saveMessageIfAbsent({
+    const saved = await this.chatModule.saveMessageIfAbsent({
       messageId: params.messageId,
       conversationId: params.conversationId,
       role: "user",
@@ -97,6 +118,8 @@ export class AIChatV2Module extends BaseModule {
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
+    this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveAssistantMessage(params: {
@@ -114,7 +137,7 @@ export class AIChatV2Module extends BaseModule {
       ...(params.metadata ?? {}),
       ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: params.messageId ?? `assistant-${uuid()}`,
       conversationId: params.conversationId,
       role: "assistant",
@@ -125,6 +148,8 @@ export class AIChatV2Module extends BaseModule {
       metadata: meta,
       messageType: MessageType.MESSAGE,
     });
+    this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveToolCallMessage(params: {
@@ -145,7 +170,7 @@ export class AIChatV2Module extends BaseModule {
       toolArguments: params.toolArguments,
       ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: `tool-call-${params.toolCallId}`,
       conversationId: params.conversationId,
       role: "assistant",
@@ -156,6 +181,8 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_CALL,
     });
+    this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async saveToolResultMessage(params: {
@@ -192,7 +219,7 @@ export class AIChatV2Module extends BaseModule {
         typeof toolResult.error === "string" ? toolResult.error : undefined,
       ...(params.turnId ? { turnId: params.turnId } : {}),
     };
-    return this.chatModule.saveMessage({
+    const saved = await this.chatModule.saveMessage({
       messageId: `tool-result-${
         params.replacesPermissionPromptForToolId ?? params.toolCallId
       }`,
@@ -203,6 +230,8 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_RESULT,
     });
+    this.coupleArchiveAppend(params.conversationId);
+    return saved;
   }
 
   async getConversationMessages(
@@ -242,6 +271,18 @@ export class AIChatV2Module extends BaseModule {
     } catch (err) {
       console.error(
         "[ai-chat-v2] clearConversation: artifact clear failed:",
+        err
+      );
+    }
+    // Tombstone the archive state (§5.2): bump revision + fence so any in-flight
+    // compaction claim is invalidated and prior cursors/source IDs/generations
+    // become unresolvable. A re-archived conversation mints a fresh epoch via
+    // ensureState. Best-effort; never break the clear on a storage hiccup.
+    try {
+      await new AIChatArchiveStateModel(this.dbpath).tombstone(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: archive tombstone failed:",
         err
       );
     }
