@@ -27,6 +27,9 @@ import {
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
+import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { isNewCompactionEnabled } from "@/config/featureFlags";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -184,6 +187,10 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactAgent = null;
   queryEngineDbPath = null;
   compactAgentDbPath = null;
+  // The coordinator captures the DB path at construction (BaseModule); a
+  // user/DB switch invalidates it, so drop the singleton so the next
+  // getCompactionCoordinator() mints one bound to the new path.
+  compactionCoordinator = null;
   // The catalog is provider-level state; a user/DB switch may change the
   // active provider, so drop the cached model windows.
   compactModelCatalog = null;
@@ -226,6 +233,14 @@ function getCompactAgent(): AIChatCompactAgentService {
           occurredAt: new Date().toISOString(),
         });
       },
+      // §11.1: when the new-compaction stage is on, the interactive manual
+      // compact (runFullCompact) delegates to the shared durable coordinator
+      // instead of the legacy all-history model call. The flag is read live
+      // here (engine construction) so a toggle takes effect on the next
+      // engine rebuild; flag-off keeps the unchanged legacy path.
+      ...(isNewCompactionEnabled()
+        ? { compactionCoordinator: getCompactionCoordinator() }
+        : {}),
     });
     compactAgentDbPath = dbPath;
   }
@@ -275,6 +290,20 @@ function getQueryEngine(): AIChatQueryEngine {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+      // §11.1: share one coordinator across the interactive engine and the
+      // compact agent when the new-compaction stage is on, so the post-turn
+      // auto-compaction hook takes the durable incremental path instead of
+      // the legacy in-memory auto-compact. Flag-off omits it and the engine
+      // falls back to the compact-agent legacy hook unchanged.
+      ...(isNewCompactionEnabled()
+        ? { compactionCoordinator: getCompactionCoordinator() }
+        : {}),
+      // §12 assembler with the compaction reader so the interactive engine
+      // assembles from the active generation's boundary + overview when one is
+      // published (degrades to legacy trim otherwise).
+      contextAssembler: new AIChatContextAssembler({
+        compactionReader: new AIChatCompactionModule(),
+      }),
     });
     queryEngineDbPath = dbPath;
   }
