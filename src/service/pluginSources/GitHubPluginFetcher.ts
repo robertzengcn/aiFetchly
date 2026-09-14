@@ -147,6 +147,9 @@ export interface GitHubPluginFetcherDependencies {
   /** Compat fallback (feature-flagged, design §17): native-Git repository
    *  acquisition while archive install is disabled for rollback. */
   readonly git?: GitPluginFetcher;
+  /** Temp-dir seam (design §10.4): tests observe creation + cleanup without
+   *  spying on the ESM fs namespace. Defaults to os.tmpdir mkdtemp. */
+  readonly createTempDir?: () => string;
 }
 
 export class GitHubPluginFetcher implements PluginSourceFetcher {
@@ -173,8 +176,14 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
       repository: cls.repo,
       canonicalUrl: `https://github.com/${cls.owner}/${cls.repo}`,
     };
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-gh-archive-"));
+    const tmp = this.deps.createTempDir
+      ? this.deps.createTempDir()
+      : fs.mkdtempSync(path.join(os.tmpdir(), "plugin-gh-archive-"));
     const zipPath = path.join(tmp, "source.zip");
+    // Ownership handoff: on success the returned cleanup() owns tmp; on
+    // every OTHER terminal path (resolve/download/extract failure,
+    // exception, abort) this finally removes it (design §16.1, FR-12).
+    let handedOff = false;
     try {
       const resolved = await this.deps.archiveClient.resolveRevision(
         identity,
@@ -210,6 +219,7 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
         return inner;
       }
       const innerCleanup = inner.source.cleanup;
+      handedOff = true;
       return {
         success: true,
         source: {
@@ -249,6 +259,14 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
           ),
         ],
       };
+    } finally {
+      if (!handedOff) {
+        try {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        } catch {
+          /* best-effort — the primary failure governs */
+        }
+      }
     }
   }
 

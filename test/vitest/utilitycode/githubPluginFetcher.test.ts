@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   classifyGitHubUrl,
   GitHubPluginFetcher,
@@ -162,5 +165,49 @@ describe("GitHubPluginFetcher — git-free repository acquisition (GF Phase B)",
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.errors[0]?.message).toContain("Ref field");
+  });
+});
+
+describe("GitHubPluginFetcher archive temp-dir cleanup (GF review)", () => {
+  it("removes the download temp dir on every failure path", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gh-cleanup-"));
+    const made: string[] = [];
+    try {
+      const fetcher = new GitHubPluginFetcher({
+        archiveClient: {
+          resolveRevision: vi.fn(async () => ({
+            ok: false as const,
+            error: {
+              code: "github-rate-limited" as const,
+              message: "x",
+              recoverable: true,
+            },
+          })),
+          downloadArchive: vi.fn(async () => ({
+            ok: true as const,
+            zipPath: "x",
+            bytes: 1,
+          })),
+        } as never,
+        zip: { acquire: vi.fn() } as never,
+        git: { acquire: vi.fn() } as never,
+        createTempDir: () => {
+          const dir = path.join(root, `archive-${made.length}`);
+          fs.mkdirSync(dir, { recursive: true });
+          made.push(dir);
+          return dir;
+        },
+      });
+      const result = await fetcher.acquire({
+        kind: "github",
+        uri: "https://github.com/owner/repo",
+      });
+      expect(result.success).toBe(false);
+      expect(made).toHaveLength(1);
+      // The failure-path finally removed the temp dir.
+      expect(fs.existsSync(made[0])).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
