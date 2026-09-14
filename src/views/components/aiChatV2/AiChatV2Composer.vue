@@ -367,12 +367,12 @@
           color="error"
           icon="mdi-stop"
           size="small"
+          class="v2-composer__icon-target"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
           data-testid="ai-chat-stop"
           @click="$emit('stop')"
         />
         <v-btn
-          v-if="!isStreaming"
           color="primary"
           icon="mdi-send"
           size="small"
@@ -382,16 +382,6 @@
           :aria-label="t('aiChatV2.send') || 'Send'"
           data-testid="ai-chat-send"
           @click="onSend"
-        />
-        <v-btn
-          v-else
-          color="error"
-          icon="mdi-stop"
-          size="small"
-          class="v2-composer__icon-target"
-          :aria-label="t('aiChatV2.stop') || 'Stop'"
-          data-testid="ai-chat-stop"
-          @click="$emit('stop')"
         />
       </div>
     </div>
