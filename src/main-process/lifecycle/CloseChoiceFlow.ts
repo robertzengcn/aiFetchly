@@ -75,8 +75,7 @@ export class CloseChoiceFlow {
       this.lifecycle.isBackgroundAvailable()
     );
 
-    const { setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } =
-      this.ports;
+    const { setTimeoutFn = setTimeout } = this.ports;
     this.ackTimer = setTimeoutFn(() => {
       this.ackTimer = null;
       // Fallback only if the renderer never showed its surface (§9).

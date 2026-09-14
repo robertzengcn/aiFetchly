@@ -6,6 +6,11 @@ import {
   type UpdateStatusState,
   type UpdateUnsupportedReason,
 } from "./UpdateStatus";
+import {
+  isExitRequestorBound,
+  requestAppExit,
+  setUpdateRestartAction,
+} from "@/main-process/lifecycle/exitRequestPort";
 
 /** Minimum cooldown between completed manual checks (PRD FR-4.4). */
 const MANUAL_CHECK_COOLDOWN_MS = 60_000;
@@ -187,13 +192,33 @@ export class ManualUpdateService {
     return this.getStatus();
   }
 
-  /** Quit and install a downloaded update; no-op unless ready-to-restart. */
+  /**
+   * Quit and install a downloaded update; no-op unless ready-to-restart.
+   *
+   * Application-exit design §12: the restart is routed through the lifecycle
+   * coordinator — bounded cleanup runs FIRST, then the updater's install
+   * runs exactly once as the terminal action. When the coordinator is not
+   * bound (unit tests, very early startup), the legacy direct path applies.
+   */
   quitAndInstall(): void {
     if (this.state !== "ready-to-restart") {
       return;
     }
+    const autoUpdater = this.deps.getAutoUpdater();
+    if (isExitRequestorBound()) {
+      setUpdateRestartAction(() => {
+        try {
+          autoUpdater.quitAndInstall();
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          log.error(`[auto-update] quitAndInstall failed: ${detail}`);
+        }
+      });
+      void requestAppExit("update-restart");
+      return;
+    }
     try {
-      this.deps.getAutoUpdater().quitAndInstall();
+      autoUpdater.quitAndInstall();
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       log.error(`[auto-update] quitAndInstall failed: ${detail}`);
@@ -227,14 +252,14 @@ export class ManualUpdateService {
     ];
     for (const eventName of events) {
       autoUpdaterRef.on(eventName, (...args: unknown[]) =>
-        this.handleAutoUpdaterEvent(eventName, args),
+        this.handleAutoUpdaterEvent(eventName, args)
       );
     }
   }
 
   private handleAutoUpdaterEvent(
     eventName: string,
-    args: readonly unknown[],
+    args: readonly unknown[]
   ): void {
     const next = mapAutoUpdaterEvent(eventName);
     if (next === null) {

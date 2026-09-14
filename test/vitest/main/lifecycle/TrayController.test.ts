@@ -4,6 +4,7 @@ import {
   type TrayControllerPorts,
   type TrayLike,
   type TrayMenuLike,
+  type TrayLabels,
 } from "@/main-process/lifecycle/TrayController";
 import {
   resolveTrayLabels,
@@ -82,11 +83,7 @@ function makePorts(
     },
     restoreWindow: restore,
     requestExit: exit,
-    labels: () => ({
-      tooltip: "AiFetchly",
-      open: "Open AiFetchly",
-      exit: "Exit",
-    }),
+    labels: () => trayLabelsForLocale("en"),
     iconCandidates: () => ["/tmp/icon.png"],
     ...overrides,
     restore,
@@ -154,20 +151,17 @@ describe("TrayController", () => {
 
   it("rebuildMenu refreshes tooltip + labels for locale changes", () => {
     const tray = new FakeTray();
-    let labels = { tooltip: "AiFetchly", open: "Open", exit: "Exit" };
+    let labels: TrayLabels = trayLabelsForLocale("en");
     const ports = makePorts(tray, {
       labels: () => labels,
     });
     const controller = new TrayController(ports);
     controller.initialize();
     expect(tray.tooltip).toBe("AiFetchly");
-    labels = {
-      tooltip: "AiFetchly",
-      open: "打开 AiFetchly",
-      exit: "退出应用程序",
-    };
+    labels = trayLabelsForLocale("zh");
     controller.rebuildMenu();
     expect(tray.tooltip).toBe("AiFetchly");
+    expect(tray.menu?.open).toBeTypeOf("function");
   });
 });
 

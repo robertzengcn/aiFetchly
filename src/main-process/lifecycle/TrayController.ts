@@ -20,11 +20,19 @@ import { log } from "@/modules/Logger";
  *  - The tray is destroyed exactly once at shutdown finalize.
  */
 
-/** Localized labels, resolved lazily so locale changes rebuild the menu. */
+/**
+ * Localized labels, resolved lazily so locale changes rebuild the menu.
+ * The close-dialog strings back the native fallback dialog (design §9);
+ * they mirror the `applicationLifecycle` renderer namespace.
+ */
 export interface TrayLabels {
   readonly tooltip: string;
   readonly open: string;
   readonly exit: string;
+  readonly keepRunning: string;
+  readonly cancel: string;
+  readonly closeTitle: string;
+  readonly closeDescription: string;
 }
 
 export interface TrayMenuLike {
@@ -36,7 +44,10 @@ export interface TrayLike {
   setContextMenu(menu: TrayMenuLike): void;
   on(event: "click", listener: (...args: unknown[]) => void): unknown;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
-  removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
+  removeListener(
+    event: string,
+    listener: (...args: unknown[]) => void
+  ): unknown;
   destroy(): void;
   isDestroyed(): boolean;
 }
@@ -45,7 +56,10 @@ export interface TrayControllerPorts {
   /** Build a tray bound to the resolved icon (returns null on failure). */
   readonly createTray: (iconPath: string | null) => TrayLike | null;
   /** Build a menu with Open/Exit items calling the given callbacks. */
-  readonly buildMenu: (labels: TrayLabels, actions: TrayActions) => TrayMenuLike;
+  readonly buildMenu: (
+    labels: TrayLabels,
+    actions: TrayActions
+  ) => TrayMenuLike;
   /** Restore + focus the main window (tray Open / click activation). */
   readonly restoreWindow: () => void;
   /** Begin the coordinated exit (FR-04 shared path). */

@@ -124,11 +124,6 @@ function describeError(err: unknown): string {
   return truncateMessage(String(err));
 }
 
-interface StageResult {
-  timedOut: boolean;
-  outcomes: ParticipantOutcome[];
-}
-
 /**
  * Race a stage against its remaining budget. The losing promises keep
  * running (no cancellation here); their adapters must honor the abort

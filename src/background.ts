@@ -10,6 +10,17 @@ import {
   protocol,
   net,
 } from "electron";
+// Tray/nativeImage are not exported by the electron tsconfig mock (WS-7
+// pattern); require them structurally like `session`/`crashReporter` above.
+type NativeImageLike = { isEmpty(): boolean };
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const electronTrayModule = require("electron") as {
+  Tray: new (image: NativeImageLike) => unknown;
+  nativeImage: {
+    createFromPath(p: string): NativeImageLike;
+    createEmpty(): NativeImageLike;
+  };
+};
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -76,14 +87,8 @@ import { ScheduleManager } from "@/modules/ScheduleManager";
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
-import {
-  initializeWebSocketConnection,
-  cleanupWebSocketConnection,
-} from "@/main-process/communication/websocket-ipc";
-import { cleanupContactExtractionWorker } from "@/main-process/communication/contactExtraction-ipc";
+import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
-import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
-import { getDefaultManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
 import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
 import * as os from "node:os";
@@ -110,7 +115,6 @@ async function sweepStaleManagedBrowserProfiles(): Promise<void> {
     }
   }
 }
-import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { clearPendingDesktopAuth } from "@/modules/pendingDesktopAuth";
 import { consumeDesktopAuthCode } from "@/modules/desktopAuthExchange";
 import {
@@ -135,6 +139,42 @@ import {
 } from "@/utils/loadHtmlFileWithUrlFallback";
 import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
 import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
+// Application exit & system tray (docs/prd/application-exit-and-system-tray-*.md)
+import { getApplicationLifecycleService } from "@/main-process/lifecycle/ApplicationLifecycleService";
+import type { ApplicationExitReason } from "@/entityTypes/applicationLifecycleTypes";
+import { ShutdownCoordinator } from "@/main-process/lifecycle/ShutdownCoordinator";
+import {
+  createShutdownParticipants,
+  reportSinkAdapter,
+} from "@/main-process/lifecycle/ShutdownParticipants";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
+import { ProcessTreeTerminator } from "@/main-process/lifecycle/ProcessTreeTerminator";
+import { createDefaultProcessOps } from "@/main-process/lifecycle/processOps";
+import { bindSpawnGateToLifecycle } from "@/main-process/lifecycle/spawnGate";
+import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
+import {
+  TrayController,
+  resolveTrayIconCandidates,
+  type TrayLike,
+  type TrayMenuLike,
+  type TrayActions,
+  type TrayLabels,
+} from "@/main-process/lifecycle/TrayController";
+import {
+  resolveTrayLabels,
+  trayLabelsForLocale,
+} from "@/main-process/lifecycle/TrayLocale";
+import { CloseChoiceFlow } from "@/main-process/lifecycle/CloseChoiceFlow";
+import {
+  bindExitRequestor,
+  requestAppExit,
+  takeUpdateRestartAction,
+} from "@/main-process/lifecycle/exitRequestPort";
+import {
+  registerApplicationLifecycleIpcHandlers,
+  broadcastLifecycleState,
+} from "@/main-process/communication/applicationLifecycle-ipc";
+import { APPLICATION_CLOSE_CHOICE_REQUEST } from "@/config/channellist";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -363,6 +403,249 @@ function scheduleForcedAppExit(reason: string): void {
  */
 let devBrowserBridge: { stop(): Promise<void> } | null = null;
 let generatedImageProtocolHandlerRegistered = false;
+
+// ---------------------------------------------------------------------------
+// Application lifecycle composition (exit & system tray PRD; design §3–§5)
+// ---------------------------------------------------------------------------
+const lifecycle = getApplicationLifecycleService();
+const ownedProcessRegistry = getOwnedProcessRegistry();
+bindSpawnGateToLifecycle(lifecycle);
+
+/** Tray label cache — refreshed async from the persisted locale. */
+let cachedTrayLabels: TrayLabels = trayLabelsForLocale(null);
+let trayController: TrayController | null = null;
+
+/**
+ * Restore the main window from hidden (tray) mode: state machine first, then
+ * show/restore/focus the EXISTING window (AC-03: no duplicate initialization).
+ */
+function showMainWindowFromTray(): void {
+  lifecycle.restoreFromTray(); // hidden -> visible (no-op otherwise)
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    return;
+  }
+  // No live window (e.g. renderer died while hidden): reuse the late-bound
+  // recreate/focus path wired inside initialize().
+  try {
+    onSecondInstanceActivate?.();
+  } catch (err) {
+    log.error(
+      "[lifecycle] window restore failed:",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+/** Ordinary close → close-choice flow (FR-01). */
+const closeChoiceFlow = new CloseChoiceFlow(lifecycle, {
+  sendRendererRequest: (token, backgroundAvailable) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(APPLICATION_CLOSE_CHOICE_REQUEST, {
+        token,
+        backgroundAvailable,
+      });
+    }
+  },
+  // Native fallback (design §9): localized, only when the renderer never
+  // acknowledged. Escape/dismiss maps to cancel.
+  showNativeFallback: async (
+    backgroundAvailable
+  ): Promise<"hide" | "exit" | "cancel"> => {
+    const labels = cachedTrayLabels;
+    const { response } = await dialog.showMessageBox({
+      type: "question",
+      title: labels.closeTitle,
+      message: labels.closeTitle,
+      detail: labels.closeDescription,
+      buttons: backgroundAvailable
+        ? [labels.keepRunning, labels.exit, labels.cancel]
+        : [labels.exit, labels.cancel],
+      defaultId: 0,
+      cancelId: backgroundAvailable ? 2 : 1,
+      noLink: true,
+    });
+    if (!backgroundAvailable) {
+      return response === 0 ? "exit" : "cancel";
+    }
+    return response === 0 ? "hide" : response === 1 ? "exit" : "cancel";
+  },
+  hideWindow: () => {
+    // State was already flipped to `hidden` by the lifecycle service; only
+    // the OS window hides here. The renderer is preserved (FR-02).
+    try {
+      if (win && !win.isDestroyed()) win.hide();
+    } catch (err) {
+      log.warn("[lifecycle] window hide failed:", err);
+    }
+  },
+});
+
+/** Resources owned by this module, handed to the participants (design §3). */
+const shutdownDeps = {
+  stopChatScheduler: stopChatScheduledBackgroundScheduler,
+  stopDevBrowserBridge: async (): Promise<void> => {
+    try {
+      await devBrowserBridge?.stop();
+    } catch (err) {
+      log.warn("[dev-browser] bridge stop failed", err);
+    }
+    devBrowserBridge = null;
+  },
+  stopDiagnosticsRetention: (): void => {
+    try {
+      __diagnosticsRetention.stop();
+    } catch {
+      /* already stopped */
+    }
+  },
+  clearPendingDesktopAuth: (): void => {
+    try {
+      clearPendingDesktopAuth();
+    } catch (err) {
+      log.warn("[shutdown] clearPendingDesktopAuth failed:", err);
+    }
+  },
+  stopLogCleanup: (): void => logger.stopLogCleanup(),
+  /**
+   * Design §11: the clean-startup marker is removed only AFTER the cleanup
+   * outcome is known (and the report records clean vs forced). Any
+   * coordinated exit is NOT a crash, so the marker comes off regardless;
+   * the report distinguishes clean from forced for the next launch.
+   */
+  clearStartupMarker: (): void => clearStartupMarker(),
+  writeShutdownReport: appendShutdownReport,
+  hasUserData: (): boolean => {
+    try {
+      const p = new Token().getValue(USERSDBPATH);
+      return Boolean(p && p.length > 0);
+    } catch {
+      return false;
+    }
+  },
+};
+
+/** Compose the coordinator over the existing cleanup owners (design §5/§6). */
+const shutdownCoordinator = new ShutdownCoordinator({
+  participants: () => createShutdownParticipants(shutdownDeps),
+  forceStop: (context) =>
+    new ProcessTreeTerminator(
+      ownedProcessRegistry,
+      createDefaultProcessOps(),
+      Date.now
+    ).terminateAll(context.remainingMs),
+  onPhase: (phase) => lifecycle.setPhase(phase),
+  onReport: reportSinkAdapter(shutdownDeps),
+});
+lifecycle.setCleanupRunner((context) => shutdownCoordinator.run(context));
+
+// Broadcast lifecycle state to the renderer (design §10).
+lifecycle.addStateListener((event) => {
+  broadcastLifecycleState(win, event);
+});
+
+/**
+ * THE shared exit entrypoint (FR-04): every explicit exit source funnels
+ * here. Awaits the bounded cleanup, arms the final-exit guard, then runs
+ * the terminal action exactly once (quit, or the updater's install).
+ */
+async function requestAppExitCoordinated(
+  reason: ApplicationExitReason
+): Promise<void> {
+  const outcome = await lifecycle.requestExit(reason);
+  lifecycle.authorizeFinalExit();
+  if (outcome.intent === "update-restart") {
+    const action = takeUpdateRestartAction();
+    if (action) {
+      try {
+        action();
+        return;
+      } catch (err) {
+        log.error(
+          "[lifecycle] update handoff failed; falling back to normal quit:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+  }
+  try {
+    trayController?.destroy();
+  } catch {
+    /* best-effort */
+  }
+  app.quit();
+}
+bindExitRequestor(requestAppExitCoordinated);
+
+/**
+ * Create the system tray (design §9). Called once after app-ready. Tray
+ * creation failure never fails startup — background mode simply stays
+ * unavailable and the close dialog degrades to Exit/Cancel (AC-10).
+ */
+function initializeSystemTray(): void {
+  // E2E bootstrap has no functional tray host; keep background mode off
+  // unless the harness explicitly enables it for a tray-scenario run
+  // (design §13 "expose only test-build hooks if needed").
+  if (
+    process.env.AIFETCHLY_E2E === "1" &&
+    process.env.AIFETCHLY_E2E_TRAY !== "1"
+  ) {
+    lifecycle.setBackgroundAvailable(false);
+    return;
+  }
+  const controller = new TrayController({
+    createTray: (iconPath: string | null): TrayLike | null => {
+      try {
+        const image = iconPath
+          ? electronTrayModule.nativeImage.createFromPath(iconPath)
+          : electronTrayModule.nativeImage.createEmpty();
+        if (image.isEmpty()) {
+          log.warn("[tray] tray icon missing or empty; background mode off");
+          return null;
+        }
+        return new electronTrayModule.Tray(image) as unknown as TrayLike;
+      } catch (err) {
+        log.warn(
+          "[tray] Tray construction failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return null;
+      }
+    },
+    buildMenu: (labels: TrayLabels, actions: TrayActions): TrayMenuLike =>
+      Menu.buildFromTemplate([
+        { label: labels.open, click: () => actions.open() },
+        { type: "separator" },
+        { label: labels.exit, click: () => actions.exit() },
+      ]) as unknown as TrayMenuLike,
+    restoreWindow: showMainWindowFromTray,
+    requestExit: () => {
+      void requestAppExit("tray");
+    },
+    labels: () => cachedTrayLabels,
+    iconCandidates: () => resolveTrayIconCandidates(__dirname),
+  });
+  trayController = controller;
+  const created = controller.initialize();
+  lifecycle.setBackgroundAvailable(created && controller.isReady());
+  if (!created) {
+    trayController = null;
+    return;
+  }
+  log.info("[tray] system tray ready — background mode available");
+  // Locale-driven label refresh (FR-08): resolve from the persisted
+  // preference, then rebuild menu/tooltip with the user's language.
+  void resolveTrayLabels().then((labels) => {
+    cachedTrayLabels = labels;
+    try {
+      trayController?.rebuildMenu();
+    } catch {
+      /* menu rebuild is best-effort */
+    }
+  });
+}
 
 function isGeneratedImageProtocolUrl(url: string): boolean {
   try {
@@ -759,6 +1042,24 @@ function initialize() {
     win.show();
     setMainWindow(win);
 
+    // Application exit & tray (FR-01, design §4 "Electron event wiring"):
+    // an ordinary user close asks for a choice instead of destroying the
+    // window; once an exit is accepted, the coordinator owns termination
+    // until the final-exit guard arms; after that the close passes through.
+    // (Structural event typing — the electron tsconfig mock types `.on`
+    // without the preventDefault surface, same pattern as WS-7 R7.2.)
+    win.on("close", (event: unknown) => {
+      const preventable = event as { preventDefault?: () => void };
+      if (lifecycle.isFinalExitAuthorized()) {
+        return; // final close allowed
+      }
+      preventable.preventDefault?.();
+      if (lifecycle.isQuitting()) {
+        return; // exit in progress — cleanup owns the termination
+      }
+      closeChoiceFlow.begin();
+    });
+
     if (win) {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
       registerMenuBarShortcuts(win);
@@ -1064,6 +1365,12 @@ function initialize() {
   }
 
   onSecondInstanceActivate = () => {
+    // Relaunch while hidden in tray: restore the existing session instead
+    // of spawning a duplicate worker set (PRD §4, AC-03).
+    if (lifecycle.getState() === "hidden") {
+      showMainWindowFromTray();
+      return;
+    }
     const hasLiveWindow = !!(win && !win.isDestroyed());
     const action = resolveSecondInstanceWindowAction({
       hasLiveWindow,
@@ -1080,122 +1387,58 @@ function initialize() {
     void createWindow();
   };
 
-  // Quit when all windows are closed.
+  // Quit when all windows are closed. Deliberate hidden (tray) mode must
+  // NOT quit the app (design §4); the close-choice flow already intercepts
+  // ordinary closes before a window can reach this path.
   app.on("window-all-closed", () => {
+    if (lifecycle.getState() === "hidden") {
+      return;
+    }
     // On macOS it is common for applications and their menu bar
     // to stay active until the user quits explicitly with Cmd + Q
     if (process.platform !== "darwin") {
-      app.quit();
+      void requestAppExit("programmatic");
     }
   });
 
-  // Handle application shutdown
-  app.on("before-quit", async () => {
-    // Remove startup marker on clean shutdown so the next launch does not
-    // mistake a graceful exit for a crash.
-    clearStartupMarker();
-
-    // Stop the dev browser bridge (no-op if it never started).
-    try {
-      await devBrowserBridge?.stop();
-    } catch (err) {
-      log.warn("[dev-browser] bridge stop failed", err);
+  // Handle application shutdown (application-exit design §4 "Electron event
+  // wiring"). The listener is SYNCHRONOUS: preventDefault holds the quit
+  // while the coordinated cleanup runs; the final re-quit passes through
+  // once the final-exit guard is armed. An async listener alone is not a
+  // shutdown barrier.
+  app.on("before-quit", (event: unknown) => {
+    if (lifecycle.isFinalExitAuthorized()) {
+      // Cleanup already completed — let this quit pass through untouched.
+      return;
     }
-    devBrowserBridge = null;
-
-    // Stop periodic diagnostics retention cleanup timer immediately.
-    __diagnosticsRetention.stop();
-
-    // Terminate running async tool jobs first so workers are signalled early
-    try {
-      getDefaultToolJobRegistry().shutdown();
-    } catch (err) {
-      console.error("[shutdown] ToolJobRegistry shutdown failed", err);
-    }
-
-    // Managed-browser supervisor: graceful session stops + verified orphan
-    // Chrome cleanup within a global deadline (design §8.5 / FR-RUNTIME-015).
-    try {
-      const supervisor = getDefaultManagedBrowserSupervisor();
-      if (supervisor.listSessions().length > 0) {
-        await supervisor.shutdownAll(5_000);
-        log.info("Managed browser supervisor shutdown completed");
-      }
-    } catch (err) {
-      log.warn("[shutdown] managed-browser supervisor failed", err);
-    }
-
-    // Managed-browser cache: clear-on-exit preference (FR-CACHE-014).
-    // Runs AFTER the supervisor stopped sessions so scopes are released.
-    try {
-      const settings = await new ManagedBrowserSettingsModule().getEffectiveSettings();
-      if (settings.clearCacheOnExit) {
-        await getDefaultManagedBrowserCacheModule().queueAllForShutdown();
-      }
-    } catch (err) {
-      log.warn("[shutdown] managed-browser cache clear-on-exit failed", err);
-    }
-
-    // WS-4 R4.5: clean up the contact-extraction worker on app quit
-    try {
-      cleanupContactExtractionWorker();
-    } catch (err) {
-      log.warn("[shutdown] contactExtractionWorker cleanup failed", err);
-    }
-
-    // Clear any in-flight desktop auth handoff so the PKCE verifier does
-    // not outlive the session.
-    try {
-      clearPendingDesktopAuth();
-    } catch (err) {
-      log.warn("[shutdown] clearPendingDesktopAuth failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    try {
-      const tokenService = new Token();
-      const userdataPath = tokenService.getValue(USERSDBPATH);
-      if (userdataPath && userdataPath.length > 0) {
-        const scheduleManager = ScheduleManager.getInstance();
-        await scheduleManager.handleAppShutdown();
-        await stopChatScheduledBackgroundScheduler();
-        log.info("Schedulers shutdown completed");
-      }
-    } catch (error) {
-      log.error("Failed to shutdown ScheduleManager:", error);
-    }
-
-    // Cleanup WebSocket connection
-    try {
-      cleanupWebSocketConnection();
-      log.info("WebSocket connection cleanup completed");
-    } catch (error) {
-      log.error("Failed to cleanup WebSocket connection:", error);
-    }
-
-    // Phase 14 (Plan 14-03 WAT-07): gracefully shut down the workspace
-    // watcher worker. The manager sends the shutdown command, awaits up to
-    // 2s for clean exit, then SIGKILLs the worker if still alive — no
-    // orphan workers persist after Electron exits. Non-fatal if the manager
-    // was never constructed (defensive — early-shutdown edge case).
-    try {
-      const watcherManager = getWorkspaceWatchManager();
-      if (watcherManager) {
-        await watcherManager.shutdown();
-        log.info("WorkspaceWatchManager shutdown completed");
-      }
-    } catch (error) {
-      log.error("Failed to shutdown WorkspaceWatchManager:", error);
-    }
-
-    // Stop log cleanup interval
-    logger.stopLogCleanup();
+    // Synchronous preventDefault — an async listener alone is not a
+    // shutdown barrier (design §4).
+    (event as { preventDefault?: () => void }).preventDefault?.();
+    // Any quit source that did not already route through the coordinator
+    // (Cmd+Q via menu role, session-end, electron-updater internals)
+    // starts/joins the same idempotent exit here.
+    void requestAppExit("programmatic");
   });
+
+  // OS session end (Windows): no interactive close-choice dialog; run the
+  // bounded best-effort cleanup directly (FR-07 / AC-16).
+  (app as unknown as { on: (event: string, fn: () => void) => void }).on(
+    "session-end",
+    () => {
+      if (!lifecycle.isQuitting()) {
+        void requestAppExit("os-session-end");
+      }
+    }
+  );
 
   app.on("activate", () => {
     // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
+    // dock icon is clicked and there are no other windows open. A hidden
+    // (tray-mode) window is restored, not recreated (AC-03).
+    if (lifecycle.getState() === "hidden") {
+      showMainWindowFromTray();
+      return;
+    }
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
@@ -1264,6 +1507,16 @@ function initialize() {
     Menu.setApplicationMenu(menu);
 
     createWindow();
+
+    // Application lifecycle (exit & tray design §3/§9/§10): renderer-facing
+    // choice/state IPC and the system tray. Both are safe no-ops when the
+    // tray host is unavailable.
+    registerApplicationLifecycleIpcHandlers({
+      lifecycle,
+      closeChoiceFlow,
+      getMainWindow: () => win,
+    });
+    initializeSystemTray();
 
     // Show crash prompt if there was an unclean shutdown (no-op otherwise).
     // Fire-and-forget so it never blocks app startup.
@@ -1468,21 +1721,24 @@ function initialize() {
   });
 
   app.on("will-quit", () => {
+    // Minimal synchronous final housekeeping only (design §4): required
+    // async cleanup already completed before the final-exit guard armed.
     clearStartupMarker();
     globalShortcut.unregisterAll();
   });
 
   // Exit cleanly on request from parent process in development mode.
+  // Routed through the same coordinator as every other exit source.
   if (isDevelopment) {
     if (process.platform === "win32") {
       process.on("message", (data) => {
         if (data === "graceful-exit") {
-          app.quit();
+          void requestAppExit("development-signal");
         }
       });
     } else {
       process.on("SIGTERM", () => {
-        app.quit();
+        void requestAppExit("development-signal");
       });
     }
   }
