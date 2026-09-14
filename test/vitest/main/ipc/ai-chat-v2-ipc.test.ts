@@ -52,27 +52,29 @@ const mockSetToolApprovalMode = vi.hoisted(() =>
 );
 vi.mock("@/modules/token", () => {
   return {
-    Token: vi.fn().mockImplementation(() => ({
-      getValue: vi.fn().mockImplementation((key: string) => {
+    // ES class so `new Token()` works (AIProviderResolver's default ctor arg
+    // and getCurrentUserDbPath both construct it). vi.fn().mockImplementation
+    // produces a plain function that throws "not a constructor" under `new`.
+    Token: class {
+      getValue(key: string): string {
         if (key === "USER_AI_ENABLED") {
           return mockState.aiEnabled;
         }
         return mockState.tokenStore.get(key) ?? "";
-      }),
-      setValue: vi.fn().mockImplementation((key: string, value: string) => {
+      }
+      setValue(key: string, value: string): void {
         mockState.tokenStore.set(key, value);
-      }),
-      deleteValue: vi.fn().mockImplementation((key: string) => {
+      }
+      deleteValue(key: string): void {
         mockState.tokenStore.delete(key);
-      }),
-      hasValue: vi
-        .fn()
-        .mockImplementation(
-          (key: string) =>
-            mockState.tokenStore.has(key) &&
-            (mockState.tokenStore.get(key)?.length ?? 0) > 0
-        ),
-    })),
+      }
+      hasValue(key: string): boolean {
+        return (
+          mockState.tokenStore.has(key) &&
+          (mockState.tokenStore.get(key)?.length ?? 0) > 0
+        );
+      }
+    },
   };
 });
 vi.mock("@/config/usersetting", async (importOriginal) => {
@@ -99,19 +101,22 @@ const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
 const mockGetDefaultSystemPrompt = vi
   .fn()
   .mockReturnValue("You are a helpful assistant.");
+// ES class: production code constructs AIChatV2Module with `new`, and Vitest 4
+// mock functions are not constructable — an arrow-factory mock throws
+// "not a constructor" at every handler entry.
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
-    clearConversation: mockClearConversation,
-    clearAllV2History: mockClearAllV2,
-    getConversations: mockGetConversations,
-    createConversationIfNeeded: mockCreateConversationIfNeeded,
-    saveUserMessage: mockSaveUserMessage,
-    getConversationMessages: mockGetConversationMessages,
-    saveAssistantMessage: mockSaveAssistantMessage,
-    saveToolCallMessage: mockSaveToolCallMessage,
-    saveToolResultMessage: mockSaveToolResultMessage,
-    getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+  AIChatV2Module: class {
+    clearConversation = mockClearConversation;
+    clearAllV2History = mockClearAllV2;
+    getConversations = mockGetConversations;
+    createConversationIfNeeded = mockCreateConversationIfNeeded;
+    saveUserMessage = mockSaveUserMessage;
+    getConversationMessages = mockGetConversationMessages;
+    saveAssistantMessage = mockSaveAssistantMessage;
+    saveToolCallMessage = mockSaveToolCallMessage;
+    saveToolResultMessage = mockSaveToolResultMessage;
+    getDefaultSystemPrompt = mockGetDefaultSystemPrompt;
+  },
 }));
 
 // Mock AiChatApi — openAIChatCompletionStream is controllable per-test.
@@ -119,20 +124,20 @@ const mockOpenAIChatCompletionStream = vi.fn().mockResolvedValue(undefined);
 const mockListOpenAIModels = vi.fn().mockResolvedValue({ data: [] });
 const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
-    Signout: mockUserSignout,
-    removeToken: vi.fn().mockResolvedValue(undefined),
-  })),
+  User: class {
+    Signout = mockUserSignout;
+    removeToken = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
-    AiChatApi: vi.fn().mockImplementation(() => ({
-      openAIChatCompletionStream: mockOpenAIChatCompletionStream,
-      listOpenAIModels: mockListOpenAIModels,
-    })),
+    AiChatApi: class {
+      openAIChatCompletionStream = mockOpenAIChatCompletionStream;
+      listOpenAIModels = mockListOpenAIModels;
+    },
   };
 });
 
@@ -159,19 +164,19 @@ vi.mock("@/service/SkillExecutor", () => ({
 }));
 
 vi.mock("@/modules/AIChatToolApprovalModule", () => ({
-  AIChatToolApprovalModule: vi.fn().mockImplementation(() => ({
-    getMode: mockGetToolApprovalMode,
-    setMode: mockSetToolApprovalMode,
-  })),
+  AIChatToolApprovalModule: class {
+    getMode = mockGetToolApprovalMode;
+    setMode = mockSetToolApprovalMode;
+  },
 }));
 
 // Mock plan module
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
-    getPlanState: vi.fn().mockResolvedValue(null),
-    ensurePlanForConversation: vi.fn().mockResolvedValue(null),
-    clearConversationPlanState: vi.fn().mockResolvedValue({ deleted: 0 }),
-  })),
+  AIChatPlanModule: class {
+    getPlanState = vi.fn().mockResolvedValue(null);
+    ensurePlanForConversation = vi.fn().mockResolvedValue(null);
+    clearConversationPlanState = vi.fn().mockResolvedValue({ deleted: 0 });
+  },
 }));
 
 // Mock plan mode helpers
@@ -188,43 +193,48 @@ vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
 }));
 
 // Mock compact-related modules used by AIChatContextAssembler (T11/T12).
-const mockAIChatSessionMemoryModule = vi.hoisted(() =>
-  vi.fn().mockImplementation(() => ({
-    getByConversation: vi.fn().mockResolvedValue(null),
-  }))
-);
+// ES class: the IPC module constructs it with `new` (Vitest 4 mocks are not
+// constructable — see the AIChatV2Module mock above). Construction count is
+// tracked so the database-switch rebuild test can observe new instances.
+const mockSessionMemoryConstructions = vi.hoisted(() => ({ count: 0 }));
+const mockGetByConversation = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: mockAIChatSessionMemoryModule,
+  AIChatSessionMemoryModule: class {
+    getByConversation = mockGetByConversation;
+    constructor() {
+      mockSessionMemoryConstructions.count += 1;
+    }
+  },
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
-    getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatCompactModule: class {
+    getActiveSummary = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
-    listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+  AgentDefinitionModule: class {
+    listActiveForRuntime = vi.fn().mockResolvedValue([]);
+  },
 }));
 vi.mock("@/modules/SystemSettingModule", () => ({
-  SystemSettingModule: vi.fn().mockImplementation(() => ({
-    getSettingValue: vi.fn().mockResolvedValue(null),
-  })),
+  SystemSettingModule: class {
+    getSettingValue = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
-    resolve: vi.fn().mockResolvedValue(null),
-  })),
+  WorkspaceResolver: class {
+    resolve = vi.fn().mockResolvedValue(null);
+  },
 }));
 vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
-  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
-    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
-  })),
+  AIUserMemoryRetrievalService: class {
+    retrieve = vi.fn().mockResolvedValue({ contextBlock: "", memories: [] });
+  },
 }));
 vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
-  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
-    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
-  })),
+  AIWorkspaceMemoryRetrievalService: class {
+    retrieve = vi.fn().mockResolvedValue({ contextBlock: "", memories: [] });
+  },
 }));
 vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
   AIFetchlyContextLoader: class {
@@ -686,8 +696,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
       { sender: { send: firstSenderSend } },
       JSON.stringify({ message: "before switch" })
     );
-    const firstRuntimeConstructCount =
-      mockAIChatSessionMemoryModule.mock.calls.length;
+    const firstRuntimeConstructCount = mockSessionMemoryConstructions.count;
 
     resetAiChatV2RuntimeForDatabaseSwitch();
 
@@ -698,7 +707,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
       JSON.stringify({ message: "after switch" })
     );
 
-    expect(mockAIChatSessionMemoryModule.mock.calls.length).toBeGreaterThan(
+    expect(mockSessionMemoryConstructions.count).toBeGreaterThan(
       firstRuntimeConstructCount + 1
     );
   });
