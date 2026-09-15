@@ -26,20 +26,25 @@ vi.mock("@/service/SkillDependencyOrchestrator", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("@/service/SkillDependencyOrchestrator")
   >();
-  let forceMissing = false;
+  // Probe mode: "real" consults the runner's PATH (ffmpeg etc.), which made
+  // CI results depend on whether the runner image ships ffmpeg. Tests that
+  // need a deterministic post-install probe force "satisfied" instead.
+  let probeMode: "real" | "missing" | "satisfied" = "real";
   return {
     ...actual,
     detectAll: (
       items: readonly import("@/entityTypes/skillInstallationTypes").DependencyPlanItem[],
       cwd: string
-    ) =>
-      forceMissing
-        ? Promise.resolve(
-            items.map((i) => ({ ...i, currentStatus: "missing" as const }))
-          )
-        : actual.detectAll(items, cwd),
+    ) => {
+      if (probeMode === "real") return actual.detectAll(items, cwd);
+      const currentStatus = probeMode as "missing" | "satisfied";
+      return Promise.resolve(items.map((i) => ({ ...i, currentStatus })));
+    },
     __setForceDependencyMissing: (value: boolean) => {
-      forceMissing = value;
+      probeMode = value ? "missing" : "real";
+    },
+    __setForceDependencySatisfied: (value: boolean) => {
+      probeMode = value ? "satisfied" : "real";
     },
   };
 });
@@ -660,18 +665,22 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
 
 describe("approveDependency — typed dependency approval (PRD §18 / FR-14)", () => {
   let setForceMissing: (value: boolean) => void = () => undefined;
+  let setForceSatisfied: (value: boolean) => void = () => undefined;
 
   beforeEach(async () => {
     const mod = (await import(
       "@/service/SkillDependencyOrchestrator"
     )) as unknown as {
       __setForceDependencyMissing: (value: boolean) => void;
+      __setForceDependencySatisfied: (value: boolean) => void;
     };
     setForceMissing = mod.__setForceDependencyMissing;
+    setForceSatisfied = mod.__setForceDependencySatisfied;
     setForceMissing(true);
   });
   afterEach(async () => {
     setForceMissing(false);
+    setForceSatisfied(false);
     setTypedDependencyInstallerForTests(null);
   });
 
@@ -763,9 +772,11 @@ describe("approveDependency — typed dependency approval (PRD §18 / FR-14)", (
     }[] = [];
     setTypedDependencyInstallerForTests(async (input) => {
       installerCalls.push(input);
-      // The typed install succeeded — flip the probe seam to satisfied so
-      // the re-verification pass sees a healthy dependency.
-      setForceMissing(false);
+      // The typed install succeeded — flip the probe seam to SATISFIED so
+      // the re-verification pass sees a healthy dependency. (Forcing the
+      // REAL probe here made the test depend on the runner having ffmpeg —
+      // CI held at installing_dependencies while local machines passed.)
+      setForceSatisfied(true);
       return { ok: true, message: "installed: apt ffmpeg" };
     });
     const module = new SkillInstallationModule();

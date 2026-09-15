@@ -472,25 +472,30 @@ export class SkillInstallationModule extends BaseModule {
         input.sessionId
       );
     }
-    if (session.state !== "awaiting_approval") {
-      return this.snapshotFromEntity(session);
-    }
     // Review D1: approval must be bound to a human gesture. The token is
     // created at prepare and handed ONLY to the renderer approval card; a
-    // model-originated approve (no token, or a wrong one) is rejected.
+    // model-originated approve (no token, or a wrong one) is rejected —
+    // on EVERY state, not just awaiting_approval. The guard runs BEFORE
+    // the state echo below so a wrong-token call on a held/paused session
+    // can never be silently answered with the current snapshot (CI D1
+    // regression: installing_dependencies hold returned errorCode
+    // undefined instead of APPROVAL_REQUIRED).
     if (session.approvalToken) {
       if (
         input.approvalToken === undefined ||
         input.approvalToken !== session.approvalToken
       ) {
         return this.errorSnapshot(
-          session.state,
+          session.state as SkillInstallationState,
           "APPROVAL_REQUIRED",
           "Installation approval must come from the user's install card. " +
             "Present the plan and wait for the user to approve it.",
           input.sessionId
         );
       }
+    }
+    if (session.state !== "awaiting_approval") {
+      return this.snapshotFromEntity(session);
     }
     if (session.planRevision !== input.planRevision) {
       return this.errorSnapshot(
