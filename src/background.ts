@@ -142,6 +142,7 @@ import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy
 // Application exit & system tray (docs/prd/application-exit-and-system-tray-*.md)
 import { getApplicationLifecycleService } from "@/main-process/lifecycle/ApplicationLifecycleService";
 import type { ApplicationExitReason } from "@/entityTypes/applicationLifecycleTypes";
+import { APPLICATION_EXIT_REASONS } from "@/entityTypes/applicationLifecycleTypes";
 import { ShutdownCoordinator } from "@/main-process/lifecycle/ShutdownCoordinator";
 import {
   createShutdownParticipants,
@@ -547,14 +548,15 @@ lifecycle.addStateListener((event) => {
 });
 
 /**
- * THE shared exit entrypoint (FR-04): every explicit exit source funnels
- * here. Awaits the bounded cleanup, arms the final-exit guard, then runs
- * the terminal action exactly once (quit, or the updater's install).
+ * THE terminal sequence (FR-04): runs exactly once when the bounded cleanup
+ * completes — for EVERY exit source. Registered as the lifecycle service's
+ * exit-completion hook so even exits that enter the state machine directly
+ * (close-dialog Exit) reach it: arm the final-exit guard, run the terminal
+ * action exactly once (quit, or the updater's install).
  */
-async function requestAppExitCoordinated(
-  reason: ApplicationExitReason
-): Promise<void> {
-  const outcome = await lifecycle.requestExit(reason);
+function runTerminalExitSequence(outcome: {
+  intent: "quit" | "update-restart";
+}): void {
   lifecycle.authorizeFinalExit();
   if (outcome.intent === "update-restart") {
     const action = takeUpdateRestartAction();
@@ -576,6 +578,18 @@ async function requestAppExitCoordinated(
     /* best-effort */
   }
   app.quit();
+}
+lifecycle.setExitCompletionHook(runTerminalExitSequence);
+
+/**
+ * THE shared exit entrypoint (FR-04): every explicit exit source funnels
+ * here. Starts/joins the idempotent coordinated exit; the terminal
+ * sequence runs via the completion hook above.
+ */
+async function requestAppExitCoordinated(
+  reason: ApplicationExitReason
+): Promise<void> {
+  await lifecycle.requestExit(reason);
 }
 bindExitRequestor(requestAppExitCoordinated);
 
@@ -645,6 +659,38 @@ function initializeSystemTray(): void {
       /* menu rebuild is best-effort */
     }
   });
+}
+
+// E2E-only lifecycle hooks (design §13 "expose only test-build hooks if
+// needed"): let Playwright drive tray restore and main-process-owned exit,
+// which have no renderer-accessible trigger. Never registered outside
+// AIFETCHLY_E2E=1 (production/dev builds never define this global).
+if (process.env.AIFETCHLY_E2E === "1") {
+  (
+    globalThis as unknown as {
+      __aifetchlyLifecycleTestHooks?: {
+        restoreFromTray: () => void;
+        requestExit: (reason: string) => void;
+        getState: () => { state: string; backgroundAvailable: boolean };
+      };
+    }
+  ).__aifetchlyLifecycleTestHooks = {
+    restoreFromTray: () => showMainWindowFromTray(),
+    requestExit: (reason: string) => {
+      void requestAppExitCoordinated(
+        (APPLICATION_EXIT_REASONS as readonly string[]).includes(reason)
+          ? (reason as ApplicationExitReason)
+          : "programmatic"
+      );
+    },
+    getState: () => {
+      const snapshot = lifecycle.snapshot();
+      return {
+        state: snapshot.state,
+        backgroundAvailable: snapshot.backgroundAvailable,
+      };
+    },
+  };
 }
 
 function isGeneratedImageProtocolUrl(url: string): boolean {

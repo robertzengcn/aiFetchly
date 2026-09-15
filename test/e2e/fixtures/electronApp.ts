@@ -26,6 +26,13 @@ export interface LaunchOptions {
    * install pipeline target the deterministic hub fixture (UPD-GAP-05).
    */
   readonly hubBaseUrl?: string;
+  /**
+   * Explicit extra env for the Electron child, applied AFTER sanitization
+   * (never inherited from the host). Used by specs that opt into gated
+   * main-process features, e.g. AIFETCHLY_E2E_TRAY=1 for the lifecycle
+   * tray scenarios.
+   */
+  readonly extraEnv?: Record<string, string>;
 }
 
 export interface NetworkViolation {
@@ -189,6 +196,8 @@ export async function launchAiFetchly(
     options.fakeAiBaseUrl,
     options.hubBaseUrl
   );
+  // Explicit opt-in extras (post-sanitization): the host env never leaks in.
+  Object.assign(env, options.extraEnv ?? {});
 
   const electronApp = await electronLauncher.launch({
     args: [

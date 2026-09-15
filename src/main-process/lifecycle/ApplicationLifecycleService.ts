@@ -105,6 +105,8 @@ export class ApplicationLifecycleService {
   private finalExitAuthorized = false;
 
   private cleanupRunner: CleanupRunner | null = null;
+  private exitCompletionHook: ((result: ApplicationExitResult) => void) | null =
+    null;
   private readonly listeners = new Set<LifecycleStateListener>();
 
   // -------------------------------------------------------------------------
@@ -277,6 +279,19 @@ export class ApplicationLifecycleService {
   }
 
   /**
+   * Terminal sequence invoked exactly once when cleanup completes — for
+   * EVERY exit source, including the close-dialog Exit which enters the
+   * state machine directly with no external caller awaiting the exit
+   * promise (design §4: after cleanup, arm the final-exit guard and run
+   * the terminal action). Hook errors are logged, never thrown.
+   */
+  setExitCompletionHook(
+    hook: ((result: ApplicationExitResult) => void) | null
+  ): void {
+    this.exitCompletionHook = hook;
+  }
+
+  /**
    * Request a normal exit. Sets `quitting` synchronously, then returns the
    * SAME promise for every caller. Ordinary reasons never overwrite an
    * accepted `update-restart` intent, and vice versa (design §4).
@@ -342,12 +357,27 @@ export class ApplicationLifecycleService {
       // valid, clean outcome (design §12).
       clean = true;
     }
-    return {
+    const result: ApplicationExitResult = {
       attemptId: context.attemptId,
       reason: context.reason,
       intent: context.intent,
       clean,
     };
+    // The completion hook runs the terminal sequence (authorize + quit or
+    // update install) for EVERY exit source — including paths that enter
+    // the lifecycle directly (close-dialog Exit), which have no external
+    // caller awaiting this promise.
+    if (this.exitCompletionHook) {
+      try {
+        this.exitCompletionHook(result);
+      } catch (err) {
+        log.error(
+          "[lifecycle] exit completion hook failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+    return result;
   }
 
   /**

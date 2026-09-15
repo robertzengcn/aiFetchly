@@ -303,6 +303,68 @@ describe("ApplicationLifecycleService — state events (FR-04, design §10)", ()
   });
 });
 
+describe("ApplicationLifecycleService — exit completion hook (design §4)", () => {
+  it("fires for a close-dialog exit even with NO external caller awaiting", async () => {
+    const svc = new ApplicationLifecycleService();
+    const { runner, resolve } = deferredCleanup();
+    svc.setCleanupRunner(runner);
+    const hookResults: string[] = [];
+    svc.setExitCompletionHook((outcome) => {
+      hookResults.push(`${outcome.intent}:${outcome.reason}:${outcome.clean}`);
+      // The hook performs the terminal sequence itself.
+      svc.authorizeFinalExit();
+    });
+    const issued = svc.beginCloseChoice();
+    const token = issued.result === "issued" ? issued.token : "";
+    svc.submitCloseChoice(token, "exit");
+    resolve(true);
+    await new Promise((r) => setImmediate(r));
+    expect(hookResults).toEqual(["quit:close-dialog:true"]);
+    expect(svc.getState()).toBe("ready-to-exit");
+  });
+
+  it("fires exactly once even when exit requests join", async () => {
+    const svc = new ApplicationLifecycleService();
+    const { runner, resolve } = deferredCleanup();
+    svc.setCleanupRunner(runner);
+    let hookCalls = 0;
+    svc.setExitCompletionHook(() => {
+      hookCalls += 1;
+    });
+    const p1 = svc.requestExit("tray");
+    const p2 = svc.requestExit("application-menu");
+    resolve(true);
+    await Promise.all([p1, p2]);
+    await new Promise((r) => setImmediate(r));
+    expect(hookCalls).toBe(1);
+  });
+
+  it("a throwing hook never fails the exit result", async () => {
+    const svc = new ApplicationLifecycleService();
+    const { runner, resolve } = deferredCleanup();
+    svc.setCleanupRunner(runner);
+    svc.setExitCompletionHook(() => {
+      throw new Error("terminal sequence bug");
+    });
+    const promise = svc.requestExit("tray");
+    resolve(true);
+    await expect(promise).resolves.toMatchObject({ clean: true });
+  });
+
+  it("fires for an update-restart intent with the correct intent value", async () => {
+    const svc = new ApplicationLifecycleService();
+    const { runner, resolve } = deferredCleanup();
+    svc.setCleanupRunner(runner);
+    const intents: string[] = [];
+    svc.setExitCompletionHook((outcome) => intents.push(outcome.intent));
+    const p = svc.requestExit("update-restart");
+    resolve(true);
+    await p;
+    await new Promise((r) => setImmediate(r));
+    expect(intents).toEqual(["update-restart"]);
+  });
+});
+
 describe("ApplicationLifecycleService — shutdown phases (FR-04)", () => {
   it("setPhase updates the phase only while quitting", () => {
     const svc = new ApplicationLifecycleService();
