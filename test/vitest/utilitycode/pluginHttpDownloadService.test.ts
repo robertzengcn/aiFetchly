@@ -10,67 +10,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   PluginHttpDownloadService,
   allowlistRedirectPolicy,
-  type PluginHttpRequestFunction,
 } from "@/service/pluginSources/PluginHttpDownloadService";
-
-type Response = {
-  statusCode: number;
-  headers: Record<string, string | string[] | undefined>;
-  body?: Buffer;
-  errorAfterChunks?: number;
-};
-
-function makeRequestDouble(
-  plan: (url: URL, hop: number) => Response | { redirect: string }
-): PluginHttpRequestFunction {
-  const hops = new Map<string, number>();
-  return (url, _headers, callback) => {
-    const hop = (hops.get(url.toString()) ?? 0) + 1;
-    hops.set(url.toString(), hop);
-    const planned = plan(url, hop);
-    const listeners = {
-      data: [] as ((chunk: Buffer) => void)[],
-      end: [] as (() => void)[],
-      error: [] as ((e: Error) => void)[],
-    };
-    const res = {
-      statusCode: "redirect" in planned ? 302 : planned.statusCode,
-      headers: "redirect" in planned ? { location: planned.redirect } : planned.headers,
-      onData: (l: (chunk: Buffer) => void) => {
-        listeners.data.push(l);
-      },
-      onEnd: (l: () => void) => {
-        listeners.end.push(l);
-      },
-      onError: (l: (e: Error) => void) => {
-        listeners.error.push(l);
-      },
-      destroy: () => {
-        /* test double */
-      },
-    };
-    callback(res);
-    if (!("redirect" in planned)) {
-      const body = planned.body ?? Buffer.alloc(0);
-      if (body.length > 0) {
-        listeners.data.forEach((l) => l(body));
-      }
-      if (planned.errorAfterChunks !== undefined) {
-        listeners.error.forEach((l) => l(new Error("boom")));
-      } else {
-        listeners.end.forEach((l) => l());
-      }
-    }
-    return {
-      destroy: () => {
-        /* noop */
-      },
-      onError: (l) => {
-        listeners.error.push(l);
-      },
-    };
-  };
-}
+import { makeRequestDouble } from "./pluginHttpDownloadService.testhelpers";
 
 const BASE = {
   headers: {},

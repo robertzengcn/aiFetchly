@@ -1,5 +1,4 @@
 import * as fs from "fs";
-import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { URL } from "url";
@@ -11,12 +10,19 @@ import {
   type PluginSourceFetcher,
   type PluginSourceRequest,
 } from "./pluginSourceTypes";
+import type { PluginError } from "@/entityTypes/pluginTypes";
 import { PLUGIN_PACKAGE_LIMITS } from "@/entityTypes/pluginTypes";
 import {
+  GITHUB_RELEASE_ASSET_REDIRECT_HOSTS,
   GitHubArchiveClient,
   type GitHubRepositoryIdentity,
 } from "./GitHubArchiveClient";
-import { PluginHttpDownloadService } from "./PluginHttpDownloadService";
+import {
+  PLUGIN_HTTP_MAX_REDIRECTS,
+  PluginHttpDownloadService,
+  allowlistRedirectPolicy,
+  type PluginHttpDownloadResult,
+} from "./PluginHttpDownloadService";
 
 /**
  * GitHub plugin source — a FIRST-CLASS archive source, not a Git wrapper
@@ -38,7 +44,12 @@ export type GitHubClass =
   | { type: "repo"; owner: string; repo: string }
   | { type: "asset"; owner: string; repo: string; tag: string; asset: string }
   | { type: "latest"; owner: string; repo: string }
-  | { type: "convenience"; owner: string; repo: string; kind: "tree" | "commit" }
+  | {
+      type: "convenience";
+      owner: string;
+      repo: string;
+      kind: "tree" | "commit";
+    }
   | { type: "unknown" };
 
 export function classifyGitHubUrl(raw: string): GitHubClass {
@@ -73,7 +84,12 @@ export function classifyGitHubUrl(raw: string): GitHubClass {
   // Browser convenience URLs are ambiguous to parse safely (branch names
   // may contain '/') — v1 rejects with correction guidance (design §6.4).
   if (parts.length >= 4 && (parts[2] === "tree" || parts[2] === "commit")) {
-    return { type: "convenience", owner, repo, kind: parts[2] as "tree" | "commit" };
+    return {
+      type: "convenience",
+      owner,
+      repo,
+      kind: parts[2] as "tree" | "commit",
+    };
   }
   if (parts.length === 2) {
     return { type: "repo", owner, repo };
@@ -81,64 +97,73 @@ export function classifyGitHubUrl(raw: string): GitHubClass {
   return { type: "unknown" };
 }
 
-async function downloadZip(url: string, dest: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let redirects = 0;
-    let aborted = false;
-    const req = (target: string) => {
-      const r = https.get(target, { timeout: 60_000 }, (res) => {
-        if (
-          res.statusCode &&
-          res.statusCode >= 300 &&
-          res.statusCode < 400 &&
-          res.headers.location
-        ) {
-          if (++redirects > 5) {
-            reject(new Error("Too many redirects"));
-            return;
-          }
-          res.destroy();
-          req(res.headers.location);
-          return;
-        }
-        if (!res.statusCode || res.statusCode !== 200) {
-          res.destroy();
-          reject(new Error(`HTTP ${res.statusCode}`));
-          return;
-        }
-        const out = fs.createWriteStream(dest);
-        let size = 0;
-        res.on("data", (c: Buffer) => {
-          size += c.length;
-          if (size > PLUGIN_PACKAGE_LIMITS.maxZipBytes && !aborted) {
-            aborted = true;
-            r.destroy();
-            out.destroy();
-            fs.rmSync(dest, { force: true });
-            reject(new Error("Package exceeds max size"));
-          }
-        });
-        res.pipe(out);
-        out.on("finish", () => resolve());
-        out.on("error", (e) => {
-          if (!aborted) reject(e);
-        });
+/**
+ * Map a shared-transport failure for a release-asset / latest download onto
+ * the stable error codes (design §9.2 matrix applies to GitHub hosts; the
+ * dialog renders these directly, so messages stay safe and non-specific).
+ */
+function mapAssetDownloadFailure(
+  res: Extract<PluginHttpDownloadResult, { success: false }>
+): PluginError {
+  switch (res.reason) {
+    case "aborted":
+      return err("source-cancelled", "The installation was cancelled.", {
+        recoverable: true,
       });
-      // The `timeout` option only emits a 'timeout' event — it does not
-      // abort the request. Without this handler a stalled server hangs the
-      // install forever.
-      r.on("timeout", () => {
-        if (!aborted) {
-          aborted = true;
-          r.destroy(new Error("Request timed out"));
+    case "timeout":
+      return err(
+        "source-timeout",
+        "The GitHub download timed out. Check the connection and retry.",
+        { recoverable: true }
+      );
+    case "redirect-rejected":
+    case "redirect-loop":
+    case "redirect-limit":
+    case "redirect-missing-location":
+      return err(
+        "source-redirect-rejected",
+        "GitHub redirected to an untrusted location, so the download was stopped."
+      );
+    case "too-large":
+      return err(
+        "install-io-failed",
+        "The release asset is too large to install safely."
+      );
+    case "http-status": {
+      const status = res.statusCode ?? 0;
+      if (status === 403 || status === 429) {
+        const remaining = res.responseHeaders?.["x-ratelimit-remaining"];
+        if (status === 429 || remaining === "0") {
+          return err(
+            "github-rate-limited",
+            "GitHub temporarily limited public download requests. Wait and retry, or import a ZIP.",
+            { recoverable: true }
+          );
         }
-      });
-      r.on("error", (e) => {
-        if (!aborted) reject(e);
-      });
-    };
-    req(url);
-  });
+      }
+      if (status === 404 || status === 401 || status === 403) {
+        return err(
+          "github-repository-unavailable",
+          "The release asset was not found or is not publicly accessible. Check the tag and asset name.",
+          { recoverable: true }
+        );
+      }
+      return err(
+        status >= 500
+          ? "source-download-failed"
+          : "github-repository-unavailable",
+        status >= 500
+          ? "GitHub could not serve the request. Retry later."
+          : "The release asset was not found or is not publicly accessible."
+      );
+    }
+    default:
+      return err(
+        "source-download-failed",
+        "The plugin could not be downloaded. Retry later.",
+        { recoverable: true }
+      );
+  }
 }
 
 export interface GitHubPluginFetcherDependencies {
@@ -147,6 +172,10 @@ export interface GitHubPluginFetcherDependencies {
   /** Compat fallback (feature-flagged, design §17): native-Git repository
    *  acquisition while archive install is disabled for rollback. */
   readonly git?: GitPluginFetcher;
+  /** Shared bounded HTTPS transport (design §8/§25): release assets and
+   *  `releases/latest` downloads ride the same redirect/stream/cancel
+   *  guarantees as repository archives. */
+  readonly http?: PluginHttpDownloadService;
   /** Temp-dir seam (design §10.4): tests observe creation + cleanup without
    *  spying on the ESM fs namespace. Defaults to os.tmpdir mkdtemp. */
   readonly createTempDir?: () => string;
@@ -154,6 +183,9 @@ export interface GitHubPluginFetcherDependencies {
 
 export class GitHubPluginFetcher implements PluginSourceFetcher {
   readonly kind = "github" as const;
+  /** Shared transport for release-asset downloads; defaults once so the
+   *  registry can inject the SAME instance used by the archive client. */
+  private readonly http: PluginHttpDownloadService;
 
   constructor(
     private readonly deps: GitHubPluginFetcherDependencies = {
@@ -163,8 +195,11 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
       }),
       zip: new LocalZipPluginFetcher(),
       git: new GitPluginFetcher(),
+      http: new PluginHttpDownloadService(),
     }
-  ) {}
+  ) {
+    this.http = deps.http ?? new PluginHttpDownloadService();
+  }
 
   /** v1 archive-first repository acquisition (design §10.4). */
   private async acquireRepoViaArchive(
@@ -311,58 +346,122 @@ export class GitHubPluginFetcher implements PluginSourceFetcher {
       return this.acquireRepoViaArchive(cls, req);
     }
 
+    return this.acquireReleaseAsset(cls, req);
+  }
+
+  /** Release-asset / `releases/latest` acquisition over the SHARED bounded
+   *  transport (design §7.8/§25): no commit resolution, publisher-supplied
+   *  content, source-specific redirect allowlist, same cleanup ownership
+   *  contract as repository archives. */
+  private async acquireReleaseAsset(
+    cls:
+      | {
+          type: "asset";
+          owner: string;
+          repo: string;
+          tag: string;
+          asset: string;
+        }
+      | { type: "latest"; owner: string; repo: string },
+    req: PluginSourceRequest
+  ): Promise<PluginAcquireResult> {
     const assetUrl =
       cls.type === "asset"
-        ? `https://github.com/${cls.owner}/${cls.repo}/releases/download/${cls.tag}/${cls.asset}`
+        ? `https://github.com/${cls.owner}/${
+            cls.repo
+          }/releases/download/${encodeURIComponent(
+            cls.tag
+          )}/${encodeURIComponent(cls.asset)}`
         : `https://github.com/${cls.owner}/${cls.repo}/releases/latest/download/plugin.zip`;
-
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-gh-"));
+    const tmp = this.deps.createTempDir
+      ? this.deps.createTempDir()
+      : fs.mkdtempSync(path.join(os.tmpdir(), "plugin-gh-"));
     const zipPath = path.join(tmp, "asset.zip");
+    // Same ownership handoff as the archive path: the returned cleanup()
+    // owns tmp on success; every other terminal path removes it here.
+    let handedOff = false;
     try {
-      await downloadZip(assetUrl, zipPath);
-    } catch (e: unknown) {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      const downloaded = await this.http.downloadToFile({
+        url: new URL(assetUrl),
+        destinationPath: zipPath,
+        headers: {
+          accept: "application/octet-stream",
+          "user-agent": "AiFetchly/plugin-install",
+        },
+        maxBytes: PLUGIN_PACKAGE_LIMITS.maxZipBytes,
+        timeoutMs: 60_000,
+        maxRedirects: PLUGIN_HTTP_MAX_REDIRECTS,
+        redirectPolicy: allowlistRedirectPolicy([
+          ...GITHUB_RELEASE_ASSET_REDIRECT_HOSTS,
+        ]),
+        ...(req.signal ? { signal: req.signal } : {}),
+        ...(req.onProgress
+          ? {
+              onProgress: (received: number, total?: number) =>
+                req.onProgress!(
+                  "downloading release asset",
+                  total ? Math.round((received / total) * 100) : undefined
+                ),
+            }
+          : {}),
+      });
+      if (!downloaded.success) {
+        return {
+          success: false,
+          errors: [mapAssetDownloadFailure(downloaded)],
+        };
+      }
+      const inner = await this.deps.zip.acquire({
+        kind: "local-zip",
+        zipPath,
+        ...(req.signal ? { signal: req.signal } : {}),
+      });
+      if (!inner.success) {
+        return inner;
+      }
+      const innerCleanup = inner.source.cleanup;
+      handedOff = true;
+      return {
+        success: true,
+        source: {
+          localRoot: inner.source.localRoot,
+          cleanup: async () => {
+            await innerCleanup();
+            try {
+              fs.rmSync(tmp, { recursive: true, force: true });
+            } catch {
+              /* best-effort */
+            }
+          },
+          provenance: {
+            sourceUri: `https://github.com/${cls.owner}/${cls.repo}`,
+            ...(cls.type === "asset" ? { sourceRef: cls.tag } : {}),
+            sourceMeta: { acquisition: "github-release-asset" },
+          },
+        },
+      };
+    } catch (e) {
       return {
         success: false,
         errors: [
           err(
-            "permission-denied",
-            e instanceof Error
-              ? `GitHub download failed: ${e.message}. For private repos, use the git source with a credential helper.`
-              : "GitHub download failed."
+            "source-download-failed",
+            `GitHub release download failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            { recoverable: true }
           ),
         ],
       };
+    } finally {
+      if (!handedOff) {
+        try {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        } catch {
+          /* best-effort — the primary failure governs */
+        }
+      }
     }
-
-    const inner = await this.deps.zip.acquire({
-      kind: "local-zip",
-      zipPath,
-    });
-    if (!inner.success) {
-      fs.rmSync(tmp, { recursive: true, force: true });
-      return inner;
-    }
-    const innerCleanup = inner.source.cleanup;
-    return {
-      success: true,
-      source: {
-        localRoot: inner.source.localRoot,
-        cleanup: async () => {
-          await innerCleanup();
-          try {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          } catch {
-            /* best-effort */
-          }
-        },
-        provenance: {
-          sourceUri: `https://github.com/${cls.owner}/${cls.repo}`,
-          ...(cls.type === "asset" ? { sourceRef: cls.tag } : {}),
-          sourceMeta: { acquisition: "github-release-asset" },
-        },
-      },
-    };
   }
 }
 
@@ -375,10 +474,11 @@ export function isGitHubArchiveInstallEnabled(): boolean {
     const { Token } = require("@/modules/token") as {
       Token: new () => { getValue: (k: string) => string };
     };
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const { GITHUB_ARCHIVE_INSTALL_FLAG } = require("@/config/featureFlags") as {
-      GITHUB_ARCHIVE_INSTALL_FLAG: string;
-    };
+    const { GITHUB_ARCHIVE_INSTALL_FLAG } =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+      require("@/config/featureFlags") as {
+        GITHUB_ARCHIVE_INSTALL_FLAG: string;
+      };
     return new Token().getValue(GITHUB_ARCHIVE_INSTALL_FLAG) !== "false";
   } catch {
     return true;

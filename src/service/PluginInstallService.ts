@@ -43,19 +43,25 @@ export class PluginInstallService {
   ) {}
 
   static defaultRegistry(): PluginSourceRegistry {
-    // Shared dependency composition (design §10.6): ONE transport + ONE
+    // Shared dependency composition (design §10.6/§25): ONE transport + ONE
     // archive client + ONE zip fetcher, so limits, redirects, cancellation,
-    // and cleanup behave identically across GitHub and URL sources.
+    // and cleanup behave identically across GitHub, release-asset, and URL
+    // sources.
     const http = new PluginHttpDownloadService();
     const zip = new LocalZipPluginFetcher();
-    const archiveClient = new GitHubArchiveClient({ http, appVersion: "1.0.0" });
+    const archiveClient = new GitHubArchiveClient({
+      http,
+      appVersion: "1.0.0",
+    });
+    const git = new GitPluginFetcher();
+    const github = new GitHubPluginFetcher({ archiveClient, zip, git, http });
     const reg = new PluginSourceRegistry();
     reg.register(zip);
     reg.register(new LocalFolderPluginFetcher());
-    reg.register(new GitPluginFetcher());
-    reg.register(new GitHubPluginFetcher({ archiveClient, zip, git: new GitPluginFetcher() }));
+    reg.register(git);
+    reg.register(github);
     reg.register(new NpmPluginFetcher());
-    reg.register(new UrlPluginFetcher());
+    reg.register(new UrlPluginFetcher({ zip, git, github, http }));
     return reg;
   }
 

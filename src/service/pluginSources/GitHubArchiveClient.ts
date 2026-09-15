@@ -53,11 +53,20 @@ export const GITHUB_ARCHIVE_REDIRECT_HOSTS = [
   "api.github.com",
   "codeload.github.com",
 ] as const;
+export const GITHUB_RELEASE_ASSET_REDIRECT_HOSTS = [
+  "github.com",
+  "release-assets.githubusercontent.com",
+  "objects.githubusercontent.com",
+] as const;
 
 const API_HOST = "api.github.com";
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-const err = (code: PluginError["code"], message: string, recoverable = true): PluginError => ({
+const err = (
+  code: PluginError["code"],
+  message: string,
+  recoverable = true
+): PluginError => ({
   code,
   message,
   recoverable,
@@ -85,7 +94,9 @@ export class GitHubArchiveClient {
       ? new URL(
           `https://${API_HOST}/repos/${encodeURIComponent(
             repository.owner
-          )}/${encodeURIComponent(repository.repository)}/commits/${encodeURIComponent(trimmed)}`
+          )}/${encodeURIComponent(
+            repository.repository
+          )}/commits/${encodeURIComponent(trimmed)}`
         )
       : new URL(
           `https://${API_HOST}/repos/${encodeURIComponent(
@@ -115,11 +126,20 @@ export class GitHubArchiveClient {
           signal
         );
       }
-      return { ok: false, error: this.mapTransportFailure(res.reason, trimmed) };
+      return {
+        ok: false,
+        error: this.mapTransportFailure(res.reason, trimmed),
+      };
     }
 
     if (res.statusCode >= 400) {
-      return this.mapStatusFailure(res.statusCode, res.responseHeaders, repository, trimmed, signal);
+      return this.mapStatusFailure(
+        res.statusCode,
+        res.responseHeaders,
+        repository,
+        trimmed,
+        signal
+      );
     }
 
     // An empty default-branch commit list = a repository with no commits
@@ -138,7 +158,10 @@ export class GitHubArchiveClient {
     if (!sha) {
       return {
         ok: false,
-        error: err("source-download-failed", "GitHub returned an unreadable response. Retry later."),
+        error: err(
+          "source-download-failed",
+          "GitHub returned an unreadable response. Retry later."
+        ),
       };
     }
     return {
@@ -162,7 +185,9 @@ export class GitHubArchiveClient {
     const url = new URL(
       `https://${API_HOST}/repos/${encodeURIComponent(
         repository.owner
-      )}/${encodeURIComponent(repository.repository)}/zipball/${revision.commitSha}`
+      )}/${encodeURIComponent(repository.repository)}/zipball/${
+        revision.commitSha
+      }`
     );
     const res = await this.deps.http.downloadToFile({
       url,
@@ -171,7 +196,9 @@ export class GitHubArchiveClient {
       maxBytes,
       timeoutMs: 60_000,
       maxRedirects: PLUGIN_HTTP_MAX_REDIRECTS,
-      redirectPolicy: allowlistRedirectPolicy([...GITHUB_ARCHIVE_REDIRECT_HOSTS]),
+      redirectPolicy: allowlistRedirectPolicy([
+        ...GITHUB_ARCHIVE_REDIRECT_HOSTS,
+      ]),
       ...(signal ? { signal } : {}),
       ...(onProgress ? { onProgress } : {}),
     });
@@ -202,7 +229,6 @@ export class GitHubArchiveClient {
       error: this.mapTransportFailure(res.reason, undefined),
     };
   }
-
 
   /** §9.2 status matrix shared by the success-path and failure-path
    *  HTTP-status branches. */
@@ -303,7 +329,10 @@ export class GitHubArchiveClient {
       ...(signal ? { signal } : {}),
     });
     if (res.success) return "accessible";
-    if (res.reason === "http-status" && (res.statusCode === 403 || res.statusCode === 429)) {
+    if (
+      res.reason === "http-status" &&
+      (res.statusCode === 403 || res.statusCode === 429)
+    ) {
       return "rate-limited";
     }
     return "inaccessible";
@@ -317,7 +346,10 @@ export class GitHubArchiveClient {
       case "aborted":
         return err("source-cancelled", "The installation was cancelled.");
       case "timeout":
-        return err("source-timeout", "The GitHub download timed out. Check the connection and retry.");
+        return err(
+          "source-timeout",
+          "The GitHub download timed out. Check the connection and retry."
+        );
       case "redirect-rejected":
       case "redirect-loop":
       case "redirect-limit":
@@ -334,7 +366,10 @@ export class GitHubArchiveClient {
           false
         );
       default:
-        return err("source-download-failed", "The plugin could not be downloaded. Retry later.");
+        return err(
+          "source-download-failed",
+          "The plugin could not be downloaded. Retry later."
+        );
     }
   }
 
