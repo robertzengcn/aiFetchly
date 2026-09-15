@@ -2873,6 +2873,11 @@ export default {
       "error_source-redirect-rejected": "The download was redirected to an untrusted location and was stopped.",
       "error_source-cancelled": "Installation cancelled.",
       source_kind: "Install source",
+      working_archive: "Resolving the revision and downloading the archive…",
+      working_clone: "Cloning the repository…",
+      working_download: "Downloading the archive…",
+      working_fetch: "Fetching the npm package…",
+      working_import: "Importing the plugin…",
       resolved_revision: "Pinned revision",
     },
     marketplace: {

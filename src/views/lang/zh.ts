@@ -2758,6 +2758,11 @@ export default {
       "error_source-redirect-rejected": "下载被重定向到不受信任的位置，已停止。",
       "error_source-cancelled": "安装已取消。",
       source_kind: "安装来源",
+      working_archive: "正在解析修订版本并下载归档…",
+      working_clone: "正在克隆仓库…",
+      working_download: "正在下载归档…",
+      working_fetch: "正在获取 npm 包…",
+      working_import: "正在导入插件…",
       resolved_revision: "固定修订版本",
     },
     marketplace: {

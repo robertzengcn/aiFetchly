@@ -2900,6 +2900,11 @@ export default {
       "error_source-redirect-rejected": "La descarga fue redirigida a una ubicación no confiable y se detuvo.",
       "error_source-cancelled": "Instalación cancelada.",
       source_kind: "Origen de instalación",
+      working_archive: "Resolviendo la revisión y descargando el archivo…",
+      working_clone: "Clonando el repositorio…",
+      working_download: "Descargando el archivo…",
+      working_fetch: "Obteniendo el paquete npm…",
+      working_import: "Importando el plugin…",
       resolved_revision: "Revisión fijada",
     },
     marketplace: {

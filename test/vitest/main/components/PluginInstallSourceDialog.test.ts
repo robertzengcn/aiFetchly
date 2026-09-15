@@ -26,7 +26,19 @@ const i18n = createI18n({
   locale: "en",
   missingWarn: false,
   fallbackWarn: false,
-  messages: { en },
+  messages: {
+    en: {
+      ...en,
+      plugins: {
+        ...en.plugins,
+        install_source: {
+          ...en.plugins?.install_source,
+          working_archive: "Resolving the revision and downloading the archive…",
+          "error_source-cancelled": "Installation cancelled.",
+        },
+      },
+    },
+  },
 });
 
 function mountDialog() {
@@ -52,7 +64,7 @@ function mountDialog() {
           props: ["modelValue", "label", "placeholder", "hint", "type"],
           emits: ["update:modelValue"],
           template:
-            "<input :aria-label=\"label\" :value=\"modelValue\" @input=\"$emit('update:modelValue', $event.target.value)\" />",
+            "<input v-bind=\"$attrs\" :aria-label=\"label\" :value=\"modelValue\" @input=\"$emit('update:modelValue', $event.target.value)\" />",
         },
         VBtn: {
           template:
@@ -174,7 +186,7 @@ describe("PluginInstallSourceDialog — git-free GitHub UX", () => {
     expect(wrapper.text()).toContain("SAFE MESSAGE");
   });
 
-  it("user cancellation shows no failure alert", async () => {
+  it("user cancellation shows no failure alert but IS announced politely", async () => {
     vi.mocked(installPluginFromSource).mockResolvedValue({
       success: false,
       errors: [{ code: "source-cancelled", message: "cancelled", recoverable: true }],
@@ -183,7 +195,129 @@ describe("PluginInstallSourceDialog — git-free GitHub UX", () => {
     await selectGithubWithUri(wrapper);
     await wrapper.find('[data-testid="install-btn"]').trigger("click");
     await flushPromises();
-    expect(wrapper.text()).not.toContain("cancelled");
+    // No failure alert…
+    expect(wrapper.find('[data-testid="install-error"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("Install failed.");
+    // …but the live region announces the cancellation (GF §11.5/NFR-10).
+    const status = wrapper.find('[data-testid="install-status"]');
+    expect(status.exists()).toBe(true);
+    expect(status.attributes("role")).toBe("status");
+    expect(status.attributes("aria-live")).toBe("polite");
+    expect(status.text()).toContain("Installation cancelled.");
+  });
+
+  it("empty URL keeps Install disabled; a typed URL enables it", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="kind-select"]').setValue("github");
+    await flushPromises();
+    const btn = wrapper.find('[data-testid="install-btn"]');
+    expect(btn.attributes("disabled")).toBeDefined();
+    const uriInput = wrapper
+      .findAll("input")
+      .find((i) => (i.element as HTMLInputElement).value === "");
+    expect(uriInput).toBeTruthy();
+    await uriInput!.setValue("https://github.com/owner/repo");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="install-btn"]').attributes("disabled")).toBeUndefined();
+  });
+
+  it("shows the working stage in a polite live region until the install settles", async () => {
+    let settle!: (v: {
+      success: boolean;
+      plugin?: unknown;
+      errors?: unknown[];
+    }) => void;
+    vi.mocked(installPluginFromSource).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve as typeof settle;
+        })
+    );
+    const wrapper = mountDialog();
+    await selectGithubWithUri(wrapper);
+    await wrapper.find('[data-testid="install-btn"]').trigger("click");
+    await flushPromises();
+    const status = wrapper.find('[data-testid="install-status"]');
+    expect(status.exists()).toBe(true);
+    expect(status.attributes("aria-live")).toBe("polite");
+    // GitHub stage copy (§11.2): resolving + downloading.
+    expect(status.text()).toContain("Resolving the revision");
+    settle({
+      success: false,
+      errors: [{ code: "github-rate-limited", message: "x", recoverable: true }],
+    });
+    await flushPromises();
+    // Settled: the stage line is gone; the typed error alert carries it.
+    expect(wrapper.find('[data-testid="install-status"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="install-error"]').attributes("role")).toBe("alert");
+  });
+
+  it("renders unavailable-repository and invalid-ref guidance for their stable codes", async () => {
+    vi.mocked(installPluginFromSource).mockResolvedValue({
+      success: false,
+      errors: [
+        {
+          code: "github-repository-unavailable",
+          message: "internal",
+          recoverable: true,
+        },
+      ],
+    });
+    let wrapper = mountDialog();
+    await selectGithubWithUri(wrapper);
+    await wrapper.find('[data-testid="install-btn"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="install-error"]').text()).toContain(
+      "not found or is not publicly accessible"
+    );
+
+    vi.mocked(installPluginFromSource).mockResolvedValue({
+      success: false,
+      errors: [
+        { code: "github-ref-not-found", message: "internal", recoverable: true },
+      ],
+    });
+    wrapper = mountDialog();
+    await selectGithubWithUri(wrapper);
+    await wrapper.find('[data-testid="install-btn"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="install-error"]').text()).toContain(
+      "branch, tag, or commit"
+    );
+  });
+
+  it("associates the helper and the error alert with the URL field (a11y)", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="kind-select"]').setValue("github");
+    await flushPromises();
+    const uriInput = wrapper
+      .findAll("input")
+      .find((i) => (i.element as HTMLInputElement).value === "");
+    // Helper is linked while it is shown (capability on).
+    expect(uriInput!.attributes("aria-describedby")).toContain(
+      "github-no-git-hint-el"
+    );
+    // A typed failure links the alert too.
+    vi.mocked(installPluginFromSource).mockResolvedValue({
+      success: false,
+      errors: [
+        {
+          code: "github-repository-unavailable",
+          message: "internal",
+          recoverable: true,
+        },
+      ],
+    });
+    await uriInput!.setValue("https://github.com/owner/repo");
+    await wrapper.find('[data-testid="install-btn"]').trigger("click");
+    await flushPromises();
+    const updated = wrapper
+      .findAll("input")
+      .find((i) => (i.element as HTMLInputElement).value.includes("owner/repo"));
+    expect(updated!.attributes("aria-describedby")).toContain(
+      "plugin-install-error"
+    );
   });
 });

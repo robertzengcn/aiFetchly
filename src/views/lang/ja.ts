@@ -2837,6 +2837,11 @@ export default {
       "error_source-redirect-rejected": "ダウンロードが信頼できない場所へリダイレクトされたため停止しました。",
       "error_source-cancelled": "インストールをキャンセルしました。",
       source_kind: "インストール元",
+      working_archive: "リビジョンを解決してアーカイブをダウンロード中…",
+      working_clone: "リポジトリをクローン中…",
+      working_download: "アーカイブをダウンロード中…",
+      working_fetch: "npm パッケージを取得中…",
+      working_import: "プラグインをインポート中…",
       resolved_revision: "固定リビジョン",
     },
     marketplace: {

@@ -2892,6 +2892,11 @@ export default {
       "error_source-redirect-rejected": "Der Download wurde zu einem nicht vertrauenswürdigen Ziel umgeleitet und gestoppt.",
       "error_source-cancelled": "Installation abgebrochen.",
       source_kind: "Installationsquelle",
+      working_archive: "Revision wird aufgelöst und Archiv wird geladen…",
+      working_clone: "Repository wird geklont…",
+      working_download: "Archiv wird heruntergeladen…",
+      working_fetch: "npm-Paket wird abgerufen…",
+      working_import: "Plugin wird importiert…",
       resolved_revision: "Feste Revision",
     },
     marketplace: {
