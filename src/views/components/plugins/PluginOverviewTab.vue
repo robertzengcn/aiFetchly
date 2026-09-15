@@ -26,6 +26,18 @@
       </strong>
       {{ detail.sourceKind }}<span v-if="detail.sourceRef"> · {{ detail.sourceRef }}</span>
     </p>
+    <p
+      v-if="resolvedCommitSha"
+      data-testid="plugin-resolved-revision"
+      class="d-flex align-center"
+    >
+      <strong class="mr-1">{{ t("plugins.resolved_revision") }}:</strong>
+      <code
+        :aria-label="t('plugins.resolved_revision')"
+        :title="resolvedCommitSha"
+        >{{ shortResolvedCommitSha }}</code
+      >
+    </p>
     <p v-if="detail.marketplaceName">
       <strong>{{ t("plugins.marketplace.column_marketplace") || "Marketplace" }}:</strong>
       {{ detail.marketplaceName }}<span v-if="detail.entryName"> · {{ detail.entryName }}</span>
@@ -35,9 +47,23 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { PluginDetail } from "@/views/api/plugins";
 
-defineProps<{ detail: PluginDetail }>();
+const props = defineProps<{ detail: PluginDetail }>();
 const { t } = useI18n();
+
+/** Trusted GitHub-archive provenance (US-06): the immutable commit the
+ *  plugin was installed from. Fetcher-generated, so it cannot be spoofed
+ *  by renderer input; undefined for non-archive sources. */
+const resolvedCommitSha = computed<string | undefined>(() => {
+  const raw = props.detail.sourceMeta?.resolvedCommitSha;
+  return typeof raw === "string" && /^[0-9a-f]{40}$/i.test(raw)
+    ? raw.toLowerCase()
+    : undefined;
+});
+const shortResolvedCommitSha = computed(
+  () => resolvedCommitSha.value?.slice(0, 7)
+);
 </script>

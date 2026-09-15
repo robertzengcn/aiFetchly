@@ -2873,6 +2873,7 @@ export default {
       "error_source-redirect-rejected": "The download was redirected to an untrusted location and was stopped.",
       "error_source-cancelled": "Installation cancelled.",
       source_kind: "Install source",
+      resolved_revision: "Pinned revision",
     },
     marketplace: {
       tab_installed: "Installed",

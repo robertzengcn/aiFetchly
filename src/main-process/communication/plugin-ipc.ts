@@ -108,7 +108,25 @@ function toSummary(
     sourceUri: p.sourceUri,
     sourceRef: p.sourceRef,
     installPath: p.installPath,
+    sourceMeta: parseSourceMeta(p.sourceMetaJson),
   };
+}
+
+/** Parse the persisted acquisition metadata for the renderer summary; a
+ *  malformed/missing value yields undefined rather than throwing. */
+function parseSourceMeta(
+  raw: string | undefined
+): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

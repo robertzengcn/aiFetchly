@@ -2880,6 +2880,7 @@ export default {
       "error_source-redirect-rejected": "Le téléchargement a été redirigé vers un emplacement non fiable et a été arrêté.",
       "error_source-cancelled": "Installation annulée.",
       source_kind: "Source d'installation",
+      resolved_revision: "Révision épinglée",
     },
     marketplace: {
       tab_installed: "Installés",

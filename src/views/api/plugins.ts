@@ -55,6 +55,9 @@ export interface PluginSummary {
   sourceUri?: string;
   sourceRef?: string;
   installPath?: string;
+  /** Trusted acquisition metadata (e.g. resolvedCommitSha for GitHub
+   *  archive installs — shown shortened in the overview, US-06). */
+  sourceMeta?: Record<string, unknown>;
 }
 
 export interface PluginSkillComponent {

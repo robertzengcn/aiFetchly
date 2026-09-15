@@ -2837,6 +2837,7 @@ export default {
       "error_source-redirect-rejected": "ダウンロードが信頼できない場所へリダイレクトされたため停止しました。",
       "error_source-cancelled": "インストールをキャンセルしました。",
       source_kind: "インストール元",
+      resolved_revision: "固定リビジョン",
     },
     marketplace: {
       tab_installed: "インストール済み",

@@ -2758,6 +2758,7 @@ export default {
       "error_source-redirect-rejected": "下载被重定向到不受信任的位置，已停止。",
       "error_source-cancelled": "安装已取消。",
       source_kind: "安装来源",
+      resolved_revision: "固定修订版本",
     },
     marketplace: {
       tab_installed: "已安装",

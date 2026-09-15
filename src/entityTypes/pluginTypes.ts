@@ -243,6 +243,12 @@ export interface PluginSummary {
   readonly sourceUri?: string;
   readonly sourceRef?: string;
   readonly installPath?: string;
+  /** Raw acquisition metadata (trusted fetcher keys only, e.g. GitHub
+   *  archive provenance: `resolvedCommitSha`, `acquisition`, host). Key
+   *  mapping PRD→design: PRD `resolvedRevision` == design `resolvedCommitSha`;
+   *  PRD `archiveType` == design `acquisition` ("github-archive" |
+   *  "github-release-asset"). Never contains credentials or signed URLs. */
+  readonly sourceMeta?: Record<string, unknown>;
 }
 
 export interface PluginSkillComponent {

@@ -2892,6 +2892,7 @@ export default {
       "error_source-redirect-rejected": "Der Download wurde zu einem nicht vertrauenswürdigen Ziel umgeleitet und gestoppt.",
       "error_source-cancelled": "Installation abgebrochen.",
       source_kind: "Installationsquelle",
+      resolved_revision: "Feste Revision",
     },
     marketplace: {
       tab_installed: "Installiert",

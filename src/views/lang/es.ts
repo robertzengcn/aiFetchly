@@ -2900,6 +2900,7 @@ export default {
       "error_source-redirect-rejected": "La descarga fue redirigida a una ubicación no confiable y se detuvo.",
       "error_source-cancelled": "Instalación cancelada.",
       source_kind: "Origen de instalación",
+      resolved_revision: "Revisión fijada",
     },
     marketplace: {
       tab_installed: "Instalados",
