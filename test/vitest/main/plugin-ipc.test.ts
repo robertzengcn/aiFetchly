@@ -442,6 +442,26 @@ describe("plugin-ipc", () => {
     expect(result).toMatchObject({ status: false });
   });
 
+  it("PLUGIN_INSTALL_FROM_SOURCE completes a GitHub install with AI DISABLED (FR-18, non-AI-gated)", async () => {
+    aiEnabledValue = "false";
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn({}, {
+      operationId: "11111111-2222-3333-4444-555555555555",
+      kind: "github",
+      uri: "https://github.com/owner/repo",
+      ref: "v1",
+    });
+    // Plugin installation is NOT an AI feature: the handler must run the
+    // full acquire+install flow even when USER_AI_ENABLED is false.
+    expect(result).toMatchObject({
+      status: true,
+      data: {
+        success: true,
+        plugin: { name: "p" },
+      },
+    });
+  });
+
   it("PLUGIN_INSTALL_FROM_SOURCE rejects CRLF in uri", async () => {
     aiEnabledValue = "true";
     const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
