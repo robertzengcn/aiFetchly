@@ -37,6 +37,12 @@ export const AI_CHAT_RECOVERABLE_DEFAULTS = {
   retrievalMaxCumulativeTokensPerTurn: 8_000,
   retrievalMaxCallsPerTurn: 4,
 
+  // Submit-time selection (§13.3): the renderer sends opaque source refs only;
+  // the engine re-resolves them and caps how much archive text one turn may add.
+  selectionMaxCount: 50,
+  selectionMaxExcerptTokens: 2_000,
+  selectionMaxTotalTokens: 8_000,
+
   // Lease / provider.
   leaseInitialSeconds: 120,
   leaseRenewIntervalSeconds: 30,

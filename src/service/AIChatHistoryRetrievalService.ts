@@ -72,6 +72,24 @@ export interface ResolveResult {
   readonly resolved: HistoryExcerpt[];
   readonly rejected: string[];
   readonly errorCode?: RecoverableHistoryErrorCode;
+  /**
+   * Submitted reference ids accepted for this turn, in submission order. The
+   * archive re-encodes each `resolved[i].sourceId`, so callers that reconcile
+   * acceptance back to UI state (§13.3) need this list — `resolved` alone
+   * does not map back to what the renderer sent.
+   */
+  readonly acceptedSubmittedIds?: readonly string[];
+}
+
+/**
+ * A resolved excerpt paired with the submitted reference that produced it.
+ * The archive layer re-encodes each excerpt's `sourceId` from the interval it
+ * actually read, so callers need the ORIGINAL submitted id to reconcile
+ * acceptance back to the chips the user drafted (§13.3).
+ */
+interface SubmittedExcerpt {
+  readonly submittedId: string;
+  readonly excerpt: HistoryExcerpt;
 }
 
 /** Decode outcome for an opaque source ID against a trusted epoch. */
@@ -486,22 +504,105 @@ export class AIChatHistoryRetrievalService {
   }
 
   /**
-   * Re-resolve user-selected source references on submit (§13.3). Budget
-   * enforcement applies (selections count toward the turn budget).
+   * Re-resolve user-selected source references on submit (§13.3).
+   *
+   * Budget enforcement applies: accepted excerpts count toward the turn budget
+   * and are deduplicated by archive interval, so a passage that is already
+   * present in recent history cannot double its cost. Excerpts over the
+   * per-excerpt cap are capped at the nearest code-point boundary instead of
+   * dropped, and the overall cap rejects the rest before acceptance so the
+   * draft selections survive on retry (§13.3 "reject before acceptance").
    */
   async resolveSelections(
     conversationId: string,
-    sourceIds: readonly string[]
+    sourceIds: readonly string[],
+    turnId?: string
   ): Promise<ResolveResult> {
+    const rejected = new Set<string>();
     try {
       const result = await this.archive.resolveSelections(
         conversationId,
         sourceIds
       );
+      if (result.errorCode === "HISTORY_SCOPE_INVALID") {
+        return {
+          resolved: [],
+          rejected: [...sourceIds],
+          errorCode: "HISTORY_SCOPE_INVALID",
+        };
+      }
+      const paired = this.pairWithSubmittedIds(sourceIds, result);
+      const resolved: HistoryExcerpt[] = [];
+      const turnBudgetTurnId = turnId ?? "default";
+      const b = this.budgetFor(conversationId, turnBudgetTurnId);
+      let acceptedTokens = 0;
+      for (const { submittedId, excerpt } of paired) {
+        const decoded = this.tryDecodeRecord(excerpt.sourceId, excerpt.text);
+        const cap = this.excerptCap(excerpt.text);
+        const text =
+          cap < excerpt.text.length
+            ? sliceByCodePoints(excerpt.text, 0, cap)
+            : excerpt.text;
+        if (text.length === 0) {
+          rejected.add(submittedId);
+          continue;
+        }
+        const tokens = this.estimateTokens(text);
+        if (
+          resolved.length > 0 &&
+          acceptedTokens + tokens >
+            AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxTotalTokens
+        ) {
+          rejected.add(submittedId);
+          continue;
+        }
+        // Account exactly what the model receives: the full requested
+        // interval, or the truncated prefix when the per-excerpt cap bit.
+        // The stored sourceId narrows to that prefix too, so a persisted
+        // reference always resolves to the text the model actually saw.
+        const span = decoded
+          ? {
+              epoch: decoded.payload.epoch,
+              revision: decoded.payload.revision,
+              rowId: decoded.payload.rowId,
+              start: decoded.payload.startCodePoint,
+              end:
+                text === excerpt.text
+                  ? decoded.payload.endCodePoint
+                  : decoded.payload.startCodePoint + codePointLength(text),
+            }
+          : null;
+        if (span) this.mergeInterval(b, span.rowId, span.start, span.end);
+        acceptedTokens += tokens;
+        if (text === excerpt.text) {
+          resolved.push(excerpt);
+          continue;
+        }
+        // Uncap-able ids (un-decodable) keep the archive's own reference.
+        resolved.push({
+          ...excerpt,
+          sourceId: span
+            ? encodeSourceId({
+                v: 1,
+                epoch: span.epoch,
+                revision: span.revision,
+                rowId: span.rowId,
+                field: "content",
+                startCodePoint: span.start,
+                endCodePoint: span.end,
+              })
+            : excerpt.sourceId,
+          text,
+          hasMore: true,
+        });
+      }
       return {
-        resolved: result.resolved,
-        rejected: result.rejected,
-        errorCode: result.errorCode as RecoverableHistoryErrorCode | undefined,
+        resolved,
+        acceptedSubmittedIds: paired
+          .filter(({ submittedId }) => !rejected.has(submittedId))
+          .map(({ submittedId }) => submittedId),
+        rejected: this.orderSelectionIds(sourceIds, rejected, result.rejected),
+        errorCode: this.selectionErrorCode(resolved, rejected),
       };
     } catch (error) {
       return mapArchiveError(error, {
@@ -509,6 +610,65 @@ export class AIChatHistoryRetrievalService {
         rejected: [...sourceIds],
       });
     }
+  }
+
+  /** Truncate an excerpt to the per-excerpt token cap at a code-point boundary. */
+  private excerptCap(text: string): number {
+    return Math.min(
+      text.length,
+      AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxExcerptTokens * 4
+    );
+  }
+
+  /**
+   * Re-attach the submitted reference to each resolved excerpt. The archive
+   * layer re-encodes `sourceId` from the interval it read, so the returned
+   * ids do NOT match what the renderer submitted — and budget rejection has to
+   * be reported against the SUBMITTED ids or the renderer cannot tell which
+   * chips were dropped (§13.3).
+   */
+  private pairWithSubmittedIds(
+    sourceIds: readonly string[],
+    result: { resolved: HistoryExcerpt[]; rejected: string[] }
+  ): SubmittedExcerpt[] {
+    const rejectedSet = new Set(result.rejected);
+    const submitted: string[] = [];
+    for (const id of sourceIds) {
+      if (!rejectedSet.has(id)) submitted.push(id);
+    }
+    return result.resolved.map((excerpt, index) => ({
+      submittedId: submitted[index] ?? excerpt.sourceId,
+      excerpt,
+    }));
+  }
+
+  /** Keep the caller's submission order while reporting every rejected id once. */
+  private orderSelectionIds(
+    sourceIds: readonly string[],
+    rejected: Set<string>,
+    archiveRejected: readonly string[]
+  ): string[] {
+    for (const id of archiveRejected) rejected.add(id);
+    return sourceIds.filter((id) => rejected.has(id));
+  }
+
+  /**
+   * Map the resolution outcome to a recoverable-history error code. A
+   * partially-accepted batch is `SOURCE_CHANGED` (the caller still gets the
+   * accepted references); an empty result is `HISTORY_SCOPE_INVALID` so a
+   * tombstoned/unknown scope reads consistently with the archive layer.
+   */
+  private selectionErrorCode(
+    resolved: readonly HistoryExcerpt[],
+    rejected: Set<string>
+  ): RecoverableHistoryErrorCode | undefined {
+    if (resolved.length === 0) {
+      return "HISTORY_SCOPE_INVALID";
+    }
+    if (rejected.size > 0) {
+      return "SOURCE_CHANGED";
+    }
+    return undefined;
   }
 
   /** Decode a record's source ID against the trusted epoch (best-effort). */

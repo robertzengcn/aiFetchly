@@ -69,7 +69,16 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
+  ChatV2HistorySelectionMetadata,
 } from "@/entityTypes/aiChatV2Types";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
+import {
+  buildSelectedHistoryContextBlock,
+  toSelectedHistoryExcerptInputs,
+  type SelectedHistoryExcerptInput,
+} from "@/service/SelectedHistoryContextBlock";
+import { isArchiveReadsEnabled } from "@/config/featureFlags";
 import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   OpenAITextContentPart,
@@ -263,6 +272,12 @@ export interface AIChatQueryEngineDeps {
    * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
    * beyond the executeTool guard. */
   toolFilter?: (toolName: string) => boolean;
+  /**
+   * Optional factory for the selection re-resolution service (§13.3). When
+   * omitted the engine builds its own archive-backed service; tests inject a
+   * stub so selection resolution does not need a live database.
+   */
+  historyRetrievalServiceFactory?: () => AIChatHistoryRetrievalService;
 }
 
 /**
@@ -302,6 +317,7 @@ export class AIChatQueryEngine {
    * task-policy-approved tools (FR-16), narrowing the prompt-injection
    * surface beyond the executeToken guard. */
   private readonly toolFilter?: (toolName: string) => boolean;
+  private readonly historyRetrievalServiceFactory?: () => AIChatHistoryRetrievalService;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -321,6 +337,7 @@ export class AIChatQueryEngine {
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
     this.toolFilter = deps?.toolFilter;
+    this.historyRetrievalServiceFactory = deps?.historyRetrievalServiceFactory;
   }
 
   /**
@@ -341,6 +358,64 @@ export class AIChatQueryEngine {
     } catch (err) {
       console.warn("[ai-chat-v2] goal lookup for auto-continue failed:", err);
       return false;
+    }
+  }
+
+  /**
+   * Re-resolve submit-time selected-context references (technical-design §13.3).
+   *
+   * The renderer sends OPAQUE ARCHIVE REFERENCES ONLY — never passage text. The
+   * backend re-validates each reference against the current epoch/revision and
+   * enforces the final budget. Resolution failure is never fatal to the turn:
+   * selections degrade to "not included" and the user's own message still goes
+   * out, with the ACCEPTED submitted ids reported back on the `start` event so
+   * the UI clears only those chips and retains the rejected drafts.
+   */
+  private async resolveSelectedHistory(
+    conversationId: string,
+    turnId: string,
+    sourceIds: readonly string[]
+  ): Promise<{
+    readonly metadata: ChatV2HistorySelectionMetadata[];
+    readonly excerpts: SelectedHistoryExcerptInput[];
+    readonly rejectedCount: number;
+  }> {
+    const empty = {
+      metadata: [] as ChatV2HistorySelectionMetadata[],
+      excerpts: [] as SelectedHistoryExcerptInput[],
+      rejectedCount: 0,
+    };
+    if (sourceIds.length === 0) return empty;
+    if (!isArchiveReadsEnabled()) return empty;
+    try {
+      const factory =
+        this.historyRetrievalServiceFactory ??
+        (() => new AIChatHistoryRetrievalService(new AIChatArchiveModule()));
+      const svc = factory();
+      const result = await svc.resolveSelections(
+        conversationId,
+        sourceIds,
+        turnId
+      );
+      const metadata: ChatV2HistorySelectionMetadata[] = result.resolved.map(
+        (e, i) => ({
+          // Prefer the SUBMITTED reference so the renderer can reconcile this
+          // back to its own chip; the archive re-encodes `e.sourceId`.
+          sourceId: result.acceptedSubmittedIds?.[i] ?? e.sourceId,
+          messageId: e.messageId,
+          role: e.role,
+          timestamp: e.timestamp,
+          exact: e.exact,
+        })
+      );
+      return {
+        metadata,
+        excerpts: toSelectedHistoryExcerptInputs(result.resolved),
+        rejectedCount: result.rejected.length,
+      };
+    } catch (err) {
+      console.warn("[ai-chat-v2] history selection resolution failed:", err);
+      return { ...empty, rejectedCount: sourceIds.length };
     }
   }
 
@@ -622,6 +697,8 @@ export class AIChatQueryEngine {
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
     let sourceUserMessageId: string | undefined;
+    /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
+    let historySelectionAcceptedIds: readonly string[] = [];
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -721,10 +798,36 @@ export class AIChatQueryEngine {
           pastedTextResolution.modelMessage
         );
       const modelUserMessage = atMentionResolution.modelMessage;
+
+      // Re-resolve user-selected archived passages (§13.3). The renderer sends
+      // opaque source ids only; the backend re-validates epoch/revision and the
+      // final budget. Accepted excerpts become the "current user + selected"
+      // context block below; the references (never the text) are persisted with
+      // the user row. Rejected/unavailable selections never block the turn.
+      const selectionResolution = await this.resolveSelectedHistory(
+        conversationId,
+        turnId,
+        request.historySelectionIds ?? []
+      );
+      const selectedHistoryBlock = buildSelectedHistoryContextBlock(
+        selectionResolution.excerpts
+      );
+      historySelectionAcceptedIds = selectionResolution.metadata.map(
+        (m) => m.sourceId
+      );
+
+      // "Current user + selected" allocation slot: the selected archive
+      // passages are folded into the SAME user message the user authored, so
+      // preflight can never evict them as an independent optional block
+      // (technical-design line 372) and they are included exactly once.
+      const userMessageForModel =
+        selectedHistoryBlock.length > 0
+          ? `${modelUserMessage}\n\n${selectedHistoryBlock}`
+          : modelUserMessage;
       if (currentUserContentParts && currentUserContentParts.length > 0) {
-        // Fold the @-mention context into the multimodal text part.
+        // Fold the @-mention context (+ selected passages) into the multimodal text part.
         currentUserContentParts = [
-          { type: "text", text: modelUserMessage },
+          { type: "text", text: userMessageForModel },
           ...currentUserContentParts.slice(1),
         ];
       }
@@ -750,10 +853,15 @@ export class AIChatQueryEngine {
       if (pastedTextResolution.pastedBlocks.length > 0) {
         userMetadata.pastedBlocks = pastedTextResolution.pastedBlocks;
       }
+      // Persist only the ACCEPTED references (provenance, never the text).
+      if (selectionResolution.metadata.length > 0) {
+        userMetadata.historySelections = selectionResolution.metadata;
+      }
       const hasUserMetadataBeyondSource =
         !!attachmentMetadata ||
         atMentionResolution.metadata.length > 0 ||
         pastedTextResolution.pastedBlocks.length > 0 ||
+        selectionResolution.metadata.length > 0 ||
         !!scheduledContext;
 
       // Save user message (display text = attachment-enriched message; the
@@ -860,7 +968,7 @@ export class AIChatQueryEngine {
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: modelUserMessage,
+        currentUserMessage: userMessageForModel,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
@@ -993,6 +1101,7 @@ export class AIChatQueryEngine {
       type: "start",
       conversationId,
       messageId: assistantMessageId,
+      historySelectionAcceptedIds,
     });
     if (textApprovedPlanState) {
       eventSink.emit({

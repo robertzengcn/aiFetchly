@@ -102,6 +102,23 @@ export interface ChatV2ScheduledLoopMetadata {
   readonly status?: "running" | "completed" | "failed" | "cancelled";
 }
 
+/**
+ * Persisted provenance for one archived passage the user selected before
+ * sending a turn (technical-design §13.3). References only, never text.
+ */
+export interface ChatV2HistorySelectionMetadata {
+  /** Opaque epoch-scoped archive reference (no readable offsets exposed). */
+  readonly sourceId: string;
+  /** Archive message id the excerpt belongs to. */
+  readonly messageId: string;
+  /** Archive row role at resolution time. */
+  readonly role: string;
+  /** ISO timestamp of the archived message. */
+  readonly timestamp: string;
+  /** Whether the backend returned the requested interval verbatim. */
+  readonly exact: boolean;
+}
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2" | "slash-command" | "scheduled-loop";
@@ -173,6 +190,16 @@ export interface ChatV2MessageMetadata {
   recovery?: ChatV2RecoveryMetadata;
   /** Scheduled-loop metadata for rows produced by a scheduled occurrence. */
   scheduledLoop?: ChatV2ScheduledLoopMetadata;
+  /**
+   * User-selected archived passages for the NEXT reply, persisted with the
+   * user-turn row that submitted them (technical-design §13.3).
+   *
+   * References/provenance only — the original passage text is NEVER stored
+   * here. `sourceId` is the opaque, epoch-scoped reference the engine
+   * re-resolved on submit; `exact` records whether the archive returned the
+   * requested interval verbatim.
+   */
+  historySelections?: readonly ChatV2HistorySelectionMetadata[];
   /** Visible in history but excluded from model, compact, and memory context.
    * Used for the raw `/loop` command and its local confirmation row so the
    * model does not interpret schedule-management text as a new instruction. */
@@ -203,6 +230,20 @@ export interface ChatV2StreamRequest {
    * model-facing message right before mention resolution.
    */
   pastedContents?: Record<string, string>;
+  /**
+   * Send-time only: opaque archive references the user selected before
+   * sending (§13.3). Opaque refs only — the renderer never supplies passage
+   * text. The backend re-resolves each reference against the current epoch and
+   * revision, rejects any that cannot fit, and persists accepted references
+   * with the user-turn metadata.
+   */
+  historySelectionIds?: readonly string[];
+  /**
+   * Stable submission id for transport retry (§13.3). A retry carrying the
+   * same submission id reuses the accepted user message instead of adding a
+   * second selected-context row.
+   */
+  submissionId?: string;
 }
 
 export interface ChatV2HistoryRequest {
@@ -338,6 +379,12 @@ export interface ChatV2StreamChunk {
   autoEntered?: boolean;
   /** Rationale supplied by the model when calling EnterPlanMode. */
   rationale?: string;
+  /**
+   * Opaque refs of the archived passages accepted for this turn (§13.3).
+   * Emitted on `start` so the renderer clears ONLY the accepted chips and
+   * retains the drafts whose sources could not be resolved or fit.
+   */
+  historySelectionAcceptedIds?: readonly string[];
   question?: AIChatPlanQuestionView;
   planVersion?: AIChatPlanVersionView;
   retryAttempt?: number;

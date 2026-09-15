@@ -8,7 +8,15 @@
  * shares one per-run test database (established pattern — see
  * AIChatQueryLoopOutboundEmailGate.test.ts).
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -47,20 +55,23 @@ import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatArchiveSearchFragmentModel } from "@/model/AIChatArchiveSearchFragment.model";
+import { encodeSourceId } from "@/service/AIChatArchiveCursorCodec";
+import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 
 function resetDbSingleton(): void {
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
 }
 
 async function seedMessages(
   conversationId: string,
   rows: Array<{ role: string; content: string; ts: number }>
-): Promise<void> {
-  const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
-    AIChatMessageEntity
-  );
+): Promise<number[]> {
+  const repo =
+    SqliteDb.getInstance(tmpDir).connection.getRepository(AIChatMessageEntity);
+  const rowIds: number[] = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const entity = new AIChatMessageEntity();
@@ -70,8 +81,10 @@ async function seedMessages(
     entity.content = r.content;
     entity.timestamp = new Date(r.ts);
     entity.messageType = MessageType.MESSAGE;
-    await repo.save(entity);
+    const saved = await repo.save(entity);
+    rowIds.push(saved.id);
   }
+  return rowIds;
 }
 
 /** Index a conversation's messages into search fragments. */
@@ -79,9 +92,8 @@ async function indexConversation(conversationId: string): Promise<void> {
   const stateModel = new AIChatArchiveStateModel(tmpDir);
   const state = await stateModel.ensureState(conversationId);
   const fragModel = new AIChatArchiveSearchFragmentModel(tmpDir);
-  const msgRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
-    AIChatMessageEntity
-  );
+  const msgRepo =
+    SqliteDb.getInstance(tmpDir).connection.getRepository(AIChatMessageEntity);
   const rows = await msgRepo.find({ where: { conversationId } });
   for (const row of rows) {
     await fragModel.indexSourceContent(
@@ -149,8 +161,16 @@ describe("AIChatHistoryRetrievalService", () => {
 
     it("finds matches across fragments with source verification", async () => {
       await seedMessages("conv-hit", [
-        { role: "user", content: "Use the column order: email, company, country.", ts: 1_000 },
-        { role: "assistant", content: "Got it — column order saved.", ts: 2_000 },
+        {
+          role: "user",
+          content: "Use the column order: email, company, country.",
+          ts: 1_000,
+        },
+        {
+          role: "assistant",
+          content: "Got it — column order saved.",
+          ts: 2_000,
+        },
       ]);
       await indexConversation("conv-hit");
       const res = await service.search({
@@ -180,8 +200,7 @@ describe("AIChatHistoryRetrievalService", () => {
       });
       expect(resA.records.length).toBeGreaterThan(0);
       // Take A's cursor, use it against B — must be rejected (scope widened).
-      const cursorA =
-        resA.nextCursor ?? encodeDummySearchCursor("conv-iso-a");
+      const cursorA = resA.nextCursor ?? encodeDummySearchCursor("conv-iso-a");
       const resB = await service.search({
         conversationId: "conv-iso-b",
         query: "needle",
@@ -242,10 +261,13 @@ describe("AIChatHistoryRetrievalService", () => {
       });
       const sid = search.records[0].sourceId;
       // Delete the source row from the DB, then read by id.
-      const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
-        AIChatMessageEntity
-      );
-      const rows = await repo.find({ where: { conversationId: "conv-read-2" } });
+      const repo =
+        SqliteDb.getInstance(tmpDir).connection.getRepository(
+          AIChatMessageEntity
+        );
+      const rows = await repo.find({
+        where: { conversationId: "conv-read-2" },
+      });
       await repo.remove(rows);
       const res = await service.read({
         conversationId: "conv-read-2",
@@ -298,6 +320,141 @@ describe("AIChatHistoryRetrievalService", () => {
       const res = await service.resolveSelections("conv-res-1", ["garbage"]);
       expect(res.resolved).toHaveLength(0);
       expect(res.rejected).toEqual(["garbage"]);
+      expect(res.errorCode).toBe("HISTORY_SCOPE_INVALID");
+    });
+
+    it("accepts a partial interval and returns just that excerpt", async () => {
+      await seedMessages("conv-res-2", [
+        { role: "assistant", content: "alpha beta gamma delta", ts: 1_000 },
+      ]);
+      await indexConversation("conv-res-2");
+      const search = await service.search({
+        conversationId: "conv-res-2",
+        query: "beta",
+      });
+      expect(search.records.length).toBeGreaterThan(0);
+      const sid = search.records[0].sourceId;
+      const res = await service.resolveSelections(
+        "conv-res-2",
+        [sid],
+        "turn-1"
+      );
+      expect(res.resolved).toHaveLength(1);
+      expect(res.resolved[0].text).toBe(search.records[0].text);
+      expect(res.resolved[0].exact).toBe(true);
+    });
+
+    it("preserves submission order and reports partial rejection", async () => {
+      await seedMessages("conv-res-3", [
+        { role: "user", content: "first passage here", ts: 1_000 },
+        { role: "assistant", content: "second passage here", ts: 2_000 },
+      ]);
+      await indexConversation("conv-res-3");
+      const search = await service.search({
+        conversationId: "conv-res-3",
+        query: "passage here",
+      });
+      const ids = search.records.map((r) => r.sourceId);
+      expect(ids.length).toBeGreaterThanOrEqual(2);
+      const res = await service.resolveSelections("conv-res-3", [
+        ids[0],
+        "not-a-real-id",
+        ids[1],
+      ]);
+      expect(res.resolved).toHaveLength(2);
+      // Every rejected id reported once, in the caller's submission order.
+      expect(res.rejected).toEqual(["not-a-real-id"]);
+      expect(res.errorCode).toBe("SOURCE_CHANGED");
+    });
+
+    it("truncates an over-cap excerpt and marks hasMore", async () => {
+      const stateModel = new AIChatArchiveStateModel(tmpDir);
+      const state = await stateModel.ensureState("conv-res-4");
+      const row = await seedMessages("conv-res-4", [
+        { role: "assistant", content: "x".repeat(10_000), ts: 1_000 },
+      ]);
+      const capChars =
+        AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxExcerptTokens * 4;
+      const sid = encodeSourceId({
+        v: 1,
+        epoch: state.epoch,
+        revision: state.sourceRevision,
+        rowId: row[0],
+        field: "content",
+        startCodePoint: 0,
+        endCodePoint: 10_000,
+      });
+      const res = await service.resolveSelections(
+        "conv-res-4",
+        [sid],
+        "turn-4"
+      );
+      expect(res.resolved).toHaveLength(1);
+      expect(res.resolved[0].text.length).toBe(capChars);
+      expect(res.resolved[0].hasMore).toBe(true);
+      expect(res.rejected).toHaveLength(0);
+    });
+
+    it("stops at the per-turn selection total cap and rejects the rest", async () => {
+      const stateModel = new AIChatArchiveStateModel(tmpDir);
+      const state = await stateModel.ensureState("conv-res-5");
+      const totalCapTokens =
+        AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxTotalTokens;
+      const perExcerptTokens =
+        AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxExcerptTokens;
+      // Each excerpt resolves at the per-excerpt cap (2,000 tokens). Five of
+      // them hit the 8,000 per-turn total exactly after 4, so the 5th is
+      // rejected — and the boundary math below pins why the split is at 4/1.
+      const n = 5;
+      const rowIds = await seedMessages(
+        "conv-res-5",
+        Array.from({ length: n }, (_, i) => ({
+          role: "assistant",
+          content: `excerpt ${i} ` + "z".repeat(10_000),
+          ts: 1_000 + i,
+        }))
+      );
+      // Intervals wide enough that each excerpt hits the per-excerpt cap.
+      const sids = rowIds.map((rowId, i) =>
+        encodeSourceId({
+          v: 1,
+          epoch: state.epoch,
+          revision: state.sourceRevision,
+          rowId,
+          field: "content",
+          startCodePoint: i,
+          endCodePoint: i + 20_000,
+        })
+      );
+      const res = await service.resolveSelections("conv-res-5", sids, "turn-5");
+      // Boundary math: n-1 excerpts fill the total cap exactly, the nth
+      // crosses it and is rejected.
+      expect(perExcerptTokens * (n - 1)).toBe(totalCapTokens);
+      expect(perExcerptTokens * n).toBeGreaterThan(totalCapTokens);
+      expect(res.resolved).toHaveLength(n - 1);
+      expect(res.rejected).toEqual([sids[n - 1]]);
+      expect(res.errorCode).toBe("SOURCE_CHANGED");
+    });
+
+    it("tombstoned scope rejects every reference with HISTORY_SCOPE_INVALID", async () => {
+      await seedMessages("conv-res-6", [
+        { role: "user", content: "archived then deleted", ts: 1_000 },
+      ]);
+      await indexConversation("conv-res-6");
+      const search = await service.search({
+        conversationId: "conv-res-6",
+        query: "deleted",
+      });
+      const sid = search.records[0].sourceId;
+      await new AIChatArchiveStateModel(tmpDir).tombstone("conv-res-6");
+      const res = await service.resolveSelections(
+        "conv-res-6",
+        [sid],
+        "turn-6"
+      );
+      expect(res.resolved).toHaveLength(0);
+      expect(res.rejected).toEqual([sid]);
+      expect(res.errorCode).toBe("HISTORY_SCOPE_INVALID");
     });
   });
 

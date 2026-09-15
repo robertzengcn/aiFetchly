@@ -42,6 +42,13 @@ export interface AIChatQueryStartEvent {
   type: "start";
   conversationId: string;
   messageId: string;
+  /**
+   * Opaque refs of the archived passages the user selected and the backend
+   * accepted for this turn (technical-design §13.3). The renderer clears only
+   * these chips on `start`; drafts whose source changed or did not fit are
+   * retained so a rejected selection is never silently dropped.
+   */
+  historySelectionAcceptedIds?: readonly string[];
 }
 
 export interface AIChatQueryTokenEvent {

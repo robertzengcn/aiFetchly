@@ -84,6 +84,10 @@ import type {
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import {
+  aiChatHistorySelectionIdsSchema,
+  aiChatHistorySubmissionIdSchema,
+} from "@/schemas/aiChatHistorySelections";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import type {
   SearchResult,
@@ -468,6 +472,8 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             eventType: "start",
             conversationId: e.conversationId,
             messageId: e.messageId,
+            // §13.3: the renderer clears only the accepted selection chips.
+            historySelectionAcceptedIds: e.historySelectionAcceptedIds,
           });
           break;
         case "token":
@@ -740,6 +746,20 @@ function validateStreamRequest(
     const parsed = aiChatV2PastedContentsSchema.safeParse(req.pastedContents);
     if (!parsed.success) {
       return parsed.error.issues[0]?.message ?? "invalid pastedContents";
+    }
+  }
+  if (req.historySelectionIds !== undefined) {
+    const parsed = aiChatHistorySelectionIdsSchema.safeParse(
+      req.historySelectionIds
+    );
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid historySelectionIds";
+    }
+  }
+  if (req.submissionId !== undefined) {
+    const parsed = aiChatHistorySubmissionIdSchema.safeParse(req.submissionId);
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid submissionId";
     }
   }
   return null;

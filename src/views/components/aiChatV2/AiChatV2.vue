@@ -3760,12 +3760,13 @@ const onSend = async (
   // before acknowledgement would silently discard a rejected message.
   options?.onAccepted?.();
   streamError.value = null;
-  // Drafted history selections are consumed on submit (§13.3). The backend
-  // re-resolves the opaque source ids against the current epoch; clear the
-  // draft here so they don't persist into the next turn.
-  if (selectedContextItems.value.length > 0) {
-    selectedContextItems.value = [];
-  }
+  // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
+  // (§13.3) — never the passage text. The backend re-resolves each reference
+  // against the current epoch/revision and the final budget. The draft is kept
+  // until the `start` event reports which references were accepted, so a
+  // rejected/unchanged selection is never silently dropped.
+  const pendingSelectionIds = selectedContextItems.value.map((item) => item.sourceId);
+  const submissionId = crypto.randomUUID();
 
   attachmentError.value = null;
   voicePlaybackError.value = null;
@@ -4050,6 +4051,11 @@ const onSend = async (
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
     }
+    // Selected archived passages (§13.3): opaque refs + stable submission id.
+    if (pendingSelectionIds.length > 0) {
+      streamRequest.historySelectionIds = pendingSelectionIds;
+    }
+    streamRequest.submissionId = submissionId;
     await streamChatV2Message(
       streamRequest,
       (chunk: ChatV2StreamChunk) => {
@@ -4064,6 +4070,19 @@ const onSend = async (
             patchConversationRuntimeState(streamConversationId, {
               activeAssistantMessageId: chunk.messageId,
             });
+          }
+          // `start` marks acceptance/persistence (§13.3): clear ONLY the
+          // selected passages the backend actually accepted — those are now
+          // folded into the turn. Drafts whose source changed or could not
+          // fit stay in the chips so the user is not silently charged for
+          // context they did not get.
+          if (pendingSelectionIds.length > 0) {
+            const accepted = new Set<string>(
+              chunk.historySelectionAcceptedIds ?? []
+            );
+            selectedContextItems.value = selectedContextItems.value.filter(
+              (item) => !accepted.has(item.sourceId)
+            );
           }
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
