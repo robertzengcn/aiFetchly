@@ -4,11 +4,17 @@ import type { ApplicationLifecycleService } from "@/main-process/lifecycle/Appli
 /**
  * Spawn gate — the synchronous freeze hook (PRD FR-05, AC-05).
  *
- * Every process-spawning site in the main process must consult this gate
- * BEFORE launching. Once the lifecycle service enters `quitting`, new
- * spawns, queued starts, retries, and worker restarts are refused with a
- * typed error. This runs synchronously inside `requestExit` (design §4), so
- * a spawn admitted an instant before exit sees the closed gate.
+ * Process-spawning sites consult this gate BEFORE launching: once the
+ * lifecycle service enters `quitting`, new spawns, queued starts, retries,
+ * and worker restarts are refused. The gate flips synchronously inside
+ * `requestExit` (design §4), so a spawn admitted an instant before exit
+ * sees the closed gate.
+ *
+ * Adoption status (v1): the contact-extraction worker spawn + crash-restart
+ * path consults `isSpawnAllowed`. Remaining families (Yellow Pages,
+ * workspace watch, MCP, tool-job workers) are covered by the force phase's
+ * verified termination until they adopt the gate; `assertSpawnAllowed` is
+ * the throwing variant reserved for those adapters.
  *
  * Pure TypeScript: bound to the lifecycle singleton at composition time
  * (background.ts), so worker transports and tests can import it freely.

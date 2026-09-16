@@ -57,11 +57,18 @@ export function registerApplicationLifecycleIpcHandlers(
 
   registerValidatedHandler<
     Record<string, never>,
-    ApplicationLifecycleStateSnapshot
+    ApplicationLifecycleStateSnapshot | null
   >(
     APPLICATION_LIFECYCLE_GET_STATE,
     () => applicationLifecycleGetStateSchema(),
-    () => {
+    (_input, event) => {
+      // Uniform sender authorization across the whole lifecycle surface
+      // (defense-in-depth: state/phase is non-sensitive, but every lifecycle
+      // channel answers only the main window's webContents).
+      if (!isAuthorizedSender(event, getMainWindow)) {
+        log.warn("[lifecycle-ipc] get-state from unauthorized sender");
+        return Promise.resolve(null);
+      }
       const snapshot = lifecycle.snapshot();
       return Promise.resolve({
         state: snapshot.state,

@@ -3934,6 +3934,8 @@ export default {
     cancel: "Abbrechen",
     exiting: "AiFetchly wird beendet…",
     stoppingTasks: "Laufende Aufgaben werden angehalten…",
+    forceStop: "Verbleibende Aufgaben werden erzwungen beendet…",
+    finalize: "Ergebnisse werden gespeichert, App wird geschlossen…",
     trayUnavailable:
       "Der Infobereich ist nicht verfügbar. Das Fenster bleibt geöffnet; zum Schließen „Beenden“ verwenden.",
     trayOpen: "AiFetchly öffnen",

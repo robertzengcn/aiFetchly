@@ -89,6 +89,7 @@ import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
 import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
 import * as os from "node:os";
@@ -442,11 +443,14 @@ function showMainWindowFromTray(): void {
 
 /** Ordinary close → close-choice flow (FR-01). */
 const closeChoiceFlow = new CloseChoiceFlow(lifecycle, {
-  sendRendererRequest: (token, backgroundAvailable) => {
+  sendRendererRequest: (token, backgroundAvailable, activeTaskCount) => {
     if (win && !win.isDestroyed()) {
       win.webContents.send(APPLICATION_CLOSE_CHOICE_REQUEST, {
         token,
         backgroundAvailable,
+        ...(typeof activeTaskCount === "number"
+          ? { activeTaskCount }
+          : {}),
       });
     }
   },
@@ -1103,7 +1107,17 @@ function initialize() {
       if (lifecycle.isQuitting()) {
         return; // exit in progress — cleanup owns the termination
       }
-      closeChoiceFlow.begin();
+      // FR-01: show a count only when trustworthy — running async tool jobs.
+      // Queued-but-not-started work and unobservable subsystems are omitted
+      // rather than reported as zero.
+      let activeTaskCount: number | undefined;
+      try {
+        const count = getDefaultToolJobRegistry().getActiveJobCount();
+        if (count > 0) activeTaskCount = count;
+      } catch {
+        /* registry unavailable — omit the count, not a zero */
+      }
+      closeChoiceFlow.begin(activeTaskCount);
     });
 
     if (win) {

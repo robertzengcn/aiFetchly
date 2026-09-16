@@ -110,9 +110,14 @@
         <div class="text-body-1" data-testid="app-exit-progress-title">
           {{ t("applicationLifecycle.exiting") || "Exiting AiFetchly…" }}
         </div>
-        <div class="text-body-2 text-medium-emphasis mt-1">
+        <!-- FR-04: the phase line follows the main process's broadcast
+             phaseKey (stoppingTasks -> forceStop -> finalize). -->
+        <div
+          class="text-body-2 text-medium-emphasis mt-1"
+          data-testid="app-exit-progress-phase"
+        >
           {{
-            t("applicationLifecycle.stoppingTasks") || "Stopping running tasks…"
+            t(`applicationLifecycle.${phaseKey}`) || "Stopping running tasks…"
           }}
         </div>
       </v-card>
@@ -121,7 +126,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   acknowledgeCloseChoice,
@@ -141,6 +146,8 @@ const backgroundAvailable = ref(true);
 const activeTaskCount = ref<number | null>(null);
 const submitting = ref(false);
 const isQuitting = ref(false);
+/** i18n key suffix of the current shutdown phase (FR-04 progress text). */
+const phaseKey = ref("stoppingTasks");
 
 const { t } = useI18n();
 
@@ -150,8 +157,16 @@ const defaultDescription =
 /** Element that had focus before the dialog opened (FR-08 restore). */
 let previouslyFocused: HTMLElement | null = null;
 
-const closeButton = computed<string>(() => t("applicationLifecycle.exitApplication") || "Exit application");
-void closeButton.value;
+/** Focus delay after opening (lets Vuetify mount the dialog content). */
+const FOCUS_DELAY_MS = 50;
+let focusTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearFocusTimer(): void {
+  if (focusTimer !== null) {
+    clearTimeout(focusTimer);
+    focusTimer = null;
+  }
+}
 
 function handleRequest(payload: {
   token: string;
@@ -170,7 +185,9 @@ function handleRequest(payload: {
   void acknowledgeCloseChoice(payload.token).catch(() => undefined);
   // Deliberate action required (FR-08): focus the primary button so keyboard
   // users land on the safest prominent action; Escape cancels via keydown.
-  setTimeout(() => {
+  clearFocusTimer();
+  focusTimer = setTimeout(() => {
+    focusTimer = null;
     try {
       const card = document.querySelector(
         "[data-testid='app-close-keep-running'], [data-testid='app-close-exit']"
@@ -179,7 +196,7 @@ function handleRequest(payload: {
     } catch {
       /* focus is best-effort */
     }
-  }, 50);
+  }, FOCUS_DELAY_MS);
 }
 
 async function choose(choice: ApplicationCloseChoice): Promise<void> {
@@ -194,6 +211,7 @@ async function choose(choice: ApplicationCloseChoice): Promise<void> {
     submitting.value = false;
     dialogOpen.value = false;
     liveToken.value = null;
+    clearFocusTimer();
     // Focus restoration after dismissal (FR-08).
     try {
       previouslyFocused?.focus?.();
@@ -204,12 +222,19 @@ async function choose(choice: ApplicationCloseChoice): Promise<void> {
   }
 }
 
-function handleStateChanged(event: { state: string }): void {
+function handleStateChanged(event: {
+  state: string;
+  phaseKey?: string;
+}): void {
   if (event.state === "quitting" || event.state === "ready-to-exit") {
     isQuitting.value = true;
+    if (typeof event.phaseKey === "string" && event.phaseKey !== "idle") {
+      phaseKey.value = event.phaseKey;
+    }
     // Any pending dialog is invalid once quitting begins (design §4).
     dialogOpen.value = false;
     liveToken.value = null;
+    clearFocusTimer();
   } else {
     isQuitting.value = false;
   }
@@ -226,6 +251,7 @@ onMounted(() => {
 onUnmounted(() => {
   unsubRequest?.();
   unsubState?.();
+  clearFocusTimer();
 });
 
 defineExpose({

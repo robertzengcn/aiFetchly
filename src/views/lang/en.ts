@@ -3882,6 +3882,8 @@ export default {
     cancel: "Cancel",
     exiting: "Exiting AiFetchly…",
     stoppingTasks: "Stopping running tasks…",
+    forceStop: "Forcing remaining tasks to stop…",
+    finalize: "Saving results and closing…",
     trayUnavailable:
       "System tray is unavailable. The window will stay open — use Exit to quit.",
     trayOpen: "Open AiFetchly",

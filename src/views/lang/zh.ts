@@ -3720,6 +3720,8 @@ export default {
     cancel: "取消",
     exiting: "正在退出 AiFetchly…",
     stoppingTasks: "正在停止运行中的任务…",
+    forceStop: "正在强制停止剩余任务…",
+    finalize: "正在保存结果并关闭…",
     trayUnavailable: "系统托盘不可用。窗口将保持打开，请使用“退出”关闭应用。",
     trayOpen: "打开 AiFetchly",
     trayExit: "退出应用程序",

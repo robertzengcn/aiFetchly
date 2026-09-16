@@ -92,14 +92,41 @@ export async function submitCloseChoice(
     : { accepted: false, stale: true };
 }
 
+/** Structural guard: a close-choice request must carry its required fields. */
+function isCloseChoiceRequest(
+  value: unknown
+): value is ApplicationCloseChoiceRequest {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.token === "string" &&
+    typeof v.backgroundAvailable === "boolean" &&
+    (v.activeTaskCount === undefined || typeof v.activeTaskCount === "number")
+  );
+}
+
+/** Structural guard: a state-changed broadcast must carry its required fields. */
+function isLifecycleStateChangedEvent(
+  value: unknown
+): value is ApplicationLifecycleStateChangedEvent {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.state === "string" &&
+    typeof v.phase === "string" &&
+    typeof v.phaseKey === "string"
+  );
+}
+
 /** Subscribe to close-choice requests (main → renderer). */
 export function onCloseChoiceRequest(
   cb: (request: ApplicationCloseChoiceRequest) => void
 ): () => void {
   const handler = (...args: unknown[]): void => {
-    const payload = args[0] as ApplicationCloseChoiceRequest | undefined;
-    if (payload && typeof payload.token === "string") {
-      cb(payload);
+    // Boundary validation: never as-cast the inbound payload — a malformed
+    // or shape-changed event is dropped, not passed through.
+    if (isCloseChoiceRequest(args[0])) {
+      cb(args[0]);
     }
   };
   api().receive(APPLICATION_CLOSE_CHOICE_REQUEST, handler);
@@ -111,9 +138,8 @@ export function onLifecycleStateChanged(
   cb: (event: ApplicationLifecycleStateChangedEvent) => void
 ): () => void {
   const handler = (...args: unknown[]): void => {
-    const payload = args[0] as ApplicationLifecycleStateChangedEvent | undefined;
-    if (payload && typeof payload.state === "string") {
-      cb(payload);
+    if (isLifecycleStateChangedEvent(args[0])) {
+      cb(args[0]);
     }
   };
   api().receive(APPLICATION_LIFECYCLE_STATE_CHANGED, handler);

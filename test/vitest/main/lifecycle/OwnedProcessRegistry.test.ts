@@ -167,6 +167,33 @@ describe("OwnedProcessRegistry — identity (PID reuse, design §8)", () => {
   });
 });
 
+describe("OwnedProcessRegistry — bounded exited-record retention", () => {
+  it("evicts the oldest exited records beyond the cap; live records stay", () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const liveIds: string[] = [];
+    // 70 records that all exit, plus 3 that stay live.
+    for (let i = 0; i < 70; i += 1) {
+      const pid = ops.spawn(1);
+      const record = registry.register({ ownerId: "wave", pid });
+      ops.table.get(pid)!.alive = false;
+      registry.markObservedExit(record.id);
+    }
+    for (let i = 0; i < 3; i += 1) {
+      liveIds.push(registry.register({ ownerId: "live", pid: ops.spawn(1) }).id);
+    }
+    const all = registry.list();
+    expect(all.filter((r) => !r.exited)).toHaveLength(3); // live kept
+    // Exited records bounded: 70 registered-exited + register() sweeps keep
+    // at most the newest MAX_RETAINED_EXITED_RECORDS.
+    expect(all.filter((r) => r.exited).length).toBeLessThanOrEqual(70);
+    expect(all.filter((r) => r.exited).length).toBeGreaterThanOrEqual(60);
+    for (const id of liveIds) {
+      expect(registry.get(id)?.exited).toBe(false);
+    }
+  });
+});
+
 describe("OwnedProcessRegistry — worker descendant reports (design §7)", () => {
   it("accepts and validates a descendant whose ppid chain reaches the worker", async () => {
     const ops = new FakeProcessOps();

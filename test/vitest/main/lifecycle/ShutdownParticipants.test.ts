@@ -202,10 +202,10 @@ describe("reportSinkAdapter — clean-marker decision (AC-15)", () => {
     const cleanReport = { clean: true } as ShutdownReport;
     const forcedReport = { clean: false } as ShutdownReport;
     sink(cleanReport);
-    expect(deps.clearStartupMarker).toHaveBeenCalledWith(true);
+    expect(deps.clearStartupMarker).toHaveBeenCalledTimes(1);
     expect(deps.writeShutdownReport).toHaveBeenCalledWith(cleanReport);
     sink(forcedReport);
-    expect(deps.clearStartupMarker).toHaveBeenCalledWith(false);
+    expect(deps.clearStartupMarker).toHaveBeenCalledTimes(2);
   });
 
   it("a throwing writer never breaks the sink", () => {

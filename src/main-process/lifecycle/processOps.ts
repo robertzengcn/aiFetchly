@@ -117,7 +117,7 @@ export function createDefaultProcessOps(): ProcessOps {
     async readParentPid(pid) {
       if (process.platform === "linux") {
         try {
-          const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+          const stat = await fs.promises.readFile(`/proc/${pid}/stat`, "utf8");
           // Field 4 is PPid; fields are space-separated but comm (field 2)
           // may contain spaces/parens — parse after the LAST ')'.
           const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
@@ -148,7 +148,7 @@ export function createDefaultProcessOps(): ProcessOps {
     async readStartTimeIdentity(pid) {
       if (process.platform === "linux") {
         try {
-          const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+          const stat = await fs.promises.readFile(`/proc/${pid}/stat`, "utf8");
           const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
           const fields = afterComm.split(" ");
           // starttime is field 22 overall = fields[19] after comm (3rd+).
@@ -159,6 +159,13 @@ export function createDefaultProcessOps(): ProcessOps {
         }
       }
       if (process.platform === "darwin") {
+        // LIMITATION (design §8): `ps -o lstart=` has ONE-SECOND granularity.
+        // If an owned pid exits and the OS recycles it within the same
+        // wall-clock second, verifyIdentity() reports "ours" and the
+        // terminator could signal the unrelated process. Today all registry
+        // entries carry a live ChildProcess handle whose exit event removes
+        // them first; harden (e.g. add a ppid snapshot discriminator) before
+        // wiring pid-only descendant reports into production.
         try {
           const { stdout } = await execFileAsync("ps", [
             "-o",

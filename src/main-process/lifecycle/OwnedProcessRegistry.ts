@@ -90,6 +90,27 @@ export type IdentityVerification =
   | "unknown" // platform cannot verify (fall back to liveness probing)
   | "no-record";
 
+/** Poll cadence for exit observation (kept in step with the terminator's verify loop). */
+const OBSERVE_POLL_MS = 50;
+
+/** Bounded parent-chain walk for worker-descendant ppid validation (§7). */
+const MAX_PARENT_CHAIN_DEPTH = 8;
+
+/**
+ * Prefix marking a fallback identity recorded when the platform cannot
+ * provide an OS start-time identity (win32; see design §8 limitation).
+ */
+const FALLBACK_IDENTITY_PREFIX = "spawn:";
+
+/**
+ * Bounded retention for EXITED records (design §6: records are kept until
+ * termination is confirmed — after that they only aid short-lived
+ * post-exit lookups). register() opportunistically evicts the oldest
+ * exited records beyond this cap so long-running hidden/tray sessions keep
+ * list()/validation scans proportional to live processes.
+ */
+const MAX_RETAINED_EXITED_RECORDS = 64;
+
 export class OwnedProcessRegistry {
   private readonly records = new Map<string, InternalRecord>();
   private readonly ops: ProcessOps;
@@ -120,6 +141,7 @@ export class OwnedProcessRegistry {
       handle: options.handle ?? null,
     };
     this.records.set(record.id, record);
+    this.pruneExitedRecords();
 
     if (record.handle) {
       try {
@@ -164,12 +186,6 @@ export class OwnedProcessRegistry {
     return record ? this.view(record) : null;
   }
 
-  /** Internal pid accessor for the terminator (never exposed to IPC). */
-  getPidForTermination(recordId: string): number | null {
-    const record = this.records.get(recordId);
-    return record && !record.exited ? record.pid : null;
-  }
-
   /**
    * Cooperative termination via the stored transport handle. Returns false
    * when no handle exists (callers fall back to signals).
@@ -182,28 +198,6 @@ export class OwnedProcessRegistry {
     } catch {
       return false;
     }
-  }
-
-  /** Signal one owned pid directly. */
-  signalPid(
-    recordId: string,
-    signal: NodeJS.Signals
-  ): "ok" | "no-process" | "error" | "unknown-record" {
-    const record = this.records.get(recordId);
-    if (!record || record.pid === null) return "unknown-record";
-    return this.ops.signal(record.pid, signal);
-  }
-
-  /** Signal an ISOLATED process group recorded at launch (§8). */
-  signalProcessGroup(
-    recordId: string,
-    signal: NodeJS.Signals
-  ): "ok" | "no-process" | "error" | "unknown-record" {
-    const record = this.records.get(recordId);
-    if (!record || record.isolatedProcessGroupId === null) {
-      return "unknown-record";
-    }
-    return this.ops.signalGroup(record.isolatedProcessGroupId, signal);
   }
 
   /**
@@ -219,7 +213,7 @@ export class OwnedProcessRegistry {
       await this.captureIdentity(record);
       if (record.startedAtIdentity === null) return "unknown";
     }
-    if (record.startedAtIdentity.startsWith("spawn:")) {
+    if (record.startedAtIdentity.startsWith(FALLBACK_IDENTITY_PREFIX)) {
       // Fallback identity (win32): cannot detect reuse; caller probes liveness.
       return this.ops.isAlive(record.pid) ? "unknown" : "gone";
     }
@@ -228,12 +222,6 @@ export class OwnedProcessRegistry {
       return this.ops.isAlive(record.pid) ? "unknown" : "gone";
     }
     return current === record.startedAtIdentity ? "ours" : "reuse";
-  }
-
-  isAlive(recordId: string): boolean {
-    const record = this.records.get(recordId);
-    if (!record || record.pid === null || record.exited) return false;
-    return this.ops.isAlive(record.pid);
   }
 
   /**
@@ -306,7 +294,7 @@ export class OwnedProcessRegistry {
           this.markObservedExit(recordId);
           finish(true);
         }
-      }, 50);
+      }, OBSERVE_POLL_MS);
       const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
       if (typeof timer.unref === "function") timer.unref();
     });
@@ -347,6 +335,18 @@ export class OwnedProcessRegistry {
 
   // -------------------------------------------------------------------------
 
+  /** Evict the oldest exited records beyond the retention cap. */
+  private pruneExitedRecords(): void {
+    let exitedSeen = 0;
+    for (const [id, record] of this.records) {
+      if (!record.exited) continue;
+      exitedSeen += 1;
+      if (exitedSeen > MAX_RETAINED_EXITED_RECORDS) {
+        this.records.delete(id);
+      }
+    }
+  }
+
   private setValidated(recordId: string, validated: boolean): void {
     const record = this.records.get(recordId);
     if (record) record.validated = validated;
@@ -373,7 +373,7 @@ export class OwnedProcessRegistry {
       }
     }
     let current = pid;
-    for (let depth = 0; depth < 8; depth += 1) {
+    for (let depth = 0; depth < MAX_PARENT_CHAIN_DEPTH; depth += 1) {
       if (trustedPids.has(current)) return true;
       const parent = await this.ops.readParentPid(current);
       if (parent === null) return false;
@@ -387,9 +387,9 @@ export class OwnedProcessRegistry {
     if (record.pid === null) return;
     try {
       const identity = await this.ops.readStartTimeIdentity(record.pid);
-      record.startedAtIdentity = identity ?? `spawn:${record.spawnTimestampMs}`;
+      record.startedAtIdentity = identity ?? `${FALLBACK_IDENTITY_PREFIX}${record.spawnTimestampMs}`;
     } catch {
-      record.startedAtIdentity = `spawn:${record.spawnTimestampMs}`;
+      record.startedAtIdentity = `${FALLBACK_IDENTITY_PREFIX}${record.spawnTimestampMs}`;
     }
   }
 
@@ -403,7 +403,7 @@ export class OwnedProcessRegistry {
       isolatedProcessGroupId: record.isolatedProcessGroupId,
       identityTracked:
         record.startedAtIdentity !== null &&
-        !record.startedAtIdentity.startsWith("spawn:"),
+        !record.startedAtIdentity.startsWith(FALLBACK_IDENTITY_PREFIX),
       validated: record.validated,
       exited: record.exited,
     };

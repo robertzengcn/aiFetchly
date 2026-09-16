@@ -82,9 +82,11 @@ function phaseKeyFor(
   phase: ApplicationShutdownPhase
 ): string {
   if (state === "quitting") {
-    return phase === "force-stop" || phase === "finalize"
-      ? phase
-      : "stoppingTasks";
+    // Keys mirror the `applicationLifecycle` i18n namespace (stoppingTasks,
+    // forceStop, finalize) so the renderer can render them directly.
+    if (phase === "force-stop") return "forceStop";
+    if (phase === "finalize") return "finalize";
+    return "stoppingTasks";
   }
   if (state === "ready-to-exit") return "exiting";
   return "idle";
@@ -100,7 +102,6 @@ export class ApplicationLifecycleService {
 
   private exitPromise: Promise<ApplicationExitResult> | null = null;
   private terminalIntent: TerminalIntent | null = null;
-  private exitReason: ApplicationExitReason | null = null;
   private attemptId: string | null = null;
   private finalExitAuthorized = false;
 
@@ -268,11 +269,6 @@ export class ApplicationLifecycleService {
     return this.terminalIntent;
   }
 
-  /** Reason of the first accepted exit (shutdown-report correlation). */
-  getExitReason(): ApplicationExitReason | null {
-    return this.exitReason;
-  }
-
   /** Install the cleanup body (ShutdownCoordinator composition in background.ts). */
   setCleanupRunner(runner: CleanupRunner): void {
     this.cleanupRunner = runner;
@@ -320,7 +316,6 @@ export class ApplicationLifecycleService {
     }
 
     this.terminalIntent = intent;
-    this.exitReason = reason;
     this.attemptId = randomUUID();
     // Synchronous freeze BEFORE the first await (design §4 / FR-05 freeze).
     this.invalidateCloseChoice();

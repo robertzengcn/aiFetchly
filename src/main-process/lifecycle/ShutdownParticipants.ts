@@ -46,10 +46,13 @@ export interface BackgroundShutdownDeps {
   /** Stop periodic log cleanup. */
   readonly stopLogCleanup: () => void;
   /**
-   * Remove the clean-startup marker AFTER required cleanup succeeded
-   * (design §11 — moved away from the beginning of before-quit).
+   * Remove the clean-startup marker AFTER the cleanup outcome is known
+   * (design §11 — moved away from the beginning of before-quit). Any
+   * coordinated exit is NOT a crash, so the marker comes off regardless;
+   * the persisted report distinguishes clean from forced for the next
+   * launch (AC-15).
    */
-  readonly clearStartupMarker: (clean: boolean) => void;
+  readonly clearStartupMarker: () => void;
   /** Persist the privacy-safe shutdown report (FR-09). */
   readonly writeShutdownReport: (report: ShutdownReport) => void;
   /** True once a user database path exists (guards scheduler shutdown). */
@@ -228,7 +231,7 @@ export function reportSinkAdapter(
       // Marker removal only on a verified clean shutdown; forced/incomplete
       // exits keep the marker so the next launch can distinguish them from
       // a crash without calling them clean (AC-15, design §11).
-      deps.clearStartupMarker(report.clean);
+      deps.clearStartupMarker();
     } catch (err) {
       log.error(
         "[shutdown] report sink failed:",

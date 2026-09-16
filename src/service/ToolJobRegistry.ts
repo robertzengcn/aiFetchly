@@ -293,6 +293,22 @@ export class ToolJobRegistry {
     return count;
   }
 
+  /**
+   * Trustworthy count of currently RUNNING async tool jobs (queued jobs are
+   * not yet active work). Feeds the application close dialog's localized
+   * active-task message (application-exit PRD FR-01: omit rather than report
+   * an untrustworthy count).
+   */
+  getActiveJobCount(): number {
+    let running = 0;
+    for (const job of this.jobs.values()) {
+      if (job.status === "running") {
+        running += 1;
+      }
+    }
+    return running;
+  }
+
   shutdown(): void {
     for (const job of this.jobs.values()) {
       if (job.status === "running" || job.status === "queued") {

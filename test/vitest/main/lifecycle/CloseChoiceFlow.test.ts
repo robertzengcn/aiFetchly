@@ -149,6 +149,32 @@ describe("CloseChoiceFlow — renderer path", () => {
     h.flow.begin();
     expect(h.requests[0]!.backgroundAvailable).toBe(false);
   });
+
+  it("forwards the trustworthy active-task count to the renderer (FR-01)", () => {
+    makeHarness(); // sanity: default flow unaffected
+    const counts: Array<number | undefined> = [];
+    // A flow whose port captures the count argument.
+    const lifecycle2 = new ApplicationLifecycleService();
+    const flow2 = new CloseChoiceFlow(lifecycle2, {
+      sendRendererRequest: (_t, _b, count) => {
+        counts.push(count);
+      },
+      showNativeFallback: async () => "cancel",
+      hideWindow: () => undefined,
+      setTimeoutFn: (() => 0) as unknown as typeof setTimeout,
+      clearTimeoutFn: () => undefined,
+    });
+    flow2.begin(3);
+    flow2.submit(
+      (
+        lifecycle2.beginCloseChoice() as { result: string; token?: string }
+      ).token!,
+      "cancel"
+    );
+    flow2.begin(); // no count -> undefined forwarded
+    expect(counts[0]).toBe(3);
+    expect(counts[1]).toBeUndefined();
+  });
 });
 
 describe("CloseChoiceFlow — native fallback (design §9)", () => {

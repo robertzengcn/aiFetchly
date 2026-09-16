@@ -14,7 +14,7 @@ import type { ApplicationCloseChoiceRequest } from "@/entityTypes/applicationLif
  */
 
 type RequestCallback = (request: ApplicationCloseChoiceRequest) => void;
-type StateCallback = (event: { state: string }) => void;
+type StateCallback = (event: { state: string; phaseKey?: string }) => void;
 
 let capturedRequestCallback: RequestCallback | null = null;
 let capturedStateCallback: StateCallback | null = null;
@@ -52,6 +52,8 @@ const i18n = createI18n({
         cancel: "Cancel",
         exiting: "Exiting AiFetchly…",
         stoppingTasks: "Stopping running tasks…",
+        forceStop: "Forcing remaining tasks to stop…",
+        finalize: "Saving results and closing…",
         trayUnavailable: "System tray is unavailable.",
         trayOpen: "Open AiFetchly",
         trayExit: "Exit application",
@@ -253,6 +255,22 @@ describe("ApplicationCloseDialog", () => {
     expect(
       wrapper.find("[data-testid='app-exit-progress-title']").exists()
     ).toBe(true);
+  });
+
+  it("renders phase-specific progress text from the broadcast phaseKey (FR-04)", async () => {
+    const wrapper = mountDialog();
+    capturedStateCallback?.({ state: "quitting", phaseKey: "forceStop" });
+    await nextTick();
+    const overlay = wrapper.find("[data-testid='app-exit-progress']");
+    expect(overlay.exists()).toBe(true);
+    expect(wrapper.find("[data-testid='app-exit-progress-phase']").text()).toContain(
+      "Forcing remaining tasks"
+    );
+    capturedStateCallback?.({ state: "quitting", phaseKey: "finalize" });
+    await nextTick();
+    expect(
+      wrapper.find("[data-testid='app-exit-progress-phase']").text()
+    ).toContain("Saving results");
   });
 
   it("a quitting app ignores NEW close-choice requests (design §4)", async () => {

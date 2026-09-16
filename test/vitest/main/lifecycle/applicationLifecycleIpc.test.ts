@@ -100,6 +100,17 @@ describe("applicationLifecycle IPC", () => {
     expect(result.data.backgroundAvailable).toBe(true);
   });
 
+  it("get-state from a NON-main sender returns null (uniform authorization)", async () => {
+    register();
+    const handler = invokeHandlers.get(APPLICATION_LIFECYCLE_GET_STATE)!;
+    const result = (await handler(makeEvent(99), {})) as {
+      status: boolean;
+      data: { state: string } | null;
+    };
+    expect(result.status).toBe(true);
+    expect(result.data).toBeNull();
+  });
+
   it("ack from the main window acknowledges the live token", async () => {
     register();
     const issued = lifecycle.beginCloseChoice();

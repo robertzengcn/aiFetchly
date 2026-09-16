@@ -3929,6 +3929,8 @@ export default {
     cancel: "Cancelar",
     exiting: "Saliendo de AiFetchly…",
     stoppingTasks: "Deteniendo las tareas en ejecución…",
+    forceStop: "Forzando la detención de las tareas restantes…",
+    finalize: "Guardando resultados y cerrando…",
     trayUnavailable:
       "La bandeja del sistema no está disponible. La ventana permanecerá abierta; usa Salir para cerrar.",
     trayOpen: "Abrir AiFetchly",

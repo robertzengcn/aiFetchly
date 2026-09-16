@@ -3848,6 +3848,8 @@ export default {
     cancel: "キャンセル",
     exiting: "AiFetchly を終了しています…",
     stoppingTasks: "実行中のタスクを停止しています…",
+    forceStop: "残りのタスクを強制停止しています…",
+    finalize: "結果を保存して終了しています…",
     trayUnavailable:
       "システムトレイを利用できません。ウィンドウは開いたままになります。終了するには「終了」を使用してください。",
     trayOpen: "AiFetchly を開く",

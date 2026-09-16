@@ -29,6 +29,8 @@ const EXPECTED_KEYS = [
   "cancel",
   "exiting",
   "stoppingTasks",
+  "forceStop",
+  "finalize",
   "trayUnavailable",
   "trayOpen",
   "trayExit",

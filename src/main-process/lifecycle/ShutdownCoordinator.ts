@@ -106,6 +106,8 @@ export interface ShutdownCoordinatorOptions extends ShutdownCoordinatorPorts {
 }
 
 const DEFAULT_TOTAL_BUDGET_MS = 10_000;
+/** Design §5 freeze target: the synchronous freeze pass fits in 250 ms. */
+const DEFAULT_FREEZE_PHASE_CAP_MS = 250;
 const DEFAULT_GRACEFUL_ELAPSED_CAP_MS = 6_000;
 const DEFAULT_FORCE_ELAPSED_CAP_MS = 9_000;
 const MAX_ERROR_MESSAGE_LENGTH = 200;
@@ -244,7 +246,7 @@ export class ShutdownCoordinator {
     phaseTimings.push({
       phase: "freeze",
       durationMs: this.now() - freezeStart,
-      timedOut: this.now() - freezeStart > 250,
+      timedOut: this.now() - freezeStart > DEFAULT_FREEZE_PHASE_CAP_MS,
     });
 
     // ---- Phase 2: graceful stop and drain (≤6 s elapsed) ------------------

@@ -3917,6 +3917,8 @@ export default {
     cancel: "Annuler",
     exiting: "Fermeture d'AiFetchly…",
     stoppingTasks: "Arrêt des tâches en cours…",
+    forceStop: "Arrêt forcé des tâches restantes…",
+    finalize: "Enregistrement des résultats et fermeture…",
     trayUnavailable:
       "La barre système est indisponible. La fenêtre restera ouverte ; utilisez Quitter pour fermer.",
     trayOpen: "Ouvrir AiFetchly",

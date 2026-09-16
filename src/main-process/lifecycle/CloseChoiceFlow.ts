@@ -21,10 +21,14 @@ import type { ApplicationLifecycleService as LifecycleService } from "@/main-pro
  */
 
 export interface CloseChoiceFlowPorts {
-  /** Fire the renderer request (token + background availability). */
+  /**
+   * Fire the renderer request (token, background availability, and the
+   * trustworthy active-task count when one was provided — FR-01).
+   */
   readonly sendRendererRequest: (
     token: string,
-    backgroundAvailable: boolean
+    backgroundAvailable: boolean,
+    activeTaskCount?: number
   ) => void;
   /** Localized native fallback (returns the user's choice). */
   readonly showNativeFallback: (
@@ -72,7 +76,10 @@ export class CloseChoiceFlow {
     const token = issued.token;
     this.ports.sendRendererRequest(
       token,
-      this.lifecycle.isBackgroundAvailable()
+      this.lifecycle.isBackgroundAvailable(),
+      typeof issued.activeTaskCount === "number"
+        ? issued.activeTaskCount
+        : undefined
     );
 
     const { setTimeoutFn = setTimeout } = this.ports;
