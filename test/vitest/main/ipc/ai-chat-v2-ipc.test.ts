@@ -99,8 +99,7 @@ vi.mock(
     );
     return {
       ...actual,
-      normalizeGeneratedImageReferences:
-        mockNormalizeGeneratedImageReferences,
+      normalizeGeneratedImageReferences: mockNormalizeGeneratedImageReferences,
     };
   }
 );
@@ -330,6 +329,12 @@ function resetProviderState(): void {
 
 beforeEach(() => {
   resetProviderState();
+  // The query engine is a module-level singleton shared across every group in
+  // this file, and every test reuses "v2-test-conv". A gate test whose mocked
+  // provider stream ignores the abort signal leaves its activeTurns entry
+  // behind, so the NEXT real submit hits the busy gate ("still working on the
+  // previous message"). Reset the runtime so each test starts turn-free.
+  resetAiChatV2RuntimeForDatabaseSwitch();
 });
 
 describe("AI Chat V2 IPC handlers", () => {
@@ -678,6 +683,7 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
 
     // start chunk
+
     const startCall = senderSend.mock.calls.find(
       (call) =>
         call[0] === AI_CHAT_V2_STREAM_CHUNK &&
