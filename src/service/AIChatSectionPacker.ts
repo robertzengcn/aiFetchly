@@ -328,7 +328,12 @@ export class AIChatSectionPacker extends BaseModule {
     for (const ex of eligible) {
       const rowId = parseRowIdFromSourceId(ex.sourceId);
       if (rowId < 0) continue;
-      const msg = await msgModel.readMessageByRowId(rowId);
+      // Conversation-scoped: a forged source ID must never pull another
+      // conversation's row into this section's coverage (AC-12).
+      const msg = await msgModel.readMessageInConversation(
+        input.conversationId,
+        rowId
+      );
       if (msg) {
         messages.set(rowId, {
           metadata: msg.metadata,

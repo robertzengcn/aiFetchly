@@ -79,21 +79,18 @@ export class AIChatCompactionRunModel extends BaseDb {
         );
       }
 
-      // If a run is already active and its lease is still valid, join it.
-      if (
-        state.activeRunId &&
-        state.leaseUntilMs &&
-        state.leaseUntilMs > now &&
-        state.leaseOwner === input.leaseOwner
-      ) {
+      // If a run is already active and its lease is still valid, join it —
+      // regardless of owner. A second trigger (manual racing auto, AC-08) must
+      // never start a competing run with duplicate active coverage.
+      // A paused run is NOT joined: nothing is running to finish it, so a new
+      // claim resumes from committed coverage instead of livelocking.
+      if (state.activeRunId && state.leaseUntilMs && state.leaseUntilMs > now) {
         const existing = await runRepo.findOne({
           where: { runId: state.activeRunId },
         });
         if (
           existing &&
-          existing.state !== "cancelled" &&
-          existing.state !== "completed" &&
-          existing.state !== "failed"
+          (existing.state === "running" || existing.state === "queued")
         ) {
           return {
             runId: existing.runId,
@@ -377,6 +374,54 @@ export class AIChatCompactionRunModel extends BaseDb {
     });
   }
 
+  /**
+   * Persist the bounded working overview + merged-through ordinal after each
+   * successful merge (§5.3). On restart, resume from that ordinal instead of
+   * re-merging from the beginning. Revalidates fence; throws
+   * COMPACTION_STALE_CLAIM on takeover.
+   */
+  async saveWorkingOverview(input: {
+    conversationId: string;
+    runId: string;
+    epoch: string;
+    expectedFence: number;
+    workingOverviewJson: string;
+    mergedThroughOrdinal: number;
+    stagedCursorJson: string;
+  }): Promise<{ fence: number }> {
+    return this.sqliteDb.connection.transaction(async (manager) => {
+      const stateRepo = manager.getRepository(AIChatArchiveStateEntity);
+      const runRepo = manager.getRepository(AIChatCompactionRunEntity);
+      const state = await stateRepo.findOne({
+        where: { conversationId: input.conversationId },
+      });
+      if (!state || state.epoch !== input.epoch) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_STALE_CLAIM",
+          `epoch changed during working-overview save`
+        );
+      }
+      if (state.fence !== input.expectedFence) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_STALE_CLAIM",
+          `fence moved during working-overview save`
+        );
+      }
+      const run = await runRepo.findOne({ where: { runId: input.runId } });
+      if (!run || run.state !== "running") {
+        throw new RecoverableHistoryError(
+          "COMPACTION_STALE_CLAIM",
+          `run ${input.runId} is not running`
+        );
+      }
+      run.workingOverviewJson = input.workingOverviewJson;
+      run.mergedThroughOrdinal = input.mergedThroughOrdinal;
+      run.stagedCursorJson = input.stagedCursorJson;
+      await runRepo.save(run);
+      return { fence: state.fence };
+    });
+  }
+
   /** Pause a run (§11.2): set state to paused after a batch budget yield. */
   async pauseRun(input: {
     conversationId: string;
@@ -395,6 +440,33 @@ export class AIChatCompactionRunModel extends BaseDb {
       const run = await runRepo.findOne({ where: { runId: input.runId } });
       if (run && run.state === "running") {
         run.state = "paused";
+        await runRepo.save(run);
+      }
+    });
+  }
+
+  /**
+   * Complete a run with no new publication (§11.2): the eligible snapshot was
+   * fully processed but there was nothing to publish (e.g. everything is
+   * retained recent context). Distinct from paused — no continuation remains.
+   */
+  async completeRun(input: {
+    conversationId: string;
+    runId: string;
+    epoch: string;
+    expectedFence: number;
+  }): Promise<void> {
+    await this.sqliteDb.connection.transaction(async (manager) => {
+      const stateRepo = manager.getRepository(AIChatArchiveStateEntity);
+      const runRepo = manager.getRepository(AIChatCompactionRunEntity);
+      const state = await stateRepo.findOne({
+        where: { conversationId: input.conversationId },
+      });
+      if (!state || state.epoch !== input.epoch) return;
+      if (state.fence !== input.expectedFence) return;
+      const run = await runRepo.findOne({ where: { runId: input.runId } });
+      if (run && run.state === "running") {
+        run.state = "completed";
         await runRepo.save(run);
       }
     });

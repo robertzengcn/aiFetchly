@@ -91,10 +91,15 @@ export class AIChatSummaryValidator {
    * Validate a model-generated summary against §10 structural + reference +
    * content rules. `validSourceIds` is the bounded map of source IDs supplied
    * to the model for this section; any reference outside it is rejected.
+   *
+   * `maxTokens` enforces the authoritative overall output cap (§10: the token/
+   * byte cap wins even when individual fields pass; §8.3 section 1500 /
+   * overview 2000). Estimated conservatively as UTF-8 bytes / 4.
    */
   validate(
     input: unknown,
-    validSourceIds: ReadonlySet<string>
+    validSourceIds: ReadonlySet<string>,
+    maxTokens?: number
   ): SummaryValidationResult {
     const errors: string[] = [];
 
@@ -187,6 +192,17 @@ export class AIChatSummaryValidator {
     }
     if (matchesAny(summary.synopsis, CREDENTIAL_PATTERNS)) {
       errors.push("synopsis appears to contain credentials (§10)");
+    }
+
+    // Overall output cap (authoritative over per-field caps — §10).
+    if (maxTokens !== undefined) {
+      const bytes = Buffer.byteLength(JSON.stringify(summary), "utf8");
+      const tokens = Math.ceil(bytes / 4);
+      if (tokens > maxTokens) {
+        errors.push(
+          `summary exceeds overall output cap (${tokens} > ${maxTokens} tokens)`
+        );
+      }
     }
 
     if (errors.length > 0) {

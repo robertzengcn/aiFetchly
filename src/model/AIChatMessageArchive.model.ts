@@ -222,6 +222,36 @@ export class AIChatMessageArchiveModel extends BaseDb {
   }
 
   /**
+   * Conversation-scoped single-row read (FR-01–03, AC-12). Every opaque source
+   * lookup must scope by conversation as well as ID so a modified reference
+   * to another conversation's row can never resolve (design §§4.2, 7).
+   */
+  async readMessageInConversation(
+    conversationId: string,
+    rowId: number
+  ): Promise<AIChatMessageEntity | null> {
+    return this.repository.findOne({ where: { id: rowId, conversationId } });
+  }
+
+  /**
+   * Conversation-scoped bounded substring read. Returns null when the row is
+   * absent or belongs to another conversation.
+   */
+  async readSourceSliceInConversation(
+    conversationId: string,
+    rowId: number,
+    startCodePoint: number,
+    endCodePoint: number
+  ): Promise<string | null> {
+    const row = await this.repository.findOne({
+      where: { id: rowId, conversationId },
+      select: ["content"],
+    });
+    if (!row) return null;
+    return sliceByCodePoints(row.content, startCodePoint, endCodePoint);
+  }
+
+  /**
    * Look up messages by public messageId within a conversation. §7.2: an
    * ambiguous public messageId returns candidate source references instead of
    * selecting an arbitrary row — the caller decides when more than one row

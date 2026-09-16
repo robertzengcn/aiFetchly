@@ -2873,6 +2873,10 @@ export default {
   },
   aiChatHistory: {
     drawer_title: "Unterhaltungsverlauf",
+    close: "Verlauf schließen",
+    tab_browse: "Durchsuchen",
+    tab_search: "Suchen",
+    search_button: "Suchen",
     search_placeholder: "Archivierten Verlauf durchsuchen…",
     search_query_too_long: "Die Suche darf höchstens 200 Zeichen lang sein.",
     no_match: "Keine übereinstimmenden Nachrichten gefunden.",
@@ -2881,6 +2885,7 @@ export default {
     index_incomplete:
       "Die Verlaufsindexierung läuft noch; Ergebnisse können unvollständig sein.",
     read_more: "Mehr lesen",
+    go_to_message: "Zur Nachricht",
     select_passage: "Abschnitt auswählen",
     selected_context: "Ausgewählter Kontext",
     estimated_cost: "Geschätzte Kosten: {tokens} Tokens",
@@ -2896,10 +2901,23 @@ export default {
     status_idle: "Inaktiv",
     status_queued: "In Warteschlange",
     status_running: "Komprimierung…",
+    status_joined: "Beigetreten",
     status_paused: "Pausiert",
     status_completed: "Komprimiert",
     status_failed: "Komprimierung fehlgeschlagen",
     status_cancelled: "Abgebrochen",
+    panel_title: "Komprimierung",
+    in_progress_note: "Arbeitet in begrenzten Stapeln — Sie können weiter chatten.",
+    view_history: "Frühere Nachrichten ansehen",
+    completed_detail:
+      "Frühere Nachrichten bleiben durchsuchbar. Die aktive Ansicht behält aktuelle Runden und eine begrenzte Übersicht.",
+    failed_detail:
+      "Die Komprimierung wurde mit einem Fehler gestoppt. Ihre Unterhaltung ist intakt — versuchen Sie es später erneut.",
+    cancelled_detail:
+      "Komprimierung abgebrochen. Gespeicherte Abschnitte bleiben für den nächsten Lauf erhalten.",
+    joined_detail: "Einer bereits laufenden Komprimierung beigetreten.",
+    running_detail: "Frühere Verläufe werden in begrenzten Abschnitten komprimiert.",
+    idle_detail: "Die Komprimierung ist inaktiv.",
     compaction_in_progress:
       "Komprimierung läuft ({packed} Abschnitte gepackt).",
     compaction_paused:

@@ -1021,6 +1021,10 @@ export class AIChatQueryLoop {
     // already been attempted so the coordinator doesn't loop forever.
     // Imported fresh per run() to avoid cross-turn contamination.
     let recoveryState = createRecoveryAttemptState(input.request.model);
+    // Effective dispatch model (§8.1/§8.5): re-resolved after model fallback
+    // so the budget preflight and the provider dispatch always agree on the
+    // same limits. Starts as the requested model; fallback updates it.
+    let effectiveModel = input.request.model;
 
     try {
       // Inject the deferred-tool announcement once at the start of the turn
@@ -1132,15 +1136,19 @@ export class AIChatQueryLoop {
         );
 
         // §8.5 dispatch enforcement: validate the final request immediately
-        // before streaming. When a budget service is wired, an oversized
-        // request throws a recoverable error instead of dispatching.
+        // before streaming — every round, after retrieval/tool results and
+        // after any model fallback (effectiveModel). Covers system/tool
+        // framing, attachments/images, output reserve, and safety margin via
+        // the budget service's conservative UTF-8-byte accounting (§8.2).
+        // When a budget service is wired, an oversized request throws a
+        // recoverable error instead of dispatching.
         if (this.deps.requestBudgetService) {
           const resolver: ModelLimitResolver =
             this.deps.resolveModelLimits ?? this.getDefaultModelLimitResolver();
           const budget = this.deps.requestBudgetService.preflight({
             messages,
             tools: hasExposedTools ? exposedTools : [],
-            model: input.request.model,
+            model: effectiveModel,
             outputReserve: currentMaxTokens,
             modelLimitResolver: resolver,
           });
@@ -1155,7 +1163,7 @@ export class AIChatQueryLoop {
         await this.deps.streamChatCompletion(
           {
             messages,
-            model: input.request.model,
+            model: effectiveModel,
             temperature: input.request.temperature,
             max_tokens: currentMaxTokens,
             stream: true,
@@ -2396,6 +2404,10 @@ export class AIChatQueryLoop {
         // persisted recoveryMetadata.
         if (result.action.type === "fallback_model") {
           recoveryState = result.updatedState;
+          // Keep dispatch + preflight consistent: subsequent rounds in this
+          // turn (e.g. outer run() retry) resolve limits against the fallback
+          // model, not the original (§8.1 re-resolve after fallback).
+          effectiveModel = result.action.fallbackModel;
           eventSink.emit({
             type: "recovery_status",
             conversationId: input.conversationId,

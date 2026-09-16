@@ -12,11 +12,15 @@ vi.mock("electron", () => ({
 }));
 
 // Controllable AI-enabled state.
+// ES class: production code constructs Token with `new` (AIProviderResolver's
+// default ctor arg); a vi.fn() factory is not constructable under Vitest 4.
 const mockState = vi.hoisted(() => ({ aiEnabled: "true" }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
-  })),
+  Token: class {
+    getValue(): string {
+      return mockState.aiEnabled;
+    }
+  },
 }));
 // Override USER_AI_ENABLED to a literal so the Token mock matches.
 vi.mock("@/config/usersetting", async (importOriginal) => {
@@ -28,13 +32,34 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
   };
 });
 
+// Deterministic chat-availability resolver: hosted + usable exactly when the
+// mocked USER_AI_ENABLED flag is on. Production AIProviderResolver reads
+// provider settings/secrets that this suite does not stub.
+vi.mock("@/service/aiProvider/AIProviderResolver", () => ({
+  AIProviderResolver: class {
+    resolveForChat() {
+      if (mockState.aiEnabled === "true") {
+        return { canUse: true, kind: "hosted" };
+      }
+      return {
+        canUse: false,
+        kind: "hosted",
+        message: "AI is not enabled",
+        reason: "hosted_subscription_required",
+      };
+    }
+  },
+}));
+
 // Mock the compact agent — the heart of what we're testing.
+// ES class: getCompactAgent() constructs it with `new`; a vi.fn() factory is
+// not constructable under Vitest 4.
 const mockRunFullCompact = vi.hoisted(() => vi.fn());
 vi.mock("@/service/AIChatCompactAgentService", () => ({
-  AIChatCompactAgentService: vi.fn().mockImplementation(() => ({
-    runFullCompact: mockRunFullCompact,
-    enqueueSessionMemoryUpdate: vi.fn().mockResolvedValue(undefined),
-  })),
+  AIChatCompactAgentService: class {
+    runFullCompact = mockRunFullCompact;
+    enqueueSessionMemoryUpdate = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 // Stub remaining modules that the IPC file imports at load time.
@@ -60,7 +85,9 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
-    AiChatApi: vi.fn().mockImplementation(() => ({})),
+    // ES class: getCompactAgent() constructs AiChatApi via `new` inside
+    // AIChatModelCatalogService; a vi.fn() factory is not constructable.
+    AiChatApi: class {},
   };
 });
 

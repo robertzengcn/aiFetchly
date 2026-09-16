@@ -55,7 +55,7 @@ import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatArchiveSearchFragmentModel } from "@/model/AIChatArchiveSearchFragment.model";
-import { encodeSourceId } from "@/service/AIChatArchiveCursorCodec";
+import { encodeSourceId, decodeSourceId } from "@/service/AIChatArchiveCursorCodec";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 
 function resetDbSingleton(): void {
@@ -367,14 +367,12 @@ describe("AIChatHistoryRetrievalService", () => {
       expect(res.errorCode).toBe("SOURCE_CHANGED");
     });
 
-    it("truncates an over-cap excerpt and marks hasMore", async () => {
+    it("rejects an over-cap excerpt with actionable feedback (no silent narrowing)", async () => {
       const stateModel = new AIChatArchiveStateModel(tmpDir);
       const state = await stateModel.ensureState("conv-res-4");
       const row = await seedMessages("conv-res-4", [
         { role: "assistant", content: "x".repeat(10_000), ts: 1_000 },
       ]);
-      const capChars =
-        AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxExcerptTokens * 4;
       const sid = encodeSourceId({
         v: 1,
         epoch: state.epoch,
@@ -389,10 +387,12 @@ describe("AIChatHistoryRetrievalService", () => {
         [sid],
         "turn-4"
       );
-      expect(res.resolved).toHaveLength(1);
-      expect(res.resolved[0].text.length).toBe(capChars);
-      expect(res.resolved[0].hasMore).toBe(true);
-      expect(res.rejected).toHaveLength(0);
+      // 10,000 chars ≈ 2,500 tokens exceeds the 2,000-token per-excerpt cap:
+      // rejected (FR-10 — the user narrows the selection), never silently cut
+      // to a prefix. The draft survives for retry.
+      expect(res.resolved).toHaveLength(0);
+      expect(res.rejected).toEqual([sid]);
+      expect(res.errorCode).toBe("CONTEXT_REQUIRED_CONTENT_TOO_LARGE");
     });
 
     it("stops at the per-turn selection total cap and rejects the rest", async () => {
@@ -400,40 +400,35 @@ describe("AIChatHistoryRetrievalService", () => {
       const state = await stateModel.ensureState("conv-res-5");
       const totalCapTokens =
         AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxTotalTokens;
-      const perExcerptTokens =
-        AI_CHAT_RECOVERABLE_DEFAULTS.selectionMaxExcerptTokens;
-      // Each excerpt resolves at the per-excerpt cap (2,000 tokens). Five of
-      // them hit the 8,000 per-turn total exactly after 4, so the 5th is
-      // rejected — and the boundary math below pins why the split is at 4/1.
-      const n = 5;
+      // Each excerpt is 6,000 chars ≈ 1,500 tokens (under the 2,000 per-excerpt
+      // cap). Six fit the per-excerpt rule but total 9,000 > 8,000, so the
+      // first five are accepted and the sixth is rejected with an actionable
+      // capacity code — the model receives precisely the accepted passages.
+      const n = 6;
       const rowIds = await seedMessages(
         "conv-res-5",
         Array.from({ length: n }, (_, i) => ({
           role: "assistant",
-          content: `excerpt ${i} ` + "z".repeat(10_000),
+          content: `excerpt ${i} ` + "z".repeat(6_000),
           ts: 1_000 + i,
         }))
       );
-      // Intervals wide enough that each excerpt hits the per-excerpt cap.
-      const sids = rowIds.map((rowId, i) =>
+      const sids = rowIds.map((rowId) =>
         encodeSourceId({
           v: 1,
           epoch: state.epoch,
           revision: state.sourceRevision,
           rowId,
           field: "content",
-          startCodePoint: i,
-          endCodePoint: i + 20_000,
+          startCodePoint: 0,
+          endCodePoint: 6_010,
         })
       );
       const res = await service.resolveSelections("conv-res-5", sids, "turn-5");
-      // Boundary math: n-1 excerpts fill the total cap exactly, the nth
-      // crosses it and is rejected.
-      expect(perExcerptTokens * (n - 1)).toBe(totalCapTokens);
-      expect(perExcerptTokens * n).toBeGreaterThan(totalCapTokens);
       expect(res.resolved).toHaveLength(n - 1);
       expect(res.rejected).toEqual([sids[n - 1]]);
-      expect(res.errorCode).toBe("SOURCE_CHANGED");
+      expect(res.errorCode).toBe("CONTEXT_REQUIRED_CONTENT_TOO_LARGE");
+      expect(totalCapTokens).toBe(8_000);
     });
 
     it("tombstoned scope rejects every reference with HISTORY_SCOPE_INVALID", async () => {
@@ -506,6 +501,16 @@ describe("AIChatHistoryRetrievalService", () => {
   });
 });
 
+/** FNV-1a 32-bit query hash — mirrors the archive's cursor query binding. */
+function fnv1a(query: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < query.length; i++) {
+    h ^= query.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
 /** Build a search cursor for another conversation to test scope rejection. */
 function encodeDummySearchCursor(conversationId: string): string {
   return Buffer.from(
@@ -521,3 +526,314 @@ function encodeDummySearchCursor(conversationId: string): string {
     "utf8"
   ).toString("base64url");
 }
+
+describe("AIChatHistoryRetrievalService bounded reads (FR-03/FR-04)", () => {
+  let archive: AIChatArchiveModule;
+  let service: AIChatHistoryRetrievalService;
+
+  beforeAll(() => {
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  beforeEach(async () => {
+    resetDbSingleton();
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    archive = new AIChatArchiveModule();
+    service = new AIChatHistoryRetrievalService(archive);
+  });
+
+  afterEach(() => {
+    resetDbSingleton();
+  });
+
+  it("recovers an oversized message across bounded calls with continuation", async () => {
+    const big = "0123456789".repeat(3_000); // 30,000 chars ≈ 7,500 tokens
+    const rowIds = await seedMessages("conv-big", [
+      { role: "user", content: big, ts: 1_000 },
+    ]);
+    await indexConversation("conv-big");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-big"
+    );
+    const sid = encodeSourceId({
+      v: 1,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      rowId: rowIds[0],
+      field: "content",
+      startCodePoint: 0,
+      endCodePoint: 30_000,
+    });
+    // First page is bounded (default 4,000 tokens) with a continuation.
+    const first = await service.read({
+      conversationId: "conv-big",
+      args: { source_id: sid },
+      turnId: "t-big",
+    });
+    expect(first.truncated).toBe(true);
+    expect(first.nextCursor).toBeTruthy();
+    expect(first.records).toHaveLength(1);
+    // Walk the continuation to recover every fragment, then reassemble.
+    let recovered = first.records[0].text;
+    let cursor = first.nextCursor;
+    let pages = 1;
+    while (cursor && pages < 10) {
+      const next = await service.read({
+        conversationId: "conv-big",
+        args: { source_id: sid, cursor },
+        turnId: `t-big-${pages}`,
+      });
+      recovered += next.records[0]?.text ?? "";
+      cursor = next.nextCursor;
+      pages += 1;
+      if (!next.truncated) break;
+    }
+    expect(cursor).toBeNull();
+    expect(recovered).toBe(big);
+  });
+
+  it("does not duplicate evidence across repeated reads (interval dedup)", async () => {
+    await seedMessages("conv-dedup", [
+      { role: "user", content: "dedup sentinel phrase", ts: 1_000 },
+    ]);
+    await indexConversation("conv-dedup");
+    const turn = "t-dedup";
+    const first = await service.search({
+      conversationId: "conv-dedup",
+      query: "dedup sentinel",
+      turnId: turn,
+    });
+    expect(first.records.length).toBeGreaterThan(0);
+    const second = await service.search({
+      conversationId: "conv-dedup",
+      query: "dedup sentinel",
+      turnId: turn,
+    });
+    // Same turn, same interval already merged → no duplicate passage.
+    expect(second.records).toHaveLength(0);
+  });
+
+  it("rejects a forged cross-conversation source ID without leaking content", async () => {
+    await seedMessages("conv-secret", [
+      { role: "user", content: "secret cross conversation data", ts: 1_000 },
+    ]);
+    await indexConversation("conv-secret");
+    await seedMessages("conv-victim", [
+      { role: "user", content: "victim conversation data", ts: 1_000 },
+    ]);
+    await indexConversation("conv-victim");
+    const secretState = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-secret"
+    );
+    const secretRows = await seedMessages("conv-secret-2", [
+      { role: "user", content: "unused", ts: 1_000 },
+    ]);
+    void secretRows;
+    // Forge: take a valid source ID shape from conv-secret's epoch but resolve
+    // it against conv-victim. Directly encode a row from conv-secret.
+    const repo =
+      SqliteDb.getInstance(tmpDir).connection.getRepository(AIChatMessageEntity);
+    const secretRow = await repo.findOne({
+      where: { conversationId: "conv-secret" },
+    });
+    const forged = encodeSourceId({
+      v: 1,
+      epoch: secretState.epoch,
+      revision: secretState.sourceRevision,
+      rowId: secretRow!.id,
+      field: "content",
+      startCodePoint: 0,
+      endCodePoint: 10,
+    });
+    const res = await service.read({
+      conversationId: "conv-victim",
+      args: { source_id: forged },
+    });
+    expect(res.records).toHaveLength(0);
+    expect(res.errorCode).toBe("HISTORY_SCOPE_INVALID");
+    expect(JSON.stringify(res)).not.toContain("secret cross conversation");
+  });
+
+  it("preserves nonzero offsets end to end (search → read → select round trip)", async () => {
+    // A 5,000-code-point message splits into two indexed fragments with a
+    // 128-code-point overlap; the unique token sits only in the second
+    // fragment (offset 3,968). A prefix-resolving bug would return the message
+    // head instead of the displayed passage.
+    const token = "UNIQUE-LATER-TOKEN-xyz-789";
+    const content = "p".repeat(4_500) + token + "q".repeat(400);
+    await seedMessages("conv-offset", [
+      { role: "user", content, ts: 1_000 },
+    ]);
+    await indexConversation("conv-offset");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-offset"
+    );
+    const hit = await service.search({
+      conversationId: "conv-offset",
+      query: token,
+      turnId: "t-off-1",
+    });
+    expect(hit.records.length).toBeGreaterThan(0);
+    const rec = hit.records[0];
+    expect(rec.text).toContain(token);
+    // Bounded fragment, not the whole 5,000-char message: the excerpt carries
+    // the exact [start, end) span of the displayed passage.
+    expect(rec.text.length).toBeLessThan(content.length);
+    const span = decodeSourceId(rec.sourceId, state.epoch);
+    expect(span).not.toBeNull();
+    expect(span!.startCodePoint).toBeGreaterThan(0);
+    expect(span!.endCodePoint).toBeLessThanOrEqual(5_000);
+    // The resolved slice is byte-identical to the stored content range.
+    expect(rec.text).toBe(content.slice(span!.startCodePoint, span!.endCodePoint));
+    // Read resolves the same exact passage, not the message prefix.
+    const read = await service.read({
+      conversationId: "conv-offset",
+      args: { source_id: rec.sourceId },
+      turnId: "t-off-2",
+    });
+    expect(read.records[0].text).toBe(rec.text);
+    // Selection acceptance carries the identical passage once.
+    const sel = await service.resolveSelections(
+      "conv-offset",
+      [rec.sourceId],
+      "t-off-3"
+    );
+    expect(sel.resolved).toHaveLength(1);
+    expect(sel.resolved[0].text).toBe(rec.text);
+  });
+
+  it("rejects a changed-query cursor without widening scope", async () => {
+    await seedMessages("conv-cursor", [
+      { role: "user", content: "cursor binding probe alpha", ts: 1_000 },
+    ]);
+    await indexConversation("conv-cursor");
+    const first = await service.search({
+      conversationId: "conv-cursor",
+      query: "alpha",
+      turnId: "t-cur-1",
+    });
+    expect(first.records.length).toBeGreaterThan(0);
+    // Reuse is impossible without a cursor here (single page), so craft the
+    // negative case directly: a cursor minted for another query must fail.
+    const other = await service.search({
+      conversationId: "conv-cursor",
+      query: "alpha",
+      cursor: encodeDummySearchCursor("conv-cursor"),
+      turnId: "t-cur-2",
+    });
+    expect(other.errorCode).toBe("HISTORY_SCOPE_INVALID");
+  });
+
+  it("recovers budget-withheld search records across resumed calls without replay", async () => {
+    // Four ~6,000-char passages (≈1,500 tokens each): the 2,000-token
+    // per-call cap fits exactly one per call while the backend page holds all
+    // four (exhausted, nextCursor null). Before intra-page resume cursors,
+    // re-requesting replayed the same page and truncated identically, so the
+    // withheld records were unreachable within and across turns.
+    const token = "budget-resume-probe";
+    await seedMessages(
+      "conv-resume",
+      [0, 1, 2, 3].map((i) => ({
+        role: "user",
+        content: `${token} passage ${i} ` + "x".repeat(6_000),
+        ts: 1_000 + i,
+      }))
+    );
+    await indexConversation("conv-resume");
+    const turn = "t-resume";
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    // Bounded walk: every call must advance the cursor (or end it), so more
+    // than 6 calls proves a replay loop.
+    for (let calls = 0; calls < 6; calls++) {
+      const res = await service.search({
+        conversationId: "conv-resume",
+        query: token,
+        cursor,
+        turnId: turn,
+        limit: 20,
+      });
+      for (const r of res.records) seen.push(r.text);
+      cursor = res.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    // Every withheld passage recovered exactly once: cursors advanced instead
+    // of looping, and nothing was dropped or duplicated.
+    expect(seen).toHaveLength(4);
+    expect(new Set(seen).size).toBe(4);
+    for (let i = 0; i < 4; i++) {
+      expect(seen.join("|")).toContain(`passage ${i}`);
+    }
+  });
+
+  it("rejects a revision-less (legacy) search cursor instead of grandfathering it", async () => {
+    await seedMessages("conv-legacy-cursor", [
+      { role: "user", content: "legacy cursor probe alpha", ts: 1_000 },
+    ]);
+    await indexConversation("conv-legacy-cursor");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-legacy-cursor"
+    );
+    // A cursor without a revision field (pre-binding issuance or hand-crafted)
+    // must fail closed once a revision is expected — never bypass the binding.
+    const legacy = Buffer.from(
+      JSON.stringify({
+        v: 1,
+        conversationId: "conv-legacy-cursor",
+        epoch: state.epoch,
+        queryHash: fnv1a("alpha"),
+        lastSourceRowId: 0,
+        lastStartCodePoint: 0,
+      }),
+      "utf8"
+    ).toString("base64url");
+    const res = await service.search({
+      conversationId: "conv-legacy-cursor",
+      query: "alpha",
+      cursor: legacy,
+      turnId: "t-legacy",
+    });
+    expect(res.records).toHaveLength(0);
+    expect(res.errorCode).toBe("HISTORY_SCOPE_INVALID");
+  });
+
+  it("reaches later ranges via continuation (range pagination starts at from)", async () => {
+    const rowIds = await seedMessages(
+      "conv-range",
+      Array.from({ length: 10 }, (_, i) => ({
+        role: "user",
+        content: `range message number ${i}`,
+        ts: 1_000 + i,
+      }))
+    );
+    await indexConversation("conv-range");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-range"
+    );
+    const sid = (rowId: number): string =>
+      encodeSourceId({
+        v: 1,
+        epoch: state.epoch,
+        revision: state.sourceRevision,
+        rowId,
+        field: "content",
+        startCodePoint: 0,
+        endCodePoint: 100,
+      });
+    // Range over the LAST three rows: proves pagination starts at `from`,
+    // not at the conversation head.
+    const res = await service.read({
+      conversationId: "conv-range",
+      args: {
+        from_source_id: sid(rowIds[7]),
+        to_source_id: sid(rowIds[9]),
+      },
+      turnId: "t-range",
+    });
+    const texts = res.records.map((r) => r.text).join("|");
+    expect(texts).toContain("range message number 7");
+    expect(texts).toContain("range message number 9");
+    expect(texts).not.toContain("range message number 0");
+  });
+});

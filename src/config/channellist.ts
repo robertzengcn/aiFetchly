@@ -388,6 +388,8 @@ export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
 export const AI_CHAT_V2_HISTORY_SEARCH = "ai-chat-v2:history-search";
 /** Renderer->Main: read archived history source slices (§13.1). */
 export const AI_CHAT_V2_HISTORY_READ = "ai-chat-v2:history-read";
+/** Renderer->Main: paginated browse of archived history (local, §13.1). */
+export const AI_CHAT_V2_HISTORY_BROWSE = "ai-chat-v2:history-browse";
 /** Renderer->Main: resolve user-selected passages to exact excerpts (§13.1). */
 export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
   "ai-chat-v2:history-resolve-selections";

@@ -242,8 +242,14 @@ export class AIChatContextAssembler {
       }
     }
 
-    const historyRows = await this.v2.getConversationMessages(
-      input.conversationId
+    const historyRows = await this.v2.getRecentMessages(
+      input.conversationId,
+      // Bounded recent fetch (FR-01/FR-07): enough rows to cover the text
+      // window plus recent tool_call/tool_result rows for pairing. Never a
+      // full-conversation load — archive size must not determine memory or
+      // query cost (PRD §10, AC-10). Tool evidence beyond this window stays
+      // recoverable via conversation_tool_history lookup.
+      (input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW) * 4 + 64
     );
     const sorted = [...historyRows].sort((a, b) => {
       const t = a.timestamp.getTime() - b.timestamp.getTime();

@@ -145,9 +145,14 @@ describe("AIChatCompactionCoordinator", () => {
   });
 
   it("a second concurrent caller joins the same in-process run (no duplicate)", async () => {
+    // Five messages: the retained recent suffix keeps the newest three, so a
+    // compactable prefix exists (FR-05 retention must not starve compaction).
     await seedMessages("conv-2", [
       { role: "user", content: "a".repeat(2_000), ts: 1_000 },
       { role: "assistant", content: "b".repeat(2_000), ts: 2_000 },
+      { role: "user", content: "c".repeat(2_000), ts: 3_000 },
+      { role: "assistant", content: "d".repeat(2_000), ts: 4_000 },
+      { role: "user", content: "e".repeat(2_000), ts: 5_000 },
     ]);
     await indexConversation("conv-2");
 
@@ -191,9 +196,78 @@ describe("AIChatCompactionCoordinator", () => {
     tryResolve();
     const [r1, r2] = await Promise.all([p1, p2]);
     expect(r1.generationId).toBeTruthy();
+    // In-process dedup shares one promise: both callers observe the same
+    // completed run (no duplicate work — the summarizer ran once).
     expect(r2.generationId).toBe(r1.generationId);
+    expect(r2.runId).toBe(r1.runId);
     // The summarizer was invoked (dedup via in-process promise — once).
     expect(fn).toHaveBeenCalled();
+  }, 15_000);
+
+  it("reports joined (never completed-by-proxy) when a separate owner holds the durable claim", async () => {
+    await seedMessages("conv-2b", [
+      { role: "user", content: "durable one", ts: 1_000 },
+      { role: "assistant", content: "durable two", ts: 2_000 },
+      { role: "user", content: "durable three", ts: 3_000 },
+      { role: "assistant", content: "durable four", ts: 4_000 },
+      { role: "user", content: "durable five", ts: 5_000 },
+    ]);
+    await indexConversation("conv-2b");
+
+    let resolveFirst!: (v: string) => void;
+    const slow = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    const ownerA = new AIChatCompactionCoordinator();
+    const ownerB = new AIChatCompactionCoordinator();
+    const p1 = ownerA.requestCompaction("conv-2b", {
+      trigger: "auto",
+      summarize: slow,
+    });
+    // Wait until A's durable claim is installed, then join from B.
+    const { AIChatCompactionModule } = await import(
+      "@/modules/AIChatCompactionModule"
+    );
+    const probe = new AIChatCompactionModule();
+    for (let i = 0; i < 200 && !(await probe.getActiveRun("conv-2b")); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const p2 = ownerB.requestCompaction("conv-2b", {
+      trigger: "manual",
+      summarize: slow,
+    });
+    // Let the single section summarize exactly once, then both settle.
+    const tryResolve = () => {
+      if (resolveFirst) {
+        resolveFirst(
+          JSON.stringify({
+            version: 1,
+            synopsis: "durable summary",
+            decisions: [],
+            constraints: [],
+            pending: [],
+            toolOutcomes: [],
+            topics: [],
+          })
+        );
+      } else {
+        setTimeout(tryResolve, 5);
+      }
+    };
+    tryResolve();
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.state).toBe("completed");
+    // B joined another owner's active run (COMPACTION_BUSY): same run, zero
+    // sections of its own, and never "completed" for work it did not do
+    // (AC-08, §11.2 run states).
+    expect(r2.state).toBe("joined");
+    expect(r2.runId).toBe(r1.runId);
+    expect(r2.sectionsPacked).toBe(0);
+    expect(r2.generationId).toBeUndefined();
+    expect(slow).toHaveBeenCalledTimes(1);
   }, 15_000);
 
   it("rejects a tombstoned conversation with COMPACTION_CONTEXT_REJECTED", async () => {
@@ -233,7 +307,10 @@ describe("AIChatCompactionCoordinator", () => {
       signal: ac.signal,
     });
     ac.abort();
-    await expect(p).rejects.toThrow();
+    // Cancellation resolves to the "cancelled" run state (committed work is
+    // preserved, no new requests) rather than throwing (§11.6, FR-09).
+    const result = await p;
+    expect(result.state).toBe("cancelled");
     // The run state is cancelled.
     const status = await coordinator.getStatus("conv-4");
     expect(["cancelled", "failed", "queued"]).toContain(status?.state);
@@ -259,4 +336,134 @@ describe("AIChatCompactionCoordinator", () => {
     // Either completed (if it fit in one batch) or paused after 3 sections.
     expect(["completed", "paused"]).toContain(result.state);
   });
+
+  it("processes only new sources on a repeat run (incremental, no resend)", async () => {
+    await seedMessages("conv-6", [
+      { role: "user", content: "first message alpha", ts: 1_000 },
+      { role: "assistant", content: "reply one beta", ts: 2_000 },
+      { role: "user", content: "second message gamma", ts: 3_000 },
+      { role: "assistant", content: "reply two delta", ts: 4_000 },
+    ]);
+    await indexConversation("conv-6");
+
+    const first = fakeSummarizer();
+    const r1 = await coordinator.requestCompaction("conv-6", {
+      trigger: "manual",
+      summarize: first.fn,
+    });
+    expect(r1.state).toBe("completed");
+
+    // Append one eligible turn after the successful compaction.
+    await seedMessages("conv-6", [
+      { role: "user", content: "third message epsilon", ts: 5_000 },
+      { role: "assistant", content: "reply three zeta", ts: 6_000 },
+    ]);
+
+    const second = fakeSummarizer();
+    const r2 = await coordinator.requestCompaction("conv-6", {
+      trigger: "auto",
+      summarize: second.fn,
+    });
+    expect(["completed", "paused"]).toContain(r2.state);
+    // Normal incremental work never resends committed raw sections: no
+    // second-run prompt may contain the already-covered first message.
+    const secondPrompts = second.fn.mock.calls.map((c) => String(c[1]));
+    expect(secondPrompts.length).toBeGreaterThan(0);
+    for (const p of secondPrompts) {
+      expect(p).not.toContain("first message alpha");
+    }
+  }, 15_000);
+
+  it("repairs one malformed output within the bounded attempt ceiling", async () => {
+    await seedMessages("conv-7", [
+      { role: "user", content: "repair me please", ts: 1_000 },
+      { role: "assistant", content: "repair reply one", ts: 2_000 },
+      { role: "user", content: "repair followup", ts: 3_000 },
+      { role: "assistant", content: "repair reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-7");
+
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return "not json at all {{{";
+      return JSON.stringify({
+        version: 1,
+        synopsis: "repaired synopsis",
+        decisions: [],
+        constraints: [],
+        pending: [],
+        toolOutcomes: [],
+        topics: [],
+      });
+    });
+    const result = await coordinator.requestCompaction("conv-7", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    // One structured-output repair inside the 4-attempt ceiling → success.
+    expect(result.state).toBe("completed");
+    expect(calls).toBe(2);
+  }, 15_000);
+
+  it("a retry after a batch-limit pause resumes with a new run instead of joining", async () => {
+    // Seed enough messages to require several sections at a small budget.
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "z".repeat(800),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-9", rows);
+    await indexConversation("conv-9");
+
+    const first = fakeSummarizer();
+    const r1 = await coordinator.requestCompaction("conv-9", {
+      trigger: "manual",
+      summarize: first.fn,
+      sourceCapacityTokens: 100, // tiny → many sections
+      maxSectionsPerBatch: 1,
+    });
+    // One section per batch with far more work remaining → resumable pause.
+    expect(r1.state).toBe("paused");
+    expect(r1.sectionsPacked).toBe(1);
+
+    // A retry inside the paused run's lease window must NOT join the paused
+    // run (nothing is running to finish it — joining returns zero progress
+    // forever). It starts a new run resuming from committed coverage.
+    const second = fakeSummarizer();
+    const r2 = await coordinator.requestCompaction("conv-9", {
+      trigger: "manual",
+      summarize: second.fn,
+      sourceCapacityTokens: 100,
+      maxSectionsPerBatch: 1,
+    });
+    expect(r2.state).not.toBe("joined");
+    expect(r2.runId).not.toBe(r1.runId);
+    expect(r2.sectionsPacked).toBeGreaterThan(0);
+    expect(["paused", "completed"]).toContain(r2.state);
+  }, 15_000);
+
+  it("fails closed without an all-history fallback after repeated invalid output", async () => {
+    await seedMessages("conv-8", [
+      { role: "user", content: "always bad output", ts: 1_000 },
+      { role: "assistant", content: "bad reply one", ts: 2_000 },
+      { role: "user", content: "bad followup", ts: 3_000 },
+      { role: "assistant", content: "bad reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-8");
+
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      return JSON.stringify({ version: 1, synopsis: "x".repeat(5_000) });
+    });
+    await expect(
+      coordinator.requestCompaction("conv-8", {
+        trigger: "manual",
+        summarize: fn,
+      })
+    ).rejects.toThrow();
+    // Bounded attempts: at most 4 model calls per section per run.
+    expect(calls).toBeLessThanOrEqual(4);
+  }, 15_000);
 });

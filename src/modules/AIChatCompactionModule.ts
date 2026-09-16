@@ -64,6 +64,22 @@ export class AIChatCompactionModule extends BaseModule {
     return this.runModel.pauseRun(input);
   }
 
+  /** Persist the bounded working overview + merged ordinal (§5.3). */
+  async saveWorkingOverview(
+    input: Parameters<AIChatCompactionRunModel["saveWorkingOverview"]>[0]
+  ) {
+    await this.ensureConnection();
+    return this.runModel.saveWorkingOverview(input);
+  }
+
+  /** Complete a run with no new publication (nothing eligible — §11.2). */
+  async completeRun(
+    input: Parameters<AIChatCompactionRunModel["completeRun"]>[0]
+  ) {
+    await this.ensureConnection();
+    return this.runModel.completeRun(input);
+  }
+
   /** Cancel a run and bump the fence (§11.6). */
   async cancelRun(input: Parameters<AIChatCompactionRunModel["cancelRun"]>[0]) {
     await this.ensureConnection();

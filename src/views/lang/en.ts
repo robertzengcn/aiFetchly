@@ -2859,6 +2859,10 @@ export default {
   },
   aiChatHistory: {
     drawer_title: "Conversation History",
+    close: "Close history",
+    tab_browse: "Browse",
+    tab_search: "Search",
+    search_button: "Search",
     search_placeholder: "Search archived history…",
     search_query_too_long: "Search query must be 200 characters or fewer.",
     no_match: "No matching messages found.",
@@ -2866,6 +2870,7 @@ export default {
     index_incomplete:
       "History indexing is still in progress; results may be incomplete.",
     read_more: "Read more",
+    go_to_message: "Go to message",
     select_passage: "Select passage",
     selected_context: "Selected context",
     estimated_cost: "Estimated cost: {tokens} tokens",
@@ -2880,10 +2885,23 @@ export default {
     status_idle: "Idle",
     status_queued: "Queued",
     status_running: "Compacting…",
+    status_joined: "Joined",
     status_paused: "Paused",
     status_completed: "Compacted",
     status_failed: "Compaction failed",
     status_cancelled: "Cancelled",
+    panel_title: "Compaction",
+    in_progress_note: "Working in bounded batches — safe to keep chatting.",
+    view_history: "View earlier messages",
+    completed_detail:
+      "Earlier messages remain searchable. The active view keeps recent turns plus a bounded overview.",
+    failed_detail:
+      "Compaction stopped with an error. Your conversation is intact — retry when ready.",
+    cancelled_detail:
+      "Compaction was cancelled. Saved sections are kept for the next run.",
+    joined_detail: "Joined an already-running compaction for this conversation.",
+    running_detail: "Compacting earlier history in bounded sections.",
+    idle_detail: "Compaction is idle.",
     compaction_in_progress:
       "Compaction in progress ({packed} sections packed).",
     compaction_paused: "Compaction paused. It will resume automatically.",

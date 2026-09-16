@@ -2861,6 +2861,10 @@ export default {
   },
   aiChatHistory: {
     drawer_title: "Historique de conversation",
+    close: "Fermer l'historique",
+    tab_browse: "Parcourir",
+    tab_search: "Rechercher",
+    search_button: "Rechercher",
     search_placeholder: "Rechercher dans l'historique archivé…",
     search_query_too_long: "La recherche ne doit pas dépasser 200 caractères.",
     no_match: "Aucun message correspondant trouvé.",
@@ -2869,6 +2873,7 @@ export default {
     index_incomplete:
       "L'indexation de l'historique est en cours ; les résultats peuvent être incomplets.",
     read_more: "Lire la suite",
+    go_to_message: "Aller au message",
     select_passage: "Sélectionner le passage",
     selected_context: "Contexte sélectionné",
     estimated_cost: "Coût estimé : {tokens} tokens",
@@ -2884,10 +2889,23 @@ export default {
     status_idle: "Inactif",
     status_queued: "En file",
     status_running: "Compactage…",
+    status_joined: "Rejoint",
     status_paused: "En pause",
     status_completed: "Compacté",
     status_failed: "Échec du compactage",
     status_cancelled: "Annulé",
+    panel_title: "Compactage",
+    in_progress_note: "Traitement par lots limités — vous pouvez continuer à discuter.",
+    view_history: "Voir les messages précédents",
+    completed_detail:
+      "Les messages précédents restent consultables. La vue active conserve les tours récents et un aperçu limité.",
+    failed_detail:
+      "Le compactage s'est arrêté sur une erreur. Votre conversation est intacte — réessayez quand vous voulez.",
+    cancelled_detail:
+      "Compactage annulé. Les sections enregistrées sont conservées pour la prochaine exécution.",
+    joined_detail: "Compactage déjà en cours rejoint pour cette conversation.",
+    running_detail: "Compactage de l'historique précédent par sections limitées.",
+    idle_detail: "Le compactage est inactif.",
     compaction_in_progress:
       "Compactage en cours ({packed} sections empaquetées).",
     compaction_paused: "Compactage en pause. Il reprendra automatiquement.",

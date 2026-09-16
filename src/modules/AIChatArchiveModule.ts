@@ -104,14 +104,18 @@ export class AIChatArchiveModule extends BaseModule {
         indexComplete: false,
       };
     }
-    // Decode the continuation cursor (scoped to conversation + epoch).
+    // Decode the continuation cursor (scoped to conversation + epoch, bound
+    // to this query/filter + revision — §§4.2, 7). A changed query, stale
+    // revision, or foreign cursor fails closed without exposing content.
     let afterRowId = 0;
     let afterStart = 0;
     if (request.cursor) {
       const decoded = decodeScanCursor(
         request.cursor,
         request.conversationId,
-        state.epoch
+        state.epoch,
+        hashQuery(request.query),
+        state.sourceRevision
       );
       if (!decoded) {
         // A modified/foreign cursor must not widen scope — reject loudly
@@ -119,7 +123,7 @@ export class AIChatArchiveModule extends BaseModule {
         // scope") so the retrieval service maps HISTORY_SCOPE_INVALID.
         throw new RecoverableHistoryError(
           "HISTORY_SCOPE_INVALID",
-          "search cursor failed scope validation (conversation/epoch mismatch or malformed payload)"
+          "search cursor failed scope validation (conversation/epoch/query/revision mismatch or malformed payload)"
         );
       }
       afterRowId = decoded.lastSourceRowId;
@@ -138,23 +142,39 @@ export class AIChatArchiveModule extends BaseModule {
     );
 
     // Verify each hit against the original source + merge overlap duplicates.
+    // Offsets are preserved exactly (code points, not UTF-16 units): a hit
+    // later in a message resolves to the displayed passage, never the prefix
+    // (FR-01–03, AC-01/AC-18). Verification checks the returned fragment
+    // itself — a match elsewhere in the message is insufficient.
     const seen = new Set<string>();
     const records: HistoryExcerpt[] = [];
     for (const hit of scan.hits) {
       const dedupKey = `${hit.sourceRowId}:${hit.field}:${hit.startCodePoint}`;
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
-      const msg = await msgModel.readMessageByRowId(hit.sourceRowId);
+      const msg = await msgModel.readMessageInConversation(
+        request.conversationId,
+        hit.sourceRowId
+      );
       if (!msg) continue; // SOURCE_UNAVAILABLE — skip, don't fabricate.
-      // Verify the query still occurs in the original (handles edits).
-      const text = msg.content ?? "";
-      const verify = text.includes(request.query);
+      // Verify the fragment slice itself contains the query (handles edits);
+      // cross-fragment phrase matches were validated at index time via the
+      // 128-code-point overlap (§7.1).
+      const fragText = sliceByCodePoints(
+        msg.content ?? "",
+        hit.startCodePoint,
+        hit.endCodePoint
+      );
+      const verify = fragText.includes(request.query);
       records.push(
-        this.toExcerpt(
+        this.toExcerptWithSpan(
           msg,
           state.epoch,
           state.sourceRevision,
-          hit.fragmentText,
+          fragText,
+          hit.field === "tool_receipt" ? "tool_receipt" : "content",
+          hit.startCodePoint,
+          hit.endCodePoint,
           verify
         )
       );
@@ -187,6 +207,10 @@ export class AIChatArchiveModule extends BaseModule {
    * Bounded substring read of a single message by code-point offsets (§6).
    * Returns null when the row no longer exists (caller maps to
    * SOURCE_UNAVAILABLE). Does not normalize exact read text.
+   *
+   * Conversation-scoped overload below is required for all new callers
+   * (AC-12): the row-ID-only form is retained for coordinator-internal reads
+   * where the conversation was already validated.
    */
   async readSourceSlice(
     rowId: number,
@@ -196,6 +220,26 @@ export class AIChatArchiveModule extends BaseModule {
     await this.ensureConnection();
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
     return msgModel.readSourceSlice(rowId, startCodePoint, endCodePoint);
+  }
+
+  /**
+   * Conversation-scoped bounded substring read (AC-12). Rejects rows from
+   * another conversation without exposing content.
+   */
+  async readSourceSliceInConversation(
+    conversationId: string,
+    rowId: number,
+    startCodePoint: number,
+    endCodePoint: number
+  ): Promise<string | null> {
+    await this.ensureConnection();
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    return msgModel.readSourceSliceInConversation(
+      conversationId,
+      rowId,
+      startCodePoint,
+      endCodePoint
+    );
   }
 
   /**
@@ -258,6 +302,11 @@ export class AIChatArchiveModule extends BaseModule {
    * Resolve one opaque source ID against the current epoch/revision.
    * Returns the message row (or null when the row is gone) plus whether the
    * reference was refreshed (revision changed — SOURCE_CHANGED per §4.2).
+   *
+   * Conversation-scoped (AC-12): the row is re-read with the conversation ID
+   * so a forged reference to another conversation's row fails closed without
+   * leaking foreign content — checking only the supplied epoch is not enough
+   * because source IDs are editable base64 data.
    */
   async resolveOne(
     conversationId: string,
@@ -275,7 +324,10 @@ export class AIChatArchiveModule extends BaseModule {
     const payload = decodeSourceId(sourceId, state.epoch);
     if (!payload) return null;
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
-    const message = await msgModel.readMessageByRowId(payload.rowId);
+    const message = await msgModel.readMessageInConversation(
+      conversationId,
+      payload.rowId
+    );
     return {
       message,
       refreshed: payload.revision !== state.sourceRevision,
@@ -374,10 +426,16 @@ export class AIChatArchiveModule extends BaseModule {
     );
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
     const callMessage = callEntry
-      ? await msgModel.readMessageByRowId(callEntry.sourceRowId)
+      ? await msgModel.readMessageInConversation(
+          conversationId,
+          callEntry.sourceRowId
+        )
       : null;
     const resultMessage = resultEntry
-      ? await msgModel.readMessageByRowId(resultEntry.sourceRowId)
+      ? await msgModel.readMessageInConversation(
+          conversationId,
+          resultEntry.sourceRowId
+        )
       : null;
     return {
       callMessage,
@@ -425,13 +483,18 @@ export class AIChatArchiveModule extends BaseModule {
         rejected.push(sid);
         continue;
       }
+      // Conversation-scoped read (AC-12): forged cross-conversation row IDs
+      // fail closed here even when the epoch matches.
+      const msg = await msgModel.readMessageInConversation(
+        conversationId,
+        payload.rowId
+      );
+      if (!msg) {
+        rejected.push(sid);
+        continue;
+      }
       // Revision mismatch ⇒ SOURCE_CHANGED (§4.2). Identity may still resolve.
       if (payload.revision !== state.sourceRevision) {
-        const msg = await msgModel.readMessageByRowId(payload.rowId);
-        if (!msg) {
-          rejected.push(sid);
-          continue;
-        }
         // Refresh the reference at the current revision.
         const refreshed = this.toExcerpt(
           msg,
@@ -445,11 +508,6 @@ export class AIChatArchiveModule extends BaseModule {
           true
         );
         resolved.push(refreshed);
-        continue;
-      }
-      const msg = await msgModel.readMessageByRowId(payload.rowId);
-      if (!msg) {
-        rejected.push(sid);
         continue;
       }
       const text = sliceByCodePoints(
@@ -502,6 +560,41 @@ export class AIChatArchiveModule extends BaseModule {
       hasMore: false,
     };
   }
+
+  /**
+   * Map a verified source slice to a HistoryExcerpt whose opaque source ID
+   * carries the exact [start, end) code-point interval (FR-01–03). A nonzero
+   * offset round-trips: search → read → select returns the same exact text.
+   */
+  private toExcerptWithSpan(
+    msg: AIChatMessageEntity,
+    epoch: string,
+    revision: number,
+    text: string,
+    field: "content" | "tool_receipt",
+    startCodePoint: number,
+    endCodePoint: number,
+    exact: boolean
+  ): HistoryExcerpt {
+    return {
+      sourceId: encodeSourceId({
+        v: 1,
+        epoch,
+        revision,
+        rowId: msg.id,
+        field,
+        startCodePoint,
+        endCodePoint,
+      }),
+      messageId: msg.messageId,
+      role: msg.role,
+      timestamp: msg.timestamp.toISOString(),
+      text,
+      exact,
+      redacted: false,
+      hasMore: false,
+    };
+  }
 }
 
 // --- Search-cursor codec (scoped, versioned, opaque) -------------------------
@@ -537,7 +630,9 @@ function encodeScanCursor(payload: ScanCursorPayload): string {
 function decodeScanCursor(
   raw: string,
   expectedConversationId: string,
-  expectedEpoch: string
+  expectedEpoch: string,
+  expectedQueryHash?: string,
+  expectedRevision?: number
 ): ScanCursorPayload | null {
   if (raw.length === 0 || raw.length > 1024) return null;
   let json: string;
@@ -560,6 +655,21 @@ function decodeScanCursor(
   if (typeof p.queryHash !== "string") return null;
   if (typeof p.lastSourceRowId !== "number") return null;
   if (typeof p.lastStartCodePoint !== "number") return null;
+  // Bind the cursor to the active query/filter + revision (§§4.2, 7): a
+  // changed query or stale revision fails closed, never widens scope. A
+  // cursor without a revision field (pre-binding issuance or hand-crafted)
+  // is rejected whenever a revision is expected — no silent grandfathering.
+  if (
+    expectedQueryHash !== undefined &&
+    p.queryHash !== expectedQueryHash
+  ) {
+    return null;
+  }
+  if (expectedRevision !== undefined) {
+    if (typeof p.revision !== "number" || p.revision !== expectedRevision) {
+      return null;
+    }
+  }
   return {
     v: 1,
     conversationId: p.conversationId as string,

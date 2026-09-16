@@ -20,14 +20,20 @@
  * AbortSignal.
  */
 
+import { createHash } from "node:crypto";
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatSectionPacker } from "@/service/AIChatSectionPacker";
+import type {
+  PackedTextFragment,
+  PackedToolReceipt,
+} from "@/service/AIChatSectionPacker";
 import { AIChatSummaryValidator } from "@/service/AIChatSummaryValidator";
 import { AIChatCompactionPromptBuilder } from "@/service/AIChatCompactionPromptBuilder";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import { encodeCursor } from "@/service/AIChatArchiveCursorCodec";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import {
   RecoverableHistoryError,
@@ -64,7 +70,13 @@ export interface RequestCompactionInput {
 
 /** Result of requestCompaction. */
 export interface RequestCompactionResult {
-  readonly state: "completed" | "paused" | "cancelled" | "failed" | "skipped";
+  readonly state:
+    | "completed"
+    | "paused"
+    | "cancelled"
+    | "failed"
+    | "skipped"
+    | "joined";
   readonly generationId?: string;
   readonly sectionsPacked: number;
   readonly runId: string;
@@ -177,7 +189,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
     const maxSectionsPerBatch =
       input.maxSectionsPerBatch ??
       AI_CHAT_RECOVERABLE_DEFAULTS.maxSectionsPerBackgroundBatch;
-    const sourceCapacityTokens =
+    let sourceCapacityTokens =
       input.sourceCapacityTokens ??
       AI_CHAT_RECOVERABLE_DEFAULTS.sectionSourceTargetTokens;
 
@@ -193,14 +205,14 @@ export class AIChatCompactionCoordinator extends BaseModule {
     const epoch = state.epoch;
     const revision = state.sourceRevision;
 
-    // 2. Snapshot the terminal-turn end (high-water) + retained suffix start.
-    // The retained suffix starts at the high-water mark (recent turns are
-    // kept verbatim). The snapshot end is everything before it.
-    const snapshotEndTimestampMs = state.highWaterTimestampMs || 0;
-    const snapshotEndRowId = state.highWaterRowId || 0;
-    // Retained suffix: keep the last N complete turns (§4.3). For the
-    // snapshot, retained start = snapshot end (we compact everything strictly
-    // before the high-water mark).
+    // 2. Terminal-turn snapshot excluding the retained recent suffix (§4.3,
+    // FR-05/FR-09). Retain two completed turns when they fit plus the
+    // in-progress turn; the snapshot end is the retained suffix start, never
+    // the raw high-water mark. Authoritative turn projections via the archive;
+    // equal timestamps, unresolved tools, and messages appended during
+    // compaction cannot cause omissions (snapshot is frozen at claim).
+    const { snapshotEndTimestampMs, snapshotEndRowId } =
+      await this.computeSnapshotEnd(conversationId, state.highWaterTimestampMs ?? 0, state.highWaterRowId ?? 0);
     const retainedStartTimestampMs = snapshotEndTimestampMs;
     const retainedStartRowId = snapshotEndRowId;
 
@@ -220,9 +232,10 @@ export class AIChatCompactionCoordinator extends BaseModule {
     });
 
     if (claim.joinedExisting) {
-      // Another owner's run is active; return its status.
+      // Another owner's run is active — join it (COMPACTION_BUSY), never
+      // report completed for work we did not do (AC-08, §11.2 states).
       return {
-        state: "completed",
+        state: "joined",
         runId: claim.runId,
         sectionsPacked: 0,
       };
@@ -230,15 +243,36 @@ export class AIChatCompactionCoordinator extends BaseModule {
 
     let fence = claim.fence;
     const runId = claim.runId;
+
+    // 4. Resume from committed coverage + persisted staged checkpoints (§11,
+    // FR-07/FR-09, AC-05/AC-07). Load existing sections for this epoch/
+    // revision and the prior published overview so a restart reuses saved
+    // sections without duplicate coverage and a new turn processes only new
+    // sources.
+    const resume = await this.loadResumeState(
+      conversationId,
+      epoch,
+      revision,
+      state.activeGenerationId
+    );
+    let cursor: string | undefined = resume.startCursor;
+    let ordinal = resume.maxOrdinal;
+    let rollingOverview: SectionSummaryV1 | null = resume.priorOverview;
+    // Ordered summaries of sections represented by the rolling overview
+    // (prior published chain + newly merged), for final validation.
+    let representedCount = resume.priorRepresentedCount;
     let sectionsPacked = 0;
-    let cursor: string | undefined = undefined;
-    let ordinal = 0;
-    let lastSummary: SectionSummaryV1 | null = null;
-    let lastCoveredThroughTs = 0;
-    let lastCoveredThroughRowId = 0;
+    let lastCoveredThroughTs = resume.coveredThroughTs;
+    let lastCoveredThroughRowId = resume.coveredThroughRowId;
+    let sectionStartTs = resume.coveredThroughTs;
+    let sectionStartRowId = resume.coveredThroughRowId;
+    // Source IDs already represented (for overview reference chain + proving
+    // no resend of committed raw sections in normal incremental work).
+    const representedSourceIds = new Set<string>(resume.representedSourceIds);
 
     try {
-      // 4. Pack + summarize sections, bounded by the batch budget.
+      // 5. Pack + summarize sections, bounded by the batch budget.
+      let yielded = false;
       while (sectionsPacked < maxSectionsPerBatch) {
         // Cancellation check before each expensive operation.
         if (input.signal?.aborted) {
@@ -248,10 +282,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
             epoch,
             expectedFence: fence,
           });
-          throw new RecoverableHistoryError(
-            "COMPACTION_CONTEXT_REJECTED",
-            "compaction cancelled by signal"
-          );
+          return { state: "cancelled", runId, sectionsPacked };
         }
 
         // Renew the lease before the expensive pack + summarize (§11.3).
@@ -285,51 +316,120 @@ export class AIChatCompactionCoordinator extends BaseModule {
           break;
         }
 
-        ordinal += 1;
-        const sectionId = `sec-${runId}-${ordinal}`;
-        const workKey = `${epoch}:${ordinal}:${packResult.fragments.length}`;
-        const prompt = this.promptBuilder.buildSectionPrompt({
-          fragments: packResult.fragments,
-          receipts: packResult.receipts,
-          sectionLabel: `section-${ordinal}`,
-          priorSynopsis: lastSummary?.synopsis,
-        });
-
-        // Bounded provider timeout (§11.3).
-        const summaryTimeoutMs =
-          AI_CHAT_RECOVERABLE_DEFAULTS.providerTimeoutSeconds * 1000;
-        const rawSummary = await this.callWithTimeout(
-          input.summarize(prompt.systemPrompt, prompt.userPrompt),
-          summaryTimeoutMs,
-          input.signal
-        );
-
-        // Validate the summary locally (§10).
-        const validSourceIds = new Set(prompt.suppliedSourceIds);
-        const validation = this.validator.validate(
-          this.safeJsonParse(rawSummary),
-          validSourceIds
-        );
-        if (!validation.ok || !validation.summary) {
-          throw new RecoverableHistoryError(
-            "COMPACTION_OUTPUT_INVALID",
-            `section ${ordinal} summary validation failed: ${validation.errors.join(
-              "; "
-            )}`
-          );
-        }
-        lastSummary = validation.summary;
-
         // Determine the section's covered-through boundary.
         const lastFrag = packResult.fragments[packResult.fragments.length - 1];
-        lastCoveredThroughTs =
+        const coveredThroughTs =
           packResult.exclusionBoundary?.timestampMs ??
           (lastFrag ? Date.parse(lastFrag.timestamp) : 0);
-        lastCoveredThroughRowId =
+        const coveredThroughRowId =
           packResult.exclusionBoundary?.rowId ??
           (lastFrag ? lastFrag.sourceRowId : 0);
 
-        // Save section + checkpoint atomically (§11.4).
+        // Deterministic work identity (§11, FR-09): epoch/revision, source
+        // range + fragments, schema version. Retry of a saved section reuses
+        // it instead of duplicating coverage.
+        const workKey = this.computeWorkKey({
+          epoch,
+          revision,
+          startTs: sectionStartTs,
+          startRowId: sectionStartRowId,
+          endTs: coveredThroughTs,
+          endRowId: coveredThroughRowId,
+          fragments: packResult.fragments,
+          receipts: packResult.receipts,
+        });
+
+        // Reuse check: an identical saved section (same workKey) from this or
+        // a prior run is reused without another model call.
+        const reused = resume.sectionsByWorkKey.get(workKey);
+        if (reused) {
+          const reuseParsed = this.safeJsonParse(reused.summaryJson);
+          const reuseValid = this.validator.validate(
+            reuseParsed,
+            new Set(
+              packResult.fragments.map((f) => f.sourceId)
+            ),
+            AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens
+          );
+          if (reuseValid.ok && reuseValid.summary) {
+            cursor = packResult.nextCursor ?? undefined;
+            ordinal = Math.max(ordinal, reused.ordinal);
+            rollingOverview = await this.mergeOverview({
+              prior: rollingOverview,
+              section: reuseValid.summary,
+              summarize: input.summarize,
+              signal: input.signal,
+            });
+            for (const f of packResult.fragments) {
+              representedSourceIds.add(f.sourceId);
+            }
+            representedCount += 1;
+            lastCoveredThroughTs = coveredThroughTs;
+            lastCoveredThroughRowId = coveredThroughRowId;
+            sectionStartTs = coveredThroughTs;
+            sectionStartRowId = coveredThroughRowId;
+            sectionsPacked += 1;
+            if (packResult.coverageComplete && !packResult.nextCursor) {
+              break;
+            }
+            continue;
+          }
+          // Saved section failed revalidation — fall through and rebuild it
+          // with the same bounded algorithm (explicit repair path).
+        }
+
+        const nextOrdinal = ordinal + 1;
+        const sectionId = `sec-${runId}-${nextOrdinal}`;
+        const prompt = this.promptBuilder.buildSectionPrompt({
+          fragments: packResult.fragments,
+          receipts: packResult.receipts,
+          sectionLabel: `section-${nextOrdinal}`,
+          priorSynopsis: rollingOverview?.synopsis,
+        });
+
+        // Complete preflight for the compaction request (§8.3): source +
+        // prompt overhead + output cap + margin must fit the model window.
+        // A non-positive capacity is an error, never permission to overshoot.
+        const preflight = this.budgetService.allocateSectionCapacity({
+          model: input.model,
+          sectionOutputReserve:
+            AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
+          promptOverhead: Math.ceil(
+            Buffer.byteLength(
+              prompt.systemPrompt + prompt.userPrompt,
+              "utf8"
+            ) / 4
+          ),
+          stateInputCost: rollingOverview
+            ? Math.ceil(
+                Buffer.byteLength(JSON.stringify(rollingOverview), "utf8") / 4
+              )
+            : 0,
+        });
+        if (preflight.errorCode) {
+          throw new RecoverableHistoryError(
+            "COMPACTION_CONTEXT_REJECTED",
+            `section ${nextOrdinal} has no source capacity for model ${input.model ?? "unknown"}`
+          );
+        }
+
+        // Bounded model attempts per section per run (§16): at most 4 total,
+        // including ≤2 source-size reductions and ≤1 structured-output repair.
+        // No all-history fallback on exhaustion.
+        const sectionSummary = await this.summarizeSectionBounded({
+          prompt,
+          summarize: input.summarize,
+          signal: input.signal,
+          timeoutMs:
+            AI_CHAT_RECOVERABLE_DEFAULTS.providerTimeoutSeconds * 1000,
+          onReduceCapacity: (reduced) => {
+            sourceCapacityTokens = reduced;
+          },
+          getCapacity: () => sourceCapacityTokens,
+        });
+
+        // Save section + checkpoint atomically (§11.4) with accurate range
+        // boundaries (never zero-stamped).
         const saved = await this.module.saveSectionAndCheckpoint({
           conversationId,
           runId,
@@ -339,11 +439,11 @@ export class AIChatCompactionCoordinator extends BaseModule {
           section: {
             sectionId,
             workKey,
-            ordinal,
-            sourceStartTimestampMs: 0,
-            sourceStartRowId: 0,
-            sourceEndTimestampMs: lastCoveredThroughTs,
-            sourceEndRowId: lastCoveredThroughRowId,
+            ordinal: nextOrdinal,
+            sourceStartTimestampMs: sectionStartTs,
+            sourceStartRowId: sectionStartRowId,
+            sourceEndTimestampMs: coveredThroughTs,
+            sourceEndRowId: coveredThroughRowId,
             sourceManifestJson: JSON.stringify({
               fragments: packResult.fragments.map((f) => ({
                 sourceId: f.sourceId,
@@ -351,34 +451,96 @@ export class AIChatCompactionCoordinator extends BaseModule {
                 end: f.endCodePoint,
               })),
             }),
-            summaryJson: JSON.stringify(validation.summary),
+            summaryJson: JSON.stringify(sectionSummary),
             model: input.model,
           },
           stagedCursorJson: packResult.nextCursor ?? "",
         });
         fence = saved.fence;
+        ordinal = nextOrdinal;
         sectionsPacked += 1;
         cursor = packResult.nextCursor ?? undefined;
+
+        // Bounded overview merge: prior overview + this new section only
+        // (never concatenate every historical section — §8.3). Persist the
+        // working overview + merged ordinal so a restart resumes the merge
+        // instead of rebuilding it (§5.3).
+        rollingOverview = await this.mergeOverview({
+          prior: rollingOverview,
+          section: sectionSummary,
+          summarize: input.summarize,
+          signal: input.signal,
+        });
+        for (const f of packResult.fragments) {
+          representedSourceIds.add(f.sourceId);
+        }
+        representedCount += 1;
+        lastCoveredThroughTs = coveredThroughTs;
+        lastCoveredThroughRowId = coveredThroughRowId;
+        sectionStartTs = coveredThroughTs;
+        sectionStartRowId = coveredThroughRowId;
+        await this.module.saveWorkingOverview({
+          conversationId,
+          runId,
+          epoch,
+          expectedFence: fence,
+          workingOverviewJson: JSON.stringify(rollingOverview),
+          mergedThroughOrdinal: ordinal,
+          stagedCursorJson: packResult.nextCursor ?? "",
+        });
 
         // If coverage is complete and there's no continuation, we're done.
         if (packResult.coverageComplete && !packResult.nextCursor) {
           break;
         }
+        if (sectionsPacked >= maxSectionsPerBatch) {
+          yielded = true;
+          break;
+        }
       }
 
-      // 5. Publish a generation via CAS (§11.5).
+      // 6. Yield resumably at the batch limit (§11.2, AC-04/AC-07): when a
+      // continuation remains, pause — never report completed prematurely.
+      // The staged cursor + working overview are already persisted above.
+      const continuationRemains = cursor !== undefined && cursor !== "";
+      if (yielded && continuationRemains) {
+        await this.module.pauseRun({
+          conversationId,
+          runId,
+          epoch,
+          expectedFence: fence,
+        });
+        return { state: "paused", runId, sectionsPacked };
+      }
+
+      if (sectionsPacked === 0 && representedCount === resume.priorRepresentedCount) {
+        // Nothing new was packed and no prior coverage to publish — the
+        // eligible snapshot is empty (e.g. everything is retained recent
+        // context). Complete without publication rather than reporting a
+        // misleading pause with no continuation.
+        await this.module.completeRun({
+          conversationId,
+          runId,
+          epoch,
+          expectedFence: fence,
+        });
+        return { state: "completed", runId, sectionsPacked };
+      }
+
+      // 7. Publish a generation via CAS (§11.5) with the validated cumulative
+      // overview (prior overview + consecutive new sections). Preserve the
+      // prior active generation when synthesis or publication fails.
+      if (!rollingOverview) {
+        await this.module.pauseRun({
+          conversationId,
+          runId,
+          epoch,
+          expectedFence: fence,
+        });
+        return { state: "paused", runId, sectionsPacked };
+      }
       const generationId = `gen-${runId}`;
-      const overviewJson = lastSummary
-        ? JSON.stringify(lastSummary)
-        : JSON.stringify({
-            version: 1,
-            synopsis: "",
-            decisions: [],
-            constraints: [],
-            pending: [],
-            toolOutcomes: [],
-            topics: [],
-          });
+      const overviewJson = JSON.stringify(rollingOverview);
 
       const published = await this.module.publishGeneration({
         conversationId,
@@ -416,7 +578,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
         runId,
       };
     } catch (error) {
-      // Cancel the run on any error (§11.6).
+      // Cancel the run on any error (§11.6), preserving committed work and
+      // the last valid active generation.
       try {
         await this.module.cancelRun({
           conversationId,
@@ -433,6 +596,442 @@ export class AIChatCompactionCoordinator extends BaseModule {
         `compaction failed: ${(error as Error).message}`
       );
     }
+  }
+
+  /**
+   * Terminal-turn snapshot excluding the retained recent suffix (§4.3, FR-05).
+   * Retains two completed turns when they fit plus the in-progress turn, with
+   * tool exchanges. Uses authoritative turn projections; falls back to the
+   * high-water mark only when no turn projections exist yet.
+   */
+  private async computeSnapshotEnd(
+    conversationId: string,
+    highWaterTs: number,
+    highWaterRowId: number
+  ): Promise<{ snapshotEndTimestampMs: number; snapshotEndRowId: number }> {
+    try {
+      const turns = await this.archive.getRecentTurns(
+        conversationId,
+        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1,
+        64 * 1024
+      );
+      if (turns.length === 0) {
+        return {
+          snapshotEndTimestampMs: highWaterTs,
+          snapshotEndRowId: highWaterRowId,
+        };
+      }
+      // Turns are chronological; the retained suffix starts at the earliest
+      // retained turn's first row. Snapshot end is strictly before it.
+      // getRecentTurns returns excerpts, not turn boundaries — decode the
+      // earliest retained row and step one position back via its (timestamp,
+      // rowId). We approximate by excluding the last N excerpts' rows: find
+      // the earliest retained timestamp/rowId from decoded source IDs.
+      const { decodeSourceId } = await import(
+        "@/service/AIChatArchiveCursorCodec"
+      );
+      const state = await this.module.getState(conversationId);
+      const epoch = state?.epoch ?? "";
+      let earliestTs = Number.MAX_SAFE_INTEGER;
+      let earliestRowId = Number.MAX_SAFE_INTEGER;
+      for (const ex of turns) {
+        const payload = decodeSourceId(ex.sourceId, epoch);
+        if (!payload) continue;
+        const ts = Date.parse(ex.timestamp);
+        if (Number.isNaN(ts)) continue;
+        if (
+          ts < earliestTs ||
+          (ts === earliestTs && payload.rowId < earliestRowId)
+        ) {
+          earliestTs = ts;
+          earliestRowId = payload.rowId;
+        }
+      }
+      if (earliestTs === Number.MAX_SAFE_INTEGER) {
+        return {
+          snapshotEndTimestampMs: highWaterTs,
+          snapshotEndRowId: highWaterRowId,
+        };
+      }
+      // Snapshot covers strictly before (earliestTs, earliestRowId): step back
+      // one rowId at the same timestamp, or to (ts-1ms, MAX) when rowId is 1.
+      // The packer's keyset uses strict-before on the snapshot end, so
+      // returning the retained-start itself as an exclusive bound is exact:
+      // rows at (earliestTs, earliestRowId) and after are retained.
+      // Encode exclusivity by returning (earliestTs, earliestRowId - 1) with
+      // timestamp stepping when needed.
+      if (earliestRowId > 1) {
+        return {
+          snapshotEndTimestampMs: earliestTs,
+          snapshotEndRowId: earliestRowId - 1,
+        };
+      }
+      return {
+        snapshotEndTimestampMs: earliestTs - 1,
+        snapshotEndRowId: Number.MAX_SAFE_INTEGER,
+      };
+    } catch {
+      return {
+        snapshotEndTimestampMs: highWaterTs,
+        snapshotEndRowId: highWaterRowId,
+      };
+    }
+  }
+
+  /**
+   * Load committed coverage + staged checkpoints + prior overview (§11, AC-05,
+   * AC-07). Returns the resume cursor, max ordinal, prior overview, and a
+   * workKey→section map for duplicate-free reuse.
+   */
+  private async loadResumeState(
+    conversationId: string,
+    epoch: string,
+    revision: number,
+    activeGenerationId: string | undefined
+  ): Promise<{
+    startCursor?: string;
+    maxOrdinal: number;
+    priorOverview: SectionSummaryV1 | null;
+    priorRepresentedCount: number;
+    coveredThroughTs: number;
+    coveredThroughRowId: number;
+    representedSourceIds: string[];
+    sectionsByWorkKey: Map<string, { ordinal: number; summaryJson: string }>;
+  }> {
+    const sections = await this.module.listSections(conversationId, epoch);
+    const sectionsByWorkKey = new Map<
+      string,
+      { ordinal: number; summaryJson: string }
+    >();
+    let maxOrdinal = 0;
+    let coveredThroughTs = 0;
+    let coveredThroughRowId = 0;
+    const representedSourceIds: string[] = [];
+    for (const s of sections) {
+      if (s.revision !== revision) continue;
+      if (s.status !== "staged" && s.status !== "published") continue;
+      sectionsByWorkKey.set(s.workKey, {
+        ordinal: s.ordinal,
+        summaryJson: s.summaryJson,
+      });
+      if (s.ordinal > maxOrdinal) maxOrdinal = s.ordinal;
+      if (
+        s.sourceEndTimestampMs > coveredThroughTs ||
+        (s.sourceEndTimestampMs === coveredThroughTs &&
+          s.sourceEndRowId > coveredThroughRowId)
+      ) {
+        coveredThroughTs = s.sourceEndTimestampMs;
+        coveredThroughRowId = s.sourceEndRowId;
+      }
+      try {
+        const manifest = JSON.parse(s.sourceManifestJson) as {
+          fragments?: Array<{ sourceId?: string }>;
+        };
+        for (const f of manifest.fragments ?? []) {
+          if (typeof f.sourceId === "string") {
+            representedSourceIds.push(f.sourceId);
+          }
+        }
+      } catch {
+        // Corrupt manifest — coverage position still advances; the section
+        // itself will be revalidated on reuse.
+      }
+    }
+
+    let priorOverview: SectionSummaryV1 | null = null;
+    let priorRepresentedCount = 0;
+    if (activeGenerationId) {
+      const gen = await this.module.getActiveGeneration(
+        conversationId,
+        epoch
+      );
+      if (gen && gen.generationId === activeGenerationId) {
+        const parsed = this.safeJsonParse(gen.overviewJson);
+        const valid = this.validator.validate(
+          parsed,
+          new Set(representedSourceIds),
+          AI_CHAT_RECOVERABLE_DEFAULTS.overviewOutputTargetTokens
+        );
+        if (valid.ok && valid.summary) {
+          priorOverview = valid.summary;
+          priorRepresentedCount = gen.representedSectionOrdinal ?? 0;
+          // Published coverage is the resume floor when no staged sections
+          // extend beyond it.
+          if (
+            Number(gen.coveredThroughTimestampMs) > coveredThroughTs ||
+            (Number(gen.coveredThroughTimestampMs) === coveredThroughTs &&
+              gen.coveredThroughRowId > coveredThroughRowId)
+          ) {
+            coveredThroughTs = Number(gen.coveredThroughTimestampMs);
+            coveredThroughRowId = gen.coveredThroughRowId;
+          }
+        }
+      }
+    }
+
+    let startCursor: string | undefined;
+    if (coveredThroughTs > 0 || coveredThroughRowId > 0) {
+      startCursor = encodeCursor({
+        v: 1,
+        conversationId,
+        epoch,
+        revision,
+        lastTimestampMs: coveredThroughTs,
+        lastRowId: coveredThroughRowId,
+        direction: "forward",
+      });
+    }
+    return {
+      startCursor,
+      maxOrdinal,
+      priorOverview,
+      priorRepresentedCount,
+      coveredThroughTs,
+      coveredThroughRowId,
+      representedSourceIds,
+      sectionsByWorkKey,
+    };
+  }
+
+  /**
+   * Deterministic section-work identity (FR-09): epoch/revision, source range
+   * + fragments, schema version. Changing provider retry attempt never creates
+   * a duplicate identity.
+   */
+  private computeWorkKey(input: {
+    epoch: string;
+    revision: number;
+    startTs: number;
+    startRowId: number;
+    endTs: number;
+    endRowId: number;
+    fragments: readonly PackedTextFragment[];
+    receipts: readonly PackedToolReceipt[];
+  }): string {
+    const fragIds = input.fragments
+      .map((f) => `${f.sourceRowId}:${f.startCodePoint}:${f.endCodePoint}`)
+      .join(",");
+    const receiptIds = input.receipts
+      .map((r) => `${r.sourceRowId}:${r.toolCallId}`)
+      .join(",");
+    const hash = createHash("sha256")
+      .update(
+        [
+          input.epoch,
+          input.revision,
+          input.startTs,
+          input.startRowId,
+          input.endTs,
+          input.endRowId,
+          fragIds,
+          receiptIds,
+          "v1",
+        ].join("|")
+      )
+      .digest("hex")
+      .slice(0, 40);
+    return `v1-${hash}`;
+  }
+
+  /**
+   * Bounded section summarization (§16, FR-08/FR-11): at most 4 model attempts
+   * per section per run — ≤2 source-size reductions on context rejection plus
+   * ≤1 structured-output repair. Provider output caps are enforced locally
+   * (rejected, never blindly cut). No all-history fallback on exhaustion.
+   */
+  private async summarizeSectionBounded(input: {
+    prompt: { systemPrompt: string; userPrompt: string; suppliedSourceIds: readonly string[] };
+    summarize: SummarizeFn;
+    signal?: AbortSignal;
+    timeoutMs: number;
+    onReduceCapacity: (reduced: number) => void;
+    getCapacity: () => number;
+  }): Promise<SectionSummaryV1> {
+    const maxAttempts =
+      AI_CHAT_RECOVERABLE_DEFAULTS.maxModelAttemptsPerSectionPerRun;
+    const maxReductions =
+      AI_CHAT_RECOVERABLE_DEFAULTS.maxContextReductionRetriesPerSection;
+    let attempts = 0;
+    let reductions = 0;
+    let repaired = false;
+    let lastErrors: string[] = [];
+    let systemPrompt = input.prompt.systemPrompt;
+    const userPrompt = input.prompt.userPrompt;
+
+    while (attempts < maxAttempts) {
+      attempts += 1;
+      let raw: string;
+      try {
+        raw = await this.callWithTimeout(
+          input.summarize(systemPrompt, userPrompt),
+          input.timeoutMs,
+          input.signal
+        );
+      } catch (err) {
+        if (this.isContextRejection(err) && reductions < maxReductions) {
+          reductions += 1;
+          const reduced = Math.max(
+            64,
+            Math.floor(input.getCapacity() / 2)
+          );
+          input.onReduceCapacity(reduced);
+          lastErrors = [`context rejected; reduced capacity to ${reduced}`];
+          continue;
+        }
+        throw err instanceof RecoverableHistoryError
+          ? err
+          : new RecoverableHistoryError(
+              "COMPACTION_CONTEXT_REJECTED",
+              `section summarize attempt ${attempts} failed: ${(err as Error).message}`
+            );
+      }
+
+      // Explicit summary output cap (§8.3): reject oversized output rather
+      // than cutting JSON or factual text.
+      const rawTokens = Math.ceil(Buffer.byteLength(raw, "utf8") / 4);
+      if (
+        rawTokens >
+        AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens * 2
+      ) {
+        lastErrors = [
+          `summary output ${rawTokens} tokens exceeds provider cap`,
+        ];
+        if (!repaired) {
+          repaired = true;
+          systemPrompt = `${input.prompt.systemPrompt}\nYour previous output was too long. Return a SHORTER valid JSON object within the schema caps.`;
+          continue;
+        }
+        throw new RecoverableHistoryError(
+          "COMPACTION_OUTPUT_INVALID",
+          lastErrors.join("; ")
+        );
+      }
+
+      const validation = this.validator.validate(
+        this.safeJsonParse(raw),
+        new Set(input.prompt.suppliedSourceIds),
+        AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens
+      );
+      if (validation.ok && validation.summary) {
+        return validation.summary;
+      }
+      lastErrors = [...validation.errors];
+      if (!repaired) {
+        // One structured-output repair within the attempt ceiling (§16).
+        repaired = true;
+        systemPrompt = `${input.prompt.systemPrompt}\nYour previous output was invalid (${lastErrors.join("; ")}). Return valid JSON matching the schema exactly, referencing only supplied source IDs.`;
+        continue;
+      }
+      // Repair already used — if the error looks like oversized input and we
+      // still have reduction budget, shrink and retry.
+      if (reductions < maxReductions) {
+        reductions += 1;
+        const reduced = Math.max(64, Math.floor(input.getCapacity() / 2));
+        input.onReduceCapacity(reduced);
+        continue;
+      }
+      break;
+    }
+    throw new RecoverableHistoryError(
+      "COMPACTION_OUTPUT_INVALID",
+      `section summary failed after ${attempts} bounded attempts: ${lastErrors.join("; ")}`
+    );
+  }
+
+  /** True when a provider error signals context-length rejection (§16). */
+  private isContextRejection(err: unknown): boolean {
+    const msg =
+      err instanceof Error ? err.message : typeof err === "string" ? err : "";
+    return /context|too large|max_tokens|token limit|context_length|input too long/i.test(
+      msg
+    );
+  }
+
+  /**
+   * Bounded overview merge (§8.3/§10/§11.5): prior bounded overview + one new
+   * section only — never concatenate every historical section. Validates
+   * references against the prior overview + new section chain and the output
+   * budget. On merge failure the caller keeps the last valid overview (never
+   * publishes coverage beyond represented turns).
+   */
+  private async mergeOverview(input: {
+    prior: SectionSummaryV1 | null;
+    section: SectionSummaryV1;
+    summarize: SummarizeFn;
+    signal?: AbortSignal;
+  }): Promise<SectionSummaryV1> {
+    if (!input.prior) return input.section;
+    const facts: Array<{ category: string; text: string; status: string }> = [];
+    for (const [category, list] of [
+      ["decisions", input.section.decisions],
+      ["constraints", input.section.constraints],
+      ["pending", input.section.pending],
+      ["toolOutcomes", input.section.toolOutcomes],
+    ] as const) {
+      for (const f of list) {
+        facts.push({ category, text: f.text, status: f.status });
+      }
+    }
+    const prompt = this.promptBuilder.buildOverviewPrompt({
+      newSectionSynopsis: input.section.synopsis,
+      newSectionFacts: facts,
+      priorOverviewSynopsis: input.prior.synopsis,
+    });
+    const allowed = new Set<string>();
+    for (const list of [
+      input.prior.decisions,
+      input.prior.constraints,
+      input.prior.pending,
+      input.prior.toolOutcomes,
+      input.section.decisions,
+      input.section.constraints,
+      input.section.pending,
+      input.section.toolOutcomes,
+    ]) {
+      for (const f of list) {
+        for (const sid of f.sourceIds) allowed.add(sid);
+      }
+    }
+    const timeoutMs =
+      AI_CHAT_RECOVERABLE_DEFAULTS.providerTimeoutSeconds * 1000;
+    let attempts = 0;
+    let lastErrors: string[] = [];
+    while (attempts < 2) {
+      attempts += 1;
+      let raw: string;
+      try {
+        raw = await this.callWithTimeout(
+          input.summarize(prompt.systemPrompt, prompt.userPrompt),
+          timeoutMs,
+          input.signal
+        );
+      } catch (err) {
+        lastErrors = [`overview merge call failed: ${(err as Error).message}`];
+        continue;
+      }
+      // Overview outputs omit the section version tag — normalize it.
+      const parsed = this.safeJsonParse(raw);
+      const normalized =
+        typeof parsed === "object" && parsed !== null && !("version" in parsed)
+          ? { ...(parsed as Record<string, unknown>), version: 1 }
+          : parsed;
+      const validation = this.validator.validate(
+        normalized,
+        allowed,
+        AI_CHAT_RECOVERABLE_DEFAULTS.overviewOutputTargetTokens
+      );
+      if (validation.ok && validation.summary) {
+        return validation.summary;
+      }
+      lastErrors = [...validation.errors];
+    }
+    // Merge failed within budget — keep the last valid overview so earlier
+    // continuation facts never disappear from the active overview (AC-21).
+    // The new section itself stays staged for a later merge retry.
+    console.error(
+      `[compaction] overview merge failed after ${attempts} attempts, keeping prior overview: ${lastErrors.join("; ")}`
+    );
+    return input.prior;
   }
 
   /** Run a promise with a timeout + cancellation wrapper (§11.3). */

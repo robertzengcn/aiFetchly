@@ -5,10 +5,7 @@ import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import {
   buildSessionMemorySystemPrompt,
   buildSessionMemoryUserPrompt,
-  buildFullCompactSystemPrompt,
-  buildFullCompactUserPrompt,
   normalizeSessionMemorySummary,
-  normalizeFullCompactSummary,
 } from "@/service/AIChatCompactPromptBuilder";
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
@@ -218,21 +215,25 @@ export class AIChatCompactAgentService {
    * covers every message row (prevents compact loops when the summary itself
    * fills the window), otherwise reuse runFullCompact and notify listeners.
    * Returns true when a new compact was saved. Never throws.
+   *
+   * Bounded: the coverage check is a single COUNT query (hasMessagesAfter),
+   * never a full conversation load (FR-01/FR-07).
    */
   private async runAutoCompact(
     input: SessionMemoryUpdateInput
   ): Promise<boolean> {
     try {
-      const [active, rows] = await Promise.all([
-        this.compact.getActiveSummary(input.conversationId),
-        this.v2.getConversationMessages(input.conversationId),
-      ]);
+      const active = await this.compact.getActiveSummary(input.conversationId);
       if (active) {
-        const boundaryTime = new Date(active.throughTimestamp).getTime();
-        const hasNewMessages = rows.some(
-          (r) => isMessageRow(r) && r.timestamp.getTime() > boundaryTime
+        const boundaryTime = new Date(active.throughTimestamp);
+        // afterRowId=0 is conservative: equal-timestamp rows count as new so
+        // timestamp collisions can trigger (safe) extra work, never a skip.
+        const hasNew = await this.v2.hasMessagesAfter(
+          input.conversationId,
+          boundaryTime,
+          0
         );
-        if (!hasNewMessages) {
+        if (!hasNew) {
           console.log(
             `[ai-chat-compact] auto compact skipped (boundary covers all messages) conv=${input.conversationId}`
           );
@@ -311,6 +312,50 @@ export class AIChatCompactAgentService {
     };
   }
 
+  /**
+   * Route an oversized session-memory delta to the shared bounded coordinator
+   * (§11.1, AC-23). The delta itself is never sent as one unbounded request;
+   * the coordinator packs it in bounded sections with checkpoints. When no
+   * coordinator is wired, record a failure with a budget-checked limitation
+   * instead of falling back to all-history input.
+   */
+  private async routeOversizedDeltaToCoordinator(
+    input: SessionMemoryUpdateInput
+  ): Promise<void> {
+    console.log(
+      `[ai-chat-compact] session delta oversized — routing to bounded coordinator conv=${input.conversationId}`
+    );
+    if (!this.deps.compactionCoordinator) {
+      await this.memory.recordFailure(
+        input.conversationId,
+        "Session delta exceeds bounded session-memory budget; bounded coordinator unavailable"
+      );
+      return;
+    }
+    try {
+      await this.deps.compactionCoordinator.requestCompaction(
+        input.conversationId,
+        {
+          trigger: "session-memory",
+          model: input.model,
+          summarize: async (systemPrompt: string, userPrompt: string) => {
+            const resp = await this.deps.completeChat({
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt },
+              ],
+              ...(input.model ? { model: input.model } : {}),
+            });
+            return openAIContentToString(resp.choices?.[0]?.message?.content);
+          },
+        }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.memory.recordFailure(input.conversationId, message);
+    }
+  }
+
   private async runSessionMemoryUpdate(
     input: SessionMemoryUpdateInput
   ): Promise<void> {
@@ -336,19 +381,70 @@ export class AIChatCompactAgentService {
         }
       }
 
-      const allRows = await this.v2.getConversationMessages(
-        input.conversationId
-      );
-      const sorted = [...allRows].sort((a, b) => {
-        const t = a.timestamp.getTime() - b.timestamp.getTime();
-        return t !== 0 ? t : a.id - b.id;
-      });
-      const boundaryIdx = existing?.coveredThroughMessageId
-        ? sorted.findIndex(
-            (r) => r.messageId === existing.coveredThroughMessageId
-          )
-        : -1;
-      const newRows = sorted.slice(boundaryIdx + 1).filter(isMessageRow);
+      // Bounded delta: resolve the covered-through boundary within this
+      // conversation (never a full load), then read at most a capped delta
+      // after it. Row-count limits alone do not bound oversized payloads, so
+      // decoded bytes are also capped; an oversized delta routes to the shared
+      // bounded coordinator instead of a direct unbounded summarize (FR-07/08,
+      // AC-23 — no unchecked secondary path).
+      const SESSION_MEMORY_DELTA_CAP_ROWS = 64;
+      const SESSION_MEMORY_DELTA_CAP_BYTES = 64 * 1024;
+      let newRows: Array<{
+        messageId: string;
+        role: string;
+        content: string;
+        timestamp: Date;
+        messageType?: MessageType;
+      }>;
+      if (existing?.coveredThroughMessageId) {
+        const boundary = await this.v2.findBoundaryInConversation(
+          input.conversationId,
+          existing.coveredThroughMessageId
+        );
+        if (!boundary) {
+          // Boundary row is gone (deleted/ambiguous) — do not rescan the
+          // whole archive. Treat as no safe delta; a coordinator rebuild owns
+          // legacy migration via bounded sections.
+          console.log(
+            `[ai-chat-compact] session update skipped (boundary unresolvable) conv=${input.conversationId}`
+          );
+          return;
+        }
+        const after = await this.v2.getMessagesAfter(
+          input.conversationId,
+          boundary.timestamp,
+          boundary.id,
+          SESSION_MEMORY_DELTA_CAP_ROWS + 1
+        );
+        if (after.length > SESSION_MEMORY_DELTA_CAP_ROWS) {
+          await this.routeOversizedDeltaToCoordinator(input);
+          return;
+        }
+        newRows = after.filter(isMessageRow);
+      } else {
+        // No prior coverage: read the first bounded page only. A fresh
+        // conversation with a huge unsummarized backlog must not send an
+        // unbounded delta — the coordinator owns it via bounded sections.
+        const first = await this.v2.getMessagesAfter(
+          input.conversationId,
+          new Date(0),
+          0,
+          SESSION_MEMORY_DELTA_CAP_ROWS + 1
+        );
+        if (first.length > SESSION_MEMORY_DELTA_CAP_ROWS) {
+          await this.routeOversizedDeltaToCoordinator(input);
+          return;
+        }
+        newRows = first.filter(isMessageRow);
+      }
+      let deltaBytes = 0;
+      for (const r of newRows) {
+        deltaBytes += Buffer.byteLength(r.content ?? "", "utf8");
+      }
+      if (deltaBytes > SESSION_MEMORY_DELTA_CAP_BYTES) {
+        await this.routeOversizedDeltaToCoordinator(input);
+        return;
+      }
       if (newRows.length < MIN_DELTA_MESSAGES) {
         console.log(
           `[ai-chat-compact] session update skipped (delta too small) conv=${input.conversationId} delta=${newRows.length}`
@@ -425,6 +521,12 @@ export class AIChatCompactAgentService {
   /**
    * Run a full compact on demand. Returns the new active summary view.
    * Throws on failure — callers (IPC) are responsible for surfacing errors.
+   *
+   * All triggers route through the durable bounded coordinator (design §11,
+   * PRD FR-07/FR-08). The legacy all-history summarization path was removed:
+   * disabling new publication must never restore unbounded input construction
+   * (design §18 rollback). When no coordinator is wired, fail with a
+   * budget-checked limitation instead of sending the entire archive.
    */
   async runFullCompact(
     input: FullCompactInput
@@ -437,10 +539,15 @@ export class AIChatCompactAgentService {
     }
     // Delegate to the durable incremental-compaction coordinator when wired
     // (design §11.1). The coordinator owns packing, summarization, validation,
-    // and CAS publication; this service no longer constructs an all-history
+    // and CAS publication; this service never constructs an all-history
     // input for the new engine.
-    if (this.deps.compactionCoordinator) {
-      const result = await this.deps.compactionCoordinator.requestCompaction(
+    if (!this.deps.compactionCoordinator) {
+      throw new Error(
+        "Compaction unavailable: bounded incremental coordinator is not wired. " +
+          "Enable new compaction publication; unbounded all-history summarization is disabled."
+      );
+    }
+    const result = await this.deps.compactionCoordinator.requestCompaction(
         input.conversationId,
         {
           trigger: "manual",
@@ -479,62 +586,6 @@ export class AIChatCompactAgentService {
         this.deps.onAutoCompacted?.(view);
       }
       return view;
-    }
-    const rows = await this.v2.getConversationMessages(input.conversationId);
-    const sorted = [...rows].filter(isMessageRow).sort((a, b) => {
-      const t = a.timestamp.getTime() - b.timestamp.getTime();
-      return t !== 0 ? t : a.id - b.id;
-    });
-    if (sorted.length === 0) {
-      throw new Error("No messages to compact");
-    }
-    const messages: OpenAIChatMessage[] = sorted.map((r) => ({
-      role: r.role as OpenAIChatMessage["role"],
-      content: r.content,
-    }));
-    const inputTokenEstimate = this.estimator.estimateMessages(messages);
-    const startedAt = Date.now();
-    console.log(
-      `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${messages.length} tokens=${inputTokenEstimate}`
-    );
-    const resp = await this.deps.completeChat({
-      messages: [
-        { role: "system", content: buildFullCompactSystemPrompt() },
-        {
-          role: "user",
-          content: buildFullCompactUserPrompt(messages),
-        },
-      ],
-      ...(input.model ? { model: input.model } : {}),
-    });
-    const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-    const { summary, ok } = normalizeFullCompactSummary(raw);
-    if (!ok) {
-      throw new Error("Compact model returned empty summary");
-    }
-    const last = sorted[sorted.length - 1];
-    const first = sorted[0];
-    const view = await this.compact.saveFullCompact({
-      compactId: `compact-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`,
-      conversationId: input.conversationId,
-      summary,
-      fromMessageId: first.messageId,
-      throughMessageId: last.messageId,
-      throughTimestamp: last.timestamp,
-      sourceMessageCount: sorted.length,
-      inputTokenEstimate,
-      outputTokenEstimate: this.estimator.estimateText(summary),
-      model: resp.model,
-      status: "active",
-    });
-    console.log(
-      `[ai-chat-compact] full compact completed conv=${
-        input.conversationId
-      } elapsed=${Date.now() - startedAt}ms`
-    );
-    return view;
   }
 }
 

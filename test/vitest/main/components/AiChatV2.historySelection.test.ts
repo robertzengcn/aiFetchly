@@ -193,6 +193,7 @@ function lastCall(): {
   request: StreamRequest;
   onChunk: (c: unknown) => void;
   onComplete: (c: unknown) => void;
+  onError: (e: Error) => void;
 } {
   const call = vi.mocked(streamChatV2Message).mock.calls.at(-1) as unknown as [
     StreamRequest,
@@ -204,6 +205,7 @@ function lastCall(): {
     request: call[0],
     onChunk: call[1],
     onComplete: call[2],
+    onError: call[3],
   };
 }
 
@@ -339,5 +341,36 @@ describe("AiChatV2 selected archived passages (§13.3)", () => {
     expect(request.historySelectionIds).toBeUndefined();
     // submissionId is always present so a retry can dedupe.
     expect(request.submissionId).toMatch(UUID);
+  });
+
+  it("reuses the same submission id across retries until acceptance resolves", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await activateConversation(wrapper);
+    await addChip(wrapper, "retry passage");
+
+    // First attempt ends WITHOUT any `start` arriving (transport failure
+    // before acceptance) — the draft and the submission identity both survive
+    // for the retry. `onComplete` only closes the turn's running state.
+    const first = await sendOnly(wrapper);
+    expect(held.chips).toHaveLength(1);
+    lastCall().onComplete({ eventType: "token", content: "ok" });
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+    // Retry without an intervening acceptance reuses the same id so the
+    // backend reuses the accepted user-turn metadata instead of duplicating
+    // the message.
+    const second = await sendOnly(wrapper);
+    expect(second.submissionId).toBe(first.submissionId);
+    expect(second.historySelectionIds).toEqual(first.historySelectionIds);
+
+    // Once `start` resolves acceptance, the next turn mints a fresh id.
+    await deliverStart(wrapper, ["sid-retry passage"]);
+    lastCall().onComplete({ eventType: "token", content: "ok" });
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+    const third = await sendOnly(wrapper);
+    expect(third.submissionId).toMatch(UUID);
+    expect(third.submissionId).not.toBe(first.submissionId);
   });
 });

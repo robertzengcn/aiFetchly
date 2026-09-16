@@ -2812,6 +2812,10 @@ export default {
   },
   aiChatHistory: {
     drawer_title: "会話履歴",
+    close: "履歴を閉じる",
+    tab_browse: "閲覧",
+    tab_search: "検索",
+    search_button: "検索",
     search_placeholder: "アーカイブ履歴を検索…",
     search_query_too_long: "検索クエリは200文字以下にしてください。",
     no_match: "一致するメッセージが見つかりませんでした。",
@@ -2819,6 +2823,7 @@ export default {
     index_incomplete:
       "履歴のインデックス作成中です。結果が不完全な場合があります。",
     read_more: "続きを読む",
+    go_to_message: "メッセージに移動",
     select_passage: "一節を選択",
     selected_context: "選択したコンテキスト",
     estimated_cost: "推定コスト: {tokens} トークン",
@@ -2833,10 +2838,23 @@ export default {
     status_idle: "アイドル",
     status_queued: "キュー済み",
     status_running: "圧縮中…",
+    status_joined: "参加中",
     status_paused: "一時停止",
     status_completed: "圧縮済み",
     status_failed: "圧縮失敗",
     status_cancelled: "キャンセル済み",
+    panel_title: "圧縮",
+    in_progress_note: "制限付きバッチで処理中 — チャットを続けられます。",
+    view_history: "以前のメッセージを見る",
+    completed_detail:
+      "以前のメッセージは引き続き検索可能です。アクティブビューは最新のターンと制限付き概要を保持します。",
+    failed_detail:
+      "圧縮はエラーで停止しました。会話は無事です — 後で再試行してください。",
+    cancelled_detail:
+      "圧縮をキャンセルしました。保存済みセクションは次回に引き継がれます。",
+    joined_detail: "この会話で実行中の圧縮に参加しました。",
+    running_detail: "以前の履歴を制限付きセクションで圧縮しています。",
+    idle_detail: "圧縮はアイドル状態です。",
     compaction_in_progress: "圧縮進行中（{packed} セクション圧縮済み）。",
     compaction_paused: "圧縮が一時停止されました。自動的に再開されます。",
     compaction_failed: "圧縮失敗: {message}",

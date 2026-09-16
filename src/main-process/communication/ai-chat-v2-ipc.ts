@@ -12,6 +12,7 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
@@ -60,6 +61,7 @@ import {
   AI_CHAT_V2_READ_PASTE_CACHE,
   AI_CHAT_V2_HISTORY_SEARCH,
   AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
@@ -94,7 +96,10 @@ import type {
   ReadResult,
   ResolveResult,
 } from "@/service/AIChatHistoryRetrievalService";
-import type { RecoverableHistoryErrorCode } from "@/entityTypes/aiChatArchiveTypes";
+import type {
+  ArchiveReadPage,
+  RecoverableHistoryErrorCode,
+} from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -125,9 +130,18 @@ let compactModelCatalog: AIChatModelCatalogService | null = null;
 let queryEngineDbPath: string | null = null;
 let compactAgentDbPath: string | null = null;
 
-/** Build the production AIChatQueryLoop with real service deps. */
-function createQueryLoop(): AIChatQueryLoop {
+/**
+ * Build the production AIChatQueryLoop with real service deps.
+ *
+ * Exported for the production-wiring test (every engine consumer must check
+ * the mandatory final request preflight — FR-04/FR-08, AC-11/AC-16).
+ */
+export function createQueryLoop(): AIChatQueryLoop {
   const deps: AIChatQueryLoopDeps = {
+    // §8.5 mandatory final request preflight: every interactive dispatch is
+    // budget-checked immediately before streamChatCompletion (FR-04/FR-08,
+    // AC-11/AC-16). Never omit this service on a production path.
+    requestBudgetService: new AIChatRequestBudgetService(),
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
       return api.openAIChatCompletionStream(
@@ -1584,6 +1598,32 @@ function validateHistoryConversationId(id: unknown): string | null {
   return id;
 }
 
+async function handleHistoryBrowse(
+  data: unknown
+): Promise<CommonMessage<HistoryBrowseEnvelope<ArchiveReadPage>>> {
+  const req = parseObjectPayload(data);
+  const conversationId = validateHistoryConversationId(req.conversationId);
+  if (!conversationId) {
+    return historyDenied("conversationId is required");
+  }
+  const cursor = typeof req.cursor === "string" ? req.cursor : undefined;
+  try {
+    // Paginated chronological browse (local, no AI). Bounded page: 20 rows +
+    // 8k code points so viewing history never loads the archive into memory
+    // or the model — viewing is independent of model-context selection (§13).
+    const archive = new AIChatArchiveModule();
+    const page = await archive.readPage({
+      conversationId,
+      cursor,
+      maxRows: 20,
+      maxCodePoints: 8_000,
+    });
+    return historyOk(page);
+  } catch (err) {
+    return historyDenied(userSafeError(err));
+  }
+}
+
 async function handleHistorySearch(
   data: unknown
 ): Promise<CommonMessage<HistoryBrowseEnvelope<SearchResult>>> {
@@ -1780,6 +1820,9 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_HISTORY_READ, async (_e, data: unknown) =>
     handleHistoryRead(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_HISTORY_BROWSE, async (_e, data: unknown) =>
+    handleHistoryBrowse(data)
   );
   ipcMain.handle(
     AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,

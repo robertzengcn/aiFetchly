@@ -49,6 +49,7 @@ import {
   AI_CHAT_V2_AUTO_COMPACTED,
   AI_CHAT_V2_HISTORY_SEARCH,
   AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
@@ -555,6 +556,36 @@ export interface HistoryReadResult {
   sourceRevision: number;
   storedContentIncomplete: boolean;
   errorCode?: RecoverableHistoryErrorCode;
+}
+
+export interface HistoryBrowsePage {
+  records: HistoryExcerpt[];
+  nextCursor: string | null;
+  truncated: boolean;
+  sourceRevision: number;
+}
+
+/**
+ * Paginated chronological browse of archived history (local, §13.1). Viewing
+ * is independent of model-context selection: browsing never mutates the next
+ * model request unless the user selects a passage.
+ */
+export async function browseHistory(
+  conversationId: string,
+  cursor?: string
+): Promise<HistoryBrowsePage> {
+  const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_BROWSE, {
+    conversationId,
+    cursor,
+  })) as HistoryBrowseResult<HistoryBrowsePage> | null;
+  return (
+    resp?.data ?? {
+      records: [],
+      nextCursor: null,
+      truncated: false,
+      sourceRevision: 0,
+    }
+  );
 }
 
 export interface HistoryResolveResult {

@@ -269,6 +269,7 @@ import {
   // AiChatV2 Recoverable History Channels (technical-design §13)
   AI_CHAT_V2_HISTORY_SEARCH,
   AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
@@ -986,6 +987,7 @@ contextBridge.exposeInMainWorld("api", {
       // AiChatV2 Recoverable History Channels (technical-design §13)
       AI_CHAT_V2_HISTORY_SEARCH,
       AI_CHAT_V2_HISTORY_READ,
+      AI_CHAT_V2_HISTORY_BROWSE,
       AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
       AI_CHAT_V2_COMPACTION_STATUS,
       AI_CHAT_V2_COMPACTION_CANCEL,

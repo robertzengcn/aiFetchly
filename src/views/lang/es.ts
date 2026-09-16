@@ -2880,6 +2880,10 @@ export default {
   },
   aiChatHistory: {
     drawer_title: "Historial de conversación",
+    close: "Cerrar historial",
+    tab_browse: "Explorar",
+    tab_search: "Buscar",
+    search_button: "Buscar",
     search_placeholder: "Buscar en el historial archivado…",
     search_query_too_long: "La búsqueda no debe superar los 200 caracteres.",
     no_match: "No se encontraron mensajes coincidentes.",
@@ -2888,6 +2892,7 @@ export default {
     index_incomplete:
       "La indexación del historial aún está en curso; los resultados pueden estar incompletos.",
     read_more: "Leer más",
+    go_to_message: "Ir al mensaje",
     select_passage: "Seleccionar pasaje",
     selected_context: "Contexto seleccionado",
     estimated_cost: "Coste estimado: {tokens} tokens",
@@ -2902,10 +2907,23 @@ export default {
     status_idle: "Inactivo",
     status_queued: "En cola",
     status_running: "Compactando…",
+    status_joined: "Unido",
     status_paused: "Pausado",
     status_completed: "Compactado",
     status_failed: "Error de compactación",
     status_cancelled: "Cancelado",
+    panel_title: "Compactación",
+    in_progress_note: "Trabajando por lotes limitados — puede seguir chateando.",
+    view_history: "Ver mensajes anteriores",
+    completed_detail:
+      "Los mensajes anteriores siguen disponibles. La vista activa conserva turnos recientes y un resumen limitado.",
+    failed_detail:
+      "La compactación se detuvo por un error. Su conversación está intacta — reintente cuando quiera.",
+    cancelled_detail:
+      "Compactación cancelada. Las secciones guardadas se conservan para la próxima ejecución.",
+    joined_detail: "Unido a una compactación ya en curso para esta conversación.",
+    running_detail: "Compactando el historial anterior por secciones limitadas.",
+    idle_detail: "La compactación está inactiva.",
     compaction_in_progress:
       "Compactación en curso ({packed} secciones empaquetadas).",
     compaction_paused: "Compactación pausada. Se reanudará automáticamente.",

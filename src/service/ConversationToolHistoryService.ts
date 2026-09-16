@@ -424,15 +424,29 @@ export function interleaveReplayWithText(input: {
 
 export interface ConversationMessageLoader {
   getConversationMessages(
-    conversationId: string
+    conversationId: string,
+    limit?: number,
+    offset?: number
+  ): Promise<AIChatMessageEntity[]>;
+  /** Optional bounded recent read (newest `limit`, chronological). */
+  getRecentMessages?(
+    conversationId: string,
+    limit: number
   ): Promise<AIChatMessageEntity[]>;
 }
+
+const TOOL_HISTORY_BOUNDED_ROWS = 256;
 
 export class ConversationToolHistoryService {
   constructor(
     private readonly chat: ConversationMessageLoader = new AIChatModule()
   ) {}
 
+  /**
+   * Bounded tool-history lookup (FR-01/FR-07, AC-10). Never loads the full
+   * conversation: tool_call_id resolves via the indexed archive pair lookup;
+   * query scans at most a bounded recent window and reports truncation.
+   */
   async lookup(
     conversationId: string,
     rawArgs: unknown
@@ -459,12 +473,88 @@ export class ConversationToolHistoryService {
         error: "Missing conversation id.",
       };
     }
-    const rows = await this.chat.getConversationMessages(conversationId);
-    const pairs = collectConversationToolPairs(rows);
-    return lookupConversationToolHistory(
+    // Fast path: tool_call_id resolves via the indexed archive (no scan).
+    if (parsed.data.tool_call_id) {
+      return this.lookupByToolCallId(
+        conversationId,
+        parsed.data,
+        started
+      );
+    }
+    const rows = await this.readBoundedToolRows(conversationId);
+    const pairs = collectConversationToolPairs(rows.rows);
+    const result = lookupConversationToolHistory(
       pairs,
       parsed.data,
       Date.now() - started
     );
+    // Signal that the scan window was capped so callers know older evidence
+    // may exist beyond the bounded window (AC-10 receipt discoverability).
+    if (rows.capped && result.truncated === false) {
+      return { ...result, truncated: true };
+    }
+    return result;
+  }
+
+  /** Indexed single-pair lookup without loading history (design §5.2). */
+  private async lookupByToolCallId(
+    conversationId: string,
+    args: { tool_call_id?: string; limit?: number; include_content?: boolean },
+    started: number
+  ): Promise<ConversationToolHistoryLookupResult> {
+    try {
+      const { AIChatArchiveModule } = await import(
+        "@/modules/AIChatArchiveModule"
+      );
+      const archive = new AIChatArchiveModule();
+      const pair = await archive.getToolPair(
+        conversationId,
+        args.tool_call_id ?? ""
+      );
+      if (pair && (pair.callMessage ?? pair.resultMessage)) {
+        const anchor = pair.callMessage ?? pair.resultMessage;
+        if (anchor) {
+          const pairs = collectConversationToolPairs(
+            [pair.callMessage, pair.resultMessage].filter(
+              (r): r is AIChatMessageEntity => r !== null
+            )
+          );
+          return lookupConversationToolHistory(
+            pairs,
+            args,
+            Date.now() - started
+          );
+        }
+      }
+    } catch {
+      // Fall through to the bounded scan — archive unavailability must not
+      // fail the lookup when the bounded window can still answer.
+    }
+    const rows = await this.readBoundedToolRows(conversationId);
+    const pairs = collectConversationToolPairs(rows.rows);
+    return lookupConversationToolHistory(
+      pairs,
+      args,
+      Date.now() - started
+    );
+  }
+
+  /** Bounded recent tool-row window (never a full load). */
+  private async readBoundedToolRows(
+    conversationId: string
+  ): Promise<{ rows: AIChatMessageEntity[]; capped: boolean }> {
+    if (this.chat.getRecentMessages) {
+      const rows = await this.chat.getRecentMessages(
+        conversationId,
+        TOOL_HISTORY_BOUNDED_ROWS
+      );
+      return { rows, capped: rows.length >= TOOL_HISTORY_BOUNDED_ROWS };
+    }
+    const rows = await this.chat.getConversationMessages(
+      conversationId,
+      TOOL_HISTORY_BOUNDED_ROWS,
+      0
+    );
+    return { rows, capped: rows.length >= TOOL_HISTORY_BOUNDED_ROWS };
   }
 }

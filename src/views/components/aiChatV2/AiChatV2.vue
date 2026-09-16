@@ -89,7 +89,11 @@
         />
         <AiChatCompactionStatus
           :status="compactionStatus"
+          :busy="compactionBusy"
           class="mx-1"
+          @retry="handleCompactionRetry"
+          @cancel="handleCompactionCancel"
+          @open-history="showHistoryDrawer = true"
         />
         <v-btn
           icon
@@ -701,6 +705,7 @@
       v-model="showHistoryDrawer"
       :conversation-id="activeConversationId"
       @select="handleHistorySelect"
+      @navigate="handleHistoryNavigate"
     />
     <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
     <AIContentReportDialog
@@ -778,6 +783,7 @@ import {
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
   getCompactionStatus,
+  cancelCompaction,
   subscribeCompactionProgress,
   unsubscribeCompactionProgress,
 } from "@/views/api/aiChatV2";
@@ -1024,7 +1030,22 @@ const compactNotice = ref(false);
 // Recoverable-history + incremental-compaction state (technical-design §13).
 const showHistoryDrawer = ref(false);
 const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+const compactionBusy = ref(false);
 const selectedContextItems = ref<SelectedContextItem[]>([]);
+/**
+ * Per-conversation selection drafts (§13.3, FR-10): switching conversations
+ * preserves each conversation's draft instead of discarding it, so context
+ * choices never leak across chats and are restored on return.
+ */
+const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map());
+/**
+ * Stable submission identity (§13.3): kept until acceptance is resolved.
+ * Transport retry reuses the same ID so the backend reuses the accepted
+ * user-turn metadata instead of duplicating the message + selected context.
+ * Provider-failure retry re-executes the existing turn rather than adding a
+ * second selected-context message.
+ */
+const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 interface MessageListController {
@@ -1636,16 +1657,65 @@ function handleHistorySelect(excerpt: HistoryExcerpt): void {
     ...selectedContextItems.value,
     { sourceId: excerpt.sourceId, preview, estimatedTokens },
   ];
+  syncActiveDraft();
 }
 
 function removeSelectedContext(sourceId: string): void {
   selectedContextItems.value = selectedContextItems.value.filter(
     (item) => item.sourceId !== sourceId
   );
+  syncActiveDraft();
 }
 
 function clearSelectedContext(): void {
   selectedContextItems.value = [];
+  syncActiveDraft();
+}
+
+/** Persist the active conversation's draft (per-conversation drafts, §13.3). */
+function syncActiveDraft(): void {
+  const id = activeConversationId.value;
+  if (id) {
+    selectedContextDrafts.value.set(id, [...selectedContextItems.value]);
+  }
+}
+
+/**
+ * Source navigation from the history drawer (§13.2, AC-17): close the drawer
+ * and return to the transcript without touching model state. Viewing never
+ * mutates the next model request — only an explicit "Select passage" action
+ * (handleHistorySelect) adds context chips. In particular, navigating must
+ * NOT draft a selection: otherwise a look-only browse would silently grow the
+ * next request.
+ */
+function handleHistoryNavigate(): void {
+  showHistoryDrawer.value = false;
+}
+
+/** Bounded retry for a failed/paused/cancelled compaction run (§13, FR-11). */
+async function handleCompactionRetry(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await handleCompactConversation();
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/** User-initiated cancel of the active compaction run (§11.6, FR-09). */
+async function handleCompactionCancel(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await cancelCompaction(activeConversationId.value);
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
 }
 
 /**
@@ -1841,9 +1911,16 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
-    // Drafted history selections are per-conversation (§13.3); switching
-    // conversations discards them so selections never leak across chats.
-    selectedContextItems.value = [];
+    // Per-conversation drafts (§13.3): stash the outgoing draft and restore
+    // the incoming one so switching preserves work without cross-chat leaks.
+    if (previousId) {
+      selectedContextDrafts.value.set(previousId, [
+        ...selectedContextItems.value,
+      ]);
+    }
+    selectedContextItems.value = id
+      ? [...(selectedContextDrafts.value.get(id) ?? [])]
+      : [];
     void refreshCompactionStatus();
   }
   void refreshWorkspace(id);
@@ -3766,7 +3843,13 @@ const onSend = async (
   // until the `start` event reports which references were accepted, so a
   // rejected/unchanged selection is never silently dropped.
   const pendingSelectionIds = selectedContextItems.value.map((item) => item.sourceId);
-  const submissionId = crypto.randomUUID();
+  // Stable submission identity (§13.3): reuse the pending ID across transport
+  // retries so the backend reuses the same user-turn metadata instead of
+  // duplicating the message. Resolved (cleared) on `start` acceptance below.
+  if (!pendingSubmissionId.value) {
+    pendingSubmissionId.value = crypto.randomUUID();
+  }
+  const submissionId = pendingSubmissionId.value;
 
   attachmentError.value = null;
   voicePlaybackError.value = null;
@@ -4075,7 +4158,8 @@ const onSend = async (
           // selected passages the backend actually accepted — those are now
           // folded into the turn. Drafts whose source changed or could not
           // fit stay in the chips so the user is not silently charged for
-          // context they did not get.
+          // context they did not get. Acceptance also resolves the stable
+          // submission identity so the next turn mints a fresh ID.
           if (pendingSelectionIds.length > 0) {
             const accepted = new Set<string>(
               chunk.historySelectionAcceptedIds ?? []
@@ -4083,7 +4167,9 @@ const onSend = async (
             selectedContextItems.value = selectedContextItems.value.filter(
               (item) => !accepted.has(item.sourceId)
             );
+            syncActiveDraft();
           }
+          pendingSubmissionId.value = null;
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
           // Real token counts from the server. Replace the streaming

@@ -246,6 +246,53 @@ export class AIChatV2Module extends BaseModule {
     );
   }
 
+  /** Bounded existence check after (timestamp, rowId) — no full load. */
+  async hasMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId = 0
+  ): Promise<boolean> {
+    return this.chatModule.hasMessagesAfter(
+      conversationId,
+      afterTimestamp,
+      afterRowId
+    );
+  }
+
+  /** Bounded delta read after (timestamp, rowId), capped at `limit` rows. */
+  async getMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId: number,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    return this.chatModule.getMessagesAfter(
+      conversationId,
+      afterTimestamp,
+      afterRowId,
+      limit
+    );
+  }
+
+  /** Scoped boundary-row lookup — never crosses conversations. */
+  async findBoundaryInConversation(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return this.chatModule.findBoundaryInConversation(
+      conversationId,
+      messageId
+    );
+  }
+
+  /** Bounded recent-message read (newest `limit`, chronological). */
+  async getRecentMessages(
+    conversationId: string,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    return this.chatModule.getRecentMessages(conversationId, limit);
+  }
+
   async clearConversation(conversationId: string): Promise<number> {
     const deleted = await this.chatModule.clearConversation(conversationId);
     // Cascade compact + session memory clear. Failures are logged, not thrown.
