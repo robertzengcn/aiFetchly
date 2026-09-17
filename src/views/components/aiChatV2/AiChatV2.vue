@@ -443,13 +443,11 @@
             v-model="selectedModel"
             :items="availableModels"
             :default-model="defaultModelId"
-            :disabled="chatIsRunning"
             :loading="availableModels.length === 0"
             class="ml-2"
           />
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
             class="ml-2"
             @update:model-value="onToolApprovalModeChange"
           />
