@@ -694,3 +694,273 @@ function makeCommandFixture(root: string): string {
   );
   return dir;
 }
+
+/** Plain fixture: no credentials, no dependencies — approve runs straight
+ *  into activation, which we make fail via an unowned collision. */
+function makeRollbackFixture(root: string): string {
+  const dir = path.join(root, "fixtures", "video-use-fail");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    "---\nname: video-use-fail\ndescription: Rollback fixture\n---\n\n# Usage\n\nEdit videos."
+  );
+  fs.writeFileSync(path.join(dir, "install.md"), "# Install\n\nNothing.\n");
+  return dir;
+}
+
+test.describe("Activation-failure rollback + typed dependency lifecycle (NL-1/NL-5)", () => {
+  test.setTimeout(240_000);
+
+  test("activation failure AFTER activation starts rolls back fully (case 5, FR-17/NFR-05)", async ({
+    aiApp,
+  }) => {
+    const app = aiApp;
+    const fixture = makeRollbackFixture(app.testRoot.rootPath);
+
+    // Pre-create an UNOWNED FILE at the exact managed-copy destination, so
+    // activation begins (approve passes token + revision gates) and then
+    // fails structurally on the destination check — a real production
+    // failure path, not a test seam.
+    const skillsRoot = path.join(app.testRoot.rootPath, ".aifetchly", "skills");
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const collision = path.join(skillsRoot, "video-use-fail");
+    fs.writeFileSync(collision, "foreign content, not owned by AiFetchly");
+
+    const prepared = await prepareToAwaitingApproval(app, fixture);
+    expect(prepared?.state).toBe("awaiting_approval");
+    const approved = await approve(app, prepared as InstallSnapshot);
+
+    // The session FAILED (activation began and could not complete).
+    expect(approved?.state).toBe("failed");
+    expect(approved?.errorCode).toBe("ACTIVATION_COLLISION");
+
+    // Rollback evidence: the foreign file is untouched and NO directory,
+    // backup, or sibling artifact was left behind.
+    const stat = fs.statSync(collision);
+    expect(stat.isFile()).toBe(true);
+    expect(fs.readFileSync(collision, "utf8")).toBe(
+      "foreign content, not owned by AiFetchly"
+    );
+    const leftovers = fs
+      .readdirSync(skillsRoot)
+      .filter((n) => n.startsWith("video-use-fail"));
+    expect(leftovers).toEqual(["video-use-fail"]);
+
+    // No durable installation row: the registry lists nothing for the source.
+    const listed = await invoke<{ installationId: number; name: string }[]>(
+      app,
+      "skill-install:list",
+      {}
+    );
+    const rows = (listed ?? []).filter((r) => r.name === "video-use-fail");
+    expect(rows).toHaveLength(0);
+
+    // The failed session is still correlatable (audit), but terminal.
+    const status = await invoke<InstallSnapshot>(app, "skill-install:status", {
+      sessionId: prepared?.sessionId,
+    });
+    expect(status?.state).toBe("failed");
+
+    await assertCleanTeardown(app, {
+      expectedExternalOrigins: ["https://github.com"],
+    });
+  });
+});
+
+/** Dependency-only fixture (no credential) for the PATH-controlled legs. */
+function makeTypedDepFixture(root: string, name: string): string {
+  const dir = path.join(root, "fixtures", name);
+  fs.mkdirSync(path.join(dir, "helpers"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: Typed dependency fixture\n---\n\n# Usage\n\nUse ffmpeg via helpers/.`
+  );
+  fs.writeFileSync(
+    path.join(dir, "install.md"),
+    "# Install\n\nRequires ffmpeg on PATH.\n"
+  );
+  fs.writeFileSync(path.join(dir, "helpers", "cut.py"), "# helper\n");
+  return dir;
+}
+
+test.describe("typed dependency approve → install → ready, deterministic on any runner (NL-5)", () => {
+  test.setTimeout(300_000);
+
+  // eslint-disable-next-line no-empty-pattern
+test("approve runs the typed installer; failure stays recoverable and retryable (FR-06/FR-14/FR-17)", async ({}, testInfo) => {
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    try {
+      // A PATH with NOTHING resolvable: the ffmpeg/ffprobe probes are
+      // deterministically MISSING (no runner dependency), and the typed
+      // installer cannot resolve its package manager (sudo/apt), so the
+      // install attempt FAILS without touching the network.
+      const emptyBin = path.join(root.rootPath, "empty-bin");
+      fs.mkdirSync(emptyBin, { recursive: true });
+      const manifest = {
+        authState: "authenticated" as const,
+        aiState: "local-enabled" as const,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+      };
+      writeStateManifest(root, manifest);
+      const fixture = makeTypedDepFixture(root.rootPath, "video-use-typed");
+
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        extraEnv: { PATH: emptyBin },
+      });
+      try {
+        const prepared = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:prepare",
+          { conversationId: "e2e-typed-approve", source: fixture }
+        );
+        expect(prepared?.state).toBe("awaiting_approval");
+        const token = await approvalToken(app, prepared?.sessionId ?? "");
+        const approved = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:approve",
+          {
+            sessionId: prepared?.sessionId,
+            planRevision: prepared?.planRevision,
+            approve: true,
+            approvalToken: token,
+          }
+        );
+        // Deterministic hold: probes cannot pass with an empty PATH.
+        expect(approved?.state).toBe("installing_dependencies");
+        expect(approved?.nextAction).toBe("approve-dependency");
+        const dep = approved?.safePlan?.dependencies?.find(
+          (d) => d.id === "dep:ffmpeg"
+        );
+        expect(dep).toMatchObject({ name: "ffmpeg", status: "missing" });
+
+        // APPROVE the typed dependency: the installer runs (and fails —
+        // no package manager resolvable). The session STAYS recoverable
+        // at the hold; it must not fall into a terminal failure.
+        const attempted = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:approve-dependency",
+          {
+            sessionId: approved?.sessionId,
+            dependencyId: "dep:ffmpeg",
+            approve: true,
+            planRevision: approved?.planRevision,
+            approvalToken: token,
+          }
+        );
+        expect(attempted?.state).toBe("installing_dependencies");
+        expect(attempted?.nextAction).toBe("approve-dependency");
+
+        // RETRY: a second approve-dependency attempt is accepted (the
+        // same-cause 3-stripe cap is not yet reached).
+        const retried = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:approve-dependency",
+          {
+            sessionId: approved?.sessionId,
+            dependencyId: "dep:ffmpeg",
+            approve: true,
+            planRevision: approved?.planRevision,
+            approvalToken: token,
+          }
+        );
+        expect(retried?.state).toBe("installing_dependencies");
+
+        // The activated skill still exists (rollback did NOT fire — the
+        // hold is recoverable, FR-17).
+        expect(
+          fs.existsSync(
+            path.join(root.rootPath, ".aifetchly", "skills", "video-use-typed")
+          )
+        ).toBe(true);
+
+        await assertCleanTeardown(app, { expectedExternalOrigins: [] });
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
+
+  // eslint-disable-next-line no-empty-pattern
+test("satisfied probes run straight through approve to ready (deterministic)", async ({}, testInfo) => {
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    try {
+      // A PATH whose ONLY ffmpeg/ffprobe are stubs printing the exact
+      // version line the probes expect — SATISFIED on any runner.
+      const stubBin = path.join(root.rootPath, "stub-bin");
+      fs.mkdirSync(stubBin, { recursive: true });
+      const writeStub = (name: string, line: string): void => {
+        const sh = path.join(stubBin, name);
+        fs.writeFileSync(sh, `#!/bin/sh\necho "${line}"\nexit 0\n`);
+        fs.chmodSync(sh, 0o755);
+        const cmd = path.join(stubBin, `${name}.cmd`);
+        fs.writeFileSync(cmd, `@echo off\necho ${line}\r\nexit /b 0\r\n`);
+      };
+      writeStub("ffmpeg", "ffmpeg version e2e-stub");
+      writeStub("ffprobe", "ffprobe version e2e-stub");
+      const manifest = {
+        authState: "authenticated" as const,
+        aiState: "local-enabled" as const,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+      };
+      writeStateManifest(root, manifest);
+      const fixture = makeTypedDepFixture(root.rootPath, "video-use-ready");
+
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        extraEnv: { PATH: stubBin },
+      });
+      try {
+        const prepared = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:prepare",
+          { conversationId: "e2e-typed-ready", source: fixture }
+        );
+        expect(prepared?.state).toBe("awaiting_approval");
+        const planDeps = prepared?.safePlan?.dependencies ?? [];
+        const ffmpeg = planDeps.find((d) => d.id === "dep:ffmpeg");
+        expect(ffmpeg?.status).toBe("satisfied");
+
+        const token = await approvalToken(app, prepared?.sessionId ?? "");
+        const approved = await invoke<InstallSnapshot>(
+          app,
+          "skill-install:approve",
+          {
+            sessionId: prepared?.sessionId,
+            planRevision: prepared?.planRevision,
+            approve: true,
+            approvalToken: token,
+          }
+        );
+        expect(approved?.state).toBe("ready");
+        expect(approved?.nextAction).toBe("ready");
+        expect(approved?.installationId).not.toBeNull();
+        for (const dep of approved?.safePlan?.dependencies ?? []) {
+          expect(dep.status).toBe("satisfied");
+        }
+
+        await assertCleanTeardown(app, { expectedExternalOrigins: [] });
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
+});
