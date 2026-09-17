@@ -935,20 +935,30 @@ export class AIChatQueryEngine {
       // @-mention context block lives only in modelUserMessage for the model).
       // Scheduled turns use a stable message id + insert-if-absent so a
       // crash-retry does not duplicate the transcript row (technical-design §14.2).
-      const savedUser = scheduledContext
-        ? await module.saveUserMessageIfAbsent({
-            conversationId,
-            content: messageToSave,
-            messageId: scheduledContext.userMessageId,
-            metadata: userMetadata,
-            turnId,
-          })
-        : await module.saveUserMessage({
-            conversationId,
-            content: messageToSave,
-            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
-            turnId,
-          });
+      // Interactive turns with a submissionId take the same idempotent path with
+      // a derived stable id so a transport retry reuses the accepted user row
+      // (§13.3) instead of writing a second one.
+      const idempotentMessageId = scheduledContext
+        ? scheduledContext.userMessageId
+        : request.submissionId
+          ? `user-${request.submissionId}`
+          : undefined;
+      const savedUser =
+        (scheduledContext && scheduledContext.userMessageId) ||
+        request.submissionId
+          ? await module.saveUserMessageIfAbsent({
+              conversationId,
+              content: messageToSave,
+              messageId: idempotentMessageId ?? "",
+              metadata: userMetadata,
+              turnId,
+            })
+          : await module.saveUserMessage({
+              conversationId,
+              content: messageToSave,
+              metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+              turnId,
+            });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {

@@ -25,6 +25,7 @@ const holders = vi.hoisted(() => ({
   archiveReadsEnabled: true,
   resolveSelections: vi.fn(),
   saveUserMessage: vi.fn().mockResolvedValue({ messageId: "user-1" }),
+  saveUserMessageIfAbsent: vi.fn().mockResolvedValue({ messageId: "user-1" }),
   assembleInput: undefined as { currentUserMessage?: string } | undefined,
 }));
 
@@ -36,6 +37,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
       saveUserMessage: holders.saveUserMessage,
+      saveUserMessageIfAbsent: holders.saveUserMessageIfAbsent,
       getConversationMessages: vi.fn().mockResolvedValue([]),
       getRecentMessages: vi.fn().mockResolvedValue([]),
       saveAssistantMessage: vi.fn().mockResolvedValue({}),
@@ -374,5 +376,114 @@ describe("AIChatQueryEngine submit-time history selection (§13.3)", () => {
     expect(holders.assembleInput?.currentUserMessage).toBe("Still goes out");
     expect(loop.run).toHaveBeenCalledTimes(1);
     expect(savedUserMessage().metadata?.historySelections).toBeUndefined();
+  });
+});
+
+describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "eng-submission-"));
+    holders.saveUserMessageIfAbsent.mockClear();
+    holders.saveUserMessage.mockClear();
+    holders.saveUserMessage.mockResolvedValue({ messageId: "user-1" });
+    holders.saveUserMessageIfAbsent.mockResolvedValue({ messageId: "user-1" });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("routes an interactive turn with submissionId through the idempotent save", async () => {
+    const { engine } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: {
+        message: "Retry-safe send",
+        submissionId: "sub_abc123",
+      },
+    });
+
+    expect(holders.saveUserMessageIfAbsent).toHaveBeenCalledTimes(1);
+    const saved = holders.saveUserMessageIfAbsent.mock
+      .calls.at(-1)?.[0] as {
+      messageId: string;
+      content: string;
+    };
+    expect(saved.messageId).toBe("user-sub_abc123");
+    expect(saved.content).toBe("Retry-safe send");
+    expect(holders.saveUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("reuses the same stable user-message id across retries with one submissionId", async () => {
+    const { engine } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "first attempt", submissionId: "sub_retry1" },
+    });
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "first attempt", submissionId: "sub_retry1" },
+    });
+
+    const firstId = (
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+    ).messageId;
+    const secondId = (
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+    ).messageId;
+    expect(firstId).toBe(secondId);
+    expect(firstId).toBe("user-sub_retry1");
+  });
+
+  it("derives distinct stable ids from different submissionIds", async () => {
+    const { engine } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "one", submissionId: "sub_one" },
+    });
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "two", submissionId: "sub_two" },
+    });
+
+    const firstId = (
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+    ).messageId;
+    const secondId = (
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+    ).messageId;
+    expect(firstId).not.toBe(secondId);
+  });
+
+  it("does not pass submissionId metadata through to scheduled idempotent saves", async () => {
+    const { engine } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: {
+        message: "plain",
+        submissionId: "sub_sched",
+      },
+    });
+
+    const saved = holders.saveUserMessageIfAbsent.mock.calls
+      .at(-1)?.[0] as { content: string };
+    expect(saved.content).toBe("plain");
+  });
+
+  it("keeps the legacy saveUserMessage path when no submissionId is supplied", async () => {
+    const { engine } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "No submission id" },
+    });
+
+    expect(holders.saveUserMessage).toHaveBeenCalledTimes(1);
+    expect(holders.saveUserMessageIfAbsent).not.toHaveBeenCalled();
   });
 });
