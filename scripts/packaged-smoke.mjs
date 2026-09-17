@@ -18,7 +18,159 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as crypto from "node:crypto";
 import { _electron } from "playwright";
+
+/** The public fixture installed by the git-free phase (GF-1). */
+const SMOKE_FIXTURE_REPO =
+  process.env.PKG_SMOKE_GITHUB_REPO ??
+  "https://github.com/robertzengcn/aifetchly-plugin-smoke-fixture";
+
+/**
+ * Sample the packaged app's descendant processes for a `git` executable
+ * (POSIX /proc walk from the Electron root pid). Windows relies on the
+ * PATH guarantee (no watchdog — the sampled tree would need WMI).
+ */
+function startGitWatchdog(rootPid) {
+  if (process.platform === "win32") return { sawGit: () => false, stop: () => {} };
+  let sawGit = false;
+  const timer = setInterval(() => {
+    try {
+      const childrenOf = new Map();
+      const pids = fs
+        .readdirSync("/proc")
+        .filter((d) => /^\d+$/.test(d))
+        .map(Number);
+      for (const pid of pids) {
+        try {
+          const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+          // Fields: pid (comm) ppid — comm may contain spaces; parse from
+          // the right: the last two numeric-ish tokens before state context.
+          const m = stat.match(/^(\d+) \(.*\) [A-Z] (-?\d+)/);
+          if (!m) continue;
+          const ppid = Number(m[2]);
+          if (!childrenOf.has(ppid)) childrenOf.set(ppid, []);
+          childrenOf.get(ppid).push(pid);
+        } catch {
+          /* process gone */
+        }
+      }
+      const stack = [rootPid];
+      const seen = new Set();
+      while (stack.length > 0) {
+        const pid = stack.pop();
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        try {
+          const cmdline = fs
+            .readFileSync(`/proc/${pid}/cmdline`, "utf8")
+            .split("\0")[0] ?? "";
+          if (/(^|\/)git(\.exe)?$/i.test(cmdline)) {
+            sawGit = true;
+          }
+        } catch {
+          /* gone */
+        }
+        for (const child of childrenOf.get(pid) ?? []) stack.push(child);
+      }
+    } catch {
+      /* /proc unavailable */
+    }
+  }, 150);
+  return {
+    sawGit: () => sawGit,
+    stop: () => clearInterval(timer),
+  };
+}
+
+/**
+ * GF-1: install a PUBLIC GitHub plugin on the packaged app with NO git on
+ * PATH, proving the archive path spawns zero Git processes and yields a
+ * healthy plugin row. Runs when PKG_SMOKE_GITHUB=1 (CI) and only after the
+ * base smoke passed (the caller owns the app lifecycle).
+ */
+async function gitFreeGitHubInstall(exe) {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-pkg-gh-"));
+  // A PATH with nothing resolvable — in particular NO git. The packaged
+  // app itself was launched by absolute path and needs no PATH entries for
+  // the HTTPS archive flow.
+  const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-nopath-"));
+  let app;
+  const result = { ok: false, pluginRow: false, sawGit: false, errors: [] };
+  try {
+    app = await _electron.launch({
+      executablePath: exe,
+      args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+      env: {
+        ...process.env,
+        ELECTRON_USER_DATA_PATH: userData,
+        PATH: emptyBin,
+      },
+      timeout: 60_000,
+    });
+    const page = await app.firstWindow();
+    await page.waitForLoadState("domcontentloaded", { timeout: 60_000 });
+    await page.waitForFunction(() => Boolean(window.api), undefined, {
+      timeout: 60_000,
+    });
+
+    const watchdog = startGitWatchdog(app.process()?.pid);
+    try {
+      const installResult = await page.evaluate(
+        async ({ uri }) => {
+          const resp = (await window.api.invoke("plugin:install-from-source", {
+            operationId: crypto.randomUUID(),
+            kind: "github",
+            uri,
+            overwrite: true,
+          }));
+          return resp ?? null;
+        },
+        { uri: SMOKE_FIXTURE_REPO }
+      );
+      const installed =
+        installResult && installResult.status === true && installResult.data;
+      if (!installed || installed.success !== true) {
+        result.errors.push(
+          "install failed: " + JSON.stringify(installed)?.slice(0, 300)
+        );
+      } else {
+        result.ok = true;
+        const listed = await page.evaluate(async () => {
+          const resp = (await window.api.invoke("plugin:list"));
+          return resp && resp.status === true ? resp.data : null;
+        });
+        const names = Array.isArray(listed)
+          ? listed.map((p) => p && p.name)
+          : [];
+        result.pluginRow = names.includes("smoke-fixture");
+        if (!result.pluginRow) {
+          result.errors.push("plugin row missing after install: " + names.join(","));
+        }
+      }
+    } finally {
+      watchdog.stop();
+      result.sawGit = watchdog.sawGit();
+    }
+  } catch (err) {
+    result.errors.push(err instanceof Error ? err.message : String(err));
+  } finally {
+    if (app) {
+      try {
+        await app.close({ timeout: 15_000 });
+      } catch {
+        /* best-effort */
+      }
+    }
+    try {
+      fs.rmSync(userData, { recursive: true, force: true });
+      fs.rmSync(emptyBin, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+  return result;
+}
 
 const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -120,6 +272,23 @@ async function main() {
       throw new Error("local IPC (app:info) did not succeed through the preload bridge");
     }
     console.log("[packaged-smoke] OK: window + renderer + preload + local IPC (app:info)");
+
+    // GF-1 (opt-in; CI sets PKG_SMOKE_GITHUB=1): git-free public GitHub
+    // plugin install on the packaged app.
+    if (process.env.PKG_SMOKE_GITHUB === "1") {
+      const gh = await gitFreeGitHubInstall(exe);
+      console.log(
+        `[packaged-smoke] git-free GitHub install: ok=${gh.ok} ` +
+          `pluginRow=${gh.pluginRow} sawGit=${gh.sawGit}` +
+          (gh.errors.length > 0 ? ` errors=${gh.errors.join(" | ")}` : "")
+      );
+      if (!gh.ok || !gh.pluginRow || gh.sawGit) {
+        throw new Error(
+          "git-free GitHub install failed " +
+            `(ok=${gh.ok} pluginRow=${gh.pluginRow} sawGit=${gh.sawGit})`
+        );
+      }
+    }
   } catch (err) {
     console.error("[packaged-smoke] FAIL:", err.message);
     exitCode = 1;

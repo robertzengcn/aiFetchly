@@ -242,9 +242,13 @@ jobs:
         # or if main_window/index.html is missing from the package.
         run: yarn verify-packaged-app
 
-      - name: Packaged application smoke (T-13)
+      - name: Packaged application smoke (T-13 + GF-1 git-free GitHub)
         # Launch the packaged executable with an isolated user-data dir and verify
-        # the first window, renderer HTML, and preload bridge (design §17.2).
+        # the first window, renderer HTML, and preload bridge (design §17.2);
+        # PKG_SMOKE_GITHUB=1 additionally installs the public fixture repo
+        # with NO git on PATH and asserts zero git spawns + a plugin row.
+        env:
+          PKG_SMOKE_GITHUB: "1"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke
 
