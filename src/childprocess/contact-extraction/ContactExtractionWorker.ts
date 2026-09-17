@@ -49,19 +49,39 @@ type ExtractContactFromUrlsMessage = Extract<
  */
 const SHUTDOWN_BROWSER_TIMEOUT_MS = 3000;
 let shuttingDown = false;
+let shutdownForceTimer: NodeJS.Timeout | null = null;
+
+/** Re-bound the graceful-close watchdog to the parent's remaining allowance. */
+function adjustShutdownTimeout(boundedMs: number): void {
+  if (shutdownForceTimer !== null) {
+    clearTimeout(shutdownForceTimer);
+  }
+  const exitCode = 0;
+  shutdownForceTimer = setTimeout(() => {
+    log.warn(
+      `ContactExtractionWorker: graceful close exceeded ${boundedMs}ms, forcing exit`
+    );
+    process.exit(exitCode);
+  }, boundedMs);
+  shutdownForceTimer.unref();
+}
+
 function gracefulShutdown(signal: string, exitCode: number): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log.info(
     `ContactExtractionWorker: received ${signal}, closing browsers and exiting`
   );
-  const force = setTimeout(() => {
-    log.warn(
-      `ContactExtractionWorker: graceful close exceeded ${SHUTDOWN_BROWSER_TIMEOUT_MS}ms, forcing exit`
-    );
-    process.exit(exitCode);
-  }, SHUTDOWN_BROWSER_TIMEOUT_MS);
-  force.unref();
+  if (shutdownForceTimer === null) {
+    const force = setTimeout(() => {
+      log.warn(
+        `ContactExtractionWorker: graceful close exceeded ${SHUTDOWN_BROWSER_TIMEOUT_MS}ms, forcing exit`
+      );
+      process.exit(exitCode);
+    }, SHUTDOWN_BROWSER_TIMEOUT_MS);
+    force.unref();
+    shutdownForceTimer = force;
+  }
   closeAllActiveBrowsers()
     .catch((e) =>
       log.error("ContactExtractionWorker: closeAllActiveBrowsers failed:", e)
@@ -92,13 +112,35 @@ function initializeWorker(): void {
     }
 
     const message = parsed.data;
+    if (message.type === "shutdown") {
+      // Design §7 protocol: ack, then close browsers/subprocesses and exit
+      // within the parent's remaining allowance. Local timeout stays bounded
+      // by the smaller of the browser timeout and the parent's remainingMs.
+      if (typeof message.remainingMs === "number") {
+        const bounded = Math.max(
+          250,
+          Math.min(message.remainingMs, SHUTDOWN_BROWSER_TIMEOUT_MS)
+        );
+        if (bounded < SHUTDOWN_BROWSER_TIMEOUT_MS) {
+          adjustShutdownTimeout(bounded);
+        }
+      }
+      process.send?.({ type: "shutdown-ack", requestId: message.requestId });
+      gracefulShutdown("shutdown-request", 0);
+      return;
+    }
+    if (shuttingDown) {
+      // Closing flag rejects new work (design §7 step 1).
+      log.warn(
+        "ContactExtractionWorker: dropping inbound job — shutdown in progress"
+      );
+      return;
+    }
     if (message.type === "extract-contact") {
       handleExtractionRequest(message);
     } else if (message.type === "extract-contact-from-urls") {
       handleExtractContactFromUrls(message);
     }
-    // 'shutdown' is a no-op at the schema level; the worker exits via
-    // SIGTERM/SIGINT handlers (process signals), not via IPC.
   });
 
   // Handle worker errors — WS-4 R4.3: on fatal error, notify main + exit(1)

@@ -233,6 +233,13 @@ function spawnWorker(): ChildProcess {
 
     const message = parsed.data;
     switch (message.type) {
+      case "shutdown-ack":
+        // Design §7: acknowledgement of our shutdown-request. The parent
+        // still waits for OBSERVED process exit — an ack is not exit proof.
+        log.info(
+          `Contact extraction worker acknowledged shutdown (requestId=${message.requestId})`
+        );
+        break;
       case "worker-ready":
         log.info("Contact extraction worker is ready");
         resetRestartCounter(); // WS-4 R4.2: healthy start clears the restart counter
@@ -729,6 +736,31 @@ export async function cleanupContactExtractionWorker(
     const record = registry
       .listByOwner("contact-extraction")
       .find((r) => r.pid === worker.pid);
+
+    // Design §7 protocol FIRST: ask the worker to close its browsers and
+    // exit within the parent's remaining allowance...
+    const requestId = uuidv4();
+    try {
+      worker.send({
+        type: "shutdown",
+        requestId,
+        reason: "app-shutdown",
+        remainingMs: observeMs,
+      });
+    } catch (err) {
+      log.warn(
+        "contact-extraction shutdown-request send failed:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+
+    if (observeMs > 0 && record) {
+      // ...wait for OBSERVED natural exit within the budget...
+      const exitedNaturally = await registry.observeExit(record.id, observeMs);
+      if (exitedNaturally) return true;
+    }
+
+    // ...then signal-kill and verify again (an ack is not exit proof).
     try {
       worker.kill();
     } catch (err) {
@@ -738,7 +770,10 @@ export async function cleanupContactExtractionWorker(
       );
     }
     if (observeMs > 0 && record) {
-      const exited = await registry.observeExit(record.id, observeMs);
+      const exited = await registry.observeExit(
+        record.id,
+        Math.min(observeMs, 1_000)
+      );
       if (!exited) {
         log.warn(
           `[contact-extraction] worker pid=${worker.pid} did not exit within ${observeMs}ms; force-phase will verify`

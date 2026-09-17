@@ -147,6 +147,7 @@ describe("contactExtraction worker inbound dispatch", () => {
     handlers: {
       onExtract: (batchId: string) => void;
       onExtractUrls: (requestId: string, urls: string[]) => void;
+      onShutdown: (requestId: string, remainingMs?: number) => void;
       onDrop: (errMsg: string) => void;
     },
   ): void {
@@ -160,8 +161,9 @@ describe("contactExtraction worker inbound dispatch", () => {
       handlers.onExtract(m.batchId);
     } else if (m.type === "extract-contact-from-urls") {
       handlers.onExtractUrls(m.requestId, m.urls);
+    } else if (m.type === "shutdown") {
+      handlers.onShutdown(m.requestId, m.remainingMs);
     }
-    // shutdown: no-op
   }
 
   it("accepts a fully-formed extract-contact", () => {
@@ -176,7 +178,7 @@ describe("contactExtraction worker inbound dispatch", () => {
           { id: 2, url: "https://b.com", title: "B" },
         ],
       },
-      { onExtract, onExtractUrls: vi.fn(), onDrop: vi.fn() },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop: vi.fn() },
     );
     expect(onExtract).toHaveBeenCalledWith("batch-1");
   });
@@ -186,7 +188,7 @@ describe("contactExtraction worker inbound dispatch", () => {
     const onExtract = vi.fn();
     dispatchInbound(
       { type: "extract-contact", batchId: "b", resultIds: [1] },
-      { onExtract, onExtractUrls: vi.fn(), onDrop },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop },
     );
     expect(onDrop).toHaveBeenCalledTimes(1);
     expect(onExtract).not.toHaveBeenCalled();
@@ -196,19 +198,30 @@ describe("contactExtraction worker inbound dispatch", () => {
     const onExtractUrls = vi.fn();
     dispatchInbound(
       { type: "extract-contact-from-urls", requestId: "r1", urls: ["https://x.com"] },
-      { onExtract: vi.fn(), onExtractUrls, onDrop: vi.fn() },
+      { onExtract: vi.fn(), onExtractUrls, onShutdown: vi.fn(), onDrop: vi.fn() },
     );
     expect(onExtractUrls).toHaveBeenCalledWith("r1", ["https://x.com"]);
   });
 
-  it("silently accepts shutdown (no-op at worker)", () => {
+  it("routes shutdown to the §7 protocol handler with requestId + budget", () => {
     const onDrop = vi.fn();
     const onExtract = vi.fn();
+    const onShutdown = vi.fn();
     dispatchInbound(
-      { type: "shutdown" },
-      { onExtract, onExtractUrls: vi.fn(), onDrop },
+      { type: "shutdown", requestId: "req-7", reason: "app-shutdown", remainingMs: 2000 },
+      { onExtract, onExtractUrls: vi.fn(), onShutdown, onDrop },
     );
     expect(onDrop).not.toHaveBeenCalled();
     expect(onExtract).not.toHaveBeenCalled();
+    expect(onShutdown).toHaveBeenCalledWith("req-7", 2000);
+  });
+
+  it("drops a bare shutdown missing the correlatable requestId", () => {
+    const onDrop = vi.fn();
+    dispatchInbound(
+      { type: "shutdown" },
+      { onExtract: vi.fn(), onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop },
+    );
+    expect(onDrop).toHaveBeenCalled();
   });
 });
