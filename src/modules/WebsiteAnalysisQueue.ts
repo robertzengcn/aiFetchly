@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { utilityProcess } from "electron";
 import { log } from "@/modules/Logger";
 import { AiChatApi, WebsiteAnalysisRequest } from "@/api/aiChatApi";
@@ -378,11 +379,15 @@ export class WebsiteAnalysisQueue {
     }
 
     return new Promise((resolve, reject) => {
+      if (!ownedSpawnAllowed("website-analysis")) {
+        throw new Error("Application is shutting down; refusing new work (website-analysis)");
+      }
       const childProcess = utilityProcess.fork(this.childProcessPath!, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: buildPackagedWorkerEnv(),
       });
+      registerOwnedProcess("website-analysis", childProcess);
 
       const requestId = `analyze-${jobId}-${Date.now()}`;
       const timeout = setTimeout(() => {

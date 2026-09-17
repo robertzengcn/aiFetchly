@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
@@ -369,11 +370,15 @@ export class OutboundEmailWorkerStarter extends BaseDb {
  * use `pid`, `postMessage`, `on`, `off`, and `kill`.
  */
 const defaultFork: ForkFn = (modulePath, args, options) => {
+  if (!ownedSpawnAllowed("outbound-email-worker")) {
+    throw new Error("Application is shutting down; refusing email worker start");
+  }
   const child = utilityProcess.fork(
     modulePath,
     args,
     options as Parameters<typeof utilityProcess.fork>[2]
   );
+  registerOwnedProcess("outbound-email-worker", child);
   return child as unknown as ForkedChild;
 };
 

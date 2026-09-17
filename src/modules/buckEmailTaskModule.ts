@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { Token } from "@/modules/token";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { BuckEmailType } from "@/entityTypes/buckEmail-type";
@@ -484,6 +485,9 @@ export class BuckEmailTaskModule extends BaseModule {
     }
     const { port1 } = new MessageChannelMain();
 
+    if (!ownedSpawnAllowed("bulk-email")) {
+      throw new Error("Application is shutting down; refusing new work (bulk-email)");
+    }
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
@@ -494,6 +498,7 @@ export class BuckEmailTaskModule extends BaseModule {
         },
       }),
     });
+    registerOwnedProcess("bulk-email", child);
 
     child.on("spawn", () => {
       console.log("child process satart, pid is" + child.pid);

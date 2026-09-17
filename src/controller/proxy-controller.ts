@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 // import * as path from "path"
 import * as fs from "fs";
 import { log } from "@/modules/Logger";
@@ -306,11 +307,17 @@ export class ProxyController {
         .toString(36)
         .substr(2, 9)}`;
 
+      if (!ownedSpawnAllowed("google-proxy-check")) {
+        reject(new Error("Application is shutting down; refusing proxy check"));
+        return;
+      }
+
       const child = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: [],
         env: buildPackagedWorkerEnv(),
       });
+      registerOwnedProcess("google-proxy-check", child);
 
       // Set timeout to kill child process if it hangs
       const timeoutId = setTimeout(() => {

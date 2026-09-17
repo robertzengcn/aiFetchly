@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "@/modules/Logger";
@@ -296,7 +297,7 @@ export class ManagedBrowserWorkerClient {
   // -----------------------------------------------------------------------
 
   private handleMessage(raw: unknown): void {
-    let parsed: unknown = typeof raw === "string" ? safeJsonParse(raw) : raw;
+    const parsed: unknown = typeof raw === "string" ? safeJsonParse(raw) : raw;
     const validated = managedBrowserOutboundSchema().safeParse(parsed);
     if (!validated.success) {
       this.malformedCount++;
@@ -395,10 +396,15 @@ function defaultFork(
       ) => UtilityProcessLike;
     };
   };
-  return electron.utilityProcess.fork(entryPath, [...args], {
+  if (!ownedSpawnAllowed("managed-browser-worker")) {
+    throw new Error("Application is shutting down; refusing worker start");
+  }
+  const proc = electron.utilityProcess.fork(entryPath, [...args], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv() as Record<string, string>,
   });
+  registerOwnedProcess("managed-browser-worker", proc);
+  return proc;
 }
 
 /** Resolve the packaged/dev worker entry (ManagedBrowser.js). */

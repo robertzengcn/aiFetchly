@@ -39,7 +39,7 @@ export interface OwnedProcessHandle {
   kill(signal?: NodeJS.Signals): boolean;
   once(
     event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+    listener: (code: number | null, signal?: NodeJS.Signals | null) => void
   ): unknown;
 }
 

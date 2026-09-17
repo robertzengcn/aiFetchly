@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 //import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { EmailsearchTaskModel } from "@/model/EmailsearchTask.model";
@@ -176,6 +177,9 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     }
 
+    if (!ownedSpawnAllowed("email-search")) {
+      throw new Error("Application is shutting down; refusing new work (email-search)");
+    }
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: [],
@@ -187,6 +191,7 @@ export class EmailSearchTaskModule extends BaseModule {
         },
       }),
     });
+    registerOwnedProcess("email-search", child);
     // console.log(path.join(__dirname, 'utilityCode.js'))
     let logpath = tokenService.getValue(USERLOGPATH);
     if (!logpath) {

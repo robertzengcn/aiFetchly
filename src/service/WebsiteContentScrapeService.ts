@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * WebsiteContentScrapeService — shared facade for the websiteContentScraper
  * child process.
@@ -231,12 +232,19 @@ export class WebsiteContentScrapeService {
       throw new Error("Child process file not found");
     }
 
+    if (!ownedSpawnAllowed("website-content-scrape")) {
+      return Promise.reject(
+        new Error("Application is shutting down; refusing scrape worker start")
+      );
+    }
+
     return new Promise((resolve, reject) => {
       const childProcess = utilityProcess.fork(childProcessPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: buildPackagedWorkerEnv(),
       });
+      registerOwnedProcess("website-content-scrape", childProcess);
 
       const requestId = `scrape-${uuidv4()}-${Date.now()}`;
       const outputCapture = createChildOutputCapture();

@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * ShellToolService — hardened shell command execution for AI chat.
  *
@@ -242,6 +243,20 @@ async function runShell(
     // collection must stop to avoid double-buffering.
     let detained = false;
 
+    if (!ownedSpawnAllowed("shell-tool")) {
+      resolve({
+        success: false,
+        exit_code: null,
+        stdout: "",
+        stderr: "Application is shutting down; shell execution refused",
+        duration_ms: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        timed_out: false,
+      } as ShellExecutionResult);
+      return;
+    }
+
     const child = spawn(interpreter.command, [...interpreter.args, command], {
       cwd,
       env,
@@ -250,6 +265,7 @@ async function runShell(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    registerOwnedProcess("shell-tool", child);
 
     const timer = setTimeout(() => {
       timedOut = true;

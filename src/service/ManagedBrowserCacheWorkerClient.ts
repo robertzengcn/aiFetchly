@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "@/modules/Logger";
@@ -481,10 +482,15 @@ function defaultCacheWorkerFork(
       ) => UtilityProcessLike;
     };
   };
-  return electron.utilityProcess.fork(entryPath, [...args], {
+  if (!ownedSpawnAllowed("managed-browser-cache-worker")) {
+    throw new Error("Application is shutting down; refusing worker start");
+  }
+  const proc = electron.utilityProcess.fork(entryPath, [...args], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv() as Record<string, string>,
   });
+  registerOwnedProcess("managed-browser-cache-worker", proc);
+  return proc;
 }
 
 /** Resolve the packaged/dev cache worker entry (ManagedBrowserCacheWorker.js). */
