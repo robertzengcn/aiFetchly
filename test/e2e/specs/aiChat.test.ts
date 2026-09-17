@@ -27,7 +27,11 @@ function composerTextarea(app: {
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // Chat-first boot race: composer may already be present.
+  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  if (await chatToggle.isVisible().catch(() => false)) {
+    await chatToggle.click();
+  }
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
 }
 

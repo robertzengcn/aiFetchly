@@ -24,10 +24,16 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // Chat-first boot race: composer may already be present.
+  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  if (await chatToggle.isVisible().catch(() => false)) {
+    await chatToggle.click();
+  }
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
+// First test arg must be a destructuring pattern; `{}` = no fixtures used.
+// eslint-disable-next-line no-empty-pattern
 test("conversation persists across a controlled restart (T-12)", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();

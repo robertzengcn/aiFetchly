@@ -21,7 +21,11 @@ function composer(app: AppLike): import("@playwright/test").Locator {
 }
 
 async function openChat(app: AppLike): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // Chat-first boot race: composer may already be present.
+  const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  if (await chatToggle.isVisible().catch(() => false)) {
+    await chatToggle.click();
+  }
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 

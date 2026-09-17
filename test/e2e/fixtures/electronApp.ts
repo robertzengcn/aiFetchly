@@ -20,6 +20,11 @@ export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /** Test-steering overrides applied AFTER sanitization (design §13.2 keeps
+   *  the secret filter authoritative; these may only ADD/replace values —
+   *  used for deterministic probes, e.g. a PATH without ffmpeg, or the
+   *  deferred tool-catalog mode). Never used to inject credentials. */
+  readonly extraEnv?: Readonly<Record<string, string>>;
 }
 
 export interface NetworkViolation {
@@ -161,6 +166,9 @@ export async function launchAiFetchly(
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
   const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  if (options.extraEnv) {
+    Object.assign(env, options.extraEnv);
+  }
 
   const electronApp = await electronLauncher.launch({
     args: [

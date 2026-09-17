@@ -39,6 +39,14 @@ export interface RedactedRequest {
   readonly toolNames: readonly string[];
   readonly clientDisconnected: boolean;
   readonly timestamp: number;
+  /** Occurrences of the fixed prompt-skill hidden-context marker in the
+   *  request body (redaction-safe constant, not user content). */
+  readonly hiddenSkillBlocks: number;
+  /** Post-compaction reattachment blocks in the request body. */
+  readonly reattachedSkillBlocks: number;
+  /** Structured deactivation diagnostics (code strings only, e.g.
+   *  SKILL_HASH_CHANGED / SKILL_UNINSTALLED). */
+  readonly skillDiagnostics: readonly string[];
 }
 
 export interface FakeOpenAiController {
@@ -109,6 +117,14 @@ function redactChatRequest(
     toolNames,
     clientDisconnected,
     timestamp: Date.now(),
+    // Occurrences of the fixed prompt-skill context markers — REDACTED
+    // counts (constant markers, never user content), used to prove single
+    // vs duplicated instruction injection and post-compaction reattachment.
+    hiddenSkillBlocks: (rawBody.match(/<invoked_prompt_skill /g) ?? []).length,
+    reattachedSkillBlocks: (
+      rawBody.match(/invoked-prompt-skill-reattached/g) ?? []
+    ).length,
+    skillDiagnostics: (rawBody.match(/invoked-prompt-skill-diagnostic code="([A-Z_]+)"/g) ?? []),
   };
 }
 
@@ -303,6 +319,61 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         requestLog.push(redactChatRequest(req, rawBody, false));
         res.writeHead(plan.status, { "Content-Type": "application/json" });
         res.end(plan.body);
+        return;
+      }
+
+      // Non-streaming fidelity (real OpenAI contract): when the request did
+      // NOT ask for SSE, answer with a single chat.completion JSON body.
+      // Background workloads (e.g. full compact) issue plain JSON requests,
+      // and JSON.parsing an SSE body fails the same way it would against
+      // the real API.
+      let wantsStream = true;
+      try {
+        wantsStream = (JSON.parse(rawBody) as { stream?: boolean }).stream === true;
+      } catch {
+        wantsStream = true;
+      }
+      if (!wantsStream) {
+        requestLog.push(redactChatRequest(req, rawBody, false));
+        const text =
+          isContinuation && followupText
+            ? followupText
+            : responseText ?? "Non-streaming e2e completion.";
+        const isToolPlan =
+          !isContinuation && !responseText && toolCallConfig !== null;
+        const message = isToolPlan
+          ? {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_e2e_1",
+                  type: "function",
+                  function: {
+                    name: toolCallConfig?.name ?? "unknown",
+                    arguments: toolCallConfig?.arguments ?? "{}",
+                  },
+                },
+              ],
+            }
+          : { role: "assistant", content: text };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-e2e-nonstream",
+            object: "chat.completion",
+            created: Date.now(),
+            model: "fake-e2e",
+            choices: [
+              {
+                index: 0,
+                message,
+                finish_reason: isToolPlan ? "tool_calls" : "stop",
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })
+        );
         return;
       }
 
