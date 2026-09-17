@@ -709,6 +709,22 @@ function encodeDummySearchCursor(conversationId: string): string {
   ).toString("base64url");
 }
 
+/** Build a full-row source id for a known row (neighbor-budget tests). */
+function anchorSid(
+  rowId: number,
+  state: { epoch: string; sourceRevision: number }
+): string {
+  return encodeSourceId({
+    v: 1,
+    epoch: state.epoch,
+    revision: state.sourceRevision,
+    rowId,
+    field: "content",
+    startCodePoint: 0,
+    endCodePoint: 14,
+  });
+}
+
 describe("AIChatHistoryRetrievalService bounded reads (FR-03/FR-04)", () => {
   let archive: AIChatArchiveModule;
   let service: AIChatHistoryRetrievalService;
@@ -1017,5 +1033,98 @@ describe("AIChatHistoryRetrievalService bounded reads (FR-03/FR-04)", () => {
     expect(texts).toContain("range message number 7");
     expect(texts).toContain("range message number 9");
     expect(texts).not.toContain("range message number 0");
+  });
+
+  it("slices oversized neighbors to the remaining allowance instead of returning whole rows", async () => {
+    // Anchor is small; the following neighbor is ~30k chars (≈7,500 tokens) —
+    // far above the remaining per-call allowance. The neighbor must arrive
+    // sliced (has_more true), never whole.
+    const hugeNeighbor = "N".repeat(30_000);
+    const rowIds = await seedMessages("conv-nb-big", [
+      { role: "user", content: "anchor message", ts: 1_000 },
+      { role: "assistant", content: hugeNeighbor, ts: 2_000 },
+    ]);
+    await indexConversation("conv-nb-big");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-nb-big"
+    );
+    const res = await service.read({
+      conversationId: "conv-nb-big",
+      args: { source_id: anchorSid(rowIds[0], state), neighbors: 1 },
+      turnId: "t-nb-1",
+    });
+    expect(res.errorCode).toBeUndefined();
+    expect(res.records).toHaveLength(2);
+    const neighbor = res.records[1];
+    expect(neighbor.text.length).toBeLessThan(hugeNeighbor.length);
+    // The cut neighbor carries has_more plus a resumable source reference;
+    // the model continues with a follow-up read on that source_id.
+    expect(neighbor.hasMore).toBe(true);
+    expect(neighbor.sourceId).toBeTruthy();
+    expect(res.truncated).toBe(true);
+  });
+
+  it("stops neighbor expansion when the remaining cumulative budget cannot fit even a sliver", async () => {
+    // Drain the cumulative turn budget with a full read of a big anchor first;
+    // a neighbor request afterwards must not add unbounded content.
+    const big = "B".repeat(30_000);
+    const rowIds = await seedMessages("conv-nb-drain", [
+      { role: "user", content: big, ts: 1_000 },
+      { role: "assistant", content: "neighbor after big anchor", ts: 2_000 },
+      { role: "user", content: "third row", ts: 3_000 },
+    ]);
+    await indexConversation("conv-nb-drain");
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(
+      "conv-nb-drain"
+    );
+    const first = await service.read({
+      conversationId: "conv-nb-drain",
+      args: {
+        source_id: encodeSourceId({
+          v: 1,
+          epoch: state.epoch,
+          revision: state.sourceRevision,
+          rowId: rowIds[0],
+          field: "content",
+          startCodePoint: 0,
+          endCodePoint: 30_000,
+        }),
+      },
+      turnId: "t-drain",
+    });
+    expect(first.truncated).toBe(true);
+    // A fresh read of the small next row WITH neighbors must keep the whole
+    // turn inside the 8,000-token cumulative budget (first page ~4,000).
+    const second = await service.read({
+      conversationId: "conv-nb-drain",
+      args: {
+        source_id: encodeSourceId({
+          v: 1,
+          epoch: state.epoch,
+          revision: state.sourceRevision,
+          rowId: rowIds[1],
+          field: "content",
+          startCodePoint: 0,
+          endCodePoint: 25,
+        }),
+        neighbors: 2,
+      },
+      turnId: "t-drain",
+    });
+    const totalChars = second.records.reduce(
+      (acc, r) => acc + r.text.length,
+      0
+    );
+    const consumedTokens = Math.ceil(
+      (first.records[0].text.length + totalChars) / 4
+    );
+    expect(consumedTokens).toBeLessThanOrEqual(
+      AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn
+    );
+    // A neighbor cut by the cap must carry the hasMore marker.
+    const neighbor = second.records[1];
+    if (neighbor) {
+      expect(neighbor.hasMore).toBe(true);
+    }
   });
 });

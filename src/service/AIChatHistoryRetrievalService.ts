@@ -579,7 +579,8 @@ export class AIChatHistoryRetrievalService {
     b.consumedTokens += this.estimateTokens(text);
 
     // Neighbor expansion (§7.2 neighbors 0–2): first page only, bounded rows
-    // around the anchor.
+    // around the anchor. A neighbor cut by the remaining allowance marks the
+    // envelope truncated so the model knows more content exists.
     const neighborCount = neighbors ?? 0;
     const neighborRecs =
       neighborCount > 0 && !cursor
@@ -591,11 +592,12 @@ export class AIChatHistoryRetrievalService {
             b
           )
         : [];
+    const neighborTruncated = neighborRecs.some((n) => n.hasMore);
 
     return {
       records: [rec, ...neighborRecs],
       nextCursor: hasMore ? encodeReadCursor(payload.rowId, pageEnd) : null,
-      truncated: hasMore,
+      truncated: hasMore || neighborTruncated,
       sourceRevision: meta.revision,
       storedContentIncomplete: false,
       errorCode:
@@ -845,7 +847,13 @@ export class AIChatHistoryRetrievalService {
     };
   }
 
-  /** Bounded neighbor expansion around an anchor (§7.2 neighbors 0–2). */
+  /**
+   * Bounded neighbor expansion around an anchor (§7.2 neighbors 0–2).
+   * Neighbors are sliced to the remaining per-call and cumulative allowance
+   * like any other excerpt: a multi-megabyte neighbor row can never land
+   * whole in one response (FR-04 / PRD invariant 4). When the cumulative
+   * budget cannot fit even a minimal sliver, expansion stops (returns []).
+   */
   private async readNeighbors(
     conversationId: string,
     anchor: AIChatMessageEntity,
@@ -855,6 +863,15 @@ export class AIChatHistoryRetrievalService {
   ): Promise<HistoryExcerpt[]> {
     const count = Math.min(Math.max(neighbors, 0), 2);
     if (count === 0) return [];
+    const remainingCumulative =
+      AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn -
+      b.consumedTokens;
+    const allowance = Math.min(
+      AI_CHAT_RECOVERABLE_DEFAULTS.retrievalDefaultOutputTokens,
+      remainingCumulative
+    );
+    if (allowance <= 0) return [];
+    let remainingChars = allowance * 4;
     const rows = await this.archive.readNeighbors(
       conversationId,
       anchor.timestamp.getTime(),
@@ -864,9 +881,19 @@ export class AIChatHistoryRetrievalService {
     );
     const out: HistoryExcerpt[] = [];
     for (const m of rows) {
-      out.push(toExcerpt(m, meta, m.content ?? "", true));
-      this.mergeInterval(b, m.id, 0, codePointLength(m.content ?? ""));
-      b.consumedTokens += this.estimateTokens(m.content ?? "");
+      if (remainingChars <= 0) break;
+      const full = m.content ?? "";
+      const totalCp = codePointLength(full);
+      const pageEnd = Math.min(totalCp, remainingChars);
+      const text = sliceByCodePoints(full, 0, pageEnd);
+      const hasMore = pageEnd < totalCp;
+      out.push({
+        ...toExcerptWithSpan(m, meta, text, 0, pageEnd, !hasMore),
+        hasMore,
+      });
+      this.mergeInterval(b, m.id, 0, pageEnd);
+      b.consumedTokens += this.estimateTokens(text);
+      remainingChars -= pageEnd;
     }
     return out;
   }
@@ -1053,17 +1080,6 @@ function rejectRead(
     storedContentIncomplete: false,
     errorCode,
   };
-}
-
-/** Map a message row to a HistoryExcerpt (whole-content span). */
-function toExcerpt(
-  msg: AIChatMessageEntity,
-  meta: { epoch: string; revision: number },
-  text: string,
-  exact: boolean
-): HistoryExcerpt {
-  const cpLen = codePointLength(text);
-  return toExcerptWithSpan(msg, meta, text, 0, cpLen, exact);
 }
 
 /** Map a verified slice to an excerpt carrying its exact [start, end) span. */
