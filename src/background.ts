@@ -156,6 +156,7 @@ import { bindSpawnGateToLifecycle } from "@/main-process/lifecycle/spawnGate";
 import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
 import {
   TrayController,
+  isLinuxTrayHostPlausible,
   resolveTrayIconCandidates,
   type TrayLike,
   type TrayMenuLike,
@@ -546,9 +547,13 @@ const shutdownCoordinator = new ShutdownCoordinator({
 });
 lifecycle.setCleanupRunner((context) => shutdownCoordinator.run(context));
 
-// Broadcast lifecycle state to the renderer (design §10).
+// Broadcast lifecycle state to the renderer (design §10) and mirror the
+// exiting state into the tray tooltip/menu (FR-04 / TODO 10).
 lifecycle.addStateListener((event) => {
   broadcastLifecycleState(win, event);
+  trayController?.setExiting(
+    event.state === "quitting" || event.state === "ready-to-exit"
+  );
 });
 
 /**
@@ -610,6 +615,16 @@ function initializeSystemTray(): void {
     process.env.AIFETCHLY_E2E === "1" &&
     process.env.AIFETCHLY_E2E_TRAY !== "1"
   ) {
+    lifecycle.setBackgroundAvailable(false);
+    return;
+  }
+  // FR-07 / TODO 9: explicit Linux desktop check — on headless/tty sessions a
+  // Tray object may construct fine but no status-notifier host will show it;
+  // keep Keep-running disabled rather than hiding into an unreachable state.
+  if (!isLinuxTrayHostPlausible(process.platform, process.env)) {
+    log.info(
+      "[tray] no plausible Linux tray host (XDG_CURRENT_DESKTOP/session); background mode disabled"
+    );
     lifecycle.setBackgroundAvailable(false);
     return;
   }

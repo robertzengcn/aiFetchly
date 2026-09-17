@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   TrayController,
+  isLinuxTrayHostPlausible,
   type TrayControllerPorts,
   type TrayLike,
   type TrayMenuLike,
@@ -162,6 +163,69 @@ describe("TrayController", () => {
     controller.rebuildMenu();
     expect(tray.tooltip).toBe("AiFetchly");
     expect(tray.menu?.open).toBeTypeOf("function");
+  });
+});
+
+describe("TrayController — exiting state (FR-04 / TODO 10)", () => {
+  it("tooltip reflects exiting and actions become no-ops while quitting", () => {
+    const tray = new FakeTray();
+    const ports = makePorts(tray);
+    const controller = new TrayController(ports);
+    controller.initialize();
+    expect(tray.tooltip).toBe("AiFetchly");
+
+    controller.setExiting(true);
+    expect(tray.tooltip).toContain("Exiting AiFetchly…");
+
+    // Open/Exit menu actions no-op while exiting (AC-08 joins the shutdown).
+    tray.menu?.open();
+    tray.menu?.exit();
+    expect(ports.restore).not.toHaveBeenCalled();
+    expect(ports.exit).not.toHaveBeenCalled();
+
+    controller.setExiting(false);
+    expect(tray.tooltip).toBe("AiFetchly");
+    tray.menu?.open();
+    expect(ports.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("setExiting is idempotent (no redundant rebuilds)", () => {
+    const tray = new FakeTray();
+    const controller = new TrayController(makePorts(tray));
+    controller.initialize();
+    const before = tray.tooltip;
+    controller.setExiting(false); // already false
+    expect(tray.tooltip).toBe(before);
+  });
+});
+
+describe("isLinuxTrayHostPlausible (FR-07 / TODO 9)", () => {
+  it("non-Linux platforms are always plausible", () => {
+    expect(isLinuxTrayHostPlausible("win32", {})).toBe(true);
+    expect(isLinuxTrayHostPlausible("darwin", {})).toBe(true);
+  });
+
+  it("Linux requires a registered desktop", () => {
+    expect(isLinuxTrayHostPlausible("linux", {})).toBe(false);
+    expect(isLinuxTrayHostPlausible("linux", { XDG_CURRENT_DESKTOP: "  " })).toBe(false);
+    expect(
+      isLinuxTrayHostPlausible("linux", { XDG_CURRENT_DESKTOP: "GNOME" })
+    ).toBe(true);
+  });
+
+  it("Linux tty sessions are implausible", () => {
+    expect(
+      isLinuxTrayHostPlausible("linux", {
+        XDG_CURRENT_DESKTOP: "GNOME",
+        XDG_SESSION_TYPE: "tty",
+      })
+    ).toBe(false);
+    expect(
+      isLinuxTrayHostPlausible("linux", {
+        XDG_CURRENT_DESKTOP: "GNOME",
+        XDG_SESSION_TYPE: "x11",
+      })
+    ).toBe(true);
   });
 });
 

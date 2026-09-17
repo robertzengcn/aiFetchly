@@ -33,6 +33,8 @@ export interface TrayLabels {
   readonly cancel: string;
   readonly closeTitle: string;
   readonly closeDescription: string;
+  /** Tray-level "exiting" affordance while quitting (FR-04, TODO 10). */
+  readonly exiting: string;
 }
 
 export interface TrayMenuLike {
@@ -80,6 +82,7 @@ export class TrayController {
   private readonly ports: TrayControllerPorts;
   private ready = false;
   private destroyed = false;
+  private exiting = false;
   private readonly clickHandler = (): void => {
     this.restore();
   };
@@ -135,13 +138,34 @@ export class TrayController {
   rebuildMenu(): void {
     if (!this.tray || this.tray.isDestroyed()) return;
     const labels = this.ports.labels();
-    this.tray.setToolTip(labels.tooltip);
+    if (this.exiting) {
+      // FR-04 / TODO 10: while quitting, the tray itself reflects the
+      // exiting state and stops offering restore/task actions.
+      this.tray.setToolTip(`${labels.tooltip} — ${labels.exiting}`);
+    } else {
+      this.tray.setToolTip(labels.tooltip);
+    }
     this.tray.setContextMenu(
       this.ports.buildMenu(labels, {
-        open: () => this.restore(),
-        exit: () => this.ports.requestExit(),
+        open: () => {
+          if (!this.exiting) this.restore();
+        },
+        exit: () => {
+          if (!this.exiting) this.ports.requestExit();
+        },
       })
     );
+  }
+
+  /**
+   * Reflect the shutdown state in the tray (FR-04). While exiting, the
+   * tooltip appends the exiting label and the Open/Exit actions become
+   * no-ops (repeated requests join the same shutdown, AC-08).
+   */
+  setExiting(exiting: boolean): void {
+    if (this.exiting === exiting) return;
+    this.exiting = exiting;
+    this.rebuildMenu();
   }
 
   /** Tray Open / click: restore the existing window (AC-03). */
@@ -170,6 +194,24 @@ export class TrayController {
     }
     this.tray = null;
   }
+}
+
+/**
+ * Linux tray-host plausibility (PRD FR-07 / TODO 9): environments where a
+ * Tray object can be constructed but no status-notifier host will ever show
+ * it (headless sessions, raw tty, no desktop registered). Keep-running
+ * stays disabled there so the window is never hidden into an unreachable
+ * state. Non-Linux platforms are always plausible.
+ */
+export function isLinuxTrayHostPlausible(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv
+): boolean {
+  if (platform !== "linux") return true;
+  const desktop = env.XDG_CURRENT_DESKTOP;
+  if (!desktop || desktop.trim().length === 0) return false;
+  if ((env.XDG_SESSION_TYPE ?? "").toLowerCase() === "tty") return false;
+  return true;
 }
 
 /**

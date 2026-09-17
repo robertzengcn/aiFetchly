@@ -23,6 +23,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "Close AiFetchly?",
     closeDescription:
       "Exit stops running tasks. Keep running hides the window and lets tasks continue in the system tray.",
+    exiting: "Exiting AiFetchly…",
   },
   zh: {
     tooltip: "AiFetchly",
@@ -33,6 +34,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "关闭 AiFetchly？",
     closeDescription:
       "退出将停止正在运行的任务。保持运行会隐藏窗口，任务继续在系统托盘中运行。",
+    exiting: "正在退出 AiFetchly…",
   },
   es: {
     tooltip: "AiFetchly",
@@ -43,6 +45,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "¿Cerrar AiFetchly?",
     closeDescription:
       "Salir detiene las tareas en ejecución. Mantener en ejecución oculta la ventana y las tareas continúan en la bandeja del sistema.",
+    exiting: "Saliendo de AiFetchly…",
   },
   fr: {
     tooltip: "AiFetchly",
@@ -53,6 +56,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "Fermer AiFetchly ?",
     closeDescription:
       "Quitter arrête les tâches en cours. Continuer en arrière-plan masque la fenêtre et les tâches continuent dans la barre système.",
+    exiting: "Fermeture d'AiFetchly…",
   },
   de: {
     tooltip: "AiFetchly",
@@ -63,6 +67,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "AiFetchly schließen?",
     closeDescription:
       "Beenden hält laufende Aufgaben an. Weiter im Infobereich blendet das Fenster aus; die Aufgaben laufen dort weiter.",
+    exiting: "AiFetchly wird beendet…",
   },
   ja: {
     tooltip: "AiFetchly",
@@ -73,6 +78,7 @@ const LABELS: Record<string, TrayLabels> = {
     closeTitle: "AiFetchly を閉じますか？",
     closeDescription:
       "終了すると実行中のタスクが停止します。「システムトレイで実行を続ける」はウィンドウを非表示にし、タスクはシステムトレイで続行されます。",
+    exiting: "AiFetchly を終了しています…",
   },
 };
 
