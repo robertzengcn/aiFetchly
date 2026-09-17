@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -202,10 +203,15 @@ function defaultSpawn(
   args: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv }
 ): SpawnChildLike {
-  return realSpawn(cmd, args, {
+  if (!ownedSpawnAllowed("git-plugin-fetch")) {
+    throw new Error("Application is shutting down; refusing fetch");
+  }
+  const child = realSpawn(cmd, args, {
     cwd: opts.cwd,
     env: opts.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   }) as unknown as SpawnChildLike;
+  registerOwnedProcess("git-plugin-fetch", child);
+  return child;
 }

@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -113,6 +114,7 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
         env: process.env,
         shell: false,
       });
+      registerOwnedProcess("npm-plugin-fetch", child);
       const timer = setTimeout(() => {
         // Don't let a hung npm process outlive the timeout.
         try {
@@ -161,6 +163,7 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
         env: process.env,
         shell: false,
       });
+      registerOwnedProcess("npm-plugin-extract", child);
       let done = false;
       const finish = (ok: boolean) => {
         if (done) return;
