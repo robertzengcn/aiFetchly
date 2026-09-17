@@ -11,7 +11,8 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
-import type { SkillDefinition, SkillManifest } from "@/entityTypes/skillTypes";
+import type { SkillDefinition, SkillExecutionResult, SkillManifest } from "@/entityTypes/skillTypes";
+import { isArchiveReadsEnabled, isHistoryToolsEnabled } from "@/config/featureFlags";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -1192,7 +1193,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "pure",
     source: "built-in",
     timeoutClass: "fast",
-    execute: async (args, context) => {
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!isHistoryToolsEnabled() || !isArchiveReadsEnabled()) {
+        return { success: false, result: { error: "HISTORY_UNAVAILABLE" } };
+      }
       const { handleConversationHistorySearch } = await import(
         "@/service/agentTools/conversationHistorySearchTool"
       );
@@ -1248,7 +1252,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     permissionCategory: "pure",
     source: "built-in",
     timeoutClass: "fast",
-    execute: async (args, context) => {
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!isHistoryToolsEnabled() || !isArchiveReadsEnabled()) {
+        return { success: false, result: { error: "HISTORY_UNAVAILABLE" } };
+      }
       const { handleConversationHistoryRead } = await import(
         "@/service/agentTools/conversationHistoryReadTool"
       );
@@ -3730,10 +3737,22 @@ async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
   };
 }
 
+const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+  CONVERSATION_HISTORY_READ_TOOL_NAME,
+]);
+
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,
   enablement: SkillRuntimeEnablement
 ): boolean {
+  if (
+    skill.source === "built-in" &&
+    HISTORY_TOOL_NAMES.has(skill.name) &&
+    (!isHistoryToolsEnabled() || !isArchiveReadsEnabled())
+  ) {
+    return false;
+  }
   if (skill.source === "built-in") return true;
 
   const installed = enablement.installedSkillsByName?.get(skill.name);

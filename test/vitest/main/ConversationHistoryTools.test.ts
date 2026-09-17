@@ -24,6 +24,38 @@ import os from "node:os";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { SqliteDb } from "@/config/SqliteDb";
+import { SkillRegistry } from "@/config/skillsRegistry";
+
+const rollout = vi.hoisted(() => ({ archive: false, tools: false }));
+vi.mock("@/config/featureFlags", () => ({
+  isArchiveReadsEnabled: (): boolean => rollout.archive,
+  isHistoryToolsEnabled: (): boolean => rollout.tools,
+}));
+
+ describe("history tool rollout", () => {
+  it.each([[false, false], [true, false], [false, true]])(
+    "hides history tools when archive=%s tools=%s",
+    async (archive, tools): Promise<void> => {
+      rollout.archive = archive;
+      rollout.tools = tools;
+      for (const name of ["conversation_history_search", "conversation_history_read"]) {
+        expect(await SkillRegistry.isSkillEnabledForRuntime(name)).toBe(false);
+        const result = await SkillRegistry.getSkill(name)?.execute({}, { conversationId: "disabled", toolCallId: "gate" });
+        expect(result?.success).toBe(false);
+        expect(result?.result.error).toBe("HISTORY_UNAVAILABLE");
+      }
+    }
+  );
+
+  it("enables history tools only with both flags", async (): Promise<void> => {
+    rollout.archive = true;
+    rollout.tools = true;
+    expect(await SkillRegistry.isSkillEnabledForRuntime("conversation_history_search")).toBe(true);
+    expect(await SkillRegistry.isSkillEnabledForRuntime("conversation_history_read")).toBe(true);
+    rollout.archive = false;
+    expect(await SkillRegistry.isSkillEnabledForRuntime("conversation_history_read")).toBe(false);
+  });
+});
 
 const tmpDir = path.join(
   os.tmpdir(),
