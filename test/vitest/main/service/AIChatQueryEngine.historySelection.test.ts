@@ -184,6 +184,8 @@ describe("AIChatQueryEngine submit-time history selection (§13.3)", () => {
     holders.resolveSelections.mockReset();
     holders.saveUserMessage.mockClear();
     holders.saveUserMessage.mockResolvedValue({ messageId: "user-1" });
+    holders.saveUserMessageIfAbsent.mockClear();
+    holders.saveUserMessageIfAbsent.mockResolvedValue({ messageId: "user-1" });
   });
 
   afterEach(() => {
@@ -359,6 +361,58 @@ describe("AIChatQueryEngine submit-time history selection (§13.3)", () => {
     expect(holders.assembleInput?.currentUserMessage).toBe("Flag off");
     // The user's own message still goes out; only the selection is dropped.
     expect(savedUserMessage().content).toBe("Flag off");
+  });
+
+  it("blocks the turn when every selection is rejected as oversized (FR-10)", async () => {
+    holders.resolveSelections.mockResolvedValue({
+      resolved: [],
+      acceptedSubmittedIds: [],
+      rejected: [SUBMITTED_A],
+      errorCode: "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+    });
+    const { engine, loop } = buildEngine();
+    const emit = vi.fn();
+
+    await engine.submitMessage({
+      eventSink: { emit } as AIChatQueryEventSink,
+      request: {
+        message: "Too big to send",
+        historySelectionIds: [SUBMITTED_A],
+      },
+    });
+
+    // The turn must fail with an actionable capacity error, not send with
+    // zero selected context while chips still show as attached.
+    expect(loop.run).not.toHaveBeenCalled();
+    const errorEvent = emit.mock.calls
+      .map((c) => c[0] as { type?: string; errorMessage?: string })
+      .find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent?.errorMessage).toContain("selection");
+    // Nothing persisted: no user row for a turn that never started.
+    expect(holders.saveUserMessage).not.toHaveBeenCalled();
+    expect(holders.saveUserMessageIfAbsent).not.toHaveBeenCalled();
+  });
+
+  it("still degrades gracefully when selections are rejected for non-size reasons", async () => {
+    holders.resolveSelections.mockResolvedValue({
+      resolved: [],
+      acceptedSubmittedIds: [],
+      rejected: [SUBMITTED_A],
+      errorCode: "SOURCE_CHANGED",
+    });
+    const { engine, loop } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: {
+        message: "Changed source",
+        historySelectionIds: [SUBMITTED_A],
+      },
+    });
+
+    expect(loop.run).toHaveBeenCalledTimes(1);
+    expect(holders.assembleInput?.currentUserMessage).toBe("Changed source");
   });
 
   it("never fails the turn when selection resolution throws", async () => {

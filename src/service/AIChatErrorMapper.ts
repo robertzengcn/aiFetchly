@@ -3,6 +3,7 @@
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
@@ -193,6 +194,12 @@ export function userSafeError(err: unknown): string {
     // clobber them with a generic "unexpected error".
     if (err instanceof AIProviderError) {
       return err.message || "AI provider error.";
+    }
+    // Recoverable-history errors carry pre-written, user-safe messages
+    // (e.g. "selected passages exceed …; remove or narrow a selection and
+    // resend") — surface them directly so the guidance reaches the UI.
+    if (err instanceof RecoverableHistoryError) {
+      return err.message || err.code;
     }
     if (err instanceof UnresolvedPastedTextError) {
       return err.message;

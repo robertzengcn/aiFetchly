@@ -409,6 +409,16 @@ export class AIChatQueryEngine {
         sourceIds,
         turnId
       );
+      // Every selection rejected for size ⇒ the send would ship with zero
+      // selected context while the chips still render as attached. FR-10
+      // requires the user to narrow the selection, so the turn fails with an
+      // actionable capacity error BEFORE persist/send; drafts survive.
+      if (result.errorCode === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE") {
+        throw new RecoverableHistoryError(
+          "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+          `selected history passages do not fit this turn (${result.rejected.length} rejected); remove or narrow a selection and resend`
+        );
+      }
       const metadata: ChatV2HistorySelectionMetadata[] = result.resolved.map(
         (e, i) => ({
           // Prefer the SUBMITTED reference so the renderer can reconcile this
@@ -429,6 +439,13 @@ export class AIChatQueryEngine {
         changedIds: (result.refreshed ?? []).map((r) => r.submittedId),
       };
     } catch (err) {
+      // Capacity rejections are turn-blocking, not degrade-to-empty.
+      if (
+        err instanceof RecoverableHistoryError &&
+        err.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+      ) {
+        throw err;
+      }
       console.warn("[ai-chat-v2] history selection resolution failed:", err);
       return { ...empty, rejectedCount: sourceIds.length };
     }
