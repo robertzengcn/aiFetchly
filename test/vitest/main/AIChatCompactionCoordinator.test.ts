@@ -26,6 +26,7 @@ import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
+import { AIChatSectionPacker } from "@/service/AIChatSectionPacker";
 
 const tmpDir = path.join(
   os.tmpdir(),
@@ -577,5 +578,62 @@ describe("AIChatCompactionCoordinator", () => {
     ).rejects.toThrow();
     // Bounded attempts: at most 4 model calls per section per run.
     expect(calls).toBeLessThanOrEqual(4);
+  }, 15_000);
+
+  it("snapshot frozen at claim excludes messages appended before pack (AC-09)", async () => {
+    const conv = "conv-ac09-inflight";
+    await seedMessages(conv, [
+      { role: "user", content: "a".repeat(2_000), ts: 1_000 },
+      { role: "assistant", content: "b".repeat(2_000), ts: 2_000 },
+      { role: "user", content: "c".repeat(2_000), ts: 3_000 },
+      { role: "assistant", content: "d".repeat(2_000), ts: 4_000 },
+      { role: "user", content: "e".repeat(2_000), ts: 5_000 },
+    ]);
+    await indexConversation(conv);
+    const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AIChatMessageEntity
+    );
+    const seeded = await repo.find({
+      where: { conversationId: conv },
+      order: { id: "ASC" },
+    });
+    const last = seeded[seeded.length - 1];
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    await stateModel.updateHighWater(
+      conv,
+      last.timestamp.getTime(),
+      last.id
+    );
+
+    const originalPack = AIChatSectionPacker.prototype.pack;
+    const packSpy = vi
+      .spyOn(AIChatSectionPacker.prototype, "pack")
+      .mockImplementation(async function (this: AIChatSectionPacker, input) {
+        await seedMessages(conv, [
+          {
+            role: "user",
+            content: "AC09_DURING_COMPACTION",
+            ts: 99_000,
+          },
+        ]);
+        return originalPack.call(this, input);
+      });
+
+    const { fn, calls } = fakeSummarizer();
+    try {
+      const result = await coordinator.requestCompaction(conv, {
+        trigger: "manual",
+        summarize: fn,
+      });
+      expect(["completed", "paused"]).toContain(result.state);
+      const prompts = calls.map((c) => c.prompt).join("\n");
+      expect(prompts).not.toContain("AC09_DURING_COMPACTION");
+      const after = await repo.find({ where: { conversationId: conv } });
+      expect(
+        after.some((r) => r.content === "AC09_DURING_COMPACTION")
+      ).toBe(true);
+    } finally {
+      packSpy.mockRestore();
+    }
   }, 15_000);
 });

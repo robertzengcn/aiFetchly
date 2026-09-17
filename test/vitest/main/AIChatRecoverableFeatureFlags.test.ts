@@ -28,6 +28,7 @@ import {
   isNewCompactionEnabled,
   isHistoryToolsEnabled,
   isHistoryUiEnabled,
+  enableRecoverableHistoryFlags,
 } from "@/config/featureFlags";
 import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
 
@@ -85,5 +86,16 @@ describe("recoverable-history rollout flags — fail-closed on store error", () 
     expect(isNewCompactionEnabled()).toBe(false);
     expect(isHistoryToolsEnabled()).toBe(false);
     expect(isHistoryUiEnabled()).toBe(false);
+  });
+});
+
+describe("recoverable-history rollout flags — operator enablement helper", () => {
+  it("enableRecoverableHistoryFlags turns all four stages on without changing defaults for other tests", () => {
+    expect(isNewCompactionEnabled()).toBe(false);
+    enableRecoverableHistoryFlags();
+    expect(isArchiveReadsEnabled()).toBe(true);
+    expect(isNewCompactionEnabled()).toBe(true);
+    expect(isHistoryToolsEnabled()).toBe(true);
+    expect(isHistoryUiEnabled()).toBe(true);
   });
 });

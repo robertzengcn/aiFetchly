@@ -9,11 +9,10 @@
  *
  * Covered acceptance criteria:
  *
- *   AC-01 — Put exact wording early in a conversation; compact; restart; the
- *           original wording is still retrievable from the archive (§17.2 line
- *           618: "compact, restart, exact recovery"). Proven through the REAL
- *           history-search IPC against the same isolated root across a
- *           controlled relaunch.
+ *   AC-01 — Put exact wording early in a conversation; compact THREE times
+ *           and restart; the original wording is still retrievable from the
+ *           archive (PRD AC-01). Proven through the REAL history-search IPC
+ *           against the same isolated root across a controlled relaunch.
  *   AC-17 — Open older messages without selecting them: the UI shows history
  *           but the model context does not grow. Proven by asserting the
  *           streamed chat request's message count is bounded after browsing.
@@ -118,15 +117,24 @@ async function closeHistoryDrawer(app: LaunchedApp): Promise<void> {
 
 /** Send a message and wait for the streamed reply to fully complete. */
 async function sendAndWait(app: LaunchedApp, text: string): Promise<void> {
-  await composer(app).fill(text);
-  await app.mainWindow.getByTestId("ai-chat-send").click();
-  // Wait for the streamed response to complete so the turn + message persist
-  // and the chatIsRunning guard clears (the send button re-appears).
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    STREAM_TEXT_FINAL,
-    { timeout: 30_000 }
-  );
-  await expect(app.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
+  const box = composer(app);
+  await expect(box).toBeVisible({ timeout: 15_000 });
+  await box.fill(text);
+  const send = app.mainWindow.getByTestId("ai-chat-send");
+  await expect(send).toBeEnabled({ timeout: 15_000 });
+  await send.click();
+  const root = app.mainWindow.getByTestId("ai-chat-root");
+  // A missed click leaves the empty-state copy and the draft in the
+  // composer (seen after heavier prior tests in the same worker). Wait a
+  // short interval before retrying so a successful send is not doubled.
+  try {
+    await expect(root).toContainText(STREAM_TEXT_FINAL, { timeout: 8_000 });
+  } catch {
+    await expect(send).toBeEnabled({ timeout: 5_000 });
+    await send.click();
+    await expect(root).toContainText(STREAM_TEXT_FINAL, { timeout: 30_000 });
+  }
+  await expect(send).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -253,7 +261,8 @@ async function openHistorySearchTab(app: LaunchedApp): Promise<void> {
  */
 async function startAndAwaitCompacted(
   app: LaunchedApp & { mainStdout?: () => string },
-  conversationId: string
+  conversationId: string,
+  previousGenerationId?: string
 ): Promise<{ state?: string; generationId?: string; runId?: string }> {
   // Collect progress broadcasts in-page so a silent run failure is
   // diagnosable (STATUS hides terminal runs by design).
@@ -261,8 +270,11 @@ async function startAndAwaitCompacted(
     const w = window as unknown as {
       api: { receive: (ch: string, fn: (e: unknown) => void) => void };
       __progressEvents: unknown[];
+      __progressHooked?: boolean;
     };
+    if (w.__progressHooked) return;
     w.__progressEvents = [];
+    w.__progressHooked = true;
     w.api.receive("ai-chat-v2:compaction-progress", (e: unknown) => {
       w.__progressEvents.push(e);
     });
@@ -283,7 +295,13 @@ async function startAndAwaitCompacted(
     seen.push(
       `${last.state ?? "?"}${last.runId ? `/${String(last.runId).slice(0, 8)}` : ""}${last.generationId ? "+gen" : ""}`
     );
-    if (last.generationId) {
+    // A leftover generation from an earlier cycle is not proof this run
+    // published (AC-01 three-compact). Wait until the active generation
+    // changes, or until the first cycle publishes any generation.
+    if (
+      last.generationId &&
+      last.generationId !== previousGenerationId
+    ) {
       terminal = "completed";
       break;
     }
@@ -328,13 +346,34 @@ async function startAndAwaitCompacted(
   return last;
 }
 
+
+async function waitUntilIndexed(
+  app: LaunchedApp,
+  conversationId: string,
+  query: string
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const b = await invokeBrowse<{ indexComplete?: boolean }>(
+          app,
+          "ai-chat-v2:history-search",
+          { conversationId, query, limit: 1 }
+        );
+        return b.result?.indexComplete === true;
+      },
+      { timeout: 30_000, intervals: [1_000] }
+    )
+    .toBe(true);
+}
+
 // ---------------------------------------------------------------------------
 // AC-01: compact → restart → exact recovery from the archive.
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
-test("AC-01: archived wording survives a compaction and a controlled restart", async ({}, testInfo) => {
-  test.setTimeout(240_000);
+test("AC-01: archived wording survives three compactions and a controlled restart", async ({}, testInfo) => {
+  test.setTimeout(420_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
     testId: testInfo.titlePath.join(" "),
@@ -363,45 +402,50 @@ test("AC-01: archived wording survives a compaction and a controlled restart", a
       // tail) verbatim, so the marker must land several turns back to be
       // eligible for incremental packing. With only two turns the retained
       // suffix covers everything and compaction is a correct no-op.
-      await sendAndWait(app1, marker);
-      await sendAndWait(app1, `ac01-followup-1-${Date.now()}`);
-      await sendAndWait(app1, `ac01-followup-2-${Date.now()}`);
-      await sendAndWait(app1, `ac01-followup-3-${Date.now()}`);
-      await sendAndWait(app1, `ac01-followup-4-${Date.now()}`);
+      // Bulky bodies so incremental packing has source to summarize;
+      // tiny one-liners stay inside the retained suffix and compact is a
+      // correct no-op (sectionsPacked=0) even after five turns.
+      const bulky = (tag: string): string => `${tag}\n${"block ".repeat(200)}`;
+      await sendAndWait(app1, bulky(marker));
+      await sendAndWait(app1, bulky(`ac01-followup-1-${Date.now()}`));
+      await sendAndWait(app1, bulky(`ac01-followup-2-${Date.now()}`));
+      await sendAndWait(app1, bulky(`ac01-followup-3-${Date.now()}`));
+      await sendAndWait(app1, bulky(`ac01-followup-4-${Date.now()}`));
 
-      // Compact via the non-blocking START channel (design §13.1): returns
-      // immediately; the run settles in the main process while STATUS tracks
-      // it. The durable coordinator packs + validates the first section and
-      // publishes a generation.
+      // Compact THREE times (PRD AC-01) via the non-blocking START channel.
+      // Extra complete turns between runs make each cycle process only NEW
+      // eligible history (AC-05) while the original marker stays archived.
       const conversationId = await firstConversationId(app1);
       expect(conversationId).toBeTruthy();
 
-      // The append coupler advances the high-water mark fire-and-forget after
-      // each turn. Poll history-search until indexComplete === true so the
-      // high-water reflects the true end of the last complete turn — otherwise
-      // the packer finds no source strictly before it (sectionsPacked === 0)
-      // or the state isn't ensured yet (CONTEXT_REJECTED).
-      await expect
-        .poll(
-          async () => {
-            const b = await invokeBrowse<{ indexComplete?: boolean }>(
-              app1,
-              "ai-chat-v2:history-search",
-              { conversationId, query: marker, limit: 1 }
-            );
-            return b.result?.indexComplete === true;
-          },
-          { timeout: 30_000, intervals: [1_000] }
-        )
-        .toBe(true);
-
-      const terminal = await startAndAwaitCompacted(app1, conversationId!);
-      // Five tiny turns compact in one batch: a generation is published.
-      // (The post-completion STATUS snapshot reads `queued` + generationId
-      // because no run is active anymore — publication, not the state label,
-      // is the proof. A pause here would still be resumable, never a
-      // failure.)
-      expect(terminal.generationId).toBeTruthy();
+      const generations: string[] = [];
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        await waitUntilIndexed(app1, conversationId!, marker);
+        const terminal = await startAndAwaitCompacted(
+          app1,
+          conversationId!,
+          generations[generations.length - 1]
+        );
+        expect(
+          terminal.generationId,
+          `cycle ${cycle} did not publish a generation`
+        ).toBeTruthy();
+        generations.push(terminal.generationId!);
+        if (cycle < 3) {
+          await sendAndWait(app1, bulky(`ac01-cycle-${cycle}-a-${Date.now()}`));
+          await sendAndWait(app1, bulky(`ac01-cycle-${cycle}-b-${Date.now()}`));
+          await sendAndWait(app1, bulky(`ac01-cycle-${cycle}-c-${Date.now()}`));
+        }
+      }
+      expect(generations).toHaveLength(3);
+      // Post-turn auto-compact shares the coordinator, so a later START may
+      // report sectionsPacked=0 while STATUS still shows the generation that
+      // auto just published. Distinct generation ids across the three cycles
+      // are the proof that incremental publication actually advanced.
+      expect(
+        new Set(generations).size,
+        `three incremental runs must publish distinct generations, got ${generations.join(",")}`
+      ).toBe(3);
       await closeApp(app1);
     } catch (err) {
       await closeApp(app1);

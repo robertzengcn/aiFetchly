@@ -81,7 +81,7 @@ export interface SectionPackInput {
   readonly conversationId: string;
   /** Source-token capacity from the budget service (§8.3). */
   readonly sourceCapacityTokens: number;
-  /** Snapshot end: rows strictly after this (timestamp, rowId) are retained. */
+  /** Inclusive snapshot end: rows AFTER this (timestamp, rowId) are retained. */
   readonly endSnapshotTimestampMs: number;
   readonly endSnapshotRowId: number;
   /** Continuation cursor from a prior partial pack (undefined for a fresh run). */
@@ -301,22 +301,32 @@ export class AIChatSectionPacker extends BaseModule {
       cursor: input.startCursor,
       maxRows: METADATA_PAGE_ROWS,
       maxCodePoints,
+      ...(input.endSnapshotTimestampMs > 0
+        ? {
+            snapshotTimestampMs: input.endSnapshotTimestampMs,
+            snapshotRowId: input.endSnapshotRowId,
+          }
+        : {}),
     });
 
-    // Filter to rows strictly before the retained suffix (snapshot end).
+    // Defense-in-depth filter matching the SQL inclusive composite bound.
     // When endSnapshotTimestampMs is 0, there is no retained suffix — keep all.
     const hasSnapshotEnd = input.endSnapshotTimestampMs > 0;
+    // Inclusive composite bound (timestamp, rowId): rows AFTER the snapshot
+    // end are retained live / left for a later incremental run — they must
+    // not be packed, and rows AT the same timestamp with a smaller-or-equal
+    // rowId must not be skipped (AC-09). `endSnapshotRowId <= 0` keeps the
+    // legacy timestamp-exclusive bound used by unit fixtures.
     const eligible = page.records.filter((r) => {
       const ts = Date.parse(r.timestamp);
       if (Number.isNaN(ts)) return false;
       if (!hasSnapshotEnd) return true;
-      if (ts >= input.endSnapshotTimestampMs) return false;
-      // Within the same timestamp, retain rows at/after the snapshot rowId.
-      if (ts === input.endSnapshotTimestampMs && input.endSnapshotRowId > 0) {
-        const rowId = parseRowIdFromSourceId(r.sourceId);
-        if (rowId >= input.endSnapshotRowId) return false;
-      }
-      return true;
+      if (ts > input.endSnapshotTimestampMs) return false;
+      if (ts < input.endSnapshotTimestampMs) return true;
+      if (input.endSnapshotRowId <= 0) return false;
+      const rowId = parseRowIdFromSourceId(r.sourceId);
+      if (rowId < 0) return false;
+      return rowId <= input.endSnapshotRowId;
     });
 
     // Load metadata for each eligible row (for tool-call detection).

@@ -115,6 +115,21 @@ export function isHistoryUiEnabled(): boolean {
   }
 }
 
+/**
+ * Operator rollout helper (design §18.1). Writes all four Token keys to
+ * `"true"` in stage order so a qualified build can be enabled without
+ * flipping process-wide defaults. Defaults remain fail-closed: this is an
+ * explicit opt-in. A Token-store error is thrown to the caller (do not
+ * silently claim enablement).
+ */
+export function enableRecoverableHistoryFlags(): void {
+  const token = new Token();
+  token.setValue(AI_CHAT_RECOVERABLE_FLAGS.archiveReads, "true");
+  token.setValue(AI_CHAT_RECOVERABLE_FLAGS.newCompaction, "true");
+  token.setValue(AI_CHAT_RECOVERABLE_FLAGS.historyTools, "true");
+  token.setValue(AI_CHAT_RECOVERABLE_FLAGS.historyUi, "true");
+}
+
 // Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
   /* no-op: flag is read live and not cached. */

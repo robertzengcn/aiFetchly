@@ -68,6 +68,8 @@ export class AIChatArchiveModule extends BaseModule {
       cursor: request.cursor,
       maxRows: request.maxRows,
       maxCodePoints: request.maxCodePoints,
+      snapshotTimestampMs: request.snapshotTimestampMs,
+      snapshotRowId: request.snapshotRowId,
     });
     const records: HistoryExcerpt[] = page.records.map((r) =>
       this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, false)

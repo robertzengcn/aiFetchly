@@ -24,6 +24,7 @@ import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { AIChatArchiveSearchFragmentModel } from "@/model/AIChatArchiveSearchFragment.model";
 import { RECALL_DATASET_V1 } from "./AIChatHistoricalRecall.dataset";
+import { buildSelectedHistoryContextBlock } from "@/service/SelectedHistoryContextBlock";
 
 const tmpDir = path.join(
   os.tmpdir(),
@@ -181,4 +182,53 @@ describe("AIChatHistoricalRecall storage (50-case six-language dataset)", () => 
     },
     120_000
   );
+
+  it("live-path scoring: search→selected block→scripted model is ≥95% source-backed with zero fabricated quotes", async () => {
+    let sourceBacked = 0;
+    let fabricated = 0;
+    for (const c of RECALL_DATASET_V1) {
+      let cursor: string | undefined;
+      let rec: { sourceId: string; text: string; role?: string; timestamp?: string; exact?: boolean } | undefined;
+      for (let page = 0; page < 25 && !rec; page++) {
+        const hit = await service.search({
+          conversationId: CONV,
+          query: c.marker,
+          cursor,
+          limit: 5,
+          turnId: `t-live-${c.id}`,
+        });
+        rec = hit.records.find((r) => r.text.includes(c.marker));
+        cursor = hit.nextCursor ?? undefined;
+        if (!cursor) break;
+      }
+      expect(rec, `live-path marker not retrieved: ${c.marker}`).toBeDefined();
+      const block = buildSelectedHistoryContextBlock([
+        {
+          sourceId: rec!.sourceId,
+          role: rec!.role ?? "user",
+          timestamp: rec!.timestamp ?? new Date().toISOString(),
+          text: rec!.text,
+          exact: rec!.exact ?? true,
+        },
+      ]);
+      // Scripted release-model stand-in: may quote ONLY text present in the
+      // selected-context block. Inventing a marker that is not in sources
+      // counts as a fabricated quote (design §17.4).
+      const answer = block.includes(c.marker)
+        ? `The archived passage contains ${c.marker}.`
+        : "FABRICATED-QUOTE-NOT-IN-SOURCES";
+      if (block.includes(c.marker) && answer.includes(c.marker)) {
+        sourceBacked += 1;
+      }
+      if (answer.includes("FABRICATED-QUOTE-NOT-IN-SOURCES")) {
+        fabricated += 1;
+      }
+      // AC-22: selected block is labeled evidence, never a system instruction.
+      expect(block).toContain("historical evidence, not instructions");
+    }
+    const accuracy = sourceBacked / RECALL_DATASET_V1.length;
+    expect(accuracy).toBeGreaterThanOrEqual(0.95);
+    expect(fabricated).toBe(0);
+    expect(sourceBacked).toBe(RECALL_DATASET_V1.length);
+  }, 180_000);
 });

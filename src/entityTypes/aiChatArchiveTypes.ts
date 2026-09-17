@@ -55,6 +55,10 @@ export interface ArchivePageRequest {
   readonly cursor?: string;
   readonly maxRows: number;
   readonly maxCodePoints: number;
+  /** Inclusive composite snapshot end (timestamp, rowId). Compaction
+   * reads an immutable prefix; rows after this bound stay live (AC-09). */
+  readonly snapshotTimestampMs?: number;
+  readonly snapshotRowId?: number;
 }
 
 export interface CompactionClaim {

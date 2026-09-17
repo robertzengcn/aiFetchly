@@ -235,4 +235,35 @@ describe("AIChatSectionPacker", () => {
     expect(packedChars).toBeLessThanOrEqual(2_000);
     expect(result.coverageComplete).toBe(false);
   });
+
+  it("packs equal-timestamp rows up to the snapshot rowId and skips later ids (AC-09)", async () => {
+    const conv = "conv-ac09-eqts";
+    const ts = 1_000;
+    await seedMessages(conv, [
+      { role: "user", content: "same-ts-first", ts },
+      { role: "assistant", content: "same-ts-second", ts },
+      { role: "user", content: "same-ts-third-after-snapshot", ts },
+    ]);
+    await indexConversation(conv);
+    const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AIChatMessageEntity
+    );
+    const rows = await repo.find({
+      where: { conversationId: conv },
+      order: { id: "ASC" },
+    });
+    expect(rows).toHaveLength(3);
+    const snapshotRowId = rows[1].id;
+
+    const result = await packer.pack({
+      conversationId: conv,
+      sourceCapacityTokens: 4_000,
+      endSnapshotTimestampMs: ts,
+      endSnapshotRowId: snapshotRowId,
+    });
+    const packed = result.fragments.map((f) => f.text).join("\n");
+    expect(packed).toContain("same-ts-first");
+    expect(packed).toContain("same-ts-second");
+    expect(packed).not.toContain("same-ts-third-after-snapshot");
+  });
 });

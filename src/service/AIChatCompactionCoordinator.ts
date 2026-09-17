@@ -634,10 +634,10 @@ export class AIChatCompactionCoordinator extends BaseModule {
       const earliestTs = Number(earliest.firstTimestampMs);
       const earliestRowId = earliest.firstRowId;
       if (!Number.isFinite(earliestTs) || earliestRowId <= 0) return fallback;
-      // Snapshot covers strictly before (earliestTs, earliestRowId): step back
-      // one rowId at the same timestamp, or to (ts-1ms, MAX) when rowId is 1.
-      // The packer's keyset uses strict-before on the snapshot end, so rows
-      // at (earliestTs, earliestRowId) and after are retained exactly.
+      // Snapshot end is the last packed row: step back one rowId at the
+      // same timestamp, or to (ts-1ms, MAX) when rowId is 1. The packer
+      // uses an inclusive composite bound, so rows at (earliestTs,
+      // earliestRowId) and after stay in the retained suffix (AC-09).
       if (earliestRowId > 1) {
         return {
           snapshotEndTimestampMs: earliestTs,

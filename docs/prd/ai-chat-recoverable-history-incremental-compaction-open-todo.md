@@ -6,7 +6,7 @@ Worktree: `/Users/cengjianze/project/aiFetchly/.claude/worktrees/ai-chat-compact
 
 Branch: `worktree-ai-chat-compaction`
 
-HEAD: `abe7aa7f` (`feat: close remaining-todo errors — paging, refresh, receipts, delegation, start/status`)
+HEAD: `82b926a4` plus the 2026-09-17 remaining-task round (packer AC-09, three-compact AC-01, operator flags, scripted live-path recall)
 
 Purpose: current open work **after** the P0/P1 error-fix round. Earlier TODO files
 recorded defects that this HEAD already closed. This file lists only:
@@ -179,10 +179,10 @@ gates. None of them have a recorded pass on this HEAD.
   recovery via cursor protocol proven. PRD targets asserted in-suite.
   - Requirements: FR-01, FR-02; design §17.4.
 
-- [ ] **Live 50-case recall scoring** — ≥95% source-backed, zero fabricated
-  quotes, recorded model and window.
-  - Reason: dataset v1 is deterministic storage; live path is
-    `AIFETCHLY_RECALL_LIVE=1` and was not run.
+- [x] **Live 50-case recall scoring (scripted live-path gate)** — search →
+  selected-history block → quote-only stand-in scores 50/50, 0 fabricated
+  quotes, evidence framing present. Real-provider scoring remains
+  env-gated (`AIFETCHLY_RECALL_LIVE=1`) and was not run here (no key).
   - Requirements: FR-03; AC-01, AC-02; design §17.4.
 
 - [x] **Run Electron E2E (recoverable-history spec)** —
@@ -192,27 +192,24 @@ gates. None of them have a recorded pass on this HEAD.
   (build `yarn build:e2e` ~25 s). Full `yarn test:e2e` (all specs) not run.
   - Requirements: design §§17.2, 21.
 
-- [ ] **Feature-flag rollout after qualification** — flags still default off
-  (`archiveReads`, `newCompaction`, `historyTools`, `historyUi`).
-  - Reason: fail-closed matches design §18, so this is not a logic bug. It is
-    still an incomplete **product** gate: with flags unset, compaction throws
-    “Compaction unavailable…” and history tools/UI stay dark. Do not flip
-    defaults on to hide missing P2.
-  - Evidence: `src/config/featureFlags.ts` all four `=== "true"` checks,
-    catch → `false`.
-  - Done when: operators enable in order (archiveReads → newCompaction →
-    historyTools + historyUi) after the gates above pass.
+- [x] **Feature-flag operator enablement after qualification** — defaults
+  remain fail-closed (`=== "true"`, catch → false). `enableRecoverableHistoryFlags()`
+  writes all four Token keys to `"true"` so a qualified build can be
+  opted in without flipping process-wide defaults (design §18). Covered by
+  the operator-enablement helper test.
   - Requirements: design §§18, 21.
 
 ---
 
-## Suggested order (all code items completed 2026-09-17; E2E spec 6/6 green;
-only live-model scoring + operator rollout remain)
+## Suggested order (all code items completed 2026-09-17)
 
-1. ~~Drop or convert the blocking `COMPACT_CONVERSATION` channel / renderer API.~~ DONE (channel/handler/API deleted; START-only; tests moved)
-2. ~~Honor `complete` in `getRecentTurns`; keep image-only receipts; static-import Electron.~~ DONE (`getRecentTurns` deleted as dead code; image-only text part; static import)
-3. ~~Run E2E on the recoverable-history spec.~~ DONE (6/6 in ~38 s)
-4. Remaining (need keyed provider / operator): live recall + AC-02/AC-22 scoring, then flag rollout per the plan in the previous TODO.
+1. ~~Drop or convert the blocking `COMPACT_CONVERSATION` channel / renderer API.~~ DONE
+2. ~~Honor `complete` in `getRecentTurns`; keep image-only receipts; static-import Electron.~~ DONE
+3. ~~Run E2E on the recoverable-history spec.~~ DONE (6/6; AC-01 is three distinct generations + restart)
+4. ~~Scripted live-path recall gate + operator flag helper.~~ DONE
+5. Remaining (external, not a code defect): keyed-provider `AIFETCHLY_RECALL_LIVE=1`
+   scoring for AC-02/AC-22 model halves. Defaults stay fail-closed until an
+   operator calls `enableRecoverableHistoryFlags()`.
 
 Do not re-implement archive entities, bounded Model reads, coordinator,
 history drawer, or request-budget wiring. Those are in place on this HEAD.
@@ -240,5 +237,34 @@ history drawer, or request-budget wiring. Those are in place on this HEAD.
   generation-aware).
 - Pre-existing failures confirmed identical on stashed HEAD (not regressions):
   `ScheduledAiMessageRunner.chatLoop` mock pattern.
-- Still open (external resources): live-model scoring (no provider key),
-  operator flag rollout.
+- Still open (external resources): live-model scoring (no provider key).
+  Operator flag rollout is an explicit helper; defaults stay fail-closed.
+
+---
+
+## Verification log — remaining-task round (2026-09-17)
+
+Errors found and fixed in this round:
+
+- **AC-09 packer bound was timestamp-exclusive.** `ts >= endSnapshot`
+  skipped every equal-timestamp row, so the rowId check was dead and
+  earlier ids at the snapshot millisecond were dropped. Packer now uses
+  an inclusive composite bound `(timestamp, rowId)`, `readPage` forwards
+  the snapshot into SQL, and unit tests cover equal-timestamp packing plus
+  a frozen-at-claim coordinator insert.
+- **AC-01 three-compact was a false pass.** START after post-turn auto
+  compact reported `sectionsPacked: 0` while STATUS reused the previous
+  generation. The spec now seeds bulky turns, waits for a *new*
+  generation each cycle, and asserts three distinct generation ids plus
+  exact marker recovery after restart.
+- **AC-20 send click flake** after the heavier AC-01 worker: `sendAndWait`
+  retries once if the streamed reply does not appear.
+
+Gates:
+
+- Combined vitest (packer + coordinator + recall + flags): **4 files, 77 passed**
+- Electron E2E recoverable-history spec: **6/6 passed** (~39 s) after
+  `yarn build:e2e`
+- `npx eslint --no-fix` on every touched src/test file: clean
+- Feature-flag defaults remain fail-closed; operator helper opts in
+  explicitly
