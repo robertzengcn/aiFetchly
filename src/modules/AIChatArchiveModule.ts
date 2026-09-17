@@ -19,6 +19,7 @@ import {
   type ArchiveReadPage,
   type ArchivePageRequest,
   type HistoryExcerpt,
+  type RefreshedSelection,
 } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
@@ -67,6 +68,70 @@ export class AIChatArchiveModule extends BaseModule {
       truncated: page.truncated,
       sourceRevision: state.sourceRevision,
     };
+  }
+
+  /**
+   * Bounded entity read for one turn range, inclusive of both ends
+   * (§4.3, FR-05). Returns raw rows (all message types, so tool exchanges
+   * stay with their turn) in chronological order. Used by context assembly
+   * to materialize whole turns by token cost — never a conversation scan.
+   */
+  async readTurnRows(
+    conversationId: string,
+    firstTimestampMs: number,
+    firstRowId: number,
+    lastTimestampMs: number,
+    lastRowId: number,
+    maxCodePoints: number
+  ): Promise<AIChatMessageEntity[]> {
+    await this.ensureConnection();
+    const stateModel = new AIChatArchiveStateModel(this.dbpath);
+    const state = await stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return [];
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    const page = await msgModel.readPageForward({
+      conversationId,
+      maxRows: 64,
+      maxCodePoints,
+      startTimestampMs: firstTimestampMs,
+      startRowId: firstRowId,
+      snapshotTimestampMs: lastTimestampMs,
+      snapshotRowId: lastRowId,
+    });
+    return page.records;
+  }
+
+  /**
+   * Bounded entity read of rows strictly after a (timestamp, rowId) position
+   * — the live/in-progress tail past the last completed turn (§4.3). Returns
+   * raw rows in chronological order, bounded by row cap + decoded-text
+   * allowance.
+   */
+  async readRowsAfter(
+    conversationId: string,
+    afterTimestampMs: number,
+    afterRowId: number,
+    maxCodePoints: number
+  ): Promise<AIChatMessageEntity[]> {
+    await this.ensureConnection();
+    const stateModel = new AIChatArchiveStateModel(this.dbpath);
+    const state = await stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return [];
+    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    const page = await msgModel.readPageForward({
+      conversationId,
+      maxRows: 64,
+      maxCodePoints,
+      startTimestampMs: afterTimestampMs,
+      startRowId: afterRowId,
+    });
+    // Start bound is inclusive; drop the anchor row itself and anything at or
+    // before the position so only the strictly-after tail remains.
+    return page.records.filter(
+      (r) =>
+        r.timestamp.getTime() > afterTimestampMs ||
+        (r.timestamp.getTime() === afterTimestampMs && r.id > afterRowId)
+    );
   }
 
   /**
@@ -337,6 +402,44 @@ export class AIChatArchiveModule extends BaseModule {
   }
 
   /**
+   * Boundary keys of recent complete turns (the retained suffix), newest-last
+   * chronological order, live turn excluded (§4.3). Used by context assembly
+   * to materialize whole turns by token cost. Empty when no turn projections
+   * exist yet (callers fall back to bounded recent rows — §15).
+   */
+  async getRecentTurnRanges(
+    conversationId: string,
+    maxCount: number
+  ): Promise<
+    Array<{
+      turnId: string;
+      firstTimestampMs: number;
+      firstRowId: number;
+      lastTimestampMs: number;
+      lastRowId: number;
+    }>
+  > {
+    await this.ensureConnection();
+    const stateModel = new AIChatArchiveStateModel(this.dbpath);
+    const state = await stateModel.getState(conversationId);
+    if (!state || state.deletedAt) return [];
+    const turnModel = new AIChatArchiveTurnModel(this.dbpath);
+    const turns = await turnModel.readRecentCompleteTurns(
+      conversationId,
+      state.epoch,
+      AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns,
+      maxCount
+    );
+    return turns.map((t) => ({
+      turnId: t.turnId,
+      firstTimestampMs: Number(t.firstTimestampMs),
+      firstRowId: t.firstRowId,
+      lastTimestampMs: Number(t.lastTimestampMs),
+      lastRowId: t.lastRowId,
+    }));
+  }
+
+  /**
    * Recent complete turns (the retained suffix), returned in chronological
    * order. Excludes the live turn (§4.3). Falls back to a bounded recent-row
    * read when no turn projections exist yet (before indexing completes — §15).
@@ -370,26 +473,23 @@ export class AIChatArchiveModule extends BaseModule {
         this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
       );
     }
-    // Materialize the message rows for each retained turn (bounded).
+    // Materialize the message rows for each retained turn (bounded). Each
+    // turn keysets forward from its own first (timestamp, rowId) through its
+    // last — never from the conversation head, so a long archive cannot push
+    // the retained suffix out of the page (FR-05, AC-03).
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
     const out: HistoryExcerpt[] = [];
     for (const turn of turns) {
-      const rows = await msgModel.readPageForward({
+      const page = await msgModel.readPageForward({
         conversationId,
         maxRows: 64,
         maxCodePoints,
+        startTimestampMs: Number(turn.firstTimestampMs),
+        startRowId: turn.firstRowId,
         snapshotTimestampMs: Number(turn.lastTimestampMs),
         snapshotRowId: turn.lastRowId,
       });
-      // Only the rows at or after the turn's first (timestamp, rowId).
-      for (const r of rows.records) {
-        const ts = r.timestamp.getTime();
-        if (
-          ts < Number(turn.firstTimestampMs) ||
-          (ts === Number(turn.firstTimestampMs) && r.id < turn.firstRowId)
-        ) {
-          continue;
-        }
+      for (const r of page.records) {
         out.push(
           this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
         );
@@ -446,15 +546,14 @@ export class AIChatArchiveModule extends BaseModule {
   }
 
   /**
-   * Re-resolve user-selected source references on submit (§13.3). Validates
-   * epoch/revision against the current source, checks final budget, and
-   * persists accepted selection references with the user-turn metadata. If the
-   * source changed (older revision), returns SOURCE_CHANGED with a refreshed
-   * reference when identity still resolves (§4.2).
-   *
-   * First version: validates each opaque source ID against the current epoch/
-   * revision and returns the resolved message rows. Budget enforcement lives
-   * in the retrieval service (§7.4).
+   * Re-resolve user-selected source references on submit (§13.3, FR-10).
+   * Validates epoch/revision against the current source. Every returned
+   * excerpt preserves its exact requested `[start, end)` span in the opaque
+   * source ID, so a mid-message hit round-trips without becoming the message
+   * prefix (FR-01–03, AC-01/AC-18). A revision mismatch rejects the stale
+   * reference and offers a refreshed one for explicit user confirmation —
+   * stale offsets are never quoted into the turn (§4.2, AC-18). Budget
+   * enforcement lives in the retrieval service (§7.4).
    */
   async resolveSelections(
     conversationId: string,
@@ -462,6 +561,7 @@ export class AIChatArchiveModule extends BaseModule {
   ): Promise<{
     resolved: HistoryExcerpt[];
     rejected: string[];
+    refreshed: RefreshedSelection[];
     errorCode?: string;
   }> {
     await this.ensureConnection();
@@ -471,12 +571,14 @@ export class AIChatArchiveModule extends BaseModule {
       return {
         resolved: [],
         rejected: [...sourceIds],
+        refreshed: [],
         errorCode: "HISTORY_SCOPE_INVALID",
       };
     }
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
     const resolved: HistoryExcerpt[] = [];
     const rejected: string[] = [];
+    const refreshed: RefreshedSelection[] = [];
     for (const sid of sourceIds) {
       const payload = decodeSourceId(sid, state.epoch);
       if (!payload) {
@@ -493,39 +595,40 @@ export class AIChatArchiveModule extends BaseModule {
         rejected.push(sid);
         continue;
       }
-      // Revision mismatch ⇒ SOURCE_CHANGED (§4.2). Identity may still resolve.
-      if (payload.revision !== state.sourceRevision) {
-        // Refresh the reference at the current revision.
-        const refreshed = this.toExcerpt(
-          msg,
-          state.epoch,
-          state.sourceRevision,
-          sliceByCodePoints(
-            msg.content ?? "",
-            payload.startCodePoint,
-            payload.endCodePoint
-          ),
-          true
-        );
-        resolved.push(refreshed);
-        continue;
-      }
       const text = sliceByCodePoints(
         msg.content ?? "",
         payload.startCodePoint,
         payload.endCodePoint
       );
-      resolved.push(
-        this.toExcerpt(msg, state.epoch, state.sourceRevision, text, true)
+      const excerpt = this.toExcerptWithSpan(
+        msg,
+        state.epoch,
+        state.sourceRevision,
+        text,
+        payload.field,
+        payload.startCodePoint,
+        payload.endCodePoint,
+        true
       );
+      // Revision mismatch ⇒ SOURCE_CHANGED (§4.2). The stale reference is
+      // rejected (never quoted); the refreshed reference is offered for
+      // explicit user confirmation, not silently substituted.
+      if (payload.revision !== state.sourceRevision) {
+        rejected.push(sid);
+        refreshed.push({ submittedId: sid, excerpt });
+        continue;
+      }
+      resolved.push(excerpt);
     }
     const errorCode =
-      rejected.length > 0 && resolved.length === 0
-        ? "SOURCE_UNAVAILABLE"
-        : rejected.length > 0
+      refreshed.length > 0
         ? "SOURCE_CHANGED"
-        : undefined;
-    return { resolved, rejected, errorCode };
+        : rejected.length > 0 && resolved.length === 0
+          ? "SOURCE_UNAVAILABLE"
+          : rejected.length > 0
+            ? "SOURCE_CHANGED"
+            : undefined;
+    return { resolved, rejected, refreshed, errorCode };
   }
 
   /**

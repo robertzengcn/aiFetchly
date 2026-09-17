@@ -8,6 +8,7 @@ import {
 const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
+const mockGetRecentMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
 const mockWorkspaceRetrieve = vi.fn();
 const mockResolve = vi.fn();
@@ -31,6 +32,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
     getConversationMessages: mockGetConversationMessages,
+    getRecentMessages: mockGetRecentMessages,
   };
   }),
 }));
@@ -81,7 +83,7 @@ describe("AIChatContextAssembler — workspace memory injection", () => {
     vi.clearAllMocks();
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
-    mockGetConversationMessages.mockResolvedValue([]);
+    mockGetRecentMessages.mockResolvedValue([]);
     mockDurableRetrieve.mockResolvedValue({
       memories: [],
       tokenEstimate: 0,

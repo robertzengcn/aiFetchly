@@ -18,6 +18,11 @@ import type {
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
+import {
+  AIChatRequestBudgetService,
+  UNKNOWN_MODEL_FALLBACK_LIMITS,
+} from "@/service/AIChatRequestBudgetService";
+import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 
 const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
@@ -31,14 +36,30 @@ const SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION = 0.8;
  * window. Kept in sync with the renderer badge threshold (compact button at
  * 80%) so the badge and the backend agree on when compaction should happen. */
 const AUTO_COMPACT_THRESHOLD_FRACTION = 0.8;
-/** Fallback context-window size when the model limit is unknown. */
-const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+/**
+ * Fallback context-window size when the model limit is unknown (design §8.1:
+ * provisional 8,192-token context, labeled fallback). Never assume 128k — an
+ * oversized denominator would delay auto-compact past the real window on
+ * small/unknown models (AC-16, AC-23). Matches the dispatch budget profile in
+ * AIChatRequestBudgetService.
+ */
+const DEFAULT_CONTEXT_WINDOW_TOKENS =
+  UNKNOWN_MODEL_FALLBACK_LIMITS.contextLimit;
 /** Trigger session-memory compaction when more than this long has passed
  * since the last successful update. Mirrors Claude Code's time-based layer. */
 const SESSION_MEMORY_MAX_AGE_MS = 60 * 60 * 1000;
 
 function isMessageRow(row: { messageType?: MessageType }): boolean {
   return row.messageType === MessageType.MESSAGE;
+}
+
+/** True when a provider error signals context-length rejection (§16). */
+function isContextRejectionMessage(err: unknown): boolean {
+  const msg =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /context|too large|max_tokens|token limit|context_length|input too long/i.test(
+    msg
+  );
 }
 
 export interface AIChatCompactAgentDeps {
@@ -48,16 +69,19 @@ export interface AIChatCompactAgentDeps {
   /** Returns true when the user has AI enabled (USER_AI_ENABLED === 'true'). */
   isEnabled(): boolean;
   /** Resolves the real context window (tokens) for a model. Optional; the
-   * 128k fallback is used when omitted. Wired to AIChatModelCatalogService in
-   * production so thresholds match the renderer's per-model badge denominator. */
+   * §8.1 unknown-model fallback (8,192) is used when omitted. Wired to
+   * AIChatModelCatalogService in production so thresholds match the
+   * renderer's per-model badge denominator. */
   getContextWindow?(model?: string): Promise<number>;
   /** Notified after a successful automatic full compact so the renderer can
    * drop the context badge immediately (mirrors the manual compact flow). */
   onAutoCompacted?(summary: AIChatCompactSummaryView): void;
-  /** Optional: the new durable incremental-compaction coordinator (design §11).
-   * When present, runFullCompact delegates to coordinator.requestCompaction
-   * instead of the legacy all-history model call. When absent, the legacy
-   * path is used unchanged. */
+  /** Optional: the durable incremental-compaction coordinator (design §11).
+   * When present, runFullCompact delegates to coordinator.requestCompaction.
+   * When absent, runFullCompact FAILS CLOSED with a budget-checked limitation
+   * (the legacy all-history model call was removed and must never return —
+   * design §18 rollback). Flag-off therefore means compaction is inoperable,
+   * not unbounded. */
   compactionCoordinator?: AIChatCompactionCoordinator;
 }
 
@@ -115,8 +139,8 @@ export class AIChatCompactAgentService {
     }
     // Resolve the model's REAL context window before the in-flight check. The
     // remainder of this method must stay synchronous up to this.inFlight.set
-    // so concurrent enqueues dedupe correctly. Falls back to 128k when the
-    // resolver is not wired (tests) — matching the renderer's default.
+    // so concurrent enqueues dedupe correctly. Falls back to the §8.1
+    // unknown-model profile (8,192) when the resolver is not wired.
     const contextWindow = await this.resolveContextWindow(input.model);
     // Per-conversation serialization.
     const existing = this.inFlight.get(input.conversationId);
@@ -148,8 +172,9 @@ export class AIChatCompactAgentService {
   }
 
   /**
-   * Resolve the model's real context window, or the 128k fallback when no
-   * resolver is wired. Never throws (resolver implementations don't throw).
+   * Resolve the model's real context window, or the §8.1 unknown-model
+   * fallback (8,192) when no resolver is wired. Never throws (resolver
+   * implementations don't throw).
    */
   private async resolveContextWindow(model?: string): Promise<number> {
     return this.deps.getContextWindow
@@ -340,6 +365,10 @@ export class AIChatCompactAgentService {
           model: input.model,
           summarize: async (systemPrompt: string, userPrompt: string) => {
             const resp = await this.deps.completeChat({
+              // Explicit provider output cap (§8.3); oversized output is
+              // rejected locally, never blindly cut.
+              max_tokens:
+                AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt },
@@ -454,56 +483,157 @@ export class AIChatCompactAgentService {
 
       await this.memory.markUpdating(input.conversationId);
 
-      const newMessages: OpenAIChatMessage[] = newRows.map((r) => ({
-        role: r.role as OpenAIChatMessage["role"],
-        content: r.content,
-      }));
-      const req: OpenAIChatCompletionRequest = {
-        model: input.model,
-        messages: [
-          { role: "system", content: buildSessionMemorySystemPrompt() },
-          {
-            role: "user",
-            content: buildSessionMemoryUserPrompt(
-              existing?.summary ?? null,
-              newMessages
-            ),
-          },
-        ],
-      };
-      const startedAt = Date.now();
-      const resp = await this.deps.completeChat(req);
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const { summary, ok } = normalizeSessionMemorySummary(raw);
-      if (!ok) {
-        await this.memory.recordFailure(
-          input.conversationId,
-          "Compact model returned empty summary"
-        );
-        return;
-      }
-      const last = newRows[newRows.length - 1];
-      const tokenEstimate = this.estimator.estimateText(summary);
-      const priorCount = existing?.sourceMessageCount ?? 0;
-      await this.memory.upsertMemory({
-        conversationId: input.conversationId,
-        summary,
-        coveredThroughMessageId: last.messageId,
-        coveredThroughTimestamp: last.timestamp,
-        sourceMessageCount: priorCount + newRows.length,
-        tokenEstimate,
-        model: resp.model,
-        status: "active",
+      // Same section budgets as manual/automatic compaction (FR-07/FR-08,
+      // AC-23): preflight the delta against the section source capacity, set
+      // an explicit provider output cap, and bound the whole attempt sequence
+      // (≤2 source-size reductions + 1 structured-output repair within a
+      // 4-attempt ceiling, mirroring §16). There is no unchecked secondary
+      // summarizer: anything that cannot fit routes to the coordinator.
+      const SESSION_MEMORY_OUTPUT_CAP_TOKENS =
+        AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens;
+      const SESSION_MEMORY_MAX_ATTEMPTS = 4;
+      const SESSION_MEMORY_MAX_REDUCTIONS = 2;
+      const budget = new AIChatRequestBudgetService();
+      const contextWindow = await this.resolveContextWindow(input.model);
+      const limitResolver = (): {
+        contextLimit: number;
+        outputLimit: number;
+        limitSource: "configured" | "fallback";
+      } => ({
+        contextLimit: contextWindow,
+        outputLimit: UNKNOWN_MODEL_FALLBACK_LIMITS.outputLimit,
+        limitSource: this.deps.getContextWindow ? "configured" : "fallback",
       });
-      await this.memory.resetFailures(input.conversationId);
-      this.lastSessionMemoryAt.set(input.conversationId, Date.now());
-      console.log(
-        `[ai-chat-compact] session update completed conv=${
-          input.conversationId
-        } msgs=${newRows.length} tokens=${tokenEstimate} elapsed=${
-          Date.now() - startedAt
-        }ms`
-      );
+      let rows = newRows;
+      let reductions = 0;
+      let repaired = false;
+      let attempts = 0;
+      let strictInstruction = "";
+      const startedAt = Date.now();
+      for (;;) {
+        attempts += 1;
+        const newMessages: OpenAIChatMessage[] = rows.map((r) => ({
+          role: r.role as OpenAIChatMessage["role"],
+          content: r.content,
+        }));
+        const systemPrompt = buildSessionMemorySystemPrompt();
+        const userPrompt =
+          buildSessionMemoryUserPrompt(existing?.summary ?? null, newMessages) +
+          strictInstruction;
+        const promptOverhead = this.estimator.estimateMessages([
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ]);
+        const stateInputCost = existing?.summary
+          ? this.estimator.estimateText(existing.summary)
+          : 0;
+        const capacity = budget.allocateSectionCapacity({
+          model: input.model,
+          sectionOutputReserve: SESSION_MEMORY_OUTPUT_CAP_TOKENS,
+          promptOverhead,
+          stateInputCost,
+          modelLimitResolver: limitResolver,
+        });
+        if (capacity.errorCode || capacity.sourceCapacity <= 0) {
+          // Even the reduced delta cannot fit this model's window — the
+          // coordinator owns it via bounded sections.
+          await this.routeOversizedDeltaToCoordinator(input);
+          return;
+        }
+        const deltaTokens = this.estimator.estimateMessages(newMessages);
+        if (deltaTokens > capacity.sourceCapacity) {
+          await this.routeOversizedDeltaToCoordinator(input);
+          return;
+        }
+        const req: OpenAIChatCompletionRequest = {
+          model: input.model,
+          max_tokens: SESSION_MEMORY_OUTPUT_CAP_TOKENS,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        };
+        let raw: string;
+        try {
+          const resp = await this.deps.completeChat(req);
+          raw = openAIContentToString(resp.choices?.[0]?.message?.content);
+          const rawTokens = Math.ceil(Buffer.byteLength(raw, "utf8") / 4);
+          if (rawTokens > SESSION_MEMORY_OUTPUT_CAP_TOKENS * 2) {
+            // Explicit output cap: reject oversized output rather than
+            // storing a blindly cut summary.
+            await this.memory.recordFailure(
+              input.conversationId,
+              `Session summary output ${rawTokens} tokens exceeds provider cap`
+            );
+            return;
+          }
+          const { summary, ok } = normalizeSessionMemorySummary(raw);
+          if (!ok) {
+            if (!repaired && attempts < SESSION_MEMORY_MAX_ATTEMPTS) {
+              repaired = true;
+              strictInstruction =
+                "\nReturn a non-empty session summary covering the new messages.";
+              continue;
+            }
+            await this.memory.recordFailure(
+              input.conversationId,
+              "Compact model returned empty summary"
+            );
+            return;
+          }
+          const summaryTokens = this.estimator.estimateText(summary);
+          if (summaryTokens > SESSION_MEMORY_OUTPUT_CAP_TOKENS) {
+            await this.memory.recordFailure(
+              input.conversationId,
+              `Session summary ${summaryTokens} tokens exceeds output cap`
+            );
+            return;
+          }
+          const last = rows[rows.length - 1];
+          const priorCount = existing?.sourceMessageCount ?? 0;
+          await this.memory.upsertMemory({
+            conversationId: input.conversationId,
+            summary,
+            coveredThroughMessageId: last.messageId,
+            coveredThroughTimestamp: last.timestamp,
+            sourceMessageCount: priorCount + rows.length,
+            tokenEstimate: summaryTokens,
+            model: resp.model,
+            status: "active",
+          });
+          await this.memory.resetFailures(input.conversationId);
+          this.lastSessionMemoryAt.set(input.conversationId, Date.now());
+          console.log(
+            `[ai-chat-compact] session update completed conv=${
+              input.conversationId
+            } msgs=${rows.length} tokens=${summaryTokens} elapsed=${
+              Date.now() - startedAt
+            }ms`
+          );
+          return;
+        } catch (err) {
+          if (
+            isContextRejectionMessage(err) &&
+            reductions < SESSION_MEMORY_MAX_REDUCTIONS &&
+            attempts < SESSION_MEMORY_MAX_ATTEMPTS
+          ) {
+            // Halve the attempted delta and retry within the ceiling. At the
+            // floor, the coordinator owns the remainder via bounded sections.
+            const halved = Math.max(
+              MIN_DELTA_MESSAGES,
+              Math.floor(rows.length / 2)
+            );
+            if (halved >= rows.length) {
+              await this.routeOversizedDeltaToCoordinator(input);
+              return;
+            }
+            reductions += 1;
+            rows = rows.slice(0, halved);
+            continue;
+          }
+          throw err;
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(
@@ -554,6 +684,10 @@ export class AIChatCompactAgentService {
           model: input.model,
           summarize: async (systemPrompt: string, userPrompt: string) => {
             const resp = await this.deps.completeChat({
+              // Explicit provider output cap (§8.3); oversized output is
+              // rejected locally, never blindly cut.
+              max_tokens:
+                AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
               messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt },
@@ -566,13 +700,34 @@ export class AIChatCompactAgentService {
       );
       // Return a legacy-compatible view. The new engine stores structured
       // summaries in context_generations; this view is a thin adapter so the
-      // renderer badge drop + onAutoCompacted hook still fire.
+      // renderer badge drop + onAutoCompacted hook still fire on completion.
+      // Non-terminal run states are preserved, never collapsed to "failed":
+      // a history needing more than one batch reports paused (resumable),
+      // never a failure (FR-07/FR-09, AC-04/AC-07).
+      const status: AIChatCompactSummaryView["status"] =
+        result.state === "completed"
+          ? "active"
+          : result.state === "paused"
+            ? "paused"
+            : result.state === "joined"
+              ? "joined"
+              : result.state === "cancelled"
+                ? "cancelled"
+                : "failed";
+      const summary =
+        result.state === "completed" && result.generationId
+          ? `compaction generation ${result.generationId}`
+          : result.state === "paused"
+            ? `compaction paused after ${result.sectionsPacked} sections; retry to resume`
+            : result.state === "joined"
+              ? `joined active compaction run ${result.runId}`
+              : result.state === "cancelled"
+                ? "compaction cancelled"
+                : "compaction failed";
       const view: AIChatCompactSummaryView = {
         compactId: result.runId,
         conversationId: input.conversationId,
-        summary: result.generationId
-          ? `compaction generation ${result.generationId}`
-          : "compaction paused",
+        summary,
         fromMessageId: "",
         throughMessageId: "",
         throughTimestamp: new Date().toISOString(),
@@ -580,11 +735,11 @@ export class AIChatCompactAgentService {
         inputTokenEstimate: 0,
         outputTokenEstimate: 0,
         model: input.model ?? "",
-        status: result.state === "completed" ? "active" : "failed",
+        status,
       };
-      if (result.state === "completed") {
-        this.deps.onAutoCompacted?.(view);
-      }
+      // No onAutoCompacted here: the automatic trigger (runAutoCompact)
+      // notifies exactly once after a successful run. The manual IPC flow has
+      // its own badge handling and must not fire the auto hook.
       return view;
   }
 }

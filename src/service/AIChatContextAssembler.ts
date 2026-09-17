@@ -34,9 +34,20 @@ import type {
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import type { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 
 /** Recent-history window counted in text (`message`) rows, not raw DB rows. */
 const DEFAULT_RECENT_MESSAGE_WINDOW = 30;
+
+/**
+ * Turn-backed retention tuning (FR-05, design §12): how many newest complete
+ * turns to consider, and the token budget they share. At least two completed
+ * turns plus the in-progress turn are targeted; a single oversized turn gets a
+ * bounded receipt + source refs instead of silent truncation.
+ */
+const MAX_CONSIDERED_COMPLETE_TURNS = 8;
+const DEFAULT_RECENT_TURNS_TOKEN_BUDGET = 6_000;
 
 const COMPACT_PREAMBLE =
   "Conversation compact context:\nThe following summary is a point-in-time memory of earlier conversation messages.\nUse it as context, but prefer recent messages when there is a conflict.\n\n";
@@ -59,6 +70,12 @@ export interface AIChatContextCompactionReader {
 /** Optional constructor deps for the assembler. */
 export interface AIChatContextAssemblerDeps {
   readonly compactionReader?: AIChatContextCompactionReader;
+  /**
+   * Archive access for turn-backed retention (FR-05). When absent the
+   * assembler falls back to bounded recent rows. Production always wires it
+   * (engine default, IPC, scheduled factory).
+   */
+  readonly archiveModule?: AIChatArchiveModule;
 }
 
 export interface AIChatContextAssembleInput {
@@ -71,6 +88,13 @@ export interface AIChatContextAssembleInput {
   readonly maxTokens?: number;
   readonly planState?: AIChatPlanStateView | null;
   readonly recentMessageWindow?: number;
+  /**
+   * Token budget shared by retained complete turns (FR-05). Defaults to
+   * 6,000. The live/in-progress turn is always retained; oversized turns get
+   * receipts. Only applies to the turn-projection path; the bounded-row
+   * fallback still uses `recentMessageWindow`.
+   */
+  readonly recentTurnTokenBudget?: number;
   readonly currentUserContentParts?: Array<
     OpenAITextContentPart | OpenAIImageUrlContentPart
   >;
@@ -100,6 +124,42 @@ function roleOf(role: string): OpenAIMessageRole {
   return "user";
 }
 
+/**
+ * Bounded receipt standing in for one oversized retained turn (FR-05): the
+ * raw content is NOT loaded, visibly marked, with the turn's boundary message
+ * ids so exact passages stay retrievable via conversation_history_read. Flows
+ * through the normal text-row replay as a labeled system message.
+ */
+function oversizedTurnReceiptRow(
+  conversationId: string,
+  turn: {
+    turnId: string;
+    firstTimestampMs: number;
+    firstRowId: number;
+    lastTimestampMs: number;
+    lastRowId: number;
+  },
+  rows: readonly AIChatMessageEntity[],
+  costTokens: number
+): AIChatMessageEntity {
+  const firstId = rows.length > 0 ? rows[0].messageId : `#${turn.firstRowId}`;
+  const lastId =
+    rows.length > 0 ? rows[rows.length - 1].messageId : `#${turn.lastRowId}`;
+  return {
+    id: turn.lastRowId,
+    messageId: `receipt-${turn.turnId}`,
+    conversationId,
+    role: "system",
+    content:
+      `[Retained turn omitted: ${rows.length} messages ` +
+      `(~${costTokens} tokens) exceed the recent-turn budget. ` +
+      `Raw content is not fully loaded. Retrieve exact passages with ` +
+      `conversation_history_read (message ids ${firstId} … ${lastId}).]`,
+    timestamp: new Date(turn.lastTimestampMs),
+    messageType: MessageType.MESSAGE,
+  } as AIChatMessageEntity;
+}
+
 export class AIChatContextAssembler {
   private readonly memory = new AIChatSessionMemoryModule();
   private readonly compact = new AIChatCompactModule();
@@ -111,9 +171,12 @@ export class AIChatContextAssembler {
   private readonly aifetchlyContext = new AIFetchlyContextLoader();
   /** Opt-in compaction reader (new §12 path); absent → legacy behavior. */
   private readonly compactionReader?: AIChatContextCompactionReader;
+  /** Archive access for turn-backed retention; absent → bounded-row fallback. */
+  private readonly archiveModule?: AIChatArchiveModule;
 
   constructor(deps?: AIChatContextAssemblerDeps) {
     this.compactionReader = deps?.compactionReader;
+    this.archiveModule = deps?.archiveModule;
   }
 
   /**
@@ -203,17 +266,12 @@ export class AIChatContextAssembler {
     const sessionMemory = await this.memory.getByConversation(
       input.conversationId
     );
-    const fullCompact = await this.compact.getActiveSummary(
-      input.conversationId
-    );
 
-    // New §12 path: when the opt-in compaction reader is injected and the
-    // conversation has a published active generation, use its composite
-    // boundary (timestamp + rowId) to trim recent history and tool pairs,
-    // and its bounded overview instead of the legacy compact summary block.
-    // The legacy full compact (when present) still wins — it represents the
-    // user-facing compact action; the generation only applies when there is
-    // no legacy compact for this conversation.
+    // Published generations take precedence over legacy compact summaries
+    // (FR-07, AC-19): the composite (timestamp, rowId) boundary is exact,
+    // while the legacy timestamp-only trim can silently exclude messages.
+    // A leftover legacy summary stays readable as advisory context until
+    // migration publishes a replacement — it never trims history again.
     let generationBoundary: {
       coveredThroughTimestampMs: number;
       coveredThroughRowId: number;
@@ -225,7 +283,7 @@ export class AIChatContextAssembler {
           await this.compactionReader.getActiveGenerationForConversation(
             input.conversationId
           );
-        if (generation && !fullCompact) {
+        if (generation) {
           generationBoundary = {
             coveredThroughTimestampMs: generation.coveredThroughTimestampMs,
             coveredThroughRowId: generation.coveredThroughRowId,
@@ -241,37 +299,26 @@ export class AIChatContextAssembler {
         );
       }
     }
-
-    const historyRows = await this.v2.getRecentMessages(
-      input.conversationId,
-      // Bounded recent fetch (FR-01/FR-07): enough rows to cover the text
-      // window plus recent tool_call/tool_result rows for pairing. Never a
-      // full-conversation load — archive size must not determine memory or
-      // query cost (PRD §10, AC-10). Tool evidence beyond this window stays
-      // recoverable via conversation_tool_history lookup.
-      (input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW) * 4 + 64
+    const fullCompact = await this.compact.getActiveSummary(
+      input.conversationId
     );
-    const sorted = [...historyRows].sort((a, b) => {
+
+    // Retained recent history (FR-05): complete terminal turns allocated by
+    // token cost, plus the live turn — never a fixed text-message count, so
+    // tool exchanges survive as units and "continue" keeps its context.
+    // Rows at or before the active exclusion boundary are dropped: the
+    // published composite boundary wins; the legacy timestamp trim applies
+    // only when no generation exists. Session memory is advisory and may
+    // overlap with recent history.
+    const retained = await this.loadRetainedRows(input, warnings);
+    const sorted = [...retained.rows].sort((a, b) => {
       const t = a.timestamp.getTime() - b.timestamp.getTime();
       return t !== 0 ? t : a.id - b.id;
     });
-    const window = input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW;
-    // Count the window in TEXT messages, not raw DB rows. A long tool-calling
-    // turn persists dozens of tool_call/tool_result rows; slicing the raw
-    // row list first then dropping those rows leaves only the last assistant
-    // fragment, so "please continue" forgets the original user task.
-    const recent = sorted.filter(isMessageRow).slice(-window);
-
-    // Drop any recent message that is already covered by an active full
-    // compact boundary. Session memory is advisory and may overlap with
-    // recent history. A published generation (§12) trims by the composite
-    // boundary (timestamp + rowId): rows strictly after the boundary remain;
-    // rows at the boundary timestamp with rowId <= coveredThroughRowId are
-    // covered (excluded).
     const withoutCurrent = input.currentUserMessageId
-      ? recent.filter((r) => r.messageId !== input.currentUserMessageId)
-      : recent;
-    const trimmedRecent = generationBoundary
+      ? sorted.filter((r) => r.messageId !== input.currentUserMessageId)
+      : sorted;
+    const afterBoundary = generationBoundary
       ? withoutCurrent.filter((r) => {
           const ts = r.timestamp.getTime();
           if (ts > generationBoundary!.coveredThroughTimestampMs) return true;
@@ -286,6 +333,15 @@ export class AIChatContextAssembler {
             new Date(fullCompact.throughTimestamp).getTime()
         )
       : withoutCurrent;
+    // Text replay window: turn-backed retention already selected whole turns
+    // by token cost, so every text row replays. The bounded-row fallback
+    // still counts the window in TEXT messages, not raw DB rows — a long
+    // tool-calling turn persists dozens of tool_call/tool_result rows, and
+    // slicing raw rows first would leave only the last assistant fragment.
+    // Tool rows never replay as text; they pair below for native replay.
+    const window = input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW;
+    const textRows = afterBoundary.filter(isMessageRow);
+    const trimmedRecent = retained.turnBacked ? textRows : textRows.slice(-window);
 
     const messages: OpenAIChatMessage[] = [];
     messages.push({ role: "system", content: systemPrompt });
@@ -503,16 +559,29 @@ export class AIChatContextAssembler {
       messages.push({ role: "system", content: durableContextBlock });
     }
 
-    if (fullCompact) {
-      messages.push({
-        role: "system",
-        content: COMPACT_PREAMBLE + fullCompact.summary,
-      });
-    } else if (generationOverview) {
+    // A published generation always wins over a leftover legacy summary
+    // (FR-07, AC-19): exclusion above already uses its composite boundary.
+    // The legacy summary stays readable as labeled advisory context until
+    // migration publishes a replacement — it never trims history again.
+    if (generationOverview) {
       // Published §12 generation overview — bounded structured digest of the
       // compacted sections (synopsis / decisions / constraints / pending /
       // tool outcomes / topics).
       messages.push({ role: "system", content: generationOverview });
+      if (fullCompact) {
+        messages.push({
+          role: "system",
+          content:
+            "Legacy compact summary (advisory — superseded by incremental " +
+            `compaction; dated ${fullCompact.throughTimestamp}):\n` +
+            fullCompact.summary,
+        });
+      }
+    } else if (fullCompact) {
+      messages.push({
+        role: "system",
+        content: COMPACT_PREAMBLE + fullCompact.summary,
+      });
     } else if (sessionMemory) {
       messages.push({
         role: "system",
@@ -520,13 +589,21 @@ export class AIChatContextAssembler {
       });
     }
 
-    const compactMs = fullCompact
-      ? new Date(fullCompact.throughTimestamp).getTime()
-      : generationBoundary?.coveredThroughTimestampMs ?? null;
-    const toolPairs = filterPairsAfterBoundary(
-      collectConversationToolPairs(sorted),
-      compactMs
-    );
+    // Published composite boundary wins for tool evidence too; the legacy
+    // timestamp trim applies only without a generation (same preference as
+    // the history exclusion above).
+    const toolPairs = generationBoundary
+      ? filterPairsAfterBoundary(
+          collectConversationToolPairs(sorted),
+          generationBoundary.coveredThroughTimestampMs,
+          generationBoundary.coveredThroughRowId
+        )
+      : fullCompact
+        ? filterPairsAfterBoundary(
+            collectConversationToolPairs(sorted),
+            new Date(fullCompact.throughTimestamp).getTime()
+          )
+        : filterPairsAfterBoundary(collectConversationToolPairs(sorted), null);
     const toolIndex = buildToolHistoryIndexBlock(toolPairs);
     if (toolIndex) {
       messages.push({ role: "system", content: toolIndex });
@@ -558,6 +635,131 @@ export class AIChatContextAssembler {
       compactTriggered: false,
       warnings,
     };
+  }
+
+  /**
+   * Retained recent history (FR-05, design §12): complete terminal turns
+   * allocated by token cost plus the live/in-progress tail — never a fixed
+   * text-message count, so tool exchanges survive as units and "continue"
+   * keeps its context (AC-03). A single oversized turn is replaced by a
+   * bounded receipt with retrievable references, visibly marked.
+   *
+   * Preferred path uses authoritative turn projections via the archive
+   * Module. Without projections (or archive access, or on any archive
+   * error) it falls back to a bounded recent-row window — archive size never
+   * determines memory or query cost (FR-01/FR-07, AC-10).
+   */
+  private async loadRetainedRows(
+    input: AIChatContextAssembleInput,
+    warnings: string[]
+  ): Promise<{ rows: AIChatMessageEntity[]; turnBacked: boolean }> {
+    if (this.archiveModule) {
+      try {
+        const ranges = await this.archiveModule.getRecentTurnRanges(
+          input.conversationId,
+          MAX_CONSIDERED_COMPLETE_TURNS
+        );
+        if (ranges.length > 0) {
+          return {
+            rows: await this.loadTurnBackedRows(input, ranges, warnings),
+            turnBacked: true,
+          };
+        }
+      } catch (err) {
+        warnings.push("turn-backed retention unavailable; using recent rows");
+        console.error(
+          "[ai-chat-context] turn-backed retention failed, falling back:",
+          err
+        );
+      }
+    }
+    return { rows: await this.loadRecentRowFallback(input), turnBacked: false };
+  }
+
+  /**
+   * Bounded recent-row fallback (pre-indexing, §15): enough rows to cover the
+   * text window plus recent tool_call/tool_result rows for pairing. The
+   * caller slices the text window; tool rows are kept whole for pairing.
+   * Tool evidence beyond this window stays recoverable via tool-history
+   * lookup.
+   */
+  private async loadRecentRowFallback(
+    input: AIChatContextAssembleInput
+  ): Promise<AIChatMessageEntity[]> {
+    const window = input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW;
+    return this.v2.getRecentMessages(
+      input.conversationId,
+      window * 4 + 64
+    );
+  }
+
+  /**
+   * Turn-projection retention: the live tail always, plus newest complete
+   * turns newest-first while the token budget allows. Oversized turns become
+   * receipts (never silent truncation) without blocking older small turns;
+   * iteration stops at the first turn that no longer fits the remaining
+   * budget, since older history is less valuable than the retained tail.
+   */
+  private async loadTurnBackedRows(
+    input: AIChatContextAssembleInput,
+    ranges: Array<{
+      turnId: string;
+      firstTimestampMs: number;
+      firstRowId: number;
+      lastTimestampMs: number;
+      lastRowId: number;
+    }>,
+    warnings: string[]
+  ): Promise<AIChatMessageEntity[]> {
+    const archive = this.archiveModule;
+    if (!archive) return this.loadRecentRowFallback(input);
+    const budget =
+      input.recentTurnTokenBudget ?? DEFAULT_RECENT_TURNS_TOKEN_BUDGET;
+    const codePoints = Math.max(64, budget * 4);
+    const newest = ranges[ranges.length - 1];
+
+    // Live/in-progress tail past the last completed turn — always retained
+    // (bounded by the read's row cap + decoded-text allowance).
+    const live = await archive.readRowsAfter(
+      input.conversationId,
+      newest.lastTimestampMs,
+      newest.lastRowId,
+      codePoints
+    );
+
+    // Newest complete turns first, while the shared budget allows.
+    const kept: AIChatMessageEntity[][] = [];
+    let spent = 0;
+    for (let i = ranges.length - 1; i >= 0; i--) {
+      const turn = ranges[i];
+      const rows = await archive.readTurnRows(
+        input.conversationId,
+        turn.firstTimestampMs,
+        turn.firstRowId,
+        turn.lastTimestampMs,
+        turn.lastRowId,
+        codePoints
+      );
+      const cost = rows.reduce(
+        (sum, r) => sum + this.estimator.estimateText(r.content ?? ""),
+        0
+      );
+      if (cost > budget) {
+        // Single oversized turn: bounded receipt + retrievable references,
+        // visibly marked that raw content is not fully loaded (FR-05).
+        kept.unshift([
+          oversizedTurnReceiptRow(input.conversationId, turn, rows, cost),
+        ]);
+        warnings.push(
+          `turn ${turn.turnId} exceeds the recent-turn budget; kept as a retrievable receipt`
+        );
+        continue;
+      }
+      if (spent + cost > budget) break;
+      spent += cost;
+      kept.unshift(rows);
+    }
+    return [...kept.flat(), ...live];
   }
 
   private async buildEnvironmentContext(): Promise<string> {

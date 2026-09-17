@@ -25,6 +25,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatArchiveTurnModel } from "@/model/AIChatArchiveTurn.model";
 import { AIChatSectionPacker } from "@/service/AIChatSectionPacker";
 import type {
   PackedTextFragment,
@@ -601,65 +602,42 @@ export class AIChatCompactionCoordinator extends BaseModule {
   /**
    * Terminal-turn snapshot excluding the retained recent suffix (§4.3, FR-05).
    * Retains two completed turns when they fit plus the in-progress turn, with
-   * tool exchanges. Uses authoritative turn projections; falls back to the
-   * high-water mark only when no turn projections exist yet.
+   * tool exchanges. Reads authoritative turn projections directly — the
+   * retained suffix starts at the earliest retained turn's first
+   * (timestamp, rowId), never approximated from decoded excerpt source IDs.
+   * Falls back to the high-water mark only when no turn projections exist yet.
    */
   private async computeSnapshotEnd(
     conversationId: string,
     highWaterTs: number,
     highWaterRowId: number
   ): Promise<{ snapshotEndTimestampMs: number; snapshotEndRowId: number }> {
+    const fallback = {
+      snapshotEndTimestampMs: highWaterTs,
+      snapshotEndRowId: highWaterRowId,
+    };
     try {
-      const turns = await this.archive.getRecentTurns(
-        conversationId,
-        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1,
-        64 * 1024
-      );
-      if (turns.length === 0) {
-        return {
-          snapshotEndTimestampMs: highWaterTs,
-          snapshotEndRowId: highWaterRowId,
-        };
-      }
-      // Turns are chronological; the retained suffix starts at the earliest
-      // retained turn's first row. Snapshot end is strictly before it.
-      // getRecentTurns returns excerpts, not turn boundaries — decode the
-      // earliest retained row and step one position back via its (timestamp,
-      // rowId). We approximate by excluding the last N excerpts' rows: find
-      // the earliest retained timestamp/rowId from decoded source IDs.
-      const { decodeSourceId } = await import(
-        "@/service/AIChatArchiveCursorCodec"
-      );
       const state = await this.module.getState(conversationId);
-      const epoch = state?.epoch ?? "";
-      let earliestTs = Number.MAX_SAFE_INTEGER;
-      let earliestRowId = Number.MAX_SAFE_INTEGER;
-      for (const ex of turns) {
-        const payload = decodeSourceId(ex.sourceId, epoch);
-        if (!payload) continue;
-        const ts = Date.parse(ex.timestamp);
-        if (Number.isNaN(ts)) continue;
-        if (
-          ts < earliestTs ||
-          (ts === earliestTs && payload.rowId < earliestRowId)
-        ) {
-          earliestTs = ts;
-          earliestRowId = payload.rowId;
-        }
-      }
-      if (earliestTs === Number.MAX_SAFE_INTEGER) {
-        return {
-          snapshotEndTimestampMs: highWaterTs,
-          snapshotEndRowId: highWaterRowId,
-        };
-      }
+      if (!state) return fallback;
+      const turnModel = new AIChatArchiveTurnModel(this.dbpath);
+      const turns = await turnModel.readRecentCompleteTurns(
+        conversationId,
+        state.epoch,
+        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns,
+        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1
+      );
+      if (turns.length === 0) return fallback;
+      // Turns are chronological; the retained suffix starts at the earliest
+      // retained turn's first row. The live turn is excluded upstream
+      // (readRecentCompleteTurns only returns completed turns).
+      const earliest = turns[0];
+      const earliestTs = Number(earliest.firstTimestampMs);
+      const earliestRowId = earliest.firstRowId;
+      if (!Number.isFinite(earliestTs) || earliestRowId <= 0) return fallback;
       // Snapshot covers strictly before (earliestTs, earliestRowId): step back
       // one rowId at the same timestamp, or to (ts-1ms, MAX) when rowId is 1.
-      // The packer's keyset uses strict-before on the snapshot end, so
-      // returning the retained-start itself as an exclusive bound is exact:
-      // rows at (earliestTs, earliestRowId) and after are retained.
-      // Encode exclusivity by returning (earliestTs, earliestRowId - 1) with
-      // timestamp stepping when needed.
+      // The packer's keyset uses strict-before on the snapshot end, so rows
+      // at (earliestTs, earliestRowId) and after are retained exactly.
       if (earliestRowId > 1) {
         return {
           snapshotEndTimestampMs: earliestTs,
@@ -671,10 +649,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
         snapshotEndRowId: Number.MAX_SAFE_INTEGER,
       };
     } catch {
-      return {
-        snapshotEndTimestampMs: highWaterTs,
-        snapshotEndRowId: highWaterRowId,
-      };
+      return fallback;
     }
   }
 

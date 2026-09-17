@@ -5,6 +5,7 @@ import {
   sliceByCodePoints,
 } from "@/service/AIChatArchiveTextUtil";
 import {
+  encodeCursor,
   encodeSourceId,
   decodeSourceId,
 } from "@/service/AIChatArchiveCursorCodec";
@@ -13,6 +14,7 @@ import {
   type HistoryExcerpt,
   type OpaqueSourceIdPayload,
   type RecoverableHistoryErrorCode,
+  type RefreshedSelection,
 } from "@/entityTypes/aiChatArchiveTypes";
 import {
   conversationHistorySearchInputSchema,
@@ -79,6 +81,14 @@ export interface ResolveResult {
    * does not map back to what the renderer sent.
    */
   readonly acceptedSubmittedIds?: readonly string[];
+  /**
+   * Stale submitted references whose source revision moved, each paired with
+   * a refreshed excerpt at the current revision (§4.2, AC-18). Refreshed
+   * passages are NEVER quoted into the turn — they are offered for explicit
+   * user confirmation, and their submitted ids are reported as rejected so
+   * drafts survive.
+   */
+  readonly refreshed?: readonly RefreshedSelection[];
 }
 
 /**
@@ -698,9 +708,6 @@ export class AIChatHistoryRetrievalService {
       return rejectRead(meta, "SOURCE_UNAVAILABLE");
     }
     const anchorTs = anchor.message.timestamp.getTime();
-    const { encodeCursor } = await import(
-      "@/service/AIChatArchiveCursorCodec"
-    );
     // Page cursor just BEFORE the resume row so the page includes it.
     const startCursor =
       resumeRowId > 1
@@ -839,6 +846,14 @@ export class AIChatHistoryRetrievalService {
           errorCode: "HISTORY_SCOPE_INVALID",
         };
       }
+      // Changed-source refreshes are rejections, not substitutions: the
+      // refreshed excerpts never enter the budget or the model block. Their
+      // submitted ids stay rejected (drafts survive) while the refreshed
+      // references travel alongside for explicit user confirmation (§4.2).
+      const refreshed = (result.refreshed ?? []).filter((r) =>
+        sourceIds.includes(r.submittedId)
+      );
+      for (const r of refreshed) rejected.add(r.submittedId);
       const paired = this.pairWithSubmittedIds(sourceIds, result);
       const resolved: HistoryExcerpt[] = [];
       const turnBudgetTurnId = turnId ?? "default";
@@ -879,13 +894,15 @@ export class AIChatHistoryRetrievalService {
       // Changed-source refreshes are rejections, not silent substitutions:
       // surface them alongside size rejections so the user confirms the
       // changed source before the model sees it.
-      const changed = result.errorCode === "SOURCE_CHANGED";
+      const changed =
+        result.errorCode === "SOURCE_CHANGED" || refreshed.length > 0;
       return {
         resolved,
         acceptedSubmittedIds: paired
           .filter(({ submittedId }) => !rejected.has(submittedId))
           .map(({ submittedId }) => submittedId),
         rejected: this.orderSelectionIds(sourceIds, rejected, result.rejected),
+        refreshed,
         errorCode: this.selectionErrorCode(resolved, rejected, {
           oversized,
           changed,
@@ -945,6 +962,7 @@ export class AIChatHistoryRetrievalService {
   ): RecoverableHistoryErrorCode | undefined {
     if (resolved.length === 0) {
       if (flags?.oversized) return "CONTEXT_REQUIRED_CONTENT_TOO_LARGE";
+      if (flags?.changed) return "SOURCE_CHANGED";
       return "HISTORY_SCOPE_INVALID";
     }
     if (flags?.oversized) return "CONTEXT_REQUIRED_CONTENT_TOO_LARGE";

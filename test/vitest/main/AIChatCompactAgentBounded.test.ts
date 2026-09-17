@@ -46,4 +46,32 @@ describe("AIChatCompactAgentService bounded routing", () => {
     // itself — the coordinator owns every summarization request.
     expect(completeChat).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["paused", "paused"],
+    ["joined", "joined"],
+    ["cancelled", "cancelled"],
+  ] as const)(
+    "preserves non-terminal coordinator state %s as view status %s (never failed)",
+    async (coordinatorState, viewStatus) => {
+      const coordinator = {
+        requestCompaction: vi.fn().mockResolvedValue({
+          state: coordinatorState,
+          sectionsPacked: 3,
+          runId: "run-9",
+        }),
+      };
+      const onAutoCompacted = vi.fn();
+      const svc = new AIChatCompactAgentService({} as never, {
+        completeChat: vi.fn(),
+        isEnabled: () => true,
+        onAutoCompacted,
+        compactionCoordinator: coordinator as never,
+      });
+      const view = await svc.runFullCompact({ conversationId: "v2-paused" });
+      // A batch-limit pause (or join/cancel) is resumable, not a failure.
+      expect(view.status).toBe(viewStatus);
+      expect(onAutoCompacted).not.toHaveBeenCalled();
+    }
+  );
 });

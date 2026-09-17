@@ -72,6 +72,8 @@ import type {
   ChatV2HistorySelectionMetadata,
 } from "@/entityTypes/aiChatV2Types";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import {
   buildSelectedHistoryContextBlock,
@@ -329,8 +331,16 @@ export class AIChatQueryEngine {
     private readonly loop: AIChatQueryLoop,
     deps?: AIChatQueryEngineDeps
   ) {
+    // Default assembler reads the published generation (§12) and retains
+    // token-budgeted complete turns (FR-05) so EVERY engine consumer —
+    // interactive, scheduled, subagent, recovery — assembles published
+    // context without each call site remembering the injections (FR-04/08).
     this.contextAssembler =
-      deps?.contextAssembler ?? new AIChatContextAssembler();
+      deps?.contextAssembler ??
+      new AIChatContextAssembler({
+        compactionReader: new AIChatCompactionModule(),
+        archiveModule: new AIChatArchiveModule(),
+      });
     this.compactAgent = deps?.compactAgent;
     this.compactionCoordinator = deps?.compactionCoordinator;
     this.autoDreamService = deps?.autoDreamService;
@@ -379,11 +389,13 @@ export class AIChatQueryEngine {
     readonly metadata: ChatV2HistorySelectionMetadata[];
     readonly excerpts: SelectedHistoryExcerptInput[];
     readonly rejectedCount: number;
+    readonly changedIds: readonly string[];
   }> {
     const empty = {
       metadata: [] as ChatV2HistorySelectionMetadata[],
       excerpts: [] as SelectedHistoryExcerptInput[],
       rejectedCount: 0,
+      changedIds: [] as readonly string[],
     };
     if (sourceIds.length === 0) return empty;
     if (!isArchiveReadsEnabled()) return empty;
@@ -412,10 +424,62 @@ export class AIChatQueryEngine {
         metadata,
         excerpts: toSelectedHistoryExcerptInputs(result.resolved),
         rejectedCount: result.rejected.length,
+        // Stale references are quoted nowhere; their chips survive for
+        // explicit user re-confirmation (§4.2, AC-18).
+        changedIds: (result.refreshed ?? []).map((r) => r.submittedId),
       };
     } catch (err) {
       console.warn("[ai-chat-v2] history selection resolution failed:", err);
       return { ...empty, rejectedCount: sourceIds.length };
+    }
+  }
+
+  /**
+   * Reactive overflow compaction (AC-23, FR-07): after a budget-rejected turn,
+   * shrink the active context through the same bounded coordinator every
+   * other trigger uses. Without a coordinator, fall back to the compact
+   * agent's threshold path with provably-over-window tokens. Never throws —
+   * the turn's error emission below is the user-visible outcome.
+   */
+  private requestReactiveCompaction(
+    conversationId: string,
+    model?: string
+  ): void {
+    try {
+      if (this.compactionCoordinator) {
+        const coordinator = this.compactionCoordinator;
+        Promise.resolve(
+          coordinator.requestCompactionForTurn(conversationId, {
+            trigger: "reactive-overflow",
+            model,
+          })
+        ).catch((err: unknown) =>
+          console.error(
+            "[ai-chat-compaction] reactive-overflow request failed:",
+            err
+          )
+        );
+      } else if (this.compactAgent) {
+        const compactAgent = this.compactAgent;
+        Promise.resolve(
+          compactAgent.enqueueAutoCompact({
+            conversationId,
+            reason: "reactive-overflow",
+            promptTokens: Number.MAX_SAFE_INTEGER,
+            model,
+          })
+        ).catch((err: unknown) =>
+          console.error(
+            "[ai-chat-compact] reactive-overflow auto-compact failed:",
+            err
+          )
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] reactive-overflow dispatch failed:",
+        err
+      );
     }
   }
 
@@ -699,6 +763,8 @@ export class AIChatQueryEngine {
     let sourceUserMessageId: string | undefined;
     /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
     let historySelectionAcceptedIds: readonly string[] = [];
+    /** Submitted refs whose source moved (§4.2), reported on `start`. */
+    let historySelectionChangedIds: readonly string[] = [];
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -815,6 +881,7 @@ export class AIChatQueryEngine {
       historySelectionAcceptedIds = selectionResolution.metadata.map(
         (m) => m.sourceId
       );
+      historySelectionChangedIds = selectionResolution.changedIds;
 
       // "Current user + selected" allocation slot: the selected archive
       // passages are folded into the SAME user message the user authored, so
@@ -1102,6 +1169,7 @@ export class AIChatQueryEngine {
       conversationId,
       messageId: assistantMessageId,
       historySelectionAcceptedIds,
+      historySelectionChangedIds,
     });
     if (textApprovedPlanState) {
       eventSink.emit({
@@ -1833,6 +1901,16 @@ export class AIChatQueryEngine {
         const activeTurn = this.activeTurns.get(conversationId);
         const failedTurnId = activeTurn?.turnId;
         void redirectToLoginOnAuthExpired(result.error);
+        // Reactive overflow (AC-23): a budget-rejected turn means the active
+        // context no longer fits — compact it through the SAME bounded
+        // coordinator (trigger "reactive-overflow"), never a secondary
+        // unbounded path. Fire-and-forget; the error below still surfaces.
+        if (
+          result.error instanceof RecoverableHistoryError &&
+          result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+        ) {
+          this.requestReactiveCompaction(conversationId, result.model);
+        }
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,

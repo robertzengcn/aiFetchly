@@ -644,10 +644,9 @@ export interface AIChatQueryLoopDeps {
   }): Promise<{ model?: string; source: string }>;
 
   /**
-   * Optional: complete-request token-budget service (technical-design §8.5).
-   * When present, the loop runs a final preflight immediately before
-   * `streamChatCompletion` and throws `RecoverableHistoryError` on rejection.
-   * When omitted, no budget enforcement is applied (legacy behavior).
+   * Complete-request token-budget service (technical-design §8.5). The loop
+   * defaults to a fresh service when omitted, so preflight is mandatory for
+   * every consumer — inject one only to share accounting or stub limits.
    */
   requestBudgetService?: AIChatRequestBudgetService;
 
@@ -744,7 +743,17 @@ function snapshotToolCatalogState(
 }
 
 export class AIChatQueryLoop {
-  constructor(private readonly deps: AIChatQueryLoopDeps) {}
+  /**
+   * Mandatory dispatch guard (§8.5, FR-04/FR-08): every provider dispatch is
+   * budget-checked. A missing injected service defaults to a fresh budget
+   * service — no production dispatch can skip preflight by omitting the dep.
+   */
+  private readonly budgetService: AIChatRequestBudgetService;
+
+  constructor(private readonly deps: AIChatQueryLoopDeps) {
+    this.budgetService =
+      deps.requestBudgetService ?? new AIChatRequestBudgetService();
+  }
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
@@ -1139,13 +1148,14 @@ export class AIChatQueryLoop {
         // before streaming — every round, after retrieval/tool results and
         // after any model fallback (effectiveModel). Covers system/tool
         // framing, attachments/images, output reserve, and safety margin via
-        // the budget service's conservative UTF-8-byte accounting (§8.2).
-        // When a budget service is wired, an oversized request throws a
-        // recoverable error instead of dispatching.
-        if (this.deps.requestBudgetService) {
+        // the budget service's conservative UTF-8-byte accounting (§8.2). An
+        // oversized request throws a recoverable error instead of dispatching.
+        // The guard is unconditional (constructor defaults the service), so no
+        // consumer can skip preflight by omitting the dep.
+        {
           const resolver: ModelLimitResolver =
             this.deps.resolveModelLimits ?? this.getDefaultModelLimitResolver();
-          const budget = this.deps.requestBudgetService.preflight({
+          const budget = this.budgetService.preflight({
             messages,
             tools: hasExposedTools ? exposedTools : [],
             model: effectiveModel,

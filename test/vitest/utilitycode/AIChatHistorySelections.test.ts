@@ -132,39 +132,33 @@ describe("buildSelectedHistoryContextBlock", () => {
     expect(block).not.toContain("duplicate");
   });
 
-  it("keeps the first passage whole and trims later ones", () => {
+  it("rejects an over-budget batch instead of silently trimming it (FR-10)", () => {
     const budget = 40;
     const firstText = "first".repeat(6);
     const secondText = "second".repeat(8);
-    const block = buildSelectedHistoryContextBlock(
-      [
-        excerpt({ text: firstText }),
-        excerpt({ sourceId: "ref-2", text: secondText }),
-      ],
-      budget
-    );
-    // The first passage keeps its full text; the second is trimmed to what
-    // the allocation slot could still hold.
-    expect(block).toContain(`\n${firstText}\n`);
-    expect(block).not.toContain(secondText);
-
-    // Passage 2 is the last body entry, so its trimmed text runs to the end.
-    const trimmed = block.split("### Passage 2 — ")[1].split("\n")[1];
-    expect(trimmed.length).toBe(budget - firstText.length);
-    expect(secondText.startsWith(trimmed)).toBe(true);
-    expect(trimmed.length).toBeLessThan(secondText.length);
+    // The model must receive precisely the accepted passages — never a
+    // silently shortened subset. The caller fails the turn; drafts survive.
+    expect(() =>
+      buildSelectedHistoryContextBlock(
+        [
+          excerpt({ text: firstText }),
+          excerpt({ sourceId: "ref-2", text: secondText }),
+        ],
+        budget
+      )
+    ).toThrow(/exceed.*turn allowance|CONTEXT_REQUIRED_CONTENT_TOO_LARGE/);
   });
 
-  it("drops later passages entirely once the budget is exhausted", () => {
-    const block = buildSelectedHistoryContextBlock(
-      [
-        excerpt({ text: "aaaa".repeat(3) }),
-        excerpt({ sourceId: "ref-2", text: "bbbb".repeat(3) }),
-      ],
-      3
-    );
-    expect(block).toContain("### Passage 1 —");
-    expect(block).not.toContain("### Passage 2 —");
+  it("rejects instead of dropping later passages once the budget is exhausted", () => {
+    expect(() =>
+      buildSelectedHistoryContextBlock(
+        [
+          excerpt({ text: "aaaa".repeat(3) }),
+          excerpt({ sourceId: "ref-2", text: "bbbb".repeat(3) }),
+        ],
+        3
+      )
+    ).toThrow(/exceed.*turn allowance|CONTEXT_REQUIRED_CONTENT_TOO_LARGE/);
   });
 });
 

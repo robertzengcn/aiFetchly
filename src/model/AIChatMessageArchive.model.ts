@@ -25,6 +25,12 @@ export interface ReadPageForwardInput {
    * are excluded. */
   snapshotTimestampMs?: number;
   snapshotRowId?: number;
+  /** Optional range lower bound (inclusive): only messages at or after
+   * (startTimestampMs, startRowId) are returned. Lets turn materialization
+   * keyset forward from a turn's first row instead of scanning from the
+   * conversation head (FR-01/FR-07 — archive size must not determine cost). */
+  startTimestampMs?: number;
+  startRowId?: number;
 }
 
 /**
@@ -96,6 +102,19 @@ export class AIChatMessageArchiveModel extends BaseDb {
           });
         })
       );
+
+    if (input.startTimestampMs !== undefined) {
+      const startDate = new Date(input.startTimestampMs);
+      const startRow = input.startRowId ?? 0;
+      qb.andWhere(
+        new Brackets((qb) => {
+          qb.where("m.timestamp > :startTs", { startTs: startDate }).orWhere(
+            "m.timestamp = :startTs2 AND m.id >= :startId",
+            { startTs2: startDate, startId: startRow }
+          );
+        })
+      );
+    }
 
     if (input.snapshotTimestampMs !== undefined) {
       const snapDate = new Date(input.snapshotTimestampMs);

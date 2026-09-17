@@ -36,6 +36,7 @@ vi.mock("@/modules/token", () => ({
 // --- Mock AIChatV2Module ------------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
@@ -47,6 +48,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     return {
       saveUserMessage: mockSaveUserMessage,
       getConversationMessages: mockGetConversationMessages,
+      getRecentMessages: mockGetRecentMessages,
       saveAssistantMessage: mockSaveAssistantMessage,
       saveToolCallMessage: mockSaveToolCallMessage,
       saveToolResultMessage: mockSaveToolResultMessage,

@@ -14,6 +14,7 @@ const held = vi.hoisted(() => ({
   nextPreview: "the archived passage text",
   sendText: "what did we decide",
   chips: [] as string[],
+  refreshed: [] as boolean[],
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
@@ -125,10 +126,13 @@ function mountChat() {
           props: ["selections"],
           setup(props) {
             return () => {
-              const previews = (props.selections as { preview: string }[]).map(
-                (s) => s.preview
-              );
+              const items = props.selections as {
+                preview: string;
+                refreshed?: boolean;
+              }[];
+              const previews = items.map((s) => s.preview);
               held.chips = previews;
+              held.refreshed = items.map((s) => s.refreshed === true);
               // Copy: Vue normalizes vnode children in place, so handing it the
               // same array would overwrite `held.chips` with text vnodes.
               return h("div", { "data-testid": "selection-chips" }, [
@@ -230,7 +234,8 @@ async function sendOnly(
  */
 async function deliverStart(
   wrapper: ReturnType<typeof mountChat>,
-  acceptedIds: readonly string[] = []
+  acceptedIds: readonly string[] = [],
+  changedIds: readonly string[] = []
 ): Promise<void> {
   const { request, onChunk } = lastCall();
   expect(onChunk).toBeTypeOf("function");
@@ -239,6 +244,7 @@ async function deliverStart(
     conversationId: request.conversationId ?? "v2-test",
     messageId: "assistant-1",
     historySelectionAcceptedIds: acceptedIds,
+    historySelectionChangedIds: changedIds,
   });
   await flushPromises();
   await wrapper.vm.$nextTick();
@@ -330,6 +336,20 @@ describe("AiChatV2 selected archived passages (§13.3)", () => {
     await sendOnly(wrapper);
     await deliverStart(wrapper, []);
     expect(held.chips).toEqual(["still waiting"]);
+  });
+
+  it("marks changed-source survivors refreshed without quoting them (§4.2)", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await activateConversation(wrapper);
+    await addChip(wrapper, "stale passage");
+
+    await sendOnly(wrapper);
+    // The backend accepted nothing but reports the source moved: the chip
+    // survives (never quoted) and is flagged for explicit re-confirmation.
+    await deliverStart(wrapper, [], ["sid-stale passage"]);
+    expect(held.chips).toEqual(["stale passage"]);
+    expect(held.refreshed).toEqual([true]);
   });
 
   it("omits historySelectionIds when there is no selection draft", async () => {

@@ -49,6 +49,12 @@ export interface AIChatQueryStartEvent {
    * retained so a rejected selection is never silently dropped.
    */
   historySelectionAcceptedIds?: readonly string[];
+  /**
+   * Submitted refs whose source revision moved (§4.2, AC-18). The turn quoted
+   * nothing for these; the renderer marks the surviving chips so the user can
+   * explicitly re-confirm the refreshed passage before it is ever quoted.
+   */
+  historySelectionChangedIds?: readonly string[];
 }
 
 export interface AIChatQueryTokenEvent {

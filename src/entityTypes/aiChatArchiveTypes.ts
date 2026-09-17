@@ -37,6 +37,19 @@ export interface ArchiveReadPage {
   readonly sourceRevision: number;
 }
 
+/**
+ * A user-selected reference whose source revision moved under it (§4.2).
+ * The submitted (stale) id is rejected — never quoted — and the excerpt
+ * carries a refreshed reference at the current revision for explicit user
+ * confirmation. The turn must not quote the old offsets.
+ */
+export interface RefreshedSelection {
+  /** The stale submitted reference (rejected, kept as a draft). */
+  readonly submittedId: string;
+  /** Same span re-read at the current revision (for user confirmation). */
+  readonly excerpt: HistoryExcerpt;
+}
+
 export interface ArchivePageRequest {
   readonly conversationId: string;
   readonly cursor?: string;

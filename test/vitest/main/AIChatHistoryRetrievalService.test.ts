@@ -431,6 +431,73 @@ describe("AIChatHistoryRetrievalService", () => {
       expect(totalCapTokens).toBe(8_000);
     });
 
+    it("round-trips a nonzero span twice without becoming the prefix", async () => {
+      const stateModel = new AIChatArchiveStateModel(tmpDir);
+      const state = await stateModel.ensureState("conv-res-7");
+      const content = "p".repeat(500) + "MID-TOKEN-xyz" + "q".repeat(500);
+      const row = await seedMessages("conv-res-7", [
+        { role: "user", content, ts: 1_000 },
+      ]);
+      const sid = encodeSourceId({
+        v: 1,
+        epoch: state.epoch,
+        revision: state.sourceRevision,
+        rowId: row[0],
+        field: "content",
+        startCodePoint: 500,
+        endCodePoint: 513,
+      });
+      // First resolve: exact slice, and the RETURNED id keeps the nonzero
+      // span (not re-encoded as start 0).
+      const first = await service.resolveSelections("conv-res-7", [sid], "t-7a");
+      expect(first.resolved).toHaveLength(1);
+      expect(first.resolved[0].text).toBe("MID-TOKEN-xyz");
+      const returned = decodeSourceId(first.resolved[0].sourceId, state.epoch);
+      expect(returned).not.toBeNull();
+      expect(returned!.startCodePoint).toBe(500);
+      expect(returned!.endCodePoint).toBe(513);
+      // Second resolve of the RETURNED id: same passage, still not the prefix.
+      const second = await service.resolveSelections(
+        "conv-res-7",
+        [first.resolved[0].sourceId],
+        "t-7b"
+      );
+      expect(second.resolved).toHaveLength(1);
+      expect(second.resolved[0].text).toBe("MID-TOKEN-xyz");
+    });
+
+    it("rejects stale-revision selections with a refreshed reference (never quotes old offsets)", async () => {
+      const stateModel = new AIChatArchiveStateModel(tmpDir);
+      const state = await stateModel.ensureState("conv-res-8");
+      const row = await seedMessages("conv-res-8", [
+        { role: "user", content: "original wording here", ts: 1_000 },
+      ]);
+      const stale = encodeSourceId({
+        v: 1,
+        epoch: state.epoch,
+        revision: state.sourceRevision + 99,
+        rowId: row[0],
+        field: "content",
+        startCodePoint: 0,
+        endCodePoint: 8,
+      });
+      const res = await service.resolveSelections("conv-res-8", [stale], "t-8");
+      // Nothing stale is quotable: resolved is empty, the stale id is
+      // rejected (draft survives), and a refreshed reference at the current
+      // revision is offered for explicit user confirmation.
+      expect(res.resolved).toHaveLength(0);
+      expect(res.rejected).toEqual([stale]);
+      expect(res.errorCode).toBe("SOURCE_CHANGED");
+      expect(res.refreshed).toHaveLength(1);
+      expect(res.refreshed![0].submittedId).toBe(stale);
+      const fresh = decodeSourceId(
+        res.refreshed![0].excerpt.sourceId,
+        state.epoch
+      );
+      expect(fresh).not.toBeNull();
+      expect(fresh!.revision).toBe(state.sourceRevision);
+    });
+
     it("tombstoned scope rejects every reference with HISTORY_SCOPE_INVALID", async () => {
       await seedMessages("conv-res-6", [
         { role: "user", content: "archived then deleted", ts: 1_000 },

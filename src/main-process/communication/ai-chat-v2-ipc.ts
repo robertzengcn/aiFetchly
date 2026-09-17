@@ -27,6 +27,7 @@ import {
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
@@ -197,6 +198,21 @@ function getCurrentUserDbPath(): string | null {
   return tokenService.getValue(USERSDBPATH) || null;
 }
 
+/**
+ * Rollout-flag snapshot captured alongside the singletons below. Flags are
+ * read live (cheap Token reads), so a stage toggle rebuilds the engine/agent
+ * on next use instead of sticking until restart or DB switch (design §18).
+ */
+let singletonNewCompactionFlag: boolean | null = null;
+
+function readNewCompactionFlag(): boolean {
+  try {
+    return isNewCompactionEnabled();
+  } catch {
+    return false;
+  }
+}
+
 export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   if (queryEngine) {
     queryEngine.stopActiveTurn();
@@ -205,6 +221,7 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactAgent = null;
   queryEngineDbPath = null;
   compactAgentDbPath = null;
+  singletonNewCompactionFlag = null;
   // The coordinator captures the DB path at construction (BaseModule); a
   // user/DB switch invalidates it, so drop the singleton so the next
   // getCompactionCoordinator() mints one bound to the new path.
@@ -218,7 +235,11 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
 
 function getCompactAgent(): AIChatCompactAgentService {
   const dbPath = getCurrentUserDbPath();
-  if (compactAgent && compactAgentDbPath !== dbPath) {
+  const flag = readNewCompactionFlag();
+  if (
+    compactAgent &&
+    (compactAgentDbPath !== dbPath || singletonNewCompactionFlag !== flag)
+  ) {
     compactAgent = null;
     compactAgentDbPath = null;
     resetSharedAutoDreamService();
@@ -252,15 +273,18 @@ function getCompactAgent(): AIChatCompactAgentService {
         });
       },
       // §11.1: when the new-compaction stage is on, the interactive manual
-      // compact (runFullCompact) delegates to the shared durable coordinator
-      // instead of the legacy all-history model call. The flag is read live
-      // here (engine construction) so a toggle takes effect on the next
-      // engine rebuild; flag-off keeps the unchanged legacy path.
-      ...(isNewCompactionEnabled()
+      // compact (runFullCompact) delegates to the shared durable coordinator.
+      // The flag is read live here (engine construction) so a toggle takes
+      // effect on the next engine rebuild. Flag-off FAILS CLOSED: the agent
+      // has no coordinator and runFullCompact rejects with an actionable
+      // limitation (design §18 rollback — the removed all-history model call
+      // is never restored, so compaction is inoperable until the flag is on).
+      ...(flag
         ? { compactionCoordinator: getCompactionCoordinator() }
         : {}),
     });
     compactAgentDbPath = dbPath;
+    singletonNewCompactionFlag = flag;
   }
   return compactAgent;
 }
@@ -276,6 +300,9 @@ function getCompactionCoordinator(): AIChatCompactionCoordinator {
     compactionCoordinator = new AIChatCompactionCoordinator({
       summarize: async (systemPrompt: string, userPrompt: string) => {
         const resp = await new AiChatApi().openAIChatCompletion({
+          // Explicit provider output cap (§8.3); oversized output is rejected
+          // locally, never blindly cut.
+          max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -299,7 +326,11 @@ function newRetrievalService(): AIChatHistoryRetrievalService {
 
 function getQueryEngine(): AIChatQueryEngine {
   const dbPath = getCurrentUserDbPath();
-  if (queryEngine && queryEngineDbPath !== dbPath) {
+  if (
+    queryEngine &&
+    (queryEngineDbPath !== dbPath ||
+      singletonNewCompactionFlag !== readNewCompactionFlag())
+  ) {
     resetAiChatV2RuntimeForDatabaseSwitch();
   }
   if (!queryEngine) {
@@ -310,9 +341,9 @@ function getQueryEngine(): AIChatQueryEngine {
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
       // §11.1: share one coordinator across the interactive engine and the
       // compact agent when the new-compaction stage is on, so the post-turn
-      // auto-compaction hook takes the durable incremental path instead of
-      // the legacy in-memory auto-compact. Flag-off omits it and the engine
-      // falls back to the compact-agent legacy hook unchanged.
+      // auto-compaction hook takes the durable incremental path. Flag-off
+      // omits it and compact attempts fail closed with an actionable
+      // limitation (never the removed unbounded path — see above).
       ...(isNewCompactionEnabled()
         ? { compactionCoordinator: getCompactionCoordinator() }
         : {}),
@@ -321,6 +352,7 @@ function getQueryEngine(): AIChatQueryEngine {
       // published (degrades to legacy trim otherwise).
       contextAssembler: new AIChatContextAssembler({
         compactionReader: new AIChatCompactionModule(),
+        archiveModule: new AIChatArchiveModule(),
       }),
     });
     queryEngineDbPath = dbPath;
@@ -488,6 +520,8 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             messageId: e.messageId,
             // §13.3: the renderer clears only the accepted selection chips.
             historySelectionAcceptedIds: e.historySelectionAcceptedIds,
+            // §4.2: surviving chips whose source moved are marked changed.
+            historySelectionChangedIds: e.historySelectionChangedIds,
           });
           break;
         case "token":
@@ -1360,6 +1394,15 @@ async function handleCompactConversation(
     return denied("conversationId must be a v2- conversation id");
   }
   try {
+    // Start-of-run progress so the status badge leaves idle immediately and
+    // the renderer does not wait on this single RPC for state (design §13.1).
+    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
+      conversationId: parsed.conversationId,
+      runId: "",
+      state: "running",
+      sectionsPacked: 0,
+      occurredAt: new Date().toISOString(),
+    });
     const summary = await getCompactAgent().runFullCompact({
       conversationId: parsed.conversationId,
       model: parsed.model,
@@ -1367,11 +1410,22 @@ async function handleCompactConversation(
     // Broadcast the run lifecycle so the compaction status badge updates
     // without polling (technical-design §13.1). The compact-agent view
     // carries the runId; the generation id is encoded in the summary string
-    // when present.
+    // when present. Paused/joined/cancelled are terminal-for-this-call but
+    // NOT failures — the RPC resolves so the UI can offer resume (AC-04).
+    const progressState =
+      summary?.status === "active"
+        ? "completed"
+        : summary?.status === "paused"
+          ? "paused"
+          : summary?.status === "joined"
+            ? "joined"
+            : summary?.status === "cancelled"
+              ? "cancelled"
+              : "failed";
     AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
       conversationId: parsed.conversationId,
       runId: summary?.compactId ?? "",
-      state: summary?.status === "active" ? "completed" : "failed",
+      state: progressState,
       generationId: summary?.summary || undefined,
       sectionsPacked: summary?.sourceMessageCount ?? 0,
       occurredAt: new Date().toISOString(),
@@ -1386,7 +1440,13 @@ async function handleCompactConversation(
       occurredAt: new Date().toISOString(),
       message: userSafeError(err),
     });
-    return denied(userSafeError(err));
+    // Flag-off fail-closed rejections carry their own actionable message
+    // ("Compaction unavailable: ..."); userSafeError would clobber known
+    // operational messages into a generic fallback, hiding the rollout state.
+    const message = err instanceof Error ? err.message : String(err);
+    return denied(
+      message.startsWith("Compaction unavailable") ? message : userSafeError(err)
+    );
   }
 }
 

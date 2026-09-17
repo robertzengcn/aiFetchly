@@ -11,6 +11,8 @@ import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import { openAIContentToString } from "@/api/aiChatApi";
 
 /**
@@ -45,6 +47,9 @@ export class AIChatQueryEngineFactory {
     const coordinator = new AIChatCompactionCoordinator({
       summarize: async (systemPrompt: string, userPrompt: string) => {
         const resp = await new AiChatApi().openAIChatCompletion({
+          // Explicit provider output cap (§8.3); oversized output is rejected
+          // locally, never blindly cut.
+          max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -53,11 +58,13 @@ export class AIChatQueryEngineFactory {
         return openAIContentToString(resp.choices?.[0]?.message?.content);
       },
     });
-    // §12 assembler with the compaction reader: reads the active generation's
-    // composite boundary + bounded overview instead of the legacy timestamp-
-    // only trim. Degrades to legacy behavior when no generation is published.
+    // §12 assembler with the compaction reader + archive access: reads the
+    // active generation's composite boundary + bounded overview instead of
+    // the legacy timestamp-only trim, and retains token-budgeted complete
+    // turns (FR-05). Degrades gracefully when nothing is published/indexed.
     const assembler = new AIChatContextAssembler({
       compactionReader: new AIChatCompactionModule(),
+      archiveModule: new AIChatArchiveModule(),
     });
     return new AIChatQueryEngine(this.createQueryLoop(policy), {
       toolFilter: (name) => this.isToolAllowed(name, policy),

@@ -1,4 +1,7 @@
-import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import {
+  RecoverableHistoryError,
+  type HistoryExcerpt,
+} from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Model-facing rendering of user-selected archived passages (technical-design
@@ -26,9 +29,11 @@ export interface SelectedHistoryExcerptInput {
 
 /**
  * Build the selected-context block. Passages are deduplicated by opaque source
- * id and the block is bounded: when the combined text exceeds `maxTextChars`
- * the excess is trimmed per passage (never the first passage) so the current
- * user message always wins the allocation slot (design line 372).
+ * id. When the combined text exceeds `maxTextChars` the call FAILS with
+ * CONTEXT_REQUIRED_CONTENT_TOO_LARGE instead of silently shortening the
+ * subset: per FR-10 the user must narrow the selection before sending, and
+ * the model must receive precisely the accepted passages (AC-18). Callers
+ * fail the turn before persist/send; drafts survive for retry.
  */
 export function buildSelectedHistoryContextBlock(
   excerpts: readonly SelectedHistoryExcerptInput[],
@@ -43,27 +48,22 @@ export function buildSelectedHistoryContextBlock(
   }
   if (unique.length === 0) return "";
 
-  let budget = maxTextChars;
-  const passages = unique
-    .map((excerpt) => {
-      let text = excerpt.text;
-      if (text.length > budget) {
-        text = text.slice(0, Math.max(budget, 0));
-      }
-      budget = Math.max(0, budget - text.length);
-      return { excerpt, text };
-    })
-    .filter((entry) => entry.text.length > 0)
-    .map(({ excerpt, text }, index) =>
-      [
-        `### Passage ${index + 1} — ${excerpt.role} · ${excerpt.timestamp}${
-          excerpt.exact ? "" : " (truncated)"
-        }`,
-        text,
-      ].join("\n")
+  const total = unique.reduce((sum, e) => sum + e.text.length, 0);
+  if (total > maxTextChars) {
+    throw new RecoverableHistoryError(
+      "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+      `selected passages (${total} chars) exceed the ${maxTextChars}-char turn allowance; remove or narrow a selection and resend`
     );
+  }
 
-  if (passages.length === 0) return "";
+  const passages = unique.map((excerpt, index) =>
+    [
+      `### Passage ${index + 1} — ${excerpt.role} · ${excerpt.timestamp}${
+        excerpt.exact ? "" : " (truncated)"
+      }`,
+      excerpt.text,
+    ].join("\n")
+  );
 
   return [
     SELECTED_HISTORY_MARKER,

@@ -3786,7 +3786,11 @@ const handleCompactConversation = async (): Promise<void> => {
       activeConversationId.value,
       resolveModelForRequest()
     );
-    if (summary) {
+    // Only a completed ("active") compact resets the badge baseline and shows
+    // the compacted notice. Paused/joined/cancelled are NOT failures, but the
+    // context did not shrink either — leave the badge alone and let the
+    // compaction status badge (progress events + refresh below) carry state.
+    if (summary && summary.status === "active") {
       const tokenEstimate =
         summary.outputTokenEstimate ??
         Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
@@ -3797,6 +3801,7 @@ const handleCompactConversation = async (): Promise<void> => {
       }
       compactNotice.value = true;
     }
+    void refreshCompactionStatus();
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -4158,15 +4163,24 @@ const onSend = async (
           // selected passages the backend actually accepted — those are now
           // folded into the turn. Drafts whose source changed or could not
           // fit stay in the chips so the user is not silently charged for
-          // context they did not get. Acceptance also resolves the stable
-          // submission identity so the next turn mints a fresh ID.
+          // context they did not get. Changed-source survivors are flagged
+          // so the user explicitly re-confirms the refreshed passage before
+          // it is ever quoted (§4.2, AC-18). Acceptance also resolves the
+          // stable submission identity so the next turn mints a fresh ID.
           if (pendingSelectionIds.length > 0) {
             const accepted = new Set<string>(
               chunk.historySelectionAcceptedIds ?? []
             );
-            selectedContextItems.value = selectedContextItems.value.filter(
-              (item) => !accepted.has(item.sourceId)
+            const changed = new Set<string>(
+              chunk.historySelectionChangedIds ?? []
             );
+            selectedContextItems.value = selectedContextItems.value
+              .filter((item) => !accepted.has(item.sourceId))
+              .map((item) =>
+                changed.has(item.sourceId)
+                  ? { ...item, refreshed: true }
+                  : item
+              );
             syncActiveDraft();
           }
           pendingSubmissionId.value = null;

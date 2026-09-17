@@ -385,6 +385,12 @@ export interface ChatV2StreamChunk {
    * retains the drafts whose sources could not be resolved or fit.
    */
   historySelectionAcceptedIds?: readonly string[];
+  /**
+   * Submitted refs whose source revision moved (§4.2, AC-18). Nothing was
+   * quoted for these; the renderer marks the surviving chips for explicit
+   * user re-confirmation.
+   */
+  historySelectionChangedIds?: readonly string[];
   question?: AIChatPlanQuestionView;
   planVersion?: AIChatPlanVersionView;
   retryAttempt?: number;

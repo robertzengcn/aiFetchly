@@ -7,6 +7,7 @@
  *  - conversation_tool_history skill: on-demand lookup
  */
 import { AIChatModule } from "@/modules/AIChatModule";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import type { ChatV2MessageMetadata } from "@/entityTypes/aiChatV2Types";
@@ -227,10 +228,21 @@ export function collectConversationToolPairs(
 
 export function filterPairsAfterBoundary(
   pairs: readonly ConversationToolPair[],
-  throughTimestampMs: number | null
+  throughTimestampMs: number | null,
+  throughRowId?: number
 ): ConversationToolPair[] {
   if (throughTimestampMs === null) return [...pairs];
-  return pairs.filter((p) => p.callTimestampMs > throughTimestampMs);
+  // With a composite (timestamp, rowId) boundary (published generations),
+  // equal-timestamp pairs at or below the covered row stay excluded (AC-09);
+  // the legacy timestamp-only boundary keeps its strict-greater semantics.
+  if (throughRowId === undefined) {
+    return pairs.filter((p) => p.callTimestampMs > throughTimestampMs);
+  }
+  return pairs.filter(
+    (p) =>
+      p.callTimestampMs > throughTimestampMs ||
+      (p.callTimestampMs === throughTimestampMs && p.callId > throughRowId)
+  );
 }
 
 export function buildToolHistoryIndexBlock(
@@ -503,9 +515,6 @@ export class ConversationToolHistoryService {
     started: number
   ): Promise<ConversationToolHistoryLookupResult> {
     try {
-      const { AIChatArchiveModule } = await import(
-        "@/modules/AIChatArchiveModule"
-      );
       const archive = new AIChatArchiveModule();
       const pair = await archive.getToolPair(
         conversationId,

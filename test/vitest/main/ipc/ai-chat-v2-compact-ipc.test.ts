@@ -69,6 +69,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     createConversationIfNeeded: vi.fn().mockReturnValue("v2-test"),
     saveUserMessage: vi.fn().mockResolvedValue({}),
     getConversationMessages: vi.fn().mockResolvedValue([]),
+    getRecentMessages: vi.fn().mockResolvedValue([]),
     saveAssistantMessage: vi.fn().mockResolvedValue({}),
     getDefaultSystemPrompt: vi.fn().mockReturnValue("sys"),
     clearConversation: vi.fn().mockResolvedValue(0),
@@ -190,6 +191,43 @@ describe("AI Chat V2 Compact Conversation IPC", () => {
     });
     expect(result.status).toBe(true);
     expect(result.data).toEqual(fakeSummary);
+  });
+
+  it("resolves (not denied) with paused status when the run yields at the batch limit", async () => {
+    mockRunFullCompact.mockResolvedValueOnce({
+      ...fakeSummary,
+      status: "paused",
+      summary: "compaction paused after 3 sections; retry to resume",
+      sourceMessageCount: 3,
+    });
+
+    const result = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACT_CONVERSATION,
+      {},
+      JSON.stringify({ conversationId: "v2-conv-1", model: "gpt-4o" })
+    )) as { status: boolean; data: AIChatCompactSummaryView };
+
+    // A resumable pause is not a failure: the RPC resolves so the UI can
+    // offer resume from the checkpoint (AC-04, AC-07).
+    expect(result.status).toBe(true);
+    expect(result.data.status).toBe("paused");
+  });
+
+  it("surfaces the actionable flag-off limitation instead of a generic error", async () => {
+    mockRunFullCompact.mockRejectedValueOnce(
+      new Error(
+        "Compaction unavailable: bounded incremental coordinator is not wired."
+      )
+    );
+    const result = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACT_CONVERSATION,
+      {},
+      JSON.stringify({ conversationId: "v2-conv-1" })
+    )) as { status: boolean; msg: string };
+    // Flag-off fail-closed (§18 rollback) must be explicit, not a surprise
+    // "unexpected error": operators learn compaction needs the stage flag.
+    expect(result.status).toBe(false);
+    expect(result.msg).toMatch(/Compaction unavailable/i);
   });
 
   it("returns denied when runFullCompact throws", async () => {

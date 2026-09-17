@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const lookupMock = vi.fn();
 
+// ES class: the handler constructs the service with `new`; a vi.fn()
+// factory is not constructable under Vitest 4.
 vi.mock("@/service/ConversationToolHistoryService", () => ({
-  ConversationToolHistoryService: vi.fn().mockImplementation(() => ({
-    lookup: lookupMock,
-  })),
+  ConversationToolHistoryService: class {
+    lookup = lookupMock;
+  },
 }));
 
 import { handleConversationToolHistory } from "@/service/agentTools/conversationToolHistoryTool";

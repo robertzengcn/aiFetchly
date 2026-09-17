@@ -443,6 +443,118 @@ describe("AIChatCompactionCoordinator", () => {
     expect(["paused", "completed"]).toContain(r2.state);
   }, 15_000);
 
+  it("survives restart after a batch-limit pause (status + resume from checkpoints)", async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "w".repeat(800),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-10", rows);
+    await indexConversation("conv-10");
+
+    const first = fakeSummarizer();
+    const r1 = await coordinator.requestCompaction("conv-10", {
+      trigger: "manual",
+      summarize: first.fn,
+      sourceCapacityTokens: 100,
+      maxSectionsPerBatch: 1,
+    });
+    expect(r1.state).toBe("paused");
+
+    // Simulate an app restart: a fresh coordinator has no in-memory state,
+    // but the paused run, staged sections, and checkpoints persist.
+    const restarted = new AIChatCompactionCoordinator();
+    const status = await restarted.getStatus("conv-10");
+    expect(status?.state).toBe("paused");
+    expect(status?.runId).toBe(r1.runId);
+
+    // Retry after restart resumes from committed coverage with a new run.
+    const second = fakeSummarizer();
+    const r2 = await restarted.requestCompaction("conv-10", {
+      trigger: "manual",
+      summarize: second.fn,
+      sourceCapacityTokens: 100,
+      maxSectionsPerBatch: 1,
+    });
+    expect(r2.state).not.toBe("joined");
+    expect(r2.runId).not.toBe(r1.runId);
+    expect(r2.sectionsPacked).toBeGreaterThan(0);
+  }, 15_000);
+
+  it("reduces source capacity on provider context rejection (at most two reductions)", async () => {
+    await seedMessages("conv-11", [
+      { role: "user", content: "reduce me please", ts: 1_000 },
+      { role: "assistant", content: "reduce reply one", ts: 2_000 },
+      { role: "user", content: "reduce followup", ts: 3_000 },
+      { role: "assistant", content: "reduce reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-11");
+
+    // First attempt is context-rejected; the bounded retry halves capacity
+    // and succeeds on the second attempt — no all-history fallback (AC-15).
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("context_length exceeded");
+      return JSON.stringify({
+        version: 1,
+        synopsis: "reduced synopsis",
+        decisions: [],
+        constraints: [],
+        pending: [],
+        toolOutcomes: [],
+        topics: [],
+      });
+    });
+    const result = await coordinator.requestCompaction("conv-11", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    expect(calls).toBe(2);
+    expect(result.generationId).toBeTruthy();
+  }, 15_000);
+
+  it("a late AI result cannot resurrect a conversation cleared mid-flight (AC-13)", async () => {
+    await seedMessages("conv-12", [
+      { role: "user", content: "doomed message", ts: 1_000 },
+      { role: "assistant", content: "doomed reply", ts: 2_000 },
+      { role: "user", content: "doomed followup", ts: 3_000 },
+      { role: "assistant", content: "doomed reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-12");
+
+    let release!: (v: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const fn = vi.fn(() => gate);
+    const p = coordinator.requestCompaction("conv-12", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    // Let the run claim + pack and reach the in-flight AI call.
+    await vi.waitFor(() => expect(fn).toHaveBeenCalled());
+    // Clear the conversation WHILE the summary request is in flight.
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    await stateModel.tombstone("conv-12");
+    release(
+      JSON.stringify({
+        version: 1,
+        synopsis: "late synopsis",
+        decisions: [],
+        constraints: [],
+        pending: [],
+        toolOutcomes: [],
+        topics: [],
+      })
+    );
+    await expect(p).rejects.toThrow();
+    // Nothing was published or staged for the tombstoned conversation.
+    const status = await coordinator.getStatus("conv-12");
+    expect(status?.generationId).toBeFalsy();
+  }, 15_000);
+
   it("fails closed without an all-history fallback after repeated invalid output", async () => {
     await seedMessages("conv-8", [
       { role: "user", content: "always bad output", ts: 1_000 },

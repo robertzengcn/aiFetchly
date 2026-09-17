@@ -37,6 +37,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     return {
       saveUserMessage: holders.saveUserMessage,
       getConversationMessages: vi.fn().mockResolvedValue([]),
+      getRecentMessages: vi.fn().mockResolvedValue([]),
       saveAssistantMessage: vi.fn().mockResolvedValue({}),
       saveToolCallMessage: vi.fn().mockResolvedValue({}),
       saveToolResultMessage: vi.fn().mockResolvedValue({}),
@@ -287,6 +288,44 @@ describe("AIChatQueryEngine submit-time history selection (§13.3)", () => {
       (startEvent as { historySelectionAcceptedIds?: readonly string[] })
         .historySelectionAcceptedIds
     ).toEqual([SUBMITTED_A]);
+  });
+
+  it("reports changed-source ids on start and never quotes stale offsets (§4.2)", async () => {
+    holders.resolveSelections.mockResolvedValue({
+      resolved: [EXCERPT_A],
+      acceptedSubmittedIds: [SUBMITTED_A],
+      rejected: [SUBMITTED_B],
+      refreshed: [{ submittedId: SUBMITTED_B, excerpt: EXCERPT_B }],
+      errorCode: "SOURCE_CHANGED",
+    });
+    const { engine } = buildEngine();
+    const emit = vi.fn();
+
+    await engine.submitMessage({
+      eventSink: { emit } as AIChatQueryEventSink,
+      request: {
+        message: "Send",
+        historySelectionIds: [SUBMITTED_A, SUBMITTED_B],
+      },
+    });
+
+    // The stale passage is quoted nowhere in the provider-bound message.
+    const modelMessage = holders.assembleInput?.currentUserMessage ?? "";
+    expect(modelMessage).toContain("The answer was column order.");
+    expect(modelMessage).not.toContain("Please repeat column order.");
+    // ...but the chip survives for explicit re-confirmation, flagged changed.
+    const startEvent = emit.mock.calls
+      .map((c) => c[0] as { type?: string })
+      .find((e) => e.type === "start");
+    expect(startEvent).toBeDefined();
+    expect(
+      (startEvent as { historySelectionAcceptedIds?: readonly string[] })
+        .historySelectionAcceptedIds
+    ).toEqual([SUBMITTED_A]);
+    expect(
+      (startEvent as { historySelectionChangedIds?: readonly string[] })
+        .historySelectionChangedIds
+    ).toEqual([SUBMITTED_B]);
   });
 
   it("sends the message unchanged and skips resolution when nothing is selected", async () => {
