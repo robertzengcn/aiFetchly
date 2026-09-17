@@ -236,6 +236,35 @@ describe("AIChatSectionPacker", () => {
     expect(result.coverageComplete).toBe(false);
   });
 
+  it("bounds one section's total source to the requested token capacity (§8.3)", async () => {
+    // Capacity 5,000 tokens ≈ 20,000 chars ASCII. Seed 16 × 2,000-char rows
+    // (32,000 chars): one pack must admit ≈ half, not all of it. The old
+    // double conversion (tokens → cp × 4, then model bytes = cp × 4) let a
+    // single section carry 4× the intended budget.
+    const rows = Array.from({ length: 16 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "w".repeat(2_000),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-cap-pack", rows);
+    await indexConversation("conv-cap-pack");
+
+    const result = await packer.pack({
+      conversationId: "conv-cap-pack",
+      sourceCapacityTokens: 5_000,
+      endSnapshotTimestampMs: 0,
+      endSnapshotRowId: 0,
+    });
+    const packedChars = result.fragments.reduce(
+      (sum, f) => sum + (f.endCodePoint - f.startCodePoint),
+      0
+    );
+    // 5,000 tokens ≈ 20,000 chars; the section must not swallow the whole
+    // 32,000-char page. Allow one row of headroom for force-inclusion.
+    expect(packedChars).toBeLessThanOrEqual(24_000);
+    expect(result.nextCursor).not.toBeNull();
+  });
+
   it("packs equal-timestamp rows up to the snapshot rowId and skips later ids (AC-09)", async () => {
     const conv = "conv-ac09-eqts";
     const ts = 1_000;

@@ -3,7 +3,7 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
-import { openAIContentToString } from "@/api/aiChatApi";
+import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
@@ -12,7 +12,6 @@ import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import { UNKNOWN_MODEL_FALLBACK_LIMITS } from "@/service/AIChatRequestBudgetService";
-import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 
 const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
@@ -350,20 +349,13 @@ export class AIChatCompactAgentService {
         {
           trigger: "session-memory",
           model: input.model,
-          summarize: async (systemPrompt: string, userPrompt: string) => {
-            const resp = await this.deps.completeChat({
-              // Explicit provider output cap (§8.3); oversized output is
-              // rejected locally, never blindly cut.
-              max_tokens:
-                AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
-              ],
+          summarize: async (systemPrompt: string, userPrompt: string) =>
+            dispatchSectionSummarize({
+              systemPrompt,
+              userPrompt,
               ...(input.model ? { model: input.model } : {}),
-            });
-            return openAIContentToString(resp.choices?.[0]?.message?.content);
-          },
+              completeChat: this.deps.completeChat,
+            }),
         }
       );
       if (result.state === "cancelled" || result.state === "failed") {
@@ -518,20 +510,13 @@ export class AIChatCompactAgentService {
         {
           trigger: "manual",
           model: input.model,
-          summarize: async (systemPrompt: string, userPrompt: string) => {
-            const resp = await this.deps.completeChat({
-              // Explicit provider output cap (§8.3); oversized output is
-              // rejected locally, never blindly cut.
-              max_tokens:
-                AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-              messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
-              ],
+          summarize: async (systemPrompt: string, userPrompt: string) =>
+            dispatchSectionSummarize({
+              systemPrompt,
+              userPrompt,
               ...(input.model ? { model: input.model } : {}),
-            });
-            return openAIContentToString(resp.choices?.[0]?.message?.content);
-          },
+              completeChat: this.deps.completeChat,
+            }),
         }
       );
       // Return a legacy-compatible view. The new engine stores structured

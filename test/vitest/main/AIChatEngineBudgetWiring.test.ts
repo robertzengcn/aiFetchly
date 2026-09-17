@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockIpcMain } from "../../utils/electron-mocks";
+import { AiChatApi } from "@/api/aiChatApi";
 
 vi.mock("electron", () => ({
   ipcMain: mockIpcMain,
@@ -94,6 +95,48 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
     expect(deps.requestBudgetService).toBeInstanceOf(
       AIChatRequestBudgetService
     );
+  });
+
+  it("forwards the model and preflighted output cap through scheduled compaction", async () => {
+    const { AIChatQueryEngineFactory } = await import("@/service/AIChatQueryEngineFactory");
+    const engine = new AIChatQueryEngineFactory().createScheduled({
+      allowedTools: [], autoApproveTools: false, allowSkills: false,
+      allowMcp: false, allowSubagents: false, maxToolCalls: 1,
+      maxRuntimeMs: 1_000, maxContinueCalls: 1,
+    });
+    const { summarizeFn } = (engine as unknown as {
+      compactionCoordinator: {
+        summarizeFn: (system: string, user: string, model?: string) => Promise<string>;
+      };
+    }).compactionCoordinator;
+    const complete = vi.spyOn(AiChatApi.prototype, "openAIChatCompletion")
+      .mockResolvedValue({
+        id: "resp-wiring",
+        object: "chat.completion",
+        created: 0,
+        model: "selected-model",
+        choices: [
+          { index: 0, message: { role: "assistant", content: "{}" }, finish_reason: "stop" },
+        ],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
+    try {
+      await summarizeFn("system", "source", "selected-model");
+      expect(complete).toHaveBeenCalledWith({
+        model: "selected-model",
+        max_tokens: 1_024,
+        messages: [
+          { role: "system", content: "system" },
+          { role: "user", content: "source" },
+        ],
+      });
+      complete.mockClear();
+      await expect(summarizeFn("system", "x".repeat(40_000), "selected-model"))
+        .rejects.toMatchObject({ code: "CONTEXT_REQUIRED_CONTENT_TOO_LARGE" });
+      expect(complete).not.toHaveBeenCalled();
+    } finally {
+      complete.mockRestore();
+    }
   });
 
   it("wires the budget service into scheduled-engine loops", async () => {

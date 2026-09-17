@@ -8,12 +8,11 @@ import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService
 import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
-import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
-import { openAIContentToString } from "@/api/aiChatApi";
 
 /**
  * Builds production {@link AIChatQueryEngine} instances for non-interactive
@@ -45,18 +44,13 @@ export class AIChatQueryEngineFactory {
     // when AI is disabled or the provider call fails, the coordinator cancels
     // the run and the engine keeps the legacy behavior.
     const coordinator = new AIChatCompactionCoordinator({
-      summarize: async (systemPrompt: string, userPrompt: string) => {
-        const resp = await new AiChatApi().openAIChatCompletion({
-          // Explicit provider output cap (§8.3); oversized output is rejected
-          // locally, never blindly cut.
-          max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        });
-        return openAIContentToString(resp.choices?.[0]?.message?.content);
-      },
+      summarize: async (systemPrompt: string, userPrompt: string, model?: string): Promise<string> =>
+        dispatchSectionSummarize({
+          systemPrompt,
+          userPrompt,
+          model,
+          completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+        }),
     });
     // §12 assembler with the compaction reader + archive access: reads the
     // active generation's composite boundary + bounded overview instead of

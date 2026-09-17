@@ -92,13 +92,16 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
   })),
 }));
+const mockCompleteChat = vi.hoisted(() => vi.fn());
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
     // ES class: getCompactAgent() constructs AiChatApi via `new` inside
     // AIChatModelCatalogService; a vi.fn() factory is not constructable.
-    AiChatApi: class {},
+    AiChatApi: class {
+      openAIChatCompletion = mockCompleteChat;
+    },
   };
 });
 
@@ -139,6 +142,33 @@ describe("AI Chat V2 Compaction Start IPC", () => {
 
   afterEach(() => {
     resetElectronMocks();
+  });
+
+  it("forwards the selected model and rejects oversized summarize requests before dispatch", async () => {
+    mockCompleteChat.mockResolvedValue({ choices: [] });
+    mockRequestCompaction.mockResolvedValueOnce({ state: "completed", runId: "budget-run", sectionsPacked: 1 });
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACTION_START,
+      {},
+      JSON.stringify({ conversationId: "v2-budget", model: "selected-model" })
+    );
+    const input = mockRequestCompaction.mock.calls[0][1] as {
+      model: string;
+      summarize: (system: string, user: string, model?: string) => Promise<string>;
+    };
+    await input.summarize("system", "source", input.model);
+    expect(mockCompleteChat).toHaveBeenCalledWith({
+      model: "selected-model",
+      max_tokens: 1_024,
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "source" },
+      ],
+    });
+    mockCompleteChat.mockClear();
+    await expect(input.summarize("system", "x".repeat(40_000), input.model))
+      .rejects.toMatchObject({ code: "CONTEXT_REQUIRED_CONTENT_TOO_LARGE" });
+    expect(mockCompleteChat).not.toHaveBeenCalled();
   });
 
   it("registers the compaction start channel", () => {

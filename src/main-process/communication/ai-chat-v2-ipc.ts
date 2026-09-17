@@ -4,7 +4,7 @@ import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { USERSDBPATH } from "@/config/usersetting";
-import { AiChatApi, openAIContentToString } from "@/api/aiChatApi";
+import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
@@ -27,7 +27,7 @@ import {
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
-import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
+import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
@@ -290,21 +290,22 @@ function getCompactAgent(): AIChatCompactAgentService {
 
 /**
  * Provider-backed summarize callback shared by every coordinator run in this
- * process (manual, auto, session-memory, reactive). Explicit output cap (§8.3);
- * oversized output is rejected locally, never blindly cut.
+ * process (manual, auto, session-memory, reactive). Preflights the exact
+ * serialized request against the model window (§8.5) and pins the explicit
+ * output cap (§8.3); oversized input/output is rejected locally, never sent
+ * or blindly cut.
  */
 async function providerSummarize(
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  model?: string
 ): Promise<string> {
-  const resp = await new AiChatApi().openAIChatCompletion({
-    max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
+  return dispatchSectionSummarize({
+    systemPrompt,
+    userPrompt,
+    model,
+    completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
   });
-  return openAIContentToString(resp.choices?.[0]?.message?.content);
 }
 
 /**

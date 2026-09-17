@@ -44,7 +44,8 @@ import {
 /** A summarize callback: (systemPrompt, userPrompt) => raw JSON string. */
 export type SummarizeFn = (
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  model?: string
 ) => Promise<string>;
 
 /** Optional constructor deps for the coordinator (opt-in pattern). */
@@ -159,7 +160,11 @@ export class AIChatCompactionCoordinator extends BaseModule {
     if (existing) {
       return existing.promise;
     }
-    const promise = this.runCompaction(conversationId, input).finally(() => {
+    const promise = this.runCompaction(conversationId, {
+      ...input,
+      summarize: (systemPrompt, userPrompt): Promise<string> =>
+        input.summarize(systemPrompt, userPrompt, input.model),
+    }).finally(() => {
       this.inFlight.delete(conversationId);
     });
     this.inFlight.set(conversationId, { promise });
@@ -300,7 +305,30 @@ export class AIChatCompactionCoordinator extends BaseModule {
         }
         fence = renewed.fence;
 
-        // Pack one section.
+        // Pack one section with the §8.3 capacity allocated BEFORE packing:
+        // sourceCapacity = min(capacity, C − Osection − M − promptOverhead −
+        // stateInputCost). Allocating first keeps small-window models from
+        // burning reduction retries on oversized packs and caps the prompt
+        // overhead to the conservative scaffold estimate + rolling overview.
+        const preflight = this.budgetService.allocateSectionCapacity({
+          model: input.model,
+          sectionOutputReserve:
+            AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
+          promptOverhead: this.estimateSectionPromptOverheadTokens(
+            rollingOverview
+          ),
+          stateInputCost: 0,
+        });
+        if (preflight.errorCode) {
+          throw new RecoverableHistoryError(
+            "COMPACTION_CONTEXT_REJECTED",
+            `section for model ${input.model ?? "unknown"} has no source capacity (context ${preflight.sourceCapacity})`
+          );
+        }
+        sourceCapacityTokens = Math.min(
+          sourceCapacityTokens,
+          preflight.sourceCapacity
+        );
         const packResult = await this.packer.pack({
           conversationId,
           sourceCapacityTokens,
@@ -388,31 +416,9 @@ export class AIChatCompactionCoordinator extends BaseModule {
           priorSynopsis: rollingOverview?.synopsis,
         });
 
-        // Complete preflight for the compaction request (§8.3): source +
-        // prompt overhead + output cap + margin must fit the model window.
-        // A non-positive capacity is an error, never permission to overshoot.
-        const preflight = this.budgetService.allocateSectionCapacity({
-          model: input.model,
-          sectionOutputReserve:
-            AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-          promptOverhead: Math.ceil(
-            Buffer.byteLength(
-              prompt.systemPrompt + prompt.userPrompt,
-              "utf8"
-            ) / 4
-          ),
-          stateInputCost: rollingOverview
-            ? Math.ceil(
-                Buffer.byteLength(JSON.stringify(rollingOverview), "utf8") / 4
-              )
-            : 0,
-        });
-        if (preflight.errorCode) {
-          throw new RecoverableHistoryError(
-            "COMPACTION_CONTEXT_REJECTED",
-            `section ${nextOrdinal} has no source capacity for model ${input.model ?? "unknown"}`
-          );
-        }
+        // §8.3: capacity was allocated BEFORE pack (above); the packer bounds
+        // source + framing to sourceCapacityTokens, so the serialized prompt
+        // is Osection + overhead + margin ≤ C by construction.
 
         // Bounded model attempts per section per run (§16): at most 4 total,
         // including ≤2 source-size reductions and ≤1 structured-output repair.
@@ -919,6 +925,34 @@ export class AIChatCompactionCoordinator extends BaseModule {
       err instanceof Error ? err.message : typeof err === "string" ? err : "";
     return /context|too large|max_tokens|token limit|context_length|input too long/i.test(
       msg
+    );
+  }
+
+  /**
+   * Conservative §8.3 prompt-overhead estimate for one section call: the
+   * fixed system scaffold + framing lines of an EMPTY section prompt (the
+   * packed source itself is bounded by sourceCapacityTokens) + the rolling
+   * overview carried as prior-synopsis context. Allocated before pack so a
+   * small-window model overrides the 12,000-token target downward.
+   */
+  private estimateSectionPromptOverheadTokens(
+    rollingOverview: SectionSummaryV1 | null
+  ): number {
+    const scaffold = this.promptBuilder.buildSectionPrompt({
+      fragments: [],
+      receipts: [],
+      sectionLabel: "section-x",
+    });
+    const overviewBytes = rollingOverview
+      ? Buffer.byteLength(JSON.stringify(rollingOverview), "utf8")
+      : 0;
+    return Math.ceil(
+      (Buffer.byteLength(
+        scaffold.systemPrompt + scaffold.userPrompt,
+        "utf8"
+      ) +
+        overviewBytes) /
+        4
     );
   }
 

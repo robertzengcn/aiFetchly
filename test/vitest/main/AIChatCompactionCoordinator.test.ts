@@ -87,7 +87,8 @@ async function indexConversation(conversationId: string): Promise<void> {
 /** A fake AI summarizer that returns a fixed valid SectionSummaryV1. */
 function fakeSummarizer() {
   const calls: Array<{ prompt: string }> = [];
-  const fn = vi.fn(async (systemPrompt: string, userPrompt: string) => {
+  const fn = vi.fn(async (systemPrompt: string, userPrompt: string, model?: string) => {
+    void model;
     calls.push({ prompt: userPrompt });
     void systemPrompt;
     return JSON.stringify({
@@ -514,6 +515,33 @@ describe("AIChatCompactionCoordinator", () => {
     expect(result.state).toBe("completed");
     expect(calls).toBe(2);
     expect(result.generationId).toBeTruthy();
+  }, 15_000);
+
+  it("allocates section capacity below the 12k default for a small-window model (§8.3)", async () => {
+    // ~50k chars of source. With the §8.3 allocation (fallback window 8,192 −
+    // output 1,500 − margin 820 − scaffold overhead), the packer receives a
+    // capacity far below the 12,000-token default, so the compactable prefix
+    // (6 turns after the 2-turn retained suffix) splits into ≥ 2 sections.
+    const rows = Array.from({ length: 16 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "w".repeat(2_000),
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages("conv-capacity", rows);
+    await indexConversation("conv-capacity");
+
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-capacity", {
+      trigger: "manual",
+      model: "compaction-model",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    expect(fn.mock.calls.every((call) => call[2] === "compaction-model")).toBe(true);
+    // §8.3: sourceCapacity = min(12000, C − Osection − M − overhead) with the
+    // fallback resolver's 8,192 window → far below 12,000. The 48k-char
+    // source therefore needs multiple summarize calls (≥ 2 sections).
+    expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
   }, 15_000);
 
   it("a late AI result cannot resurrect a conversation cleared mid-flight (AC-13)", async () => {

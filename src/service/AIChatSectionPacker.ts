@@ -88,8 +88,6 @@ export interface SectionPackInput {
   readonly startCursor?: string;
 }
 
-/** Approx bytes-per-token for the conservative budget (mirrors §8.2). */
-const BYTES_PER_TOKEN = 4;
 /** Metadata rows per page (§9.3 — bounded). */
 const METADATA_PAGE_ROWS = 64;
 
@@ -286,12 +284,13 @@ export class AIChatSectionPacker extends BaseModule {
     const epoch = state.epoch;
     const revision = state.sourceRevision;
 
-    // Convert the token budget to a conservative code-point budget (§8.2 —
-    // UTF-8 bytes, ~4 bytes/token). Round down to stay within budget.
-    const maxCodePoints = Math.max(
-      64,
-      Math.floor((input.sourceCapacityTokens * BYTES_PER_TOKEN) / 1)
-    );
+    // Convert the token budget to the code-point budget passed to the archive
+    // page read (§8.2). The archive Model enforces a byte allowance of
+    // maxCodePoints × 4 (UTF-8 worst case), so passing sourceCapacityTokens
+    // directly yields an ASCII allowance of capacity × 4 bytes ≈ the intended
+    // 4-chars/token budget, and stays tighter (correct) for multi-byte text.
+    // Multiplying here a second time quadrupled every section's source budget.
+    const maxCodePoints = Math.max(64, input.sourceCapacityTokens);
 
     // Read a metadata page of excerpts up to the snapshot end. The archive
     // Module's readPage already bounds by rows + decoded-text allowance and
