@@ -159,6 +159,83 @@ describe("AIChatHistoryRetrievalService", () => {
       expect(res.errorCode).toBe("HISTORY_NO_MATCH");
     });
 
+    it("returns a hit on backend page 2 inside one tool call (§7.1.5)", async () => {
+      const excerpt = {
+        sourceId: encodeSourceId({
+          v: 1,
+          epoch: "e",
+          revision: 0,
+          rowId: 42,
+          field: "content",
+          startCodePoint: 0,
+          endCodePoint: 5,
+        }),
+        messageId: "msg-42",
+        role: "user",
+        timestamp: "2026-09-17T10:00:00.000Z",
+        text: "hello",
+        exact: true,
+        redacted: false,
+        hasMore: false,
+      };
+      const searchPage = vi
+        .fn()
+        // First 100 ms fragment page: no hit yet, scan continues.
+        .mockResolvedValueOnce({
+          records: [],
+          nextCursor: "backend-page-2",
+          truncated: false,
+          sourceRevision: 0,
+          scanComplete: false,
+          indexComplete: true,
+        })
+        .mockResolvedValueOnce({
+          records: [excerpt],
+          nextCursor: null,
+          truncated: false,
+          sourceRevision: 0,
+          scanComplete: true,
+          indexComplete: true,
+        });
+      const stubbed = new AIChatHistoryRetrievalService({
+        searchPage,
+      } as never);
+      const res = await stubbed.search({
+        conversationId: "conv-multi",
+        query: "hello",
+        turnId: "t-multi",
+      });
+      // Both backend pages consumed in ONE call — no second tool round needed.
+      expect(searchPage).toHaveBeenCalledTimes(2);
+      expect(res.records).toHaveLength(1);
+      expect(res.records[0].text).toBe("hello");
+      expect(res.scanComplete).toBe(true);
+      expect(res.errorCode).toBeUndefined();
+    });
+
+    it("never maps an empty first page + cursor to HISTORY_NO_MATCH (FR-02)", async () => {
+      const searchPage = vi.fn().mockResolvedValue({
+        records: [],
+        nextCursor: "backend-page-2",
+        truncated: false,
+        sourceRevision: 0,
+        scanComplete: false,
+        indexComplete: true,
+      });
+      const stubbed = new AIChatHistoryRetrievalService({
+        searchPage,
+      } as never);
+      const res = await stubbed.search({
+        conversationId: "conv-empty-first",
+        query: "later-hit",
+        turnId: "t-empty",
+      });
+      expect(res.records).toHaveLength(0);
+      expect(res.scanComplete).toBe(false);
+      expect(res.nextCursor).toBe("backend-page-2");
+      expect(res.errorCode).not.toBe("HISTORY_NO_MATCH");
+    });
+
     it("finds matches across fragments with source verification", async () => {
       await seedMessages("conv-hit", [
         {
@@ -496,6 +573,44 @@ describe("AIChatHistoryRetrievalService", () => {
       );
       expect(fresh).not.toBeNull();
       expect(fresh!.revision).toBe(state.sourceRevision);
+      // The confirmation preview re-reads CURRENT text with a RESET span and
+      // exact:false — never the stale interval sliced onto changed content.
+      expect(res.refreshed![0].excerpt.exact).toBe(false);
+      expect(res.refreshed![0].excerpt.text).toBe("original wording here");
+      expect(fresh!.startCodePoint).toBe(0);
+      expect(fresh!.endCodePoint).toBe("original wording here".length);
+    });
+
+    it("caps an oversized changed-source preview with hasMore (still exact:false)", async () => {
+      const stateModel = new AIChatArchiveStateModel(tmpDir);
+      const state = await stateModel.ensureState("conv-res-8b");
+      const big = "changed-big-body ".repeat(500);
+      const row = await seedMessages("conv-res-8b", [
+        { role: "user", content: big, ts: 1_000 },
+      ]);
+      const stale = encodeSourceId({
+        v: 1,
+        epoch: state.epoch,
+        revision: state.sourceRevision + 1,
+        rowId: row[0],
+        field: "content",
+        startCodePoint: 10,
+        endCodePoint: 20,
+      });
+      const res = await service.resolveSelections(
+        "conv-res-8b",
+        [stale],
+        "t-8b"
+      );
+      expect(res.resolved).toHaveLength(0);
+      expect(res.errorCode).toBe("SOURCE_CHANGED");
+      const preview = res.refreshed![0].excerpt;
+      expect(preview.exact).toBe(false);
+      expect(preview.hasMore).toBe(true);
+      expect(preview.text.length).toBeLessThan(big.length);
+      // The stale slice [10, 20) is nowhere in the confirmation path.
+      const fresh = decodeSourceId(preview.sourceId, state.epoch);
+      expect(fresh!.startCodePoint).toBe(0);
     });
 
     it("tombstoned scope rejects every reference with HISTORY_SCOPE_INVALID", async () => {

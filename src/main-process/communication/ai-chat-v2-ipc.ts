@@ -66,6 +66,7 @@ import {
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
+  AI_CHAT_V2_COMPACTION_START,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -290,29 +291,56 @@ function getCompactAgent(): AIChatCompactAgentService {
 }
 
 /**
- * Shared incremental-compaction coordinator (technical-design §11). Bound to a
- * provider-backed summarize callback so AI_CHAT_V2_COMPACTION_STATUS / CANCEL
- * and the manual compact flow share one coordinator instance. The summarizer
- * delegates to AiChatApi exactly as the compact agent's runFullCompact does.
+ * Provider-backed summarize callback shared by every coordinator run in this
+ * process (manual, auto, session-memory, reactive). Explicit output cap (§8.3);
+ * oversized output is rejected locally, never blindly cut.
+ */
+async function providerSummarize(
+  systemPrompt: string,
+  userPrompt: string
+): Promise<string> {
+  const resp = await new AiChatApi().openAIChatCompletion({
+    max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+  return openAIContentToString(resp.choices?.[0]?.message?.content);
+}
+
+/**
+ * Shared incremental-compaction coordinator (technical-design §11). Bound to
+ * the provider summarize callback so AI_CHAT_V2_COMPACTION_STATUS / CANCEL /
+ * START and the manual compact flow share one coordinator instance.
  */
 function getCompactionCoordinator(): AIChatCompactionCoordinator {
   if (!compactionCoordinator) {
     compactionCoordinator = new AIChatCompactionCoordinator({
-      summarize: async (systemPrompt: string, userPrompt: string) => {
-        const resp = await new AiChatApi().openAIChatCompletion({
-          // Explicit provider output cap (§8.3); oversized output is rejected
-          // locally, never blindly cut.
-          max_tokens: AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        });
-        return openAIContentToString(resp.choices?.[0]?.message?.content);
-      },
+      summarize: providerSummarize,
     });
   }
   return compactionCoordinator;
+}
+
+/**
+ * Map a coordinator terminal state (or legacy view status) onto the progress
+ * event vocabulary (design §13.1). Paused/joined/cancelled are NOT failures.
+ */
+function coordinatorStateToProgress(state: string): string {
+  switch (state) {
+    case "completed":
+    case "active":
+      return "completed";
+    case "paused":
+      return "paused";
+    case "joined":
+      return "joined";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "failed";
+  }
 }
 
 /**
@@ -1412,16 +1440,7 @@ async function handleCompactConversation(
     // carries the runId; the generation id is encoded in the summary string
     // when present. Paused/joined/cancelled are terminal-for-this-call but
     // NOT failures — the RPC resolves so the UI can offer resume (AC-04).
-    const progressState =
-      summary?.status === "active"
-        ? "completed"
-        : summary?.status === "paused"
-          ? "paused"
-          : summary?.status === "joined"
-            ? "joined"
-            : summary?.status === "cancelled"
-              ? "cancelled"
-              : "failed";
+    const progressState = coordinatorStateToProgress(summary?.status ?? "");
     AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
       conversationId: parsed.conversationId,
       runId: summary?.compactId ?? "",
@@ -1447,6 +1466,86 @@ async function handleCompactConversation(
     return denied(
       message.startsWith("Compaction unavailable") ? message : userSafeError(err)
     );
+  }
+}
+
+/**
+ * Start (or resume) a bounded compaction run and return IMMEDIATELY
+ * (design §13.1 start/status/progress — never one blocking RPC for the whole
+ * batch). The run continues in the main process; the renderer drives its
+ * badge from progress events + AI_CHAT_V2_COMPACTION_STATUS, so navigating
+ * away mid-batch loses nothing. Resume is just another start call: a fresh
+ * claim resumes from persisted checkpoints (paused runs are never joined).
+ */
+async function handleCompactionStart(
+  data: string
+): Promise<CommonMessage<{ started: boolean }>> {
+  const chatAccess = await canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+  const parsed = data
+    ? (JSON.parse(data) as { conversationId?: string; model?: string })
+    : {};
+  if (!parsed.conversationId) {
+    return denied("conversationId is required");
+  }
+  if (!parsed.conversationId.startsWith("v2-")) {
+    return denied("conversationId must be a v2- conversation id");
+  }
+  if (!readNewCompactionFlag()) {
+    return denied(
+      "Compaction unavailable: bounded incremental coordinator is not wired. " +
+        "Enable new compaction publication; unbounded all-history summarization is disabled."
+    );
+  }
+  const conversationId = parsed.conversationId;
+  const model = parsed.model;
+  try {
+    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
+      conversationId,
+      runId: "",
+      state: "running",
+      sectionsPacked: 0,
+      occurredAt: new Date().toISOString(),
+    });
+    // Fire-and-forget BY DESIGN: settle only via progress events. The promise
+    // chain is always observed here, so no unhandled rejection can escape.
+    void getCompactionCoordinator()
+      .requestCompaction(conversationId, {
+        trigger: "manual",
+        model,
+        summarize: providerSummarize,
+      })
+      .then(
+        (result) => {
+          AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress(
+            {
+              conversationId,
+              runId: result.runId,
+              state: coordinatorStateToProgress(result.state),
+              generationId: result.generationId,
+              sectionsPacked: result.sectionsPacked,
+              occurredAt: new Date().toISOString(),
+            }
+          );
+        },
+        (err: unknown) => {
+          AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress(
+            {
+              conversationId,
+              runId: "",
+              state: "failed",
+              sectionsPacked: 0,
+              occurredAt: new Date().toISOString(),
+              message: userSafeError(err),
+            }
+          );
+        }
+      );
+    return ok({ started: true });
+  } catch (err) {
+    return denied(userSafeError(err));
   }
 }
 
@@ -1893,6 +1992,9 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_COMPACTION_CANCEL, async (_e, data: unknown) =>
     handleCompactionCancel(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_COMPACTION_START, async (_e, data: unknown) =>
+    handleCompactionStart((data as string) ?? "")
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

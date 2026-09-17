@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AI_CHAT_V2_COMPACT_CONVERSATION,
+  AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_STREAM,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
@@ -9,6 +10,7 @@ import {
 import {
   clearChatV2StreamListeners,
   compactChatV2Conversation,
+  startCompaction,
   streamChatV2Message,
 } from "@/views/api/aiChatV2";
 
@@ -300,5 +302,21 @@ describe("aiChatV2 renderer API", () => {
       JSON.stringify({ conversationId: "v2-1" })
     );
     expect(result).toEqual(compactSummary);
+  });
+
+  it("invokes the non-blocking compaction start channel (§13.1)", async () => {
+    invoke.mockResolvedValueOnce({
+      status: true,
+      msg: "ok",
+      data: { started: true },
+    });
+
+    const result = await startCompaction("v2-1", "gpt-4o");
+
+    expect(invoke).toHaveBeenCalledWith(
+      AI_CHAT_V2_COMPACTION_START,
+      JSON.stringify({ conversationId: "v2-1", model: "gpt-4o" })
+    );
+    expect(result).toEqual({ started: true });
   });
 });

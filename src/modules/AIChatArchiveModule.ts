@@ -5,6 +5,7 @@ import { AIChatArchiveEntryModel } from "@/model/AIChatArchiveEntry.model";
 import { AIChatArchiveTurnModel } from "@/model/AIChatArchiveTurn.model";
 import { AIChatArchiveSearchFragmentModel } from "@/model/AIChatArchiveSearchFragment.model";
 import {
+  encodeCursor,
   encodeSourceId,
   decodeSourceId,
 } from "@/service/AIChatArchiveCursorCodec";
@@ -33,7 +34,16 @@ import {
  * Never touches repositories directly (three-layer architecture). Maps
  * entities → HistoryExcerpt with opaque source IDs. All reads are bounded by a
  * metadata row cap + a decoded-text byte allowance (§6 operational limits).
+ *
+ * Turn materialization follows page continuations past the 64-row metadata
+ * page (up to TURN_READ_MAX_PAGES) and reports completeness, so a tool-heavy
+ * turn is never silently truncated (FR-05).
  */
+/** Rows per turn-materialization page (matches the metadata page cap). */
+const TURN_READ_PAGE_ROWS = 64;
+/** Page-follow cap per turn/tail read: 16 × 64 = 1,024 rows, then receipt. */
+const TURN_READ_MAX_PAGES = 16;
+
 export class AIChatArchiveModule extends BaseModule {
   /**
    * Bounded forward page read in (timestamp, id) ASC order. Honors an opaque
@@ -73,8 +83,10 @@ export class AIChatArchiveModule extends BaseModule {
   /**
    * Bounded entity read for one turn range, inclusive of both ends
    * (§4.3, FR-05). Returns raw rows (all message types, so tool exchanges
-   * stay with their turn) in chronological order. Used by context assembly
-   * to materialize whole turns by token cost — never a conversation scan.
+   * stay with their turn) in chronological order, following page continuations
+   * until the turn end bound — never a conversation scan. `complete` is false
+   * when the turn exceeds the page cap (callers must take the receipt path,
+   * never cost a truncated page as a complete turn).
    */
   async readTurnRows(
     conversationId: string,
@@ -83,55 +95,79 @@ export class AIChatArchiveModule extends BaseModule {
     lastTimestampMs: number,
     lastRowId: number,
     maxCodePoints: number
-  ): Promise<AIChatMessageEntity[]> {
+  ): Promise<{ rows: AIChatMessageEntity[]; complete: boolean }> {
     await this.ensureConnection();
     const stateModel = new AIChatArchiveStateModel(this.dbpath);
     const state = await stateModel.getState(conversationId);
-    if (!state || state.deletedAt) return [];
+    if (!state || state.deletedAt) return { rows: [], complete: true };
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
-    const page = await msgModel.readPageForward({
-      conversationId,
-      maxRows: 64,
-      maxCodePoints,
-      startTimestampMs: firstTimestampMs,
-      startRowId: firstRowId,
-      snapshotTimestampMs: lastTimestampMs,
-      snapshotRowId: lastRowId,
-    });
-    return page.records;
+    const rows: AIChatMessageEntity[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < TURN_READ_MAX_PAGES; pages++) {
+      const page = await msgModel.readPageForward({
+        conversationId,
+        cursor,
+        maxRows: TURN_READ_PAGE_ROWS,
+        maxCodePoints,
+        // First page keysets from the turn start; later pages continue from
+        // the opaque cursor (strictly after the last returned row).
+        ...(cursor
+          ? {}
+          : {
+              startTimestampMs: firstTimestampMs,
+              startRowId: firstRowId,
+            }),
+        snapshotTimestampMs: lastTimestampMs,
+        snapshotRowId: lastRowId,
+      });
+      rows.push(...page.records);
+      if (!page.nextCursor) return { rows, complete: true };
+      cursor = page.nextCursor;
+    }
+    return { rows, complete: false };
   }
 
   /**
    * Bounded entity read of rows strictly after a (timestamp, rowId) position
-   * — the live/in-progress tail past the last completed turn (§4.3). Returns
-   * raw rows in chronological order, bounded by row cap + decoded-text
-   * allowance.
+   * — the live/in-progress tail past the last completed turn (§4.3). Keysets
+   * strictly after the anchor (no page slot wasted on it) and follows page
+   * continuations up to the cap. Returns raw rows in chronological order.
    */
   async readRowsAfter(
     conversationId: string,
     afterTimestampMs: number,
     afterRowId: number,
     maxCodePoints: number
-  ): Promise<AIChatMessageEntity[]> {
+  ): Promise<{ rows: AIChatMessageEntity[]; complete: boolean }> {
     await this.ensureConnection();
     const stateModel = new AIChatArchiveStateModel(this.dbpath);
     const state = await stateModel.getState(conversationId);
-    if (!state || state.deletedAt) return [];
+    if (!state || state.deletedAt) return { rows: [], complete: true };
     const msgModel = new AIChatMessageArchiveModel(this.dbpath);
-    const page = await msgModel.readPageForward({
+    // Exclusive anchor cursor: rows strictly after the position, so every
+    // page slot carries live-tail content (FR-05, AC-03).
+    let cursor: string | undefined = encodeCursor({
+      v: 1,
       conversationId,
-      maxRows: 64,
-      maxCodePoints,
-      startTimestampMs: afterTimestampMs,
-      startRowId: afterRowId,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      lastTimestampMs: afterTimestampMs,
+      lastRowId: afterRowId,
+      direction: "forward",
     });
-    // Start bound is inclusive; drop the anchor row itself and anything at or
-    // before the position so only the strictly-after tail remains.
-    return page.records.filter(
-      (r) =>
-        r.timestamp.getTime() > afterTimestampMs ||
-        (r.timestamp.getTime() === afterTimestampMs && r.id > afterRowId)
-    );
+    const rows: AIChatMessageEntity[] = [];
+    for (let pages = 0; pages < TURN_READ_MAX_PAGES; pages++) {
+      const page = await msgModel.readPageForward({
+        conversationId,
+        cursor,
+        maxRows: TURN_READ_PAGE_ROWS,
+        maxCodePoints,
+      });
+      rows.push(...page.records);
+      if (!page.nextCursor) return { rows, complete: true };
+      cursor = page.nextCursor;
+    }
+    return { rows, complete: false };
   }
 
   /**
@@ -473,23 +509,21 @@ export class AIChatArchiveModule extends BaseModule {
         this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
       );
     }
-    // Materialize the message rows for each retained turn (bounded). Each
-    // turn keysets forward from its own first (timestamp, rowId) through its
-    // last — never from the conversation head, so a long archive cannot push
-    // the retained suffix out of the page (FR-05, AC-03).
-    const msgModel = new AIChatMessageArchiveModel(this.dbpath);
+    // Materialize the message rows for each retained turn. Each turn keysets
+    // forward from its own first (timestamp, rowId) through its last —
+    // never from the conversation head — following pages past 64 rows so a
+    // tool-heavy turn is never silently truncated (FR-05, AC-03).
     const out: HistoryExcerpt[] = [];
     for (const turn of turns) {
-      const page = await msgModel.readPageForward({
+      const { rows } = await this.readTurnRows(
         conversationId,
-        maxRows: 64,
-        maxCodePoints,
-        startTimestampMs: Number(turn.firstTimestampMs),
-        startRowId: turn.firstRowId,
-        snapshotTimestampMs: Number(turn.lastTimestampMs),
-        snapshotRowId: turn.lastRowId,
-      });
-      for (const r of page.records) {
+        Number(turn.firstTimestampMs),
+        turn.firstRowId,
+        Number(turn.lastTimestampMs),
+        turn.lastRowId,
+        maxCodePoints
+      );
+      for (const r of rows) {
         out.push(
           this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
         );
@@ -595,30 +629,57 @@ export class AIChatArchiveModule extends BaseModule {
         rejected.push(sid);
         continue;
       }
+      // Revision mismatch ⇒ SOURCE_CHANGED (§4.2). The stale reference is
+      // rejected (never quoted). The confirmation preview is the CURRENT
+      // message text with a reset span — never the stale interval sliced
+      // onto changed content — and `exact: false`, because the user's
+      // selected offsets no longer describe this text. Oversized messages
+      // preview bounded with hasMore so the confirmation stays small.
+      if (payload.revision !== state.sourceRevision) {
+        rejected.push(sid);
+        const current = msg.content ?? "";
+        const currentLen = codePointLength(current);
+        const previewLen = Math.min(
+          currentLen,
+          AI_CHAT_RECOVERABLE_DEFAULTS.searchFragmentMaxCodePoints
+        );
+        const preview = sliceByCodePoints(current, 0, previewLen);
+        const previewExcerpt = this.toExcerptWithSpan(
+          msg,
+          state.epoch,
+          state.sourceRevision,
+          preview,
+          payload.field,
+          0,
+          previewLen,
+          false
+        );
+        refreshed.push({
+          submittedId: sid,
+          excerpt:
+            previewLen < currentLen
+              ? { ...previewExcerpt, hasMore: true }
+              : previewExcerpt,
+        });
+        continue;
+      }
       const text = sliceByCodePoints(
         msg.content ?? "",
         payload.startCodePoint,
         payload.endCodePoint
       );
-      const excerpt = this.toExcerptWithSpan(
-        msg,
-        state.epoch,
-        state.sourceRevision,
-        text,
-        payload.field,
-        payload.startCodePoint,
-        payload.endCodePoint,
-        true
+      resolved.push(
+        this.toExcerptWithSpan(
+          msg,
+          state.epoch,
+          state.sourceRevision,
+          text,
+          payload.field,
+          payload.startCodePoint,
+          payload.endCodePoint,
+          true
+        )
       );
-      // Revision mismatch ⇒ SOURCE_CHANGED (§4.2). The stale reference is
-      // rejected (never quoted); the refreshed reference is offered for
-      // explicit user confirmation, not silently substituted.
-      if (payload.revision !== state.sourceRevision) {
-        rejected.push(sid);
-        refreshed.push({ submittedId: sid, excerpt });
-        continue;
-      }
-      resolved.push(excerpt);
     }
     const errorCode =
       refreshed.length > 0

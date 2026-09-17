@@ -2922,6 +2922,7 @@ export default {
       "Komprimierung läuft ({packed} Abschnitte gepackt).",
     compaction_paused:
       "Komprimierung pausiert. Sie wird automatisch fortgesetzt.",
+    compaction_start_failed: "Komprimierung konnte nicht gestartet werden.",
     compaction_failed: "Komprimierung fehlgeschlagen: {message}",
     compaction_retry: "Erneut versuchen",
     compaction_cancel: "Komprimierung abbrechen",

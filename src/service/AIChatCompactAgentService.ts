@@ -1,27 +1,17 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
-import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
-import {
-  buildSessionMemorySystemPrompt,
-  buildSessionMemoryUserPrompt,
-  normalizeSessionMemorySummary,
-} from "@/service/AIChatCompactPromptBuilder";
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
 import { openAIContentToString } from "@/api/aiChatApi";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
-  OpenAIChatMessage,
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
-import {
-  AIChatRequestBudgetService,
-  UNKNOWN_MODEL_FALLBACK_LIMITS,
-} from "@/service/AIChatRequestBudgetService";
+import { UNKNOWN_MODEL_FALLBACK_LIMITS } from "@/service/AIChatRequestBudgetService";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 
 const V2_PREFIX = "v2-";
@@ -51,15 +41,6 @@ const SESSION_MEMORY_MAX_AGE_MS = 60 * 60 * 1000;
 
 function isMessageRow(row: { messageType?: MessageType }): boolean {
   return row.messageType === MessageType.MESSAGE;
-}
-
-/** True when a provider error signals context-length rejection (§16). */
-function isContextRejectionMessage(err: unknown): boolean {
-  const msg =
-    err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  return /context|too large|max_tokens|token limit|context_length|input too long/i.test(
-    msg
-  );
 }
 
 export interface AIChatCompactAgentDeps {
@@ -105,7 +86,6 @@ export class AIChatCompactAgentService {
   private readonly memory = new AIChatSessionMemoryModule();
   private readonly compact = new AIChatCompactModule();
   private readonly v2 = new AIChatV2Module();
-  private readonly estimator = new AIChatTokenEstimator();
   /** Per-conversation latest known prompt-token count from the API. */
   private readonly lastPromptTokens = new Map<string, number>();
   /** Per-conversation epoch-ms of the last successful session-memory update.
@@ -338,27 +318,34 @@ export class AIChatCompactAgentService {
   }
 
   /**
-   * Route an oversized session-memory delta to the shared bounded coordinator
-   * (§11.1, AC-23). The delta itself is never sent as one unbounded request;
-   * the coordinator packs it in bounded sections with checkpoints. When no
+   * Delegate a session-memory update to the shared bounded coordinator
+   * (FR-07, AC-23, design §§8/11/16). There is exactly ONE summarization
+   * algorithm in this codebase — the coordinator's pack → summarize →
+   * validate → checkpoint → publish pipeline. Session memory owns NO second
+   * `completeChat` summarizer: every trigger (tiny or oversized delta) goes
+   * through section packing with checkpoints, output caps, and the shared
+   * retry ceiling. The session-memory store stays readable as advisory
+   * fallback for conversations without a published generation. When no
    * coordinator is wired, record a failure with a budget-checked limitation
-   * instead of falling back to all-history input.
+   * instead of summarizing directly (fail closed, never unbounded).
    */
-  private async routeOversizedDeltaToCoordinator(
+  private async delegateSessionMemoryToCoordinator(
     input: SessionMemoryUpdateInput
   ): Promise<void> {
     console.log(
-      `[ai-chat-compact] session delta oversized — routing to bounded coordinator conv=${input.conversationId}`
+      `[ai-chat-compact] session update delegating to bounded coordinator conv=${input.conversationId}`
     );
     if (!this.deps.compactionCoordinator) {
       await this.memory.recordFailure(
         input.conversationId,
-        "Session delta exceeds bounded session-memory budget; bounded coordinator unavailable"
+        "Session-memory update needs the bounded incremental coordinator; direct summarization is disabled"
       );
       return;
     }
     try {
-      await this.deps.compactionCoordinator.requestCompaction(
+      await this.memory.markUpdating(input.conversationId);
+      const startedAt = Date.now();
+      const result = await this.deps.compactionCoordinator.requestCompaction(
         input.conversationId,
         {
           trigger: "session-memory",
@@ -378,6 +365,22 @@ export class AIChatCompactAgentService {
             return openAIContentToString(resp.choices?.[0]?.message?.content);
           },
         }
+      );
+      if (result.state === "cancelled" || result.state === "failed") {
+        await this.memory.recordFailure(
+          input.conversationId,
+          `coordinator session-memory run ${result.state}`
+        );
+        return;
+      }
+      await this.memory.resetFailures(input.conversationId);
+      this.lastSessionMemoryAt.set(input.conversationId, Date.now());
+      console.log(
+        `[ai-chat-compact] session update delegated conv=${
+          input.conversationId
+        } state=${result.state} sections=${result.sectionsPacked} elapsed=${
+          Date.now() - startedAt
+        }ms`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -410,230 +413,63 @@ export class AIChatCompactAgentService {
         }
       }
 
-      // Bounded delta: resolve the covered-through boundary within this
-      // conversation (never a full load), then read at most a capped delta
-      // after it. Row-count limits alone do not bound oversized payloads, so
-      // decoded bytes are also capped; an oversized delta routes to the shared
-      // bounded coordinator instead of a direct unbounded summarize (FR-07/08,
-      // AC-23 — no unchecked secondary path).
-      const SESSION_MEMORY_DELTA_CAP_ROWS = 64;
-      const SESSION_MEMORY_DELTA_CAP_BYTES = 64 * 1024;
-      let newRows: Array<{
-        messageId: string;
-        role: string;
-        content: string;
-        timestamp: Date;
-        messageType?: MessageType;
-      }>;
+      // New-work probe (bounded, never a full load): resolve the
+      // covered-through boundary within this conversation, then count message
+      // rows after it. Any real delta delegates to the shared bounded
+      // coordinator — session memory never summarizes directly (FR-07,
+      // AC-23). Deltas below MIN_DELTA_MESSAGES are skipped without waking
+      // the model; a capped probe that fills up also delegates (the
+      // coordinator pages the rest itself).
+      const SESSION_MEMORY_DELTA_PROBE_ROWS = 64;
       if (existing?.coveredThroughMessageId) {
         const boundary = await this.v2.findBoundaryInConversation(
           input.conversationId,
           existing.coveredThroughMessageId
         );
         if (!boundary) {
-          // Boundary row is gone (deleted/ambiguous) — do not rescan the
-          // whole archive. Treat as no safe delta; a coordinator rebuild owns
-          // legacy migration via bounded sections.
+          // Boundary row is gone (deleted/ambiguous): the coordinator rebuild
+          // owns legacy migration via bounded sections.
           console.log(
-            `[ai-chat-compact] session update skipped (boundary unresolvable) conv=${input.conversationId}`
+            `[ai-chat-compact] session update delegating (boundary unresolvable) conv=${input.conversationId}`
           );
+          await this.delegateSessionMemoryToCoordinator(input);
           return;
         }
         const after = await this.v2.getMessagesAfter(
           input.conversationId,
           boundary.timestamp,
           boundary.id,
-          SESSION_MEMORY_DELTA_CAP_ROWS + 1
+          SESSION_MEMORY_DELTA_PROBE_ROWS + 1
         );
-        if (after.length > SESSION_MEMORY_DELTA_CAP_ROWS) {
-          await this.routeOversizedDeltaToCoordinator(input);
+        if (
+          after.length <= SESSION_MEMORY_DELTA_PROBE_ROWS &&
+          after.filter(isMessageRow).length < MIN_DELTA_MESSAGES
+        ) {
+          console.log(
+            `[ai-chat-compact] session update skipped (delta too small) conv=${input.conversationId}`
+          );
           return;
         }
-        newRows = after.filter(isMessageRow);
       } else {
-        // No prior coverage: read the first bounded page only. A fresh
-        // conversation with a huge unsummarized backlog must not send an
-        // unbounded delta — the coordinator owns it via bounded sections.
+        // No prior coverage: probe the head of the archive. Any real backlog
+        // delegates — the coordinator pages it in bounded sections.
         const first = await this.v2.getMessagesAfter(
           input.conversationId,
           new Date(0),
           0,
-          SESSION_MEMORY_DELTA_CAP_ROWS + 1
+          SESSION_MEMORY_DELTA_PROBE_ROWS + 1
         );
-        if (first.length > SESSION_MEMORY_DELTA_CAP_ROWS) {
-          await this.routeOversizedDeltaToCoordinator(input);
-          return;
-        }
-        newRows = first.filter(isMessageRow);
-      }
-      let deltaBytes = 0;
-      for (const r of newRows) {
-        deltaBytes += Buffer.byteLength(r.content ?? "", "utf8");
-      }
-      if (deltaBytes > SESSION_MEMORY_DELTA_CAP_BYTES) {
-        await this.routeOversizedDeltaToCoordinator(input);
-        return;
-      }
-      if (newRows.length < MIN_DELTA_MESSAGES) {
-        console.log(
-          `[ai-chat-compact] session update skipped (delta too small) conv=${input.conversationId} delta=${newRows.length}`
-        );
-        return;
-      }
-
-      await this.memory.markUpdating(input.conversationId);
-
-      // Same section budgets as manual/automatic compaction (FR-07/FR-08,
-      // AC-23): preflight the delta against the section source capacity, set
-      // an explicit provider output cap, and bound the whole attempt sequence
-      // (≤2 source-size reductions + 1 structured-output repair within a
-      // 4-attempt ceiling, mirroring §16). There is no unchecked secondary
-      // summarizer: anything that cannot fit routes to the coordinator.
-      const SESSION_MEMORY_OUTPUT_CAP_TOKENS =
-        AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens;
-      const SESSION_MEMORY_MAX_ATTEMPTS = 4;
-      const SESSION_MEMORY_MAX_REDUCTIONS = 2;
-      const budget = new AIChatRequestBudgetService();
-      const contextWindow = await this.resolveContextWindow(input.model);
-      const limitResolver = (): {
-        contextLimit: number;
-        outputLimit: number;
-        limitSource: "configured" | "fallback";
-      } => ({
-        contextLimit: contextWindow,
-        outputLimit: UNKNOWN_MODEL_FALLBACK_LIMITS.outputLimit,
-        limitSource: this.deps.getContextWindow ? "configured" : "fallback",
-      });
-      let rows = newRows;
-      let reductions = 0;
-      let repaired = false;
-      let attempts = 0;
-      let strictInstruction = "";
-      const startedAt = Date.now();
-      for (;;) {
-        attempts += 1;
-        const newMessages: OpenAIChatMessage[] = rows.map((r) => ({
-          role: r.role as OpenAIChatMessage["role"],
-          content: r.content,
-        }));
-        const systemPrompt = buildSessionMemorySystemPrompt();
-        const userPrompt =
-          buildSessionMemoryUserPrompt(existing?.summary ?? null, newMessages) +
-          strictInstruction;
-        const promptOverhead = this.estimator.estimateMessages([
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ]);
-        const stateInputCost = existing?.summary
-          ? this.estimator.estimateText(existing.summary)
-          : 0;
-        const capacity = budget.allocateSectionCapacity({
-          model: input.model,
-          sectionOutputReserve: SESSION_MEMORY_OUTPUT_CAP_TOKENS,
-          promptOverhead,
-          stateInputCost,
-          modelLimitResolver: limitResolver,
-        });
-        if (capacity.errorCode || capacity.sourceCapacity <= 0) {
-          // Even the reduced delta cannot fit this model's window — the
-          // coordinator owns it via bounded sections.
-          await this.routeOversizedDeltaToCoordinator(input);
-          return;
-        }
-        const deltaTokens = this.estimator.estimateMessages(newMessages);
-        if (deltaTokens > capacity.sourceCapacity) {
-          await this.routeOversizedDeltaToCoordinator(input);
-          return;
-        }
-        const req: OpenAIChatCompletionRequest = {
-          model: input.model,
-          max_tokens: SESSION_MEMORY_OUTPUT_CAP_TOKENS,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        };
-        let raw: string;
-        try {
-          const resp = await this.deps.completeChat(req);
-          raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-          const rawTokens = Math.ceil(Buffer.byteLength(raw, "utf8") / 4);
-          if (rawTokens > SESSION_MEMORY_OUTPUT_CAP_TOKENS * 2) {
-            // Explicit output cap: reject oversized output rather than
-            // storing a blindly cut summary.
-            await this.memory.recordFailure(
-              input.conversationId,
-              `Session summary output ${rawTokens} tokens exceeds provider cap`
-            );
-            return;
-          }
-          const { summary, ok } = normalizeSessionMemorySummary(raw);
-          if (!ok) {
-            if (!repaired && attempts < SESSION_MEMORY_MAX_ATTEMPTS) {
-              repaired = true;
-              strictInstruction =
-                "\nReturn a non-empty session summary covering the new messages.";
-              continue;
-            }
-            await this.memory.recordFailure(
-              input.conversationId,
-              "Compact model returned empty summary"
-            );
-            return;
-          }
-          const summaryTokens = this.estimator.estimateText(summary);
-          if (summaryTokens > SESSION_MEMORY_OUTPUT_CAP_TOKENS) {
-            await this.memory.recordFailure(
-              input.conversationId,
-              `Session summary ${summaryTokens} tokens exceeds output cap`
-            );
-            return;
-          }
-          const last = rows[rows.length - 1];
-          const priorCount = existing?.sourceMessageCount ?? 0;
-          await this.memory.upsertMemory({
-            conversationId: input.conversationId,
-            summary,
-            coveredThroughMessageId: last.messageId,
-            coveredThroughTimestamp: last.timestamp,
-            sourceMessageCount: priorCount + rows.length,
-            tokenEstimate: summaryTokens,
-            model: resp.model,
-            status: "active",
-          });
-          await this.memory.resetFailures(input.conversationId);
-          this.lastSessionMemoryAt.set(input.conversationId, Date.now());
+        if (
+          first.length <= SESSION_MEMORY_DELTA_PROBE_ROWS &&
+          first.filter(isMessageRow).length < MIN_DELTA_MESSAGES
+        ) {
           console.log(
-            `[ai-chat-compact] session update completed conv=${
-              input.conversationId
-            } msgs=${rows.length} tokens=${summaryTokens} elapsed=${
-              Date.now() - startedAt
-            }ms`
+            `[ai-chat-compact] session update skipped (delta too small) conv=${input.conversationId}`
           );
           return;
-        } catch (err) {
-          if (
-            isContextRejectionMessage(err) &&
-            reductions < SESSION_MEMORY_MAX_REDUCTIONS &&
-            attempts < SESSION_MEMORY_MAX_ATTEMPTS
-          ) {
-            // Halve the attempted delta and retry within the ceiling. At the
-            // floor, the coordinator owns the remainder via bounded sections.
-            const halved = Math.max(
-              MIN_DELTA_MESSAGES,
-              Math.floor(rows.length / 2)
-            );
-            if (halved >= rows.length) {
-              await this.routeOversizedDeltaToCoordinator(input);
-              return;
-            }
-            reductions += 1;
-            rows = rows.slice(0, halved);
-            continue;
-          }
-          throw err;
         }
       }
+      await this.delegateSessionMemoryToCoordinator(input);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(

@@ -106,18 +106,29 @@ describe("AIChatHistoricalRecall storage (50-case six-language dataset)", () => 
   it.each(RECALL_DATASET_V1.map((c) => [c.id, c.marker, c.text] as const))(
     "%s: exact marker recoverable byte-for-byte via search→read",
     async (_id, marker, text) => {
-      const hit = await service.search({
-        conversationId: CONV,
-        query: marker,
-        limit: 5,
-        turnId: `t-recall-${marker}`,
-      });
-      expect(
-        hit.records.length,
-        `marker not found: ${marker}`
-      ).toBeGreaterThan(0);
-      const rec = hit.records.find((r) => r.text.includes(marker));
-      expect(rec, `no excerpt contains ${marker}`).toBeDefined();
+      // Follow the search continuation to scan completion: the bounded scan
+      // (500 fragments / 100 ms per backend page) may return an empty first
+      // page under load for a marker that exists later in the walk. An empty
+      // page with a cursor is NEVER "no match" — only scan completion ends
+      // the search (FR-02, AC-01).
+      let cursor: string | undefined;
+      let rec: { sourceId: string; text: string } | undefined;
+      let scanComplete = false;
+      for (let page = 0; page < 25 && !rec; page++) {
+        const hit = await service.search({
+          conversationId: CONV,
+          query: marker,
+          cursor,
+          limit: 5,
+          turnId: `t-recall-${marker}`,
+        });
+        rec = hit.records.find((r) => r.text.includes(marker));
+        scanComplete = hit.scanComplete;
+        cursor = hit.nextCursor ?? undefined;
+        if (!cursor) break;
+      }
+      expect(rec, `marker not found: ${marker}`).toBeDefined();
+      expect(scanComplete || rec).toBeTruthy();
       const read = await service.read({
         conversationId: CONV,
         args: { source_id: rec!.sourceId },

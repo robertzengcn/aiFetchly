@@ -62,6 +62,27 @@ vi.mock("@/service/AIChatCompactAgentService", () => ({
   },
 }));
 
+// Controllable coordinator for the non-blocking START flow. The START handler
+// must return while the run is still pending, then report settle via events.
+const mockRequestCompaction = vi.hoisted(() => vi.fn());
+vi.mock("@/service/AIChatCompactionCoordinator", () => ({
+  AIChatCompactionCoordinator: class {
+    requestCompaction = mockRequestCompaction;
+    requestCompactionForTurn = vi.fn();
+    getStatus = vi.fn().mockResolvedValue(null);
+  },
+}));
+
+const mockEmitCompactionProgress = vi.hoisted(() => vi.fn());
+vi.mock("@/service/AIChatConversationUpdateBroadcaster", () => ({
+  AIChatConversationUpdateBroadcaster: {
+    getInstance: () => ({
+      emitCompactionProgress: mockEmitCompactionProgress,
+      emitAutoCompacted: vi.fn(),
+    }),
+  },
+}));
+
 // Stub remaining modules that the IPC file imports at load time.
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(() => ({
@@ -110,7 +131,10 @@ vi.mock("@/service/SkillExecutor", () => ({
 }));
 
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
-import { AI_CHAT_V2_COMPACT_CONVERSATION } from "@/config/channellist";
+import {
+  AI_CHAT_V2_COMPACT_CONVERSATION,
+  AI_CHAT_V2_COMPACTION_START,
+} from "@/config/channellist";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 
 const fakeSummary: AIChatCompactSummaryView = {
@@ -228,6 +252,69 @@ describe("AI Chat V2 Compact Conversation IPC", () => {
     // "unexpected error": operators learn compaction needs the stage flag.
     expect(result.status).toBe(false);
     expect(result.msg).toMatch(/Compaction unavailable/i);
+  });
+
+  it("START returns immediately while the run is still pending (non-blocking)", async () => {
+    let release!: (v: {
+      runId: string;
+      state: "completed";
+      generationId: string;
+      sectionsPacked: number;
+    }) => void;
+    mockRequestCompaction.mockImplementationOnce(
+      () =>
+        new Promise<{
+          runId: string;
+          state: "completed";
+          generationId: string;
+          sectionsPacked: number;
+        }>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    const result = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACTION_START,
+      {},
+      JSON.stringify({ conversationId: "v2-conv-1", model: "gpt-4o" })
+    )) as { status: boolean; data: { started: boolean } };
+
+    // Returned while the coordinator run is still in flight — the renderer
+    // never waits on one RPC for the whole batch (design §13.1).
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual({ started: true });
+    expect(mockEmitCompactionProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "running" })
+    );
+
+    // Settle drives the badge via a progress event, not the RPC result.
+    release({
+      runId: "run-9",
+      state: "completed",
+      generationId: "gen-9",
+      sectionsPacked: 2,
+    });
+    await vi.waitFor(() =>
+      expect(mockEmitCompactionProgress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-9",
+          state: "completed",
+          generationId: "gen-9",
+          sectionsPacked: 2,
+        })
+      )
+    );
+  });
+
+  it("START validates the conversation id before touching the coordinator", async () => {
+    const result = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACTION_START,
+      {},
+      JSON.stringify({})
+    )) as { status: boolean; msg: string };
+    expect(result.status).toBe(false);
+    expect(result.msg).toMatch(/conversationId is required/i);
+    expect(mockRequestCompaction).not.toHaveBeenCalled();
   });
 
   it("returns denied when runFullCompact throws", async () => {

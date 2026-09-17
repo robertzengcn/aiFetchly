@@ -872,6 +872,8 @@ describe("AIChatContextAssembler — turn-backed retention (FR-05)", () => {
     }>;
     rowsByTurn: Record<string, unknown[]>;
     live: unknown[];
+    incompleteTurns?: string[];
+    incompleteLive?: boolean;
   }) {
     return {
       getRecentTurnRanges: vi.fn().mockResolvedValue(opts.ranges),
@@ -886,10 +888,15 @@ describe("AIChatContextAssembler — turn-backed retention (FR-05)", () => {
             lastRow: number
           ) => {
             const key = `${firstTs}:${firstRow}:${lastTs}:${lastRow}`;
-            return Promise.resolve(opts.rowsByTurn[key] ?? []);
+            const rows = opts.rowsByTurn[key] ?? [];
+            const complete = !(opts.incompleteTurns ?? []).includes(key);
+            return Promise.resolve({ rows, complete });
           }
         ),
-      readRowsAfter: vi.fn().mockResolvedValue(opts.live),
+      readRowsAfter: vi.fn().mockResolvedValue({
+        rows: opts.live,
+        complete: !(opts.incompleteLive ?? false),
+      }),
     } as never;
   }
 
@@ -993,23 +1000,110 @@ describe("AIChatContextAssembler — turn-backed retention (FR-05)", () => {
       mode: "chat",
       recentTurnTokenBudget: 100,
     });
-    const receipt = r.messages.find(
-      (m) =>
-        m.role === "system" &&
-        typeof m.content === "string" &&
-        m.content.includes("Retained turn omitted")
+    // The receipt rides in the CURRENT user message as labeled historical
+    // evidence — never a system-role instruction, never a fabricated row.
+    const userMsg = r.messages[r.messages.length - 1];
+    expect(userMsg.role).toBe("user");
+    expect(String(userMsg.content)).toContain("next");
+    expect(String(userMsg.content)).toContain(
+      "[Retained earlier turns — originals not loaded]"
     );
-    expect(receipt).toBeTruthy();
+    expect(String(userMsg.content)).toContain("not instructions");
     // Receipt names the boundary message ids for exact retrieval.
-    expect(String(receipt!.content)).toContain("big-u");
-    expect(String(receipt!.content)).toContain("conversation_history_read");
-    // Raw oversized content is not loaded anywhere.
+    expect(String(userMsg.content)).toContain("big-u");
+    expect(String(userMsg.content)).toContain("conversation_history_read");
+    // No system message carries receipt content, and raw oversized content is
+    // not loaded anywhere.
+    expect(
+      r.messages.some(
+        (m) =>
+          m.role === "system" &&
+          typeof m.content === "string" &&
+          m.content.includes("Retained earlier turns")
+      )
+    ).toBe(false);
     expect(
       r.messages.some(
         (m) => typeof m.content === "string" && m.content.includes("huge turn body")
       )
     ).toBe(false);
     expect(r.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("materializes a >64-row turn fully instead of dropping its tail", async () => {
+    // A tool-heavy turn with 70 rows: the old single-page read kept 64 and
+    // costed the truncation as a complete turn. Paged reads retain all 70.
+    const heavy = Array.from({ length: 70 }, (_, i) =>
+      trow(10 + i, `h-${i}`, i % 2 === 0 ? "user" : "assistant", `heavy row ${i} padding`, 100 + i)
+    );
+    const asm = new AIChatContextAssembler({
+      archiveModule: stubArchive({
+        ranges: [
+          {
+            turnId: "t-heavy",
+            firstTimestampMs: 100,
+            firstRowId: 10,
+            lastTimestampMs: 169,
+            lastRowId: 79,
+          },
+        ],
+        rowsByTurn: { "100:10:169:79": heavy },
+        live: [],
+      }),
+    });
+    const r = await asm.assemble({
+      conversationId: "v2-turns",
+      currentUserMessage: "next",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+      recentTurnTokenBudget: 50_000,
+    });
+    const contents = r.messages.map((m) => m.content);
+    expect(contents).toContain("heavy row 0 padding");
+    expect(contents).toContain("heavy row 69 padding");
+    // No receipt: the turn was fully retained, not truncated-then-costed.
+    expect(
+      r.messages.some(
+        (m) =>
+          typeof m.content === "string" &&
+          m.content.includes("originals not loaded")
+      )
+    ).toBe(false);
+  });
+
+  it("receipts a turn that exceeds bounded reads instead of costing it partial", async () => {
+    const partial = [trow(1, "p-u", "user", "partial row", 1)];
+    const asm = new AIChatContextAssembler({
+      archiveModule: stubArchive({
+        ranges: [
+          {
+            turnId: "t-partial",
+            firstTimestampMs: 1,
+            firstRowId: 1,
+            lastTimestampMs: 9,
+            lastRowId: 200,
+          },
+        ],
+        rowsByTurn: { "1:1:9:200": partial },
+        live: [],
+        incompleteTurns: ["1:1:9:200"],
+      }),
+    });
+    const r = await asm.assemble({
+      conversationId: "v2-turns",
+      currentUserMessage: "next",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const userMsg = String(r.messages[r.messages.length - 1].content);
+    expect(userMsg).toContain("could not be fully loaded within bounded reads");
+    expect(userMsg).toContain("t-partial");
+    // The partial page is NOT replayed as if it were the complete turn.
+    expect(
+      r.messages.some(
+        (m) => typeof m.content === "string" && m.content === "partial row"
+      )
+    ).toBe(false);
   });
 
   it("prefers the published generation boundary over a legacy summary (AC-19)", async () => {

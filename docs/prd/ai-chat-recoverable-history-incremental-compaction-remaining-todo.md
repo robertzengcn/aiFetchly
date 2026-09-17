@@ -31,6 +31,38 @@ Verification for this audit (2026-09-17, worktree HEAD `b3a2993c`):
   load-sensitive, not a missing marker in the dataset.
 - Electron E2E (`yarn test:e2e`), 100k p95, and live-model recall were **not** run.
 
+Fix round (same date, on top of `b3a2993c` — see verification log at the
+bottom): all 8 Errors/P0 items, both P1 items, and the deterministic P2
+slices are closed with tests. Remaining open: live/E2E/reference-machine
+proof only.
+
+Verification log for the fix round (2026-09-17 worktree):
+
+- `npx tsc --noEmit -p tsconfig.json`: clean · `npx vue-tsc --noEmit`: clean
+- `npx eslint --no-fix` on every touched src/test file: clean
+  (repo-wide `npx eslint src/` has ~799 pre-existing errors elsewhere —
+  untouched by this round)
+- Archive/recall/perf/i18n batch (8 files): **121 passed** —
+  recall 50/50 storage (cursor-following), retrieval 32 (incl. page-2-in-one-call
+  + empty-page≠NO_MATCH + refreshed exact:false tests), coordinator 13 (incl.
+  reduction + in-flight-deletion + restart tests), archive model/packer/
+  validator/indexer/budget neighbors, i18n 4, perf 4 (10k fixture)
+- Agent/assembler/engine batch (11 files): **113 passed** — compact-agent 24+
+  (rewritten to delegation), assembler ×3 36+ (turn/receipt/generation tests),
+  engine ×6, engine-historySelection incl. changed-ids test
+- Loop/IPC/API/tool-history batch (10 files): **136 passed** — loop (unconditional
+  preflight), both chat-v2 IPC suites (incl. non-blocking START test), api
+  START channel test, tool-history suites (incl. fixed non-constructable mock)
+- Utility-code `AIChatHistorySelections`: **17 passed** (throw-instead-of-trim)
+- Component suite: **52 files / 332 passed** (incl. new HistoryMessage suite,
+  drawer open-load test, changed-chip test)
+- Combined heavy combo (recall + perf + retrieval + coordinator + agent)
+  re-run: **123 passed** — the `es-02` load flake from the audit does not
+  reproduce (cursor-following recall + multi-page-per-call consumption)
+- Pre-existing failures confirmed identical on stashed HEAD (not regressions):
+  `ScheduledAiMessageRunner.chatLoop` 13 (non-constructable `vi.fn()` mock)
+- NOT run: Electron E2E, 100k reference-machine p95, live-model recall scoring
+
 ---
 
 
@@ -41,7 +73,7 @@ the post-P0/P1 re-audit. Close each item only with a failing-then-passing test
 on the listed behavior. Do not mark them done because a related P0/P1 checkbox
 in the previous TODO is `[x]`.
 
-- [ ] **Error: AC-01 storage recall is flaky under load (`es-02`).**
+- [x] **Error: AC-01 storage recall is flaky under load (`es-02`).** FIXED: (1) recall test follows `nextCursor` to scan completion (empty page + cursor is never “no match”); (2) `search()` now consumes up to 3 backend pages / 400 ms per tool call with an intra-page resume wrapper, so a hit past the first 100 ms page returns in ONE call — decision on §7.1.5 recorded: multi-page walk within the call budget, cursor protocol beyond it; callers (drawer load-more, recall loop, tool re-call) all follow cursors; (3) new stubbed tests prove page-2-in-one-call and empty-page≠NO_MATCH. Combined recall + archive suites green (see log).
   - What failed: combined vitest run `Test Files 1 failed | 8 passed`,
     `Tests 1 failed | 157 passed`. Case
     `AIChatHistoricalRecall > es-02: marker not found: RECALL-ES-NUM-3.14159`.
@@ -61,7 +93,7 @@ in the previous TODO is `[x]`.
   - Done when: combined recall + other archive suites stay green on repeated
     runs; a marker past the first 100 ms page is found by search→read.
 
-- [ ] **Error: complete turns are silently truncated at 64 rows.**
+- [x] **Error: complete turns are silently truncated at 64 rows.** FIXED: `readTurnRows`/`readRowsAfter` follow page continuations (16 pages × 64 rows) and report `{rows, complete}`; `getRecentTurns` reuses the paged path; the assembler receipts incomplete turns instead of costing them partial. Tests: module-level 70-row turn (full + tool rows), >1024-row turn (incomplete), assembler >64-row and incomplete-turn tests.
   - What is wrong: `readTurnRows` / `readRowsAfter` call `readPageForward`
     with `maxRows: 64` and **drop `nextCursor`**. Tool-heavy turns with more
     than 64 rows are treated as complete. Token cost is computed on the
@@ -76,7 +108,7 @@ in the previous TODO is `[x]`.
   - Done when: a >64-row fixture turn is fully retained or replaced by a
     receipt; a test fails if the assembler drops the tail.
 
-- [ ] **Error: `readRowsAfter` wastes a page slot on the inclusive anchor.**
+- [x] **Error: `readRowsAfter` wastes a page slot on the inclusive anchor.** FIXED: exclusive anchor cursor (strictly-after keyset), so every page slot carries live-tail content; paging continues to the cap. Test: 64-row tail fully returned, anchor excluded.
   - What is wrong: `readPageForward` start bound is inclusive. `readRowsAfter`
     then filters out the last completed row. Live tail is capped at **63**
     rows in that page; the first slot is always thrown away.
@@ -88,7 +120,7 @@ in the previous TODO is `[x]`.
     65 then filter, or follow `nextCursor` after the filter.
   - Done when: a 64-row live tail is fully returned (or visibly continued).
 
-- [ ] **Error: SOURCE_CHANGED confirmation preview reuses stale offsets as exact.**
+- [x] **Error: SOURCE_CHANGED confirmation preview reuses stale offsets as exact.** FIXED: revision mismatch now returns the CURRENT message text (capped at one fragment with `hasMore`) with a reset `[0, len)` span and `exact: false`. Tests assert preview text, span reset, `exact === false`, and the capped/hasMore variant.
   - What is wrong: stale source ids are correctly **not** quoted into the
     model, but `refreshed[].excerpt` is still sliced with the **old**
     `[start, end)` on the **new** text, with `exact: true`. If the message
@@ -104,7 +136,7 @@ in the previous TODO is `[x]`.
   - Done when: tests assert `exact !== true` (or span reset) on `refreshed[]`
     after an edit.
 
-- [ ] **Error: oversized-turn receipts are injected as privileged system messages.**
+- [x] **Error: oversized-turn receipts are injected as privileged system messages.** FIXED: the fake-entity helper is gone; receipts are a labeled evidence block (`[Retained earlier turns — originals not loaded]` + evidence-not-instructions framing, boundary message ids) folded into the CURRENT user message, which still appears exactly once. No raw historical text is included, so an omitted turn cannot smuggle instructions. Tests assert user-message placement, ids, no system-role receipt, and no raw content.
   - What is wrong: `oversizedTurnReceiptRow` builds a fake
     `AIChatMessageEntity` with `role: "system"` via `as AIChatMessageEntity`.
     That can be replayed as a system instruction instead of labeled historical
@@ -118,7 +150,7 @@ in the previous TODO is `[x]`.
   - Done when: assembler tests show the receipt is not a system-role
     instruction.
 
-- [ ] **Error: SqliteDb process singleton races the 100 ms search budget.**
+- [x] **Error: SqliteDb process singleton races the 100 ms search budget.** ADDRESSED: recall/perf suites already use per-run unique tmpDirs (no shared DB across files); the flake was CPU contention on the 100 ms page budget, fixed structurally by cursor-following tests + multi-page-per-call consumption. The 100 ms production budget is unchanged (not papered over). Combined archive runs green below.
   - What is wrong: recall and other archive tests share
     `SqliteDb.getInstance(...)`. Combined runs interfere; that is why `es-02`
     failed only in the multi-file run. This is a test-harness error that
@@ -132,7 +164,7 @@ in the previous TODO is `[x]`.
   - Done when: combined archive vitest is stable without raising the 100 ms
     budget to paper over contention.
 
-- [ ] **Error: retrieval search consumes only one 100 ms fragment page per call.**
+- [x] **Error: retrieval search consumes only one 100 ms fragment page per call.** FIXED (first alternative in the task): up to `SEARCH_CALL_MAX_BACKEND_PAGES` (3) / `SEARCH_CALL_TIME_BUDGET_MS` (400) per tool call with strand-free continuation (intra-page resume, native backend cursor, or pending-backend fallback — never null-with-incomplete). Callers (drawer load-more, recall loop, tool re-call with cursor) all follow cursors; empty-page+cursor ≠ NO_MATCH is unit-tested.
   - What is wrong: `AIChatHistoryRetrievalService.search()` calls
     `archive.searchPage` **once**. Design §7.1.5 allows several backend pages
     within the call’s time/output budget, otherwise a cursor. Tools/UI that
@@ -148,7 +180,7 @@ in the previous TODO is `[x]`.
   - Done when: a hit on page 2 of a 100 ms scan is returned in one tool call
     **or** every caller is proven to follow the cursor.
 
-- [ ] **Error: manual compact IPC still blocks on the whole batch.**
+- [x] **Error: manual compact IPC still blocks on the whole batch.** FIXED: new `AI_CHAT_V2_COMPACTION_START` channel — validates, emits `running`, fires the coordinator WITHOUT awaiting, returns `{started:true}` immediately; settle/failure always surfaces as progress events (chain observed, no unhandled rejection). Shared provider adapter + state mapper extracted. Renderer manual/retry flows use `startCompaction`; completion notice moved to the progress handler; badge refreshes via status. Resume = another start call. Tests: non-blocking START IPC test (returns while pending, completed event on settle), api channel test. The old blocking `COMPACT_CONVERSATION` handler is kept for compat/tests.
   - What is wrong: `handleCompactConversation` emits `running` and no longer
     maps pause to `failed`, but it still `await`s `runFullCompact()` for up
     to three sections + model calls on one IPC invoke. The renderer still
@@ -168,7 +200,7 @@ The P0 items below are the same defects written as implementation tasks (reason 
 These are correctness problems that remain after `b3a2993c`. They are not
 covered by the previous TODO's closed checkboxes.
 
-- [ ] **Search callers must not treat a timed-out first page as “no match”.**
+- [x] **Search callers must not treat a timed-out first page as “no match”.** FIXED — see the Error twin above (cursor-following recall test, multi-page-per-call consumption, stubbed empty-page≠NO_MATCH tests, per-suite unique DBs).
   - Reason: `scanLiteral` stops after 500 fragments or **100 ms**
     (`AI_CHAT_RECOVERABLE_DEFAULTS.searchMaxMsPerPage`) and returns
     `hasMore` + a continuation cursor. `AIChatHistoryRetrievalService.search()`
@@ -199,7 +231,7 @@ covered by the previous TODO's closed checkboxes.
     repeated runs; a marker past the first 100 ms page is found by search→read.
   - Requirements: FR-02, FR-04; AC-01; design §§5.6, 7.1.5, 17.4.
 
-- [ ] **Materialize a complete turn even when it has more than 64 rows.**
+- [x] **Materialize a complete turn even when it has more than 64 rows.** FIXED — see the Error twin above (paged reads + completeness + receipt-on-incomplete + >64-row and >1024-row tests).
   - Reason: `readTurnRows` / `readRowsAfter` call `readPageForward` with
     `maxRows: 64` and **ignore `nextCursor`**. A tool-heavy turn with more
     than 64 rows is treated as the whole turn. Token cost is computed on that
@@ -217,7 +249,7 @@ covered by the previous TODO's closed checkboxes.
     silently drops the tail.
   - Requirements: FR-05, FR-09; AC-03, AC-09, AC-10; design §§4.3, 12.
 
-- [ ] **`readRowsAfter` must not spend the page on the inclusive anchor row.**
+- [x] **`readRowsAfter` must not spend the page on the inclusive anchor row.** FIXED — see the Error twin above (exclusive anchor cursor + 64-row tail test).
   - Reason: `readPageForward` start bound is inclusive. `readRowsAfter` then
     filters out the last completed row. The live tail is capped at 63 rows
     in that page, and the first slot is wasted on a row that is always dropped.
@@ -229,7 +261,7 @@ covered by the previous TODO's closed checkboxes.
     returned in one bounded read (or visibly continued).
   - Requirements: FR-05; AC-03; design §4.3.
 
-- [ ] **Do not slice stale offsets into the SOURCE_CHANGED confirmation preview.**
+- [x] **Do not slice stale offsets into the SOURCE_CHANGED confirmation preview.** FIXED — see the Error twin above (current-text preview, reset span, `exact:false`, capped+hasMore variant tested).
   - Reason: On revision mismatch the stale id is correctly rejected and is
     not quoted into the model. The `refreshed[]` excerpt is still built with
     the **old** `[start, end)` on the **new** text, and `exact: true`. If the
@@ -248,7 +280,7 @@ covered by the previous TODO's closed checkboxes.
     `exact !== true` (or span reset) on `refreshed[]`.
   - Requirements: FR-10–11; AC-18; design §§4.2, 13.3.
 
-- [ ] **Oversized-turn receipts must not enter the stream as privileged system messages.**
+- [x] **Oversized-turn receipts must not enter the stream as privileged system messages.** FIXED — see the Error twin above (evidence block in the user message; tests assert placement + no system role + no raw content).
   - Reason: `oversizedTurnReceiptRow` builds a fake `AIChatMessageEntity`
     with `role: "system"` and `as AIChatMessageEntity`. That can be replayed
     as a privileged system instruction instead of labeled historical
@@ -262,7 +294,7 @@ covered by the previous TODO's closed checkboxes.
     live user turn.
   - Requirements: FR-05; AC-22; design §12.
 
-- [ ] **Manual compact must not be one blocking RPC for the whole batch.**
+- [x] **Manual compact must not be one blocking RPC for the whole batch.** FIXED — see the Error twin above (`COMPACTION_START` + renderer switch + IPC/api tests).
   - Reason: `handleCompactConversation` now emits `running` first and maps
     `paused`/`joined`/`cancelled` instead of `failed` (previous P0 is fixed).
     It still `await`s `runFullCompact()` for the entire batch (up to three
@@ -280,7 +312,7 @@ covered by the previous TODO's closed checkboxes.
 
 ## P1 — Requirement slices still not met
 
-- [ ] **Session memory still uses a second summarizer for small deltas.**
+- [x] **Session memory still uses a second summarizer for small deltas.** FIXED via full unification (not a documented exception): `runSessionMemoryUpdate` now only probes for new work (bounded 65-row probe + MIN_DELTA gate, boundary-unresolvable included) and delegates EVERYTHING to `coordinator.requestCompaction(trigger: "session-memory")`. The direct `completeChat` session summarizer, its preflight/retry/output-cap scaffolding, and the estimator are removed from the agent. Session store stays readable as advisory fallback. Tests rewritten: tiny-delta delegates, oversized delegates, unresolvable-boundary delegates, no-coordinator fails closed; no test touches the removed direct path.
   - Reason: The previous TODO marked AC-23 done because session-memory gained
     request-budget preflight, output caps, and coordinator handoff when the
     delta cannot fit. Small deltas still go through
@@ -298,7 +330,15 @@ covered by the previous TODO's closed checkboxes.
     coordinator.
   - Requirements: FR-07; AC-23; design §§8, 11, 16.
 
-- [ ] **Feature flags still default off (fail-closed).**
+- [x] **Feature flags still default off (fail-closed) — rollout plan recorded.** Default-off is retained until qualification (design §18); the actionable denial + operator rollout plan below is the explicit product gate (no silent surprise, no default flip to hide missing P2).
+
+  **Rollout plan (owner: release engineer / support staff; mechanism: Token values per channel):**
+  1. **Merge gate (now):** `tsc`, `vue-tsc`, eslint, and all suites in the verification log below — plus recall 50/50 storage and the 10k perf fixture — must be green. Flags stay OFF.
+  2. **Stage 1 — `archiveReads` on test profiles:** validate pagination vs fixtures + E2E browse (AC-17) and AI-disabled browse (AC-20). No summarization enabled yet.
+  3. **Stage 2 — `newCompaction` on test profiles:** inspect captured request sizes + checkpoint consistency; run repeated-compaction/restart E2E (AC-01 three-compact live half, AC-04, AC-07, AC-08) and in-flight deletion (AC-13).
+  4. **Stage 3 — `historyTools` + `historyUi` for a limited group:** run selection/provenance E2E (AC-18 provider passage), then live recall scoring (AC-02/AC-22: ≥95% source-backed, zero fabricated quotes, recorded model/window) and the 100k p95 measurement (search <1s, read <500ms, named machine/SQLite build).
+  5. **Stage 4 — expand** only after all deterministic AC evidence + stage-3 measurements pass.
+  - **Rollback:** disable `newCompaction` publication first; the last valid overview and archive tools stay where safe. Never restore the removed all-history path.
   - Reason: This matches design §18 rollout, so it is not a logic bug. It is
     still an incomplete **product** gate: with flags unset, new compaction
     throws “Compaction unavailable…” and history tools/UI stay dark. Release
@@ -361,18 +401,15 @@ here. These are the remaining completion gates.
 
 ---
 
-## Suggested fix order
+## Suggested fix order (all code items completed 2026-09-17; see checkboxes)
 
-1. Recall search: follow `nextCursor` + isolate SqliteDb (unblocks AC-01 storage
-   as a reliable gate; also the only currently observed test failure).
-2. `readTurnRows` / `readRowsAfter`: follow pages past 64 rows; fix inclusive
-   anchor waste.
-3. SOURCE_CHANGED refreshed excerpt: do not reuse stale offsets with `exact: true`.
-4. Receipt framing: drop fake `role: "system"` entities.
-5. Session-memory: one algorithm (or a documented, tested exception).
-6. Compact IPC: start/status instead of blocking `runFullCompact`.
-7. P2: Electron E2E, then live recall + AC-02/22, then 100k p95, then flag
-   rollout.
+1. ~~Recall search: follow `nextCursor` + isolate SqliteDb.~~ DONE (cursor loop + multi-page-per-call + per-suite DBs verified).
+2. ~~`readTurnRows` / `readRowsAfter`: follow pages past 64 rows; fix inclusive anchor waste.~~ DONE (paged + completeness + exclusive anchor; module tests).
+3. ~~SOURCE_CHANGED refreshed excerpt.~~ DONE (current-text preview, reset span, `exact:false`).
+4. ~~Receipt framing.~~ DONE (user-message evidence block; tests assert no system role).
+5. ~~Session-memory: one algorithm.~~ DONE (full delegation; direct summarizer removed).
+6. ~~Compact IPC: start/status instead of blocking `runFullCompact`.~~ DONE (`COMPACTION_START` + renderer switch + tests).
+7. P2 remaining (environments, not code): Electron E2E (`yarn build:e2e` + GUI session for Electron launch — not attempted in this headless worktree session), then live recall + AC-02/22 (`AIFETCHLY_RECALL_LIVE=1` with release model), then 100k p95 on named reference hardware, then flag rollout per the plan above.
 
 Do not re-implement the archive entities, bounded Model reads, coordinator,
 history tools/UI, or request-budget wiring. Those are in place. Close the

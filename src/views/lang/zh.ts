@@ -2755,6 +2755,7 @@ export default {
     idle_detail: "压缩处于空闲状态。",
     compaction_in_progress: "压缩进行中（已打包 {packed} 段）。",
     compaction_paused: "压缩已暂停，将自动恢复。",
+    compaction_start_failed: "压缩启动失败。",
     compaction_failed: "压缩失败：{message}",
     compaction_retry: "重试",
     compaction_cancel: "取消压缩",

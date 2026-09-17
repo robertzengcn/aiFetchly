@@ -107,6 +107,14 @@ interface DecodedSource {
   readonly payload: OpaqueSourceIdPayload;
 }
 
+/**
+ * Per-tool-call backend-page walk bounds (design §7.1.5): one search call
+ * may consume several 100 ms backend pages so a hit past the first fragment
+ * page is returned in ONE call; anything further out is exposed as a cursor.
+ */
+const SEARCH_CALL_MAX_BACKEND_PAGES = 3;
+const SEARCH_CALL_TIME_BUDGET_MS = 400;
+
 export class AIChatHistoryRetrievalService {
   constructor(private readonly archive: AIChatArchiveModule) {}
 
@@ -252,12 +260,7 @@ export class AIChatHistoryRetrievalService {
       // Unwrap an intra-page resume cursor into its backend cursor + record
       // offset. Unknown formats pass through for archive-side validation
       // (which fails closed on forged/foreign cursors).
-      const { backendCursor, skip } = splitSearchCursor(parsed.data.cursor);
-      const page = await this.archive.searchPage({
-        conversationId: input.conversationId,
-        query: parsed.data.query,
-        cursor: backendCursor,
-      });
+      const first = splitSearchCursor(parsed.data.cursor);
       const limit = parsed.data.limit;
       // Per-call response allowance for search (PRD FR-02: 2,000 tokens
       // default, reduced when the active context has less room).
@@ -265,75 +268,126 @@ export class AIChatHistoryRetrievalService {
       let callTokens = 0;
       let truncatedByBudget = false;
       const records: HistoryExcerpt[] = [];
-      // Resume index: first unexamined record of this backend page. Only
-      // accepted records advance it past withheld ones — dedup-skipped
-      // passages are re-examined (cheap, still skipped same-turn) so a later
-      // turn with a fresh budget can still return them.
-      let resumeIndex = Math.max(0, Math.min(skip, page.records.length));
-      for (let i = resumeIndex; i < page.records.length; i++) {
-        const rec = page.records[i];
-        // Caller's limit reached: the tail stays unexamined and resumable
-        // via the intra-page cursor below (never silently dropped).
-        if (records.length >= limit) break;
-        // Actual deduplication: skip passages whose intervals are already
-        // fully covered by this turn's merged set (§7.4, FR-04). Checked
-        // without mutating, so a withheld record is never pre-merged into
-        // the dedup set before it is actually returned.
-        const decoded = this.tryDecodeRecord(rec.sourceId, rec.text);
-        if (
-          decoded &&
-          this.isCovered(
-            b,
-            decoded.payload.rowId,
-            decoded.payload.startCodePoint,
-            decoded.payload.endCodePoint
-          )
-        ) {
-          continue;
+      // Backend-page walk (design §7.1.5): one tool call may consume several
+      // backend pages within its time/output budget, otherwise it exposes a
+      // cursor. A hit past the first 100 ms fragment page is therefore
+      // returned in ONE call instead of stranding the caller on an empty
+      // first page. Bounded by page count + wall clock + token caps.
+      const callStartMs = Date.now();
+      let backendCursor = first.backendCursor;
+      let skip = first.skip;
+      let backendComplete = false;
+      let indexComplete = false;
+      let nextCursor: string | null = null;
+      // Last unconsumed native backend position: the fallback continuation
+      // when the page cap stops us exactly on a page boundary.
+      let pendingBackend: string | null = first.backendCursor ?? null;
+      let settled = false;
+      for (
+        let backendPages = 0;
+        backendPages < SEARCH_CALL_MAX_BACKEND_PAGES;
+        backendPages++
+      ) {
+        const page = await this.archive.searchPage({
+          conversationId: input.conversationId,
+          query: parsed.data.query,
+          cursor: backendCursor,
+        });
+        indexComplete = page.indexComplete;
+        // Resume index: first unexamined record of this backend page. Only
+        // accepted records advance it past withheld ones — dedup-skipped
+        // passages are re-examined (cheap, still skipped same-turn) so a
+        // later turn with a fresh budget can still return them.
+        let resumeIndex = Math.max(0, Math.min(skip, page.records.length));
+        skip = 0;
+        for (let i = resumeIndex; i < page.records.length; i++) {
+          const rec = page.records[i];
+          // Caller's limit reached: the tail stays unexamined and resumable
+          // via the intra-page cursor below (never silently dropped).
+          if (records.length >= limit) break;
+          // Actual deduplication: skip passages whose intervals are already
+          // fully covered by this turn's merged set (§7.4, FR-04). Checked
+          // without mutating, so a withheld record is never pre-merged into
+          // the dedup set before it is actually returned.
+          const decoded = this.tryDecodeRecord(rec.sourceId, rec.text);
+          if (
+            decoded &&
+            this.isCovered(
+              b,
+              decoded.payload.rowId,
+              decoded.payload.startCodePoint,
+              decoded.payload.endCodePoint
+            )
+          ) {
+            continue;
+          }
+          const tokens = this.estimateTokens(rec.text);
+          if (
+            callTokens + tokens > perCallCap ||
+            b.consumedTokens + tokens >
+              AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn
+          ) {
+            truncatedByBudget = true;
+            break;
+          }
+          if (decoded) {
+            this.mergeInterval(
+              b,
+              decoded.payload.rowId,
+              decoded.payload.startCodePoint,
+              decoded.payload.endCodePoint
+            );
+          }
+          callTokens += tokens;
+          b.consumedTokens += tokens;
+          records.push(rec);
+          resumeIndex = i + 1;
         }
-        const tokens = this.estimateTokens(rec.text);
-        if (
-          callTokens + tokens > perCallCap ||
-          b.consumedTokens + tokens >
-            AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn
-        ) {
-          truncatedByBudget = true;
+        // Intra-page remainder (unexamined records, whether withheld by
+        // budget or over the caller's limit) resumes within THIS page — never
+        // by echoing the input cursor (which would replay the page forever)
+        // and never by jumping to the backend's next page (which would drop
+        // the tail). The backend cursor is preserved inside the wrapper, so
+        // its query/revision binding still applies on resume.
+        if (resumeIndex < page.records.length) {
+          nextCursor = encodeSearchResumeCursor(backendCursor, resumeIndex);
+          settled = true;
           break;
         }
-        if (decoded) {
-          this.mergeInterval(
-            b,
-            decoded.payload.rowId,
-            decoded.payload.startCodePoint,
-            decoded.payload.endCodePoint
-          );
+        if (!page.nextCursor) {
+          backendComplete = page.scanComplete;
+          nextCursor = null;
+          settled = true;
+          break;
         }
-        callTokens += tokens;
-        b.consumedTokens += tokens;
-        records.push(rec);
-        resumeIndex = i + 1;
+        if (Date.now() - callStartMs >= SEARCH_CALL_TIME_BUDGET_MS) {
+          // Out of call time with backend pages remaining: expose the native
+          // backend cursor (skip 0 — this page was fully consumed).
+          nextCursor = page.nextCursor;
+          settled = true;
+          break;
+        }
+        backendCursor = page.nextCursor;
+        pendingBackend = page.nextCursor;
       }
-      // Intra-page remainder (unexamined records, whether withheld by budget
-      // or over the caller's limit) resumes within THIS page — never by
-      // echoing the input cursor (which would replay the page forever) and
-      // never by jumping to the backend's next page (which would drop the
-      // tail). The backend cursor is preserved inside the wrapper, so its
-      // query/revision binding still applies on resume.
-      const hasRemainder = resumeIndex < page.records.length;
-      const nextCursor = hasRemainder
-        ? encodeSearchResumeCursor(backendCursor, resumeIndex)
-        : page.nextCursor;
-      const pageExhausted = page.scanComplete && !hasRemainder;
+      if (!settled) {
+        // Stopped on the backend-page cap exactly on a page boundary with
+        // scan remaining: continue from the last unconsumed backend position
+        // so no window of the archive is ever skipped.
+        nextCursor = pendingBackend;
+      }
+      const scanComplete = backendComplete && !truncatedByBudget;
       const overBudget =
         b.consumedTokens >=
         AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn;
       return {
         records,
+        // Invariant: an empty page with a cursor is NEVER "no match" (FR-02).
         nextCursor,
-        scanComplete: pageExhausted && !truncatedByBudget,
-        indexComplete: page.indexComplete,
+        scanComplete,
+        indexComplete,
         errorCode:
-          records.length === 0 && pageExhausted && !truncatedByBudget
+          records.length === 0 && scanComplete && !truncatedByBudget
             ? "HISTORY_NO_MATCH"
             : truncatedByBudget || overBudget
               ? "MODEL_BUDGET_UNAVAILABLE"

@@ -397,6 +397,14 @@ export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
 export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
 /** Renderer->Main: cancel the active compaction run (§13.1). */
 export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
+/**
+ * Renderer->Main: start (or resume) a bounded compaction run and return
+ * immediately (§13.1 start/status/progress). The run continues in the main
+ * process; the badge follows progress events + status — never one blocking
+ * RPC for the whole batch. Resume is just another start call: fresh claims
+ * resume from persisted checkpoints.
+ */
+export const AI_CHAT_V2_COMPACTION_START = "ai-chat-v2:compaction-start";
 /** Main->renderer compaction run lifecycle/progress broadcast (§13.1). */
 export const AI_CHAT_V2_COMPACTION_PROGRESS = "ai-chat-v2:compaction-progress";
 

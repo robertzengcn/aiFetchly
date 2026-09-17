@@ -53,6 +53,7 @@ import {
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
+  AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_COMPACTION_PROGRESS,
 } from "@/config/channellist";
 
@@ -367,6 +368,10 @@ export async function clearAllChatV2History(): Promise<{
 /**
  * Run a full compact for the selected v2 conversation and return the active
  * compact summary saved by the main process.
+ *
+ * NOTE: this blocks until one batch settles. New UI flows should prefer
+ * {@link startCompaction} (returns immediately; badge follows progress).
+ * Kept for compat and tests.
  */
 export async function compactChatV2Conversation(
   conversationId: string,
@@ -377,6 +382,23 @@ export async function compactChatV2Conversation(
     model,
   });
   return (resp as AIChatCompactSummaryView | null) ?? null;
+}
+
+/**
+ * Start (or resume) a bounded compaction run and return IMMEDIATELY with a
+ * start acknowledgement (design §13.1 start/status/progress). The run
+ * continues in the main process; track it via `getCompactionStatus` and the
+ * `subscribeCompactionProgress` event. Resume is just another start call.
+ */
+export async function startCompaction(
+  conversationId: string,
+  model?: string
+): Promise<{ started: boolean }> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACTION_START, {
+    conversationId,
+    model,
+  });
+  return (resp as { started: boolean } | null) ?? { started: false };
 }
 
 /**

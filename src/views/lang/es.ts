@@ -2927,6 +2927,7 @@ export default {
     compaction_in_progress:
       "Compactación en curso ({packed} secciones empaquetadas).",
     compaction_paused: "Compactación pausada. Se reanudará automáticamente.",
+    compaction_start_failed: "No se pudo iniciar la compactación.",
     compaction_failed: "Error de compactación: {message}",
     compaction_retry: "Reintentar",
     compaction_cancel: "Cancelar compactación",

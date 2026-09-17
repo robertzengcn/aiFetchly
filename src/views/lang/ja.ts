@@ -2857,6 +2857,7 @@ export default {
     idle_detail: "圧縮はアイドル状態です。",
     compaction_in_progress: "圧縮進行中（{packed} セクション圧縮済み）。",
     compaction_paused: "圧縮が一時停止されました。自動的に再開されます。",
+    compaction_start_failed: "圧縮を開始できませんでした。",
     compaction_failed: "圧縮失敗: {message}",
     compaction_retry: "再試行",
     compaction_cancel: "圧縮をキャンセル",

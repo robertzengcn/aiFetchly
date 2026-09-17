@@ -771,7 +771,7 @@ import {
   streamChatV2Message,
   stopChatV2Stream,
   getChatV2PlanState,
-  compactChatV2Conversation,
+  startCompaction,
   subscribeAutoCompacted,
   unsubscribeAutoCompacted,
   answerChatV2Question,
@@ -1625,7 +1625,9 @@ function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
 /**
  * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
  * Updates the status badge for the active conversation; ignored for other
- * conversations (the badge is per-conversation, not global).
+ * conversations (the badge is per-conversation, not global). A `completed`
+ * event also raises the compacted notice — the manual flow no longer waits
+ * on a blocking RPC, so completion is observed here instead.
  */
 function handleCompactionProgress(
   event: ChatV2CompactionProgressEvent
@@ -1636,6 +1638,9 @@ function handleCompactionProgress(
     runId: event.runId,
     generationId: event.generationId,
   };
+  if (event.state === "completed") {
+    compactNotice.value = true;
+  }
 }
 
 /**
@@ -3771,6 +3776,13 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   }
 };
 
+/**
+ * Manual compact entry point (design §13.1 start/status/progress). Starts a
+ * bounded run and returns IMMEDIATELY — the batch continues in the main
+ * process while the badge follows progress events + status, so navigating
+ * away mid-batch loses nothing. Resume/retry is just another start call.
+ * Completion surfaces via `handleCompactionProgress` (notice + badge).
+ */
 const handleCompactConversation = async (): Promise<void> => {
   if (
     !activeConversationId.value ||
@@ -3782,24 +3794,14 @@ const handleCompactConversation = async (): Promise<void> => {
   isCompacting.value = true;
   streamError.value = null;
   try {
-    const summary = await compactChatV2Conversation(
+    const ack = await startCompaction(
       activeConversationId.value,
       resolveModelForRequest()
     );
-    // Only a completed ("active") compact resets the badge baseline and shows
-    // the compacted notice. Paused/joined/cancelled are NOT failures, but the
-    // context did not shrink either — leave the badge alone and let the
-    // compaction status badge (progress events + refresh below) carry state.
-    if (summary && summary.status === "active") {
-      const tokenEstimate =
-        summary.outputTokenEstimate ??
-        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
-      streamingEstimatedTokens.value = tokenEstimate;
-      lastUsage.value = null;
-      if (summary.model) {
-        activeModel.value = summary.model;
-      }
-      compactNotice.value = true;
+    if (!ack.started) {
+      streamError.value =
+        t("aiChatCompaction.compaction_start_failed") ||
+        "Compaction failed to start.";
     }
     void refreshCompactionStatus();
   } catch (err) {
