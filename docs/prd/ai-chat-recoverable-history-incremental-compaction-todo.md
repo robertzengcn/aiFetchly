@@ -8,7 +8,7 @@ Branch: `worktree-ai-chat-compaction`
 
 HEAD: `7cf8956f` (`feat: bounded incremental compaction with recoverable history retrieval`) + uncommitted P0/P1/P2 round (see verification log below)
 
-Status: **P0 and P1 complete and tested.** P2 deterministic qualification is substantially covered (50/50 recall storage, 10k scaled perf fixture, AC regression tests); the remaining P2 items need a live provider / reference machine / Electron run and are listed explicitly.
+Status: **P0/P1 from the implementation round are checked in below, but a later re-audit found remaining errors** (see “Errors remaining after `b3a2993c`”). P2 deterministic qualification is substantially covered (50/50 recall storage is **flaky in combined runs**); remaining P2 items need a live provider / reference machine / Electron run.
 
 References:
 
@@ -38,6 +38,40 @@ Verification log for this round (2026-09-17, worktree):
 - NOT run here: Electron E2E (`yarn test:e2e`), 100k reference-machine p95 measurement, live-model recall scoring
 
 ---
+
+## Errors remaining after `b3a2993c` (not covered by the [x] items below)
+
+The P0/P1 checkboxes in this file were closed in the implementation round.
+A later re-audit found **these errors still in the worktree**. They are also
+tracked with full reason/evidence in
+[ai-chat-recoverable-history-incremental-compaction-remaining-todo.md](ai-chat-recoverable-history-incremental-compaction-remaining-todo.md).
+Do not treat this file's `[x]` P0/P1 list as “no errors left”.
+
+- [ ] **Error: AC-01 storage recall is flaky** — combined vitest failed
+  `AIChatHistoricalRecall` `es-02` (`marker not found: RECALL-ES-NUM-3.14159`);
+  isolated file 50/50. Cause: 100 ms `scanLiteral` first page + no
+  `nextCursor` follow + `SqliteDb` process singleton contention.
+- [ ] **Error: complete turns silently truncated at 64 rows** —
+  `readTurnRows` / `readRowsAfter` ignore `nextCursor`; cost is computed on
+  the truncated page (FR-05).
+- [ ] **Error: `readRowsAfter` wastes the inclusive anchor slot** — live tail
+  capped at 63 rows in a 64-row page.
+- [ ] **Error: SOURCE_CHANGED refreshed excerpt reuses stale offsets with
+  `exact: true`** — stale id is not quoted to the model, but the confirmation
+  preview can be the wrong span.
+- [ ] **Error: oversized-turn receipts injected as `role: "system"`** —
+  `oversizedTurnReceiptRow` uses `as AIChatMessageEntity` (AC-22).
+- [ ] **Error: SqliteDb singleton races the 100 ms search budget** — recall
+  flake only appears in combined archive test runs.
+- [ ] **Error: retrieval `search()` consumes one fragment page per call** —
+  design §7.1.5 allows several pages or a cursor; callers that do not loop
+  miss later hits (FR-02).
+- [ ] **Error: manual compact IPC still `await`s the whole batch** — paused
+  is no longer mapped to failed, but the RPC is still blocking (design §13.1).
+
+Also still incomplete (not closed by this file's P2 `[x]` storage half):
+session-memory small deltas still use `completeChat` (not the section packer);
+feature flags default off; live/E2E/100k P2 gates.
 
 ## P0 — Defects in committed code (all fixed this round)
 

@@ -11,8 +11,8 @@ HEAD: `b3a2993c` (`feat: close P0/P1 compaction defects and qualify P2 acceptanc
 Purpose: this is a **second** TODO. It does **not** replace
 [`ai-chat-recoverable-history-incremental-compaction-todo.md`](ai-chat-recoverable-history-incremental-compaction-todo.md).
 That file recorded the P0/P1 round and marked those items complete. This file lists
-what is **still incomplete or still wrong** after an independent re-audit of HEAD
-`b3a2993c` against the PRD and technical design.
+what is **still incomplete** and the **errors still in the git worktree** after an independent re-audit of HEAD
+`b3a2993c` against the PRD and technical design. Errors are listed first.
 
 References:
 
@@ -32,6 +32,136 @@ Verification for this audit (2026-09-17, worktree HEAD `b3a2993c`):
 - Electron E2E (`yarn test:e2e`), 100k p95, and live-model recall were **not** run.
 
 ---
+
+
+## Errors found in the worktree (HEAD `b3a2993c`)
+
+These are **bugs / incorrect behavior**, not missing ACs. They were observed in
+the post-P0/P1 re-audit. Close each item only with a failing-then-passing test
+on the listed behavior. Do not mark them done because a related P0/P1 checkbox
+in the previous TODO is `[x]`.
+
+- [ ] **Error: AC-01 storage recall is flaky under load (`es-02`).**
+  - What failed: combined vitest run `Test Files 1 failed | 8 passed`,
+    `Tests 1 failed | 157 passed`. Case
+    `AIChatHistoricalRecall > es-02: marker not found: RECALL-ES-NUM-3.14159`.
+    Isolated re-run of the same file: **50/50 passed**.
+  - Reason: `scanLiteral` stops after **100 ms** (`searchMaxMsPerPage`) or 500
+    fragments and returns a continuation cursor. The recall test searches once
+    with `limit: 5` and asserts `hit.records.length > 0` on that **first page**.
+    It never follows `nextCursor`. `SqliteDb.getInstance(tmpDir)` is a process
+    singleton; neighbor archive tests steal wall-clock from the 100 ms budget,
+    so a real later hit looks like “marker not found”.
+  - Evidence: `test/vitest/main/AIChatHistoricalRecall.test.ts` (~line 109);
+    `src/service/AIChatRecoverableDefaults.ts` `searchMaxMsPerPage: 100`;
+    `src/model/AIChatArchiveSearchFragment.model.ts` `scanLiteral`;
+    `src/service/AIChatHistoryRetrievalService.ts` `search()` (one `searchPage`).
+  - Fix: follow `nextCursor` until `scanComplete` or a hit; isolate/reset
+    SqliteDb per suite; do not map empty first page + cursor to no-match.
+  - Done when: combined recall + other archive suites stay green on repeated
+    runs; a marker past the first 100 ms page is found by search→read.
+
+- [ ] **Error: complete turns are silently truncated at 64 rows.**
+  - What is wrong: `readTurnRows` / `readRowsAfter` call `readPageForward`
+    with `maxRows: 64` and **drop `nextCursor`**. Tool-heavy turns with more
+    than 64 rows are treated as complete. Token cost is computed on the
+    truncated page, so an oversized turn can look like it fits.
+  - Reason: FR-05 requires the whole retained turn, or a visible receipt that
+    raw content is not fully loaded. Silent tail drop is a correctness error,
+    not an open AC.
+  - Evidence: `src/modules/AIChatArchiveModule.ts` `readTurnRows` /
+    `readRowsAfter`; `src/service/AIChatContextAssembler.ts` `loadTurnBackedRows`.
+  - Fix: page until the turn end bound / decoded-text allowance, or emit the
+    receipt path. Never cost a truncated page as a complete turn.
+  - Done when: a >64-row fixture turn is fully retained or replaced by a
+    receipt; a test fails if the assembler drops the tail.
+
+- [ ] **Error: `readRowsAfter` wastes a page slot on the inclusive anchor.**
+  - What is wrong: `readPageForward` start bound is inclusive. `readRowsAfter`
+    then filters out the last completed row. Live tail is capped at **63**
+    rows in that page; the first slot is always thrown away.
+  - Reason: live/in-progress tail after the last complete turn must be bounded
+    by the documented row cap, not cap-minus-one.
+  - Evidence: `src/modules/AIChatArchiveModule.ts` `readRowsAfter` (“Start
+    bound is inclusive; drop the anchor row…”).
+  - Fix: keyset strictly after `(afterTimestampMs, afterRowId)`, or request
+    65 then filter, or follow `nextCursor` after the filter.
+  - Done when: a 64-row live tail is fully returned (or visibly continued).
+
+- [ ] **Error: SOURCE_CHANGED confirmation preview reuses stale offsets as exact.**
+  - What is wrong: stale source ids are correctly **not** quoted into the
+    model, but `refreshed[].excerpt` is still sliced with the **old**
+    `[start, end)` on the **new** text, with `exact: true`. If the message
+    changed, the UI chip can preview the wrong span and claim it is exact.
+  - Reason: design §4.2 / AC-18 require a refreshed reference for explicit
+    re-selection, not reuse of stale intervals.
+  - Evidence: `src/modules/AIChatArchiveModule.ts` `resolveSelections`
+    (`sliceByCodePoints` with payload offsets, then `toExcerptWithSpan(..., true)`
+    **before** the revision check).
+  - Fix: on revision mismatch, return whole-message/field excerpt with
+    `exact: false`, or identity + “source changed — reselect”. Never set
+    `exact: true` for a stale interval.
+  - Done when: tests assert `exact !== true` (or span reset) on `refreshed[]`
+    after an edit.
+
+- [ ] **Error: oversized-turn receipts are injected as privileged system messages.**
+  - What is wrong: `oversizedTurnReceiptRow` builds a fake
+    `AIChatMessageEntity` with `role: "system"` via `as AIChatMessageEntity`.
+    That can be replayed as a system instruction instead of labeled historical
+    evidence.
+  - Reason: AC-22 — historical content is evidence, not instructions. A
+    receipt that looks like `system` can outrank the live user turn.
+  - Evidence: `src/service/AIChatContextAssembler.ts` `oversizedTurnReceiptRow`.
+  - Fix: emit a labeled history/receipt block (same framing as selected
+    context), not `role: "system"`. Keep message ids for
+    `conversation_history_read`.
+  - Done when: assembler tests show the receipt is not a system-role
+    instruction.
+
+- [ ] **Error: SqliteDb process singleton races the 100 ms search budget.**
+  - What is wrong: recall and other archive tests share
+    `SqliteDb.getInstance(...)`. Combined runs interfere; that is why `es-02`
+    failed only in the multi-file run. This is a test-harness error that
+    produces a false “no match” and hides real misses.
+  - Reason: design §5.6 page budget is per scan; a stolen clock makes the
+    first page empty even when the index contains the marker.
+  - Evidence: `test/vitest/main/AIChatHistoricalRecall.test.ts` and
+    `AIChatArchivePerf.test.ts` both call `SqliteDb.getInstance(tmpDir)`.
+  - Fix: unique DB path / reset singleton per file; do not keep one
+    connection across unrelated suites.
+  - Done when: combined archive vitest is stable without raising the 100 ms
+    budget to paper over contention.
+
+- [ ] **Error: retrieval search consumes only one 100 ms fragment page per call.**
+  - What is wrong: `AIChatHistoryRetrievalService.search()` calls
+    `archive.searchPage` **once**. Design §7.1.5 allows several backend pages
+    within the call’s time/output budget, otherwise a cursor. Tools/UI that
+    do not loop `nextCursor` miss matches later in the archive (same root
+    cause as the recall flake for assistant/tool callers).
+  - Reason: FR-02 — retrieval may consume several backend pages; empty first
+    page is not “not in history”.
+  - Evidence: `src/service/AIChatHistoryRetrievalService.ts` `search()`
+    (single `searchPage`, then intra-page resume or `page.nextCursor`).
+  - Fix: consume additional backend pages while time/token budget remains,
+    or document that every caller (tools, drawer, tests) must follow
+    `nextCursor` and enforce that in tests.
+  - Done when: a hit on page 2 of a 100 ms scan is returned in one tool call
+    **or** every caller is proven to follow the cursor.
+
+- [ ] **Error: manual compact IPC still blocks on the whole batch.**
+  - What is wrong: `handleCompactConversation` emits `running` and no longer
+    maps pause to `failed`, but it still `await`s `runFullCompact()` for up
+    to three sections + model calls on one IPC invoke. The renderer still
+    waits on a single RPC.
+  - Reason: design §13.1 is start / status / progress, not one indefinite
+    handler. Long conversations freeze the compact UI until the batch ends.
+  - Evidence: `src/main-process/communication/ai-chat-v2-ipc.ts`
+    `handleCompactConversation` (~1406).
+  - Fix: start the coordinator, return `runId`, drive the badge from
+    progress/status; resume is a separate call.
+  - Done when: compact IPC returns while a run is `running`.
+
+The P0 items below are the same defects written as implementation tasks (reason / evidence / work / done-when). Prefer closing the **Errors** checkboxes; the P0 list is the engineering breakdown of those errors.
 
 ## P0 — Defects still in committed code
 
