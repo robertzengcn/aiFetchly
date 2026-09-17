@@ -519,6 +519,28 @@ function realFailDeps(): FailDeps {
 }
 
 /**
+ * Shutdown-time task reconciliation (PRD FR-06 / AC-09): map every in-flight
+ * extraction row to its existing failed state with an interruption reason so
+ * interrupted work is never silently marked complete or blindly retried —
+ * retry stays a user-initiated action. Called by the lifecycle participant
+ * BEFORE the worker is asked to stop (results that complete before the
+ * worker exits are already terminal and untouched).
+ */
+export async function reconcileInterruptedExtractions(
+  reason: string
+): Promise<number[]> {
+  try {
+    return await failInFlightExtractions(realFailDeps(), reason);
+  } catch (err) {
+    log.error(
+      "[contact-extraction] interrupted-task reconciliation failed:",
+      err instanceof Error ? err.message : String(err)
+    );
+    return [];
+  }
+}
+
+/**
  * Register IPC handlers for contact extraction
  */
 export function registerContactExtractionHandlers(): void {

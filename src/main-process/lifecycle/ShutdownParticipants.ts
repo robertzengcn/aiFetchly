@@ -118,16 +118,27 @@ export function createShutdownParticipants(
     id: "contact-extraction",
     freeze: () => undefined,
     stop: async (context) => {
-      const { cleanupContactExtractionWorker } = await import(
+      const contactIpc = await import(
         "@/main-process/communication/contactExtraction-ipc"
       );
-      // Send the termination signal and wait for OBSERVED exit within a
+      // FR-06/AC-09 first: map in-flight rows to the existing failed state
+      // (with interruption reason) BEFORE stopping the worker, so completed
+      // results stay and interrupted work is never blindly retried.
+      const interrupted = await contactIpc.reconcileInterruptedExtractions(
+        "Application exited while extraction was in progress"
+      );
+      if (interrupted.length > 0) {
+        log.info(
+          `[contact-extraction] marked ${interrupted.length} in-flight job(s) interrupted`
+        );
+      }
+      // Send the §7 shutdown protocol and wait for OBSERVED exit within a
       // bounded slice; survivors are force-verified in the force phase.
       const budget = Math.min(
         CONTACT_WORKER_OBSERVE_MS,
         Math.max(0, context.remainingMs())
       );
-      await cleanupContactExtractionWorker(budget);
+      await contactIpc.cleanupContactExtractionWorker(budget);
     },
     finalize: async () => undefined,
   };

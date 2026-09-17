@@ -23,6 +23,7 @@ const wsCleanup = vi.fn(() => undefined);
 const watcherShutdown = vi.fn(async () => undefined);
 const ypTerminateAll = vi.fn(async () => undefined);
 const contactCleanup = vi.fn(async () => true);
+const reconcileExtractions = vi.fn(async (_reason: string) => []);
 const tokenRefreshStop = vi.fn(() => undefined);
 const settingsGetter = vi.fn(async () => ({ clearCacheOnExit: false }));
 
@@ -70,6 +71,8 @@ vi.mock("@/modules/YellowPagesProcessManager", () => ({
 }));
 vi.mock("@/main-process/communication/contactExtraction-ipc", () => ({
   cleanupContactExtractionWorker: contactCleanup,
+  reconcileInterruptedExtractions: (reason: string) =>
+    reconcileExtractions(reason),
 }));
 vi.mock("@/modules/tokenRefresh", () => ({
   TokenRefreshService: { stopAutoRefresh: tokenRefreshStop },
@@ -126,10 +129,15 @@ describe("createShutdownParticipants — owner mapping", () => {
     expect(settingsGetter).toHaveBeenCalled();
   });
 
-  it("contact-extraction waits for observed exit with a bounded budget", async () => {
+  it("contact-extraction reconciles interrupted rows before the worker stops", async () => {
     const participants = createShutdownParticipants(makeDeps());
     const contact = participants.find((p) => p.id === "contact-extraction")!;
     await contact.stop(contextOf(10_000));
+    expect(reconcileExtractions).toHaveBeenCalledTimes(1);
+    // Reconciliation runs BEFORE the worker shutdown (FR-06 ordering).
+    expect(reconcileExtractions.mock.invocationCallOrder[0]).toBeLessThan(
+      contactCleanup.mock.invocationCallOrder[0]
+    );
     expect(contactCleanup).toHaveBeenCalledWith(2_000);
   });
 
