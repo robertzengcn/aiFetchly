@@ -161,6 +161,11 @@ function main() {
     // python, make, etc.) instead of only the direct child.
     detached: process.platform !== "win32",
     env: process.env,
+    // On Windows forgeBin resolves to a .cmd shim; Node (>=18.20, the
+    // CVE-2024-27980 fix) throws EINVAL when spawning .cmd/.bat without a
+    // shell. Quote-safe because args contain no shell metacharacters
+    // (fixed package targets only).
+    shell: process.platform === "win32",
   });
 
   let sawCompletionMarker = false;

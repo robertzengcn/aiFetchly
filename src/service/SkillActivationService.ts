@@ -256,10 +256,16 @@ export class SkillActivationService {
       return { ok: false, message: "Ownership metadata unreadable." };
     }
     // Final guard: the resolved real path must be inside the skill root.
+    // Compare RESOLVED against RESOLVED: on macOS the configured skills
+    // root commonly contains symlink components (/var -> /private/var,
+    // /tmp -> /private/tmp), and comparing a realpath'd activation against
+    // the unresolved root rejected every legitimate uninstall (NL-7
+    // macOS managed-copy evidence caught this).
     const real = fs.realpathSync(activationPath);
-    const rootWithSep = this.skillRoot.endsWith(path.sep)
-      ? this.skillRoot
-      : this.skillRoot + path.sep;
+    const realRoot = fs.realpathSync(this.skillRoot);
+    const rootWithSep = realRoot.endsWith(path.sep)
+      ? realRoot
+      : realRoot + path.sep;
     if (!real.startsWith(rootWithSep)) {
       return {
         ok: false,

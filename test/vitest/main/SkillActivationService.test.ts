@@ -101,6 +101,33 @@ describe("SkillActivationService — managed copy", () => {
 });
 
 describe("SkillActivationService — uninstall safety (NFR-05)", () => {
+  it("removes an owned managed copy whose skills root contains a symlink component (macOS /var)", async () => {
+    // macOS default roots resolve through /var -> /private/var (and
+    // /tmp -> /private/tmp). The containment guard must compare resolved
+    // against resolved, or every legitimate uninstall is refused (NL-7).
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), "skill-real-"));
+    const linkedRoot = path.join(os.tmpdir(), `skill-link-${Date.now()}`);
+    fs.symlinkSync(realRoot, linkedRoot, "dir");
+    try {
+      const service = new SkillActivationService(linkedRoot);
+      const activated = await service.activate({
+        sourceRoot: writeSource(),
+        skillName: "video-use",
+        mode: "managed-copy",
+        contentHash: "hash",
+        installationId: "inst-symlink",
+      });
+      expect(activated.ok).toBe(true);
+      if (!activated.ok) return;
+      const removed = service.uninstall(activated.activationPath);
+      expect(removed.ok).toBe(true);
+      expect(fs.existsSync(activated.activationPath)).toBe(false);
+    } finally {
+      fs.rmSync(realRoot, { recursive: true, force: true });
+      fs.rmSync(linkedRoot, { force: true });
+    }
+  });
+
   it("removes an owned managed copy", async () => {
     const src = writeSource();
     const service = new SkillActivationService(skillRoot);
