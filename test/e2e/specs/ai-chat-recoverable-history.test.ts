@@ -222,11 +222,118 @@ async function firstConversationId(app: LaunchedApp): Promise<string | null> {
   return convs[0]?.conversationId ?? null;
 }
 
+/**
+ * Open the history drawer on its Search tab. The drawer boots on Browse;
+ * search controls only render after switching tabs.
+ */
+async function openHistorySearchTab(app: LaunchedApp): Promise<void> {
+  await app.mainWindow.getByTestId("ai-history-drawer-toggle").click();
+  await expect(app.mainWindow.getByTestId("ai-history-drawer")).toBeVisible({
+    timeout: 15_000,
+  });
+  await app.mainWindow.getByTestId("ai-history-tab-search").click();
+  await expect(
+    app.mainWindow.getByTestId("ai-history-search-input")
+  ).toBeVisible({ timeout: 15_000 });
+}
+
+/**
+ * Ensure a published generation via STATUS polling and return the terminal
+ * snapshot. Design §13.1: nobody awaits a whole batch.
+ *
+ * Publication may come from the post-turn auto trigger (which fires after
+ * every turn through the same bounded coordinator) or from the explicit
+ * manual START below — both prove the product path, so START is always
+ * issued too (idempotent: it joins or resumes) without assuming which one
+ * publishes first.
+ *
+ * Terminal detection is generation-aware, not state-name-aware: a completed
+ * run leaves no active run row, so STATUS reports `queued` WITH a
+ * generationId — which still means compacted.
+ */
+async function startAndAwaitCompacted(
+  app: LaunchedApp & { mainStdout?: () => string },
+  conversationId: string
+): Promise<{ state?: string; generationId?: string; runId?: string }> {
+  // Collect progress broadcasts in-page so a silent run failure is
+  // diagnosable (STATUS hides terminal runs by design).
+  await app.mainWindow.evaluate(() => {
+    const w = window as unknown as {
+      api: { receive: (ch: string, fn: (e: unknown) => void) => void };
+      __progressEvents: unknown[];
+    };
+    w.__progressEvents = [];
+    w.api.receive("ai-chat-v2:compaction-progress", (e: unknown) => {
+      w.__progressEvents.push(e);
+    });
+  });
+  const start = await invokeChannel(app, "ai-chat-v2:compaction-start", {
+    conversationId,
+  });
+  expect(start.status).toBe(true);
+  let last: { state?: string; generationId?: string; runId?: string } = {};
+  const seen: string[] = [];
+  const deadline = Date.now() + 120_000;
+  let terminal: string = "waiting";
+  while (Date.now() < deadline) {
+    const s = await invokeChannel(app, "ai-chat-v2:compaction-status", {
+      conversationId,
+    });
+    last = (s.data ?? {}) as typeof last;
+    seen.push(
+      `${last.state ?? "?"}${last.runId ? `/${String(last.runId).slice(0, 8)}` : ""}${last.generationId ? "+gen" : ""}`
+    );
+    if (last.generationId) {
+      terminal = "completed";
+      break;
+    }
+    if (last.state === "failed" || last.state === "cancelled") {
+      terminal = last.state;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[ac01] status trajectory: ${seen.join(" → ")}`);
+  const progressEvents = await app.mainWindow
+    .evaluate(() => {
+      const w = window as unknown as { __progressEvents?: unknown[] };
+      return w.__progressEvents ?? [];
+    })
+    .catch(() => []);
+  // eslint-disable-next-line no-console
+  console.log(`[ac01] progress events: ${JSON.stringify(progressEvents)}`);
+  if (terminal === "waiting") {
+    // Diagnostic: the run never surfaced — dump main-process compaction logs.
+    try {
+      const out: string =
+        typeof (app as unknown as { mainStdout?: () => string }).mainStdout ===
+        "function"
+          ? (app as unknown as { mainStdout: () => string }).mainStdout()
+          : "";
+      const hits = out
+        .split("\n")
+        .filter((l) => /compact|COMPACTION|Error|error|reject|fail/i.test(l))
+        .slice(-40);
+      // eslint-disable-next-line no-console
+      console.log(`[ac01] main log excerpts:\n${hits.join("\n")}`);
+    } catch {
+      // Diagnostics must never mask the real assertion below.
+    }
+  }
+  expect(
+    `terminal=${terminal} trajectory=[${seen.join(" ")}]`,
+    "no published generation within 120s (see [ac01] logs above)"
+  ).not.toContain("terminal=waiting");
+  return last;
+}
+
 // ---------------------------------------------------------------------------
 // AC-01: compact → restart → exact recovery from the archive.
 // ---------------------------------------------------------------------------
 
-test("AC-01: archived wording survives a compaction and a controlled restart", async (_fixtures: unknown, testInfo) => {
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-01: archived wording survives a compaction and a controlled restart", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
@@ -252,15 +359,20 @@ test("AC-01: archived wording survives a compaction and a controlled restart", a
     });
     try {
       await openChat(app1);
-      // Two turns: the marker lands in turn 1 (below the packer's high-water
-      // mark, which is the end of the LAST complete turn), so compaction can
-      // pack it; turn 2 pushes the high-water past the marker.
+      // Five turns: FR-05 retention keeps the newest complete turns (+ live
+      // tail) verbatim, so the marker must land several turns back to be
+      // eligible for incremental packing. With only two turns the retained
+      // suffix covers everything and compaction is a correct no-op.
       await sendAndWait(app1, marker);
-      await sendAndWait(app1, `ac01-followup-${Date.now()}`);
+      await sendAndWait(app1, `ac01-followup-1-${Date.now()}`);
+      await sendAndWait(app1, `ac01-followup-2-${Date.now()}`);
+      await sendAndWait(app1, `ac01-followup-3-${Date.now()}`);
+      await sendAndWait(app1, `ac01-followup-4-${Date.now()}`);
 
-      // Compact via IPC (the UI compact button has no stable testid; it only
-      // appears at ≥80% context fill). The durable coordinator packs + validates
-      // the first section and publishes a generation.
+      // Compact via the non-blocking START channel (design §13.1): returns
+      // immediately; the run settles in the main process while STATUS tracks
+      // it. The durable coordinator packs + validates the first section and
+      // publishes a generation.
       const conversationId = await firstConversationId(app1);
       expect(conversationId).toBeTruthy();
 
@@ -283,16 +395,13 @@ test("AC-01: archived wording survives a compaction and a controlled restart", a
         )
         .toBe(true);
 
-      const compactResp = await invokeChannel(
-        app1,
-        "ai-chat-v2:compact-conversation",
-        { conversationId }
-      );
-      expect(compactResp.status).toBe(true);
-      const summary = compactResp.data as {
-        sourceMessageCount?: number;
-      } | null;
-      expect(summary?.sourceMessageCount ?? 0).toBeGreaterThanOrEqual(1);
+      const terminal = await startAndAwaitCompacted(app1, conversationId!);
+      // Five tiny turns compact in one batch: a generation is published.
+      // (The post-completion STATUS snapshot reads `queued` + generationId
+      // because no run is active anymore — publication, not the state label,
+      // is the proof. A pause here would still be resumable, never a
+      // failure.)
+      expect(terminal.generationId).toBeTruthy();
       await closeApp(app1);
     } catch (err) {
       await closeApp(app1);
@@ -324,6 +433,15 @@ test("AC-01: archived wording survives a compaction and a controlled restart", a
       expect(records.length).toBeGreaterThanOrEqual(1);
       // Exact recovery: the original marker wording is present in the record.
       expect(JSON.stringify(records)).toContain(marker);
+      // The published generation survived the restart alongside the
+      // retrievable originals (summaries are navigation aids, not storage).
+      const status2 = await invokeChannel(app2, "ai-chat-v2:compaction-status", {
+        conversationId,
+      });
+      expect(status2.status).toBe(true);
+      expect(
+        (status2.data as { generationId?: string } | null)?.generationId
+      ).toBeTruthy();
       await closeApp(app2);
     } catch (err) {
       await closeApp(app2);
@@ -339,7 +457,8 @@ test("AC-01: archived wording survives a compaction and a controlled restart", a
 // AC-17: browse without selection → model context does not grow.
 // ---------------------------------------------------------------------------
 
-test("AC-17: browsing older history without selecting does not grow the model context", async (_fixtures: unknown, testInfo) => {
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-17: browsing older history without selecting does not grow the model context", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
@@ -367,11 +486,9 @@ test("AC-17: browsing older history without selecting does not grow the model co
       await sendAndWait(app, `ac17-first-${Date.now()}`);
       await sendAndWait(app, `ac17-second-${Date.now()}`);
 
-      // Open the history drawer and search (browse) WITHOUT selecting anything.
-      await app.mainWindow.getByTestId("ai-history-drawer-toggle").click();
-      await expect(app.mainWindow.getByTestId("ai-history-drawer")).toBeVisible(
-        { timeout: 15_000 }
-      );
+      // Open the history drawer on the Search tab and search (browse)
+      // WITHOUT selecting anything.
+      await openHistorySearchTab(app);
       await app.mainWindow
         .getByTestId("ai-history-search-input")
         .locator("input")
@@ -419,7 +536,8 @@ test("AC-17: browsing older history without selecting does not grow the model co
 // and the passage text never reaches the redacted request log.
 // ---------------------------------------------------------------------------
 
-test("AC-18: a selected passage is persisted as references only and clears its chip on acceptance", async (_fixtures: unknown, testInfo) => {
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-18: a selected passage is persisted as references only and clears its chip on acceptance", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
@@ -447,11 +565,9 @@ test("AC-18: a selected passage is persisted as references only and clears its c
       // Complete a turn whose assistant reply carries the unique passage text.
       await sendAndWait(app, `ac18-set: ${passageMarker}`);
 
-      // Open the history drawer, search for the passage, and select it.
-      await app.mainWindow.getByTestId("ai-history-drawer-toggle").click();
-      await expect(app.mainWindow.getByTestId("ai-history-drawer")).toBeVisible(
-        { timeout: 15_000 }
-      );
+      // Open the history drawer on the Search tab, search for the passage,
+      // and select it.
+      await openHistorySearchTab(app);
       await app.mainWindow
         .getByTestId("ai-history-search-input")
         .locator("input")
@@ -546,7 +662,8 @@ test("AC-18: a selected passage is persisted as references only and clears its c
 // unauthorized AI call occurs.
 // ---------------------------------------------------------------------------
 
-test("AC-20: history remains readable with AI disabled and no provider call occurs", async (_fixtures: unknown, testInfo) => {
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-20: history remains readable with AI disabled and no provider call occurs", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
@@ -639,7 +756,8 @@ test("AC-20: history remains readable with AI disabled and no provider call occu
 // tombstoned shapes across search / read / resolve-selections.
 // ---------------------------------------------------------------------------
 
-test("§17.2 deletion: cleared conversation yields tombstoned history shapes", async (_fixtures: unknown, testInfo) => {
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("§17.2 deletion: cleared conversation yields tombstoned history shapes", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   const root = createTemporaryRoot({
@@ -728,6 +846,101 @@ test("§17.2 deletion: cleared conversation yields tombstoned history shapes", a
       expect(resolveBrowse.status).toBe(true);
       expect(resolveBrowse.result?.resolved ?? []).toHaveLength(0);
       expect(resolveBrowse.errorCode).toBe("HISTORY_SCOPE_INVALID");
+
+      await closeApp(app);
+    } catch (err) {
+      await closeApp(app);
+      throw err;
+    }
+  } finally {
+    await fakeAi.stop();
+    root.remove();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AC-12: forged cross-conversation ids fail closed in the running app.
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+test("AC-12: source ids from another conversation resolve to nothing without leaking", async ({}, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    await fakeAi.setScenario("stream-text");
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+      tokenOverrides: RECOVERABLE_FLAGS_ON,
+    });
+
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      // Conversation A holds a uniquely marked turn.
+      const markerA = `ac12-secret-${Date.now()}`;
+      await sendAndWait(app, markerA);
+      const convA = await firstConversationId(app);
+      expect(convA).toBeTruthy();
+
+      // Conversation B: brand-new chat + its own turn.
+      await app.mainWindow.getByTestId("new-conversation").click();
+      await sendAndWait(app, `ac12-other-${Date.now()}`);
+      const convB = await firstConversationId(app);
+      expect(convB).toBeTruthy();
+      expect(convB).not.toBe(convA);
+
+      // A real opaque source id out of conversation A...
+      const searchA = await invokeBrowse<{
+        records?: ReadonlyArray<{ sourceId?: string; text?: string }>;
+      }>(app, "ai-chat-v2:history-search", {
+        conversationId: convA,
+        query: markerA,
+        limit: 5,
+      });
+      expect(searchA.status).toBe(true);
+      const sourceIdA = searchA.result?.records?.[0]?.sourceId;
+      expect(sourceIdA).toBeTruthy();
+
+      // ...resolved AGAINST conversation B must fail closed: no records, a
+      // scope error, and — critically — none of A's content anywhere. The
+      // epoch binding rejects first (HISTORY_SCOPE_INVALID); a forged id
+      // carrying B's epoch would fall through to the conversation-scoped row
+      // read and fail as SOURCE_UNAVAILABLE instead (unit-covered). Either
+      // way nothing leaks.
+      const readB = await invokeBrowse<{
+        records?: ReadonlyArray<unknown>;
+      }>(app, "ai-chat-v2:history-read", {
+        conversationId: convB,
+        args: { source_id: sourceIdA },
+      });
+      expect(readB.status).toBe(true);
+      expect(readB.result?.records ?? []).toHaveLength(0);
+      expect(readB.errorCode).toBe("HISTORY_SCOPE_INVALID");
+      expect(JSON.stringify(readB)).not.toContain(markerA);
+
+      const resolveB = await invokeBrowse<{
+        resolved?: ReadonlyArray<unknown>;
+        rejected?: ReadonlyArray<string>;
+      }>(app, "ai-chat-v2:history-resolve-selections", {
+        conversationId: convB,
+        sourceIds: [sourceIdA ?? "stale"],
+      });
+      expect(resolveB.status).toBe(true);
+      expect(resolveB.result?.resolved ?? []).toHaveLength(0);
+      expect(resolveB.result?.rejected ?? []).toContain(sourceIdA);
+      expect(resolveB.errorCode).toBe("HISTORY_SCOPE_INVALID");
+      expect(JSON.stringify(resolveB)).not.toContain(markerA);
 
       await closeApp(app);
     } catch (err) {

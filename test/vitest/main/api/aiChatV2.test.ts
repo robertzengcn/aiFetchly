@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_COMPACTION_START,
   AI_CHAT_V2_STREAM,
   AI_CHAT_V2_STREAM_CHUNK,
@@ -9,7 +8,6 @@ import {
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
-  compactChatV2Conversation,
   startCompaction,
   streamChatV2Message,
 } from "@/views/api/aiChatV2";
@@ -277,31 +275,6 @@ describe("aiChatV2 renderer API", () => {
     expect(settled).toBe(true);
     expect(onComplete).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
-  });
-
-  it("invokes the compact conversation channel with the active conversation id", async () => {
-    const compactSummary = {
-      compactId: "compact-1",
-      conversationId: "v2-1",
-      summary: "# Compact Summary",
-      throughMessageId: "m-3",
-      throughTimestamp: "2026-06-19T00:00:00.000Z",
-      sourceMessageCount: 3,
-      status: "active",
-    };
-    invoke.mockResolvedValueOnce({
-      status: true,
-      msg: "ok",
-      data: compactSummary,
-    });
-
-    const result = await compactChatV2Conversation("v2-1");
-
-    expect(invoke).toHaveBeenCalledWith(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
-      JSON.stringify({ conversationId: "v2-1" })
-    );
-    expect(result).toEqual(compactSummary);
   });
 
   it("invokes the non-blocking compaction start channel (§13.1)", async () => {

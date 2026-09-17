@@ -26,6 +26,7 @@ import {
 } from "@/service/ConversationToolHistoryService";
 import path from "node:path";
 import os from "node:os";
+import { app as electronApp } from "electron";
 import type {
   OpenAIChatMessage,
   OpenAIMessageRole,
@@ -618,16 +619,23 @@ export class AIChatContextAssembler {
     // historical evidence (same framing as selected context: evidence, never
     // instructions) — never as privileged system messages, and never as
     // fabricated user/assistant transcript rows (FR-05, AC-22). The current
-    // user content still appears exactly once, in one message.
+    // user content still appears exactly once, in one message. An image-only
+    // turn (no text part) gains a text part for the receipt — otherwise the
+    // omission would be silent (FR-05).
     const receiptBlock = buildTurnReceiptBlock(retained.receipts);
     if (input.currentUserContentParts) {
+      const parts = input.currentUserContentParts.map((part) =>
+        part.type === "text" && receiptBlock
+          ? { ...part, text: `${part.text}\n\n${receiptBlock}` }
+          : part
+      );
       messages.push({
         role: "user",
-        content: input.currentUserContentParts.map((part) =>
-          part.type === "text" && receiptBlock
-            ? { ...part, text: `${part.text}\n\n${receiptBlock}` }
-            : part
-        ),
+        content:
+          receiptBlock &&
+          !parts.some((part) => part.type === "text")
+            ? [{ type: "text", text: receiptBlock } as const, ...parts]
+            : parts,
       });
     } else {
       messages.push({
@@ -824,11 +832,14 @@ export class AIChatContextAssembler {
     const release = os.release();
     const arch = process.arch;
 
+    // Static Electron import (no `await import()` on this path — packaging /
+    // tree-shaking rule). Guarded for non-Electron runtimes (test runner).
     let appVersion = "unknown";
     try {
-      const { app } = await import("electron");
-      const fn = (app as unknown as { getVersion?: () => string }).getVersion;
-      appVersion = typeof fn === "function" ? fn.call(app) : "unknown";
+      const fn = (
+        electronApp as unknown as { getVersion?: () => string }
+      ).getVersion;
+      appVersion = typeof fn === "function" ? fn.call(electronApp) : "unknown";
     } catch {
       // Not running inside Electron (e.g. test runner) — leave as "unknown".
     }

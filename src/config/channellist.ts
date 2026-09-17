@@ -345,8 +345,6 @@ export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
 export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
   "ai-chat-v2:request-plan-changes";
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
-export const AI_CHAT_V2_COMPACT_CONVERSATION =
-  "ai-chat-v2:compact-conversation";
 export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =

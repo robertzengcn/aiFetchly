@@ -122,7 +122,7 @@
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
           "
-          @click="handleCompactConversation"
+          @click="handleCompactStart"
           :title="
             t('aiChatV2.compact_conversation') || 'Compact conversation'
           "
@@ -1702,7 +1702,7 @@ async function handleCompactionRetry(): Promise<void> {
   if (!activeConversationId.value || compactionBusy.value) return;
   compactionBusy.value = true;
   try {
-    await handleCompactConversation();
+    await handleCompactStart();
   } finally {
     compactionBusy.value = false;
     void refreshCompactionStatus();
@@ -3783,7 +3783,7 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
  * away mid-batch loses nothing. Resume/retry is just another start call.
  * Completion surfaces via `handleCompactionProgress` (notice + badge).
  */
-const handleCompactConversation = async (): Promise<void> => {
+const handleCompactStart = async (): Promise<void> => {
   if (
     !activeConversationId.value ||
     chatIsRunning.value ||

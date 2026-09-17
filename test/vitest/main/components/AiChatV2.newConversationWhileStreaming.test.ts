@@ -21,7 +21,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),

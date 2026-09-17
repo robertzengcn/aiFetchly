@@ -103,6 +103,47 @@ describe("AIChatHistoricalRecall storage (50-case six-language dataset)", () => 
     // Keep the singleton: reseeding 50 messages + fragments is expensive.
   });
 
+  it("correction pairs stay citable with the correction ordered later (AC-02 storage half)", async () => {
+    // Model-side preference (later explicit correction wins) needs live
+    // scoring; the storage contract underneath is: BOTH passages remain
+    // retrievable with source links, and timestamps order correction after
+    // decision so preference has a basis.
+    for (const [decideId, correctId] of [
+      ["en-04", "en-05"],
+      ["zh-04", "zh-05"],
+    ] as const) {
+      const decide = RECALL_DATASET_V1.find((c) => c.id === decideId)!;
+      const correct = RECALL_DATASET_V1.find((c) => c.id === correctId)!;
+      const find = async (marker: string, tag: string) => {
+        let cursor: string | undefined;
+        for (let page = 0; page < 25; page++) {
+          const hit = await service.search({
+            conversationId: CONV,
+            query: marker,
+            cursor,
+            limit: 5,
+            turnId: `t-ac02-${tag}-${page}`,
+          });
+          const rec = hit.records.find((r) => r.text.includes(marker));
+          if (rec) return rec;
+          cursor = hit.nextCursor ?? undefined;
+          if (!cursor) break;
+        }
+        throw new Error(`AC-02 marker not found: ${marker}`);
+      };
+      const decision = await find(decide.marker, decideId);
+      const correction = await find(correct.marker, correctId);
+      // Both citable with valid source links...
+      expect(decision.sourceId).toBeTruthy();
+      expect(correction.sourceId).toBeTruthy();
+      // ...and the correction is strictly later, so "prefer later explicit
+      // corrections" (FR-04) has a deterministic basis.
+      expect(new Date(correction.timestamp).getTime()).toBeGreaterThan(
+        new Date(decision.timestamp).getTime()
+      );
+    }
+  });
+
   it.each(RECALL_DATASET_V1.map((c) => [c.id, c.marker, c.text] as const))(
     "%s: exact marker recoverable byte-for-byte via search→read",
     async (_id, marker, text) => {

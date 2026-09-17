@@ -475,62 +475,12 @@ export class AIChatArchiveModule extends BaseModule {
     }));
   }
 
-  /**
-   * Recent complete turns (the retained suffix), returned in chronological
-   * order. Excludes the live turn (§4.3). Falls back to a bounded recent-row
-   * read when no turn projections exist yet (before indexing completes — §15).
-   */
-  async getRecentTurns(
-    conversationId: string,
-    maxCount: number,
-    maxCodePoints: number
-  ): Promise<HistoryExcerpt[]> {
-    await this.ensureConnection();
-    const stateModel = new AIChatArchiveStateModel(this.dbpath);
-    const state = await stateModel.getState(conversationId);
-    if (!state || state.deletedAt) return [];
+  // NOTE: a previous `getRecentTurns` excerpt helper was removed (2026-09-17).
+  // It had no callers or tests worktree-wide, and its single-page materialize
+  // silently truncated turns past 64 rows. Live consumers: `getRecentTurnRanges`
+  // + `readTurnRows` / `readRowsAfter` (paged, completeness-reporting), and the
+  // assembler's `loadTurnBackedRows` (receipts incomplete/oversized turns).
 
-    const turnModel = new AIChatArchiveTurnModel(this.dbpath);
-    const turns = await turnModel.readRecentCompleteTurns(
-      conversationId,
-      state.epoch,
-      AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns,
-      maxCount
-    );
-    if (turns.length === 0) {
-      // Fallback: bounded recent rows before indexing completes (§15).
-      const msgModel = new AIChatMessageArchiveModel(this.dbpath);
-      const rows = await msgModel.readRecent(
-        conversationId,
-        maxCount,
-        maxCodePoints
-      );
-      return rows.map((r) =>
-        this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
-      );
-    }
-    // Materialize the message rows for each retained turn. Each turn keysets
-    // forward from its own first (timestamp, rowId) through its last —
-    // never from the conversation head — following pages past 64 rows so a
-    // tool-heavy turn is never silently truncated (FR-05, AC-03).
-    const out: HistoryExcerpt[] = [];
-    for (const turn of turns) {
-      const { rows } = await this.readTurnRows(
-        conversationId,
-        Number(turn.firstTimestampMs),
-        turn.firstRowId,
-        Number(turn.lastTimestampMs),
-        turn.lastRowId,
-        maxCodePoints
-      );
-      for (const r of rows) {
-        out.push(
-          this.toExcerpt(r, state.epoch, state.sourceRevision, r.content, true)
-        );
-      }
-    }
-    return out;
-  }
 
   /**
    * Indexed tool-call/tool-result pair lookup (§5.2, §7.3). Replaces the

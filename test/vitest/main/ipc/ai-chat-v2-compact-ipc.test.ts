@@ -51,17 +51,6 @@ vi.mock("@/service/aiProvider/AIProviderResolver", () => ({
   },
 }));
 
-// Mock the compact agent — the heart of what we're testing.
-// ES class: getCompactAgent() constructs it with `new`; a vi.fn() factory is
-// not constructable under Vitest 4.
-const mockRunFullCompact = vi.hoisted(() => vi.fn());
-vi.mock("@/service/AIChatCompactAgentService", () => ({
-  AIChatCompactAgentService: class {
-    runFullCompact = mockRunFullCompact;
-    enqueueSessionMemoryUpdate = vi.fn().mockResolvedValue(undefined);
-  },
-}));
-
 // Controllable coordinator for the non-blocking START flow. The START handler
 // must return while the run is still pending, then report settle via events.
 const mockRequestCompaction = vi.hoisted(() => vi.fn());
@@ -131,26 +120,16 @@ vi.mock("@/service/SkillExecutor", () => ({
 }));
 
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
-import {
-  AI_CHAT_V2_COMPACT_CONVERSATION,
-  AI_CHAT_V2_COMPACTION_START,
-} from "@/config/channellist";
-import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
+import { AI_CHAT_V2_COMPACTION_START } from "@/config/channellist";
 
-const fakeSummary: AIChatCompactSummaryView = {
-  compactId: "compact-1",
-  conversationId: "v2-conv-1",
-  summary: "# Recent Work\n- Did X\n- Did Y",
-  throughMessageId: "assistant-5",
-  throughTimestamp: "2026-06-15T12:00:00.000Z",
-  sourceMessageCount: 10,
-  inputTokenEstimate: 800,
-  outputTokenEstimate: 200,
-  model: "gpt-4o",
-  status: "active",
-};
+type StartResult = { status: boolean; data?: { started: boolean }; msg?: string };
 
-describe("AI Chat V2 Compact Conversation IPC", () => {
+/**
+ * START is the ONLY user-facing compact contract (design §13.1
+ * start/status/progress). The old blocking compact channel was removed: no
+ * production or renderer API awaits the full batch.
+ */
+describe("AI Chat V2 Compaction Start IPC", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
@@ -162,99 +141,45 @@ describe("AI Chat V2 Compact Conversation IPC", () => {
     resetElectronMocks();
   });
 
-  it("registers the compact channel", () => {
+  it("registers the compaction start channel", () => {
     const registered = mockIpcMain.getRegisteredChannels();
-    expect(registered).toContain(AI_CHAT_V2_COMPACT_CONVERSATION);
+    expect(registered).toContain(AI_CHAT_V2_COMPACTION_START);
   });
 
   it("returns denied when AI is not enabled", async () => {
     mockState.aiEnabled = "false";
-    const result = await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
+    const result = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_COMPACTION_START,
       {},
       JSON.stringify({ conversationId: "v2-conv-1" })
-    );
-    expect(result).toMatchObject({ status: false });
-    expect(mockRunFullCompact).not.toHaveBeenCalled();
+    )) as StartResult;
+    expect(result.status).toBe(false);
+    expect(mockRequestCompaction).not.toHaveBeenCalled();
   });
 
   it("returns denied when conversationId is missing", async () => {
     const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
+      AI_CHAT_V2_COMPACTION_START,
       {},
       JSON.stringify({})
-    )) as { status: boolean; msg: string };
+    )) as StartResult;
     expect(result.status).toBe(false);
     expect(result.msg).toMatch(/conversationId is required/i);
-    expect(mockRunFullCompact).not.toHaveBeenCalled();
+    expect(mockRequestCompaction).not.toHaveBeenCalled();
   });
 
   it("returns denied when conversationId lacks v2- prefix", async () => {
     const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
+      AI_CHAT_V2_COMPACTION_START,
       {},
       JSON.stringify({ conversationId: "legacy-1" })
-    )) as { status: boolean; msg: string };
+    )) as StartResult;
     expect(result.status).toBe(false);
     expect(result.msg).toMatch(/v2-/i);
-    expect(mockRunFullCompact).not.toHaveBeenCalled();
+    expect(mockRequestCompaction).not.toHaveBeenCalled();
   });
 
-  it("returns compact summary on success", async () => {
-    mockRunFullCompact.mockResolvedValueOnce(fakeSummary);
-
-    const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
-      {},
-      JSON.stringify({ conversationId: "v2-conv-1", model: "gpt-4o" })
-    )) as { status: boolean; data: AIChatCompactSummaryView };
-
-    expect(mockRunFullCompact).toHaveBeenCalledWith({
-      conversationId: "v2-conv-1",
-      model: "gpt-4o",
-    });
-    expect(result.status).toBe(true);
-    expect(result.data).toEqual(fakeSummary);
-  });
-
-  it("resolves (not denied) with paused status when the run yields at the batch limit", async () => {
-    mockRunFullCompact.mockResolvedValueOnce({
-      ...fakeSummary,
-      status: "paused",
-      summary: "compaction paused after 3 sections; retry to resume",
-      sourceMessageCount: 3,
-    });
-
-    const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
-      {},
-      JSON.stringify({ conversationId: "v2-conv-1", model: "gpt-4o" })
-    )) as { status: boolean; data: AIChatCompactSummaryView };
-
-    // A resumable pause is not a failure: the RPC resolves so the UI can
-    // offer resume from the checkpoint (AC-04, AC-07).
-    expect(result.status).toBe(true);
-    expect(result.data.status).toBe("paused");
-  });
-
-  it("surfaces the actionable flag-off limitation instead of a generic error", async () => {
-    mockRunFullCompact.mockRejectedValueOnce(
-      new Error(
-        "Compaction unavailable: bounded incremental coordinator is not wired."
-      )
-    );
-    const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
-      {},
-      JSON.stringify({ conversationId: "v2-conv-1" })
-    )) as { status: boolean; msg: string };
-    // Flag-off fail-closed (§18 rollback) must be explicit, not a surprise
-    // "unexpected error": operators learn compaction needs the stage flag.
-    expect(result.status).toBe(false);
-    expect(result.msg).toMatch(/Compaction unavailable/i);
-  });
-
-  it("START returns immediately while the run is still pending (non-blocking)", async () => {
+  it("returns immediately while the run is still pending (non-blocking)", async () => {
     let release!: (v: {
       runId: string;
       state: "completed";
@@ -277,12 +202,13 @@ describe("AI Chat V2 Compact Conversation IPC", () => {
       AI_CHAT_V2_COMPACTION_START,
       {},
       JSON.stringify({ conversationId: "v2-conv-1", model: "gpt-4o" })
-    )) as { status: boolean; data: { started: boolean } };
+    )) as StartResult;
 
     // Returned while the coordinator run is still in flight — the renderer
     // never waits on one RPC for the whole batch (design §13.1).
     expect(result.status).toBe(true);
     expect(result.data).toEqual({ started: true });
+    expect(mockRequestCompaction).toHaveBeenCalledTimes(1);
     expect(mockEmitCompactionProgress).toHaveBeenCalledWith(
       expect.objectContaining({ state: "running" })
     );
@@ -306,28 +232,28 @@ describe("AI Chat V2 Compact Conversation IPC", () => {
     );
   });
 
-  it("START validates the conversation id before touching the coordinator", async () => {
+  it("reports a failed settle via progress events (RPC already returned)", async () => {
+    let reject!: (e: unknown) => void;
+    mockRequestCompaction.mockImplementationOnce(
+      () =>
+        new Promise<never>((_resolve, rejectFn) => {
+          reject = rejectFn;
+        })
+    );
+
     const result = (await mockIpcMain.callHandler(
       AI_CHAT_V2_COMPACTION_START,
       {},
-      JSON.stringify({})
-    )) as { status: boolean; msg: string };
-    expect(result.status).toBe(false);
-    expect(result.msg).toMatch(/conversationId is required/i);
-    expect(mockRequestCompaction).not.toHaveBeenCalled();
-  });
-
-  it("returns denied when runFullCompact throws", async () => {
-    mockRunFullCompact.mockRejectedValueOnce(
-      new Error("No messages to compact")
-    );
-    const result = (await mockIpcMain.callHandler(
-      AI_CHAT_V2_COMPACT_CONVERSATION,
-      {},
       JSON.stringify({ conversationId: "v2-conv-1" })
-    )) as { status: boolean; msg: string };
-    expect(result.status).toBe(false);
-    // userSafeError maps unknown errors to a generic safe message.
-    expect(result.msg).toMatch(/unexpected error/i);
+    )) as StartResult;
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual({ started: true });
+
+    reject(new Error("provider down"));
+    await vi.waitFor(() =>
+      expect(mockEmitCompactionProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ state: "failed" })
+      )
+    );
   });
 });

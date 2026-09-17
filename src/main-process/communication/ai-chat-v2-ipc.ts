@@ -56,7 +56,6 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
-  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
@@ -75,7 +74,6 @@ import type {
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
-import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
   ChatV2StreamChunk,
@@ -1405,70 +1403,6 @@ async function handlePlanVersions(
   }
 }
 
-async function handleCompactConversation(
-  data: string
-): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
-  const chatAccess = await canUseChat();
-  if (!chatAccess.ok) {
-    return denied(chatAccess.message);
-  }
-  const parsed = data
-    ? (JSON.parse(data) as { conversationId?: string; model?: string })
-    : {};
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (!parsed.conversationId.startsWith("v2-")) {
-    return denied("conversationId must be a v2- conversation id");
-  }
-  try {
-    // Start-of-run progress so the status badge leaves idle immediately and
-    // the renderer does not wait on this single RPC for state (design §13.1).
-    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
-      conversationId: parsed.conversationId,
-      runId: "",
-      state: "running",
-      sectionsPacked: 0,
-      occurredAt: new Date().toISOString(),
-    });
-    const summary = await getCompactAgent().runFullCompact({
-      conversationId: parsed.conversationId,
-      model: parsed.model,
-    });
-    // Broadcast the run lifecycle so the compaction status badge updates
-    // without polling (technical-design §13.1). The compact-agent view
-    // carries the runId; the generation id is encoded in the summary string
-    // when present. Paused/joined/cancelled are terminal-for-this-call but
-    // NOT failures — the RPC resolves so the UI can offer resume (AC-04).
-    const progressState = coordinatorStateToProgress(summary?.status ?? "");
-    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
-      conversationId: parsed.conversationId,
-      runId: summary?.compactId ?? "",
-      state: progressState,
-      generationId: summary?.summary || undefined,
-      sectionsPacked: summary?.sourceMessageCount ?? 0,
-      occurredAt: new Date().toISOString(),
-    });
-    return ok(summary);
-  } catch (err) {
-    AIChatConversationUpdateBroadcaster.getInstance().emitCompactionProgress({
-      conversationId: parsed.conversationId,
-      runId: "",
-      state: "failed",
-      sectionsPacked: 0,
-      occurredAt: new Date().toISOString(),
-      message: userSafeError(err),
-    });
-    // Flag-off fail-closed rejections carry their own actionable message
-    // ("Compaction unavailable: ..."); userSafeError would clobber known
-    // operational messages into a generic fallback, hiding the rollout state.
-    const message = err instanceof Error ? err.message : String(err);
-    return denied(
-      message.startsWith("Compaction unavailable") ? message : userSafeError(err)
-    );
-  }
-}
-
 /**
  * Start (or resume) a bounded compaction run and return IMMEDIATELY
  * (design §13.1 start/status/progress — never one blocking RPC for the whole
@@ -1959,9 +1893,6 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
     handlePlanVersions((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
-    handleCompactConversation((data as string) ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleGetToolApprovalMode((data as string) ?? "")
