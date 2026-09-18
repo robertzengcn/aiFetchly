@@ -58,10 +58,10 @@ export interface AIChatCompactAgentDeps {
   onAutoCompacted?(summary: AIChatCompactSummaryView): void;
   /** Optional: the durable incremental-compaction coordinator (design §11).
    * When present, runFullCompact delegates to coordinator.requestCompaction.
-   * When absent, runFullCompact FAILS CLOSED with a budget-checked limitation
-   * (the legacy all-history model call was removed and must never return —
-   * design §18 rollback). Flag-off therefore means compaction is inoperable,
-   * not unbounded. */
+   * When absent, runFullCompact uses the budget-checked legacy-summary
+   * rollback (bounded recent window, preflighted, no generation published —
+   * design §15/§18 rollback). The legacy all-history model call was removed
+   * and must never return. */
   compactionCoordinator?: AIChatCompactionCoordinator;
 }
 

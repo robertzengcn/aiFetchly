@@ -274,10 +274,10 @@ function getCompactAgent(): AIChatCompactAgentService {
       // §11.1: when the new-compaction stage is on, the interactive manual
       // compact (runFullCompact) delegates to the shared durable coordinator.
       // The flag is read live here (engine construction) so a toggle takes
-      // effect on the next engine rebuild. Flag-off FAILS CLOSED: the agent
-      // has no coordinator and runFullCompact rejects with an actionable
-      // limitation (design §18 rollback — the removed all-history model call
-      // is never restored, so compaction is inoperable until the flag is on).
+      // effect on the next engine rebuild. Flag-off uses the budget-checked
+      // legacy-summary rollback (design §15/§18 — the removed all-history
+      // model call is never restored; only a bounded recent window is
+      // summarized and no generation is published).
       ...(flag
         ? { compactionCoordinator: getCompactionCoordinator() }
         : {}),

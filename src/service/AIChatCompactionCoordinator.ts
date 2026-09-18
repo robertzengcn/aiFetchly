@@ -437,6 +437,9 @@ export class AIChatCompactionCoordinator extends BaseModule {
             if (packResult.coverageComplete && !packResult.nextCursor) {
               break;
             }
+            if (!hasBoundary && !packResult.nextCursor) {
+              break;
+            }
             continue;
           }
           // Saved section failed revalidation — fall through and rebuild it
@@ -541,7 +544,13 @@ export class AIChatCompactionCoordinator extends BaseModule {
         }
 
         // If coverage is complete and there's no continuation, we're done.
+        // Likewise when everything stageable is staged but the terminal turn
+        // is still incomplete (no boundary, no cursor): repacking would only
+        // duplicate the same section, so publish what merged (P1-1).
         if (packResult.coverageComplete && !packResult.nextCursor) {
+          break;
+        }
+        if (!hasBoundary && !packResult.nextCursor) {
           break;
         }
         if (sectionsPacked >= maxSectionsPerBatch) {

@@ -1,11 +1,12 @@
 /**
  * Bounded-compaction routing tests for AIChatCompactAgentService
- * (PRD FR-07/FR-08; design §18 rollback).
+ * (PRD FR-07/FR-08; design §15/§18 rollback).
  *
  * Disabling new publication must never restore the unbounded all-history
- * summarization algorithm: without a coordinator, runFullCompact fails with a
- * budget-checked limitation instead of sending the entire archive in one
- * request.
+ * summarization algorithm: without a coordinator, runFullCompact falls back
+ * to a budget-checked legacy summary over a bounded recent window (preflighted,
+ * output-capped, no generation published) instead of sending the entire
+ * archive in one request.
  */
 import { describe, it, expect, vi } from "vitest";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
