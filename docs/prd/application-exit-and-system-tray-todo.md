@@ -104,7 +104,7 @@ This file lists work that is **not complete** relative to the PRD release bar. T
 | Process-observer after real app Exit; unrelated process survival | AC-07, AC-14 |
 | Worker adapter: graceful close, ignored shutdown, ack-without-exit, no restart | Design section 13; only contact-extraction SIGTERM path exists |
 | Registry: spawn during freeze on real launch sites | AC-05 only gated for contact extraction |
-| testmain / test:components / test:e2e recorded green on this branch | Audit was source-only; no completion gate run attached to this file |
+| testmain / test:components / test:e2e recorded green on this branch | DONE 2026-09-18: test:components 76 files/532 tests green; lifecycle E2E 9/9 green (both specs, incl. 60s hidden-mode + observer + timings idle 145ms / busy 158ms); main suite: every failing file reproduces at fork base a21ba198 (Portable*/ConversationToolState/preload-marker/ai-*-memory — pre-existing, fixed only on newer dev); tsc + vue-tsc clean |
 
 ---
 
