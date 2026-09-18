@@ -277,10 +277,15 @@ export async function launchAiFetchly(
   });
 
   try {
-    // Wait for the page to navigate to the Vite renderer origin. Use a regex so
-    // the bare root URL (http://127.0.0.1:5173/) matches — a `**` glob would
-    // require a non-empty path and never resolve.
-    await mainWindow.waitForURL(/127\.0\.0\.1:5173(\/|$)/, { timeout: 60_000 });
+    // Wait for the page to navigate to the Vite renderer origin AND for the
+    // router's initial navigation to settle (a non-empty hash). Resolving on
+    // the bare root URL races the "/" -> "#/aiworkspace" initial redirect:
+    // a spec's goto("#/plugins/...") that fires mid-redirect gets its hash
+    // OVERWRITTEN when the pending redirect lands, silently stranding the
+    // test on the chat center.
+    await mainWindow.waitForURL(new RegExp(
+      `${RENDERER_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/#/`
+    ), { timeout: 60_000 });
     // Preload bridge must be present (implies the page loaded + contextBridge ran).
     await mainWindow.waitForFunction(
       () => Boolean((window as unknown as { api?: unknown }).api),

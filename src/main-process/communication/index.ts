@@ -43,6 +43,7 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerManagedBrowserIpcHandlers } from "@/main-process/communication/managed-browser-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { registerCommunityPluginIpcHandlers } from "@/main-process/communication/community-plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
@@ -132,6 +133,10 @@ export function registerCommunicationIpcHandlers(
     registerAgentDefinitionIpcHandlers();
     registerManagedBrowserIpcHandlers(win);
     registerPluginIpcHandlers();
+    // Community catalog (NON-AI-gated): the registration call was dropped by
+    // a dev-side merge, leaving plugin:community:* unregistered ("No handler
+    // registered") and the unified plugin page unable to load any catalog.
+    registerCommunityPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);

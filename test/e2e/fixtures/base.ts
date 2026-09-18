@@ -149,3 +149,33 @@ export const e2eTest = base.extend<E2EFixtures>({
 });
 
 export { expect };
+
+/**
+ * Navigate a launched app's main window to a renderer route and survive the
+ * auth-guard startup bounce. The global guard (src/views/permission.ts)
+ * awaits getUserInfo() on its FIRST evaluation; a goto that lands while that
+ * promise is still resolving gets bounced through /login back to "/" (the
+ * chat center), silently clobbering the target hash. Re-navigate until the
+ * URL actually settles on the target path.
+ */
+export async function gotoRoute(
+  page: import("@playwright/test").Page,
+  fullPath: string,
+  origin = process.env.AIFETCHLY_E2E_RENDERER_ORIGIN ||
+    "http://127.0.0.1:5173"
+): Promise<void> {
+  const target = `${origin}/#${fullPath}`;
+  const pathPart = `#/${fullPath.replace(/^\/+/, "")}`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.goto(target);
+    await page.waitForLoadState("domcontentloaded");
+    // Give the guard's async bounce (login -> "/") a moment to play out.
+    await page.waitForTimeout(500);
+    if (page.url().includes(pathPart)) return;
+  }
+  // Last try: assert via waitForURL so failures surface the expected-vs-got.
+  await page.goto(target);
+  await page.waitForURL(new RegExp(pathPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), {
+    timeout: 10_000,
+  });
+}

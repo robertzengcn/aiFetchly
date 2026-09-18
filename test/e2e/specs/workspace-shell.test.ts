@@ -1,4 +1,5 @@
 import { e2eTest as test, expect } from "../fixtures/base";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 import { warmLazyRouteModules } from "../support/devServerWarmup";
 
 /**
@@ -20,7 +21,7 @@ const LIVE_AI = process.env.AIFETCHLY_E2E_LIVE_AI === "1";
 async function openWorkspace(
   page: import("@playwright/test").Page
 ): Promise<void> {
-  await page.goto("http://127.0.0.1:5173/#/aiworkspace");
+  await page.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
   await expect(page.getByTestId("chat-center-surface")).toBeVisible({
     timeout: 20_000,
   });
