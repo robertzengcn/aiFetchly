@@ -218,11 +218,19 @@ export class AIChatArchiveIndexer extends BaseModule {
       prevRowId = row.id;
     }
 
-    // If the walk is complete (no more rows), close the final turn.
-    if (!hasMore && currentTurnId.length > 0) {
+    if (currentTurnId.length > 0) {
       const lastRow = rows[rows.length - 1];
-      lastCompleteTurnEndTs = lastRow.timestamp.getTime();
-      lastCompleteTurnEndRowId = lastRow.id;
+      const currentTurnRows = rows.filter(
+        (r) =>
+          r.timestamp.getTime() > turnStartTs ||
+          (r.timestamp.getTime() === turnStartTs && r.id >= turnStartRowId)
+      );
+      const hasTerminalReply = currentTurnRows.some(
+        (r) =>
+          r.role === "assistant" ||
+          r.messageType === MessageType.TOOL_RESULT ||
+          r.messageType === MessageType.TOOL_CALL
+      );
       await this.turnModel.upsertTurn({
         conversationId,
         epoch,
@@ -231,32 +239,17 @@ export class AIChatArchiveIndexer extends BaseModule {
         firstRowId: turnStartRowId,
         lastTimestampMs: lastRow.timestamp.getTime(),
         lastRowId: lastRow.id,
-        status: "completed",
+        status: hasTerminalReply ? "completed" : "open",
         confidence: rows.some(
           (r) => parseRowMetadata(r.metadata)?.turnId !== undefined
         )
           ? "native"
           : "inferred",
       });
-    } else if (currentTurnId.length > 0) {
-      // More rows remain: the current turn is still open (live). Persist it
-      // as "open" so the coordinator's compactable-prefix query excludes it.
-      const lastRow = rows[rows.length - 1];
-      await this.turnModel.upsertTurn({
-        conversationId,
-        epoch,
-        turnId: currentTurnId,
-        firstTimestampMs: turnStartTs,
-        firstRowId: turnStartRowId,
-        lastTimestampMs: lastRow.timestamp.getTime(),
-        lastRowId: lastRow.id,
-        status: "open",
-        confidence: rows.some(
-          (r) => parseRowMetadata(r.metadata)?.turnId !== undefined
-        )
-          ? "native"
-          : "inferred",
-      });
+      if (hasTerminalReply) {
+        lastCompleteTurnEndTs = lastRow.timestamp.getTime();
+        lastCompleteTurnEndRowId = lastRow.id;
+      }
     }
 
     const lastRow = rows[rows.length - 1];

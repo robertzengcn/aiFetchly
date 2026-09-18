@@ -124,6 +124,21 @@ afterEach(() => {
 });
 
 describe("AIChatArchiveIndexer — first-pass indexing", () => {
+  it("keeps a user-only tail open across restart until an assistant reply arrives", async () => {
+    await SqliteDb.ensureInitialized();
+    const conv = "live-tail";
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState(conv);
+    await seedMessages(conv, [{ role: "user", content: "pending", ts: 1000 }]);
+    await new AIChatArchiveIndexer().runToCompletion(conv);
+    const turns = new AIChatArchiveTurnModel(tmpDir);
+    expect((await turns.getLastTurn(conv, state.epoch))?.status).toBe("open");
+    await seedMessages(conv, [{ role: "assistant", content: "finished", ts: 2000 }]);
+    await new AIChatArchiveIndexer().runToCompletion(conv);
+    const turn = await turns.getLastTurn(conv, state.epoch);
+    expect(turn?.status).toBe("completed");
+    expect(Number(turn?.firstTimestampMs)).toBe(1000);
+    expect(Number(turn?.lastTimestampMs)).toBe(2000);
+  });
   it("projects entries + fragments for every source row and reaches complete", async () => {
     await SqliteDb.ensureInitialized();
     const stateModel = new AIChatArchiveStateModel(tmpDir);
@@ -341,8 +356,9 @@ describe("AIChatArchiveIndexer — turn inference", () => {
     expect(b2.hasMore).toBe(false);
     const stateEnd = await stateModel.getState(conv);
     expect(stateEnd?.indexState).toBe("complete");
-    // The live turn is now complete (walk ended) so high-water advances to it.
-    expect(stateEnd?.highWaterTimestampMs).toBe(5_000);
+    // The user-only tail stays open, so high-water remains at the last
+    // complete turn end (4000), never into the live turn.
+    expect(stateEnd?.highWaterTimestampMs).toBe(4_000);
   });
 });
 
