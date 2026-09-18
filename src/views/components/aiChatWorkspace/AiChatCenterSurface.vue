@@ -142,8 +142,12 @@
         @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
         @grant-permission="onGrantPermission"
         @deny-permission="onDenyPermission"
+        :pending-messages="pendingRows"
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
+        @steer-pending="onSteerPending"
+        @cancel-pending="onCancelPending"
+        @resume-pending="onResumePending"
       />
       <button
         v-if="selectedStore.hasOlder && conversationId"
@@ -460,6 +464,12 @@ import {
   composerDraftKeyFor,
   useComposerDraftStore,
 } from "@/views/store/composerDrafts";
+import { usePendingMessagesStore } from "@/views/store/pendingMessages";
+import {
+  cancelChatV2PendingMessage,
+  resumeChatV2PendingQueue,
+  steerChatV2PendingMessage,
+} from "@/views/api/aiChatV2";
 import {
   useSelectedConversationStore,
   type PermissionActionTexts,
@@ -636,6 +646,40 @@ const GENERATED_IMAGE_REFERENCE_LIMIT = 3;
 const GENERATED_IMAGE_FALLBACK_PROMPT = "Describe the selected image.";
 
 const composerDrafts = useComposerDraftStore();
+const pendingMessages = usePendingMessagesStore();
+
+// --- Queued (pending) message actions (message-queue PRD §7) ----------------
+async function onSteerPending(pendingMessageId: string): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    const view = await steerChatV2PendingMessage(
+      conversationId.value,
+      pendingMessageId
+    );
+    if (view) {
+      pendingMessages.upsert(view);
+    }
+  } catch {
+    // Non-fatal: the lifecycle event / next load refreshes the row.
+  }
+}
+
+async function onCancelPending(pendingMessageId: string): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    await cancelChatV2PendingMessage(conversationId.value, pendingMessageId);
+  } catch {
+    // Non-fatal: the cancelled event removes the row.
+  }
+}
+
+async function onResumePending(targetConversationId: string): Promise<void> {
+  try {
+    await resumeChatV2PendingQueue(targetConversationId);
+  } catch {
+    // Non-fatal: the queue retries the drain.
+  }
+}
 /** Store key for the selected conversation (pending sentinel when null). */
 const composerDraftKey = computed(() => composerDraftKeyFor(conversationId.value));
 
@@ -648,6 +692,18 @@ const sameGeneratedImageRef = (
   a: ChatV2GeneratedImageReference,
   b: ChatV2GeneratedImageReference
 ): boolean => a.messageId === b.messageId && a.imageIndex === b.imageIndex;
+
+const pendingRows = computed(() =>
+  pendingMessages.rowsFor(conversationId.value)
+);
+
+watch(
+  conversationId,
+  (id) => {
+    void pendingMessages.loadConversation(id);
+  },
+  { immediate: true }
+);
 
 /** References attached to the composer tray for the SELECTED conversation. */
 const activeGeneratedImageRefs = computed(() => [
@@ -1237,6 +1293,7 @@ onMounted(async () => {
  * surface itself (the composable's onScopeDispose handles it).
  */
 onUnmounted(() => {
+  pendingMessages.teardown();
   voice.dispose();
   // Release the conversation's filesystem-watch claim (review fix): this
   // surface owns the composable instance; without disposal an inner-page

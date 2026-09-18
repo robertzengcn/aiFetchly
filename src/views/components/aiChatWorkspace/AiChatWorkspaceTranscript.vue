@@ -9,6 +9,18 @@
     plan-status surfaces.
   -->
   <div class="workspace-transcript" data-testid="workspace-transcript">
+    <!-- Queued (pending) rows: user bubbles in creation order, visually
+         distinct; they deliver later through the queue drain. -->
+    <AiChatV2PendingMessage
+      v-for="pending in pendingMessages"
+      :key="`pending-${pending.pendingMessageId}`"
+      :view="pending"
+      :runtime-status="pendingRuntimeStatus"
+      @steer="(id: string) => emit('steer-pending', id)"
+      @cancel="(id: string) => emit('cancel-pending', id)"
+      @resume="(id: string) => emit('resume-pending', id)"
+    />
+
     <template v-for="item in projectedItems" :key="item.key">
       <!-- User messages render normally. -->
       <AiChatV2Message
@@ -83,10 +95,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type {
+  AIChatPendingMessageView,
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
+import AiChatV2PendingMessage from "@/views/components/aiChatV2/AiChatV2PendingMessage.vue";
 import AiChatExecutionGroup from "@/views/components/aiChatWorkspace/AiChatExecutionGroup.vue";
 import AiChatExecutionRow from "@/views/components/aiChatWorkspace/AiChatExecutionRow.vue";
 import AiChatPlanDecisionCard from "@/views/components/aiChatWorkspace/AiChatPlanDecisionCard.vue";
@@ -115,6 +129,8 @@ const props = defineProps<{
   showReasoning?: boolean;
   /** FR-059: submission error for the active plan-question flow. */
   planSubmitError?: string | null;
+  /** Queued rows from the durable pending-message queue (PRD §7). */
+  pendingMessages?: readonly AIChatPendingMessageView[];
 }>();
 
 const emit = defineEmits<{
@@ -145,6 +161,9 @@ const emit = defineEmits<{
     e: "edit-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (e: "steer-pending", pendingMessageId: string): void;
+  (e: "cancel-pending", pendingMessageId: string): void;
+  (e: "resume-pending", conversationId: string): void;
 }>();
 
 type ProjectedItem =
@@ -316,6 +335,14 @@ const projectedItems = computed<ProjectedItem[]>(() => {
 
   return result;
 });
+
+/**
+ * Map the transcript stream status onto the pending bubble's runtime-status
+ * contract (running/idle only — awaiting_* states arrive via the store).
+ */
+const pendingRuntimeStatus = computed<"idle" | "running" | undefined>(() =>
+  props.streamStatus === "streaming" ? "running" : "idle"
+);
 
 function streamStatusForMessage(
   message: ChatV2MessageView
