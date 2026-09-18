@@ -140,6 +140,31 @@ describe("AIChatMessageArchiveModel keyset reads", () => {
     expect(page.records.map((r) => r.content)).toEqual(["a", "b"]);
   });
 
+  it("rejects a stale-revision cursor (P2-5)", async () => {
+    await SqliteDb.ensureInitialized();
+    await new AIChatArchiveStateModel(tmpDir).ensureState("conv-rev");
+    await seedMessages("conv-rev", [
+      { role: "user", content: "a", ts: 1_000 },
+      { role: "assistant", content: "b", ts: 2_000 },
+    ]);
+    const model = new AIChatMessageArchiveModel(tmpDir);
+    const page1 = await model.readPageForward({
+      conversationId: "conv-rev",
+      maxRows: 1,
+      maxCodePoints: 100_000,
+    });
+    expect(page1.nextCursor).not.toBeNull();
+    await new AIChatArchiveStateModel(tmpDir).incrementRevision("conv-rev");
+    await expect(
+      model.readPageForward({
+        conversationId: "conv-rev",
+        cursor: page1.nextCursor ?? undefined,
+        maxRows: 1,
+        maxCodePoints: 100_000,
+      })
+    ).rejects.toMatchObject({ code: "HISTORY_SCOPE_INVALID" });
+  });
+
   it("honors the decoded-text byte allowance by truncating a page", async () => {
     await SqliteDb.ensureInitialized();
     // Each message ~1000 chars; allow only ~2000 bytes → 2 rows kept.

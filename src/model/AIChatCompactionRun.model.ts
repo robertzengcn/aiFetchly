@@ -159,6 +159,15 @@ export class AIChatCompactionRunModel extends BaseDb {
           `fence moved: expected ${input.expectedFence}, got ${state.fence}`
         );
       }
+      if (
+        state.leaseOwner &&
+        state.leaseOwner !== input.leaseOwner
+      ) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_STALE_CLAIM",
+          `lease owner mismatch: expected ${state.leaseOwner}`
+        );
+      }
       const run = await runRepo.findOne({ where: { runId: input.runId } });
       if (!run || run.state !== "running") return null;
       const leaseUntil = now + leaseMs;
@@ -204,7 +213,13 @@ export class AIChatCompactionRunModel extends BaseDb {
       const state = await stateRepo.findOne({
         where: { conversationId: input.conversationId },
       });
-      if (!state || state.epoch !== input.epoch) {
+      if (!state || state.deletedAt) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_CONTEXT_REJECTED",
+          `conversation ${input.conversationId} is tombstoned`
+        );
+      }
+      if (state.epoch !== input.epoch) {
         throw new RecoverableHistoryError(
           "COMPACTION_STALE_CLAIM",
           `epoch changed during section save`
@@ -292,7 +307,13 @@ export class AIChatCompactionRunModel extends BaseDb {
       const state = await stateRepo.findOne({
         where: { conversationId: input.conversationId },
       });
-      if (!state || state.epoch !== input.epoch) {
+      if (!state || state.deletedAt) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_CONTEXT_REJECTED",
+          `conversation ${input.conversationId} is tombstoned`
+        );
+      }
+      if (state.epoch !== input.epoch) {
         throw new RecoverableHistoryError(
           "COMPACTION_STALE_CLAIM",
           `epoch changed during publish`
@@ -387,7 +408,13 @@ export class AIChatCompactionRunModel extends BaseDb {
       const state = await stateRepo.findOne({
         where: { conversationId: input.conversationId },
       });
-      if (!state || state.epoch !== input.epoch) {
+      if (!state || state.deletedAt) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_CONTEXT_REJECTED",
+          `conversation ${input.conversationId} is tombstoned`
+        );
+      }
+      if (state.epoch !== input.epoch) {
         throw new RecoverableHistoryError(
           "COMPACTION_STALE_CLAIM",
           `epoch changed during working-overview save`

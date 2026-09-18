@@ -294,8 +294,30 @@ export class AIChatV2Module extends BaseModule {
   }
 
   async clearConversation(conversationId: string): Promise<number> {
+    // Fence first (P1-4, §11.6/AC-13): tombstone + invalidate the compaction
+    // epoch BEFORE deleting sources so an in-flight summarize cannot recreate
+    // derived records after the messages are gone. Best-effort; never break
+    // the clear on a storage hiccup.
+    try {
+      await new AIChatArchiveStateModel(this.dbpath).tombstone(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: archive tombstone failed:",
+        err
+      );
+    }
+    try {
+      const { AIChatCompactionModule } = await import(
+        "@/modules/AIChatCompactionModule"
+      );
+      await new AIChatCompactionModule().invalidateConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: compaction invalidate failed:",
+        err
+      );
+    }
     const deleted = await this.chatModule.clearConversation(conversationId);
-    // Cascade compact + session memory clear. Failures are logged, not thrown.
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
     } catch (err) {
@@ -312,24 +334,11 @@ export class AIChatV2Module extends BaseModule {
         err
       );
     }
-    // Cascade artifact clear so generated HTML is removed with the chat.
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
       console.error(
         "[ai-chat-v2] clearConversation: artifact clear failed:",
-        err
-      );
-    }
-    // Tombstone the archive state (§5.2): bump revision + fence so any in-flight
-    // compaction claim is invalidated and prior cursors/source IDs/generations
-    // become unresolvable. A re-archived conversation mints a fresh epoch via
-    // ensureState. Best-effort; never break the clear on a storage hiccup.
-    try {
-      await new AIChatArchiveStateModel(this.dbpath).tombstone(conversationId);
-    } catch (err) {
-      console.error(
-        "[ai-chat-v2] clearConversation: archive tombstone failed:",
         err
       );
     }

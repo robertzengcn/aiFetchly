@@ -144,6 +144,54 @@ describe("AIChatCompactionCoordinator", () => {
     expect((await module.getRun(claim.runId))?.mergedThroughOrdinal).toBe(0);
   });
 
+  it("rejects section saves after tombstone and enforces lease ownership (P1-4/P2-4)", async () => {
+    const { AIChatCompactionModule } = await import("@/modules/AIChatCompactionModule");
+    const module = new AIChatCompactionModule();
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState("fence-check");
+    const claim = await module.claimRun({
+      conversationId: state.conversationId,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      trigger: "manual",
+      leaseOwner: "owner-a",
+      snapshotEndTimestampMs: 1_000,
+      snapshotEndRowId: 1,
+      retainedStartTimestampMs: 2_000,
+      retainedStartRowId: 2,
+    });
+    await expect(
+      module.renewLease({
+        conversationId: state.conversationId,
+        runId: claim.runId,
+        epoch: state.epoch,
+        expectedFence: claim.fence,
+        leaseOwner: "owner-b",
+      })
+    ).rejects.toMatchObject({ code: "COMPACTION_STALE_CLAIM" });
+    await new AIChatArchiveStateModel(tmpDir).tombstone("fence-check");
+    await expect(
+      module.saveSectionAndCheckpoint({
+        conversationId: state.conversationId,
+        epoch: state.epoch,
+        revision: state.sourceRevision,
+        runId: claim.runId,
+        expectedFence: claim.fence,
+        stagedCursorJson: "",
+        section: {
+          sectionId: "late",
+          workKey: "late",
+          ordinal: 1,
+          sourceStartTimestampMs: 0,
+          sourceStartRowId: 0,
+          sourceEndTimestampMs: 1_000,
+          sourceEndRowId: 1,
+          sourceManifestJson: "{}",
+          summaryJson: "{}",
+        },
+      })
+    ).rejects.toMatchObject({ code: "COMPACTION_CONTEXT_REJECTED" });
+  });
+
   it("does not advance the checkpoint past an incomplete terminal turn (P1-1)", async () => {
     await seedMessages("conv-mid-checkpoint", [
       { role: "user", content: "q1", ts: 1_000 },

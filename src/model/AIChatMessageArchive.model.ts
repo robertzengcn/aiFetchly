@@ -68,6 +68,7 @@ export class AIChatMessageArchiveModel extends BaseDb {
     const stateModel = new AIChatArchiveStateModel(this.dbPath);
     const state = await stateModel.getState(input.conversationId);
     const epoch = state?.epoch ?? "";
+    const revision = state?.sourceRevision ?? 0;
     const pageLimit = Math.min(
       input.maxRows,
       AI_CHAT_RECOVERABLE_DEFAULTS.metadataPageRows
@@ -76,11 +77,11 @@ export class AIChatMessageArchiveModel extends BaseDb {
     let lastTimestampMs = 0;
     let lastRowId = 0;
     if (input.cursor) {
-      const decoded = decodeCursor(input.cursor, input.conversationId, epoch);
+      const decoded = decodeCursor(input.cursor, input.conversationId, epoch, revision);
       if (!decoded) {
         throw new RecoverableHistoryError(
           "HISTORY_SCOPE_INVALID",
-          "cursor failed scope validation (conversation/epoch mismatch or malformed payload)"
+          "cursor failed scope validation (conversation/epoch/revision mismatch or malformed payload)"
         );
       }
       lastTimestampMs = decoded.lastTimestampMs;

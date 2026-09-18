@@ -883,7 +883,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
           const decoded = decodeCursor(
             activeRun.stagedCursorJson,
             conversationId,
-            epoch
+            epoch,
+            revision
           );
           if (decoded) {
             stagedCursor = activeRun.stagedCursorJson;

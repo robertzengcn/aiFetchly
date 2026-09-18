@@ -33,7 +33,8 @@ export function encodeCursor(payload: CursorPayload): string {
 export function decodeCursor(
   raw: unknown,
   expectedConversationId: string,
-  expectedEpoch: string
+  expectedEpoch: string,
+  expectedRevision?: number
 ): CursorPayload | null {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 1024) {
     return null;
@@ -53,11 +54,17 @@ export function decodeCursor(
   const result = cursorPayloadSchema.safeParse(parsed);
   if (!result.success) return null;
   const data = result.data;
-  // Strict scope: cursor must reference the same conversation + epoch.
+  // Strict scope: cursor must reference the same conversation + epoch +
+  // revision (P2-5, FR-01). A stale-revision cursor cannot resume after source
+  // changes. Revision is optional for legacy callers that already validated it
+  // via epoch rotation; new callers must pass it.
   if (
     data.conversationId !== expectedConversationId ||
     data.epoch !== expectedEpoch
   ) {
+    return null;
+  }
+  if (expectedRevision !== undefined && data.revision !== expectedRevision) {
     return null;
   }
   return data;
