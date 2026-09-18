@@ -11,7 +11,6 @@
       :persistent="true"
       max-width="520"
       content-testid="app-close-dialog"
-      @keydown.esc="choose('cancel')"
     >
       <v-card
         v-if="dialogOpen"
@@ -161,6 +160,32 @@ let previouslyFocused: HTMLElement | null = null;
 const FOCUS_DELAY_MS = 50;
 let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Escape cancels the dialog (FR-01/FR-08). Vuetify's persistent dialog
+ * intercepts Escape on its own content ("persistent wiggle") and stops
+ * propagation, so a template @keydown.esc on v-dialog never fires — listen
+ * on the DOCUMENT (capture phase) while the dialog is open instead.
+ */
+let escapeListener: ((event: KeyboardEvent) => void) | null = null;
+
+function attachEscapeListener(): void {
+  detachEscapeListener();
+  escapeListener = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      void choose("cancel");
+    }
+  };
+  document.addEventListener("keydown", escapeListener, true);
+}
+
+function detachEscapeListener(): void {
+  if (escapeListener !== null) {
+    document.removeEventListener("keydown", escapeListener, true);
+    escapeListener = null;
+  }
+}
+
 function clearFocusTimer(): void {
   if (focusTimer !== null) {
     clearTimeout(focusTimer);
@@ -180,6 +205,7 @@ function handleRequest(payload: {
   activeTaskCount.value =
     typeof payload.activeTaskCount === "number" ? payload.activeTaskCount : null;
   dialogOpen.value = true;
+  attachEscapeListener();
   previouslyFocused = document.activeElement as HTMLElement | null;
   // Acknowledge so the main process cancels its native fallback (design §9).
   void acknowledgeCloseChoice(payload.token).catch(() => undefined);
@@ -212,6 +238,7 @@ async function choose(choice: ApplicationCloseChoice): Promise<void> {
     dialogOpen.value = false;
     liveToken.value = null;
     clearFocusTimer();
+    detachEscapeListener();
     // Focus restoration after dismissal (FR-08).
     try {
       previouslyFocused?.focus?.();
@@ -235,6 +262,7 @@ function handleStateChanged(event: {
     dialogOpen.value = false;
     liveToken.value = null;
     clearFocusTimer();
+    detachEscapeListener();
   } else {
     isQuitting.value = false;
   }
@@ -252,6 +280,7 @@ onUnmounted(() => {
   unsubRequest?.();
   unsubState?.();
   clearFocusTimer();
+  detachEscapeListener();
 });
 
 defineExpose({

@@ -190,6 +190,24 @@ test.describe("Application exit and system tray", () => {
     }
   });
 
+  test("Escape on the close dialog cancels — window and app stay open (FR-08/AC-12 keyboard)", async ({
+    app,
+  }) => {
+    const { mainWindow } = app;
+
+    await userCloseWindow(app);
+    const card = mainWindow.locator("[data-testid='app-close-dialog-card']");
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    // Escape must mean cancel, never Exit (exit requires deliberate action).
+    await mainWindow.keyboard.press("Escape");
+    await expect(card).toHaveCount(0);
+    expect(await windowCount(app)).toBe(1);
+    expect(await isWindowVisible(app)).toBe(true);
+    // App did not exit: the lifecycle state is still visible.
+    expect((await getLifecycleState(app))?.state).toBe("visible");
+  });
+
   test("dialog Exit runs coordinated cleanup, writes the report, and exits (AC-04/AC-15)", async ({
     testRoot,
   }) => {
