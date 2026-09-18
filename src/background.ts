@@ -93,6 +93,7 @@ import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
 import { getDefaultManagedBrowserCacheMaintenanceScheduler } from "@/service/ManagedBrowserCacheMaintenanceScheduler";
 import * as os from "node:os";
+import { spawn as nodeSpawn } from "node:child_process";
 import * as fsMod from "node:fs";
 import * as pathMod from "node:path";
 
@@ -153,6 +154,7 @@ import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRe
 import { ProcessTreeTerminator } from "@/main-process/lifecycle/ProcessTreeTerminator";
 import { createDefaultProcessOps } from "@/main-process/lifecycle/processOps";
 import { bindSpawnGateToLifecycle } from "@/main-process/lifecycle/spawnGate";
+import { registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
 import {
   TrayController,
@@ -611,17 +613,18 @@ function initializeSystemTray(): void {
   // E2E bootstrap has no functional tray host; keep background mode off
   // unless the harness explicitly enables it for a tray-scenario run
   // (design §13 "expose only test-build hooks if needed").
-  if (
-    process.env.AIFETCHLY_E2E === "1" &&
-    process.env.AIFETCHLY_E2E_TRAY !== "1"
-  ) {
+  const e2eTrayOptIn =
+    process.env.AIFETCHLY_E2E === "1" && process.env.AIFETCHLY_E2E_TRAY === "1";
+  if (process.env.AIFETCHLY_E2E === "1" && !e2eTrayOptIn) {
     lifecycle.setBackgroundAvailable(false);
     return;
   }
   // FR-07 / TODO 9: explicit Linux desktop check — on headless/tty sessions a
   // Tray object may construct fine but no status-notifier host will show it;
   // keep Keep-running disabled rather than hiding into an unreachable state.
-  if (!isLinuxTrayHostPlausible(process.platform, process.env)) {
+  // The E2E tray opt-in bypasses the heuristic (xvfb provides the host and
+  // the spec itself asserts readiness before hiding).
+  if (!e2eTrayOptIn && !isLinuxTrayHostPlausible(process.platform, process.env)) {
     log.info(
       "[tray] no plausible Linux tray host (XDG_CURRENT_DESKTOP/session); background mode disabled"
     );
@@ -691,6 +694,7 @@ if (process.env.AIFETCHLY_E2E === "1") {
         restoreFromTray: () => void;
         requestExit: (reason: string) => void;
         getState: () => { state: string; backgroundAvailable: boolean };
+        spawnOwnedFixture: (markPath: string) => { pid: number };
       };
     }
   ).__aifetchlyLifecycleTestHooks = {
@@ -708,6 +712,24 @@ if (process.env.AIFETCHLY_E2E === "1") {
         state: snapshot.state,
         backgroundAvailable: snapshot.backgroundAvailable,
       };
+    },
+    /**
+     * Spawn a REAL owned worker through the production registration path
+     * (registry + identity) for process-observer specs. The child runs a
+     * bounded script, heartbeats to markPath every 5s, and exits on its own
+     * after 15 minutes. E2E-only — never present in production/dev builds.
+     */
+    spawnOwnedFixture: (markPath: string): { pid: number } => {
+      const child = nodeSpawn(
+        process.execPath,
+        ["-e", "const fs=require('fs');const write=()=>{try{fs.writeFileSync(process.argv[1],String(Date.now()))}catch{}};write();setInterval(write,5000);setTimeout(()=>process.exit(0),15*60*1000);", markPath],
+        {
+          stdio: "ignore",
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        }
+      );
+      registerOwnedProcess("e2e-observer-fixture", child);
+      return { pid: child.pid ?? -1 };
     },
   };
 }
