@@ -232,10 +232,6 @@ export class AIChatCompactionRunModel extends BaseDb {
       });
       if (existing) {
         run.stagedCursorJson = input.stagedCursorJson;
-        run.mergedThroughOrdinal = Math.max(
-          run.mergedThroughOrdinal,
-          existing.ordinal
-        );
         await runRepo.save(run);
         return { saved: false, fence: state.fence };
       }
@@ -261,10 +257,6 @@ export class AIChatCompactionRunModel extends BaseDb {
       await sectionRepo.save(entity);
 
       run.stagedCursorJson = input.stagedCursorJson;
-      run.mergedThroughOrdinal = Math.max(
-        run.mergedThroughOrdinal,
-        input.section.ordinal
-      );
       await runRepo.save(run);
       return { saved: true, fence: state.fence };
     });

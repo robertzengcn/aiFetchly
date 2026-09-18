@@ -34,7 +34,7 @@ import type {
 import { AIChatSummaryValidator } from "@/service/AIChatSummaryValidator";
 import { AIChatCompactionPromptBuilder } from "@/service/AIChatCompactionPromptBuilder";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
-import { encodeCursor } from "@/service/AIChatArchiveCursorCodec";
+import { encodeCursor, decodeCursor } from "@/service/AIChatArchiveCursorCodec";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import {
   RecoverableHistoryError,
@@ -214,13 +214,18 @@ export class AIChatCompactionCoordinator extends BaseModule {
     // 2. Terminal-turn snapshot excluding the retained recent suffix (§4.3,
     // FR-05/FR-09). Retain two completed turns when they fit plus the
     // in-progress turn; the snapshot end is the retained suffix start, never
-    // the raw high-water mark. Authoritative turn projections via the archive;
-    // equal timestamps, unresolved tools, and messages appended during
-    // compaction cannot cause omissions (snapshot is frozen at claim).
-    const { snapshotEndTimestampMs, snapshotEndRowId } =
-      await this.computeSnapshotEnd(conversationId, state.highWaterTimestampMs ?? 0, state.highWaterRowId ?? 0);
-    const retainedStartTimestampMs = snapshotEndTimestampMs;
-    const retainedStartRowId = snapshotEndRowId;
+    // the raw high-water mark. Snapshot is frozen at the durable claim
+    // (P2-1, §11.3): compute optimistically, claim, then recompute and take
+    // the earlier composite bound so messages appended between compute and
+    // claim cannot slip inside the compactable prefix past the retention
+    // boundary.
+    const preSnapshot = await this.computeSnapshotEnd(
+      conversationId,
+      state.highWaterTimestampMs ?? 0,
+      state.highWaterRowId ?? 0
+    );
+    const retainedStartTimestampMs = preSnapshot.snapshotEndTimestampMs;
+    const retainedStartRowId = preSnapshot.snapshotEndRowId;
 
     // 3. Durable claim (§11.3).
     const claim = await this.module.claimRun({
@@ -230,8 +235,8 @@ export class AIChatCompactionCoordinator extends BaseModule {
       trigger: input.trigger,
       model: input.model,
       leaseOwner,
-      snapshotEndTimestampMs,
-      snapshotEndRowId,
+      snapshotEndTimestampMs: preSnapshot.snapshotEndTimestampMs,
+      snapshotEndRowId: preSnapshot.snapshotEndRowId,
       retainedStartTimestampMs,
       retainedStartRowId,
       baseGenerationId: state.activeGenerationId,
@@ -249,6 +254,23 @@ export class AIChatCompactionCoordinator extends BaseModule {
 
     let fence = claim.fence;
     const runId = claim.runId;
+    const postSnapshot = await this.computeSnapshotEnd(
+      conversationId,
+      state.highWaterTimestampMs ?? 0,
+      state.highWaterRowId ?? 0
+    );
+    const snapshotEndTimestampMs =
+      postSnapshot.snapshotEndTimestampMs < preSnapshot.snapshotEndTimestampMs ||
+      (postSnapshot.snapshotEndTimestampMs === preSnapshot.snapshotEndTimestampMs &&
+        postSnapshot.snapshotEndRowId < preSnapshot.snapshotEndRowId)
+        ? postSnapshot.snapshotEndTimestampMs
+        : preSnapshot.snapshotEndTimestampMs;
+    const snapshotEndRowId =
+      postSnapshot.snapshotEndTimestampMs < preSnapshot.snapshotEndTimestampMs ||
+      (postSnapshot.snapshotEndTimestampMs === preSnapshot.snapshotEndTimestampMs &&
+        postSnapshot.snapshotEndRowId < preSnapshot.snapshotEndRowId)
+        ? postSnapshot.snapshotEndRowId
+        : preSnapshot.snapshotEndRowId;
 
     // 4. Resume from committed coverage + persisted staged checkpoints (§11,
     // FR-07/FR-09, AC-05/AC-07). Load existing sections for this epoch/
@@ -263,6 +285,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
     );
     let cursor: string | undefined = resume.startCursor;
     let ordinal = resume.maxOrdinal;
+    let mergedOrdinal = resume.mergedThroughOrdinal;
     let rollingOverview: SectionSummaryV1 | null = resume.priorOverview;
     // Ordered summaries of sections represented by the rolling overview
     // (prior published chain + newly merged), for final validation.
@@ -345,14 +368,20 @@ export class AIChatCompactionCoordinator extends BaseModule {
           break;
         }
 
-        // Determine the section's covered-through boundary.
-        const lastFrag = packResult.fragments[packResult.fragments.length - 1];
-        const coveredThroughTs =
-          packResult.exclusionBoundary?.timestampMs ??
-          (lastFrag ? Date.parse(lastFrag.timestamp) : 0);
-        const coveredThroughRowId =
-          packResult.exclusionBoundary?.rowId ??
-          (lastFrag ? lastFrag.sourceRowId : 0);
+        // Determine the section's fragment extent vs the compactable
+        // checkpoint (P1-1, FR-05/FR-07/AC-06). The section manifest always
+        // records the actual packed fragments; the checkpoint advances ONLY to
+        // the packer's exclusionBoundary (complete terminal turn). When the
+        // boundary is absent (mid-turn cut, truncated page, oversized fragment
+        // without terminal completion), staged progress is kept without
+        // advancing the published/compactable checkpoint.
+        const hasBoundary = packResult.exclusionBoundary !== undefined;
+        const coveredThroughTs = hasBoundary
+          ? packResult.exclusionBoundary.timestampMs
+          : sectionStartTs;
+        const coveredThroughRowId = hasBoundary
+          ? packResult.exclusionBoundary.rowId
+          : sectionStartRowId;
 
         // Deterministic work identity (§11, FR-09): epoch/revision, source
         // range + fragments, schema version. Retry of a saved section reuses
@@ -383,16 +412,22 @@ export class AIChatCompactionCoordinator extends BaseModule {
           if (reuseValid.ok && reuseValid.summary) {
             cursor = packResult.nextCursor ?? undefined;
             ordinal = Math.max(ordinal, reused.ordinal);
-            rollingOverview = await this.mergeOverview({
-              prior: rollingOverview,
+            const reusePrior = rollingOverview;
+            const reuseMerged = await this.mergeOverview({
+              prior: reusePrior,
               section: reuseValid.summary,
               summarize: input.summarize,
               signal: input.signal,
             });
+            const reuseSucceeded = reusePrior === null || reuseMerged !== reusePrior;
+            rollingOverview = reuseMerged;
             for (const f of packResult.fragments) {
               representedSourceIds.add(f.sourceId);
             }
-            representedCount += 1;
+            if (reuseSucceeded) {
+              representedCount += 1;
+              mergedOrdinal = Math.max(mergedOrdinal, reused.ordinal);
+            }
             lastCoveredThroughTs = coveredThroughTs;
             lastCoveredThroughRowId = coveredThroughRowId;
             sectionStartTs = coveredThroughTs;
@@ -471,30 +506,38 @@ export class AIChatCompactionCoordinator extends BaseModule {
         // Bounded overview merge: prior overview + this new section only
         // (never concatenate every historical section — §8.3). Persist the
         // working overview + merged ordinal so a restart resumes the merge
-        // instead of rebuilding it (§5.3).
-        rollingOverview = await this.mergeOverview({
-          prior: rollingOverview,
+        // instead of rebuilding it (§5.3). On merge failure the counters must
+        // NOT advance (P2-3, FR-07/AC-14): the section stays staged without
+        // being reflected in the rolling overview.
+        const mergePrior = rollingOverview;
+        const merged = await this.mergeOverview({
+          prior: mergePrior,
           section: sectionSummary,
           summarize: input.summarize,
           signal: input.signal,
         });
+        const mergeSucceeded = mergePrior === null || merged !== mergePrior;
+        rollingOverview = merged;
         for (const f of packResult.fragments) {
           representedSourceIds.add(f.sourceId);
         }
-        representedCount += 1;
         lastCoveredThroughTs = coveredThroughTs;
         lastCoveredThroughRowId = coveredThroughRowId;
         sectionStartTs = coveredThroughTs;
         sectionStartRowId = coveredThroughRowId;
-        await this.module.saveWorkingOverview({
-          conversationId,
-          runId,
-          epoch,
-          expectedFence: fence,
-          workingOverviewJson: JSON.stringify(rollingOverview),
-          mergedThroughOrdinal: ordinal,
-          stagedCursorJson: packResult.nextCursor ?? "",
-        });
+        if (mergeSucceeded) {
+          representedCount += 1;
+          mergedOrdinal = ordinal;
+          await this.module.saveWorkingOverview({
+            conversationId,
+            runId,
+            epoch,
+            expectedFence: fence,
+            workingOverviewJson: JSON.stringify(rollingOverview),
+            mergedThroughOrdinal: ordinal,
+            stagedCursorJson: packResult.nextCursor ?? "",
+          });
+        }
 
         // If coverage is complete and there's no continuation, we're done.
         if (packResult.coverageComplete && !packResult.nextCursor) {
@@ -556,7 +599,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
         expectedFence: fence,
         generationId,
         parentGenerationId: state.activeGenerationId,
-        representedSectionOrdinal: ordinal,
+        representedSectionOrdinal: mergedOrdinal,
         coveredThroughTimestampMs: lastCoveredThroughTs,
         coveredThroughRowId: lastCoveredThroughRowId,
         overviewJson,
@@ -630,13 +673,48 @@ export class AIChatCompactionCoordinator extends BaseModule {
         conversationId,
         state.epoch,
         AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns,
-        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1
+        10
       );
       if (turns.length === 0) return fallback;
-      // Turns are chronological; the retained suffix starts at the earliest
-      // retained turn's first row. The live turn is excluded upstream
+      // Token-budgeted retention (P2-15, FR-05): retain at least
+      // minRetainedCompleteTurns, then extend to older turns while the
+      // cumulative recent-turn cost stays within the assembler's 6,000-token
+      // recent-turn budget. The live turn is excluded upstream
       // (readRecentCompleteTurns only returns completed turns).
-      const earliest = turns[0];
+      const minRetain = AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns;
+      const budget = 6_000;
+      let retainedCount = 0;
+      let cumulative = 0;
+      let earliestIdx = turns.length - 1;
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const t = turns[i];
+        let cost = 0;
+        try {
+          const { rows } = await this.archive.readTurnRows(
+            conversationId,
+            Number(t.firstTimestampMs),
+            t.firstRowId,
+            Number(t.lastTimestampMs),
+            t.lastRowId,
+            200_000
+          );
+          let bytes = 0;
+          for (const r of rows) {
+            bytes += Buffer.byteLength(r.content ?? "", "utf8") + 8;
+          }
+          cost = Math.ceil(bytes / 4);
+        } catch {
+          cost = 0;
+        }
+        if (retainedCount < minRetain || cumulative + cost <= budget) {
+          cumulative += cost;
+          retainedCount += 1;
+          earliestIdx = i;
+        } else {
+          break;
+        }
+      }
+      const earliest = turns[earliestIdx];
       const earliestTs = Number(earliest.firstTimestampMs);
       const earliestRowId = earliest.firstRowId;
       if (!Number.isFinite(earliestTs) || earliestRowId <= 0) return fallback;
@@ -672,6 +750,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
   ): Promise<{
     startCursor?: string;
     maxOrdinal: number;
+    mergedThroughOrdinal: number;
     priorOverview: SectionSummaryV1 | null;
     priorRepresentedCount: number;
     coveredThroughTs: number;
@@ -750,8 +829,73 @@ export class AIChatCompactionCoordinator extends BaseModule {
       }
     }
 
-    let startCursor: string | undefined;
-    if (coveredThroughTs > 0 || coveredThroughRowId > 0) {
+    let mergedThroughOrdinal = 0;
+    let stagedCursor: string | undefined;
+    try {
+      const activeRun = await this.module.getActiveRun(conversationId);
+      if (
+        activeRun &&
+        activeRun.epoch === epoch &&
+        activeRun.revision === revision &&
+        (activeRun.state === "running" || activeRun.state === "paused")
+      ) {
+        const merged = Number(activeRun.mergedThroughOrdinal) || 0;
+        if (merged > 0) {
+          mergedThroughOrdinal = merged;
+          if (merged > maxOrdinal) {
+            maxOrdinal = merged;
+          }
+        }
+        if (activeRun.workingOverviewJson) {
+          const parsed = this.safeJsonParse(activeRun.workingOverviewJson);
+          const valid = this.validator.validate(
+            parsed,
+            new Set(representedSourceIds),
+            AI_CHAT_RECOVERABLE_DEFAULTS.overviewOutputTargetTokens
+          );
+          if (valid.ok && valid.summary) {
+            priorOverview = valid.summary;
+            priorRepresentedCount = Math.max(priorRepresentedCount, mergedThroughOrdinal);
+            const mergedSections = sections.filter(
+              (s) =>
+                s.revision === revision &&
+                (s.status === "staged" || s.status === "published") &&
+                s.ordinal <= mergedThroughOrdinal
+            );
+            let mergedTs = 0;
+            let mergedRowId = 0;
+            for (const s of mergedSections) {
+              if (
+                s.sourceEndTimestampMs > mergedTs ||
+                (s.sourceEndTimestampMs === mergedTs && s.sourceEndRowId > mergedRowId)
+              ) {
+                mergedTs = s.sourceEndTimestampMs;
+                mergedRowId = s.sourceEndRowId;
+              }
+            }
+            if (mergedTs > 0 || mergedRowId > 0) {
+              coveredThroughTs = mergedTs;
+              coveredThroughRowId = mergedRowId;
+            }
+          }
+        }
+        if (activeRun.stagedCursorJson) {
+          const decoded = decodeCursor(
+            activeRun.stagedCursorJson,
+            conversationId,
+            epoch
+          );
+          if (decoded) {
+            stagedCursor = activeRun.stagedCursorJson;
+          }
+        }
+      }
+    } catch {
+      stagedCursor = undefined;
+    }
+
+    let startCursor: string | undefined = stagedCursor;
+    if (!startCursor && (coveredThroughTs > 0 || coveredThroughRowId > 0)) {
       startCursor = encodeCursor({
         v: 1,
         conversationId,
@@ -765,6 +909,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
     return {
       startCursor,
       maxOrdinal,
+      mergedThroughOrdinal,
       priorOverview,
       priorRepresentedCount,
       coveredThroughTs,

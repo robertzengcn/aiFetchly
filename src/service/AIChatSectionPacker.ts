@@ -29,6 +29,7 @@ import {
 import { encodeSourceId } from "@/service/AIChatArchiveCursorCodec";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
 import { AIChatMessageArchiveModel } from "@/model/AIChatMessageArchive.model";
+import { AIChatArchiveTurnModel } from "@/model/AIChatArchiveTurn.model";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 
 /** A packed text fragment with exact code-point coverage. */
@@ -379,17 +380,49 @@ export class AIChatSectionPacker extends BaseModule {
     });
     const coverageComplete = noTruncation && allMessagesFullyCovered;
 
-    // Publish an exclusion boundary only when coverage is complete for the
-    // terminal turn in this batch (§9.2).
+    // Publish an exclusion boundary only when a complete terminal turn is
+    // fully covered (§9.2, FR-05). A page that cuts mid-turn (last fragment is
+    // a user message, or the turn projection is still open) stages fragments
+    // without advancing the compactable checkpoint.
     let exclusionBoundary: { timestampMs: number; rowId: number } | undefined;
     if (coverageComplete && fragments.length > 0) {
       const last = fragments[fragments.length - 1];
-      const ts = Date.parse(last.timestamp);
-      if (!Number.isNaN(ts)) {
-        exclusionBoundary = {
-          timestampMs: ts,
-          rowId: last.sourceRowId,
-        };
+      const lastIsUser = last.role === "user" && receipts.length === 0;
+      let terminalComplete = !lastIsUser;
+      if (terminalComplete) {
+        try {
+          const turnModel = new AIChatArchiveTurnModel(this.dbpath);
+          const lastTs = Date.parse(last.timestamp);
+          if (!Number.isNaN(lastTs)) {
+            const compactable = await turnModel.readCompactablePrefix(
+              input.conversationId,
+              epoch,
+              lastTs,
+              last.sourceRowId
+            );
+            const covering = compactable.filter(
+              (t) =>
+                Number(t.firstTimestampMs) <= lastTs &&
+                Number(t.lastTimestampMs) >= lastTs &&
+                t.firstRowId <= last.sourceRowId &&
+                t.lastRowId >= last.sourceRowId
+            );
+            if (covering.length > 0) {
+              terminalComplete = covering.every((t) => t.status === "completed");
+            }
+          }
+        } catch {
+          terminalComplete = !lastIsUser;
+        }
+      }
+      if (terminalComplete) {
+        const ts = Date.parse(last.timestamp);
+        if (!Number.isNaN(ts)) {
+          exclusionBoundary = {
+            timestampMs: ts,
+            rowId: last.sourceRowId,
+          };
+        }
       }
     }
 

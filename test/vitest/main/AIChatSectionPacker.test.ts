@@ -295,4 +295,38 @@ describe("AIChatSectionPacker", () => {
     expect(packed).toContain("same-ts-second");
     expect(packed).not.toContain("same-ts-third-after-snapshot");
   });
+
+  it("withholds exclusion when the terminal turn is incomplete (P1-1/FR-05)", async () => {
+    await seedMessages("conv-mid-turn", [
+      { role: "user", content: "q1", ts: 1_000 },
+      { role: "assistant", content: "a1", ts: 2_000 },
+      { role: "user", content: "q2 without reply", ts: 3_000 },
+    ]);
+    await indexConversation("conv-mid-turn");
+    const result = await packer.pack({
+      conversationId: "conv-mid-turn",
+      sourceCapacityTokens: 4_000,
+      endSnapshotTimestampMs: 4_000,
+      endSnapshotRowId: 0,
+    });
+    expect(result.fragments.length).toBe(3);
+    expect(result.exclusionBoundary).toBeUndefined();
+  });
+
+  it("withholds exclusion on truncated pages and continues via cursor (P1-1/AC-06)", async () => {
+    await seedMessages("conv-trunc", [
+      { role: "user", content: "x".repeat(2_000), ts: 1_000 },
+      { role: "assistant", content: "y".repeat(2_000), ts: 2_000 },
+    ]);
+    await indexConversation("conv-trunc");
+    const first = await packer.pack({
+      conversationId: "conv-trunc",
+      sourceCapacityTokens: 50,
+      endSnapshotTimestampMs: 3_000,
+      endSnapshotRowId: 0,
+    });
+    expect(first.coverageComplete).toBe(false);
+    expect(first.exclusionBoundary).toBeUndefined();
+    expect(first.nextCursor).not.toBeNull();
+  });
 });

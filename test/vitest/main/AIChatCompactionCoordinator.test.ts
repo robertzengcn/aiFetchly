@@ -107,6 +107,66 @@ function fakeSummarizer() {
 describe("AIChatCompactionCoordinator", () => {
   let coordinator: AIChatCompactionCoordinator;
 
+  it("section save does not advance mergedThroughOrdinal before overview merge (P2-3)", async () => {
+    const { AIChatCompactionModule } = await import("@/modules/AIChatCompactionModule");
+    const module = new AIChatCompactionModule();
+    const state = await new AIChatArchiveStateModel(tmpDir).ensureState("merge-checkpoint");
+    const claim = await module.claimRun({
+      conversationId: state.conversationId,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      trigger: "manual",
+      leaseOwner: "test",
+      snapshotEndTimestampMs: 2000,
+      snapshotEndRowId: 2,
+      retainedStartTimestampMs: 3000,
+      retainedStartRowId: 3,
+    });
+    await module.saveSectionAndCheckpoint({
+      conversationId: state.conversationId,
+      epoch: state.epoch,
+      revision: state.sourceRevision,
+      runId: claim.runId,
+      expectedFence: claim.fence,
+      stagedCursorJson: "",
+      section: {
+        sectionId: "unmerged",
+        workKey: "unmerged",
+        ordinal: 1,
+        sourceStartTimestampMs: 0,
+        sourceStartRowId: 0,
+        sourceEndTimestampMs: 2000,
+        sourceEndRowId: 2,
+        sourceManifestJson: "{}",
+        summaryJson: "{}",
+      },
+    });
+    expect((await module.getRun(claim.runId))?.mergedThroughOrdinal).toBe(0);
+  });
+
+  it("does not advance the checkpoint past an incomplete terminal turn (P1-1)", async () => {
+    await seedMessages("conv-mid-checkpoint", [
+      { role: "user", content: "q1", ts: 1_000 },
+      { role: "assistant", content: "a1", ts: 2_000 },
+      { role: "user", content: "q2 live", ts: 3_000 },
+    ]);
+    await indexConversation("conv-mid-checkpoint");
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-mid-checkpoint", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    const { AIChatCompactionModule } = await import("@/modules/AIChatCompactionModule");
+    const sections = await new AIChatCompactionModule().listSections(
+      "conv-mid-checkpoint",
+      (await new AIChatArchiveStateModel(tmpDir).getState("conv-mid-checkpoint"))?.epoch ?? ""
+    );
+    for (const s of sections) {
+      expect(s.sourceEndTimestampMs).toBeLessThanOrEqual(2_000);
+    }
+  });
+
   beforeAll(() => {
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
   });
