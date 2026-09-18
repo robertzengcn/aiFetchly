@@ -389,7 +389,21 @@ locally, components 35 files / 202 tests, utilityCode suites green.
 
 ### CI evidence
 
-- Test Suite (push, Test Suite green): run 35240095664 → `test` job green
-  on the branch head; macOS managed-copy + Windows/Ubuntu smoke matrix
-  re-run recorded after the two fixes (see branch checks).
+- Test Suite `test` job green on the branch head (runs 35240095664 /
+  35295183714 / 35339358287).
+- `managed-copy-macos` green (runs 35295183714 and 35339358287) — after
+  the two macOS defects it surfaced were fixed (symlinked-root
+  containment, helper execute/read guards).
+- `packaged-smoke-github (windows-2022)` green (runs 35295183714 and
+  35339358287) — zero Git spawns + plugin row on packaged Windows.
+- `packaged-smoke-github (macos-latest)` green (runs 35240095664,
+  35270311753, 35339358287).
+- `packaged-smoke-github (ubuntu-latest)`: BLOCKED by the pre-documented
+  repo-wide infra failure — GitHub evicts ubuntu runners ~2 minutes into
+  electron-packager ("runner has received a shutdown signal"), four
+  consecutive times across both the matrix job and ci.yml's package-smoke
+  job, with disk-free + swap hardening in place. Linux GF-1 evidence was
+  recorded from a LOCAL packaged run instead (empty-PATH relaunch, public
+  fixture install, zero git descendants — log in the PR description);
+  the ubuntu job stays failing-loud to track the infra issue.
 - Branch protection now requires `windows-shell-matrix` (NL-9).
