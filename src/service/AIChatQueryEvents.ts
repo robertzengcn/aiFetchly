@@ -55,6 +55,12 @@ export interface AIChatQueryStartEvent {
    * explicitly re-confirm the refreshed passage before it is ever quoted.
    */
   historySelectionChangedIds?: readonly string[];
+  /**
+   * Submitted refs hard-rejected (unavailable/oversized, not stale) (P2-10,
+   * AC-18). The renderer marks the surviving chips rejected so the user can
+   * remove or replace them.
+   */
+  historySelectionRejectedIds?: readonly string[];
 }
 
 export interface AIChatQueryTokenEvent {

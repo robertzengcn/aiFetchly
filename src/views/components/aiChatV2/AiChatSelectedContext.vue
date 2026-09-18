@@ -20,7 +20,10 @@
         size="x-small"
         variant="text"
         data-testid="ai-selected-context-clear"
+        :aria-label="t('aiChatHistory.clear_selections') || 'Clear selections'"
         @click="emitClear"
+        @keydown.enter="emitClear"
+        @keydown.space.prevent="emitClear"
       >
         {{ t("aiChatHistory.clear_selections") || "Clear selections" }}
       </v-btn>
@@ -32,6 +35,13 @@
         size="x-small"
         variant="tonal"
         :color="sel.rejected ? 'error' : sel.refreshed ? 'warning' : 'default'"
+        :title="
+          sel.rejected
+            ? t('aiChatHistory.source_unavailable') || 'This passage is no longer available.'
+            : sel.refreshed
+              ? t('aiChatHistory.source_changed') || 'This passage changed since selection and was refreshed.'
+              : undefined
+        "
         closable
         @click:close="emitRemove(sel.sourceId)"
       >

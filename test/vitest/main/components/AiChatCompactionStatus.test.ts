@@ -48,6 +48,7 @@ const i18n = createI18n({
         idle_detail: "Compaction is idle.",
         compaction_retry: "Retry",
         compaction_cancel: "Cancel compaction",
+        compaction_in_progress: "Compaction in progress ({packed} sections packed).",
       },
     },
   },
@@ -109,6 +110,11 @@ describe("AiChatCompactionStatus", () => {
     const chip = w.find('[data-testid="ai-compaction-status"]');
     expect(chip.exists()).toBe(true);
     expect(chip.text()).toContain("Compacting");
+  });
+
+  it("shows the packed section count while running (P2-11)", () => {
+    const w = mountStatus({ state: "running", runId: "run-2", sectionsPacked: 3 });
+    expect(w.text()).toContain("3");
   });
 
   it("renders the joined label for a joined run (never completed-by-proxy)", () => {

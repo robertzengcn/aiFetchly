@@ -1637,6 +1637,7 @@ function handleCompactionProgress(
     state: event.state,
     runId: event.runId,
     generationId: event.generationId,
+    sectionsPacked: event.sectionsPacked,
   };
   if (event.state === "completed") {
     compactNotice.value = true;
@@ -1693,8 +1694,20 @@ function syncActiveDraft(): void {
  * NOT draft a selection: otherwise a look-only browse would silently grow the
  * next request.
  */
-function handleHistoryNavigate(): void {
+function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
   showHistoryDrawer.value = false;
+  if (!excerpt) return;
+  void nextTick(() => {
+    const selector = `[data-message-id="${excerpt.messageId}"]`;
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const previous = el.style.outline;
+    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+    window.setTimeout(() => {
+      el.style.outline = previous;
+    }, 1_600);
+  });
 }
 
 /** Bounded retry for a failed/paused/cancelled compaction run (§13, FR-11). */
@@ -4176,12 +4189,18 @@ const onSend = async (
             const changed = new Set<string>(
               chunk.historySelectionChangedIds ?? []
             );
+            const rejected = new Set<string>(
+              (chunk as { historySelectionRejectedIds?: readonly string[] })
+                .historySelectionRejectedIds ?? []
+            );
             selectedContextItems.value = selectedContextItems.value
               .filter((item) => !accepted.has(item.sourceId))
               .map((item) =>
                 changed.has(item.sourceId)
                   ? { ...item, refreshed: true }
-                  : item
+                  : rejected.has(item.sourceId)
+                    ? { ...item, rejected: true }
+                    : item
               );
             syncActiveDraft();
           }

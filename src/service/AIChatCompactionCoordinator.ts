@@ -89,6 +89,7 @@ export interface CompactionStatusSnapshot {
   readonly state: string;
   readonly runId?: string;
   readonly generationId?: string;
+  readonly sectionsPacked?: number;
 }
 
 interface InFlightRun {

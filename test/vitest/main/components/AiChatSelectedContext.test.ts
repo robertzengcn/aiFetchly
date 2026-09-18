@@ -49,15 +49,16 @@ const i18n = createI18n({
 });
 
 const VChip = {
-  props: ["color", "closable"],
+  props: ["color", "closable", "title"],
   emits: ["click:close"],
   template:
-    '<span class="v-chip" :data-color="color ?? \'default\'" @click="$emit(\'click:close\')"><slot /></span>',
+    '<span class="v-chip" :data-color="color ?? \'default\'" :title="title" @click="$emit(\'click:close\')"><slot /></span>',
 };
 const VBtn = {
+  props: ["ariaLabel"],
   emits: ["click"],
   template:
-    '<button class="v-btn" data-testid="ai-selected-context-clear" @click="$emit(\'click\')"><slot /></button>',
+    '<button class="v-btn" data-testid="ai-selected-context-clear" :aria-label="ariaLabel" @click="$emit(\'click\')"><slot /></button>',
 };
 
 function mountPanel(selections: SelectedContextItem[]) {
@@ -153,5 +154,23 @@ describe("AiChatSelectedContext", () => {
     await w.find('[data-testid="ai-selected-context-clear"]').trigger("click");
     expect(w.emitted("clear")).toBeTruthy();
     expect(w.emitted("clear")!.length).toBe(1);
+  });
+
+  it("exposes an accessible label on the clear button (P2-12)", () => {
+    const w = mountPanel([makeItem({ sourceId: "c-1", preview: "x" })]);
+    const btn = w.find('[data-testid="ai-selected-context-clear"]');
+    expect(btn.attributes("aria-label")).toBeTruthy();
+  });
+
+  it("titles rejected and refreshed chips with the reason (P2-10)", () => {
+    const w = mountPanel([
+      makeItem({ sourceId: "bad", preview: "gone", rejected: true }),
+      makeItem({ sourceId: "moved", preview: "changed", refreshed: true }),
+      makeItem({ sourceId: "ok", preview: "fine" }),
+    ]);
+    const chips = w.findAll(".v-chip");
+    expect(chips[0].attributes("title")).toBeTruthy();
+    expect(chips[1].attributes("title")).toBeTruthy();
+    expect(chips[2].attributes("title")).toBeUndefined();
   });
 });

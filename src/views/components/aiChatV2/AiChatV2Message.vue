@@ -1,6 +1,6 @@
 <template>
   <!-- Plan approval card renders inline (no bubble wrapper) -->
-  <div v-if="isPlanCard" class="v2-message v2-message--plan">
+  <div v-if="isPlanCard" class="v2-message v2-message--plan" :data-message-id="message.id">
     <AiChatV2PlanApprovalCard
       :plan-state="message.metadata!.planStateView!"
       :disabled="disabled"
@@ -9,7 +9,7 @@
       @request-changes="(fb) => emit('request-plan-changes', fb)"
     />
   </div>
-  <div v-else class="v2-message" :class="`v2-message--${message.role}`">
+  <div v-else class="v2-message" :class="`v2-message--${message.role}`" :data-message-id="message.id">
     <div class="v2-message__bubble">
       <div class="v2-message__meta">
         <span class="v2-message__role">{{ roleLabel }}</span>

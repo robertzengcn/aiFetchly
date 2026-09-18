@@ -160,11 +160,22 @@ const detail = computed(() => {
         "Joined an already-running compaction for this conversation."
       );
     case "running":
-    case "queued":
+    case "queued": {
+      const packed = props.status?.sectionsPacked ?? 0;
+      if (packed > 0) {
+        const rendered = t("aiChatCompaction.compaction_in_progress", {
+          packed,
+        });
+        if (rendered && rendered !== "aiChatCompaction.compaction_in_progress") {
+          return rendered;
+        }
+        return `Compaction in progress (${packed} sections packed).`;
+      }
       return (
         t("aiChatCompaction.running_detail") ||
         "Compacting earlier history in bounded sections."
       );
+    }
     default:
       return t("aiChatCompaction.idle_detail") || "Compaction is idle.";
   }

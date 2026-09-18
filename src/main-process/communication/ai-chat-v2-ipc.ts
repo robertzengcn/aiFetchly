@@ -549,6 +549,8 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             historySelectionAcceptedIds: e.historySelectionAcceptedIds,
             // §4.2: surviving chips whose source moved are marked changed.
             historySelectionChangedIds: e.historySelectionChangedIds,
+            // P2-10: surviving chips that were hard-rejected are marked rejected.
+            historySelectionRejectedIds: e.historySelectionRejectedIds,
           });
           break;
         case "token":

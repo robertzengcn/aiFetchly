@@ -390,12 +390,14 @@ export class AIChatQueryEngine {
     readonly excerpts: SelectedHistoryExcerptInput[];
     readonly rejectedCount: number;
     readonly changedIds: readonly string[];
+    readonly rejectedIds: readonly string[];
   }> {
     const empty = {
       metadata: [] as ChatV2HistorySelectionMetadata[],
       excerpts: [] as SelectedHistoryExcerptInput[],
       rejectedCount: 0,
       changedIds: [] as readonly string[],
+      rejectedIds: [] as readonly string[],
     };
     if (sourceIds.length === 0) return empty;
     if (!isArchiveReadsEnabled()) return empty;
@@ -430,13 +432,18 @@ export class AIChatQueryEngine {
           exact: e.exact,
         })
       );
+      const changed = (result.refreshed ?? []).map((r) => r.submittedId);
+      const changedSet = new Set(changed);
       return {
         metadata,
         excerpts: toSelectedHistoryExcerptInputs(result.resolved),
         rejectedCount: result.rejected.length,
         // Stale references are quoted nowhere; their chips survive for
         // explicit user re-confirmation (§4.2, AC-18).
-        changedIds: (result.refreshed ?? []).map((r) => r.submittedId),
+        changedIds: changed,
+        // Hard rejections (unavailable/oversized, not stale) mark chips
+        // rejected so the user can remove or replace them (P2-10, AC-18).
+        rejectedIds: result.rejected.filter((id) => !changedSet.has(id)),
       };
     } catch (err) {
       // Capacity rejections are turn-blocking, not degrade-to-empty.
@@ -447,7 +454,11 @@ export class AIChatQueryEngine {
         throw err;
       }
       console.warn("[ai-chat-v2] history selection resolution failed:", err);
-      return { ...empty, rejectedCount: sourceIds.length };
+      return {
+        ...empty,
+        rejectedCount: sourceIds.length,
+        rejectedIds: [...sourceIds],
+      };
     }
   }
 
@@ -782,6 +793,8 @@ export class AIChatQueryEngine {
     let historySelectionAcceptedIds: readonly string[] = [];
     /** Submitted refs whose source moved (§4.2), reported on `start`. */
     let historySelectionChangedIds: readonly string[] = [];
+    /** Submitted refs hard-rejected (unavailable/oversized), reported on `start`. */
+    let historySelectionRejectedIds: readonly string[] = [];
 
     try {
       conversationId = module.createConversationIfNeeded(
@@ -899,6 +912,7 @@ export class AIChatQueryEngine {
         (m) => m.sourceId
       );
       historySelectionChangedIds = selectionResolution.changedIds;
+      historySelectionRejectedIds = selectionResolution.rejectedIds;
 
       // "Current user + selected" allocation slot: the selected archive
       // passages are folded into the SAME user message the user authored, so
@@ -1197,6 +1211,7 @@ export class AIChatQueryEngine {
       messageId: assistantMessageId,
       historySelectionAcceptedIds,
       historySelectionChangedIds,
+      historySelectionRejectedIds,
     });
     if (textApprovedPlanState) {
       eventSink.emit({

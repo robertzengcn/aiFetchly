@@ -391,6 +391,7 @@ export interface ChatV2StreamChunk {
    * user re-confirmation.
    */
   historySelectionChangedIds?: readonly string[];
+  historySelectionRejectedIds?: readonly string[];
   question?: AIChatPlanQuestionView;
   planVersion?: AIChatPlanVersionView;
   retryAttempt?: number;
