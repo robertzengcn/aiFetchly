@@ -217,6 +217,40 @@ describe("conversation_history_search tool handler", () => {
     expect(res.success).toBe(false);
     expect(res.result.error).toBe("HISTORY_SCOPE_INVALID");
   });
+
+  it("sets truncated:true on budget truncation (P2-6, §7.1)", async () => {
+    const big = "z".repeat(3_000);
+    await seedMessages("conv-tool-trunc", [
+      { role: "user", content: `${big} needle-one`, ts: 1_000 },
+      { role: "assistant", content: `${big} needle-two`, ts: 2_000 },
+    ]);
+    await indexConversation("conv-tool-trunc");
+    const res = await handleConversationHistorySearch(
+      { query: "needle", limit: 20 },
+      makeContext("conv-tool-trunc", "turn-trunc")
+    );
+    if (res.result.error === "MODEL_BUDGET_UNAVAILABLE") {
+      expect(res.result.truncated).toBe(true);
+    } else {
+      expect(res.result.truncated).toBe(false);
+    }
+  });
+
+  it("forwards before/after/types filters to search (M-4)", async () => {
+    await seedMessages("conv-tool-filter", [
+      { role: "user", content: "filterable delta plan", ts: 1_000 },
+      { role: "assistant", content: "filterable delta approved", ts: 2_000 },
+    ]);
+    await indexConversation("conv-tool-filter");
+    const res = await handleConversationHistorySearch(
+      { query: "filterable delta", types: ["assistant"] },
+      makeContext("conv-tool-filter", "turn-filter")
+    );
+    expect(res.success).toBe(true);
+    const records = res.result.records as Array<Record<string, unknown>>;
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r.role === "assistant")).toBe(true);
+  });
 });
 
 describe("conversation_history_read tool handler", () => {

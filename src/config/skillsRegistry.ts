@@ -1172,6 +1172,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           minLength: 1,
           maxLength: 200,
         },
+        before: {
+          type: "string",
+          description:
+            "Only matches before this ISO datetime (exclusive).",
+        },
+        after: {
+          type: "string",
+          description:
+            "Only matches after this ISO datetime (exclusive).",
+        },
+        types: {
+          type: "array",
+          description:
+            "Filter by message role (user, assistant, system, tool).",
+          items: {
+            type: "string",
+            enum: ["user", "assistant", "system", "tool"],
+          },
+          maxItems: 4,
+        },
         cursor: {
           type: "string",
           description:

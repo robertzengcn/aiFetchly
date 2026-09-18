@@ -20,6 +20,8 @@ import {
   conversationHistorySearchInputSchema,
   conversationHistoryReadInputSchema,
 } from "@/schemas/aiChatHistoryTools";
+import { TOOL_HISTORY_LOOKUP_CONTENT_CHARS } from "@/entityTypes/conversationToolHistoryTypes";
+import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 
 /**
@@ -211,12 +213,18 @@ export class AIChatHistoryRetrievalService {
   async search(input: {
     conversationId: string;
     query: string;
+    before?: string;
+    after?: string;
+    types?: string[];
     cursor?: string;
     limit?: number;
     turnId?: string;
   }): Promise<SearchResult> {
     const parsed = conversationHistorySearchInputSchema.safeParse({
       query: input.query,
+      before: input.before,
+      after: input.after,
+      types: input.types,
       cursor: input.cursor,
       limit: input.limit,
     });
@@ -262,6 +270,18 @@ export class AIChatHistoryRetrievalService {
       // (which fails closed on forged/foreign cursors).
       const first = splitSearchCursor(parsed.data.cursor);
       const limit = parsed.data.limit;
+      const beforeMs = parsed.data.before ? Date.parse(parsed.data.before) : NaN;
+      const afterMs = parsed.data.after ? Date.parse(parsed.data.after) : NaN;
+      const typeSet = parsed.data.types
+        ? new Set<string>(parsed.data.types)
+        : null;
+      const matchesFilters = (rec: HistoryExcerpt): boolean => {
+        if (typeSet && !typeSet.has(rec.role)) return false;
+        const ts = Date.parse(rec.timestamp);
+        if (!Number.isNaN(beforeMs) && !(ts < beforeMs)) return false;
+        if (!Number.isNaN(afterMs) && !(ts > afterMs)) return false;
+        return true;
+      };
       // Per-call response allowance for search (PRD FR-02: 2,000 tokens
       // default, reduced when the active context has less room).
       const perCallCap = 2_000;
@@ -302,6 +322,9 @@ export class AIChatHistoryRetrievalService {
         skip = 0;
         for (let i = resumeIndex; i < page.records.length; i++) {
           const rec = page.records[i];
+          // Caller-supplied before/after/types filters (M-4, FR-02): withheld
+          // records are skipped without budget cost, like dedup-skipped ones.
+          if (!matchesFilters(rec)) continue;
           // Caller's limit reached: the tail stays unexamined and resumable
           // via the intra-page cursor below (never silently dropped).
           if (records.length >= limit) break;
@@ -376,7 +399,83 @@ export class AIChatHistoryRetrievalService {
         // so no window of the archive is ever skipped.
         nextCursor = pendingBackend;
       }
-      const scanComplete = backendComplete && !truncatedByBudget;
+      let scanComplete = backendComplete && !truncatedByBudget;
+      let fallbackExhausted = false;
+      // Bounded source fallback (M-3, FR-02/§15.5): when the fragment index is
+      // incomplete and the backend walk found nothing, scan original messages
+      // directly (literal, case-insensitive) within a tight row bound instead
+      // of reporting a false HISTORY_NO_MATCH.
+      if (
+        records.length === 0 &&
+        backendComplete &&
+        !truncatedByBudget &&
+        !indexComplete &&
+        !backendCursor
+      ) {
+        const needle = parsed.data.query.toLowerCase();
+        let cursor: string | undefined;
+        let rowsSeen = 0;
+        for (let pages = 0; pages < 2 && records.length < limit; pages++) {
+          const src = await this.archive.readPage({
+            conversationId: input.conversationId,
+            cursor,
+            maxRows: 64,
+            maxCodePoints: 8_000,
+          });
+          if (src.records.length === 0) {
+            scanComplete = true;
+            break;
+          }
+          for (const rec of src.records) {
+            rowsSeen += 1;
+            if (records.length >= limit) break;
+            if (!matchesFilters(rec)) continue;
+            if (!rec.text.toLowerCase().includes(needle)) continue;
+            const decoded = this.tryDecodeRecord(rec.sourceId, rec.text);
+            if (
+              decoded &&
+              this.isCovered(
+                b,
+                decoded.payload.rowId,
+                decoded.payload.startCodePoint,
+                decoded.payload.endCodePoint
+              )
+            ) {
+              continue;
+            }
+            const tokens = this.estimateTokens(rec.text);
+            if (
+              callTokens + tokens > perCallCap ||
+              b.consumedTokens + tokens >
+                AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn
+            ) {
+              truncatedByBudget = true;
+              break;
+            }
+            if (decoded) {
+              this.mergeInterval(
+                b,
+                decoded.payload.rowId,
+                decoded.payload.startCodePoint,
+                decoded.payload.endCodePoint
+              );
+            }
+            callTokens += tokens;
+            b.consumedTokens += tokens;
+            records.push(rec);
+          }
+          if (truncatedByBudget) break;
+          if (!src.nextCursor) {
+            scanComplete = true;
+            break;
+          }
+          cursor = src.nextCursor;
+          scanComplete = false;
+        }
+        if (rowsSeen >= 128 && records.length === 0 && !scanComplete) {
+          fallbackExhausted = true;
+        }
+      }
       const overBudget =
         b.consumedTokens >=
         AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn;
@@ -389,7 +488,7 @@ export class AIChatHistoryRetrievalService {
         errorCode:
           records.length === 0 && scanComplete && !truncatedByBudget
             ? "HISTORY_NO_MATCH"
-            : truncatedByBudget || overBudget
+            : truncatedByBudget || overBudget || fallbackExhausted
               ? "MODEL_BUDGET_UNAVAILABLE"
               : undefined,
       };
@@ -582,7 +681,7 @@ export class AIChatHistoryRetrievalService {
     // around the anchor. A neighbor cut by the remaining allowance marks the
     // envelope truncated so the model knows more content exists.
     const neighborCount = neighbors ?? 0;
-    const neighborRecs =
+    const neighborRes =
       neighborCount > 0 && !cursor
         ? await this.readNeighbors(
             conversationId,
@@ -591,7 +690,8 @@ export class AIChatHistoryRetrievalService {
             neighborCount,
             b
           )
-        : [];
+        : { records: [], storedIncomplete: false };
+    const neighborRecs = neighborRes.records;
     const neighborTruncated = neighborRecs.some((n) => n.hasMore);
 
     return {
@@ -599,7 +699,8 @@ export class AIChatHistoryRetrievalService {
       nextCursor: hasMore ? encodeReadCursor(payload.rowId, pageEnd) : null,
       truncated: hasMore || neighborTruncated,
       sourceRevision: meta.revision,
-      storedContentIncomplete: false,
+      storedContentIncomplete:
+        storedIncompleteForMessages([one.message]) || neighborRes.storedIncomplete,
       errorCode:
         hasMore && one.refreshed
           ? "SOURCE_CHANGED"
@@ -659,7 +760,7 @@ export class AIChatHistoryRetrievalService {
       const pageText = sliceByCodePoints(text, 0, pageEnd);
       const hasMore = pageEnd < totalCp;
       const records = [
-        toExcerptWithSpan(only, meta, pageText, 0, pageEnd, true),
+        toExcerptWithSpan(only, meta, pageText, 0, pageEnd, !hasMore),
       ];
       this.mergeInterval(b, only.id, 0, pageEnd);
       b.consumedTokens += this.estimateTokens(pageText);
@@ -668,7 +769,7 @@ export class AIChatHistoryRetrievalService {
         nextCursor: hasMore ? encodeReadCursor(only.id, pageEnd) : null,
         truncated: hasMore,
         sourceRevision: meta.revision,
-        storedContentIncomplete: false,
+        storedContentIncomplete: storedIncompleteForMessages([only]),
         errorCode: hasMore ? "HISTORY_PARTIAL_SCAN" : undefined,
       };
     }
@@ -679,13 +780,14 @@ export class AIChatHistoryRetrievalService {
     const records = candidates.slice(0, 20).map((m) => {
       const text = m.content ?? "";
       const preview = sliceByCodePoints(text, 0, 500);
+      const full = codePointLength(preview) >= codePointLength(text);
       return toExcerptWithSpan(
         m,
         meta,
         preview,
         0,
         codePointLength(preview),
-        true
+        full
       );
     });
     for (const r of records) {
@@ -705,7 +807,7 @@ export class AIChatHistoryRetrievalService {
       nextCursor: null,
       truncated: false,
       sourceRevision: meta.revision,
-      storedContentIncomplete: false,
+      storedContentIncomplete: storedIncompleteForMessages(candidates.slice(0, 20)),
       // Multiple candidates is itself a form of SOURCE_CHANGED (identity not
       // unique); a single exact row resolves cleanly.
       errorCode: "SOURCE_CHANGED",
@@ -732,8 +834,17 @@ export class AIChatHistoryRetrievalService {
     if (!from || !to) {
       return rejectRead(meta, "HISTORY_SCOPE_INVALID");
     }
-    // Validate range direction: from must be at or before to.
-    if (from.rowId > to.rowId) {
+    // Validate range direction as a composite (timestamp, rowId) (P2-7,
+    // FR-01/FR-03): rowId-only ordering rejects valid ranges when timestamps
+    // are out of id order, and accepts inverted ones when they are not.
+    const fromAnchor = await this.archive.resolveOne(conversationId, fromSourceId);
+    const toAnchor = await this.archive.resolveOne(conversationId, toSourceId);
+    if (!fromAnchor?.message || !toAnchor?.message) {
+      return rejectRead(meta, "SOURCE_UNAVAILABLE");
+    }
+    const fromTs = fromAnchor.message.timestamp.getTime();
+    const toTs = toAnchor.message.timestamp.getTime();
+    if (fromTs > toTs || (fromTs === toTs && from.rowId > to.rowId)) {
       return rejectRead(meta, "HISTORY_SCOPE_INVALID");
     }
     // Resume position from the range continuation cursor when supplied.
@@ -835,6 +946,17 @@ export class AIChatHistoryRetrievalService {
     const reachedEnd = rangeExhausted || lastIncludedRowId >= to.rowId;
     const backendHasMore = page.nextCursor !== null;
     const hasMore = !reachedEnd && (backendHasMore || lastIncludedRowId < to.rowId);
+    let rangeIncomplete = false;
+    try {
+      const msgs: AIChatMessageEntity[] = [];
+      for (const r of inRange.slice(0, 20)) {
+        const resolved = await this.archive.resolveOne(conversationId, r.sourceId);
+        if (resolved?.message) msgs.push(resolved.message);
+      }
+      rangeIncomplete = storedIncompleteForMessages(msgs);
+    } catch {
+      rangeIncomplete = false;
+    }
     return {
       records: inRange,
       nextCursor: hasMore
@@ -842,7 +964,7 @@ export class AIChatHistoryRetrievalService {
         : null,
       truncated: hasMore,
       sourceRevision: page.sourceRevision,
-      storedContentIncomplete: false,
+      storedContentIncomplete: rangeIncomplete,
       errorCode: hasMore ? "HISTORY_PARTIAL_SCAN" : undefined,
     };
   }
@@ -860,9 +982,9 @@ export class AIChatHistoryRetrievalService {
     meta: { epoch: string; revision: number; indexState: string },
     neighbors: number,
     b: MutableBudget
-  ): Promise<HistoryExcerpt[]> {
+  ): Promise<{ records: HistoryExcerpt[]; storedIncomplete: boolean }> {
     const count = Math.min(Math.max(neighbors, 0), 2);
-    if (count === 0) return [];
+    if (count === 0) return { records: [], storedIncomplete: false };
     const remainingCumulative =
       AI_CHAT_RECOVERABLE_DEFAULTS.retrievalMaxCumulativeTokensPerTurn -
       b.consumedTokens;
@@ -870,7 +992,7 @@ export class AIChatHistoryRetrievalService {
       AI_CHAT_RECOVERABLE_DEFAULTS.retrievalDefaultOutputTokens,
       remainingCumulative
     );
-    if (allowance <= 0) return [];
+    if (allowance <= 0) return { records: [], storedIncomplete: false };
     let remainingChars = allowance * 4;
     const rows = await this.archive.readNeighbors(
       conversationId,
@@ -895,7 +1017,10 @@ export class AIChatHistoryRetrievalService {
       b.consumedTokens += this.estimateTokens(text);
       remainingChars -= pageEnd;
     }
-    return out;
+    return {
+      records: out,
+      storedIncomplete: storedIncompleteForMessages([anchor, ...rows]),
+    };
   }
 
   /**
@@ -1065,6 +1190,43 @@ export class AIChatHistoryRetrievalService {
     const payload = decodeSourceIdRaw(sourceId);
     return payload ? { payload } : null;
   }
+}
+
+/**
+ * Stored-completeness probe (M-2, §7.3): true when the archive's stored copy
+ * is itself incomplete relative to the original — a message metadata
+ * truncation flag, or a tool pair whose content was clipped
+ * (content_truncated). Distinct from this response's truncated flag.
+ */
+function messageStoredIncomplete(msg: AIChatMessageEntity): boolean {
+  if (!msg.metadata) return false;
+  try {
+    const parsed = JSON.parse(msg.metadata) as Record<string, unknown>;
+    return (
+      parsed.truncated === true ||
+      parsed.contentTruncated === true ||
+      parsed.content_truncated === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+function storedIncompleteForMessages(msgs: readonly AIChatMessageEntity[]): boolean {
+  for (const m of msgs) {
+    if (messageStoredIncomplete(m)) return true;
+    // Tool-history representation clips payloads at TOOL_HISTORY_LOOKUP_CONTENT_CHARS
+    // (content_truncated); a tool row exceeding that bound is incomplete in the
+    // tool-history view, so surface it here (M-2, §7.3).
+    if (
+      (m.messageType === MessageType.TOOL_CALL ||
+        m.messageType === MessageType.TOOL_RESULT) &&
+      (m.content ?? "").length > TOOL_HISTORY_LOOKUP_CONTENT_CHARS
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Build a rejected ReadResult with the current source revision. */

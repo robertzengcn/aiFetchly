@@ -19,9 +19,15 @@ export async function handleConversationHistorySearch(
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
   const turnId = context.sourceUserMessageId;
   const service = getRetrievalService(context.conversationId, turnId);
+  const types = Array.isArray(args.types)
+    ? (args.types.filter((t) => typeof t === "string") as string[])
+    : undefined;
   const result = await service.search({
     conversationId: context.conversationId,
     query: String(args.query ?? ""),
+    before: typeof args.before === "string" ? args.before : undefined,
+    after: typeof args.after === "string" ? args.after : undefined,
+    types,
     cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     limit: typeof args.limit === "number" ? args.limit : undefined,
     turnId,
@@ -42,7 +48,7 @@ export async function handleConversationHistorySearch(
     result: {
       records,
       next_cursor: result.nextCursor,
-      truncated: false,
+      truncated: result.errorCode === "MODEL_BUDGET_UNAVAILABLE",
       scan_complete: result.scanComplete,
       index_complete: result.indexComplete,
       ...(result.errorCode !== undefined

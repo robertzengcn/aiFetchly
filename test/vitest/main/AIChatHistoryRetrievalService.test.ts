@@ -159,6 +159,58 @@ describe("AIChatHistoryRetrievalService", () => {
       expect(res.errorCode).toBe("HISTORY_NO_MATCH");
     });
 
+    it("applies before/after/types filters (M-4/FR-02)", async () => {
+      await seedMessages("conv-filter", [
+        { role: "user", content: "alpha launch plan", ts: 1_000 },
+        { role: "assistant", content: "alpha launch approved", ts: 2_000 },
+        { role: "user", content: "alpha retrospective", ts: 3_000 },
+      ]);
+      await indexConversation("conv-filter");
+      const byRole = await service.search({
+        conversationId: "conv-filter",
+        query: "alpha",
+        types: ["assistant"],
+        turnId: "t-filter-1",
+      });
+      expect(byRole.records.length).toBeGreaterThan(0);
+      expect(byRole.records.every((r) => r.role === "assistant")).toBe(true);
+      const byAfter = await service.search({
+        conversationId: "conv-filter",
+        query: "alpha",
+        after: new Date(2_500).toISOString(),
+        turnId: "t-filter-2",
+      });
+      expect(byAfter.records.length).toBeGreaterThan(0);
+      expect(
+        byAfter.records.every((r) => Date.parse(r.timestamp) > 2_500)
+      ).toBe(true);
+      const byBefore = await service.search({
+        conversationId: "conv-filter",
+        query: "alpha",
+        before: new Date(1_500).toISOString(),
+        turnId: "t-filter-3",
+      });
+      expect(byBefore.records.length).toBeGreaterThan(0);
+      expect(
+        byBefore.records.every((r) => Date.parse(r.timestamp) < 1_500)
+      ).toBe(true);
+    });
+
+    it("falls back to bounded source lookup when the index is incomplete (M-3)", async () => {
+      await seedMessages("conv-fallback", [
+        { role: "user", content: "fallback needle phrase", ts: 1_000 },
+      ]);
+      await new AIChatArchiveStateModel(tmpDir).ensureState("conv-fallback");
+      const res = await service.search({
+        conversationId: "conv-fallback",
+        query: "fallback needle",
+        turnId: "t-fallback",
+      });
+      expect(res.records.length).toBeGreaterThan(0);
+      expect(res.errorCode).toBeUndefined();
+      expect(res.indexComplete).toBe(false);
+    });
+
     it("returns a hit on backend page 2 inside one tool call (§7.1.5)", async () => {
       const excerpt = {
         sourceId: encodeSourceId({
@@ -351,6 +403,95 @@ describe("AIChatHistoryRetrievalService", () => {
         args: { source_id: sid },
       });
       expect(res.errorCode).toBe("SOURCE_UNAVAILABLE");
+    });
+
+    it("marks sliced message_id previews exact:false (P2-8)", async () => {
+      const repo =
+        SqliteDb.getInstance(tmpDir).connection.getRepository(
+          AIChatMessageEntity
+        );
+      const entity = new AIChatMessageEntity();
+      entity.messageId = "dup-msg";
+      entity.conversationId = "conv-preview";
+      entity.role = "user";
+      entity.content = "p".repeat(600);
+      entity.timestamp = new Date(1_000);
+      entity.messageType = MessageType.MESSAGE;
+      await repo.save(entity);
+      const entity2 = new AIChatMessageEntity();
+      entity2.messageId = "dup-msg";
+      entity2.conversationId = "conv-preview";
+      entity2.role = "assistant";
+      entity2.content = "short";
+      entity2.timestamp = new Date(2_000);
+      entity2.messageType = MessageType.MESSAGE;
+      await repo.save(entity2);
+      await indexConversation("conv-preview");
+      const res = await service.read({
+        conversationId: "conv-preview",
+        args: { message_id: "dup-msg" },
+      });
+      expect(res.errorCode).toBe("SOURCE_CHANGED");
+      const longPreview = res.records.find((r) => r.text.length > 500);
+      expect(longPreview).toBeUndefined();
+      const sliced = res.records.find((r) => r.role === "user");
+      expect(sliced?.exact).toBe(false);
+    });
+
+    it("surfaces storedContentIncomplete from message truncation flags (M-2)", async () => {
+      const repo =
+        SqliteDb.getInstance(tmpDir).connection.getRepository(
+          AIChatMessageEntity
+        );
+      const entity = new AIChatMessageEntity();
+      entity.messageId = "msg-trunc-0";
+      entity.conversationId = "conv-trunc-flag";
+      entity.role = "assistant";
+      entity.content = "clipped tool result";
+      entity.timestamp = new Date(1_000);
+      entity.messageType = MessageType.MESSAGE;
+      entity.metadata = JSON.stringify({ truncated: true });
+      await repo.save(entity);
+      await indexConversation("conv-trunc-flag");
+      const search = await service.search({
+        conversationId: "conv-trunc-flag",
+        query: "clipped tool",
+      });
+      expect(search.records.length).toBeGreaterThan(0);
+      const res = await service.read({
+        conversationId: "conv-trunc-flag",
+        args: { source_id: search.records[0].sourceId },
+      });
+      expect(res.errorCode).toBeUndefined();
+      expect(res.storedContentIncomplete).toBe(true);
+    });
+
+    it("validates range direction on composite (timestamp, rowId) (P2-7)", async () => {
+      await seedMessages("conv-range", [
+        { role: "user", content: "range one apple", ts: 1_000 },
+        { role: "assistant", content: "range two apple", ts: 2_000 },
+      ]);
+      await indexConversation("conv-range");
+      const first = await service.search({
+        conversationId: "conv-range",
+        query: "range one apple",
+        turnId: "t-range-1",
+      });
+      const second = await service.search({
+        conversationId: "conv-range",
+        query: "range two apple",
+        turnId: "t-range-2",
+      });
+      expect(first.records.length).toBeGreaterThan(0);
+      expect(second.records.length).toBeGreaterThan(0);
+      const res = await service.read({
+        conversationId: "conv-range",
+        args: {
+          from_source_id: second.records[0].sourceId,
+          to_source_id: first.records[0].sourceId,
+        },
+      });
+      expect(res.errorCode).toBe("HISTORY_SCOPE_INVALID");
     });
 
     it("returns SOURCE_CHANGED when revision mismatches", async () => {
