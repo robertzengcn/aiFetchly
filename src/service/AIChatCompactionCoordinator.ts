@@ -679,48 +679,21 @@ export class AIChatCompactionCoordinator extends BaseModule {
         conversationId,
         state.epoch,
         AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns,
-        10
+        AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1
       );
       if (turns.length === 0) return fallback;
-      // Token-budgeted retention (P2-15, FR-05): retain at least
-      // minRetainedCompleteTurns, then extend to older turns while the
-      // cumulative recent-turn cost stays within the assembler's 6,000-token
-      // recent-turn budget. The live turn is excluded upstream
+      // Turn-count retention (FR-05): the retained suffix starts at the
+      // earliest of the newest minRetainedCompleteTurns complete turns. This
+      // intentionally differs from the assembler's token-budgeted verbatim
+      // window (P2-15 ruling): compacted turns remain available via the
+      // published overview + archive reads, while the assembler keeps up to
+      // its token budget verbatim in context. Extending compaction retention
+      // to the full token budget would make AC-01's five-turn conversation a
+      // correct no-op and stall incremental coverage.
+      // Turns are chronological; the retained suffix starts at the earliest
+      // retained turn's first row. The live turn is excluded upstream
       // (readRecentCompleteTurns only returns completed turns).
-      const minRetain = AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns;
-      const budget = 6_000;
-      let retainedCount = 0;
-      let cumulative = 0;
-      let earliestIdx = turns.length - 1;
-      for (let i = turns.length - 1; i >= 0; i--) {
-        const t = turns[i];
-        let cost = 0;
-        try {
-          const { rows } = await this.archive.readTurnRows(
-            conversationId,
-            Number(t.firstTimestampMs),
-            t.firstRowId,
-            Number(t.lastTimestampMs),
-            t.lastRowId,
-            200_000
-          );
-          let bytes = 0;
-          for (const r of rows) {
-            bytes += Buffer.byteLength(r.content ?? "", "utf8") + 8;
-          }
-          cost = Math.ceil(bytes / 4);
-        } catch {
-          cost = 0;
-        }
-        if (retainedCount < minRetain || cumulative + cost <= budget) {
-          cumulative += cost;
-          retainedCount += 1;
-          earliestIdx = i;
-        } else {
-          break;
-        }
-      }
-      const earliest = turns[earliestIdx];
+      const earliest = turns[0];
       const earliestTs = Number(earliest.firstTimestampMs);
       const earliestRowId = earliest.firstRowId;
       if (!Number.isFinite(earliestTs) || earliestRowId <= 0) return fallback;

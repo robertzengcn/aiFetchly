@@ -219,6 +219,43 @@ describe("AIChatCompactionCoordinator", () => {
     expect(Array.isArray(parsed.pending)).toBe(true);
   });
 
+  it("publishes distinct generations across three incremental cycles (AC-01)", async () => {
+    const { AIChatArchiveIndexer } = await import("@/service/AIChatArchiveIndexer");
+    const conv = "conv-ac01";
+    await new AIChatArchiveStateModel(tmpDir).ensureState(conv);
+    const bulky = (tag: string): string => `${tag}\n${"block ".repeat(200)}`;
+    let ts = 1_000;
+    const addTurn = async (tag: string): Promise<void> => {
+      await seedMessages(conv, [
+        { role: "user", content: bulky(tag), ts },
+        { role: "assistant", content: `reply ${tag}`, ts: ts + 500 },
+      ]);
+      ts += 1_000;
+    };
+    for (const tag of ["m1", "f1", "f2", "f3", "f4"]) {
+      await addTurn(tag);
+    }
+    await new AIChatArchiveIndexer().runToCompletion(conv);
+    const { fn } = fakeSummarizer();
+    const generations: string[] = [];
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      const result = await coordinator.requestCompaction(conv, {
+        trigger: "manual",
+        summarize: fn,
+      });
+      expect(result.state).toBe("completed");
+      expect(result.generationId).toBeTruthy();
+      generations.push(result.generationId ?? "");
+      if (cycle < 3) {
+        for (const tag of [`c${cycle}a`, `c${cycle}b`, `c${cycle}c`]) {
+          await addTurn(tag);
+        }
+        await new AIChatArchiveIndexer().runToCompletion(conv);
+      }
+    }
+    expect(new Set(generations).size).toBe(3);
+  }, 60_000);
+
   it("does not advance the checkpoint past an incomplete terminal turn (P1-1)", async () => {
     await seedMessages("conv-mid-checkpoint", [
       { role: "user", content: "q1", ts: 1_000 },
