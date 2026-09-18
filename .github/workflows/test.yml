@@ -199,6 +199,41 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev xvfb
 
+      # Same disk + swap hardening the ci.yml package-smoke job needs:
+      # unpacked packaging duplicates node_modules into /tmp AND out/,
+      # which exhausts the 14 GB runner SSD and gets the job evicted
+      # ("runner has received a shutdown signal").
+      - name: Free up disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          echo "Disk after cleanup:"; df -h /
+
+      - name: Add swap to absorb finalize memory spikes (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          if swapon --show 2>/dev/null | grep -q swapfile; then
+            echo "/swapfile already active — skipping creation."
+          else
+            sudo fallocate -l 4G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+            sudo swapon /swapfile
+          fi
+          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
+          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
+            echo "::error::Swap is not active after setup. Aborting so packaging doesn't OOM."
+            exit 1
+          fi
+
       - name: Install dependencies (Linux/macOS)
         if: runner.os != 'Windows'
         run: yarn install --frozen-lockfile

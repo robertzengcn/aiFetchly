@@ -94,10 +94,12 @@ export function loadSkillMarkdownFile(
     const lstat = fs.lstatSync(mdPath);
     if (lstat.isSymbolicLink()) {
       const real = fs.realpathSync(mdPath);
-      const rootWithSep = canonicalRoot.endsWith(path.sep)
-        ? canonicalRoot
-        : canonicalRoot + path.sep;
-      if (real !== canonicalRoot && !real.startsWith(rootWithSep)) {
+      // Resolved-against-resolved (macOS /var -> /private/var roots).
+      const realRoot = fs.realpathSync(canonicalRoot);
+      const rootWithSep = realRoot.endsWith(path.sep)
+        ? realRoot
+        : realRoot + path.sep;
+      if (real !== realRoot && !real.startsWith(rootWithSep)) {
         return {
           ok: false,
           code: "SKILL_MD_NOT_REGULAR_FILE",

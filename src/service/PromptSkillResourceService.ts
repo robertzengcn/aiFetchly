@@ -222,12 +222,16 @@ export async function readSkillResource(
     );
   }
 
-  // Revalidate after resolving symlinks (PRD §20.3).
+  // Revalidate after resolving symlinks (PRD §20.3). Resolved-against-
+  // resolved: canonical roots commonly contain symlink components on macOS
+  // (/var -> /private/var) — the unresolved comparison refused every
+  // legitimate read there (same class as the activation containment fix).
   const real = fs.realpathSync(resolved.absolute);
-  const rootWithSep = definition.canonicalRoot.endsWith(path.sep)
-    ? definition.canonicalRoot
-    : definition.canonicalRoot + path.sep;
-  if (real !== definition.canonicalRoot && !real.startsWith(rootWithSep)) {
+  const realRoot = fs.realpathSync(definition.canonicalRoot);
+  const rootWithSep = realRoot.endsWith(path.sep)
+    ? realRoot
+    : realRoot + path.sep;
+  if (real !== realRoot && !real.startsWith(rootWithSep)) {
     return errorOutcome("Resolved path escapes the skill root.");
   }
 
@@ -360,12 +364,17 @@ export async function executeSkillResource(
   if (sample.includes(0)) {
     return errorOutcome(`'${relativePath}' looks binary and cannot run.`);
   }
-  // Revalidate after resolving symlinks (§20.3).
+  // Revalidate after resolving symlinks (§20.3). Compare RESOLVED against
+  // RESOLVED: canonical roots commonly contain symlink components on macOS
+  // (/var -> /private/var, /tmp -> /private/tmp), and comparing a realpath'd
+  // helper against the unresolved root refused every legitimate execution
+  // (NL-7 macOS evidence — same class as the activation containment fix).
   const real = fs.realpathSync(resolved.absolute);
-  const rootWithSep = definition.canonicalRoot.endsWith(path.sep)
-    ? definition.canonicalRoot
-    : definition.canonicalRoot + path.sep;
-  if (real !== definition.canonicalRoot && !real.startsWith(rootWithSep)) {
+  const realRoot = fs.realpathSync(definition.canonicalRoot);
+  const rootWithSep = realRoot.endsWith(path.sep)
+    ? realRoot
+    : realRoot + path.sep;
+  if (real !== realRoot && !real.startsWith(rootWithSep)) {
     return errorOutcome("Resolved path escapes the skill root.");
   }
 
