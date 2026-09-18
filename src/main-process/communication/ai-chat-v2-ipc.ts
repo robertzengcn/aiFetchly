@@ -31,7 +31,10 @@ import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
-import { isNewCompactionEnabled } from "@/config/featureFlags";
+import {
+  isHistoryUiEnabled,
+  isNewCompactionEnabled,
+} from "@/config/featureFlags";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -63,6 +66,7 @@ import {
   AI_CHAT_V2_HISTORY_READ,
   AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+  AI_CHAT_V2_HISTORY_UI_ENABLED,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
   AI_CHAT_V2_COMPACTION_START,
@@ -1809,6 +1813,18 @@ async function handleHistoryResolveSelections(
   }
 }
 
+async function handleHistoryUiEnabled(): Promise<
+  CommonMessage<{ enabled: boolean }>
+> {
+  // Token lives in main (design §18, stage 3). Read live so a runtime toggle
+  // takes effect without restart. Fail-closed on store errors.
+  try {
+    return ok({ enabled: isHistoryUiEnabled() });
+  } catch {
+    return ok({ enabled: false });
+  }
+}
+
 async function handleCompactionStatus(
   data: unknown
 ): Promise<CommonMessage<CompactionStatusSnapshot | null>> {
@@ -1920,6 +1936,9 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
     async (_e, data: unknown) => handleHistoryResolveSelections(data)
+  );
+  ipcMain.handle(AI_CHAT_V2_HISTORY_UI_ENABLED, async () =>
+    handleHistoryUiEnabled()
   );
   ipcMain.handle(AI_CHAT_V2_COMPACTION_STATUS, async (_e, data: unknown) =>
     handleCompactionStatus(data)

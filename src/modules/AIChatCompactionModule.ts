@@ -34,6 +34,14 @@ export class AIChatCompactionModule extends BaseModule {
     return this.runModel.claimRun(input);
   }
 
+  /** Durable claim with the snapshot frozen inside the claim transaction (C-4). */
+  async claimRunWithSnapshot(
+    input: Parameters<AIChatCompactionRunModel["claimRunWithSnapshot"]>[0]
+  ) {
+    await this.ensureConnection();
+    return this.runModel.claimRunWithSnapshot(input);
+  }
+
   /** Renew the lease (§11.3). */
   async renewLease(
     input: Parameters<AIChatCompactionRunModel["renewLease"]>[0]

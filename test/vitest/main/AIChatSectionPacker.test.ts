@@ -27,6 +27,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { SqliteDb } from "@/config/SqliteDb";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatArchiveTurnModel } from "@/model/AIChatArchiveTurn.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatSectionPacker } from "@/service/AIChatSectionPacker";
@@ -328,5 +329,61 @@ describe("AIChatSectionPacker", () => {
     expect(first.coverageComplete).toBe(false);
     expect(first.exclusionBoundary).toBeUndefined();
     expect(first.nextCursor).not.toBeNull();
+  });
+
+  it("omits exclusionBoundary without confirmed completed turns, emits only from completed projections (C-7/AC-06)", async () => {
+    const conv = "conv-c7-no-turns";
+    await seedMessages(conv, [
+      { role: "user", content: "q", ts: 1_000 },
+      { role: "assistant", content: "a", ts: 2_000 },
+    ]);
+    await indexConversation(conv);
+    // No turn projections yet (index lag): full fragment coverage but the
+    // last fragment is assistant — must NOT emit a boundary.
+    const withoutTurns = await packer.pack({
+      conversationId: conv,
+      sourceCapacityTokens: 4_000,
+      endSnapshotTimestampMs: 3_000,
+      endSnapshotRowId: 0,
+    });
+    expect(withoutTurns.coverageComplete).toBe(true);
+    expect(withoutTurns.fragments.length).toBeGreaterThan(0);
+    expect(withoutTurns.exclusionBoundary).toBeUndefined();
+
+    // Confirm a completed turn covering the terminal row: boundary emits.
+    const state = await new AIChatArchiveStateModel(tmpDir).getState(conv);
+    expect(state).toBeTruthy();
+    const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AIChatMessageEntity
+    );
+    const rows = await repo.find({
+      where: { conversationId: conv },
+      order: { id: "ASC" },
+    });
+    expect(rows).toHaveLength(2);
+    const firstTs = rows[0].timestamp.getTime();
+    const lastTs = rows[1].timestamp.getTime();
+    await new AIChatArchiveTurnModel(tmpDir).upsertTurn({
+      conversationId: conv,
+      epoch: state!.epoch,
+      turnId: "t1",
+      firstTimestampMs: firstTs,
+      firstRowId: rows[0].id,
+      lastTimestampMs: lastTs,
+      lastRowId: rows[1].id,
+      status: "completed",
+      completedAt: new Date(),
+      confidence: "native",
+    });
+    const withTurn = await packer.pack({
+      conversationId: conv,
+      sourceCapacityTokens: 4_000,
+      endSnapshotTimestampMs: 3_000,
+      endSnapshotRowId: 0,
+    });
+    expect(withTurn.coverageComplete).toBe(true);
+    expect(withTurn.exclusionBoundary).toBeDefined();
+    expect(withTurn.exclusionBoundary!.timestampMs).toBe(lastTs);
+    expect(withTurn.exclusionBoundary!.rowId).toBe(rows[1].id);
   });
 });

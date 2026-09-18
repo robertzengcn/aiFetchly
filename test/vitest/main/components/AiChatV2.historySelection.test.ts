@@ -41,6 +41,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
   setChatV2ToolApprovalMode: vi.fn(),
   startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/views/api/workspace", () => ({

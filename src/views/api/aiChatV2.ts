@@ -49,6 +49,7 @@ import {
   AI_CHAT_V2_HISTORY_READ,
   AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+  AI_CHAT_V2_HISTORY_UI_ENABLED,
   AI_CHAT_V2_COMPACTION_STATUS,
   AI_CHAT_V2_COMPACTION_CANCEL,
   AI_CHAT_V2_COMPACTION_START,
@@ -722,4 +723,27 @@ export function subscribeCompactionProgress(
 /** Remove ALL compaction-progress listeners (call in onBeforeUnmount). */
 export function unsubscribeCompactionProgress(): void {
   windowRemoveAllListeners(AI_CHAT_V2_COMPACTION_PROGRESS);
+}
+
+/**
+ * Read whether the recoverable-history UI stage is enabled (design §18,
+ * stage 3). The flag lives in main (Token); the renderer cannot force-enable
+ * it. Fail-closed: any transport error resolves to false so selection chips
+ * never render without backend resolution.
+ */
+export async function isHistoryUiEnabled(): Promise<boolean> {
+  try {
+    const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_UI_ENABLED, {})) as {
+      data?: { enabled?: boolean } | null;
+      enabled?: boolean;
+    } | null;
+    if (!resp) return false;
+    if (typeof (resp as { enabled?: unknown }).enabled === "boolean") {
+      return (resp as { enabled: boolean }).enabled;
+    }
+    const inner = (resp as { data?: { enabled?: unknown } | null }).data;
+    return inner?.enabled === true;
+  } catch {
+    return false;
+  }
 }

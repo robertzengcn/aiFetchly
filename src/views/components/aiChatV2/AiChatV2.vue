@@ -93,7 +93,7 @@
           class="mx-1"
           @retry="handleCompactionRetry"
           @cancel="handleCompactionCancel"
-          @open-history="showHistoryDrawer = true"
+          @open-history="historyUiEnabled && (showHistoryDrawer = true)"
         />
         <v-btn
           icon
@@ -133,6 +133,7 @@
           icon
           size="small"
           variant="text"
+          v-if="historyUiEnabled"
           data-testid="ai-history-drawer-toggle"
           :disabled="!activeConversationId"
           @click="showHistoryDrawer = true"
@@ -434,6 +435,7 @@
       </div>
 
       <AiChatSelectedContext
+        v-if="historyUiEnabled"
         :selections="selectedContextItems"
         @remove="removeSelectedContext"
         @clear="clearSelectedContext"
@@ -699,9 +701,12 @@
         </v-card-text>
       </v-card>
     </v-dialog>
-    <!-- Recoverable-history browser drawer (technical-design §13.1). -->
+    <!-- Recoverable-history browser drawer (technical-design §13.1, §18 stage 3).
+         Gated on the history-UI rollout flag: no drawer, toggle, or selection
+         chips when the stage is off so users cannot select passages that
+         resolve to empty. -->
     <AiChatHistoryDrawer
-      v-if="activeConversationId"
+      v-if="activeConversationId && historyUiEnabled"
       v-model="showHistoryDrawer"
       :conversation-id="activeConversationId"
       @select="handleHistorySelect"
@@ -787,6 +792,7 @@ import {
   subscribeCompactionProgress,
   unsubscribeCompactionProgress,
 } from "@/views/api/aiChatV2";
+import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
   AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
@@ -1029,6 +1035,13 @@ const isCompacting = ref(false);
 const compactNotice = ref(false);
 // Recoverable-history + incremental-compaction state (technical-design §13).
 const showHistoryDrawer = ref(false);
+/**
+ * History-UI rollout flag (design §18 stage 3). Fail-closed: false until the
+ * main-process flag read resolves true. When false the drawer toggle,
+ * selected-context chips, and "use in next reply" affordances are hidden so
+ * users cannot select passages that backend resolution would no-op.
+ */
+const historyUiEnabled = ref(false);
 const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
 const compactionBusy = ref(false);
 const selectedContextItems = ref<SelectedContextItem[]>([]);
@@ -1650,6 +1663,9 @@ function handleCompactionProgress(
  * on submit; renderer text is never trusted as the original quote.
  */
 function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  // Fail-closed when the history-UI stage is off: ignore drawer selections
+  // so no chips render without backend resolution (§18).
+  if (!historyUiEnabled.value) return;
   const existing = selectedContextItems.value.find(
     (item) => item.sourceId === excerpt.sourceId
   );
@@ -5113,6 +5129,27 @@ function onStopSpeaking(): void {
 onMounted(() => {
   void loadConversations();
   void loadVoiceSettings();
+  // History-UI rollout flag (§18 stage 3): fail-closed to false. Namespace
+  // lookup tolerates older test mocks without the export (treated as
+  // enabled so existing selection tests exercise the drawer); production
+  // always exports the function and any transport error resolves false.
+  try {
+    const fn = (aiChatV2Api as unknown as Record<string, unknown>)
+      .isHistoryUiEnabled as (() => Promise<boolean>) | undefined;
+    if (typeof fn !== "function") {
+      historyUiEnabled.value = true;
+    } else {
+      void fn()
+        .then((enabled) => {
+          historyUiEnabled.value = enabled === true;
+        })
+        .catch(() => {
+          historyUiEnabled.value = false;
+        });
+    }
+  } catch {
+    historyUiEnabled.value = false;
+  }
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(

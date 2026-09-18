@@ -23,6 +23,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { SqliteDb } from "@/config/SqliteDb";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatArchiveTurnModel } from "@/model/AIChatArchiveTurn.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
@@ -82,6 +83,46 @@ async function indexConversation(conversationId: string): Promise<void> {
   const stateModel = new AIChatArchiveStateModel(tmpDir);
   await stateModel.ensureState(conversationId);
   await stateModel.setIndexState(conversationId, "complete");
+}
+
+/**
+ * Project completed turn projections for consecutive user/assistant pairs
+ * (C-7: coverage advances only from confirmed `completed` turns). Call after
+ * seedMessages+indexConversation. Pairs messages in order: [u,a],[u,a],...
+ */
+async function projectCompletedTurns(
+  conversationId: string,
+  turnCount: number
+): Promise<void> {
+  const state = await new AIChatArchiveStateModel(tmpDir).getState(
+    conversationId
+  );
+  if (!state) throw new Error(`no archive state for ${conversationId}`);
+  const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+    AIChatMessageEntity
+  );
+  const rows = await repo.find({
+    where: { conversationId },
+    order: { id: "ASC" },
+  });
+  const turnModel = new AIChatArchiveTurnModel(tmpDir);
+  for (let t = 0; t < turnCount; t++) {
+    const first = rows[t * 2];
+    const last = rows[t * 2 + 1];
+    if (!first || !last) break;
+    await turnModel.upsertTurn({
+      conversationId,
+      epoch: state.epoch,
+      turnId: `t${t + 1}`,
+      firstTimestampMs: first.timestamp.getTime(),
+      firstRowId: first.id,
+      lastTimestampMs: last.timestamp.getTime(),
+      lastRowId: last.id,
+      status: "completed",
+      completedAt: new Date(),
+      confidence: "native",
+    });
+  }
 }
 
 /** A fake AI summarizer that returns a fixed valid SectionSummaryV1. */
@@ -512,13 +553,23 @@ describe("AIChatCompactionCoordinator", () => {
   });
 
   it("processes only new sources on a repeat run (incremental, no resend)", async () => {
+    // C-7: coverage advances only from confirmed completed turns. Seed 5
+    // turns (retain newest 3 per the snapshot window, compact oldest 2),
+    // then append a 6th turn. The second run must not resend t1's alpha.
     await seedMessages("conv-6", [
       { role: "user", content: "first message alpha", ts: 1_000 },
       { role: "assistant", content: "reply one beta", ts: 2_000 },
       { role: "user", content: "second message gamma", ts: 3_000 },
       { role: "assistant", content: "reply two delta", ts: 4_000 },
+      { role: "user", content: "third message epsilon", ts: 5_000 },
+      { role: "assistant", content: "reply three zeta", ts: 6_000 },
+      { role: "user", content: "fourth message eta", ts: 7_000 },
+      { role: "assistant", content: "reply four theta", ts: 8_000 },
+      { role: "user", content: "fifth message iota", ts: 9_000 },
+      { role: "assistant", content: "reply five kappa", ts: 10_000 },
     ]);
     await indexConversation("conv-6");
+    await projectCompletedTurns("conv-6", 5);
 
     const first = fakeSummarizer();
     const r1 = await coordinator.requestCompaction("conv-6", {
@@ -529,9 +580,10 @@ describe("AIChatCompactionCoordinator", () => {
 
     // Append one eligible turn after the successful compaction.
     await seedMessages("conv-6", [
-      { role: "user", content: "third message epsilon", ts: 5_000 },
-      { role: "assistant", content: "reply three zeta", ts: 6_000 },
+      { role: "user", content: "sixth message lambda", ts: 11_000 },
+      { role: "assistant", content: "reply six mu", ts: 12_000 },
     ]);
+    await projectCompletedTurns("conv-6", 6);
 
     const second = fakeSummarizer();
     const r2 = await coordinator.requestCompaction("conv-6", {
@@ -716,8 +768,79 @@ describe("AIChatCompactionCoordinator", () => {
     expect(fn.mock.calls.length).toBeGreaterThanOrEqual(2);
   }, 15_000);
 
-  it("a late AI result cannot resurrect a conversation cleared mid-flight (AC-13)", async () => {
-    await seedMessages("conv-12", [
+  it("freezes the compactable snapshot inside the claim transaction (C-4/AC-09)", async () => {
+    // 5 completed turns: the claim must persist snapshotEnd = retained-suffix
+    // start (t3.first stepped back one composite key), and the persisted run
+    // row must equal the bound the packer uses. A row inserted after the
+    // claim sits strictly after the frozen bound (outside coverage).
+    const conv = "conv-c4-snapshot";
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: `c4 message ${i}`,
+      ts: 1_000 + i * 1_000,
+    }));
+    await seedMessages(conv, rows);
+    await indexConversation(conv);
+    await projectCompletedTurns(conv, 5);
+
+    const { AIChatCompactionModule } = await import(
+      "@/modules/AIChatCompactionModule"
+    );
+    const module = new AIChatCompactionModule();
+    const claim = await module.claimRunWithSnapshot({
+      conversationId: conv,
+      trigger: "manual",
+      leaseOwner: "c4-test",
+    });
+    expect(claim.joinedExisting).toBe(false);
+    // Claim row persists the frozen bound.
+    const persisted = await module.getRun(claim.runId);
+    expect(persisted?.snapshotEndTimestampMs).toBe(
+      claim.snapshotEndTimestampMs
+    );
+    expect(persisted?.snapshotEndRowId).toBe(claim.snapshotEndRowId);
+    expect(persisted?.retainedStartTimestampMs).toBe(
+      claim.snapshotEndTimestampMs
+    );
+    // Snapshot is the retained-suffix start: with 5 turns the window keeps
+    // the newest 3, so the bound sits before t3 (after t2's end).
+    const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      AIChatMessageEntity
+    );
+    const all = await repo.find({
+      where: { conversationId: conv },
+      order: { id: "ASC" },
+    });
+    expect(all).toHaveLength(10);
+    const t2EndId = all[3].id;
+    const t3FirstId = all[4].id;
+    const t3FirstTs = all[4].timestamp.getTime();
+    expect(claim.snapshotEndTimestampMs).toBe(t3FirstTs);
+    expect(claim.snapshotEndRowId).toBe(t3FirstFirstIdMinusOne(t3FirstId));
+    expect(claim.snapshotEndRowId).toBeGreaterThanOrEqual(t2EndId);
+
+    // A row appended after the claim is outside the frozen coverage.
+    await seedMessages(conv, [
+      { role: "user", content: "late arrival", ts: 99_000 },
+    ]);
+    const after = await repo.find({
+      where: { conversationId: conv },
+      order: { id: "DESC" },
+      take: 1,
+    });
+    const late = after[0];
+    const outside =
+      late.timestamp.getTime() > claim.snapshotEndTimestampMs ||
+      (late.timestamp.getTime() === claim.snapshotEndTimestampMs &&
+        late.id > claim.snapshotEndRowId);
+    expect(outside).toBe(true);
+
+    function t3FirstFirstIdMinusOne(id: number): number {
+      return id - 1;
+    }
+  });
+
+  it("a late AI result cannot resurrect a conversation cleared mid-flight (AC-13)", async () => {    await seedMessages("conv-12", [
       { role: "user", content: "doomed message", ts: 1_000 },
       { role: "assistant", content: "doomed reply", ts: 2_000 },
       { role: "user", content: "doomed followup", ts: 3_000 },

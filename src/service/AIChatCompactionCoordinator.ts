@@ -209,39 +209,25 @@ export class AIChatCompactionCoordinator extends BaseModule {
         `conversation ${conversationId} is tombstoned or has no archive state`
       );
     }
-    const epoch = state.epoch;
-    const revision = state.sourceRevision;
 
-    // 2. Terminal-turn snapshot excluding the retained recent suffix (§4.3,
-    // FR-05/FR-09). Retain two completed turns when they fit plus the
-    // in-progress turn; the snapshot end is the retained suffix start, never
-    // the raw high-water mark. Snapshot is frozen at the durable claim
-    // (P2-1, §11.3): compute optimistically, claim, then recompute and take
-    // the earlier composite bound so messages appended between compute and
-    // claim cannot slip inside the compactable prefix past the retention
-    // boundary.
-    const preSnapshot = await this.computeSnapshotEnd(
+    // 2-3. Durable claim with the snapshot frozen INSIDE the claim
+    // transaction (C-4, FR-09/AC-09, §11.3). The claim transaction reads
+    // epoch/revision/high-water + retained-suffix turns and persists
+    // `snapshotEnd*` atomically with the fence increment, so a row inserted
+    // between any outside compute and the claim cannot slip inside the
+    // compactable prefix past the retention boundary. The persisted snapshot
+    // IS the packer's frozen bound — no pre/post min outside the transaction.
+    const claim = await this.module.claimRunWithSnapshot({
       conversationId,
-      state.highWaterTimestampMs ?? 0,
-      state.highWaterRowId ?? 0
-    );
-    const retainedStartTimestampMs = preSnapshot.snapshotEndTimestampMs;
-    const retainedStartRowId = preSnapshot.snapshotEndRowId;
-
-    // 3. Durable claim (§11.3).
-    const claim = await this.module.claimRun({
-      conversationId,
-      epoch,
-      revision,
       trigger: input.trigger,
       model: input.model,
       leaseOwner,
-      snapshotEndTimestampMs: preSnapshot.snapshotEndTimestampMs,
-      snapshotEndRowId: preSnapshot.snapshotEndRowId,
-      retainedStartTimestampMs,
-      retainedStartRowId,
       baseGenerationId: state.activeGenerationId,
     });
+    // Refresh epoch/revision from the atomic claim (state could have moved
+    // between the pre-read above and the claim transaction).
+    const epoch = claim.epoch;
+    const revision = claim.revision;
 
     if (claim.joinedExisting) {
       // Another owner's run is active — join it (COMPACTION_BUSY), never
@@ -255,23 +241,10 @@ export class AIChatCompactionCoordinator extends BaseModule {
 
     let fence = claim.fence;
     const runId = claim.runId;
-    const postSnapshot = await this.computeSnapshotEnd(
-      conversationId,
-      state.highWaterTimestampMs ?? 0,
-      state.highWaterRowId ?? 0
-    );
-    const snapshotEndTimestampMs =
-      postSnapshot.snapshotEndTimestampMs < preSnapshot.snapshotEndTimestampMs ||
-      (postSnapshot.snapshotEndTimestampMs === preSnapshot.snapshotEndTimestampMs &&
-        postSnapshot.snapshotEndRowId < preSnapshot.snapshotEndRowId)
-        ? postSnapshot.snapshotEndTimestampMs
-        : preSnapshot.snapshotEndTimestampMs;
-    const snapshotEndRowId =
-      postSnapshot.snapshotEndTimestampMs < preSnapshot.snapshotEndTimestampMs ||
-      (postSnapshot.snapshotEndTimestampMs === preSnapshot.snapshotEndTimestampMs &&
-        postSnapshot.snapshotEndRowId < preSnapshot.snapshotEndRowId)
-        ? postSnapshot.snapshotEndRowId
-        : preSnapshot.snapshotEndRowId;
+    // Frozen bound = the claim row's persisted snapshot (C-4). It equals the
+    // bound the packer uses below; no outside recompute.
+    const snapshotEndTimestampMs = claim.snapshotEndTimestampMs;
+    const snapshotEndRowId = claim.snapshotEndRowId;
 
     // 4. Resume from committed coverage + persisted staged checkpoints (§11,
     // FR-07/FR-09, AC-05/AC-07). Load existing sections for this epoch/

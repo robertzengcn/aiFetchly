@@ -3,6 +3,7 @@ import { AIChatCompactionRunEntity } from "@/entity/AIChatCompactionRun.entity";
 import { AIChatCompactionSectionEntity } from "@/entity/AIChatCompactionSection.entity";
 import { AIChatContextGenerationEntity } from "@/entity/AIChatContextGeneration.entity";
 import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
+import { AIChatArchiveTurnEntity } from "@/entity/AIChatArchiveTurn.entity";
 import type { Repository } from "typeorm";
 import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
@@ -129,6 +130,154 @@ export class AIChatCompactionRunModel extends BaseDb {
       await stateRepo.save(state);
 
       return { runId, fence: entity.fence, joinedExisting: false };
+    });
+  }
+
+  /**
+   * Durable claim with the compactable snapshot frozen INSIDE the claim
+   * transaction (C-4, FR-09/AC-09, §11.3). Reads epoch/revision/high-water
+   * and the retained-suffix turn projections with the same transactional
+   * snapshot that persists `snapshotEnd*`, increments the fence, and assigns
+   * the lease — so a row inserted between an outside compute and the claim
+   * can never slip inside the packer's frozen bound. The persisted
+   * `snapshotEnd*` IS the bound the packer uses (returned here).
+   */
+  async claimRunWithSnapshot(input: {
+    conversationId: string;
+    trigger: string;
+    model?: string;
+    leaseOwner: string;
+    baseGenerationId?: string;
+  }): Promise<{
+    runId: string;
+    fence: number;
+    joinedExisting: boolean;
+    epoch: string;
+    revision: number;
+    snapshotEndTimestampMs: number;
+    snapshotEndRowId: number;
+    retainedStartTimestampMs: number;
+    retainedStartRowId: number;
+  }> {
+    const runId = crypto.randomUUID();
+    const leaseMs = AI_CHAT_RECOVERABLE_DEFAULTS.leaseInitialSeconds * 1000;
+    const now = Date.now();
+    const minCount = AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns;
+    const maxCount = AI_CHAT_RECOVERABLE_DEFAULTS.minRetainedCompleteTurns + 1;
+
+    return this.sqliteDb.connection.transaction(async (manager) => {
+      const stateRepo = manager.getRepository(AIChatArchiveStateEntity);
+      const runRepo = manager.getRepository(AIChatCompactionRunEntity);
+      const turnRepo = manager.getRepository(AIChatArchiveTurnEntity);
+      const state = await stateRepo.findOne({
+        where: { conversationId: input.conversationId },
+      });
+      if (!state || state.deletedAt) {
+        throw new RecoverableHistoryError(
+          "COMPACTION_CONTEXT_REJECTED",
+          `conversation ${input.conversationId} is tombstoned or has no archive state`
+        );
+      }
+      const epoch = state.epoch;
+      const revision = state.sourceRevision;
+
+      if (state.activeRunId && state.leaseUntilMs && state.leaseUntilMs > now) {
+        const existing = await runRepo.findOne({
+          where: { runId: state.activeRunId },
+        });
+        if (
+          existing &&
+          (existing.state === "running" || existing.state === "queued")
+        ) {
+          return {
+            runId: existing.runId,
+            fence: state.fence,
+            joinedExisting: true,
+            epoch,
+            revision,
+            snapshotEndTimestampMs: existing.snapshotEndTimestampMs,
+            snapshotEndRowId: existing.snapshotEndRowId,
+            retainedStartTimestampMs: existing.retainedStartTimestampMs,
+            retainedStartRowId: existing.retainedStartRowId,
+          };
+        }
+      }
+
+      // Snapshot computed from the SAME transactional read: high-water
+      // fallback, else the retained suffix start (earliest retained complete
+      // turn stepped back one composite key). Mirrors the coordinator's
+      // computeSnapshotEnd but never leaves the claim transaction.
+      let snapshotEndTimestampMs = state.highWaterTimestampMs ?? 0;
+      let snapshotEndRowId = state.highWaterRowId ?? 0;
+      try {
+        const rows = await turnRepo.find({
+          where: {
+            conversationId: input.conversationId,
+            epoch,
+            status: "completed",
+          },
+          order: { lastTimestampMs: "DESC", lastRowId: "DESC" },
+          take: Math.max(minCount, maxCount),
+        });
+        const turns = rows.reverse().slice(0, maxCount);
+        if (turns.length > 0) {
+          const earliest = turns[0];
+          const earliestTs = Number(earliest.firstTimestampMs);
+          const earliestRowId = earliest.firstRowId;
+          if (Number.isFinite(earliestTs) && earliestRowId > 0) {
+            if (earliestRowId > 1) {
+              snapshotEndTimestampMs = earliestTs;
+              snapshotEndRowId = earliestRowId - 1;
+            } else {
+              snapshotEndTimestampMs = earliestTs - 1;
+              snapshotEndRowId = Number.MAX_SAFE_INTEGER;
+            }
+          }
+        }
+      } catch {
+        // Turn read failed inside the claim: keep the high-water fallback so
+        // the claim still freezes a deterministic bound.
+      }
+
+      const entity = new AIChatCompactionRunEntity();
+      entity.runId = runId;
+      entity.conversationId = input.conversationId;
+      entity.epoch = epoch;
+      entity.revision = revision;
+      entity.trigger = input.trigger;
+      entity.state = "running";
+      entity.snapshotEndTimestampMs = snapshotEndTimestampMs;
+      entity.snapshotEndRowId = snapshotEndRowId;
+      entity.retainedStartTimestampMs = snapshotEndTimestampMs;
+      entity.retainedStartRowId = snapshotEndRowId;
+      entity.baseGenerationId = input.baseGenerationId;
+      entity.fence = state.fence + 1;
+      entity.leaseOwner = input.leaseOwner;
+      entity.leaseUntilMs = now + leaseMs;
+      entity.model = input.model;
+      entity.mergedThroughOrdinal = 0;
+      entity.attemptCount = 0;
+      entity.contextReductionCount = 0;
+      entity.schemaVersion = 1;
+      await runRepo.save(entity);
+
+      state.activeRunId = runId;
+      state.fence = entity.fence;
+      state.leaseOwner = input.leaseOwner;
+      state.leaseUntilMs = now + leaseMs;
+      await stateRepo.save(state);
+
+      return {
+        runId,
+        fence: entity.fence,
+        joinedExisting: false,
+        epoch,
+        revision,
+        snapshotEndTimestampMs,
+        snapshotEndRowId,
+        retainedStartTimestampMs: snapshotEndTimestampMs,
+        retainedStartRowId: snapshotEndRowId,
+      };
     });
   }
 

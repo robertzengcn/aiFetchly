@@ -10,6 +10,8 @@ import { USER_AI_AUTO_PLAN } from "@/config/usersetting";
 import { buildAutoPlanPromptSection } from "@/service/ChatModePromptSection";
 import { AIChatArchiveAppendCoupler } from "@/service/AIChatArchiveAppendCoupler";
 import { AIChatArchiveStateModel } from "@/model/AIChatArchiveState.model";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
@@ -296,25 +298,40 @@ export class AIChatV2Module extends BaseModule {
   async clearConversation(conversationId: string): Promise<number> {
     // Fence first (P1-4, §11.6/AC-13): tombstone + invalidate the compaction
     // epoch BEFORE deleting sources so an in-flight summarize cannot recreate
-    // derived records after the messages are gone. Best-effort; never break
-    // the clear on a storage hiccup.
+    // derived records after the messages are gone. Fencing is mandatory, not
+    // best-effort (invariant 9): if the fence fails the clear aborts so a
+    // failed fence + successful delete cannot reopen the resurrection window.
+    // Tombstone gets one retry; invalidate aborts on first failure.
     try {
-      await new AIChatArchiveStateModel(this.dbpath).tombstone(conversationId);
+      try {
+        await new AIChatArchiveStateModel(this.dbpath).tombstone(
+          conversationId
+        );
+      } catch {
+        await new AIChatArchiveStateModel(this.dbpath).tombstone(
+          conversationId
+        );
+      }
     } catch (err) {
       console.error(
-        "[ai-chat-v2] clearConversation: archive tombstone failed:",
+        "[ai-chat-v2] clearConversation: archive tombstone failed, aborting clear:",
         err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: archive tombstone failed for ${conversationId}`
       );
     }
     try {
-      const { AIChatCompactionModule } = await import(
-        "@/modules/AIChatCompactionModule"
-      );
       await new AIChatCompactionModule().invalidateConversation(conversationId);
     } catch (err) {
       console.error(
-        "[ai-chat-v2] clearConversation: compaction invalidate failed:",
+        "[ai-chat-v2] clearConversation: compaction invalidate failed, aborting clear:",
         err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: compaction invalidate failed for ${conversationId}`
       );
     }
     const deleted = await this.chatModule.clearConversation(conversationId);

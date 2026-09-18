@@ -381,15 +381,18 @@ export class AIChatSectionPacker extends BaseModule {
     const coverageComplete = noTruncation && allMessagesFullyCovered;
 
     // Publish an exclusion boundary only when a complete terminal turn is
-    // fully covered (§9.2, FR-05). A page that cuts mid-turn (last fragment is
-    // a user message, or the turn projection is still open) stages fragments
-    // without advancing the compactable checkpoint.
+    // fully covered (§9.2, FR-05, AC-06). A page that cuts mid-turn (last
+    // fragment is a user message, or the turn projection is still open)
+    // stages fragments without advancing the compactable checkpoint.
+    // Missing turn projections NEVER emit a boundary (C-7): a user+assistant
+    // pair not yet projected (index lag) must not advance coverage into an
+    // in-progress turn. Only confirmed `status === "completed"` turns emit.
     let exclusionBoundary: { timestampMs: number; rowId: number } | undefined;
     if (coverageComplete && fragments.length > 0) {
       const last = fragments[fragments.length - 1];
       const lastIsUser = last.role === "user" && receipts.length === 0;
-      let terminalComplete = !lastIsUser;
-      if (terminalComplete) {
+      let terminalComplete = false;
+      if (!lastIsUser) {
         try {
           const turnModel = new AIChatArchiveTurnModel(this.dbpath);
           const lastTs = Date.parse(last.timestamp);
@@ -407,12 +410,14 @@ export class AIChatSectionPacker extends BaseModule {
                 t.firstRowId <= last.sourceRowId &&
                 t.lastRowId >= last.sourceRowId
             );
+            // Empty covering (no projections / index lag) or a throw below
+            // leaves terminalComplete false: stage fragments only.
             if (covering.length > 0) {
               terminalComplete = covering.every((t) => t.status === "completed");
             }
           }
         } catch {
-          terminalComplete = !lastIsUser;
+          terminalComplete = false;
         }
       }
       if (terminalComplete) {
