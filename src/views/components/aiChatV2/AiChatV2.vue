@@ -5129,15 +5129,15 @@ function onStopSpeaking(): void {
 onMounted(() => {
   void loadConversations();
   void loadVoiceSettings();
-  // History-UI rollout flag (§18 stage 3): fail-closed to false. Namespace
-  // lookup tolerates older test mocks without the export (treated as
-  // enabled so existing selection tests exercise the drawer); production
-  // always exports the function and any transport error resolves false.
+  // History-UI rollout flag (§18 stage 3, R-1): fail-closed. A missing
+  // helper is treated like a transport error (false) — never enabled.
+  // Component tests that need the drawer stub `isHistoryUiEnabled`.
+  // Production always exports the function via preload + IPC.
   try {
     const fn = (aiChatV2Api as unknown as Record<string, unknown>)
       .isHistoryUiEnabled as (() => Promise<boolean>) | undefined;
     if (typeof fn !== "function") {
-      historyUiEnabled.value = true;
+      historyUiEnabled.value = false;
     } else {
       void fn()
         .then((enabled) => {
