@@ -9,19 +9,38 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
 
 describe("AIChatCompactAgentService bounded routing", () => {
-  it("refuses all-history summarization when no coordinator is wired", async () => {
-    const completeChat = vi.fn();
+  it("falls back to a bounded legacy summary when no coordinator is wired (M-5)", async () => {
+    const completeChat = vi.fn().mockResolvedValue({
+      id: "legacy-1",
+      object: "chat.completion",
+      created: 0,
+      model: "test",
+      choices: [
+        { index: 0, message: { role: "assistant", content: "legacy summary" }, finish_reason: "stop" },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+    vi.spyOn(AIChatV2Module.prototype, "getRecentMessages").mockResolvedValueOnce([
+      { role: "user", content: "hi", messageId: "m1" },
+      { role: "assistant", content: "hello", messageId: "m2" },
+    ] as never);
     const svc = new AIChatCompactAgentService({} as never, {
       completeChat,
       isEnabled: () => true,
     });
-    await expect(
-      svc.runFullCompact({ conversationId: "v2-nocoord" })
-    ).rejects.toThrow(/bounded|coordinator|unavailable/i);
-    // The legacy unbounded path must never run: no provider call happens.
-    expect(completeChat).not.toHaveBeenCalled();
+    const view = await svc.runFullCompact({ conversationId: "v2-nocoord" });
+    expect(view.status).toBe("active");
+    expect(completeChat).toHaveBeenCalledTimes(1);
+    const req = completeChat.mock.calls[0][0] as {
+      max_tokens: number;
+      messages: Array<{ content: string }>;
+    };
+    expect(req.max_tokens).toBeLessThanOrEqual(1_500);
+    expect(req.messages).toHaveLength(2);
+    expect(JSON.stringify(req.messages).length).toBeLessThanOrEqual(30_000);
   });
 
   it("delegates to the bounded coordinator when wired", async () => {

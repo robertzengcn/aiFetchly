@@ -591,6 +591,10 @@ export class AIChatCompactionCoordinator extends BaseModule {
       }
       const generationId = `gen-${runId}`;
       const overviewJson = JSON.stringify(rollingOverview);
+      const continuationStateJson = this.buildContinuationState(
+        rollingOverview,
+        representedSourceIds
+      );
 
       const published = await this.module.publishGeneration({
         conversationId,
@@ -603,6 +607,7 @@ export class AIChatCompactionCoordinator extends BaseModule {
         coveredThroughTimestampMs: lastCoveredThroughTs,
         coveredThroughRowId: lastCoveredThroughRowId,
         overviewJson,
+        continuationStateJson,
         model: input.model,
       });
 
@@ -1100,6 +1105,49 @@ export class AIChatCompactionCoordinator extends BaseModule {
         overviewBytes) /
         4
     );
+  }
+
+  /**
+   * Bounded source-linked continuation state (FR-06, AC-03, §10/§12): derived
+   * ONLY from the validated rolling overview + represented source IDs — never
+   * inferred memory, never permission grants (facts already passed the section
+   * validator which rejects permission-grant patterns). Bounded: goal and
+   * next step are slices, fact lists capped, artifact refs from tool outcomes.
+   */
+  private buildContinuationState(
+    overview: SectionSummaryV1,
+    representedSourceIds: ReadonlySet<string>
+  ): string {
+    const cleanFacts = (
+      facts: readonly { text: string; status: string; sourceIds: readonly string[] }[],
+      max: number,
+      maxChars: number
+    ): Array<{ text: string; status: string; sourceIds: string[] }> => {
+      const out: Array<{ text: string; status: string; sourceIds: string[] }> = [];
+      for (const f of facts) {
+        if (out.length >= max) break;
+        const refs = f.sourceIds.filter((s) => representedSourceIds.has(s));
+        out.push({
+          text: f.text.slice(0, maxChars),
+          status: f.status,
+          sourceIds: refs.slice(0, 4),
+        });
+      }
+      return out;
+    };
+    const pending = cleanFacts(overview.pending, 10, 200);
+    const state = {
+      version: 1,
+      goal: overview.synopsis.slice(0, 500),
+      constraints: cleanFacts(overview.constraints, 10, 200),
+      decisions: cleanFacts(overview.decisions, 10, 200),
+      pending,
+      nextStep: pending.length > 0 ? pending[0].text : "",
+      artifactRefs: cleanFacts(overview.toolOutcomes, 10, 200),
+      topics: overview.topics.slice(0, 20),
+    };
+    const json = JSON.stringify(state);
+    return json.length > 8_000 ? json.slice(0, 8_000) : json;
   }
 
   /**

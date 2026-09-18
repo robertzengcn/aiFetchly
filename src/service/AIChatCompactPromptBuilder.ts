@@ -12,19 +12,6 @@ export const SESSION_MEMORY_HEADINGS = [
   "## Next Useful Step",
 ] as const;
 
-export const FULL_COMPACT_HEADINGS = [
-  "# Compact Summary",
-  "## Primary Request",
-  "## Current State",
-  "## Important Decisions",
-  "## Technical Concepts",
-  "## Files, Modules, And Tools",
-  "## Errors And Fixes",
-  "## Pending Tasks",
-  "## User Constraints",
-  "## Next Step",
-] as const;
-
 const SECRET_RULE =
   "Do not store secrets, tokens, cookies, credentials, or unnecessary raw data.";
 
@@ -60,31 +47,6 @@ export function buildSessionMemoryUserPrompt(
   ].join("\n");
 }
 
-export function buildFullCompactSystemPrompt(): string {
-  return [
-    "You create compact continuation summaries for an AI chat application.",
-    "Summarize the provided conversation so another assistant can continue accurately.",
-    "Keep facts, decisions, constraints, pending tasks, tool outcomes, and current state.",
-    SECRET_RULE,
-    "Use the required markdown headings exactly.",
-  ].join(" ");
-}
-
-export function buildFullCompactUserPrompt(
-  messages: readonly OpenAIChatMessage[]
-): string {
-  const msgs = messages
-    .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : ""}`)
-    .join("\n");
-  return [
-    "Conversation messages to compact:",
-    msgs,
-    "",
-    "Return a compact summary with:",
-    ...FULL_COMPACT_HEADINGS,
-  ].join("\n");
-}
-
 function ensureHeadings(
   raw: string,
   headings: readonly string[]
@@ -113,10 +75,4 @@ export function normalizeSessionMemorySummary(
   raw: string
 ): { summary: string; ok: boolean } {
   return ensureHeadings(raw, SESSION_MEMORY_HEADINGS);
-}
-
-export function normalizeFullCompactSummary(
-  raw: string
-): { summary: string; ok: boolean } {
-  return ensureHeadings(raw, FULL_COMPACT_HEADINGS);
 }

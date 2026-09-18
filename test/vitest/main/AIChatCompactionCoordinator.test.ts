@@ -192,6 +192,33 @@ describe("AIChatCompactionCoordinator", () => {
     ).rejects.toMatchObject({ code: "COMPACTION_CONTEXT_REJECTED" });
   });
 
+  it("populates source-linked continuation state on publish (M-1/FR-06)", async () => {
+    await seedMessages("conv-continuation", [
+      { role: "user", content: "plan the launch", ts: 1_000 },
+      { role: "assistant", content: "launch plan drafted", ts: 2_000 },
+    ]);
+    await indexConversation("conv-continuation");
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-continuation", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    const { AIChatCompactionModule } = await import("@/modules/AIChatCompactionModule");
+    const state = await new AIChatArchiveStateModel(tmpDir).getState("conv-continuation");
+    const gen = await new AIChatCompactionModule().getActiveGeneration(
+      "conv-continuation",
+      state?.epoch ?? ""
+    );
+    expect(gen?.continuationStateJson).toBeTruthy();
+    const parsed = JSON.parse(gen?.continuationStateJson ?? "{}") as {
+      goal?: string;
+      pending?: unknown[];
+    };
+    expect(typeof parsed.goal).toBe("string");
+    expect(Array.isArray(parsed.pending)).toBe(true);
+  });
+
   it("does not advance the checkpoint past an incomplete terminal turn (P1-1)", async () => {
     await seedMessages("conv-mid-checkpoint", [
       { role: "user", content: "q1", ts: 1_000 },
