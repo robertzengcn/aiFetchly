@@ -170,6 +170,10 @@ jobs:
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
       PKG_SMOKE_GITHUB: "1"
+      # macOS packaging occasionally exceeds the guard's 15-minute default
+      # hard timeout (one eviction observed at ~15min with the run otherwise
+      # healthy); give the slower runners headroom.
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: "1800000"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
