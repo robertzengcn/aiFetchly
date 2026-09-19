@@ -1,5 +1,7 @@
 # Recoverable History and Incremental Compaction — Independent Audit TODO
 
+**Status (2026-09-18):** Original audit P0/P1-budget items are **closed**. C-1–C-7 closed on `d1e2a2be`. **Current leftovers:** [ai-chat-recoverable-history-incremental-compaction-remaining-after-c1-c7.md](ai-chat-recoverable-history-incremental-compaction-remaining-after-c1-c7.md). Keep this file as the original audit record.
+
 **Date:** 2026-09-17  
 **Auditor:** independent code review of worktree (not the implementer's own TODO claims)  
 **Worktree:** `/Users/cengjianze/project/aiFetchly/.claude/worktrees/ai-chat-compaction`  
