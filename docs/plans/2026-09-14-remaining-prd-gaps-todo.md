@@ -402,8 +402,15 @@ locally, components 35 files / 202 tests, utilityCode suites green.
   repo-wide infra failure — GitHub evicts ubuntu runners ~2 minutes into
   electron-packager ("runner has received a shutdown signal"), four
   consecutive times across both the matrix job and ci.yml's package-smoke
-  job, with disk-free + swap hardening in place. Linux GF-1 evidence was
-  recorded from a LOCAL packaged run instead (empty-PATH relaunch, public
-  fixture install, zero git descendants — log in the PR description);
-  the ubuntu job stays failing-loud to track the infra issue.
+  job, with disk-free + swap hardening in place. A local (WSL) packaged
+  run was attempted as fallback evidence: packaging completed, the
+  packaged main process boots, but no window opens under WSL's software
+  graphics stack (the identical smoke passes on real macOS/Windows
+  runners), so the local leg could not complete. The ubuntu CI job stays
+  failing-loud to record the third OS as soon as runner eviction subsides;
+  Windows + macOS provide the recorded zero-Git + plugin-row proof until
+  then. Side finding for follow-up: electron-packager's prune strips
+  typeorm's hoisted runtime deps (tslib/ansis/dayjs) from the Linux
+  package on some trees — CI runners' installs nest them and boot fine,
+  but the prod-vs-dev hoisting deserves a look before the next release.
 - Branch protection now requires `windows-shell-matrix` (NL-9).
