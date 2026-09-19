@@ -13,6 +13,17 @@ vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  // Incremental-compaction + recoverable-history APIs (added on test branch).
+  // Mocked here so the merged component can mount: the switch-model /
+  // tool-approval assertions below do not exercise compaction, they only
+  // need these imports to exist.
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  cancelCompaction: vi.fn().mockResolvedValue({ cancelled: false }),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
+  detachChatV2ConversationStreamListeners: vi.fn(),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(false),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({
     messages: [],
@@ -204,6 +215,12 @@ function mountChat() {
         // state mid-stream (model enabled, tool-approval locked).
         AiChatV2PlanStatusBadge: true,
         AiChatV2ContextBadge: true,
+        // Recoverable-history components (added on test branch). Stubbed —
+        // these tests assert the model / tool-approval selectors only.
+        AiChatCompactionStatus: true,
+        AiChatHistoryDrawer: true,
+        AiChatSelectedContext: true,
+        AiChatHistoryMessage: true,
         FileOperationBadge: true,
         MCPToolManager: true,
         AgentTaskListDialog: true,
