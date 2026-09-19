@@ -51,19 +51,47 @@ const SHUTDOWN_BROWSER_TIMEOUT_MS = 3000;
 let shuttingDown = false;
 let shutdownForceTimer: NodeJS.Timeout | null = null;
 
-/** Re-bound the graceful-close watchdog to the parent's remaining allowance. */
-function adjustShutdownTimeout(boundedMs: number): void {
+/** Single watchdog builder: force-exit if graceful close exceeds `ms`. */
+function armShutdownWatchdog(ms: number, exitCode: number): void {
   if (shutdownForceTimer !== null) {
     clearTimeout(shutdownForceTimer);
   }
-  const exitCode = 0;
   shutdownForceTimer = setTimeout(() => {
     log.warn(
-      `ContactExtractionWorker: graceful close exceeded ${boundedMs}ms, forcing exit`
+      `ContactExtractionWorker: graceful close exceeded ${ms}ms, forcing exit`
     );
     process.exit(exitCode);
-  }, boundedMs);
+  }, ms);
   shutdownForceTimer.unref();
+}
+
+/** Re-bound the graceful-close watchdog to the parent's remaining allowance. */
+function adjustShutdownTimeout(boundedMs: number): void {
+  armShutdownWatchdog(boundedMs, 0);
+}
+
+/**
+ * §7 shutdown-request handler (design §7): bound local cleanup to the parent's
+ * remaining allowance, acknowledge with the correlatable requestId, then run
+ * the graceful path (closing flag rejects new jobs; browsers close; exit).
+ * Exported for direct unit tests — the ack ordering and bounded timer are
+ * contract-critical.
+ */
+export function handleWorkerShutdown(message: {
+  requestId: string;
+  remainingMs?: number;
+}): void {
+  if (typeof message.remainingMs === "number") {
+    const bounded = Math.max(
+      250,
+      Math.min(message.remainingMs, SHUTDOWN_BROWSER_TIMEOUT_MS)
+    );
+    if (bounded < SHUTDOWN_BROWSER_TIMEOUT_MS) {
+      adjustShutdownTimeout(bounded);
+    }
+  }
+  process.send?.({ type: "shutdown-ack", requestId: message.requestId });
+  gracefulShutdown("shutdown-request", 0);
 }
 
 function gracefulShutdown(signal: string, exitCode: number): void {
@@ -73,14 +101,7 @@ function gracefulShutdown(signal: string, exitCode: number): void {
     `ContactExtractionWorker: received ${signal}, closing browsers and exiting`
   );
   if (shutdownForceTimer === null) {
-    const force = setTimeout(() => {
-      log.warn(
-        `ContactExtractionWorker: graceful close exceeded ${SHUTDOWN_BROWSER_TIMEOUT_MS}ms, forcing exit`
-      );
-      process.exit(exitCode);
-    }, SHUTDOWN_BROWSER_TIMEOUT_MS);
-    force.unref();
-    shutdownForceTimer = force;
+    armShutdownWatchdog(SHUTDOWN_BROWSER_TIMEOUT_MS, exitCode);
   }
   closeAllActiveBrowsers()
     .catch((e) =>
@@ -113,20 +134,7 @@ function initializeWorker(): void {
 
     const message = parsed.data;
     if (message.type === "shutdown") {
-      // Design §7 protocol: ack, then close browsers/subprocesses and exit
-      // within the parent's remaining allowance. Local timeout stays bounded
-      // by the smaller of the browser timeout and the parent's remainingMs.
-      if (typeof message.remainingMs === "number") {
-        const bounded = Math.max(
-          250,
-          Math.min(message.remainingMs, SHUTDOWN_BROWSER_TIMEOUT_MS)
-        );
-        if (bounded < SHUTDOWN_BROWSER_TIMEOUT_MS) {
-          adjustShutdownTimeout(bounded);
-        }
-      }
-      process.send?.({ type: "shutdown-ack", requestId: message.requestId });
-      gracefulShutdown("shutdown-request", 0);
+      handleWorkerShutdown(message);
       return;
     }
     if (shuttingDown) {

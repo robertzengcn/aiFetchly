@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { spawn, ChildProcess } from "child_process";
 import { log } from "@/modules/Logger";
@@ -246,16 +247,15 @@ export class MCPClient {
         }
       }
 
-      if (!ownedSpawnAllowed("mcp-server")) {
-        throw new Error("Application is shutting down; refusing MCP server start");
-      }
-
-      const child = spawn(command, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: childEnv,
-        cwd: this.config.cwd,
-      });
-      registerOwnedProcess("mcp-server", child);
+      const child = spawnOwned(
+        "mcp-server",
+        () =>
+          spawn(command, args, {
+            stdio: ["pipe", "pipe", "pipe"],
+            env: childEnv,
+            cwd: this.config.cwd,
+          })
+      );
 
       this.connection = child;
 

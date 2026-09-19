@@ -109,6 +109,9 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
         }
         resolve({ code, stdout, tarball });
       };
+      if (!ownedSpawnAllowed("npm-plugin-fetch")) {
+        throw new Error("Application is shutting down; refusing plugin fetch");
+      }
       const child = spawn("npm", args, {
         cwd: workdir,
         env: process.env,
@@ -159,6 +162,9 @@ export class NpmPluginFetcher implements PluginSourceFetcher {
     fs.mkdirSync(extractDir, { recursive: true });
 
     const extracted = await new Promise<boolean>((resolve) => {
+      if (!ownedSpawnAllowed("npm-plugin-extract")) {
+        throw new Error("Application is shutting down; refusing plugin extraction");
+      }
       const child = spawn("tar", ["-xzf", tarball, "-C", extractDir], {
         env: process.env,
         shell: false,

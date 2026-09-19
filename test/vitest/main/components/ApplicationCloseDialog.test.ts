@@ -1,5 +1,12 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+  beforeEach,
+  afterEach,
+} from "vitest";
+import { mount, flushPromises, enableAutoUnmount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent, nextTick } from "vue";
 import ApplicationCloseDialog from "@/views/components/application/ApplicationCloseDialog.vue";
@@ -12,6 +19,11 @@ import type { ApplicationCloseChoiceRequest } from "@/entityTypes/applicationLif
  * token, switches to the shutdown progress overlay when quitting, and never
  * stacks dialogs (AC-01/AC-08).
  */
+
+// The dialog attaches a DOCUMENT keydown listener while open; happy-dom shares
+// one document across tests, so every mounted wrapper must unmount or stale
+// listeners leak between tests.
+enableAutoUnmount(afterEach);
 
 type RequestCallback = (request: ApplicationCloseChoiceRequest) => void;
 type StateCallback = (event: { state: string; phaseKey?: string }) => void;
@@ -236,6 +248,34 @@ describe("ApplicationCloseDialog", () => {
     await nextTick();
     expect(acknowledgeMock).toHaveBeenCalledTimes(1);
     expect(acknowledgeMock).toHaveBeenCalledWith("token-first-1");
+  });
+
+  it("Escape cancels the dialog and detaches the document listener", async () => {
+    const wrapper = mountDialog();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(submitMock).not.toHaveBeenCalled(); // no request yet — listener not attached
+
+    pushRequest();
+    await nextTick();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(submitMock).toHaveBeenCalledWith("token-1234", "cancel");
+
+    // Dialog closed → listener detached; a stray Escape must not re-submit.
+    submitMock.mockClear();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(submitMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("a non-Escape key does not cancel the dialog", async () => {
+    mountDialog();
+    pushRequest();
+    await nextTick();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await flushPromises();
+    expect(submitMock).not.toHaveBeenCalled();
   });
 
   it("a quitting broadcast closes any dialog and shows the progress overlay (FR-04)", async () => {

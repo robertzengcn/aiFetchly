@@ -15,6 +15,7 @@ import {
   contactExtractionWorkerOutboundSchema,
   contactExtractionWorkerInboundSchema,
 } from "@/schemas/worker/contactExtraction";
+import { handleWorkerShutdown } from "@/childprocess/contact-extraction/ContactExtractionWorker";
 
 // Stand-in for the main-side dispatch — same logic as in contactExtraction-ipc.ts.
 function dispatchOutbound(
@@ -223,5 +224,46 @@ describe("contactExtraction worker inbound dispatch", () => {
       { onExtract: vi.fn(), onExtractUrls: vi.fn(), onShutdown: vi.fn(), onDrop },
     );
     expect(onDrop).toHaveBeenCalled();
+  });
+});
+
+describe("handleWorkerShutdown — the REAL §7 handler (not a mirror)", () => {
+  const sendMock = vi.fn(() => true);
+  const exitMock = vi.fn();
+  vi.stubGlobal("process", {
+    ...process,
+    send: sendMock,
+    exit: exitMock,
+  });
+  // gracefulShutdown closes browsers asynchronously then exits; the finally
+  // calls process.exit — mocked. Keep tests focused on ack + timer arming.
+
+  it("acks with the correlatable requestId, then exits via the graceful path", async () => {
+    handleWorkerShutdown({ requestId: "req-9" });
+    // Ack is SYNCHRONOUS — sent before any async browser cleanup resolves.
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-9",
+    });
+    // gracefulShutdown closes browsers then exits in .finally — flush.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(exitMock).toHaveBeenCalled();
+  });
+
+  it("bounds the watchdog to the parent's remainingMs when smaller", () => {
+    handleWorkerShutdown({ requestId: "req-b", remainingMs: 500 });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-b",
+    });
+  });
+
+  it("clamps a generous parent budget to the local browser timeout", () => {
+    handleWorkerShutdown({ requestId: "req-c", remainingMs: 60_000 });
+    expect(sendMock).toHaveBeenCalledWith({
+      type: "shutdown-ack",
+      requestId: "req-c",
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import url from "url";
 //import request from "@/modules/lib/request"
@@ -193,10 +194,10 @@ export class SocialTask {
     }
     const { port1, port2 } = new MessageChannelMain();
 
-    if (!ownedSpawnAllowed("social-task")) {
-      throw new Error("Application is shutting down; refusing new work (social-task)");
-    }
-    const child = utilityProcess.fork(
+    const child = spawnOwned(
+      "social-task",
+      () =>
+        utilityProcess.fork(
       childPath,
       ["-a", "runtask", "-t", entity.taskrun_num],
       {
@@ -209,8 +210,8 @@ export class SocialTask {
           },
         }),
       }
+    )
     );
-    registerOwnedProcess("social-task", child);
     //console.log(path.join(__dirname, 'utilityCode.js'))
 
     // child.postMessage({ message: 'hello' }, [port1])

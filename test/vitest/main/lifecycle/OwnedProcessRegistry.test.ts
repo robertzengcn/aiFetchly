@@ -194,6 +194,32 @@ describe("OwnedProcessRegistry — bounded exited-record retention", () => {
   });
 });
 
+describe("OwnedProcessRegistry — own-group isolation guard (design §8)", () => {
+  it("accepts isolatedProcessGroupId only when it equals the pid", () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const pid = ops.spawn(1);
+    const record = registry.register({
+      ownerId: "detached",
+      pid,
+      isolatedProcessGroupId: pid,
+    });
+    expect(record.isolatedProcessGroupId).toBe(pid);
+  });
+
+  it("refuses a foreign isolatedProcessGroupId (never signal a group we did not create)", () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const pid = ops.spawn(1);
+    const record = registry.register({
+      ownerId: "suspicious",
+      pid,
+      isolatedProcessGroupId: 1, // e.g. the app's own group
+    });
+    expect(record.isolatedProcessGroupId).toBeNull();
+  });
+});
+
 describe("OwnedProcessRegistry — worker descendant reports (design §7)", () => {
   it("accepts and validates a descendant whose ppid chain reaches the worker", async () => {
     const ops = new FakeProcessOps();

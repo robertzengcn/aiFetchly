@@ -119,11 +119,19 @@ function truncateMessage(message: string): string {
 }
 
 function describeError(err: unknown): string {
-  if (err instanceof Error) {
-    // Error.message only — name+message, never stack traces (may embed paths).
-    return truncateMessage(`${err.name}: ${err.message}`);
-  }
-  return truncateMessage(String(err));
+  const raw =
+    err instanceof Error
+      ? // Error.message only — name+message, never stack traces (may embed paths).
+        `${err.name}: ${err.message}`
+      : String(err);
+  // FR-09 privacy: messages can quote filesystem paths (ENOENT etc.).
+  // Collapse absolute/posix/win32 path-shaped runs to <path>.
+  return truncateMessage(
+    raw.replace(
+      /(?:[A-Za-z]:)?(?:[\/][\w .@()-]+){2,}/g,
+      "<path>"
+    )
+  );
 }
 
 /**

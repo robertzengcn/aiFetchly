@@ -348,6 +348,22 @@ describe("ShutdownCoordinator — report privacy (FR-09)", () => {
     expect(outcome?.errorMessage?.length ?? 0).toBeLessThanOrEqual(201);
   });
 
+  it("redacts path-shaped substrings from participant error messages (FR-09)", async () => {
+    const recording = makeRecordingParticipants(["leaky"]);
+    recording.participants[0] = {
+      ...recording.participants[0],
+      stop: () =>
+        Promise.reject(
+          new Error("ENOENT: no such file /home/robertzeng/secrets/config.json")
+        ),
+    };
+    const coordinator = makeCoordinator(recording);
+    const { report } = await coordinator.run(CONTEXT);
+    const outcome = report.participantOutcomes[0];
+    expect(outcome?.errorMessage).toContain("<path>");
+    expect(outcome?.errorMessage).not.toContain("/home/robertzeng");
+  });
+
   it("carries attempt/reason/intent correlation fields", async () => {
     const coordinator = makeCoordinator(makeRecordingParticipants([]));
     const { report } = await coordinator.run({

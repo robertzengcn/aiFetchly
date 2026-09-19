@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Local AI Runtime — disposable voice health probe (design §19).
@@ -87,16 +88,16 @@ export function resolveRuntimeProbeWorkerPath(
 
 /** Default production fork: Electron utilityProcess with packaged-worker env. */
 const defaultFork: ProbeForkFn = (workerPath): ProbeUtilityProcess => {
-  if (!ownedSpawnAllowed("runtime-probe")) {
-    throw new Error("Application is shutting down; refusing probe start");
-  }
-  const proc = utilityProcess.fork(workerPath, [], {
+  const proc = spawnOwned(
+    "runtime-probe",
+    () =>
+      utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
       extraEnv: { WORKER_TYPE: "runtime-probe" },
     }),
-  });
-  registerOwnedProcess("runtime-probe", proc);
+  })
+  );
   return proc as unknown as ProbeUtilityProcess;
 };
 

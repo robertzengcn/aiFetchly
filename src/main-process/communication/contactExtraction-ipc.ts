@@ -29,6 +29,10 @@ import {
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
 import { isSpawnAllowed } from "@/main-process/lifecycle/spawnGate";
+import {
+  reconcileInterruptedWork,
+  shutdownContactWorker,
+} from "./contactExtractionShutdown";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 
@@ -529,15 +533,15 @@ function realFailDeps(): FailDeps {
 export async function reconcileInterruptedExtractions(
   reason: string
 ): Promise<number[]> {
-  try {
-    return await failInFlightExtractions(realFailDeps(), reason);
-  } catch (err) {
-    log.error(
-      "[contact-extraction] interrupted-task reconciliation failed:",
-      err instanceof Error ? err.message : String(err)
-    );
-    return [];
-  }
+  return reconcileInterruptedWork(
+    realFailDeps(),
+    reason,
+    (message, err) =>
+      log.error(
+        message,
+        err instanceof Error ? err.message : String(err)
+      )
+  );
 }
 
 /**
@@ -758,52 +762,16 @@ export async function cleanupContactExtractionWorker(
     const record = registry
       .listByOwner("contact-extraction")
       .find((r) => r.pid === worker.pid);
-
-    // Design §7 protocol FIRST: ask the worker to close its browsers and
-    // exit within the parent's remaining allowance...
-    const requestId = uuidv4();
-    try {
-      worker.send({
-        type: "shutdown",
-        requestId,
-        reason: "app-shutdown",
-        remainingMs: observeMs,
-      });
-    } catch (err) {
-      log.warn(
-        "contact-extraction shutdown-request send failed:",
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-
-    if (observeMs > 0 && record) {
-      // ...wait for OBSERVED natural exit within the budget...
-      const exitedNaturally = await registry.observeExit(record.id, observeMs);
-      if (exitedNaturally) return true;
-    }
-
-    // ...then signal-kill and verify again (an ack is not exit proof).
-    try {
-      worker.kill();
-    } catch (err) {
-      log.warn(
-        "contact-extraction worker kill failed:",
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-    if (observeMs > 0 && record) {
-      const exited = await registry.observeExit(
-        record.id,
-        Math.min(observeMs, 1_000)
-      );
-      if (!exited) {
+    return shutdownContactWorker(worker, record, observeMs, {
+      registry,
+      newRequestId: uuidv4,
+      warn: (message, err) =>
         log.warn(
-          `[contact-extraction] worker pid=${worker.pid} did not exit within ${observeMs}ms; force-phase will verify`
-        );
-      }
-      return exited;
-    }
-    return true;
+          message,
+          err instanceof Error ? err.message : String(err)
+        ),
+      info: (m) => log.info(m),
+    });
   }
   return true;
 }

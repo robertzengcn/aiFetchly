@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { utilityProcess } from "electron";
 import { log } from "@/modules/Logger";
 import type { UtilityProcess } from "electron";
@@ -167,10 +169,14 @@ export class PythonRuntimeWorkerClient {
     log.info(
       `[PythonRuntimeWorkerClient] Starting utility process worker from ${resolvedPath}`
     );
-    const worker = utilityProcess.fork(resolvedPath, [], {
+    const worker = spawnOwned(
+      "python-runtime-worker",
+      () =>
+        utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
       env: buildPackagedWorkerEnv(),
-    });
+    })
+    );
 
     this.workerProcess = worker;
     this.startupPromise = null;

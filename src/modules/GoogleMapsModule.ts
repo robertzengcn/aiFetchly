@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Google Maps Module — orchestration layer shared by AI skill and UI page.
@@ -188,14 +189,14 @@ export class GoogleMapsModule extends BaseModule {
             workerEnv.NODE_PATH
           )}`
         );
-        if (!ownedSpawnAllowed("google-maps")) {
-          throw new Error("Application is shutting down; refusing new work (google-maps)");
-        }
-        worker = spawn(process.execPath, [resolvedWorkerPath], {
+        worker = spawnOwned(
+          "google-maps",
+          () =>
+            spawn(process.execPath, [resolvedWorkerPath], {
           stdio: ["pipe", "pipe", "pipe", "ipc"],
           env: workerEnv,
-        });
-        registerOwnedProcess("google-maps", worker);
+        })
+        );
       } catch (err) {
         reject(
           new Error(

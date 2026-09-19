@@ -127,6 +127,20 @@ export class OwnedProcessRegistry {
    * is OBSERVED, not assumed (design §6).
    */
   register(options: RegisterOptions): OwnedProcessRecordView {
+    // Design §8 guard: an isolated pgid is only ever valid when the launcher
+    // detached the child into its OWN group (pgid === pid). A different value
+    // could name an existing group — including the app's own — so refuse it
+    // outright rather than ever signaling a group we did not create.
+    if (
+      options.isolatedProcessGroupId !== undefined &&
+      options.isolatedProcessGroupId !== options.pid
+    ) {
+      log.warn(
+        `[registry] refusing isolatedProcessGroupId ${options.isolatedProcessGroupId} ` +
+          `(!= pid ${options.pid ?? "n/a"}) for '${options.ownerId}' — only own-group isolation is recordable`
+      );
+      options = { ...options, isolatedProcessGroupId: undefined };
+    }
     const record: InternalRecord = {
       id: randomUUID(),
       ownerId: options.ownerId,

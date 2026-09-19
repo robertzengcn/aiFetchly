@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * WorkspaceWatchManager — main-process owner of the watcher worker lifecycle.
@@ -125,11 +126,11 @@ const defaultUtilityFork = (
   args: readonly string[],
   opts: { env?: NodeJS.ProcessEnv }
 ): WorkerHandle => {
-  if (!ownedSpawnAllowed("workspace-watch")) {
-    throw new Error("Application is shutting down; refusing watcher start");
-  }
-  const child = utilityProcess.fork(entry, [...args], { env: opts.env });
-  registerOwnedProcess("workspace-watch", child);
+  const child = spawnOwned(
+    "workspace-watch",
+    () =>
+      utilityProcess.fork(entry, [...args], { env: opts.env })
+  );
   return child as unknown as WorkerHandle;
 };
 

@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 "use strict";
 import { utilityProcess } from "electron";
@@ -116,16 +117,16 @@ export function buildLocalEmbeddingWorkerNodePathExtras(
 }
 
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
-  if (!ownedSpawnAllowed("embedding-worker")) {
-    throw new Error("Application is shutting down; refusing embedding worker start");
-  }
-  const proc = utilityProcess.fork(workerPath, [], {
+  const proc = spawnOwned(
+    "embedding-worker",
+    () =>
+      utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
       existingNodePath: buildLocalEmbeddingWorkerNodePathExtras(workerPath),
     }),
-  });
-  registerOwnedProcess("embedding-worker", proc);
+  })
+  );
   return proc as unknown as UtilityProcessLike;
 };
 

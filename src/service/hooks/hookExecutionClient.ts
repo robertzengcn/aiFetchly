@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 // src/service/hooks/hookExecutionClient.ts
 // HOK-02 (Phase 17 / Plan 03) — main-side IPC client for the dedicated
@@ -69,11 +70,11 @@ const defaultUtilityFork = (
   args: readonly string[],
   opts: { env?: NodeJS.ProcessEnv }
 ): WorkerHandle => {
-  if (!ownedSpawnAllowed("hooks")) {
-    throw new Error("Application is shutting down; refusing hook worker start");
-  }
-  const child = utilityProcess.fork(modulePath, [...args], { env: opts.env });
-  registerOwnedProcess("hooks", child);
+  const child = spawnOwned(
+    "hooks",
+    () =>
+      utilityProcess.fork(modulePath, [...args], { env: opts.env })
+  );
   return child as unknown as WorkerHandle;
 };
 

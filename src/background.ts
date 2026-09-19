@@ -154,7 +154,7 @@ import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRe
 import { ProcessTreeTerminator } from "@/main-process/lifecycle/ProcessTreeTerminator";
 import { createDefaultProcessOps } from "@/main-process/lifecycle/processOps";
 import { bindSpawnGateToLifecycle } from "@/main-process/lifecycle/spawnGate";
-import { registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
 import {
   TrayController,
@@ -720,6 +720,9 @@ if (process.env.AIFETCHLY_E2E === "1") {
      * after 15 minutes. E2E-only — never present in production/dev builds.
      */
     spawnOwnedFixture: (markPath: string): { pid: number } => {
+      if (!ownedSpawnAllowed("e2e-observer-fixture")) {
+        throw new Error("Application is shutting down; refusing fixture spawn");
+      }
       const child = nodeSpawn(
         process.execPath,
         ["-e", "const fs=require('fs');const write=()=>{try{fs.writeFileSync(process.argv[1],String(Date.now()))}catch{}};write();setInterval(write,5000);setTimeout(()=>process.exit(0),15*60*1000);", markPath],

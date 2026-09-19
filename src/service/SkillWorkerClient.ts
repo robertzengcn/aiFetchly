@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { utilityProcess } from "electron";
 import { log } from "@/modules/Logger";
@@ -262,14 +263,14 @@ export class SkillWorkerClient {
   private async startWorker(): Promise<UtilityProcess> {
     const resolvedPath = this.resolveWorkerPath();
 
-    if (!ownedSpawnAllowed("skill-worker")) {
-      throw new Error("Application is shutting down; refusing skill worker start");
-    }
-    const worker = utilityProcess.fork(resolvedPath, [], {
+    const worker = spawnOwned(
+      "skill-worker",
+      () =>
+        utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
       env: buildPackagedWorkerEnv(),
-    });
-    registerOwnedProcess("skill-worker", worker);
+    })
+    );
 
     // Attach lifecycle handlers before exposing the worker to callers.
     let settled = false;

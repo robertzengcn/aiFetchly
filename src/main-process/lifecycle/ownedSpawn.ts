@@ -5,7 +5,10 @@ import type {
   OwnedProcessRecordView,
   RegisterOptions,
 } from "@/main-process/lifecycle/OwnedProcessRegistry";
-import { isSpawnAllowed } from "@/main-process/lifecycle/spawnGate";
+import {
+  isSpawnAllowed,
+  SpawnGateError,
+} from "@/main-process/lifecycle/spawnGate";
 
 /**
  * ownedSpawn — the one-liner adoption path for every main-process spawn
@@ -43,6 +46,28 @@ export interface SpawnedProcessLike {
 /** Spawn gate re-export with an owner id (see spawnGate.ts). */
 export function ownedSpawnAllowed(ownerId: string): boolean {
   return isSpawnAllowed(ownerId);
+}
+
+/**
+ * The single adoption point (design §6): gate -> launch -> register in ONE
+ * call so the ownerId string can never drift between the gate check and the
+ * registration. Throws SpawnGateError when the app is shutting down (the
+ * caller's existing error handling reports the refused work); the launch
+ * function runs only when the gate is open.
+ *
+ *   const child = spawnOwned("yellow-pages", () => utilityProcess.fork(...));
+ */
+export function spawnOwned<T extends SpawnedProcessLike>(
+  ownerId: string,
+  launch: () => T,
+  options: Omit<RegisterOptions, "ownerId" | "pid" | "handle"> = {}
+): T {
+  if (!ownedSpawnAllowed(ownerId)) {
+    throw new SpawnGateError(ownerId);
+  }
+  const process = launch();
+  registerOwnedProcess(ownerId, process, options);
+  return process;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { SearchDataParam } from "@/entityTypes/scrapeType";
 import { log } from "@/modules/Logger";
@@ -378,10 +379,10 @@ export class SearchModule extends BaseModule {
     //log.info("two captcha token value is "+twoCaptchaTokenvalue)
     //log.info("local browser excute path is "+localBrowserexcutepath)
     //log.info("user data dir is "+userDataDir)
-    if (!ownedSpawnAllowed("search-scraper")) {
-      throw new Error("Application is shutting down; refusing new work (search-scraper)");
-    }
-    const child = utilityProcess.fork(childPath, [], {
+    const child = spawnOwned(
+      "search-scraper",
+      () =>
+        utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: buildPackagedWorkerEnv({
@@ -391,8 +392,8 @@ export class SearchModule extends BaseModule {
           //USEDATADIR: userDataDir
         },
       }),
-    });
-    registerOwnedProcess("search-scraper", child);
+    })
+    );
     child.on("spawn", async () => {
       log.info("child process satart, pid is" + child.pid);
       this.updateTaskStatus(taskId, SearchTaskStatus.Processing);

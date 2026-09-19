@@ -74,6 +74,14 @@ function runChildProcess(
   timeoutMs: number
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    if (!ownedSpawnAllowed("doc-skill-script")) {
+      resolve({
+        code: 1,
+        stdout: "",
+        stderr: "Application is shutting down; script execution refused",
+      });
+      return;
+    }
     const proc = child_process.spawn(cmd, args, { windowsHide: true });
     registerOwnedProcess("doc-skill-script", proc);
     let stdout = "";

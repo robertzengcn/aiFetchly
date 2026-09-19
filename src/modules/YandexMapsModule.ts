@@ -1,3 +1,4 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Yandex Maps Module -- orchestration layer shared by AI skill and UI page.
@@ -182,10 +183,10 @@ export class YandexMapsModule extends BaseModule {
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc).
         // buildPackagedWorkerEnv sets NODE_PATH so unpacked workers can resolve deps that
         // live inside app.asar/node_modules (e.g. puppeteer).
-        if (!ownedSpawnAllowed("yandex-maps")) {
-          throw new Error("Application is shutting down; refusing new work (yandex-maps)");
-        }
-        worker = spawn(process.execPath, [resolvedWorkerPath], {
+        worker = spawnOwned(
+          "yandex-maps",
+          () =>
+            spawn(process.execPath, [resolvedWorkerPath], {
           stdio: ["pipe", "pipe", "pipe", "ipc"],
           env: buildPackagedWorkerEnv({
             runAsNode: true,
@@ -194,8 +195,8 @@ export class YandexMapsModule extends BaseModule {
               ELECTRON_USER_DATA_PATH: app.getPath("userData"),
             },
           }),
-        });
-        registerOwnedProcess("yandex-maps", worker);
+        })
+        );
       } catch (err) {
         reject(
           new Error(
