@@ -28,8 +28,26 @@ function composerTextarea(app: {
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // The chat workspace is the default landing route; the legacy dock
+  // toggle only exists when the app landed elsewhere. Handle both.
+  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  try {
+    await toggle.waitFor({ state: "visible", timeout: 5_000 });
+    await toggle.click();
+  } catch {
+    /* already on the chat workspace */
+  }
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+  // Under the chat-first shell the report button lives in the workspace
+  // strip, which renders only once a conversation exists — start one.
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  try {
+    await newChat.waitFor({ state: "visible", timeout: 5_000 });
+    await newChat.click();
+    await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+  } catch {
+    /* legacy dock: header button renders without a conversation */
+  }
 }
 
 /**
@@ -40,9 +58,15 @@ async function openChat(app: {
 function v2ReportButton(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): import("@playwright/test").Locator {
+  // The chat-first shell hosts the report button in the workspace strip;
+  // the legacy dock (ai-chat-root) is the rollback surface. Scope to
+  // whichever root is present.
   return app.mainWindow
-    .getByTestId("ai-chat-root")
-    .getByTestId("report-conversation");
+    .locator(
+      '[data-testid="chat-center-surface"] [data-testid="report-conversation"], ' +
+        '[data-testid="ai-chat-root"] [data-testid="report-conversation"]'
+    )
+    .first();
 }
 
 test.describe("Conversation reporting (Electron integration)", () => {

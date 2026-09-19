@@ -21,6 +21,13 @@
          header, above the run strip and transcript, inside the center. -->
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
       <template v-if="conversationId">
+        <AIConversationReportButton
+          :enabled="conversationReportEnabled"
+          :loading="reportCapabilitiesLoading"
+          :disabled-reason="conversationReportDisabledReason"
+          compact
+          @open="onOpenConversationReport"
+        />
         <WorkspaceBadge
           :workspace="conversationWorkspace.workspace.value"
           :memory-count="conversationWorkspace.memoryCount.value"
@@ -348,6 +355,14 @@
       @confirm="voice.confirmRuntimeInstall"
     />
 
+    <!-- Multi-select conversation report dialog (non-AI-gated). -->
+    <AIConversationReportDialog
+      v-if="conversationReportDialogOpen && conversationReportSnapshot"
+      v-model="conversationReportDialogOpen"
+      :snapshot="conversationReportSnapshot"
+      @submitted="onConversationReportSubmitted"
+    />
+
     <!-- Workspace memory dialog (existing surface, fed by the composable). -->
     <v-dialog v-model="showWorkspaceMemory" max-width="760">
       <v-card>
@@ -465,6 +480,14 @@ import {
   useComposerDraftStore,
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
+import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
+import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
+import {
+  buildChatV2ConversationSnapshot,
+  hasEligibleChatV2Candidate,
+  type ConversationReportSnapshot,
+} from "@/views/components/aiContentReport/conversationReportSnapshot";
+import { useReportCapabilities } from "@/views/utils/reportCapabilities";
 import {
   cancelChatV2PendingMessage,
   resumeChatV2PendingQueue,
@@ -696,6 +719,80 @@ const sameGeneratedImageRef = (
 const pendingRows = computed(() =>
   pendingMessages.rowsFor(conversationId.value)
 );
+
+// --- Conversation reporting (capability-gated, non-AI-gated) ----------------
+const hasReportableConversationOutput = computed(() =>
+  hasEligibleChatV2Candidate({
+    conversationId: conversationId.value ?? "",
+    messages: [...selectedStore.messages],
+    activeAssistantMessageId: selectedStore.activeAssistantMessageId,
+    streamStatus:
+      selectedStore.streamStatus === "streaming" ? "streaming" : "idle",
+  })
+);
+// Retry-capable capability fetch; the rearm key restarts the chain on every
+// conversation switch (see useReportCapabilities docstring for bug history).
+const {
+  capabilities: reportCapabilities,
+  loading: reportCapabilitiesLoading,
+} = useReportCapabilities({
+  hasEligibleOutput: () => hasReportableConversationOutput.value,
+  rearmKey: () => conversationId.value,
+});
+const conversationReportEnabled = computed(
+  () =>
+    reportCapabilities.value?.conversationReporting.enabled === true &&
+    hasReportableConversationOutput.value
+);
+const conversationReportDisabledReason = computed(() => {
+  if (reportCapabilities.value?.conversationReporting.enabled !== true) {
+    return (
+      t("aiConversationReport.unavailable") ||
+      "Conversation reporting is currently unavailable."
+    );
+  }
+  if (!hasReportableConversationOutput.value) {
+    return (
+      t("aiConversationReport.noEligibleOutputs") ||
+      "There are no reportable AI outputs in this conversation yet."
+    );
+  }
+  return "";
+});
+
+const conversationReportDialogOpen = ref(false);
+const conversationReportSnapshot = ref<ConversationReportSnapshot | null>(
+  null
+);
+
+/** Freeze the current visible messages into the report snapshot at open. */
+function onOpenConversationReport(): void {
+  conversationReportSnapshot.value = buildChatV2ConversationSnapshot({
+    conversationId: conversationId.value ?? "",
+    messages: [...selectedStore.messages],
+    activeAssistantMessageId: selectedStore.activeAssistantMessageId,
+    streamStatus:
+      selectedStore.streamStatus === "streaming" ? "streaming" : "idle",
+  });
+  conversationReportDialogOpen.value = true;
+}
+
+function onConversationReportSubmitted(payload: {
+  reportId: string;
+  selectedMessageIds: string[];
+}): void {
+  // Keep the dialog OPEN so the user can copy the report reference; the
+  // dialog itself owns closing on dismiss (FR-5.5 / Journey 11.1 step 8).
+  void payload;
+}
+
+// An open dialog must never describe a conversation the user navigated away
+// from — close without submitting so a later open rebuilds a fresh snapshot.
+watch(conversationId, () => {
+  if (!conversationReportDialogOpen.value) return;
+  conversationReportDialogOpen.value = false;
+  conversationReportSnapshot.value = null;
+});
 
 watch(
   conversationId,
