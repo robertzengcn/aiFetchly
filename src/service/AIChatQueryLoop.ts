@@ -82,6 +82,12 @@ import {
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
+import {
+  AIChatRequestBudgetService,
+  type ModelLimitResolver,
+} from "@/service/AIChatRequestBudgetService";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
@@ -105,14 +111,56 @@ import {
 } from "@/entityTypes/hookTypes";
 
 /**
- * Max model→tool→model rounds per user turn. Must be high enough to
- * accommodate plan-mode flows where each AskUserQuestion pauses and
- * resumes (consuming one round per question). A typical planning turn
+ * Max model→tool→model rounds per cycle inside one user turn. Must be high
+ * enough to accommodate plan-mode flows where each AskUserQuestion pauses
+ * and resumes (consuming one round per question). A typical planning turn
  * uses 1 (EnterPlanMode) + N (AskUserQuestion) + 1 (SubmitPlanForApproval)
  * + execution rounds. 8 was too low and dead-ended conversations after
  * ~7 questions.
+ *
+ * Hitting this cap used to return `completed` with empty `fullContent`
+ * after the last tool result. The engine then skipped persisting an
+ * assistant row, so plan execution looked like a silent stop. The loop
+ * now injects an in-memory continuation and starts another cycle for
+ * every chat turn — no canned pause is shown in the UI. Stop still aborts.
  */
-const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
+
+/**
+ * How many extra 30-round cycles a turn may start after hitting the cap.
+ * This is a runaway guard (Stop still aborts). 200 cycles × 30 rounds is
+ * enough for long scrapes without an unbounded loop if the model never
+ * stops calling tools.
+ */
+export const MAX_TOOL_ROUND_CAP_CONTINUATIONS = 200;
+
+/**
+ * How many times to nudge the model after it returns finish_reason=stop
+ * with no text and no tool calls, but this turn already executed tools.
+ * Empty stop after tools is not a finished plan — it is a premature end.
+ */
+export const MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS = 3;
+
+/** In-memory (not persisted) nudge sent when the model empty-stops after tools. */
+export const EMPTY_STOP_AFTER_TOOLS_PROMPT =
+  "Continue the current plan now. Call the next tool or write a short progress update with blockers. Do not end the turn with an empty reply.";
+
+/**
+ * In-memory (not persisted) prompt injected when /goal hits the per-cycle
+ * tool-round cap and should keep executing instead of pausing.
+ */
+export const GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT =
+  "The current tool-round cycle ended, but the goal is not finished. Continue executing the plan now. Call the next tool or write a short progress update with blockers. Do not stop until the goal's completion conditions are met.";
+
+/**
+ * In-memory (not persisted) prompt injected when a normal chat hits the
+ * per-cycle tool-round cap. Sent only to the model; not shown as a user
+ * or assistant bubble.
+ */
+export const TOOL_ROUND_CAP_CONTINUATION_PROMPT =
+  "The current tool-round cycle ended, but the task is not finished. " +
+  "Continue now. Call the next tool or write a short progress update with blockers. " +
+  "Do not end with an empty reply, and do not ask the user whether to continue.";
 
 /**
  * Polling interval for async tool jobs. The loop sleeps this long between
@@ -594,6 +642,20 @@ export interface AIChatQueryLoopDeps {
     currentModel?: string;
     reason: AIChatRecoveryReason;
   }): Promise<{ model?: string; source: string }>;
+
+  /**
+   * Complete-request token-budget service (technical-design §8.5). The loop
+   * defaults to a fresh service when omitted, so preflight is mandatory for
+   * every consumer — inject one only to share accounting or stub limits.
+   */
+  requestBudgetService?: AIChatRequestBudgetService;
+
+  /**
+   * Optional: model-limit resolver for the budget service. When omitted, the
+   * loop constructs one from `AIChatModelCatalogService`. Exposed for tests
+   * that want to inject deterministic limits without the live catalog.
+   */
+  resolveModelLimits?: ModelLimitResolver;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -681,10 +743,51 @@ function snapshotToolCatalogState(
 }
 
 export class AIChatQueryLoop {
-  constructor(private readonly deps: AIChatQueryLoopDeps) {}
+  /**
+   * Mandatory dispatch guard (§8.5, FR-04/FR-08): every provider dispatch is
+   * budget-checked. A missing injected service defaults to a fresh budget
+   * service — no production dispatch can skip preflight by omitting the dep.
+   */
+  private readonly budgetService: AIChatRequestBudgetService;
+
+  constructor(private readonly deps: AIChatQueryLoopDeps) {
+    this.budgetService =
+      deps.requestBudgetService ?? new AIChatRequestBudgetService();
+  }
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
+  private readonly modelCatalogService = new AIChatModelCatalogService();
+
+  /**
+   * Build a ModelLimitResolver backed by the live AIChatModelCatalogService
+   * (§8.1). Unknown models resolve to the conservative 8,192/1,024 fallback.
+   * Synchronous in shape — the catalog is loaded lazily on first budget
+   * preflight; when unloaded the fallback applies. Memoized per instance.
+   */
+  getDefaultModelLimitResolver(): ModelLimitResolver {
+    return (model?: string) => {
+      // The catalog methods are async but we need a sync resolver for the
+      // budget preflight. Use the cached entries directly when loaded; fall
+      // back to the §8.1 provisional limits otherwise.
+      const entries = this.modelCatalogService.entries();
+      if (model) {
+        const entry = entries.find((e) => e.id === model);
+        if (entry) {
+          return {
+            contextLimit: entry.contextWindow,
+            outputLimit: entry.maxOutputTokens ?? 1_024,
+            limitSource: "provider",
+          };
+        }
+      }
+      return {
+        contextLimit: 8_192,
+        outputLimit: 1_024,
+        limitSource: "fallback",
+      };
+    };
+  }
 
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
@@ -912,6 +1015,12 @@ export class AIChatQueryLoop {
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
     let textToolCallMarkerRetryCount = 0;
+    let executedToolRound = false;
+    let emptyStopContinuations = 0;
+    let roundCapContinuations = 0;
+    const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
+    const maxRoundCapContinuations =
+      input.maxRoundCapContinuations ?? MAX_TOOL_ROUND_CAP_CONTINUATIONS;
     // Ensure a generous token budget so large tool-call arguments (e.g.
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
@@ -921,6 +1030,10 @@ export class AIChatQueryLoop {
     // already been attempted so the coordinator doesn't loop forever.
     // Imported fresh per run() to avoid cross-turn contamination.
     let recoveryState = createRecoveryAttemptState(input.request.model);
+    // Effective dispatch model (§8.1/§8.5): re-resolved after model fallback
+    // so the budget preflight and the provider dispatch always agree on the
+    // same limits. Starts as the requested model; fallback updates it.
+    let effectiveModel = input.request.model;
 
     try {
       // Inject the deferred-tool announcement once at the start of the turn
@@ -942,11 +1055,43 @@ export class AIChatQueryLoop {
       // any other generated image.
       const collectedToolImages: OpenAIChatImage[] = [];
 
-      for (
-        let round = input.startRound;
-        round < CHAT_V2_MAX_TOOL_ROUNDS;
-        round += 1
-      ) {
+      for (let round = input.startRound; ; round += 1) {
+        if (round >= maxToolRounds) {
+          const canKeepGoing =
+            executedToolRound &&
+            !input.abortController.signal.aborted &&
+            input.isActiveTurn() &&
+            roundCapContinuations < maxRoundCapContinuations;
+          if (canKeepGoing) {
+            roundCapContinuations += 1;
+            emptyStopContinuations = 0;
+            const continuationPrompt = input.goalAutoContinue
+              ? GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+              : TOOL_ROUND_CAP_CONTINUATION_PROMPT;
+            messages.push({
+              role: "user",
+              content: continuationPrompt,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "persistent_retry",
+              reason: "server_error",
+              attempt: roundCapContinuations,
+              maxAttempts: maxRoundCapContinuations,
+              message: "Continuing after tool-round cap",
+            });
+            console.log(
+              `[ai-chat-v2] auto-continue after ${maxToolRounds}-round cap; cycle ${roundCapContinuations}/${maxRoundCapContinuations}`
+            );
+            // for-loop increment runs after continue, so -1 → 0 next cycle.
+            round = -1;
+            continue;
+          }
+          break;
+        }
+
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);
@@ -999,10 +1144,36 @@ export class AIChatQueryLoop {
           }`
         );
 
+        // §8.5 dispatch enforcement: validate the final request immediately
+        // before streaming — every round, after retrieval/tool results and
+        // after any model fallback (effectiveModel). Covers system/tool
+        // framing, attachments/images, output reserve, and safety margin via
+        // the budget service's conservative UTF-8-byte accounting (§8.2). An
+        // oversized request throws a recoverable error instead of dispatching.
+        // The guard is unconditional (constructor defaults the service), so no
+        // consumer can skip preflight by omitting the dep.
+        {
+          const resolver: ModelLimitResolver =
+            this.deps.resolveModelLimits ?? this.getDefaultModelLimitResolver();
+          const budget = this.budgetService.preflight({
+            messages,
+            tools: hasExposedTools ? exposedTools : [],
+            model: effectiveModel,
+            outputReserve: currentMaxTokens,
+            modelLimitResolver: resolver,
+          });
+          if (!budget.ok) {
+            throw new RecoverableHistoryError(
+              budget.errorCode ?? "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+              `request budget rejected: ${budget.reason ?? "over capacity"}`
+            );
+          }
+        }
+
         await this.deps.streamChatCompletion(
           {
             messages,
-            model: input.request.model,
+            model: effectiveModel,
             temperature: input.request.temperature,
             max_tokens: currentMaxTokens,
             stream: true,
@@ -1361,6 +1532,67 @@ export class AIChatQueryLoop {
                 "Plan submitted for approval. Please review the plan card.";
             }
           }
+
+          // After tools already ran this turn, finish_reason=stop with no
+          // text is a premature end, not a finished plan. Nudge the model
+          // to continue instead of persisting an empty completion.
+          const emptyAfterTools =
+            executedToolRound &&
+            lastFailedTool === null &&
+            accumulator.state.fullContent.trim().length === 0;
+          if (emptyAfterTools) {
+            if (
+              emptyStopContinuations < MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS
+            ) {
+              emptyStopContinuations += 1;
+              messages.push({
+                role: "user",
+                content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: emptyStopContinuations,
+                maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+                message: "Continuing after empty model stop",
+              });
+              console.log(
+                `[ai-chat-v2] empty stop after tools; continuation ${emptyStopContinuations}/${MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS}`
+              );
+              continue;
+            }
+            if (
+              roundCapContinuations < maxRoundCapContinuations &&
+              !input.abortController.signal.aborted &&
+              input.isActiveTurn()
+            ) {
+              roundCapContinuations += 1;
+              emptyStopContinuations = 0;
+              messages.push({
+                role: "user",
+                content: TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+              });
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: "persistent_retry",
+                reason: "server_error",
+                attempt: roundCapContinuations,
+                maxAttempts: maxRoundCapContinuations,
+                message: "Continuing after empty model stop",
+              });
+              console.log(
+                `[ai-chat-v2] empty-stop exhausted; hidden continue ${roundCapContinuations}/${maxRoundCapContinuations}`
+              );
+              continue;
+            }
+            break;
+          }
+
           break;
         }
 
@@ -1393,6 +1625,7 @@ export class AIChatQueryLoop {
         // delivered content so a later transient failure is not retried
         // (which would duplicate those events and orphan the persisted rows).
         tracker.delivered = true;
+        executedToolRound = true;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
@@ -1981,6 +2214,7 @@ export class AIChatQueryLoop {
                 outboundAuthorization,
                 planContext,
                 eventSink: eventSink,
+                turnId: input.turnId,
                 toolCatalogState: catalogActive
                   ? snapshotToolCatalogState(
                       discoveredToolNames,
@@ -2180,6 +2414,10 @@ export class AIChatQueryLoop {
         // persisted recoveryMetadata.
         if (result.action.type === "fallback_model") {
           recoveryState = result.updatedState;
+          // Keep dispatch + preflight consistent: subsequent rounds in this
+          // turn (e.g. outer run() retry) resolve limits against the fallback
+          // model, not the original (§8.1 re-resolve after fallback).
+          effectiveModel = result.action.fallbackModel;
           eventSink.emit({
             type: "recovery_status",
             conversationId: input.conversationId,
@@ -2288,6 +2526,7 @@ export class AIChatQueryLoop {
         questionId: questionView.questionId,
         planId: input.planContext.planState.planId,
         eventSink: eventSink,
+        turnId: input.turnId,
       },
     };
   }
@@ -2659,11 +2898,7 @@ export class AIChatQueryLoop {
           const gateIntent = honorModelSkipReview
             ? { mode: "send_now" as const }
             : intentDecision;
-          return OutboundEmailToolGate.evaluate(
-            gateIntent,
-            auth,
-            auth.batchId
-          );
+          return OutboundEmailToolGate.evaluate(gateIntent, auth, auth.batchId);
         }
         if (honorModelSkipReview) {
           return { allowed: true, skipReviewDirectSend: true };

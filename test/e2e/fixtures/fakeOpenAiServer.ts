@@ -4,6 +4,12 @@
  * Listens on an ephemeral loopback port and implements:
  *   GET  /v1/models              — OpenAI-compatible model list
  *   POST /v1/chat/completions    — SSE stream driven by the active scenario
+ *                                  (stream:true), or an immediate JSON
+ *                                  OpenAIChatCompletionResponse body
+ *                                  (stream:false — the compaction summarize
+ *                                  path gets a valid SectionSummaryV1 JSON;
+ *                                  any other non-streaming caller gets a
+ *                                  short generic completion)
  *   POST /__e2e/scenario         — select the active scenario (control)
  *   GET  /__e2e/requests         — redacted request log (control)
  *   POST /__e2e/reset            — clear scenario + request log (control)
@@ -21,6 +27,9 @@ import * as http from "http";
 import * as crypto from "crypto";
 import {
   MODELS_RESPONSE,
+  completionResponse,
+  nonStreamingContent,
+  parseChatRequestBody,
   toolCallChunk,
   toolCallFinishChunk,
   type FakeAiScenarioName,
@@ -197,6 +206,27 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
 
     if (url === "/v1/chat/completions" && req.method === "POST") {
       const rawBody = await readBody(req);
+      // Non-streaming requests (stream !== true): answer immediately with a
+      // JSON OpenAIChatCompletionResponse body — the path the production
+      // OpenAICompatibleProviderClient.complete takes for the compaction
+      // coordinator's summarize callback (stream omitted/false). Compaction
+      // summarize prompts carry the SectionSummaryV1 marker and get a valid
+      // SectionSummaryV1 JSON content; other non-streaming callers get a short
+      // generic completion. Existing SSE scenarios are untouched (stream:true).
+      const parsedBody = parseChatRequestBody(rawBody);
+      if (!parsedBody.stream) {
+        requestLog.push(redactChatRequest(req, rawBody, false));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify(
+            completionResponse(
+              nonStreamingContent(parsedBody.messages),
+              parsedBody.model
+            )
+          )
+        );
+        return;
+      }
       let clientDisconnected = false;
       // An interruptible signal that resolves the moment the client aborts
       // mid-stream, so long delay frames (the cancel barrier) wake at once and

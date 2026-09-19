@@ -107,13 +107,13 @@ import {
   offUpdateStatus,
   type UpdateStatusListener,
 } from "@/views/api/app";
-import { AIFETCHLY_WEBSITE_URL } from "@/config/appInfo";
+import { getRendererWebsiteUrl } from "@/views/utils/websiteUrl";
 import type { UpdateStatusSnapshot } from "@/entityTypes/updateStatus-type";
 
 const { t } = useI18n();
 const router = useRouter();
 
-const websiteUrl = AIFETCHLY_WEBSITE_URL;
+const websiteUrl = getRendererWebsiteUrl();
 const displayName = ref<string>("");
 const appVersion = ref<string>("");
 const openingWebsite = ref(false);

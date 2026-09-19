@@ -30,6 +30,14 @@ export interface E2EStateManifestInput {
     string,
     { action: "canceled" | "confirmed"; paths?: readonly string[] }
   >;
+  /**
+   * Optional Token-store overrides applied after the standard seed. The four
+   * recoverable-history rollout flags (technical-design §18) are the intended
+   * use — E2E scenarios assert the flag-gated archive/compaction paths. Keys
+   * are restricted to the flag names and values to "true"/"false" by the
+   * bootstrap's manifest validation (E2EEnvironment).
+   */
+  readonly tokenOverrides?: Readonly<Record<string, string>>;
 }
 
 /** Write the validated state.json the E2EStateSeeder consumes. */
@@ -47,6 +55,9 @@ export function writeStateManifest(
   };
   if (manifest.dialogResponses) {
     payload.dialogResponses = manifest.dialogResponses;
+  }
+  if (manifest.tokenOverrides) {
+    payload.tokenOverrides = manifest.tokenOverrides;
   }
   fs.writeFileSync(root.stateFilePath, JSON.stringify(payload), "utf8");
 }

@@ -30,57 +30,75 @@ const mockCreateConversationIfNeeded = vi.hoisted(() =>
   vi.fn((id?: string) => (id && id.startsWith("v2-") ? id : "v2-minted"))
 );
 
+interface MockEngine {
+  submitMessage: typeof mockSubmit;
+}
+
+type MockConstructor<T> = new (...args: never[]) => T;
+
+function createMockClass<T extends object>(
+  factory: () => T
+): MockConstructor<T> {
+  const cls = function (this: T) {
+    Object.assign(this, factory());
+  } as unknown as MockConstructor<T>;
+  return cls;
+}
+
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: createMockClass(() => ({
     getValue: vi.fn((key: string) =>
       key === "user_ai_enabled" ? aiEnabled.value : "/tmp/test-db"
     ),
   })),
 }));
 vi.mock("@/service/aiProvider/AIProviderResolver", () => ({
-  AIProviderResolver: vi.fn().mockImplementation(() => ({
-    resolveForChat: () =>
-      chatCanUse.value
+  AIProviderResolver: class {
+    resolveForChat(): { kind: "hosted"; canUse: true } | { canUse: false; reason: string; message: string } {
+      return chatCanUse.value
         ? { kind: "hosted" as const, canUse: true as const }
         : {
             canUse: false as const,
             reason: "hosted_subscription_required" as const,
             message: "Hosted aiFetchly AI requires a subscription.",
-          },
-  })),
+          };
+    }
+  },
 }));
 vi.mock("@/modules/AiMessageTaskModule", () => ({
-  AiMessageTaskModule: vi.fn().mockImplementation(() => ({
-    getTask: mockGetTask,
-    parseAllowedTools: mockParseAllowedTools,
-    updateTask: mockUpdateTask,
-    updateLastRunResult: vi.fn(),
-  })),
+  AiMessageTaskModule: class {
+    getTask = mockGetTask;
+    parseAllowedTools = mockParseAllowedTools;
+    updateTask = mockUpdateTask;
+    updateLastRunResult = vi.fn();
+  },
 }));
 vi.mock("@/modules/AiMessageTaskRunModule", () => ({
-  AiMessageTaskRunModule: vi.fn().mockImplementation(() => ({
-    createRun: mockCreateRun,
-    updateRunStatus: mockUpdateRunStatus,
-    completeRun: mockCompleteRun,
-    failRun: mockFailRun,
-  })),
+  AiMessageTaskRunModule: class {
+    createRun = mockCreateRun;
+    updateRunStatus = mockUpdateRunStatus;
+    completeRun = mockCompleteRun;
+    failRun = mockFailRun;
+  },
 }));
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
-    createConversationIfNeeded: mockCreateConversationIfNeeded,
-  })),
+  AIChatV2Module: class {
+    createConversationIfNeeded = mockCreateConversationIfNeeded;
+  },
 }));
 vi.mock("@/model/ScheduleTask.model", () => ({
-  ScheduleTaskModel: vi.fn().mockImplementation(() => ({
-    getScheduleById: mockGetScheduleById,
-    pauseWithReason: mockPauseWithReason,
-    updateIntervalAfterResult: mockUpdateIntervalAfterResult,
-  })),
+  ScheduleTaskModel: class {
+    getScheduleById = mockGetScheduleById;
+    pauseWithReason = mockPauseWithReason;
+    updateIntervalAfterResult = mockUpdateIntervalAfterResult;
+  },
 }));
 vi.mock("@/service/AIChatQueryEngineFactory", () => ({
-  AIChatQueryEngineFactory: vi.fn().mockImplementation(() => ({
-    createScheduled: () => ({ submitMessage: mockSubmit }),
-  })),
+  AIChatQueryEngineFactory: class {
+    createScheduled(): MockEngine {
+      return { submitMessage: mockSubmit };
+    }
+  },
 }));
 vi.mock("@/service/AIChatConversationTurnCoordinator", () => ({
   AIChatConversationTurnCoordinator: {

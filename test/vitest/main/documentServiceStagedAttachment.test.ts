@@ -63,8 +63,11 @@ describe("DocumentService.getStagedAttachmentImportSource", () => {
     expect(source.markdownFallback).toBe(false);
     expect(source.sha256).toBe("sha-abc");
     expect(source.sizeBytes).toBe(Buffer.from("fake-pdf-bytes").length);
-    // Resolved path must live under the staged attachment root.
-    expect(source.filePath.startsWith(STAGED_ROOT)).toBe(true);
+    // Resolved path must live under the staged attachment root. getStagedAttachmentImportSource
+    // canonicalizes via realpathSync (symlink-safe containment), so the filePath
+    // is the CANONICAL path — on macOS /tmp resolves to /private/tmp. Assert
+    // containment against the realpath'd root, not the lexical prefix.
+    expect(source.filePath.startsWith(fs.realpathSync(STAGED_ROOT))).toBe(true);
   });
 
   test("falls back to markdown when the original file was not staged", async () => {

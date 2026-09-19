@@ -345,8 +345,6 @@ export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
 export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
   "ai-chat-v2:request-plan-changes";
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
-export const AI_CHAT_V2_COMPACT_CONVERSATION =
-  "ai-chat-v2:compact-conversation";
 export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
@@ -379,6 +377,37 @@ export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
 /** Main->renderer broadcast after an automatic full compact so the renderer
  * drops the context badge immediately (mirrors the manual compact flow). */
 export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
+
+// ==================== AiChatV2 Recoverable History Channels ====================
+// Recoverable conversation history + incremental compaction (technical-design
+// §13). History browsing is LOCAL-only (no AI calls, no AI-enable gate);
+// compaction status/cancel mirror the AI-gated compact flow.
+/** Renderer->Main: search archived history excerpts (local index scan, §13.1). */
+export const AI_CHAT_V2_HISTORY_SEARCH = "ai-chat-v2:history-search";
+/** Renderer->Main: read archived history source slices (§13.1). */
+export const AI_CHAT_V2_HISTORY_READ = "ai-chat-v2:history-read";
+/** Renderer->Main: paginated browse of archived history (local, §13.1). */
+export const AI_CHAT_V2_HISTORY_BROWSE = "ai-chat-v2:history-browse";
+/** Renderer->Main: resolve user-selected passages to exact excerpts (§13.1). */
+export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
+  "ai-chat-v2:history-resolve-selections";
+/** Renderer->Main: read whether the recoverable-history UI stage is enabled (design §18, stage 3). */
+export const AI_CHAT_V2_HISTORY_UI_ENABLED =
+  "ai-chat-v2:history-ui-enabled";
+/** Renderer->Main: read the active compaction run status (§13.1). */
+export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
+/** Renderer->Main: cancel the active compaction run (§13.1). */
+export const AI_CHAT_V2_COMPACTION_CANCEL = "ai-chat-v2:compaction-cancel";
+/**
+ * Renderer->Main: start (or resume) a bounded compaction run and return
+ * immediately (§13.1 start/status/progress). The run continues in the main
+ * process; the badge follows progress events + status — never one blocking
+ * RPC for the whole batch. Resume is just another start call: fresh claims
+ * resume from persisted checkpoints.
+ */
+export const AI_CHAT_V2_COMPACTION_START = "ai-chat-v2:compaction-start";
+/** Main->renderer compaction run lifecycle/progress broadcast (§13.1). */
+export const AI_CHAT_V2_COMPACTION_PROGRESS = "ai-chat-v2:compaction-progress";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

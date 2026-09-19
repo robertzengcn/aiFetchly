@@ -35,7 +35,9 @@ export function resolveConfigRelativePath(
   if (relativePath.includes("\0")) {
     return {
       ok: false,
-      reason: `relative path contains null bytes: ${JSON.stringify(relativePath)}`,
+      reason: `relative path contains null bytes: ${JSON.stringify(
+        relativePath
+      )}`,
     };
   }
   // 2. Control-character rejection (mirror FilePathGuard).
@@ -43,7 +45,9 @@ export function resolveConfigRelativePath(
   if (/[\x00-\x1f\x7f]/.test(relativePath)) {
     return {
       ok: false,
-      reason: `relative path contains control characters: ${JSON.stringify(relativePath)}`,
+      reason: `relative path contains control characters: ${JSON.stringify(
+        relativePath
+      )}`,
     };
   }
 
@@ -76,7 +80,19 @@ export function resolveConfigRelativePath(
     }
   }
 
-  const resolvedRoot = path.resolve(rootPath);
+  const lexicalRoot = path.resolve(rootPath);
+  // Canonicalize the root itself when it exists. Comparing a realpath'd
+  // candidate against a LEXICAL root false-positives "path-outside-root"
+  // whenever the root path contains a symlink (macOS tmpdirs: /var →
+  // /private/var). realpathSync throws when the root does not exist yet —
+  // in that case nothing under it can exist either, so the lexical
+  // resolution is already canonical for containment purposes.
+  let resolvedRoot = lexicalRoot;
+  try {
+    resolvedRoot = fs.realpathSync(lexicalRoot);
+  } catch {
+    // Root does not exist yet — keep the lexical resolution.
+  }
   const candidate = path.resolve(resolvedRoot, normalizedRelative);
 
   // 5. Symlink resolution. For existing entries, realpath and verify the

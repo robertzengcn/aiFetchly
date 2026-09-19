@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { OutboundEmailPreflightService } from "@/service/outboundEmail/OutboundEmailPreflightService";
 import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
-import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type {
+  BatchEnvelopeEntry,
+  BatchEnvelopeEntryV2,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import type { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import type { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
 
@@ -69,6 +72,73 @@ function envelopeFor(view: DraftView): BatchEnvelopeEntry {
     draftId: view.draft.id,
     emailServiceId: r.emailServiceId,
     senderAddress: r.senderAddress,
+    recipientAddress: r.recipientAddress,
+    subject: r.subject,
+    bodyText: r.bodyText,
+    bodyHtml: r.bodyHtml,
+  };
+}
+
+/** A v2 view: revision with identity fields populated. */
+function makeViewV2(
+  overrides: Partial<{
+    draftId: number;
+    batchId: number;
+    recipientAddress: string;
+    revisionNumber: number;
+    subject: string;
+    bodyText: string;
+    bodyHtml: string | null;
+    emailServiceId: number;
+    senderAddress: string;
+    smtpUsername: string;
+    replyToAddress: string | null;
+    contentHash: string;
+  }> = {}
+): DraftView {
+  const draftId = overrides.draftId ?? 1;
+  const revisionNumber = overrides.revisionNumber ?? 1;
+  const contentHash = overrides.contentHash ?? "a".repeat(64);
+  return {
+    draft: {
+      id: draftId,
+      batchId: overrides.batchId ?? 1,
+      recipientAddress: overrides.recipientAddress ?? "a@example.com",
+      currentRevisionId: draftId * 100,
+      revisionNumber,
+    },
+    revision: {
+      id: draftId * 100,
+      draftId,
+      revisionNumber,
+      actor: "ai",
+      emailServiceId: overrides.emailServiceId ?? 1,
+      envelopeVersion: 2,
+      smtpUsername: overrides.smtpUsername ?? "smtp-login@example.com",
+      replyToAddress: overrides.replyToAddress ?? null,
+      senderAddress: overrides.senderAddress ?? "sender@example.com",
+      recipientAddress: overrides.recipientAddress ?? "a@example.com",
+      subject: overrides.subject ?? "Hello",
+      bodyText: overrides.bodyText ?? "Hi there",
+      bodyHtml: overrides.bodyHtml ?? null,
+      contentHash,
+      personalizationEvidenceJson: null,
+      knowledgeSourcesJson: null,
+      generationMetadataJson: null,
+      validationFindingsJson: null,
+    } as OutboundEmailDraftRevisionEntity,
+  };
+}
+
+function envelopeForV2(view: DraftView): BatchEnvelopeEntryV2 {
+  const r = view.revision!;
+  return {
+    version: 2,
+    draftId: view.draft.id,
+    emailServiceId: r.emailServiceId,
+    smtpUsername: r.smtpUsername ?? "",
+    senderAddress: r.senderAddress,
+    replyToAddress: r.replyToAddress,
     recipientAddress: r.recipientAddress,
     subject: r.subject,
     bodyText: r.bodyText,
@@ -192,5 +262,67 @@ describe("OutboundEmailPreflightService", () => {
       { view: v1, envelope: envelopeFor(v1), storedHash: hashOf(v1) },
     ]);
     expect(again.batchHash).toBe(result.batchHash);
+  });
+
+  it("passes a v2 batch and recomputes the v2 envelope hash", () => {
+    const view = makeViewV2({ draftId: 1, recipientAddress: "c@example.com" });
+    const hashOf = (v: DraftView) =>
+      OutboundEmailEnvelopeHasher.hashEnvelopeV2(envelopeForV2(v));
+    const result = service.run([
+      { view, envelope: envelopeForV2(view), storedHash: hashOf(view) },
+    ]);
+    expect(result.passed).toBe(true);
+    expect(result.findings).toHaveLength(0);
+    expect(result.batchHash).toMatch(/^[0-9a-f]{64}$/);
+    // v2 batch hash must differ from what v1 would produce.
+    const v1BatchHash = OutboundEmailEnvelopeHasher.hashBatch([
+      envelopeFor(view),
+    ]);
+    expect(result.batchHash).not.toBe(v1BatchHash);
+  });
+
+  it("blocks a v2 envelope whose recomputed hash mismatches the stored hash", () => {
+    const view = makeViewV2({ draftId: 1, recipientAddress: "d@example.com" });
+    const result = service.run([
+      {
+        view,
+        envelope: envelopeForV2(view),
+        storedHash: "b".repeat(64),
+      },
+    ]);
+    expect(result.passed).toBe(false);
+    expect(
+      result.findings.some((f) => f.code === "envelope_hash_mismatch")
+    ).toBe(true);
+  });
+
+  it("passes a mixed v1+v2 batch and returns a v2 batch hash (v2 dominates)", () => {
+    const v1View = makeView({
+      draftId: 1,
+      recipientAddress: "e@example.com",
+    });
+    const v2View = makeViewV2({
+      draftId: 2,
+      recipientAddress: "f@example.com",
+    });
+    const result = service.run([
+      {
+        view: v1View,
+        envelope: envelopeFor(v1View),
+        storedHash: OutboundEmailEnvelopeHasher.hashEnvelope(
+          envelopeFor(v1View)
+        ),
+      },
+      {
+        view: v2View,
+        envelope: envelopeForV2(v2View),
+        storedHash: OutboundEmailEnvelopeHasher.hashEnvelopeV2(
+          envelopeForV2(v2View)
+        ),
+      },
+    ]);
+    expect(result.passed).toBe(true);
+    expect(result.findings).toHaveLength(0);
+    expect(result.batchHash).toMatch(/^[0-9a-f]{64}$/);
   });
 });

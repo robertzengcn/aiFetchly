@@ -87,6 +87,14 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
+        <AiChatCompactionStatus
+          :status="compactionStatus"
+          :busy="compactionBusy"
+          class="mx-1"
+          @retry="handleCompactionRetry"
+          @cancel="handleCompactionCancel"
+          @open-history="historyUiEnabled && (showHistoryDrawer = true)"
+        />
         <v-btn
           icon
           size="small"
@@ -114,12 +122,24 @@
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
           "
-          @click="handleCompactConversation"
+          @click="handleCompactStart"
           :title="
             t('aiChatV2.compact_conversation') || 'Compact conversation'
           "
         >
           <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          v-if="historyUiEnabled"
+          data-testid="ai-history-drawer-toggle"
+          :disabled="!activeConversationId"
+          @click="showHistoryDrawer = true"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+        >
+          <v-icon size="small">mdi-book-search-outline</v-icon>
         </v-btn>
         <v-btn
           icon
@@ -414,6 +434,13 @@
         </v-btn>
       </div>
 
+      <AiChatSelectedContext
+        v-if="historyUiEnabled"
+        :selections="selectedContextItems"
+        @remove="removeSelectedContext"
+        @clear="clearSelectedContext"
+      />
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -673,6 +700,17 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Recoverable-history browser drawer (technical-design §13.1, §18 stage 3).
+         Gated on the history-UI rollout flag: no drawer, toggle, or selection
+         chips when the stage is off so users cannot select passages that
+         resolve to empty. -->
+    <AiChatHistoryDrawer
+      v-if="activeConversationId && historyUiEnabled"
+      v-model="showHistoryDrawer"
+      :conversation-id="activeConversationId"
+      @select="handleHistorySelect"
+      @navigate="handleHistoryNavigate"
+    />
     <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
     <AIContentReportDialog
       v-if="singleReportDialogOpen && activeSingleDescriptor"
@@ -715,6 +753,7 @@ import type {
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -736,7 +775,7 @@ import {
   streamChatV2Message,
   stopChatV2Stream,
   getChatV2PlanState,
-  compactChatV2Conversation,
+  startCompaction,
   subscribeAutoCompacted,
   unsubscribeAutoCompacted,
   answerChatV2Question,
@@ -747,7 +786,12 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
+  getCompactionStatus,
+  cancelCompaction,
+  subscribeCompactionProgress,
+  unsubscribeCompactionProgress,
 } from "@/views/api/aiChatV2";
+import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
   AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
@@ -794,6 +838,12 @@ import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
+import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
+import AiChatSelectedContext from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -982,6 +1032,32 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+// Recoverable-history + incremental-compaction state (technical-design §13).
+const showHistoryDrawer = ref(false);
+/**
+ * History-UI rollout flag (design §18 stage 3). Fail-closed: false until the
+ * main-process flag read resolves true. When false the drawer toggle,
+ * selected-context chips, and "use in next reply" affordances are hidden so
+ * users cannot select passages that backend resolution would no-op.
+ */
+const historyUiEnabled = ref(false);
+const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+const compactionBusy = ref(false);
+const selectedContextItems = ref<SelectedContextItem[]>([]);
+/**
+ * Per-conversation selection drafts (§13.3, FR-10): switching conversations
+ * preserves each conversation's draft instead of discarding it, so context
+ * choices never leak across chats and are restored on return.
+ */
+const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map());
+/**
+ * Stable submission identity (§13.3): kept until acceptance is resolved.
+ * Transport retry reuses the same ID so the backend reuses the accepted
+ * user-turn metadata instead of duplicating the message + selected context.
+ * Provider-failure retry re-executes the existing turn rather than adding a
+ * second selected-context message.
+ */
+const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 interface MessageListController {
@@ -1559,6 +1635,142 @@ function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
 }
 
 /**
+ * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
+ * Updates the status badge for the active conversation; ignored for other
+ * conversations (the badge is per-conversation, not global). A `completed`
+ * event also raises the compacted notice — the manual flow no longer waits
+ * on a blocking RPC, so completion is observed here instead.
+ */
+function handleCompactionProgress(
+  event: ChatV2CompactionProgressEvent
+): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  compactionStatus.value = {
+    state: event.state,
+    runId: event.runId,
+    generationId: event.generationId,
+    sectionsPacked: event.sectionsPacked,
+  };
+  if (event.state === "completed") {
+    compactNotice.value = true;
+  }
+}
+
+/**
+ * Build a SelectedContextItem from a resolved history excerpt (§13.3). The
+ * preview text is display-only — the backend re-resolves the opaque sourceId
+ * on submit; renderer text is never trusted as the original quote.
+ */
+function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  // Fail-closed when the history-UI stage is off: ignore drawer selections
+  // so no chips render without backend resolution (§18).
+  if (!historyUiEnabled.value) return;
+  const existing = selectedContextItems.value.find(
+    (item) => item.sourceId === excerpt.sourceId
+  );
+  if (existing) return; // dedup: a passage can be selected only once
+  const preview =
+    excerpt.text.length > 80
+      ? excerpt.text.slice(0, 77) + "…"
+      : excerpt.text;
+  const estimatedTokens = Math.ceil(excerpt.text.length / 4);
+  selectedContextItems.value = [
+    ...selectedContextItems.value,
+    { sourceId: excerpt.sourceId, preview, estimatedTokens },
+  ];
+  syncActiveDraft();
+}
+
+function removeSelectedContext(sourceId: string): void {
+  selectedContextItems.value = selectedContextItems.value.filter(
+    (item) => item.sourceId !== sourceId
+  );
+  syncActiveDraft();
+}
+
+function clearSelectedContext(): void {
+  selectedContextItems.value = [];
+  syncActiveDraft();
+}
+
+/** Persist the active conversation's draft (per-conversation drafts, §13.3). */
+function syncActiveDraft(): void {
+  const id = activeConversationId.value;
+  if (id) {
+    selectedContextDrafts.value.set(id, [...selectedContextItems.value]);
+  }
+}
+
+/**
+ * Source navigation from the history drawer (§13.2, AC-17): close the drawer
+ * and return to the transcript without touching model state. Viewing never
+ * mutates the next model request — only an explicit "Select passage" action
+ * (handleHistorySelect) adds context chips. In particular, navigating must
+ * NOT draft a selection: otherwise a look-only browse would silently grow the
+ * next request.
+ */
+function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
+  showHistoryDrawer.value = false;
+  if (!excerpt) return;
+  void nextTick(() => {
+    const selector = `[data-message-id="${excerpt.messageId}"]`;
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const previous = el.style.outline;
+    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+    window.setTimeout(() => {
+      el.style.outline = previous;
+    }, 1_600);
+  });
+}
+
+/** Bounded retry for a failed/paused/cancelled compaction run (§13, FR-11). */
+async function handleCompactionRetry(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await handleCompactStart();
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/** User-initiated cancel of the active compaction run (§11.6, FR-09). */
+async function handleCompactionCancel(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await cancelCompaction(activeConversationId.value);
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/**
+ * Load the current compaction status when switching conversations so the
+ * badge reflects the active run (if any) for the focused conversation.
+ */
+async function refreshCompactionStatus(): Promise<void> {
+  if (!activeConversationId.value) {
+    compactionStatus.value = null;
+    return;
+  }
+  try {
+    compactionStatus.value = await getCompactionStatus(
+      activeConversationId.value
+    );
+  } catch {
+    // Status is best-effort; a failure leaves the prior badge (or null).
+    compactionStatus.value = null;
+  }
+}
+
+/**
  * Handle a scheduled-turn completion broadcast (refresh hint only). Reloads the
  * authoritative history when the originating conversation is active and idle;
  * defers until the active stream ends so scheduled tokens never merge into an
@@ -1732,6 +1944,17 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Per-conversation drafts (§13.3): stash the outgoing draft and restore
+    // the incoming one so switching preserves work without cross-chat leaks.
+    if (previousId) {
+      selectedContextDrafts.value.set(previousId, [
+        ...selectedContextItems.value,
+      ]);
+    }
+    selectedContextItems.value = id
+      ? [...(selectedContextDrafts.value.get(id) ?? [])]
+      : [];
+    void refreshCompactionStatus();
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
@@ -3581,7 +3804,14 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   }
 };
 
-const handleCompactConversation = async (): Promise<void> => {
+/**
+ * Manual compact entry point (design §13.1 start/status/progress). Starts a
+ * bounded run and returns IMMEDIATELY — the batch continues in the main
+ * process while the badge follows progress events + status, so navigating
+ * away mid-batch loses nothing. Resume/retry is just another start call.
+ * Completion surfaces via `handleCompactionProgress` (notice + badge).
+ */
+const handleCompactStart = async (): Promise<void> => {
   if (
     !activeConversationId.value ||
     chatIsRunning.value ||
@@ -3592,21 +3822,16 @@ const handleCompactConversation = async (): Promise<void> => {
   isCompacting.value = true;
   streamError.value = null;
   try {
-    const summary = await compactChatV2Conversation(
+    const ack = await startCompaction(
       activeConversationId.value,
       resolveModelForRequest()
     );
-    if (summary) {
-      const tokenEstimate =
-        summary.outputTokenEstimate ??
-        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
-      streamingEstimatedTokens.value = tokenEstimate;
-      lastUsage.value = null;
-      if (summary.model) {
-        activeModel.value = summary.model;
-      }
-      compactNotice.value = true;
+    if (!ack.started) {
+      streamError.value =
+        t("aiChatCompaction.compaction_start_failed") ||
+        "Compaction failed to start.";
     }
+    void refreshCompactionStatus();
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -3647,6 +3872,19 @@ const onSend = async (
   // before acknowledgement would silently discard a rejected message.
   options?.onAccepted?.();
   streamError.value = null;
+  // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
+  // (§13.3) — never the passage text. The backend re-resolves each reference
+  // against the current epoch/revision and the final budget. The draft is kept
+  // until the `start` event reports which references were accepted, so a
+  // rejected/unchanged selection is never silently dropped.
+  const pendingSelectionIds = selectedContextItems.value.map((item) => item.sourceId);
+  // Stable submission identity (§13.3): reuse the pending ID across transport
+  // retries so the backend reuses the same user-turn metadata instead of
+  // duplicating the message. Resolved (cleared) on `start` acceptance below.
+  if (!pendingSubmissionId.value) {
+    pendingSubmissionId.value = crypto.randomUUID();
+  }
+  const submissionId = pendingSubmissionId.value;
 
   attachmentError.value = null;
   voicePlaybackError.value = null;
@@ -3931,6 +4169,11 @@ const onSend = async (
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
     }
+    // Selected archived passages (§13.3): opaque refs + stable submission id.
+    if (pendingSelectionIds.length > 0) {
+      streamRequest.historySelectionIds = pendingSelectionIds;
+    }
+    streamRequest.submissionId = submissionId;
     await streamChatV2Message(
       streamRequest,
       (chunk: ChatV2StreamChunk) => {
@@ -3946,6 +4189,37 @@ const onSend = async (
               activeAssistantMessageId: chunk.messageId,
             });
           }
+          // `start` marks acceptance/persistence (§13.3): clear ONLY the
+          // selected passages the backend actually accepted — those are now
+          // folded into the turn. Drafts whose source changed or could not
+          // fit stay in the chips so the user is not silently charged for
+          // context they did not get. Changed-source survivors are flagged
+          // so the user explicitly re-confirms the refreshed passage before
+          // it is ever quoted (§4.2, AC-18). Acceptance also resolves the
+          // stable submission identity so the next turn mints a fresh ID.
+          if (pendingSelectionIds.length > 0) {
+            const accepted = new Set<string>(
+              chunk.historySelectionAcceptedIds ?? []
+            );
+            const changed = new Set<string>(
+              chunk.historySelectionChangedIds ?? []
+            );
+            const rejected = new Set<string>(
+              (chunk as { historySelectionRejectedIds?: readonly string[] })
+                .historySelectionRejectedIds ?? []
+            );
+            selectedContextItems.value = selectedContextItems.value
+              .filter((item) => !accepted.has(item.sourceId))
+              .map((item) =>
+                changed.has(item.sourceId)
+                  ? { ...item, refreshed: true }
+                  : rejected.has(item.sourceId)
+                    ? { ...item, rejected: true }
+                    : item
+              );
+            syncActiveDraft();
+          }
+          pendingSubmissionId.value = null;
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
           // Real token counts from the server. Replace the streaming
@@ -4854,6 +5128,27 @@ function onStopSpeaking(): void {
 onMounted(() => {
   void loadConversations();
   void loadVoiceSettings();
+  // History-UI rollout flag (§18 stage 3, R-1): fail-closed. A missing
+  // helper is treated like a transport error (false) — never enabled.
+  // Component tests that need the drawer stub `isHistoryUiEnabled`.
+  // Production always exports the function via preload + IPC.
+  try {
+    const fn = (aiChatV2Api as unknown as Record<string, unknown>)
+      .isHistoryUiEnabled as (() => Promise<boolean>) | undefined;
+    if (typeof fn !== "function") {
+      historyUiEnabled.value = false;
+    } else {
+      void fn()
+        .then((enabled) => {
+          historyUiEnabled.value = enabled === true;
+        })
+        .catch(() => {
+          historyUiEnabled.value = false;
+        });
+    }
+  } catch {
+    historyUiEnabled.value = false;
+  }
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(
@@ -4923,6 +5218,8 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
+  // Incremental-compaction run lifecycle updates the status badge (§13.1).
+  subscribeCompactionProgress(handleCompactionProgress);
 });
 
 // --- Conversation + single-output report orchestration (design §11.1) -----
@@ -4994,6 +5291,7 @@ onBeforeUnmount(() => {
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
   unsubscribeAutoCompacted();
+  unsubscribeCompactionProgress();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;

@@ -42,7 +42,7 @@ load them. When a request matches one of the capabilities below:
    substitute (an HTML page/report, an edited image, etc. must be produced via
    its tool so the app displays it correctly).
 
-| Capability (user phrasing) |原生工具 | search query |
+| Capability (user phrasing) | tool names | search query |
 |---|---|---|
 | Show/render/display data as HTML, a page, a report, a dashboard, a chart, a visual summary; "show result in html" | \`create_html_artifact\` | \`html page report display\` |
 | Create/overwrite/edit a workspace file; **export/download/convert/save data to a csv/xlsx/spreadsheet/json/file** — use \`file_write\` with the full content (NOT a shell echo, NOT row-by-row appends), \`file_edit\` for exact string replace | \`file_write\`, \`file_edit\` | \`file create write export csv\` |
@@ -53,7 +53,7 @@ load them. When a request matches one of the capabilities below:
 | Automation schedule / cron / run later / recurring task | \`list_schedules\`, \`get_schedule_details\`, \`list_schedule_executions\`, \`create_schedule\`, \`update_schedule\`, \`delete_schedule\`, \`pause_schedule\`, \`resume_schedule\`, \`run_schedule_now\` | \`schedule cron automation\` |
 | Import/list/delete knowledge-library documents; import a webpage/url/docs into the knowledge base | \`knowledge_library_list_documents\`, \`knowledge_library_import_attachment\`, \`knowledge_library_import_website\`, \`knowledge_library_delete_document\` | \`knowledge library import\` |
 | Browse/scrape search-engine result URLs; extract contacts or read page content by URL | \`scrape_urls_from_search_engine\`, \`extract_contact_info\`, \`read_url_content\` | \`scrape search extract contact\` |
-| Run a local shell command (needs confirmation). shell_execute is for executing commands the user asked for — do NOT use it as a substitute for file_write to create/export a data file (csv/xlsx/json) via echo/redirect, do NOT use it for image edits (use attach_local_images), and do NOT use it to read/write workspace files | \`shell_execute\` | \`shell command run\` |
+| Resume/continue interrupted work; previous tool results already run this chat | \`conversation_tool_history\` (always loaded) | n/a |
 
 If a capability you need is not listed and not exposed, search the catalog by
 keyword with \`tool_catalog_search\`. Prefer normal chat responses for simple

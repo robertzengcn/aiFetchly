@@ -1255,8 +1255,15 @@ export default {
   },
   emailservice: {
     id: "ID",
-    from: "Cuenta de remitente",
-    from_hint: "Ingrese la cuenta del remitente",
+    smtp_username: "Nombre de usuario SMTP",
+    smtp_username_hint:
+      "La cuenta de buzón utilizada para iniciar sesión en su servidor SMTP.",
+    reply_to: "Responder a",
+    reply_to_hint:
+      "Las respuestas van aquí. Déjelo vacío para responder a la dirección From.",
+    from: "From",
+    from_hint:
+      "La dirección que ven los destinatarios. Debe estar permitida por su proveedor de correo.",
     password: "Contraseña",
     password_hint: "Ingrese la contraseña del correo",
     host: "Servidor SMTP",
@@ -1284,6 +1291,58 @@ export default {
     send_test_email_error: "Error al enviar correo de prueba",
     email_send_success: "Correo enviado correctamente",
     required_fields_missing: "Complete todos los campos obligatorios",
+    smtp_error_auth_failed:
+      "Error de autenticación SMTP. Compruebe el nombre de usuario y la contraseña SMTP de este servicio.",
+    smtp_error_from_rejected:
+      "La dirección From fue rechazada por su proveedor de correo. Verifique que este alias esté autorizado para enviar con este inicio de sesión.",
+    smtp_error_recipient_rejected:
+      "La dirección del destinatario fue rechazada por el proveedor de correo.",
+    smtp_error_tls_failed:
+      "Error de TLS o certificado al conectar al servidor SMTP. Compruebe el ajuste SSL/TLS y el puerto (465 usa SSL implícito, 587 usa STARTTLS).",
+    smtp_error_connection_failed:
+      "No se pudo conectar al servidor SMTP. Compruebe el host, el puerto y la red.",
+    smtp_error_submission_failed:
+      "El servidor SMTP rechazó el envío del mensaje.",
+    smtp_error_unknown:
+      "No se pudo enviar el correo por un motivo desconocido. La respuesta del servidor se muestra a continuación.",
+    identity_missing_smtp_username:
+      "Se requiere un nombre de usuario SMTP para este servicio.",
+    identity_from_invalid:
+      "La dirección From no es una dirección de correo válida.",
+    identity_reply_to_invalid:
+      "La dirección de respuesta no es una dirección de correo válida.",
+    identity_changed_after_approval:
+      "La identidad de envío (nombre de usuario SMTP, From o respuesta) cambió tras la aprobación. Se requiere una nueva revisión antes de enviar.",
+    identity_import_password_required:
+      "Se requiere una contraseña para importar esta fila de servicio de correo.",
+    identity_header_break_forbidden:
+      "No se permiten saltos de línea en este campo.",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "La aprobación de envío no coincide con este borrador. Apruebe la respuesta de nuevo.",
+    approval_stale:
+      "La respuesta fue editada tras la aprobación. Revísela y apruébela de nuevo.",
+    hash_mismatch:
+      "El contenido aprobado de la respuesta ya no coincide. Revísela y apruébela de nuevo.",
+    revision_hash_mismatch:
+      "La revisión de la respuesta ya no coincide con el sobre aprobado. Revísela y apruébela de nuevo.",
+    mailbox_mismatch:
+      "El borrador de respuesta, el mensaje original y el servicio de correo no comparten un mismo buzón.",
+    service_inactive:
+      "El servicio de correo de esta respuesta está deshabilitado. Actívelo e inténtelo de nuevo.",
+    service_missing:
+      "No se pudo encontrar el servicio de correo de esta respuesta. Vuelva a seleccionar el servicio en el borrador.",
+    sender_mismatch:
+      "La dirección From cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    recipient_mismatch:
+      "El destinatario ya no coincide con el remitente original o su dirección de respuesta.",
+    smtp_username_mismatch:
+      "El nombre de usuario SMTP cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    reply_to_mismatch:
+      "La dirección de respuesta cambió tras la aprobación. Revise y apruebe la respuesta de nuevo.",
+    legacy_reply_identity_requires_review:
+      "La identidad del servicio de correo cambió tras crear esta aprobación. Revise y apruebe la respuesta de nuevo.",
   },
   buckemailsend: {
     email_source: "Fuente de correos",
@@ -1340,6 +1399,10 @@ export default {
     draft_id: "id de borrador",
     revision_id: "id de revisión",
     attempt_id: "id de intento de envío",
+    from_address: "dirección From",
+    email_service: "servicio de correo",
+    smtp_username: "usuario SMTP",
+    reply_to: "dirección de respuesta",
     detail_not_found: "No se encontró el registro de envío",
   },
   socialaccount: {
@@ -2814,6 +2877,61 @@ export default {
     status_rejected: "Rechazado",
     status_completed: "Completado",
     status_cancelled: "Cancelado",
+  },
+  aiChatHistory: {
+    drawer_title: "Historial de conversación",
+    close: "Cerrar historial",
+    tab_browse: "Explorar",
+    tab_search: "Buscar",
+    search_button: "Buscar",
+    search_placeholder: "Buscar en el historial archivado…",
+    search_query_too_long: "La búsqueda no debe superar los 200 caracteres.",
+    no_match: "No se encontraron mensajes coincidentes.",
+    partial_scan:
+      "Mostrando resultados parciales — el escaneo completo no ha terminado.",
+    index_incomplete:
+      "La indexación del historial aún está en curso; los resultados pueden estar incompletos.",
+    read_more: "Leer más",
+    go_to_message: "Ir al mensaje",
+    select_passage: "Seleccionar pasaje",
+    selected_context: "Contexto seleccionado",
+    estimated_cost: "Coste estimado: {tokens} tokens",
+    clear_selections: "Borrar selección",
+    source_changed: "Este pasaje cambió desde la selección y se actualizó.",
+    source_unavailable: "Este pasaje ya no está disponible.",
+    scope_invalid: "Ámbito de historial no válido. Reintente.",
+    load_error: "Error al cargar el historial. {message}",
+    empty: "Aún no hay historial archivado para esta conversación.",
+  },
+  aiChatCompaction: {
+    status_idle: "Inactivo",
+    status_queued: "En cola",
+    status_running: "Compactando…",
+    status_joined: "Unido",
+    status_paused: "Pausado",
+    status_completed: "Compactado",
+    status_failed: "Error de compactación",
+    status_cancelled: "Cancelado",
+    panel_title: "Compactación",
+    in_progress_note: "Trabajando por lotes limitados — puede seguir chateando.",
+    view_history: "Ver mensajes anteriores",
+    completed_detail:
+      "Los mensajes anteriores siguen disponibles. La vista activa conserva turnos recientes y un resumen limitado.",
+    failed_detail:
+      "La compactación se detuvo por un error. Su conversación está intacta — reintente cuando quiera.",
+    cancelled_detail:
+      "Compactación cancelada. Las secciones guardadas se conservan para la próxima ejecución.",
+    joined_detail: "Unido a una compactación ya en curso para esta conversación.",
+    running_detail: "Compactando el historial anterior por secciones limitadas.",
+    idle_detail: "La compactación está inactiva.",
+    compaction_in_progress:
+      "Compactación en curso ({packed} secciones empaquetadas).",
+    compaction_paused: "Compactación pausada. Se reanudará automáticamente.",
+    compaction_start_failed: "No se pudo iniciar la compactación.",
+    compaction_failed: "Error de compactación: {message}",
+    compaction_retry: "Reintentar",
+    compaction_cancel: "Cancelar compactación",
+    cancel_failed: "No se pudo cancelar la compactación. {message}",
   },
   subagents: {
     title: "Subagentes",

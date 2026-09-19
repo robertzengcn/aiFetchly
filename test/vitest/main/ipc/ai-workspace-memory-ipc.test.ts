@@ -17,9 +17,18 @@ const spies = vi.hoisted(() => ({
   mockUpdate: vi.fn(),
   mockArchive: vi.fn(),
   mockDelete: vi.fn(),
+  mockWorkspaceRunNow: vi.fn(),
+  mockWorkspaceGetStatus: vi.fn(),
 }));
 
-const { mockCreate, mockList, mockUpdate, mockArchive, mockDelete } = spies;
+const {
+  mockCreate,
+  mockList,
+  mockUpdate,
+  mockArchive,
+  mockDelete,
+  mockWorkspaceRunNow,
+} = spies;
 
 vi.mock("@/service/AIWorkspaceMemoryService", () => ({
   AIWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
@@ -37,6 +46,15 @@ vi.mock("@/modules/SystemSettingModule", () => ({
   SystemSettingModule: vi.fn().mockImplementation(() => ({
     getSettingValue: mockGetSettingValue,
   })),
+}));
+
+// Mock the shared factory so run-auto-dream tests assert the handler wiring
+// without running the real consolidation service.
+vi.mock("@/service/AIAutoDreamFactory", () => ({
+  getSharedWorkspaceAutoDreamService: () => ({
+    runNow: spies.mockWorkspaceRunNow,
+    getStatus: spies.mockWorkspaceGetStatus,
+  }),
 }));
 
 const handlers: Record<string, (e: unknown, data: string) => Promise<unknown>> =
@@ -73,6 +91,11 @@ describe("ai-workspace-memory-ipc", () => {
     state.aiEnabled = "true";
     // Manual-memory toggle defaults to enabled (setting absent → enabled).
     mockGetSettingValue.mockResolvedValue(null);
+    // runNow rejects like the real service's "skipped" path unless a test
+    // overrides it, so run failures keep surfacing as denied.
+    mockWorkspaceRunNow.mockRejectedValue(
+      new Error("Workspace auto-dream run skipped")
+    );
     _resetAIWorkspaceMemorySingletonsForTesting();
     registerAIWorkspaceMemoryIpcHandlers();
   });
@@ -182,9 +205,43 @@ describe("ai-workspace-memory-ipc", () => {
       EVENT,
       JSON.stringify({ conversationId: "conv-1" })
     )) as { status: boolean };
-    // AI enabled, but the real service skips when there are no workspace-bound
-    // sources in the test DB → runNow throws "skipped" → denied.
+    // AI enabled, but runNow rejects ("skipped") → denied.
     expect(r.status).toBe(false);
+    expect(mockWorkspaceRunNow).toHaveBeenCalled();
+  });
+
+  it("run-auto-dream forwards force and an optional model to runNow", async () => {
+    mockWorkspaceRunNow.mockResolvedValue([
+      { runId: "wrun-1", status: "completed" },
+    ]);
+    const r = (await handlers[AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ force: true, model: "deepseek-v4-flash" })
+    )) as { status: boolean };
+    expect(mockWorkspaceRunNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        force: true,
+        reason: "manual_ipc",
+        model: "deepseek-v4-flash",
+      })
+    );
+    expect(r.status).toBe(true);
+  });
+
+  it("run-auto-dream omits model when the payload has none", async () => {
+    mockWorkspaceRunNow.mockResolvedValue([
+      { runId: "wrun-1", status: "completed" },
+    ]);
+    const r = (await handlers[AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ force: true })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    const arg = mockWorkspaceRunNow.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(arg).toBeDefined();
+    expect(arg).not.toHaveProperty("model");
   });
 
   it("manual write handlers are denied when the manual-memory toggle is off", async () => {

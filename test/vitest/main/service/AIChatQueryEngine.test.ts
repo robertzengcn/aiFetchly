@@ -18,6 +18,7 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
@@ -25,23 +26,28 @@ const mockCreateConversationIfNeeded = vi.fn().mockReturnValue("v2-test-conv");
 const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
-    saveUserMessage: mockSaveUserMessage,
-    getConversationMessages: mockGetConversationMessages,
-    saveAssistantMessage: mockSaveAssistantMessage,
-    saveToolCallMessage: mockSaveToolCallMessage,
-    saveToolResultMessage: mockSaveToolResultMessage,
-    createConversationIfNeeded: mockCreateConversationIfNeeded,
-    getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
+      saveUserMessage: mockSaveUserMessage,
+      getConversationMessages: mockGetConversationMessages,
+      getRecentMessages: mockGetRecentMessages,
+      saveAssistantMessage: mockSaveAssistantMessage,
+      saveToolCallMessage: mockSaveToolCallMessage,
+      saveToolResultMessage: mockSaveToolResultMessage,
+      createConversationIfNeeded: mockCreateConversationIfNeeded,
+      getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
+    };
+  }),
 }));
 
 // --- Mock AIChatAttachmentModule (attachment byte persistence) ----------
 const mockSaveUploadedFiles = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/modules/AIChatAttachmentModule", () => ({
-  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
-    saveUploadedFiles: mockSaveUploadedFiles,
-  })),
+  AIChatAttachmentModule: vi.fn().mockImplementation(function () {
+    return {
+      saveUploadedFiles: mockSaveUploadedFiles,
+    };
+  }),
 }));
 
 // --- Mock AIChatPlanModule ---------------------------------------------
@@ -50,29 +56,46 @@ const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
 const mockApprovePlan = vi.fn();
 
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
-    getPlanState: mockGetPlanState,
-    ensurePlanForConversation: mockEnsurePlanForConversation,
-    approvePlan: mockApprovePlan,
-  })),
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
+      getPlanState: mockGetPlanState,
+      ensurePlanForConversation: mockEnsurePlanForConversation,
+      approvePlan: mockApprovePlan,
+    };
+  }),
+}));
+
+const mockGetActiveGoal = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AIChatGoalModule", () => ({
+  AIChatGoalModule: vi.fn().mockImplementation(function () {
+    return {
+      getActiveGoal: mockGetActiveGoal,
+    };
+  }),
 }));
 
 // --- Mock compact modules (used by default AIChatContextAssembler) -----
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
-    getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
+      getByConversation: vi.fn().mockResolvedValue(null),
+    };
+  }),
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
-    getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
+      getActiveSummary: vi.fn().mockResolvedValue(null),
+    };
+  }),
 }));
 
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
-    listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return {
+      listActiveForRuntime: vi.fn().mockResolvedValue([]),
+    };
+  }),
 }));
 
 // --- Mock AiChatApi ----------------------------------------------------
@@ -80,7 +103,9 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
-    AiChatApi: vi.fn().mockImplementation(() => ({})),
+    AiChatApi: vi.fn().mockImplementation(function () {
+      return {};
+    }),
   };
 });
 
@@ -107,9 +132,11 @@ vi.mock("@/service/SkillExecutor", () => ({
 
 // --- Mock Token --------------------------------------------------------
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockReturnValue("true"),
-  })),
+  Token: vi.fn().mockImplementation(function () {
+    return {
+      getValue: vi.fn().mockReturnValue("true"),
+    };
+  }),
 }));
 
 // --- Mock usersetting --------------------------------------------------
@@ -150,6 +177,7 @@ describe("AIChatQueryEngine", () => {
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockApprovePlan.mockReset();
+    mockGetActiveGoal.mockResolvedValue(null);
     HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
@@ -451,6 +479,9 @@ describe("AIChatQueryEngine", () => {
         toolCallId: "call-1",
         toolName: "get_time",
         toolArguments: { timezone: "UTC" },
+        turnId: expect.any(String),
+        model: undefined,
+        tokensUsed: undefined,
       });
       expect(mockSaveToolResultMessage).toHaveBeenCalledWith({
         conversationId: "v2-test-conv",
@@ -460,6 +491,7 @@ describe("AIChatQueryEngine", () => {
         content: '{"success":true}',
         toolResult: { success: true, summary: "12:00 UTC" },
         replacesPermissionPromptForToolId: undefined,
+        turnId: expect.any(String),
       });
     });
 
@@ -653,6 +685,68 @@ describe("AIChatQueryEngine", () => {
       expect(loopInput.planContext).toBeUndefined();
       // …and autoPlan stays off so the loop would reject any stray call.
       expect(loopInput.autoPlan).toBeUndefined();
+    });
+
+    it("sets goalAutoContinue in chat mode when a conversation goal is active", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(true);
+    });
+
+    it("does not set goalAutoContinue in plan mode even with an active goal", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "plan",
+          message: "Plan how to accomplish this goal",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(false);
     });
 
     it("advertises EnterPlanMode in plain chat mode with no approved plan", async () => {

@@ -59,15 +59,20 @@ describe("ToolCatalogService.buildFromOpenAITools", () => {
   it("classifies core helpers as always via injected skill resolver", () => {
     const svc = new ToolCatalogService({
       getSkillDefinition: (name) =>
-        name === "file_read" ? ({ name, source: "built-in" } as never) : null,
+        name === "file_read" || name === "conversation_tool_history"
+          ? ({ name, source: "built-in" } as never)
+          : null,
     });
     const cat = svc.buildFromOpenAITools({
-      tools: [tool("file_read")],
+      tools: [tool("file_read"), tool("conversation_tool_history")],
       context: ctx,
     });
     const e = cat.byName.get("file_read");
     expect(e?.source).toBe("builtin");
     expect(e?.loadPolicy).toBe("always");
+    expect(cat.byName.get("conversation_tool_history")?.loadPolicy).toBe(
+      "always"
+    );
   });
 
   it("deduplicates entries by name (first wins)", () => {

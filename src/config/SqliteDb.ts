@@ -67,6 +67,13 @@ import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
+import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
+import { AIChatArchiveTurnEntity } from "@/entity/AIChatArchiveTurn.entity";
+import { AIChatArchiveEntryEntity } from "@/entity/AIChatArchiveEntry.entity";
+import { AIChatCompactionRunEntity } from "@/entity/AIChatCompactionRun.entity";
+import { AIChatCompactionSectionEntity } from "@/entity/AIChatCompactionSection.entity";
+import { AIChatContextGenerationEntity } from "@/entity/AIChatContextGeneration.entity";
+import { AIChatArchiveSearchFragmentEntity } from "@/entity/AIChatArchiveSearchFragment.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
@@ -574,6 +581,13 @@ export class SqliteDb {
           AIChatGoalEvidenceEntity,
           AIChatSessionMemoryEntity,
           AIChatCompactSummaryEntity,
+          AIChatArchiveStateEntity,
+          AIChatArchiveTurnEntity,
+          AIChatArchiveEntryEntity,
+          AIChatCompactionRunEntity,
+          AIChatCompactionSectionEntity,
+          AIChatContextGenerationEntity,
+          AIChatArchiveSearchFragmentEntity,
           AgentDefinitionEntity,
           AgentTaskEntity,
           AgentTaskMessageEntity,

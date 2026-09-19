@@ -25,6 +25,7 @@ import { ai_custom_context_directive } from "@/config/settinggroupInit";
 const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
+const mockGetRecentMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
 const mockGetSettingValue = vi.fn();
 const mockGetInstructionBlocks = vi.fn();
@@ -32,37 +33,50 @@ const mockGetInstructionBlocks = vi.fn();
 const mockListActiveForRuntime = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
     getByConversation: mockGetByConversation,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
     getActiveSummary: mockGetActiveSummary,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     getConversationMessages: mockGetConversationMessages,
-  })),
+    getRecentMessages: mockGetRecentMessages,
+  };
+  }),
 }));
 
 vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
-  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+  AIUserMemoryRetrievalService: vi.fn().mockImplementation(function () {
+    return {
     retrieve: mockDurableRetrieve,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/SystemSettingModule", () => ({
-  SystemSettingModule: vi.fn().mockImplementation(() => ({
+  SystemSettingModule: vi.fn().mockImplementation(function () {
+    return {
     getSettingValue: mockGetSettingValue,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn() };
+  }),
 }));
 
 // Mock the AIFetchlyContextLoader module: replace the instance's
@@ -73,9 +87,11 @@ vi.mock("@/modules/token", () => ({
 // stable marker.
 vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
   AIFetchlyContextLoader: Object.assign(
-    vi.fn().mockImplementation(() => ({
+    vi.fn().mockImplementation(function () {
+    return {
       getInstructionBlocks: mockGetInstructionBlocks,
-    })),
+    };
+  }),
     {
       formatInstructionBlock: (block: AIFetchlyInstructionBlock): string =>
         "User global AiFetchly instructions from ~/.aifetchly/AGENTS.md:\n\n" +
@@ -85,9 +101,11 @@ vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
 }));
 
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return {
     listActiveForRuntime: mockListActiveForRuntime,
-  })),
+  };
+  }),
 }));
 
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
@@ -127,7 +145,7 @@ describe("AIChatContextAssembler — AGENTS.md injection (CTX-01, CTX-03)", () =
     // custom directive empty. Each test overrides what it needs.
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
-    mockGetConversationMessages.mockResolvedValue([]);
+    mockGetRecentMessages.mockResolvedValue([]);
     mockDurableRetrieve.mockResolvedValue({
       memories: [],
       tokenEstimate: 0,

@@ -11,7 +11,8 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
-import type { SkillDefinition, SkillManifest } from "@/entityTypes/skillTypes";
+import type { SkillDefinition, SkillExecutionResult, SkillManifest } from "@/entityTypes/skillTypes";
+import { isArchiveReadsEnabled, isHistoryToolsEnabled } from "@/config/featureFlags";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -72,6 +73,11 @@ import {
   importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
+import {
+  CONVERSATION_TOOL_HISTORY_TOOL_NAME,
+  CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+  CONVERSATION_HISTORY_READ_TOOL_NAME,
+} from "@/entityTypes/conversationToolHistoryTypes";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1105,6 +1111,178 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: CONVERSATION_TOOL_HISTORY_TOOL_NAME,
+    description:
+      "Look up tools already run in this conversation (name, status, receipt, truncated result). " +
+      "Use before repeating a side-effecting tool (email send, file write, scrape) or when " +
+      "the user asks to continue an interrupted task. Filter with query (tool name or text) " +
+      "or fetch one full truncated result with tool_call_id from the prior-tool-activity index.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Filter receipts by tool name, tool_call_id, or summary text.",
+        },
+        tool_call_id: {
+          type: "string",
+          description:
+            "Fetch one prior tool result by id from the prior-tool-activity index.",
+        },
+        limit: {
+          type: "number",
+          description: "Max receipts to return (default 30, max 50).",
+        },
+        include_content: {
+          type: "boolean",
+          description:
+            "If true, include truncated result bodies in the list. " +
+            "tool_call_id fetches always include truncated content.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const { handleConversationToolHistory } = await import(
+        "@/service/agentTools/conversationToolHistoryTool"
+      );
+      return handleConversationToolHistory(args, context.conversationId);
+    },
+  },
+  {
+    name: CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+    description:
+      "Search the recoverable conversation history archive for a literal phrase (1–200 chars). " +
+      "Returns excerpts with opaque source_id references the model can pass to conversation_history_read. " +
+      "No-match is final only when scan_complete is true; otherwise resume with next_cursor. " +
+      "The active conversation is bound by trusted context — never pass it as an argument. " +
+      "Use this before quoting historical details you are not certain about; report missing/partial sources honestly.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Literal user text to search for (1–200 characters). Never raw FTS/SQL syntax.",
+          minLength: 1,
+          maxLength: 200,
+        },
+        before: {
+          type: "string",
+          description:
+            "Only matches before this ISO datetime (exclusive).",
+        },
+        after: {
+          type: "string",
+          description:
+            "Only matches after this ISO datetime (exclusive).",
+        },
+        types: {
+          type: "array",
+          description:
+            "Filter by message role (user, assistant, system, tool).",
+          items: {
+            type: "string",
+            enum: ["user", "assistant", "system", "tool"],
+          },
+          maxItems: 4,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+        },
+        limit: {
+          type: "number",
+          description: "Max records to return (default 10, max 20).",
+          default: 10,
+          minimum: 1,
+          maximum: 20,
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!isHistoryToolsEnabled() || !isArchiveReadsEnabled()) {
+        return { success: false, result: { error: "HISTORY_UNAVAILABLE" } };
+      }
+      const { handleConversationHistorySearch } = await import(
+        "@/service/agentTools/conversationHistorySearchTool"
+      );
+      return handleConversationHistorySearch(args, context);
+    },
+  },
+  {
+    name: CONVERSATION_HISTORY_READ_TOOL_NAME,
+    description:
+      "Read exact source content from the recoverable history archive by opaque source_id (from search), " +
+      "by public message_id, or as a range from_source_id→to_source_id. Returns exact excerpts and a " +
+      "continuation cursor for large messages/ranges. Pass neighbors 0–2 to include surrounding rows. " +
+      "An ambiguous message_id returns candidate source references — re-read by source_id to disambiguate. " +
+      "The active conversation is bound by trusted context — never pass it as an argument.",
+    parameters: {
+      type: "object",
+      properties: {
+        source_id: {
+          type: "string",
+          description:
+            "Opaque source reference from a search result. Reads that exact slice.",
+        },
+        message_id: {
+          type: "string",
+          description:
+            "Public message id. Ambiguous ids return all candidate source references.",
+        },
+        from_source_id: {
+          type: "string",
+          description: "Range start (inclusive). Use with to_source_id only.",
+        },
+        to_source_id: {
+          type: "string",
+          description: "Range end (inclusive). Use with from_source_id only.",
+        },
+        neighbors: {
+          type: "number",
+          description:
+            "Include 0–2 surrounding rows (single-point modes only).",
+          minimum: 0,
+          maximum: 2,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+        },
+      },
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!isHistoryToolsEnabled() || !isArchiveReadsEnabled()) {
+        return { success: false, result: { error: "HISTORY_UNAVAILABLE" } };
+      }
+      const { handleConversationHistoryRead } = await import(
+        "@/service/agentTools/conversationHistoryReadTool"
+      );
+      return handleConversationHistoryRead(args, context);
+    },
+  },
+  {
     name: "file_edit",
     description:
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
@@ -1717,7 +1895,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "skip_review=true (boolean) and the recipients plus subject/body — do NOT " +
       "call draft_outbound_email_batch first and do NOT wait for Review. " +
       "Otherwise draft first, then stop and wait for the user to click Review. " +
-      "If the user has now confirmed in chat (e.g. \"yes, send it\"), call this " +
+      'If the user has now confirmed in chat (e.g. "yes, send it"), call this ' +
       "again without re-drafting. Provide " +
       "service_ids from list_email_services plus either template_ids or " +
       "email_subject and email_html_content. Provide exactly one of emails " +
@@ -1845,11 +2023,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             success: claimed,
             result: {
               status: claim.status,
-              send_attempt_id: claim.attemptId,
+              send_attempt_id: "attemptId" in claim ? claim.attemptId : null,
               batch_id: outboundAuthorization.batchId,
               ...(claim.status === "already_processed"
                 ? {
                     note: "This batch was already claimed by an earlier send attempt; no duplicate send was started.",
+                  }
+                : {}),
+              ...(claim.status === "legacy_identity_requires_review"
+                ? {
+                    note: "This legacy batch's service identity no longer matches the approved sender. Edit the draft to create a version-2 revision and re-approve.",
+                  }
+                : {}),
+              ...(claim.status === "mixed_version_batch"
+                ? {
+                    note: "This batch mixes version-1 and version-2 revisions and cannot be sent under one canonicalization rule. Edit the drafts to materialize version-2 revisions and re-approve.",
+                  }
+                : {}),
+              ...(claim.status === "sender_identity_changed"
+                ? {
+                    note: "A referenced email service's identity changed between approval and delivery. Re-approve the batch.",
                   }
                 : {}),
             },
@@ -3564,10 +3757,22 @@ async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
   };
 }
 
+const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
+  CONVERSATION_HISTORY_READ_TOOL_NAME,
+]);
+
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,
   enablement: SkillRuntimeEnablement
 ): boolean {
+  if (
+    skill.source === "built-in" &&
+    HISTORY_TOOL_NAMES.has(skill.name) &&
+    (!isHistoryToolsEnabled() || !isArchiveReadsEnabled())
+  ) {
+    return false;
+  }
   if (skill.source === "built-in") return true;
 
   const installed = enablement.installedSkillsByName?.get(skill.name);

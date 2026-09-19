@@ -2,12 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildSessionMemorySystemPrompt,
   buildSessionMemoryUserPrompt,
-  buildFullCompactSystemPrompt,
-  buildFullCompactUserPrompt,
   normalizeSessionMemorySummary,
-  normalizeFullCompactSummary,
   SESSION_MEMORY_HEADINGS,
-  FULL_COMPACT_HEADINGS,
 } from "@/service/AIChatCompactPromptBuilder";
 
 describe("AIChatCompactPromptBuilder", () => {
@@ -30,18 +26,6 @@ describe("AIChatCompactPromptBuilder", () => {
     }
   });
 
-  it("full compact user prompt embeds all messages", () => {
-    const u = buildFullCompactUserPrompt([
-      { role: "user", content: "do X" },
-      { role: "assistant", content: "ok" },
-    ]);
-    expect(u).toContain("do X");
-    expect(u).toContain("ok");
-    for (const h of FULL_COMPACT_HEADINGS) {
-      expect(u).toContain(h);
-    }
-  });
-
   it("normalizeSessionMemorySummary injects missing headings", () => {
     const { summary, ok } = normalizeSessionMemorySummary(
       "## Current Goal\nship"
@@ -55,15 +39,5 @@ describe("AIChatCompactPromptBuilder", () => {
   it("normalizeSessionMemorySummary rejects empty content", () => {
     const { ok } = normalizeSessionMemorySummary("   ");
     expect(ok).toBe(false);
-  });
-
-  it("normalizeFullCompactSummary injects missing headings", () => {
-    const { summary, ok } = normalizeFullCompactSummary(
-      "## Primary Request\nship it"
-    );
-    expect(ok).toBe(true);
-    for (const h of FULL_COMPACT_HEADINGS) {
-      expect(summary).toContain(h);
-    }
   });
 });

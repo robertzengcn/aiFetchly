@@ -1142,7 +1142,7 @@ Add counters or structured audit codes for:
 - `smtp_auth_failed`;
 - `smtp_from_rejected`;
 - `smtp_recipient_rejected`;
-- `outbound_identity_changed`;
+- `sender_identity_changed`;
 - `legacy_identity_requires_review`;
 - `worker_identity_mismatch`; and
 - `reply_identity_mismatch`.

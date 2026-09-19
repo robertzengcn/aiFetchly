@@ -1202,6 +1202,23 @@ function initialize() {
         );
       }
 
+      // Recoverable-history archive index backfill (technical-design §15.5).
+      // Idempotent + fire-and-forget: resumes any incomplete/stale index in
+      // bounded batches, yields to the event loop between batches, and is a
+      // no-op when the archive-reads rollout flag is off. Never blocks
+      // startup; a per-conversation failure is logged and skipped.
+      try {
+        const { AIChatArchiveRecoveryStartup } = await import(
+          "@/service/AIChatArchiveRecoveryStartup"
+        );
+        void new AIChatArchiveRecoveryStartup().runRecoverySweep();
+      } catch (err) {
+        log.warn(
+          "[archive-recovery] startup sweep failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Seed built-in agent definitions (marketing subagent system).
       try {
         const { AgentDefinitionModule } = await import(

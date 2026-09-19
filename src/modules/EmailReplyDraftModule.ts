@@ -132,8 +132,7 @@ export class EmailReplyDraftModule extends BaseModule {
     draftId: number,
     revisionId: number,
     approvedHash: string,
-    policyVersion: string,
-    at: Date
+    policyVersion: string
   ): Promise<boolean> {
     try {
       await this.ensureConnection();
@@ -141,8 +140,7 @@ export class EmailReplyDraftModule extends BaseModule {
         draftId,
         revisionId,
         approvedHash,
-        policyVersion,
-        at
+        policyVersion
       );
     } catch (error) {
       console.error("Error marking reply draft approved:", error);

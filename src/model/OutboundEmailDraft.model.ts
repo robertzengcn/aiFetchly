@@ -18,6 +18,9 @@ export interface AppendRevisionInput {
   readonly draftId: number;
   readonly actor: "ai" | "user";
   readonly emailServiceId: number;
+  readonly envelopeVersion?: 1 | 2;
+  readonly smtpUsername?: string | null;
+  readonly replyToAddress?: string | null;
   readonly senderAddress: string;
   readonly recipientAddress: string;
   readonly subject: string;
@@ -298,6 +301,9 @@ export class OutboundEmailDraftModel extends BaseDb {
         revisionNumber: nextRevisionNumber,
         actor: input.actor,
         emailServiceId: input.emailServiceId,
+        envelopeVersion: input.envelopeVersion ?? 1,
+        smtpUsername: input.smtpUsername ?? null,
+        replyToAddress: input.replyToAddress ?? null,
         senderAddress: input.senderAddress,
         recipientAddress: input.recipientAddress,
         subject: input.subject,

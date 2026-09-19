@@ -7,6 +7,12 @@ import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
+import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
+import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
+import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
+import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 
 /**
  * Builds production {@link AIChatQueryEngine} instances for non-interactive
@@ -33,8 +39,31 @@ export class AIChatQueryEngineFactory {
    * engine runs fine without them; all deps are optional.
    */
   createScheduled(policy: AiMessageTaskToolPolicy): AIChatQueryEngine {
+    // §11 coordinator with a provider-backed summarize callback. The engine's
+    // post-turn hook calls requestCompactionForTurn (§12 incremental path);
+    // when AI is disabled or the provider call fails, the coordinator cancels
+    // the run and the engine keeps the legacy behavior.
+    const coordinator = new AIChatCompactionCoordinator({
+      summarize: async (systemPrompt: string, userPrompt: string, model?: string): Promise<string> =>
+        dispatchSectionSummarize({
+          systemPrompt,
+          userPrompt,
+          model,
+          completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+        }),
+    });
+    // §12 assembler with the compaction reader + archive access: reads the
+    // active generation's composite boundary + bounded overview instead of
+    // the legacy timestamp-only trim, and retains token-budgeted complete
+    // turns (FR-05). Degrades gracefully when nothing is published/indexed.
+    const assembler = new AIChatContextAssembler({
+      compactionReader: new AIChatCompactionModule(),
+      archiveModule: new AIChatArchiveModule(),
+    });
     return new AIChatQueryEngine(this.createQueryLoop(policy), {
       toolFilter: (name) => this.isToolAllowed(name, policy),
+      compactionCoordinator: coordinator,
+      contextAssembler: assembler,
     });
   }
 
@@ -52,6 +81,9 @@ export class AIChatQueryEngineFactory {
         const svc = new AIChatModelFallbackService();
         return svc.resolve({ originalModel, currentModel, reason });
       },
+      // §8.5 complete-request budget preflight: rejects a turn before the
+      // model call when the assembled context exceeds the model's window.
+      requestBudgetService: new AIChatRequestBudgetService(),
     };
     return new AIChatQueryLoop(deps);
   }

@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { OpenAITool } from "@/api/aiChatApi";
@@ -334,6 +335,10 @@ export class AgentRuntime {
       streamChatCompletion: streamChat,
       executeTool: policyCheckedExecute,
       getSkillDefinition: getSkill,
+      // §8.5 mandatory preflight for isolated subagent consumers (FR-04/FR-08).
+      // Subagent history is never implicitly parent history; the budget guard
+      // still bounds every dispatch within the agent's own conversation.
+      requestBudgetService: new AIChatRequestBudgetService(),
     });
 
     // 5. Run with abort controller + runtime timeout.
@@ -575,6 +580,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           console.error("[ai-auto-dream] agent trigger failed:", err)
@@ -585,6 +591,7 @@ export class AgentRuntime {
         .evaluateAfterAgentTask({
           agentTaskId,
           reason: "agent_task_completed",
+          model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
           console.error("[workspace-auto-dream] agent trigger failed:", err)

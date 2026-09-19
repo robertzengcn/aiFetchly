@@ -3,10 +3,9 @@ import type {
   EmailServiceEntitydata,
   EmailSendResult,
 } from "@/entityTypes/emailmarketingType";
-import {
-  OutboundSmtpSession,
-  smtpErrorMessage,
-} from "@/modules/lib/smtpTransport";
+import { OutboundSmtpSession } from "@/modules/lib/smtpTransport";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
 
 /** Reply payload with thread-tracking headers preserved where available. */
 export interface ReplyEmailRequestData {
@@ -20,24 +19,31 @@ export interface ReplyEmailRequestData {
 
 /**
  * Sends a reply email through the same SMTP credentials as outbound send,
- * preserving threading headers (`In-Reply-To`, `References`) when present so the
- * reply threads correctly in the recipient's mailbox.
- *
- * Mirrors {@link EmailService} construction but adds a reply-specific send.
+ * preserving threading headers. The configured outgoing Reply-To (§13.2) is
+ * emitted as a header; the inbound message's replyToAddress still selects
+ * `data.receiver` independently (FR-011).
  */
 export class ReplyEmailService {
   private session: OutboundSmtpSession;
-  private emailSender: string;
+  private readonly fromAddress: string;
+  private readonly replyToAddress: string | null;
 
   constructor(param: EmailServiceEntitydata) {
-    this.emailSender = param.from;
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: param.smtpUsername,
+      from: param.from,
+      replyTo: param.replyTo,
+    });
+    this.fromAddress = identity.fromAddress;
+    this.replyToAddress = identity.replyToAddress;
     this.session = new OutboundSmtpSession(param);
   }
 
   async sendReplyEmail(data: ReplyEmailRequestData): Promise<EmailSendResult> {
     const subject = ensureRePrefix(data.subject);
     const mailOptions: nodemailer.SendMailOptions = {
-      from: this.emailSender,
+      from: this.fromAddress,
+      ...(this.replyToAddress ? { replyTo: this.replyToAddress } : {}),
       to: data.receiver,
       subject,
       text: data.text,
@@ -62,12 +68,14 @@ export class ReplyEmailService {
         info: typeof info === "object" && info ? info.messageId : undefined,
       };
     } catch (error: unknown) {
+      const classified = classifySmtpFailure(error);
       return {
         receiver: data.receiver,
         status: false,
         title: subject,
         content: data.text,
-        info: smtpErrorMessage(error),
+        info: classified.sanitizedMessage,
+        failureCode: classified.code,
       };
     }
   }

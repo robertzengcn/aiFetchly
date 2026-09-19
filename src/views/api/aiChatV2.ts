@@ -12,14 +12,19 @@ import type {
   ChatV2ConversationSummary,
   ChatToolApprovalMode,
   ChatV2AutoCompactedEvent,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
-import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
+import type {
+  HistoryExcerpt,
+  RecoverableHistoryErrorCode,
+} from "@/entityTypes/aiChatArchiveTypes";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import {
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
@@ -30,7 +35,6 @@ import {
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
-  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_PLAN_STATE,
   AI_CHAT_V2_ANSWER_QUESTION,
   AI_CHAT_V2_APPROVE_PLAN,
@@ -41,6 +45,15 @@ import {
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
   AI_CHAT_V2_AUTO_COMPACTED,
+  AI_CHAT_V2_HISTORY_SEARCH,
+  AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_BROWSE,
+  AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+  AI_CHAT_V2_HISTORY_UI_ENABLED,
+  AI_CHAT_V2_COMPACTION_STATUS,
+  AI_CHAT_V2_COMPACTION_CANCEL,
+  AI_CHAT_V2_COMPACTION_START,
+  AI_CHAT_V2_COMPACTION_PROGRESS,
 } from "@/config/channellist";
 
 /**
@@ -352,18 +365,20 @@ export async function clearAllChatV2History(): Promise<{
 }
 
 /**
- * Run a full compact for the selected v2 conversation and return the active
- * compact summary saved by the main process.
+ * Start (or resume) a bounded compaction run and return IMMEDIATELY with a
+ * start acknowledgement (design §13.1 start/status/progress). The run
+ * continues in the main process; track it via `getCompactionStatus` and the
+ * `subscribeCompactionProgress` event. Resume is just another start call.
  */
-export async function compactChatV2Conversation(
+export async function startCompaction(
   conversationId: string,
   model?: string
-): Promise<AIChatCompactSummaryView | null> {
-  const resp = await windowInvoke(AI_CHAT_V2_COMPACT_CONVERSATION, {
+): Promise<{ started: boolean }> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACTION_START, {
     conversationId,
     model,
   });
-  return (resp as AIChatCompactSummaryView | null) ?? null;
+  return (resp as { started: boolean } | null) ?? { started: false };
 }
 
 /**
@@ -511,4 +526,224 @@ export async function setChatV2ToolApprovalMode(
     mode,
   });
   return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
+}
+
+// ---------------------------------------------------------------------------
+// Recoverable History + Incremental Compaction (technical-design §13)
+// ---------------------------------------------------------------------------
+
+/**
+ * Envelope the main process wraps local history-browsing results in. Carries
+ * the recoverable-history errorCode so the renderer can distinguish
+ * partial-scan / no-match / scope-invalid from a genuine empty result.
+ */
+export interface HistoryBrowseResult<T> {
+  data: T | null;
+  errorCode?: RecoverableHistoryErrorCode;
+  errorMessage?: string;
+}
+
+export interface HistorySearchResult {
+  records: HistoryExcerpt[];
+  nextCursor: string | null;
+  scanComplete: boolean;
+  indexComplete: boolean;
+  errorCode?: RecoverableHistoryErrorCode;
+}
+
+export interface HistoryReadResult {
+  records: HistoryExcerpt[];
+  nextCursor: string | null;
+  truncated: boolean;
+  sourceRevision: number;
+  storedContentIncomplete: boolean;
+  errorCode?: RecoverableHistoryErrorCode;
+}
+
+export interface HistoryBrowsePage {
+  records: HistoryExcerpt[];
+  nextCursor: string | null;
+  truncated: boolean;
+  sourceRevision: number;
+}
+
+/**
+ * Paginated chronological browse of archived history (local, §13.1). Viewing
+ * is independent of model-context selection: browsing never mutates the next
+ * model request unless the user selects a passage.
+ */
+export async function browseHistory(
+  conversationId: string,
+  cursor?: string
+): Promise<HistoryBrowsePage> {
+  const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_BROWSE, {
+    conversationId,
+    cursor,
+  })) as HistoryBrowseResult<HistoryBrowsePage> | null;
+  return (
+    resp?.data ?? {
+      records: [],
+      nextCursor: null,
+      truncated: false,
+      sourceRevision: 0,
+    }
+  );
+}
+
+export interface HistoryResolveResult {
+  resolved: HistoryExcerpt[];
+  rejected: string[];
+  errorCode?: RecoverableHistoryErrorCode;
+}
+
+/**
+ * Search archived history excerpts for a conversation (local index scan, §13.1).
+ * NOT turn-scoped — browsing has no model budget. Pass a cursor for paginated
+ * continuation; the backend caps at 20 records per page.
+ */
+export async function searchHistory(
+  conversationId: string,
+  query: string,
+  cursor?: string,
+  limit?: number
+): Promise<HistorySearchResult> {
+  const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_SEARCH, {
+    conversationId,
+    query,
+    cursor,
+    limit,
+  })) as HistoryBrowseResult<HistorySearchResult> | null;
+  const inner = resp?.data ?? {
+    records: [],
+    nextCursor: null,
+    scanComplete: true,
+    indexComplete: false,
+    errorCode: resp?.errorCode,
+  };
+  // Surface the envelope's errorCode when the inner result didn't carry one.
+  return {
+    ...inner,
+    errorCode: inner.errorCode ?? resp?.errorCode,
+  };
+}
+
+/**
+ * Read archived history source slices (§13.1). `args` mirrors the
+ * conversation_history_read tool schema: exactly one of source_id/message_id
+ * or from_source_id+to_source_id, plus optional neighbors (0-2).
+ */
+export async function readHistory(
+  conversationId: string,
+  args: Record<string, unknown>,
+  cursor?: string
+): Promise<HistoryReadResult> {
+  const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_READ, {
+    conversationId,
+    args,
+    cursor,
+  })) as HistoryBrowseResult<HistoryReadResult> | null;
+  const inner = resp?.data ?? {
+    records: [],
+    nextCursor: null,
+    truncated: false,
+    sourceRevision: 0,
+    storedContentIncomplete: false,
+    errorCode: resp?.errorCode,
+  };
+  return {
+    ...inner,
+    errorCode: inner.errorCode ?? resp?.errorCode,
+  };
+}
+
+/**
+ * Resolve user-selected source references to exact excerpts on submit (§13.3).
+ * The backend re-validates each opaque source id against the current epoch and
+ * revision, returning rejected ids (SOURCE_CHANGED / SOURCE_UNAVAILABLE).
+ */
+export async function resolveSelections(
+  conversationId: string,
+  sourceIds: string[]
+): Promise<HistoryResolveResult> {
+  const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS, {
+    conversationId,
+    sourceIds,
+  })) as HistoryBrowseResult<HistoryResolveResult> | null;
+  const inner = resp?.data ?? {
+    resolved: [],
+    rejected: sourceIds,
+    errorCode: resp?.errorCode,
+  };
+  return {
+    ...inner,
+    errorCode: inner.errorCode ?? resp?.errorCode,
+  };
+}
+
+/**
+ * Read the active incremental-compaction run status for a conversation
+ * (§13.1). Returns null when no run exists for this conversation.
+ */
+export async function getCompactionStatus(
+  conversationId: string
+): Promise<CompactionStatusSnapshot | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACTION_STATUS, {
+    conversationId,
+  });
+  return (resp as CompactionStatusSnapshot | null) ?? null;
+}
+
+/**
+ * Cancel the active compaction run for a conversation (§13.1). Best-effort;
+ * resolves to { cancelled: true } even when no run was in flight.
+ */
+export async function cancelCompaction(
+  conversationId: string
+): Promise<{ cancelled: boolean }> {
+  const resp = await windowInvoke(AI_CHAT_V2_COMPACTION_CANCEL, {
+    conversationId,
+  });
+  return (resp as { cancelled: boolean } | null) ?? { cancelled: false };
+}
+
+/**
+ * Subscribe to incremental-compaction run lifecycle broadcasts (§13.1). The
+ * handler must filter by conversationId — only the active conversation's
+ * status badge should update. Call unsubscribeCompactionProgress in
+ * onBeforeUnmount to avoid leaking the shared-channel listener.
+ */
+export function subscribeCompactionProgress(
+  handler: (event: ChatV2CompactionProgressEvent) => void
+): void {
+  windowReceive(AI_CHAT_V2_COMPACTION_PROGRESS, (event) => {
+    handler(event as ChatV2CompactionProgressEvent);
+  });
+}
+
+/** Remove ALL compaction-progress listeners (call in onBeforeUnmount). */
+export function unsubscribeCompactionProgress(): void {
+  windowRemoveAllListeners(AI_CHAT_V2_COMPACTION_PROGRESS);
+}
+
+/**
+ * Read whether the recoverable-history UI stage is enabled (design §18,
+ * stage 3). The flag lives in main (Token); the renderer cannot force-enable
+ * it. Fail-closed: any transport error resolves to false so selection chips
+ * never render without backend resolution.
+ */
+export async function isHistoryUiEnabled(): Promise<boolean> {
+  try {
+    const resp = (await windowInvoke(AI_CHAT_V2_HISTORY_UI_ENABLED, {})) as {
+      data?: { enabled?: boolean } | null;
+      enabled?: boolean;
+    } | null;
+    if (!resp) return false;
+    if (typeof (resp as { enabled?: unknown }).enabled === "boolean") {
+      return (resp as { enabled: boolean }).enabled;
+    }
+    const inner = (resp as { data?: { enabled?: unknown } | null }).data;
+    return inner?.enabled === true;
+  } catch {
+    return false;
+  }
 }
