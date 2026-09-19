@@ -49,6 +49,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   answerChatV2Question: vi.fn(),
   clearChatV2Conversation: vi.fn(),
   compactChatV2Conversation: vi.fn(),
+  // Pending-message queue store contract (message-queue §7)
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
 }));
 
 vi.mock("@/views/api/aiChatV2Voice", () => ({
@@ -213,7 +216,14 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         AiChatV2ModelSelector: defineComponent({
           name: "AiChatV2ModelSelector",
-          props: ["modelValue", "items", "defaultModel", "disabled", "loading", "noModels"],
+          props: [
+            "modelValue",
+            "items",
+            "defaultModel",
+            "disabled",
+            "loading",
+            "noModels",
+          ],
           template: '<div data-testid="model-selector-stub" />',
         }),
         AiChatV2ToolApprovalModeSelector: true,
@@ -929,9 +939,9 @@ describe("AiChatCenterSurface spoken-response save failure (FR-VOICE-004)", () =
     const wrapper = mountSurface();
     await flushPromises();
 
-    expect(
-      wrapper.find('[data-testid="voice-save-error"]').exists()
-    ).toBe(false);
+    expect(wrapper.find('[data-testid="voice-save-error"]').exists()).toBe(
+      false
+    );
 
     // Toggle spoken response on (settings default to disabled, runtime ready).
     wrapper
@@ -967,17 +977,19 @@ describe("AiChatCenterSurface spoken-response save failure (FR-VOICE-004)", () =
     await flushPromises();
     expect(setVoiceSettingsMock).toHaveBeenCalledTimes(1);
     // A successful retry clears the recoverable failure.
-    expect(
-      wrapper.find('[data-testid="voice-save-error"]').exists()
-    ).toBe(false);
+    expect(wrapper.find('[data-testid="voice-save-error"]').exists()).toBe(
+      false
+    );
   });
 });
-
 
 describe("AiChatCenterSurface model availability states (PRD §13.4)", () => {
   it("distinguishes bounded loading from the actionable no-model state", async () => {
     // A settled catalog response with an EMPTY list must not spin forever.
-    getOpenAIChatModelsMock.mockResolvedValue({ data: [], default_model: undefined });
+    getOpenAIChatModelsMock.mockResolvedValue({
+      data: [],
+      default_model: undefined,
+    });
     const wrapper = mountSurface();
     await flushPromises();
 
@@ -987,8 +999,10 @@ describe("AiChatCenterSurface model availability states (PRD §13.4)", () => {
   });
 
   it("keeps loading true only until the catalog settles with models", async () => {
-    let releaseModels: (value: { data: unknown[]; default_model?: string }) => void =
-      () => undefined;
+    let releaseModels: (value: {
+      data: unknown[];
+      default_model?: string;
+    }) => void = () => undefined;
     getOpenAIChatModelsMock.mockReturnValue(
       new Promise((resolve) => {
         releaseModels = resolve;

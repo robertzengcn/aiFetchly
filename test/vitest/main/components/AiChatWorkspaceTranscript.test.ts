@@ -396,6 +396,94 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(plain?.props("group").defaultExpanded).toBe(false);
   });
 
+  it("§18: outbound batch result paired in a group surfaces the interactive review card", async () => {
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "Drafting the batch."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-outbound",
+        toolName: "draft_outbound_email_batch",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-outbound",
+        toolName: "draft_outbound_email_batch",
+        toolResult: {
+          batchId: 42,
+          mode: "review_first",
+          draftCount: 1,
+          batchStatus: "draft_ready",
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The paired execution group still renders…
+    const groups = wrapper.findAllComponents({ name: "AiChatExecutionGroup" });
+    expect(groups.length).toBeGreaterThanOrEqual(1);
+    // …and the reviewable batch surfaces its authorization card (AD-003):
+    // the Review action is visible with the batch id, not hidden inside the
+    // collapsed receipt.
+    const review = wrapper.findAll('[data-testid="outbound-batch-review"]');
+    expect(review.length).toBe(1);
+    expect(review[0].attributes("data-batch-id")).toBe("42");
+  });
+
+  it("§18: unpaired outbound batch result renders the review card, not a receipt", async () => {
+    const messages = [
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-outbound-solo",
+        toolName: "draft_outbound_email_batch",
+        toolResult: {
+          batchId: 7,
+          mode: "review_first",
+          draftCount: 2,
+          batchStatus: "draft_ready",
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const review = wrapper.findAll('[data-testid="outbound-batch-review"]');
+    expect(review.length).toBe(1);
+    expect(review[0].attributes("data-batch-id")).toBe("7");
+  });
+
+  it("§18: a terminal outbound batch (delivery_unknown) renders the card without the review action", async () => {
+    const messages = [
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-outbound-done",
+        toolName: "draft_outbound_email_batch",
+        toolResult: {
+          batchId: 9,
+          mode: "review_first",
+          draftCount: 1,
+          batchStatus: "delivery_unknown",
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Terminal batches hide the Review action (card shows the outcome
+    // summary instead) — the interactive card surface itself still renders.
+    expect(
+      wrapper.findAll('[data-testid="outbound-batch-review"]').length
+    ).toBe(0);
+    expect(
+      wrapper.findAllComponents({ name: "OutboundEmailBatchCard" }).length
+    ).toBe(1);
+  });
+
   it("FR-059: submitError prop surfaces in the question flow", async () => {
     const pendingQuestion = {
       questionId: "q1",

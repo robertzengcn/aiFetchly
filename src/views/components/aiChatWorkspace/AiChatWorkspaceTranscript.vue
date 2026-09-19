@@ -66,6 +66,14 @@
         @deny-permission="(msg) => emit('deny-permission', msg)"
       />
 
+      <!-- Outbound-email batch (§18): the review/approve/send card IS the
+           authorization surface (AD-003) — interactive, never a collapsed
+           execution receipt. -->
+      <AiChatOutboundBatchReviewCard
+        v-else-if="item.kind === 'outbound-batch'"
+        :message="item.message"
+      />
+
       <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
       <AiChatPlanDecisionCard
         v-else-if="item.kind === 'plan-decision'"
@@ -102,6 +110,7 @@ import type {
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
 import AiChatV2PendingMessage from "@/views/components/aiChatV2/AiChatV2PendingMessage.vue";
 import AiChatExecutionGroup from "@/views/components/aiChatWorkspace/AiChatExecutionGroup.vue";
+import AiChatOutboundBatchReviewCard from "@/views/components/aiChatWorkspace/AiChatOutboundBatchReviewCard.vue";
 import AiChatExecutionRow from "@/views/components/aiChatWorkspace/AiChatExecutionRow.vue";
 import AiChatPlanDecisionCard from "@/views/components/aiChatWorkspace/AiChatPlanDecisionCard.vue";
 import AiChatPlanReceipt from "@/views/components/aiChatWorkspace/AiChatPlanReceipt.vue";
@@ -120,6 +129,7 @@ import type {
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
 import type { MessageType } from "@/entityTypes/commonType";
+import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
 
 const props = defineProps<{
   messages: readonly ChatV2MessageView[];
@@ -174,7 +184,8 @@ type ProjectedItem =
   | { kind: "plan-decision"; key: string; plan: PlanPresentationView }
   | { kind: "plan-receipt"; key: string; plan: PlanPresentationView }
   | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView }
-  | { kind: "permission-prompt"; key: string; message: ChatV2MessageView };
+  | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
+  | { kind: "outbound-batch"; key: string; message: ChatV2MessageView };
 
 /**
  * Project the raw message list into the workspace transcript:
@@ -233,6 +244,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           key: group.key,
           group,
         });
+        // The anchor tool message itself can carry an interactive surface
+        // (a solo batch result owns a legacy group) — check it too.
+        if (isOutboundBatchResultMessage(msg)) {
+          result.push({
+            kind: "outbound-batch",
+            key: `outbound-batch-${msg.id}`,
+            message: msg,
+          });
+        }
         // Skip all consecutive tool messages.
         i += 1;
         while (
@@ -247,6 +267,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
               message: messages[i],
             });
           }
+          // The outbound batch card is the review/approve/send authorization
+          // surface (§18, AD-003) — surface it beside the group, not inside
+          // the collapsed receipt.
+          if (isOutboundBatchResultMessage(messages[i])) {
+            result.push({
+              kind: "outbound-batch",
+              key: `outbound-batch-${messages[i].id}`,
+              message: messages[i],
+            });
+          }
           i += 1;
         }
       } else if (isPermissionPrompt(msg)) {
@@ -255,6 +285,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         result.push({
           kind: "permission-prompt",
           key: `permission-${msg.id}`,
+          message: msg,
+        });
+        i += 1;
+      } else if (isOutboundBatchResultMessage(msg)) {
+        // Unpaired outbound batch result: same rule — the review card IS the
+        // authorization surface, never a collapsed receipt.
+        result.push({
+          kind: "outbound-batch",
+          key: `outbound-batch-${msg.id}`,
           message: msg,
         });
         i += 1;

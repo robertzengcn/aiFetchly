@@ -471,6 +471,10 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
 import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
+import {
+  deriveOutboundBatchCardModel,
+  type OutboundBatchCardModel,
+} from "@/views/components/outboundEmail/outboundBatchCardModel";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -741,46 +745,11 @@ const toolResult = computed<Record<string, unknown>>(
 // Outbound-email batch summary (§18). When the draft_outbound_email_batch tool
 // succeeds, its returned batch_id surfaces a review card inline in the chat
 // result so the user can review/approve/send or see the direct-send outcome.
+// The derivation is shared with the chat-first workspace transcript.
 // ---------------------------------------------------------------------------
-interface OutboundBatchCardModel {
-  readonly batchId: number;
-  readonly mode: string;
-  readonly recipientCount: number;
-  readonly batchStatus: string;
-  readonly reasonCode: string;
-  readonly sentCount: number;
-}
-
-const outboundBatch = computed<OutboundBatchCardModel | null>(() => {
-  if (String(props.message.metadata?.toolName || "") !== "draft_outbound_email_batch") {
-    return null;
-  }
-  const batchId = toolResult.value.batchId;
-  if (typeof batchId !== "number") return null;
-  return {
-    batchId,
-    mode:
-      typeof toolResult.value.mode === "string"
-        ? (toolResult.value.mode as string)
-        : "review_first",
-    recipientCount:
-      typeof toolResult.value.draftCount === "number"
-        ? (toolResult.value.draftCount as number)
-        : 0,
-    batchStatus:
-      typeof toolResult.value.batchStatus === "string"
-        ? (toolResult.value.batchStatus as string)
-        : "draft_ready",
-    reasonCode:
-      typeof toolResult.value.reasonCode === "string"
-        ? (toolResult.value.reasonCode as string)
-        : "explicit_review_instruction",
-    sentCount:
-      typeof toolResult.value.sentCount === "number"
-        ? (toolResult.value.sentCount as number)
-        : 0,
-  };
-});
+const outboundBatch = computed<OutboundBatchCardModel | null>(() =>
+  deriveOutboundBatchCardModel(props.message)
+);
 
 const reviewOutboundBatchId = ref<number | null>(null);
 const reviewDialogOpen = ref<boolean>(true);
