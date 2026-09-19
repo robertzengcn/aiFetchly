@@ -77,6 +77,16 @@ vi.mock("@/main-process/communication/contactExtraction-ipc", () => ({
 vi.mock("@/modules/tokenRefresh", () => ({
   TokenRefreshService: { stopAutoRefresh: tokenRefreshStop },
 }));
+const searchReconcile = vi.fn(
+  async (_reason: string) => [11, 12]
+);
+vi.mock("@/modules/SearchModule", () => ({
+  SearchModule: class {
+    reconcileInterruptedTasks(reason: string): Promise<number[]> {
+      return searchReconcile(reason);
+    }
+  },
+}));
 
 function makeDeps(
   overrides: Partial<BackgroundShutdownDeps> = {}
@@ -191,6 +201,15 @@ describe("createShutdownParticipants — owner mapping", () => {
     expect(deps.clearPendingDesktopAuth).toHaveBeenCalledTimes(1);
     expect(deps.stopDiagnosticsRetention).toHaveBeenCalledTimes(1);
     expect(deps.stopLogCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("search-scraper maps running rows to interrupted at stop time (FR-06/AC-09)", async () => {
+    const participants = createShutdownParticipants(makeDeps());
+    const search = participants.find((p) => p.id === "search-scraper")!;
+    await search.stop(contextOf(10_000));
+    expect(searchReconcile).toHaveBeenCalledWith(
+      "Application exited while the search task was running"
+    );
   });
 
   it("a throwing owner rejects its participant (coordinator isolates it)", async () => {

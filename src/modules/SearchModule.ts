@@ -897,6 +897,36 @@ export class SearchModule extends BaseModule {
     await this.taskdbModel.updateTaskStatus(taskId, status);
   }
 
+  /**
+   * FR-06/AC-09 at-exit reconciliation: map every RUNNING search task to the
+   * existing Error state with an interruption note, and clear its stored PID.
+   * Called by the lifecycle participant BEFORE the process is force-killed —
+   * the module's own child-exit handler races app termination and cannot be
+   * relied on for the DB write. Completed rows are untouched; retry stays
+   * user-initiated (no subsystem auto-restarts an Error task).
+   */
+  public async reconcileInterruptedTasks(reason: string): Promise<number[]> {
+    const { SearchController } = await import("@/controller/SearchController");
+    const taskIds = SearchController.getInstance().getActiveTaskIds();
+    for (const taskId of taskIds) {
+      try {
+        await this.updateTaskStatus(taskId, SearchTaskStatus.Error);
+        await this.updateTaskPID(taskId, null);
+        await this.taskdbModel.updateRuntimeLog(
+          taskId,
+          `[${new Date().toISOString()}] Task interrupted: ${reason}`
+        );
+        SearchController.getInstance().unregisterProcess(taskId);
+      } catch (err) {
+        log.error(
+          `Failed to reconcile interrupted search task ${taskId}:`,
+          err
+        );
+      }
+    }
+    return taskIds;
+  }
+
   //get search result list by task id
   public async listSearchResult(
     taskId: number,

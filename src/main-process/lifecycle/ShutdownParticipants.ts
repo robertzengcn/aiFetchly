@@ -159,6 +159,26 @@ export function createShutdownParticipants(
     finalize: async () => undefined,
   };
 
+  const searchScraper: ShutdownParticipant = {
+    id: "search-scraper",
+    freeze: () => undefined,
+    stop: async () => {
+      // FR-06/AC-09: map running search rows to the existing Error state
+      // (with interruption note) BEFORE the force kill — the module's own
+      // child-exit handler races app termination and can miss the DB write.
+      const { SearchModule } = await import("@/modules/SearchModule");
+      const interrupted = await new SearchModule().reconcileInterruptedTasks(
+        "Application exited while the search task was running"
+      );
+      if (interrupted.length > 0) {
+        log.info(
+          `[search-scraper] marked ${interrupted.length} running task(s) interrupted`
+        );
+      }
+    },
+    finalize: async () => undefined,
+  };
+
   const marketingWebSocket: ShutdownParticipant = {
     id: "marketing-websocket",
     freeze: () => undefined,
@@ -225,6 +245,7 @@ export function createShutdownParticipants(
     marketingWebSocket,
     workspaceWatch,
     yellowPages,
+    searchScraper,
     appResources,
   ];
 }

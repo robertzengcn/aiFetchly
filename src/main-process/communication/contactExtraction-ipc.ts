@@ -29,6 +29,7 @@ import {
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
 import { isSpawnAllowed } from "@/main-process/lifecycle/spawnGate";
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
 import {
   reconcileInterruptedWork,
   shutdownContactWorker,
@@ -143,29 +144,26 @@ function spawnWorker(): ChildProcess {
   // the packaged app.asar/node_modules. Electron API surface is unavailable, so
   // the worker receives auth/AI state via env vars (WORKER_AUTH_TOKEN,
   // WORKER_AI_ENABLED) and communicates over the ipc stdio channel.
-  const worker = spawn(process.execPath, [workerPath], {
-    stdio: ["pipe", "pipe", "pipe", "ipc"],
-    env: buildPackagedWorkerEnv({
-      runAsNode: true,
-      extraEnv: {
-        ELECTRON_APP_NAME: app.getName(),
-        ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-        WORKER_TYPE: "contact-extraction",
-        WORKER_AUTH_TOKEN: workerAuthToken,
-        WORKER_AI_ENABLED: workerAiEnabled,
-      },
-    }),
-  });
-
-  // Track the real process in the owned-process registry so the shutdown
-  // force-phase can verify termination even if this module's pointer is
-  // dropped first (application-exit design §2/§6). The registry attaches
-  // its own exit listener — observation is automatic.
-  getOwnedProcessRegistry().register({
-    ownerId: "contact-extraction",
-    pid: worker.pid ?? undefined,
-    handle: worker,
-  });
+  // AC-05: the LAZY spawn path gates too — IPC can start an extraction after
+  // Exit begins unless refused here. spawnOwned = gate + launch + register
+  // (registry attaches its own exit listener — observation is automatic).
+  const worker = spawnOwned(
+    "contact-extraction",
+    () =>
+      spawn(process.execPath, [workerPath], {
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        env: buildPackagedWorkerEnv({
+          runAsNode: true,
+          extraEnv: {
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+            WORKER_TYPE: "contact-extraction",
+            WORKER_AUTH_TOKEN: workerAuthToken,
+            WORKER_AI_ENABLED: workerAiEnabled,
+          },
+        }),
+      }) as ChildProcess
+  );
 
   // Handle worker output
   worker.stdout?.on("data", (data) => {

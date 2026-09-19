@@ -40,10 +40,12 @@ of the recorded PID with start-time identity (AC-04/AC-14).
 | 21 | `google-proxy-check` | src/controller/proxy-controller.ts | utilityProcess.fork | Per-request check |
 | 22 | `mcp-server` | src/modules/MCPClient.ts | child_process.spawn (stdio) | Owned stdio servers; external transport connections are never registered |
 | 23 | `shell-tool` | src/service/ShellToolService.ts | child_process.spawn (detached) | Existing tree-kill retained; registry adds verified backstop |
-| 24 | `npm-plugin-fetch` / `npm-plugin-extract` | src/service/pluginSources/NpmPluginFetcher.ts | spawn (npm pack / tar) | Long-running install path |
+| 24 | `npm-plugin-fetch` / `npm-plugin-extract` | src/service/pluginSources/NpmPluginFetcher.ts | spawn (npm pack / tar) | Long-running install path; see #29 for the gate note |
 | 25 | `git-plugin-fetch` | src/service/pluginSources/GitPluginFetcher.ts | spawn (git) | Via injectable defaultSpawn |
 | 26 | `git-marketplace-fetch` | src/service/pluginMarketplaces/GitMarketplaceFetcher.ts | spawn (git) | Via injectable defaultSpawn |
 | 27 | `doc-skill-script` | src/service/DocSkillScriptRunnerService.ts | child_process.spawn | Skill scripts |
+| 28 | `hooks-command` | src/service/hooks/executors/CommandHookExecutor.ts | child_process.spawn | User hook commands; refused with a structured failure result while quitting (covered by the wiring guard) |
+| 29 | `npm-plugin-fetch` / `npm-plugin-extract` (gated) | src/service/pluginSources/NpmPluginFetcher.ts | spawn (npm pack / tar) | Split row: both transports gated AND registered |
 
 ## Excluded launch sites (documented + rationale)
 

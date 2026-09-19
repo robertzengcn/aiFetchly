@@ -740,6 +740,11 @@ export class SearchController {
    * Unregister a process for a task
    * @param taskId The task ID
    */
+  /** Task ids with a live registered worker (lifecycle reconciliation). */
+  public getActiveTaskIds(): number[] {
+    return Array.from(this.processMap.keys());
+  }
+
   public unregisterProcess(taskId: number): void {
     this.processMap.delete(taskId);
   }

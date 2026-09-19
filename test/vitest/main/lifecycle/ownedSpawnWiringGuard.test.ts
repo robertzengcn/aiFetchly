@@ -60,7 +60,6 @@ const EXCLUDED_FILES = [
   "src/modules/browserManager.ts", // worker-side puppeteer (inventory)
   "src/modules/browserManagerExample.ts",
   "src/service/ShellToolService.ts", // gated inside runShell (spawn hit is the taskkill helper)
-  "src/main-process/communication/contactExtraction-ipc.ts", // gated at spawnWorker; taskkill-free
   "src/background.ts", // E2E-only fixture hook (env-gated, quitting-gated)
   "src/service/ToolJobRegistry.ts", // `spawn` is an injected callback, not child_process
 ].map((p) => path.resolve(p));
