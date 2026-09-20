@@ -15,9 +15,13 @@ vi.mock("electron", () => ({
 
 const tokenStore = vi.hoisted(() => new Map<string, string>());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: (key: string) => tokenStore.get(key) ?? "",
-  })),
+  };
+    }
+  },
 }));
 
 const mockAiChatApi = vi.hoisted(() => vi.fn());

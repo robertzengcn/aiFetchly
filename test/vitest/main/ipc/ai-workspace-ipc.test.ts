@@ -36,13 +36,17 @@ vi.mock("@/service/dialogs/NativeDialogServiceProvider", () => ({
 }));
 
 vi.mock("@/modules/WorkspaceModule", () => ({
-  WorkspaceModule: vi.fn().mockImplementation(() => ({
+  WorkspaceModule: class {
+    constructor() {
+      return {
     setWorkspace: vi.fn(),
     getActiveWorkspace: vi.fn(),
     approveWorkspace: vi.fn(),
     revokeWorkspace: vi.fn(),
     listWorkspaces: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";

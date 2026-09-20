@@ -22,7 +22,11 @@ vi.mock("@/modules/Logger", () => ({
 
 const tokenGetValue = vi.fn(() => "false");
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: tokenGetValue })),
+  Token: class {
+    constructor() {
+      return { getValue: tokenGetValue };
+    }
+  },
 }));
 
 import {

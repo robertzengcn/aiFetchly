@@ -17,19 +17,27 @@ const aiEnabled = vi.hoisted(() => ({ value: "true" }));
 
 vi.mock("electron", () => ({ ipcMain: mockIpcMain }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn(() => aiEnabled.value),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/modules/AIChatGoalModule", () => ({
-  AIChatGoalModule: vi.fn().mockImplementation(() => ({
+  AIChatGoalModule: class {
+    constructor() {
+      return {
     createDraftGoal: mockCreateDraftGoal,
     getActiveGoal: mockGetActiveGoal,
     getGoal: mockGetGoal,
     createRun: mockCreateRun,
     transitionGoalStatus: mockTransitionGoalStatus,
     cancelActiveRun: mockCancelActiveRun,
-  })),
+  };
+    }
+  },
 }));
 
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";

@@ -53,16 +53,24 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
-    resolve: resolverMocks.resolve,
-  })),
+  WorkspaceResolver: class {
+    constructor() {
+      return {
+        resolve: resolverMocks.resolve,
+      };
+    }
+  },
 }));
 
 vi.mock("@/modules/WorkspaceModule", () => ({
-  WorkspaceModule: vi.fn().mockImplementation(() => ({
-    approveWorkspace: workspaceModuleMocks.approveWorkspace,
-    revokeWorkspace: workspaceModuleMocks.revokeWorkspace,
-  })),
+  WorkspaceModule: class {
+    constructor() {
+      return {
+        approveWorkspace: workspaceModuleMocks.approveWorkspace,
+        revokeWorkspace: workspaceModuleMocks.revokeWorkspace,
+      };
+    }
+  },
 }));
 
 // --- Imports (after mocks) --------------------------------------------------
@@ -73,7 +81,6 @@ import {
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
   AIFETCHLY_WORKSPACE_TRUST_PREVIEW,
   AIFETCHLY_WORKSPACE_TRUST_SET,
-  AIFETCHLY_CONFIG_CHANGED,
 } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManager";
@@ -159,15 +166,11 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
     // The renderer attempts to override the workspaceRoot. The zod schema
     // only accepts { conversationId, workspaceId } — workspaceRoot is
     // schema-stripped, and the manager MUST receive the resolver's value.
-    await mockIpcMain.callHandler(
-      AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
-      {},
-      {
-        conversationId: "conv-1",
-        workspaceId: "42",
-        workspaceRoot: "/attacker/controlled/path",
-      } as unknown as { conversationId: string }
-    );
+    await mockIpcMain.callHandler(AIFETCHLY_WORKSPACE_WATCH_ACQUIRE, {}, {
+      conversationId: "conv-1",
+      workspaceId: "42",
+      workspaceRoot: "/attacker/controlled/path",
+    } as unknown as { conversationId: string });
     const call = managerMocks.acquire.mock.calls[0][0];
     expect(call.workspaceRoot).toBe("/resolved/path");
     expect(call.workspaceRoot).not.toBe("/attacker/controlled/path");

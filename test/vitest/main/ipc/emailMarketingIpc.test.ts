@@ -30,7 +30,9 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/controller/emailMarketingController", () => ({
-  EmailMarketingController: vi.fn().mockImplementation(() => ({
+  EmailMarketingController: class {
+    constructor() {
+      return {
     exportEmailServices: mockExportEmailServices,
     importEmailServices: mockImportEmailServices,
     getEmailServiceEntity: mockGetEmailServiceEntity,
@@ -38,7 +40,9 @@ vi.mock("@/controller/emailMarketingController", () => ({
     validateEmailServiceForSave: mockValidateEmailServiceForSave,
     updateEmailService: mockUpdateEmailService,
     createEmailService: mockCreateEmailService,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/dialogs/NativeDialogServiceProvider", () => ({

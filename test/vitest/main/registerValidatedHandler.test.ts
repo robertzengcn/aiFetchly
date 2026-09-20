@@ -28,11 +28,15 @@ vi.mock("@/modules/Logger", () => ({
 }));
 
 // Mock Token so AI-enabled check is deterministic.
-const tokenGetValue = vi.fn((key: string) => "false");
+const tokenGetValue = vi.fn(() => "false");
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: tokenGetValue,
-  })),
+  Token: class {
+    constructor() {
+      return {
+        getValue: tokenGetValue,
+      };
+    }
+  },
 }));
 
 // Import AFTER mocks are in place.

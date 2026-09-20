@@ -4,35 +4,59 @@ const mockUpdateStatus = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIsConnectionOpen = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn(() => "/tmp/schedule-manager-shutdown"),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/ScheduleTaskModule", () => ({
-  ScheduleTaskModule: vi.fn().mockImplementation(() => ({})),
+  ScheduleTaskModule: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 
 vi.mock("@/modules/ScheduleExecutionLogModule", () => ({
-  ScheduleExecutionLogModule: vi.fn().mockImplementation(() => ({})),
+  ScheduleExecutionLogModule: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 
 vi.mock("@/modules/ScheduleDependencyModule", () => ({
-  ScheduleDependencyModule: vi.fn().mockImplementation(() => ({})),
+  ScheduleDependencyModule: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 
 vi.mock("@/modules/TaskExecutorService", () => ({
-  TaskExecutorService: vi.fn().mockImplementation(() => ({})),
+  TaskExecutorService: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 
 vi.mock("@/model/SchedulerStatus.model", () => ({
   isDatabaseConnectionClosedError: (error: unknown): boolean =>
     error instanceof Error &&
     error.message === "The database connection is not open",
-  SchedulerStatusModel: vi.fn().mockImplementation(() => ({
+  SchedulerStatusModel: class {
+    constructor() {
+      return {
     isConnectionOpen: mockIsConnectionOpen,
     updateStatus: mockUpdateStatus,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("cron", () => ({

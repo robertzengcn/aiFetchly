@@ -74,7 +74,9 @@ vi.mock("@/service/AIChatConversationUpdateBroadcaster", () => ({
 
 // Stub remaining modules that the IPC file imports at load time.
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: class {
+    constructor() {
+      return {
     getConversations: vi.fn().mockResolvedValue([]),
     createConversationIfNeeded: vi.fn().mockReturnValue("v2-test"),
     saveUserMessage: vi.fn().mockResolvedValue({}),
@@ -84,13 +86,19 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     getDefaultSystemPrompt: vi.fn().mockReturnValue("sys"),
     clearConversation: vi.fn().mockResolvedValue(0),
     clearAllV2History: vi.fn().mockResolvedValue(0),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
+  AIChatPlanModule: class {
+    constructor() {
+      return {
     getPlanState: vi.fn().mockResolvedValue(null),
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
-  })),
+  };
+    }
+  },
 }));
 const mockCompleteChat = vi.hoisted(() => vi.fn());
 vi.mock("@/api/aiChatApi", async (importOriginal) => {

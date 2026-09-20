@@ -28,26 +28,38 @@ const {
 } = spies;
 
 vi.mock("@/service/AIUserMemoryService", () => ({
-  AIUserMemoryService: vi.fn().mockImplementation(() => ({
+  AIUserMemoryService: class {
+    constructor() {
+      return {
     createManualMemory: spies.mockCreate,
     list: spies.mockList,
     update: spies.mockUpdate,
     archive: spies.mockArchive,
     delete: spies.mockDelete,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/AIAutoDreamService", () => ({
-  AIAutoDreamService: vi.fn().mockImplementation(() => ({
+  AIAutoDreamService: class {
+    constructor() {
+      return {
     runNow: spies.mockRunNow,
     getStatus: spies.mockGetStatus,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
+  AiChatApi: class {
+    constructor() {
+      return {
     openAIChatCompletion: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 const handlers: Record<string, (e: unknown, data: string) => Promise<unknown>> =

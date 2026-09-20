@@ -16,16 +16,22 @@ const archiveMemory = vi.fn();
 const listActive = vi.fn();
 
 vi.mock("@/modules/AIWorkspaceMemoryModule", () => ({
-  AIWorkspaceMemoryModule: vi.fn().mockImplementation(() => ({
+  AIWorkspaceMemoryModule: class {
+    constructor() {
+      return {
     createMemory,
     updateMemory,
     archiveMemory,
     listActiveForRetrieval: listActive,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/AIWorkspaceMemoryConsolidationRunModule", () => ({
-  AIWorkspaceMemoryConsolidationRunModule: vi.fn().mockImplementation(() => ({
+  AIWorkspaceMemoryConsolidationRunModule: class {
+    constructor() {
+      return {
     startRun,
     completeRun,
     failRun,
@@ -33,14 +39,20 @@ vi.mock("@/modules/AIWorkspaceMemoryConsolidationRunModule", () => ({
     getLatestSuccessfulRun: getLatest,
     getRunningRun: getRunning,
     recoverStaleRunningRuns: recoverStale,
-  })),
+  };
+    }
+  },
 }));
 
 // Mock the collector: `collect` is the method; `groupByWorkspace` is the pure
 // helper the service imports. Replicate the real grouping so packets with no
 // workspace are excluded (the workspace-isolation first line of defense).
 vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
-  AIAutoDreamSourceCollector: vi.fn().mockImplementation(() => ({ collect })),
+  AIAutoDreamSourceCollector: class {
+    constructor() {
+      return { collect };
+    }
+  },
   groupByWorkspace: (packets: ReadonlyArray<{ workspace?: { workspaceKey: string } }>) => {
     const m = new Map<string, unknown[]>();
     for (const p of packets) {
@@ -55,7 +67,11 @@ vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: class {
+    constructor() {
+      return { getValue: vi.fn() };
+    }
+  },
 }));
 
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";

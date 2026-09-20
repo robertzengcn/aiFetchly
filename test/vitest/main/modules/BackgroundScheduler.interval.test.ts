@@ -38,44 +38,72 @@ vi.mock("@/modules/ScheduleManager", () => ({
   },
 }));
 vi.mock("@/modules/ScheduleTaskModule", () => ({
-  ScheduleTaskModule: vi.fn().mockImplementation(() => ({
+  ScheduleTaskModule: class {
+    constructor() {
+      return {
     getSchedulesReadyToExecute: vi.fn(async () => []),
     getSchedulesByTriggerType: vi.fn(async () => []),
     getScheduleById: vi.fn(async () => null),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/model/ScheduleExecutionLog.model", () => ({
-  ScheduleExecutionLogModel: vi.fn().mockImplementation(() => ({
+  ScheduleExecutionLogModel: class {
+    constructor() {
+      return {
     cleanupOldExecutions: mockCleanupOldExecutions,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/modules/TaskExecutorService", () => ({
-  TaskExecutorService: vi.fn().mockImplementation(() => ({})),
+  TaskExecutorService: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 vi.mock("@/model/ScheduleTask.model", () => ({
-  ScheduleTaskModel: vi.fn().mockImplementation(() => ({
+  ScheduleTaskModel: class {
+    constructor() {
+      return {
     findDueIntervalSchedules: mockFindDue,
     claimIntervalOccurrence: mockClaim,
     getSchedulesByTriggerType: mockGetByTrigger,
     pauseWithReason: mockPauseWithReason,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/model/AiMessageTaskRun.model", () => ({
-  AiMessageTaskRunModel: vi.fn().mockImplementation(() => ({
+  AiMessageTaskRunModel: class {
+    constructor() {
+      return {
     markInterruptedRuns: mockMarkInterrupted,
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/service/ScheduledAiMessageRunner", () => ({
-  ScheduledAiMessageRunner: vi.fn().mockImplementation(() => ({
+  ScheduledAiMessageRunner: class {
+    constructor() {
+      return {
     runChatScheduledLoop: mockRunChatLoop,
-  })),
+  };
+    }
+  },
 }));
 
 // Token.getValue(USERSDBPATH) drives refreshDatabaseForUserPath(). Hoist the
 // resolver so each test can pin the "current" user path.
 const mockGetValue = vi.hoisted(() => vi.fn());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: mockGetValue })),
+  Token: class {
+    constructor() {
+      return { getValue: mockGetValue };
+    }
+  },
 }));
 
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";

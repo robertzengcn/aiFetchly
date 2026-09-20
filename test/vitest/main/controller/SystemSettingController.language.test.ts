@@ -13,25 +13,37 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/modules/SystemSettingGroupModule", () => ({
-  SystemSettingGroupModule: vi.fn().mockImplementation(() => ({
+  SystemSettingGroupModule: class {
+    constructor() {
+      return {
     ensureConnection: mocks.groupEnsureConnection,
     listall: mocks.listall,
     tableInit: mocks.tableInit,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/SystemSettingModule", () => ({
-  SystemSettingModule: vi.fn().mockImplementation(() => ({
+  SystemSettingModule: class {
+    constructor() {
+      return {
     ensureConnection: mocks.settingEnsureConnection,
     updateSystemSetting: mocks.updateSystemSetting,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/SystemSettingOptionModule", () => ({
-  SystemSettingOptionModule: vi.fn().mockImplementation(() => ({
+  SystemSettingOptionModule: class {
+    constructor() {
+      return {
     ensureConnection: mocks.optionEnsureConnection,
     findOptionBySetting: mocks.findOptionBySetting,
-  })),
+  };
+    }
+  },
 }));
 
 import { SystemSettingController } from "@/controller/SystemSettingController";

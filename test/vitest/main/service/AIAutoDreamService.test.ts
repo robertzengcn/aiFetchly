@@ -16,16 +16,22 @@ const mockArchiveMemory = vi.fn();
 const mockListMemories = vi.fn();
 
 vi.mock("@/modules/AIUserMemoryModule", () => ({
-  AIUserMemoryModule: vi.fn().mockImplementation(() => ({
+  AIUserMemoryModule: class {
+    constructor() {
+      return {
     createMemory: mockCreateMemory,
     updateMemory: mockUpdateMemory,
     archiveMemory: mockArchiveMemory,
     listMemories: mockListMemories,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/AIMemoryConsolidationRunModule", () => ({
-  AIMemoryConsolidationRunModule: vi.fn().mockImplementation(() => ({
+  AIMemoryConsolidationRunModule: class {
+    constructor() {
+      return {
     startRun: mockStartRun,
     completeRun: mockCompleteRun,
     failRun: mockFailRun,
@@ -33,17 +39,27 @@ vi.mock("@/modules/AIMemoryConsolidationRunModule", () => ({
     getLatestSuccessfulRun: mockGetLatest,
     getRunningRun: mockGetRunning,
     recoverStaleRunningRuns: mockRecoverStale,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
-  AIAutoDreamSourceCollector: vi.fn().mockImplementation(() => ({
+  AIAutoDreamSourceCollector: class {
+    constructor() {
+      return {
     collect: mockCollect,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: class {
+    constructor() {
+      return { getValue: vi.fn() };
+    }
+  },
 }));
 
 function makeService(opts: {

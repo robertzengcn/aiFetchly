@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
+  User: class {
+    constructor() {
+      return {
     Signout: mockUserSignout,
-  })),
+  };
+    }
+  },
 }));
 
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";

@@ -35,10 +35,14 @@ vi.mock("@/modules/Logger", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn(() => ""),
     setValue: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/tokenRefresh", () => ({
@@ -67,7 +71,11 @@ vi.mock("@/controller/UserController", () => {
 });
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({ Signout: vi.fn() })),
+  User: class {
+    constructor() {
+      return { Signout: vi.fn() };
+    }
+  },
 }));
 
 vi.mock("@/modules/pendingDesktopAuth", () => ({

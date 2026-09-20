@@ -31,21 +31,29 @@ const {
 } = spies;
 
 vi.mock("@/service/AIWorkspaceMemoryService", () => ({
-  AIWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+  AIWorkspaceMemoryService: class {
+    constructor() {
+      return {
     createManualMemory: spies.mockCreate,
     list: spies.mockList,
     update: spies.mockUpdate,
     archive: spies.mockArchive,
     delete: spies.mockDelete,
-  })),
+  };
+    }
+  },
 }));
 
 // Controllable manual-memory toggle (default-on; set "false" to disable writes).
 const mockGetSettingValue = vi.fn();
 vi.mock("@/modules/SystemSettingModule", () => ({
-  SystemSettingModule: vi.fn().mockImplementation(() => ({
+  SystemSettingModule: class {
+    constructor() {
+      return {
     getSettingValue: mockGetSettingValue,
-  })),
+  };
+    }
+  },
 }));
 
 // Mock the shared factory so run-auto-dream tests assert the handler wiring

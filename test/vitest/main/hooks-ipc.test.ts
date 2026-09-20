@@ -44,20 +44,33 @@ const fakeAudit = {
 };
 
 vi.mock("@/modules/HookModule", () => ({
-  HookModule: vi.fn(() => fakeHook),
+  // Vitest 4: vi.fn() is not constructable; production does `new HookModule()`.
+  HookModule: class {
+    constructor() {
+      return fakeHook;
+    }
+  },
 }));
 
 vi.mock("@/modules/HookAuditModule", () => ({
-  HookAuditModule: vi.fn(() => fakeAudit),
+  HookAuditModule: class {
+    constructor() {
+      return fakeAudit;
+    }
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn((key: string) =>
-      key === "user_hooks_enabled" ? "true" : ""
-    ),
-    setValue: vi.fn(),
-  })),
+  Token: class {
+    constructor() {
+      return {
+        getValue: vi.fn((key: string) =>
+          key === "user_hooks_enabled" ? "true" : ""
+        ),
+        setValue: vi.fn(),
+      };
+    }
+  },
 }));
 
 vi.mock("@/service/hooks/HookRegistry", () => ({

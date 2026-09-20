@@ -18,7 +18,9 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
 // connection. Mirrors the Token-mock isolation in ai-chat-v2-ipc.test.ts.
 const mockTokenStore = vi.hoisted(() => new Map<string, string>());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi
       .fn()
       .mockImplementation((key: string) => mockTokenStore.get(key) ?? ""),
@@ -36,7 +38,9 @@ vi.mock("@/modules/token", () => ({
         (key: string) =>
           mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
       ),
-  })),
+  };
+    }
+  },
 }));
 
 /**

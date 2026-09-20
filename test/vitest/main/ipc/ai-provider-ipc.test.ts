@@ -4,7 +4,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const store = new Map<string, string>();
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: (k: string) => store.get(k) ?? "",
     setValue: (k: string, v: string) => {
       store.set(k, v);
@@ -13,7 +15,9 @@ vi.mock("@/modules/token", () => ({
       store.delete(k);
     },
     hasValue: (k: string) => store.has(k) && (store.get(k)?.length ?? 0) > 0,
-  })),
+  };
+    }
+  },
 }));
 
 // Capture ipcMain.handle registrations so tests can invoke them directly.

@@ -17,12 +17,16 @@ import {
 // Token store so AiChatVoiceModule reads/writes settings without the DB.
 const tokenStore = vi.hoisted(() => new Map<string, string>());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: (key: string) => tokenStore.get(key) ?? "",
     setValue: (key: string, val: string) => {
       tokenStore.set(key, val);
     },
-  })),
+  };
+    }
+  },
 }));
 
 // Stub the worker client so no utility process is forked during IPC tests.
