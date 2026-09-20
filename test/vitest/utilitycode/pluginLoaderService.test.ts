@@ -26,25 +26,23 @@ import { getPluginInstallRoot } from "@/service/pluginPaths";
 // the SqliteDb singleton onto it. Mirrors EmailReplyRecovery.model.test.ts.
 const mockTokenStore = vi.hoisted(() => new Map<string, string>());
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi
-      .fn()
-      .mockImplementation((key: string) => mockTokenStore.get(key) ?? ""),
-    setValue: vi
-      .fn()
-      .mockImplementation((key: string, value: string) =>
-        mockTokenStore.set(key, value)
-      ),
-    deleteValue: vi
-      .fn()
-      .mockImplementation((key: string) => mockTokenStore.delete(key)),
-    hasValue: vi
-      .fn()
-      .mockImplementation(
-        (key: string) =>
-          mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
-      ),
-  })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue(key: string): string {
+      return mockTokenStore.get(key) ?? "";
+    }
+    setValue(key: string, value: string): void {
+      mockTokenStore.set(key, value);
+    }
+    deleteValue(key: string): void {
+      mockTokenStore.delete(key);
+    }
+    hasValue(key: string): boolean {
+      return (
+        mockTokenStore.has(key) && (mockTokenStore.get(key)?.length ?? 0) > 0
+      );
+    }
+  },
 }));
 
 function buildPluginZip(zipPath: string, files: Record<string, string>): void {

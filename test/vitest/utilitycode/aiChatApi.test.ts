@@ -2,8 +2,17 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
-// Import the modules to be mocked
-import { Token } from "@/modules/token";
+const mockTokenGetValue = vi.hoisted(() =>
+  vi.fn<(key: string) => string>((key: string) => {
+    if (key === "user_ai_enabled") return "true";
+    return "";
+  })
+);
+
+function defaultTokenGetValue(key: string): string {
+  if (key === "user_ai_enabled") return "true";
+  return "";
+}
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
 const mockPostJsonShared = vi.fn();
@@ -23,11 +32,16 @@ vi.mock("@/modules/lib/httpclient", () => {
     }
   }
   return {
-    HttpClient: vi.fn().mockImplementation(() => ({
-      postJson: mockPostJsonShared,
-      get: mockGetShared,
-      postStream: mockPostStreamShared,
-    })),
+    // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+    HttpClient: class {
+      constructor() {
+        return {
+          postJson: mockPostJsonShared,
+          get: mockGetShared,
+          postStream: mockPostStreamShared,
+        };
+      }
+    },
     HttpResponseError,
   };
 });
@@ -35,22 +49,21 @@ vi.mock("@/modules/lib/httpclient", () => {
 // Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
 // USER_AI_ENABLED constant from @/config/usersetting is 'user_ai_enabled'
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => {
-    const storeMock = {
-      setValue: vi.fn(),
-      getValue: vi.fn(),
-      deleteValue: vi.fn(),
-      clearStore: vi.fn(),
-    };
-    return {
-      store: storeMock as unknown as ElectronStoreService,
-      setValue: vi.fn(),
-      getValue: vi.fn((key: string) => {
-        if (key === "user_ai_enabled") return "true";
-        return "";
-      }),
-    };
-  }),
+  Token: class {
+    constructor() {
+      const storeMock = {
+        setValue: vi.fn(),
+        getValue: vi.fn(),
+        deleteValue: vi.fn(),
+        clearStore: vi.fn(),
+      };
+      return {
+        store: storeMock as unknown as ElectronStoreService,
+        setValue: vi.fn(),
+        getValue: mockTokenGetValue,
+      };
+    }
+  },
 }));
 
 describe("AiChatApi - Validation", () => {
@@ -59,6 +72,7 @@ describe("AiChatApi - Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     // Create API instance with custom validation config for testing
     api = new AiChatApi({
       maxPageSize: 10 * 1024, // 10KB for testing
@@ -526,25 +540,12 @@ describe("AiChatApi - Validation", () => {
 
   describe("ensureAIEnabled", () => {
     it("should throw when AI is not enabled (main process)", async () => {
-      // Mock AI as disabled
-      const MockedToken = vi.mocked(Token);
-      const storeMock = {
-        setValue: vi.fn(),
-        getValue: vi.fn(),
-        deleteValue: vi.fn(),
-        clearStore: vi.fn(),
-      } as unknown as ElectronStoreService;
-      MockedToken.mockImplementation(
-        () =>
-          ({
-            store: storeMock,
-            setValue: vi.fn(),
-            getValue: vi.fn((key: string) => {
-              if (key === "USER_AI_ENABLED") return "false";
-              return "";
-            }),
-          } as unknown as Token)
-      );
+      mockTokenGetValue.mockImplementation((key: string) => {
+        if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
+          return "false";
+        }
+        return "";
+      });
 
       const disabledApi = new AiChatApi();
 
@@ -560,6 +561,7 @@ describe("AiChatApi - Error Sanitization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi({
       maxErrorLength: 1000,
     });
@@ -599,7 +601,9 @@ describe("AiChatApi - Error Sanitization", () => {
     it.each(sanitizeErrorTests)(
       "$name",
       ({ input, shouldNotContain, shouldContain, maxLength }) => {
-        const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo(input);
+        const sanitized = (
+          api as unknown as { sanitizeErrorInfo: (input: string) => string }
+        ).sanitizeErrorInfo(input);
 
         if (shouldNotContain) {
           shouldNotContain.forEach((str: string) => {
@@ -621,12 +625,16 @@ describe("AiChatApi - Error Sanitization", () => {
   });
 
   it("should handle empty error info", () => {
-    const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo("");
+    const sanitized = (
+      api as unknown as { sanitizeErrorInfo: (input: string) => string }
+    ).sanitizeErrorInfo("");
     expect(sanitized).toBe("");
   });
 
   it("should handle error info with only whitespace", () => {
-    const sanitized = (api as unknown as { sanitizeErrorInfo: (input: string) => string }).sanitizeErrorInfo("   \n\t   ");
+    const sanitized = (
+      api as unknown as { sanitizeErrorInfo: (input: string) => string }
+    ).sanitizeErrorInfo("   \n\t   ");
     expect(sanitized).toBe("");
   });
 });
@@ -636,43 +644,56 @@ describe("AiChatApi - Screenshot Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi();
   });
 
   describe("validateScreenshot", () => {
     it("should accept valid PNG data URI", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
       }).not.toThrow();
     });
 
     it("should accept valid JPEG data URI", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
       }).not.toThrow();
     });
 
     it("should accept valid WebP data URI", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/webp;base64,UklGR");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("data:image/webp;base64,UklGR");
       }).not.toThrow();
     });
 
     it("should reject text data URI", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:text/plain;base64,invalid");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("data:text/plain;base64,invalid");
       }).toThrow("Invalid screenshot format");
     });
 
     it("should reject malformed data URI", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("data:image/png;");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("data:image/png;");
       }).toThrow("Invalid screenshot format");
     });
 
     it("should accept raw base64 string (for wrapping)", () => {
       expect(() => {
-        (api as unknown as { validateScreenshot: (screenshot: string) => void }).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
+        (
+          api as unknown as { validateScreenshot: (screenshot: string) => void }
+        ).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
       }).not.toThrow();
     });
   });
@@ -683,6 +704,7 @@ describe("AiChatApi - Page Size Validation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi({
       maxPageSize: 50 * 1024, // 50KB default
     });
@@ -692,31 +714,41 @@ describe("AiChatApi - Page Size Validation", () => {
     it("should accept page content within limit", () => {
       const content = "x".repeat(49 * 1024); // 49KB
       expect(() => {
-        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
+        (
+          api as unknown as { validatePageSize: (pageContent: string) => void }
+        ).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should reject page content exceeding limit", () => {
       const content = "x".repeat(51 * 1024); // 51KB
       expect(() => {
-        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
+        (
+          api as unknown as { validatePageSize: (pageContent: string) => void }
+        ).validatePageSize(content);
       }).toThrow("Page content too large");
     });
 
     it("should accept page content exactly at limit", () => {
       const content = "x".repeat(50 * 1024); // Exactly 50KB
       expect(() => {
-        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
+        (
+          api as unknown as { validatePageSize: (pageContent: string) => void }
+        ).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should include size information in error", () => {
       const content = "x".repeat(60 * 1024); // 60KB
       expect(() => {
-        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
+        (
+          api as unknown as { validatePageSize: (pageContent: string) => void }
+        ).validatePageSize(content);
       }).toThrow(/61440/);
       expect(() => {
-        (api as unknown as { validatePageSize: (pageContent: string) => void }).validatePageSize(content);
+        (
+          api as unknown as { validatePageSize: (pageContent: string) => void }
+        ).validatePageSize(content);
       }).toThrow(/51200/);
     });
   });
@@ -727,26 +759,12 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    const MockedToken = vi.mocked(Token);
-    const storeMock = {
-      setValue: vi.fn(),
-      getValue: vi.fn(),
-      deleteValue: vi.fn(),
-      clearStore: vi.fn(),
-    } as unknown as ElectronStoreService;
-    MockedToken.mockImplementation(
-      () =>
-        ({
-          store: storeMock,
-          setValue: vi.fn(),
-          getValue: vi.fn((key: string) => {
-            if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
-              return "true";
-            }
-            return "";
-          }),
-        } as unknown as Token)
-    );
+    mockTokenGetValue.mockImplementation((key: string) => {
+      if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
+        return "true";
+      }
+      return "";
+    });
     api = new AiChatApi();
   });
 
@@ -1310,7 +1328,9 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
         },
         vi.fn()
       )
-    ).rejects.toThrow("AI server error code=500: database connection is not open");
+    ).rejects.toThrow(
+      "AI server error code=500: database connection is not open"
+    );
   });
 });
 

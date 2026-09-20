@@ -25,17 +25,21 @@ const { MockHttpResponseError } = vi.hoisted(() => {
 });
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: (k: string) => tokenStore.get(k) ?? "",
-    setValue: (k: string, v: string) => {
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue(k: string): string {
+      return tokenStore.get(k) ?? "";
+    }
+    setValue(k: string, v: string): void {
       tokenStore.set(k, v);
-    },
-    deleteValue: (k: string) => {
+    }
+    deleteValue(k: string): void {
       tokenStore.delete(k);
-    },
-    hasValue: (k: string) =>
-      tokenStore.has(k) && (tokenStore.get(k)?.length ?? 0) > 0,
-  })),
+    }
+    hasValue(k: string): boolean {
+      return tokenStore.has(k) && (tokenStore.get(k)?.length ?? 0) > 0;
+    }
+  },
 }));
 
 // Hosted HttpClient captured so we can assert it is (or is not) used.
@@ -43,11 +47,15 @@ const mockGet = vi.fn();
 const mockPostJson = vi.fn();
 const mockPostStream = vi.fn();
 vi.mock("@/modules/lib/httpclient", () => ({
-  HttpClient: vi.fn().mockImplementation(() => ({
-    get: mockGet,
-    postJson: mockPostJson,
-    postStream: mockPostStream,
-  })),
+  HttpClient: class {
+    constructor() {
+      return {
+        get: mockGet,
+        postJson: mockPostJson,
+        postStream: mockPostStream,
+      };
+    }
+  },
   HttpResponseError: MockHttpResponseError,
 }));
 
@@ -304,9 +312,7 @@ describe("AiChatApi provider routing", () => {
       fallbackModel: "deepseek-v4-flash",
     });
     expect(mockPostJson).toHaveBeenCalledTimes(1);
-    expect(mockPostJson.mock.calls[0]?.[0]).toBe(
-      "/api/ai/v1/chat/completions"
-    );
+    expect(mockPostJson.mock.calls[0]?.[0]).toBe("/api/ai/v1/chat/completions");
     const wire = mockPostJson.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(wire.model).toBe("small");
     expect(wire).not.toHaveProperty("fallbackModel");
@@ -374,7 +380,9 @@ describe("AiChatApi provider routing", () => {
 
   it("hosted does not retry a non-404 error on the small alias", async () => {
     enableHosted();
-    mockPostJson.mockRejectedValue(new MockHttpResponseError(500, "Server Error"));
+    mockPostJson.mockRejectedValue(
+      new MockHttpResponseError(500, "Server Error")
+    );
     await expect(
       api.openAIChatCompletion({
         messages: [{ role: "user", content: "hi" }],

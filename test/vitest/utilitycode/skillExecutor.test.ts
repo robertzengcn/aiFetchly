@@ -9,20 +9,23 @@ vi.mock("@/service/ToolExecutor", () => ({
 }));
 
 vi.mock("@/service/MCPToolService", () => ({
-  MCPToolService: vi.fn().mockImplementation(() => ({
-    getEnabledMCPToolsAsFunctions: vi.fn().mockResolvedValue([]),
-  })),
+  MCPToolService: class {
+    getEnabledMCPToolsAsFunctions = vi.fn().mockResolvedValue([]);
+  },
 }));
 
 // Mock Token (used by SkillPermissionService) — shared store across instances
 const tokenStore: Record<string, string> = {};
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn((key: string) => tokenStore[key] || ""),
-    setValue: vi.fn((key: string, value: string) => {
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue(key: string): string {
+      return tokenStore[key] || "";
+    }
+    setValue(key: string, value: string): void {
       tokenStore[key] = value;
-    }),
-  })),
+    }
+  },
 }));
 
 import { SkillExecutor, sanitizeForLog } from "@/service/SkillExecutor";

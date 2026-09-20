@@ -9,9 +9,9 @@ vi.mock("@/service/ToolExecutor", () => ({
 }));
 
 vi.mock("@/service/MCPToolService", () => ({
-  MCPToolService: vi.fn().mockImplementation(() => ({
-    getEnabledMCPToolsAsFunctions: vi.fn().mockResolvedValue([]),
-  })),
+  MCPToolService: class {
+    getEnabledMCPToolsAsFunctions = vi.fn().mockResolvedValue([]);
+  },
 }));
 
 import { SkillRegistry } from "@/config/skillsRegistry";

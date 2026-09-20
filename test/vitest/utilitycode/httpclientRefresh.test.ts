@@ -11,18 +11,19 @@ const mockTokenSetValue = vi.hoisted(() =>
 );
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: mockTokenGetValue,
-    setValue: mockTokenSetValue,
-  })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue = mockTokenGetValue;
+    setValue = mockTokenSetValue;
+  },
 }));
 
 const mockRemoveToken = vi.hoisted(() => vi.fn<() => void>());
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
-    removeToken: mockRemoveToken,
-  })),
+  User: class {
+    removeToken = mockRemoveToken;
+  },
 }));
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
@@ -44,14 +45,13 @@ const MockRefreshTokenInvalidError = vi.hoisted(() => {
 
 vi.mock("@/modules/tokenRefresh", () => {
   // Constructor-callable stub: HttpClient does `new TokenRefreshService()`
-  // in its constructor. We attach a static `refreshOnce` method that the
-  // source code calls for refreshes.
-  const Stub = vi.fn().mockImplementation(() => ({}));
-  (Stub as unknown as { refreshOnce: typeof mockRefreshOnce }).refreshOnce =
-    mockRefreshOnce;
+  // in its constructor. Static `refreshOnce` matches the source call site.
+  class TokenRefreshService {
+    static refreshOnce = mockRefreshOnce;
+  }
   return {
     RefreshTokenInvalidError: MockRefreshTokenInvalidError,
-    TokenRefreshService: Stub,
+    TokenRefreshService,
   };
 });
 
