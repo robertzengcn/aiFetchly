@@ -340,6 +340,15 @@ export class OwnedProcessRegistry {
     return true;
   }
 
+  /**
+   * Opaque handle access for the §7 graceful-shutdown protocol (main-process
+   * internal; never crosses IPC). Null once the record has exited.
+   */
+  getHandleForShutdown(recordId: string): unknown {
+    const record = this.records.get(recordId);
+    return record && !record.exited ? record.handle : null;
+  }
+
   /** Descendant discovery support for the terminator (spawn races, §8). */
   async listChildPids(recordId: string): Promise<number[]> {
     const record = this.records.get(recordId);

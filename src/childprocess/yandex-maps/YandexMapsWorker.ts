@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * Yandex Maps Worker -- Puppeteer-based child process scraper.
  *
@@ -1306,6 +1307,17 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 // Message handler
 // ---------------------------------------------------------------------------
+
+process.on("message", (raw: unknown) => {
+  // §7 graceful shutdown (design §7): ack, then exit within the parent's
+  // budget. Parent observes exit + force-verifies (ack is not exit proof).
+  if (shutdownResponder.handle(raw)) return;
+});
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => {
+    process.send?.(message);
+  },
+});
 
 process.on("message", (raw: unknown) => {
   const validation = parseWorkerMessage<YandexMapsWorkerInbound>(

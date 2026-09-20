@@ -179,6 +179,59 @@ export function createShutdownParticipants(
     finalize: async () => undefined,
   };
 
+  const workerProtocol: ShutdownParticipant = {
+    id: "worker-graceful-protocol",
+    freeze: () => undefined,
+    stop: async (context) => {
+      // Design §7 rollout: send the validated shutdown message to every live
+      // registered worker over its own transport (postMessage / ipc send),
+      // bounded per record; survivors are force-stopped by the force phase.
+      const { getOwnedProcessRegistry } = await import(
+        "@/main-process/lifecycle/OwnedProcessRegistry"
+      );
+      const { inferShutdownTransport } = await import(
+        "@/main-process/lifecycle/workerShutdownProtocol"
+      );
+      const registry = getOwnedProcessRegistry();
+      const slice = Math.max(250, Math.floor(context.remainingMs() / 2));
+      const live = registry.list().filter((r) => !r.exited);
+      for (const record of live) {
+        const handle = registry.getHandleForShutdown(record.id);
+        if (!handle) continue;
+        const transport = inferShutdownTransport(
+          handle as Parameters<typeof inferShutdownTransport>[0]
+        );
+        if (!transport) continue;
+        try {
+          transport({
+            type: "shutdown",
+            requestId: `${record.ownerId}-${Date.now()}`,
+            reason: "app-shutdown",
+            remainingMs: slice,
+          });
+        } catch (err) {
+          log.warn(
+            `[worker-protocol] send failed for '${record.ownerId}':`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+      // Give the collective workers ONE bounded window to exit naturally;
+      // poll cheaply rather than per-record waits (records may share pids).
+      const deadline = Date.now() + slice;
+      while (Date.now() < deadline) {
+        const stillLive = registry.list().filter((r) => !r.exited);
+        if (stillLive.length === 0) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const remaining = registry.list().filter((r) => !r.exited).length;
+      log.info(
+        `[worker-protocol] graceful pass done; ${remaining} worker(s) left to the force phase`
+      );
+    },
+    finalize: async () => undefined,
+  };
+
   const marketingWebSocket: ShutdownParticipant = {
     id: "marketing-websocket",
     freeze: () => undefined,
@@ -246,6 +299,7 @@ export function createShutdownParticipants(
     workspaceWatch,
     yellowPages,
     searchScraper,
+    workerProtocol,
     appResources,
   ];
 }

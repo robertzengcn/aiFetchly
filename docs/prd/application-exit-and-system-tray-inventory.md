@@ -18,24 +18,24 @@ of the recorded PID with start-time identity (AC-04/AC-14).
 | # | Family (ownerId) | File | Transport | Notes |
 | --- | --- | --- | --- | --- |
 | 1 | `contact-extraction` | src/main-process/communication/contactExtraction-ipc.ts | child_process.spawn (Electron RUN_AS_NODE) | Original adoption; crash-restart also gated |
-| 2 | `yellow-pages` | src/modules/YellowPagesProcessManager.ts | utilityProcess.fork | Per-task worker |
+| 2 | `yellow-pages` | src/modules/YellowPagesProcessManager.ts | utilityProcess.fork | Per-task worker; §7 responder installed (YellowPagesScraperProcess.ts) |
 | 3 | `website-analysis` | src/modules/WebsiteAnalysisQueue.ts | utilityProcess.fork | Per-job scrape worker |
 | 4 | `social-task` | src/modules/socialtask.ts | utilityProcess.fork | Per-taskrun worker |
 | 5 | `bulk-email` | src/modules/buckEmailTaskModule.ts | utilityProcess.fork | Send worker |
 | 6 | `search-scraper` | src/modules/SearchModule.ts | utilityProcess.fork | Stores PID in DB |
 | 7 | `email-search` | src/modules/EmailSearchTaskModule.ts | utilityProcess.fork | |
-| 8 | `google-maps` | src/modules/GoogleMapsModule.ts | child_process.spawn (ipc) | |
-| 9 | `yandex-maps` | src/modules/YandexMapsModule.ts | child_process.spawn (ipc) | |
-| 10 | `skill-worker` | src/service/SkillWorkerClient.ts | utilityProcess.fork | Lazy singleton |
-| 11 | `embedding-worker` | src/service/embedding/LocalEmbeddingWorkerClient.ts | utilityProcess.fork | Via injectable defaultFork |
-| 12 | `voice-worker` | src/service/aiChatVoice/SherpaVoiceWorkerClient.ts | utilityProcess.fork | Via injectable defaultFork |
-| 13 | `python-runtime-worker` | src/service/PythonRuntimeWorkerClient.ts | utilityProcess.fork | |
+| 8 | `google-maps` | src/modules/GoogleMapsModule.ts | child_process.spawn (ipc) | §7 responder installed (ipc send) |
+| 9 | `yandex-maps` | src/modules/YandexMapsModule.ts | child_process.spawn (ipc) | §7 responder installed (ipc send) |
+| 10 | `skill-worker` | src/service/SkillWorkerClient.ts | utilityProcess.fork | Lazy singleton; §7 responder installed (SkillWorker.ts) |
+| 11 | `embedding-worker` | src/service/embedding/LocalEmbeddingWorkerClient.ts | utilityProcess.fork | Via injectable defaultFork; §7 responder installed |
+| 12 | `voice-worker` | src/service/aiChatVoice/SherpaVoiceWorkerClient.ts | utilityProcess.fork | Via injectable defaultFork; §7 responder installed |
+| 13 | `python-runtime-worker` | src/service/PythonRuntimeWorkerClient.ts | utilityProcess.fork | §7 responder installed |
 | 14 | `outbound-email-worker` | src/service/outboundEmail/OutboundEmailWorkerStarter.ts | utilityProcess.fork | Via injectable defaultFork |
 | 15 | `managed-browser-worker` | src/service/ManagedBrowserWorkerClient.ts | utilityProcess.fork | Supervisor also shuts sessions down gracefully |
 | 16 | `managed-browser-cache-worker` | src/service/ManagedBrowserCacheWorkerClient.ts | utilityProcess.fork | |
 | 17 | `workspace-watch` | src/service/workspaceWatch/WorkspaceWatchManager.ts | utilityProcess.fork | Restart path routes through the same gated defaultFork (restarter reuses ForkFn) |
 | 18 | `hooks` | src/service/hooks/hookExecutionClient.ts | utilityProcess.fork | Via injectable defaultFork |
-| 19 | `runtime-probe` | src/service/localAiRuntime/DisposableVoiceRuntimeProbe.ts | utilityProcess.fork | Short-lived probe, still tracked (§6 launch/shutdown overlap) |
+| 19 | `runtime-probe` | src/service/localAiRuntime/DisposableVoiceRuntimeProbe.ts | utilityProcess.fork | Short-lived probe, still tracked (§6 launch/shutdown overlap); §7 responder installed |
 | 20 | `website-content-scrape` | src/service/WebsiteContentScrapeService.ts | utilityProcess.fork | Per-request worker |
 | 21 | `google-proxy-check` | src/controller/proxy-controller.ts | utilityProcess.fork | Per-request check |
 | 22 | `mcp-server` | src/modules/MCPClient.ts | child_process.spawn (stdio) | Owned stdio servers; external transport connections are never registered |
@@ -110,3 +110,41 @@ outcomes at exit. No new task states were introduced (existing vocabulary only).
 **No-blind-retry rule:** no subsystem auto-retries interrupted external
 operations on restart; every retry path is user-initiated (retry buttons,
 re-run task), which the PRD permits.
+
+## §7 graceful-shutdown rollout (2026-09-20)
+
+The validated shutdown message now reaches **every live registered worker** at
+graceful-stop time, not just contact extraction:
+
+- **Parent side** (`src/main-process/lifecycle/workerShutdownProtocol.ts` +
+  the `worker-graceful-protocol` participant): transport is INFERRED
+  structurally from the opaque registry handle (`.postMessage` for utility
+  processes, `.send` for ipc children). Each live record receives
+  `{type:"shutdown", requestId, reason, remainingMs}` bounded by half the
+  remaining coordinator budget; the participant then waits one collective
+  window for observed exits. Non-exiting workers remain owned by the
+  force-and-verify phase — an ack is never treated as exit proof.
+- **Worker side** (`src/childprocess/lib/workerShutdownResponder.ts`, shared):
+  parse+validate the request, set the closing flag, ack with the correlatable
+  requestId, run optional `closeOwnedResources`, and exit within a bounded
+  watchdog (clamped to the parent budget). Installed in: SkillWorker,
+  PythonRuntimeWorker, LocalEmbeddingWorker, AiChatVoiceWorker,
+  RuntimeProbeWorker (parentPort transports), GoogleMapsWorker,
+  YandexMapsWorker, YellowPagesScraperProcess (ipc transports), plus the
+  original ContactExtractionWorker reference implementation.
+- **Graceful browser close**: scraper workers that hold Puppeteer instances
+  still rely on the force-phase tree kill (verified, includes descendants);
+  passing `closeOwnedResources` per scraper family is the incremental
+  hardening path — the shared responder makes each a ~5-line change.
+
+## Windows containment — release decision (design §8)
+
+**v1 ships WITHOUT native Job Objects** (decision accepted 2026-09-20).
+Windows containment is `taskkill /PID <pid> /T /F` (argument array, awaited)
+plus liveness-verified exit; POSIX uses isolated process groups where owners
+create them. The complete-cleanup claim **explicitly excludes** the
+parent-crash guarantee a Job Object would give (a crash of the Electron
+process itself before the coordinator runs). Implementing Job Objects needs
+a maintained native helper plus Windows packaged tests that cannot run on
+this machine — tracked as the follow-up if the leftover-process report ever
+reproduces a parent-crash leak.
