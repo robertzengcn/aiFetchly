@@ -99,11 +99,11 @@ outcomes at exit. No new task states were introduced (existing vocabulary only).
 | Subsystem | Queued at exit | Running at exit | Completed | Uncertain external ops |
 | --- | --- | --- | --- | --- |
 | Contact extraction | Retry stays user-initiated (RETRY handler); nothing auto-runs | `reconcileInterruptedExtractions` marks in-flight rows **failed** with "Application exited while extraction was in progress" (participant stop, before worker shutdown) | untouched | none (no email/post side effects) |
-| Yellow Pages | Previous-session rows marked failed at NEXT startup by `handleTasksFromPreviousSession` (existing behavior) | `terminateAllProcesses` (participant stop); rows reconcile at next startup via the same previous-session path | untouched | none |
-| Search scraper | PIDs stored in DB; worker killed via registry force phase; status reconciled by existing task-status flow | same | untouched | none |
+| Yellow Pages | Queued-not-started rows wait for the next-startup `handleTasksFromPreviousSession` path (documented gap) | ACTIVE processes: participant `terminateAllProcesses` → `terminateProcess` sets **Paused** + clears PID at exit; rows whose handle was already dropped fall to the next-startup previous-session path | untouched | none |
+| Search scraper | Retry stays user-initiated | `SearchModule.reconcileInterruptedTasks` (participant stop, BEFORE the force kill): running rows → existing **Error** + interruption runtime-log + PID clear | untouched | none |
 | Async tool jobs | `ToolJobRegistry.shutdown()` aborts queued+running and marks **cancelled** (existing) | same | untouched | email/social tool side effects already carry their own outcome records via ToolExecutionService; no auto-retry at startup exists |
 | Bulk email send | Worker killed via registry; send logs record per-recipient state; no auto-retry on restart | same | untouched | **send outcome may be unknown** if killed mid-SMTP — recorded as non-sent in logs; blind retry prevented because batches require user initiation |
-| Social tasks | Same as search scraper (worker + taskrun rows) | same | untouched | post/publish outcome may be unknown — taskrun status flow records interrupted, no auto-resume |
+| Social tasks | Retry stays user-initiated | see the reconcile rows added with the social participant (below) | untouched | post/publish outcome may be unknown — taskrun status flow records interrupted, no auto-resume |
 | Managed browser sessions | n/a | supervisor graceful stop + cache clear-on-exit preference | n/a | n/a |
 | All other families | Short-lived commands; no durable task rows | n/a | n/a | n/a |
 
@@ -132,6 +132,16 @@ graceful-stop time, not just contact extraction:
   RuntimeProbeWorker (parentPort transports), GoogleMapsWorker,
   YandexMapsWorker, YellowPagesScraperProcess (ipc transports), plus the
   original ContactExtractionWorker reference implementation.
+- **Still lacking a responder** (2026-09-20 audit list — every entry below
+  must either gain one or carry a documented tested exclusion): googleScraper,
+  bingScraper, baiduScraper, yandexScraper, searchScraper, userSearch,
+  emailSearch, emailScraper, emailSend, emailCluster, websiteContentScraper,
+  scrapeManager, managed-browser worker, managed-browser-cache worker,
+  workspace-watch worker, hook-execution worker, googleProxyCheck,
+  outbound-email worker, social-task child, worker.ts (legacy). Families
+  whose parent uses a raw `.send`/`.postMessage` handle still RECEIVE the
+  broadcast; without a responder they neither reject new jobs nor close
+  Puppeteer — force-and-verify remains their termination path.
 - **Graceful browser close**: scraper workers that hold Puppeteer instances
   still rely on the force-phase tree kill (verified, includes descendants);
   passing `closeOwnedResources` per scraper family is the incremental
