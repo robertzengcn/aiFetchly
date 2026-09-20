@@ -273,7 +273,12 @@ export class Logger {
       console?: { level?: string | false };
     };
     if (logTransportsWithConsole?.console) {
-      logTransportsWithConsole.console.level = isDevelopment ? "debug" : false;
+      // AIFETCHLY_DEBUG_LOGS=true opts tests/support environments into the
+      // same terminal visibility as development without touching production.
+      logTransportsWithConsole.console.level =
+        isDevelopment || process.env.AIFETCHLY_DEBUG_LOGS === "true"
+          ? "debug"
+          : false;
     }
 
     // Only monkey-patch console.* to mirror into electron-log during development.

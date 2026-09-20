@@ -382,3 +382,50 @@ describe("AIChatQueryLoop tool catalog integration", () => {
     }
   });
 });
+
+describe("AIChatQueryLoop hydration + permission (FR-28 regression)", () => {
+  it("a hydrated deferred tool that needs permission pauses with the card state intact", async () => {
+    // The model calls a DEFERRED tool DIRECTLY (no tool_catalog_search):
+    // the hydration gate must transparently execute it, and when the tool
+    // is confirmation-gated the turn must PAUSE for permission exactly
+    // like an advertised tool — never stall silently.
+    let call = 0;
+    const fakeStream = vi.fn(
+      async (
+        _req: unknown,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        call += 1;
+        if (call === 1) {
+          onChunk(
+            makeToolCallChunk("direct-call", "mcp_1_secret", JSON.stringify({}))
+          );
+        }
+      }
+    );
+    const execTool = vi.fn(
+      async (name: string): Promise<ToolExecutionResult> => ({
+        tool_call_id: "direct-call",
+        tool_name: name,
+        success: false,
+        execution_time_ms: 0,
+        result: { needsPermissionPrompt: true },
+      })
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: execTool,
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const { input } = buildInput();
+    const result = await loop.run(input);
+
+    expect(result.type).toBe("paused_for_permission");
+    if (result.type === "paused_for_permission") {
+      expect(result.pending.toolName).toBe("mcp_1_secret");
+      expect(result.pending.toolCatalogState?.discoveredToolNames).toContain(
+        "mcp_1_secret"
+      );
+    }
+  });
+});

@@ -792,6 +792,12 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
+  if (process.env.AIFETCHLY_DEBUG_LOGS === "true") {
+    log.info(
+      `[e2e-debug] submitMessage conv=${req.conversationId ?? "(new)"} ` +
+        `msg=${req.message.slice(0, 40)}`
+    );
+  }
 
   // Normalize uploaded files
   const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);

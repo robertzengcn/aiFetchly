@@ -319,10 +319,29 @@ locally, components 35 files / 202 tests, utilityCode suites green.
   always-loaded (design §8.7) — the race the PRD feared cannot occur for
   the installer entry tool; prepare/approve runs to ONE installation with
   no synthetic failure. The hydrated-deferred-call replay itself is
-  unit-covered. FINDING for follow-up: during development a hydrated
-  confirmation-gated tool call (`shell_execute`) mid-conversation appeared
-  to stall WITHOUT surfacing its permission card — suspected product bug
-  in the hydrated-tool permission pause path.
+  unit-covered AND regression-pinned at the loop level (a hydrated
+  deferred tool that needs permission pauses with its card state intact
+  — AIChatQueryLoop.toolCatalog.test.ts).
+
+  FOLLOW-UP INVESTIGATION (closed 2026-09-20): the "hydrated tool stalls
+  without a permission card" observation was reproduced and root-caused to
+  the RENDERER surface layer, not the hydration gate — it reproduces
+  identically with the ALWAYS-LOADED skill_install_prepare tool, so it is
+  not hydration-specific. Engine side is provably correct in every
+  reproduction: the turn pauses at awaiting_permission, the permission
+  tool-result row persists, and events reach the renderer API layer. The
+  visible failure is confined to the chat-first workspace shell in the E2E
+  environment: approving a conversation workspace mid-session swaps chat
+  surfaces, the ai-chat-root unmounts entirely (0 instances at the stall,
+  one composer remains), and stream events arrive doubled to surviving
+  listeners. Deferred to the chat-first-shell surface-unification work
+  (needs a dedicated fix + component tests on the workspace chat
+  surface); production default tool-catalog mode is `auto`, not `on`, and
+  no engine changes are required. Diagnostics added during the
+  investigation are kept env-gated: AIFETCHLY_DEBUG_LOGS now also enables
+  the logger's console transport, the fake OpenAI server logs its served
+  plan per request under FAKEAI_DEBUG_PLANS, and the stream handler logs
+  submitMessage under AIFETCHLY_DEBUG_LOGS.
 - **NL-5** — typed dependency lifecycle E2E made deterministic on ANY
   runner via PATH-controlled launches: empty-PATH (probes missing AND
   installer unresolvable: approve → recoverable hold → retry accepted) and

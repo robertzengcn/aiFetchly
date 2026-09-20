@@ -276,6 +276,22 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       //    flow can gate execution.
       //  - else the active scenario.
       const isContinuation = hasToolResultMessage(rawBody);
+      if (process.env.FAKEAI_DEBUG_PLANS === "1") {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[fakeai] plan: continuation=${isContinuation} ` +
+            `responseText=${responseText !== null} ` +
+            `toolCall=${toolCallConfig?.name ?? "-"} ` +
+            `followup=${followupText !== null} ` +
+            `stream=${(() => {
+              try {
+                return (JSON.parse(rawBody) as { stream?: boolean }).stream;
+              } catch {
+                return "?";
+              }
+            })()}`
+        );
+      }
       let plan;
       if (isContinuation) {
         plan = followupText
