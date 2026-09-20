@@ -430,7 +430,8 @@ baseTest.describe(
   () => {
     baseTest(
       "import two aliases sharing one SMTP login: each sends with its own From (scenario 2)",
-      async (_fixture, testInfo) => {
+      // eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixtures object
+      async ({}, testInfo) => {
         baseTest.setTimeout(240_000);
 
         const fakeAi = await startFakeOpenAiServer();
