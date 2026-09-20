@@ -86,6 +86,7 @@ import {
   AIChatRequestBudgetService,
   type ModelLimitResolver,
 } from "@/service/AIChatRequestBudgetService";
+import { AI_CHAT_RECOVERABLE_DEFAULTS } from "@/service/AIChatRecoverableDefaults";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { Token } from "@/modules/token";
@@ -656,6 +657,13 @@ export interface AIChatQueryLoopDeps {
    * that want to inject deterministic limits without the live catalog.
    */
   resolveModelLimits?: ModelLimitResolver;
+
+  /**
+   * Optional: shared model catalog for budget-limit resolution. Production
+   * may inject the process-wide catalog so context windows are already
+   * cached; tests inject a pre-loaded stub to avoid network.
+   */
+  modelCatalogService?: AIChatModelCatalogService;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -753,40 +761,23 @@ export class AIChatQueryLoop {
   constructor(private readonly deps: AIChatQueryLoopDeps) {
     this.budgetService =
       deps.requestBudgetService ?? new AIChatRequestBudgetService();
+    this.modelCatalogService =
+      deps.modelCatalogService ?? new AIChatModelCatalogService();
   }
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
-  private readonly modelCatalogService = new AIChatModelCatalogService();
+  private readonly modelCatalogService: AIChatModelCatalogService;
 
   /**
-   * Build a ModelLimitResolver backed by the live AIChatModelCatalogService
-   * (§8.1). Unknown models resolve to the conservative 8,192/1,024 fallback.
-   * Synchronous in shape — the catalog is loaded lazily on first budget
-   * preflight; when unloaded the fallback applies. Memoized per instance.
+   * Build a ModelLimitResolver backed by the live AIChatModelCatalogService.
+   * Call `ensureLoaded()` before the first preflight so provider rows are
+   * present. Unknown / unloaded models use the catalog's 128k fallback
+   * (same as `getContextWindow()`), not the 8,192-token provisional —
+   * an unloaded catalog is not evidence the selected model is small.
    */
   getDefaultModelLimitResolver(): ModelLimitResolver {
-    return (model?: string) => {
-      // The catalog methods are async but we need a sync resolver for the
-      // budget preflight. Use the cached entries directly when loaded; fall
-      // back to the §8.1 provisional limits otherwise.
-      const entries = this.modelCatalogService.entries();
-      if (model) {
-        const entry = entries.find((e) => e.id === model);
-        if (entry) {
-          return {
-            contextLimit: entry.contextWindow,
-            outputLimit: entry.maxOutputTokens ?? 1_024,
-            limitSource: "provider",
-          };
-        }
-      }
-      return {
-        contextLimit: 8_192,
-        outputLimit: 1_024,
-        limitSource: "fallback",
-      };
-    };
+    return (model?: string) => this.modelCatalogService.resolveLimits(model);
   }
 
   /**
@@ -1036,6 +1027,19 @@ export class AIChatQueryLoop {
     let effectiveModel = input.request.model;
 
     try {
+      // Load provider context/output limits before the first preflight.
+      // The default resolver is sync and reads the catalog cache; without
+      // this, every turn used the 8,192-token unknown-model fallback and
+      // `/goal` Plan Mode (system + tool schemas) was rejected.
+      // Skip the live fetch in Vitest unless the test injected a catalog
+      // (those catalogs are mocked). Unloaded still falls back to 128k.
+      if (
+        !this.deps.resolveModelLimits &&
+        (this.deps.modelCatalogService || process.env.VITEST !== "true")
+      ) {
+        await this.modelCatalogService.ensureLoaded();
+      }
+
       // Inject the deferred-tool announcement once at the start of the turn
       // (FR-6). First turn gets a compact category-level note; later turns get
       // a token-budgeted delta only when the deferred set changed. Mutates
@@ -1155,11 +1159,23 @@ export class AIChatQueryLoop {
         {
           const resolver: ModelLimitResolver =
             this.deps.resolveModelLimits ?? this.getDefaultModelLimitResolver();
+          const limits = resolver(effectiveModel);
+          const safety = Math.ceil(
+            AI_CHAT_RECOVERABLE_DEFAULTS.safetyMarginFraction *
+              limits.contextLimit
+          );
+          // Keep some input room: O + M must not consume the whole window.
+          const maxFitOutput = Math.max(1, limits.contextLimit - safety - 1);
+          const outputReserve = Math.min(
+            currentMaxTokens,
+            limits.outputLimit,
+            maxFitOutput
+          );
           const budget = this.budgetService.preflight({
             messages,
             tools: hasExposedTools ? exposedTools : [],
             model: effectiveModel,
-            outputReserve: currentMaxTokens,
+            outputReserve,
             modelLimitResolver: resolver,
           });
           if (!budget.ok) {
@@ -1168,6 +1184,7 @@ export class AIChatQueryLoop {
               `request budget rejected: ${budget.reason ?? "over capacity"}`
             );
           }
+          currentMaxTokens = outputReserve;
         }
 
         await this.deps.streamChatCompletion(

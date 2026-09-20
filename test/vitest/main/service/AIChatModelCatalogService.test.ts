@@ -177,4 +177,59 @@ describe("AIChatModelCatalogService", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].id).toBe("m1");
   });
+
+  describe("resolveLimits", () => {
+    it("uses the 128k catalog fallback before the catalog is loaded", () => {
+      const { service } = buildApiMock({ object: "list", data: [] });
+      const limits = service.resolveLimits("gpt-4o");
+      expect(limits.contextLimit).toBe(128_000);
+      expect(limits.outputLimit).toBe(16_384);
+      expect(limits.limitSource).toBe("fallback");
+    });
+
+    it("uses provider limits after the catalog is loaded", async () => {
+      const { service } = buildApiMock({
+        object: "list",
+        data: [
+          {
+            id: "gpt-4o",
+            object: "model",
+            created: 1,
+            owned_by: "test",
+            context_window: 128_000,
+            max_tokens: 16_384,
+          },
+        ],
+      });
+      await service.refresh();
+      expect(service.resolveLimits("gpt-4o")).toEqual({
+        contextLimit: 128_000,
+        outputLimit: 16_384,
+        limitSource: "provider",
+      });
+    });
+
+    it("falls back to the default model when the request omits a model id", async () => {
+      const { service } = buildApiMock({
+        object: "list",
+        data: [
+          {
+            id: "hosted-default",
+            object: "model",
+            created: 1,
+            owned_by: "test",
+            context_size: 200_000,
+            max_tokens: 8_192,
+          },
+        ],
+        default_model: "hosted-default",
+      });
+      await service.refresh();
+      expect(service.resolveLimits(undefined)).toEqual({
+        contextLimit: 200_000,
+        outputLimit: 8_192,
+        limitSource: "provider",
+      });
+    });
+  });
 });

@@ -51,6 +51,7 @@ import {
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -684,8 +685,22 @@ export class AIChatQueryEngine {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly budgetService = new ToolPromptBudgetService();
+  private readonly modelCatalogService = new AIChatModelCatalogService();
   private readonly conversationToolStateService =
     new ConversationToolStateService();
+
+  /**
+   * Real per-model context window for tool-catalog auto mode. Vitest skips
+   * the live catalog fetch so unit tests do not hang on the models API.
+   */
+  private async resolveContextWindowTokens(
+    model?: string
+  ): Promise<number | undefined> {
+    if (process.env.VITEST === "true") {
+      return undefined;
+    }
+    return this.modelCatalogService.getContextWindow(model);
+  }
 
   /**
    * Build the deferred tool catalog + mode decision for a turn (FR-8, design
@@ -972,8 +987,8 @@ export class AIChatQueryEngine {
       const idempotentMessageId = scheduledContext
         ? scheduledContext.userMessageId
         : request.submissionId
-          ? `user-${request.submissionId}`
-          : undefined;
+        ? `user-${request.submissionId}`
+        : undefined;
       const savedUser =
         (scheduledContext && scheduledContext.userMessageId) ||
         request.submissionId
@@ -1175,6 +1190,7 @@ export class AIChatQueryEngine {
       userMessage: request.message,
       recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
+      contextWindowTokens: await this.resolveContextWindowTokens(request.model),
     });
 
     // Load persisted discovered-tool state so tools discovered in earlier turns
@@ -1549,6 +1565,9 @@ export class AIChatQueryEngine {
           matchedByToolId.conversationMessages
         ),
         model: matchedByToolId.request.model,
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
       });
 
       const loopInput: AIChatQueryLoopInput = {
@@ -1711,6 +1730,9 @@ export class AIChatQueryEngine {
         pending.conversationMessages
       ),
       model: pending.request.model,
+      contextWindowTokens: await this.resolveContextWindowTokens(
+        pending.request.model
+      ),
     });
 
     const loopInput: AIChatQueryLoopInput = {
