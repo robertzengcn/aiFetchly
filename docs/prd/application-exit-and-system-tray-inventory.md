@@ -132,16 +132,22 @@ graceful-stop time, not just contact extraction:
   RuntimeProbeWorker (parentPort transports), GoogleMapsWorker,
   YandexMapsWorker, YellowPagesScraperProcess (ipc transports), plus the
   original ContactExtractionWorker reference implementation.
-- **Still lacking a responder** (2026-09-20 audit list — every entry below
-  must either gain one or carry a documented tested exclusion): googleScraper,
-  bingScraper, baiduScraper, yandexScraper, searchScraper, userSearch,
-  emailSearch, emailScraper, emailSend, emailCluster, websiteContentScraper,
-  scrapeManager, managed-browser worker, managed-browser-cache worker,
-  workspace-watch worker, hook-execution worker, googleProxyCheck,
-  outbound-email worker, social-task child, worker.ts (legacy). Families
-  whose parent uses a raw `.send`/`.postMessage` handle still RECEIVE the
-  broadcast; without a responder they neither reject new jobs nor close
-  Puppeteer — force-and-verify remains their termination path.
+- **Responder coverage now complete at every real worker ENTRY POINT**
+  (2026-09-20 second pass): taskCode.ts (the shared worker behind
+  social-task, search, email-search and outbound-email children),
+  utilityCode.ts (legacy), websiteContentScraper, googleProxyCheck,
+  hook-execution worker, workspace-config watch worker, managed-browser and
+  managed-browser-cache workers — joining the first-pass Skill /
+  PythonRuntime / Embedding / Voice / RuntimeProbe / GoogleMaps / YandexMaps /
+  YellowPagesScraperProcess / ContactExtractionWorker installs.
+- **Non-entry scraper classes** (googleScraper, bingScraper, baiduScraper,
+  yandexScraper, searchScraper, userSearch, emailSearch, emailScraper,
+  emailSend, emailCluster, scrapeManager) are LIBRARIES imported by the wired
+  entry points above — they run inside processes whose entry now responds.
+  Their Puppeteer instances close when the process exits; per-family
+  `closeOwnedResources` hooks remain the incremental hardening path for
+  browser-close-before-exit semantics. worker.ts (src/childprocess/worker.ts)
+  is the deprecated legacy entry per CLAUDE.md and is not built by forge.
 - **Graceful browser close**: scraper workers that hold Puppeteer instances
   still rely on the force-phase tree kill (verified, includes descendants);
   passing `closeOwnedResources` per scraper family is the incremental

@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 import { log } from "@/modules/Logger";
 import {
   managedBrowserInboundSchema,
@@ -43,6 +44,12 @@ if (!parentPortRaw || !sessionId.startsWith("mb_") || !sessionNonce) {
 
 /** Narrowed port handle — closures below capture this, never the optional. */
 const parentPort: ParentPortLike = parentPortRaw;
+
+// §7 graceful shutdown (design §7): ack + best-effort session teardown within
+// the parent's budget; the parent observes exit and force-verifies.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort.postMessage(JSON.stringify(message)),
+});
 
 let sequence = 0;
 let malformedCount = 0;
@@ -121,6 +128,18 @@ setInterval(() => {
 }, MANAGED_BROWSER_TIMEOUTS.heartbeatIntervalMs);
 
 // --- Inbound dispatch. ---
+parentPort.on("message", (event: { data: unknown }) => {
+  let raw: unknown = event.data;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = undefined;
+    }
+  }
+  if (raw !== undefined && shutdownResponder.handle(raw)) return;
+});
+
 parentPort.on("message", async (event: { data: unknown }) => {
   if (stopped) {
     return;

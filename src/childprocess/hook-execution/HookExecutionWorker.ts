@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 // src/childprocess/hook-execution/HookExecutionWorker.ts
 // HOK-02 (Phase 17 / Plan 03) — fork entry for the dedicated hook-execution
 // worker. Receives an `execute-hook` command, runs the command in a
@@ -22,6 +23,12 @@
 //   - stdout/stderr capped at HOOK_LIMITS sizes; timeout SIGKILLs the child.
 /** parentPort — the utilityProcess transport (R4.6). */
 const parentPort = (process as unknown as { parentPort?: { on: (event: "message", cb: (e: { data: unknown }) => void) => void; postMessage: (msg: unknown) => void } }).parentPort;
+
+// §7 graceful shutdown (design §7): ack + prompt clean exit within the
+// parent's budget; the parent observes exit and force-verifies.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
 //   - Non-fatal: any error/timeout surfaces as a hook-result.error; the worker
 //     itself never crashes the stream (HOK-02 SC4).
 
@@ -277,6 +284,17 @@ function handleCommand(cmd: HookExecutionCommand): void {
 }
 
 export function initializeWorker(): void {
+  parentPort?.on("message", (e) => {
+    let raw: unknown = e.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort?.on("message", (e: { data: unknown }) => {
     const raw = e.data;
     const parsed = workerCommandSchema.safeParse(raw);

@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * WorkspaceConfigWatchWorker — D-02 pure-Node fork target.
  *
@@ -57,6 +58,12 @@ const parentPort = (
     };
   }
 ).parentPort;
+
+// §7 graceful shutdown (design §7): ack + prompt clean exit within the
+// parent's budget; the parent observes exit and force-verifies.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
 import { scanWorkspace } from "./workerScanner";
 
 /**
@@ -209,6 +216,17 @@ async function handleCommand(cmd: WorkspaceWatchCommand): Promise<void> {
  * zero watched workspaces.
  */
 function initializeWorker(): void {
+  parentPort?.on("message", (e) => {
+    let raw: unknown = e.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort?.on("message", (e: { data: unknown }) => {
     const raw = e.data;
     // Defense-in-depth: main is trusted, but the worker guards anyway. A

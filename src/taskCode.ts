@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 export {};
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
@@ -51,6 +52,14 @@ const parentPort = (
     };
   }
 ).parentPort;
+
+// §7 graceful shutdown (design §7): parse the parent shutdown request,
+// ack with the requestId, close anything this worker owns, exit within the
+// parent's budget. The parent observes exit and force-verifies — the ack is
+// never exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
 function isAiFeatureEnabled(): boolean {
   try {
     const tokenService = new Token();
@@ -67,6 +76,18 @@ function isAiFeatureEnabled(): boolean {
 }
 
 if (parentPort) {
+  parentPort.on("message", (e) => {
+    // §7 shutdown request arrives as a JSON string on the same channel.
+    let raw: unknown = e.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = undefined;
+      }
+    }
+    if (raw !== undefined && shutdownResponder.handle(raw)) return;
+  });
   parentPort.on("message", async (e) => {
     try {
       //console.log(e.data)
