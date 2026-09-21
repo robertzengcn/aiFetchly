@@ -1,15 +1,17 @@
 <template>
   <v-btn
+    data-testid="ai-content-report-btn"
     variant="text"
     size="small"
+    :icon="compact"
     :disabled="reported"
     :aria-label="ariaLabel"
     :title="ariaLabel"
     class="ai-content-report-btn"
     @click="onClick"
   >
-    <v-icon size="small" start>mdi-flag-outline</v-icon>
-    {{ reported ? reportedLabel : actionLabel }}
+    <v-icon size="small" :start="!compact">mdi-flag-outline</v-icon>
+    <template v-if="!compact">{{ reported ? reportedLabel : actionLabel }}</template>
   </v-btn>
 </template>
 
@@ -26,15 +28,24 @@ import type { ReportableOutputDescriptor } from "./reportableOutput";
  * output" (PRD §11.4). When the report has been submitted this session,
  * the button is disabled and labeled "Reported" (PRD FR-1.4, §9.1).
  *
+ * Pass `compact` to render an icon-only variant (for dense per-message
+ * rows where a labeled button would crowd the output). The accessible
+ * label/title are preserved either way.
+ *
  * The parent owns dialog mount (one dialog per surface region) to avoid
  * stacked-dialog focus races; the button just emits `report` with the
  * descriptor.
  */
-const props = defineProps<{
-  descriptor: ReportableOutputDescriptor;
-  /** True after a successful submission this session. */
-  reported?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    descriptor: ReportableOutputDescriptor;
+    /** True after a successful submission this session. */
+    reported?: boolean;
+    /** Icon-only variant for compact surfaces (per-message rows). */
+    compact?: boolean;
+  }>(),
+  { reported: false, compact: false }
+);
 const emit = defineEmits<{
   (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();

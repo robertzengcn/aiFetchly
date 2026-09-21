@@ -2656,6 +2656,9 @@ export default {
     reasoning_unavailable: "Reasoning is not available for this model.",
     copy_reasoning: "Copy reasoning",
     reasoning_copied: "Reasoning copied",
+    copy_message: "Copy message",
+    copied: "Copied",
+    copy_message_aria: "Copy this AI response",
     new_conversation: "New conversation",
     empty_title: "Start a conversation",
     empty_description: "Ask anything. Your history stays on this device.",
@@ -2899,7 +2902,8 @@ export default {
       "Compaction stopped with an error. Your conversation is intact — retry when ready.",
     cancelled_detail:
       "Compaction was cancelled. Saved sections are kept for the next run.",
-    joined_detail: "Joined an already-running compaction for this conversation.",
+    joined_detail:
+      "Joined an already-running compaction for this conversation.",
     running_detail: "Compacting earlier history in bounded sections.",
     idle_detail: "Compaction is idle.",
     compaction_in_progress:

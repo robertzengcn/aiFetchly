@@ -2653,6 +2653,9 @@ export default {
       "Le raisonnement n'est pas disponible pour ce modèle.",
     copy_reasoning: "Copier le raisonnement",
     reasoning_copied: "Raisonnement copié",
+    copy_message: "Copier le message",
+    copied: "Copié",
+    copy_message_aria: "Copier cette réponse de l'IA",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
     empty_description:
@@ -2895,7 +2898,8 @@ export default {
     status_failed: "Échec du compactage",
     status_cancelled: "Annulé",
     panel_title: "Compactage",
-    in_progress_note: "Traitement par lots limités — vous pouvez continuer à discuter.",
+    in_progress_note:
+      "Traitement par lots limités — vous pouvez continuer à discuter.",
     view_history: "Voir les messages précédents",
     completed_detail:
       "Les messages précédents restent consultables. La vue active conserve les tours récents et un aperçu limité.",
@@ -2904,7 +2908,8 @@ export default {
     cancelled_detail:
       "Compactage annulé. Les sections enregistrées sont conservées pour la prochaine exécution.",
     joined_detail: "Compactage déjà en cours rejoint pour cette conversation.",
-    running_detail: "Compactage de l'historique précédent par sections limitées.",
+    running_detail:
+      "Compactage de l'historique précédent par sections limitées.",
     idle_detail: "Le compactage est inactif.",
     compaction_in_progress:
       "Compactage en cours ({packed} sections empaquetées).",

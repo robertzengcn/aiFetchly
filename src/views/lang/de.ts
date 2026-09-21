@@ -2662,6 +2662,9 @@ export default {
     reasoning_unavailable: "Für dieses Modell ist kein Denkvorgang verfügbar.",
     copy_reasoning: "Denkvorgang kopieren",
     reasoning_copied: "Denkvorgang kopiert",
+    copy_message: "Nachricht kopieren",
+    copied: "Kopiert",
+    copy_message_aria: "Diese KI-Antwort kopieren",
     new_conversation: "Neue Unterhaltung",
     empty_title: "Unterhaltung starten",
     empty_description: "Frag alles. Dein Verlauf bleibt auf diesem Gerät.",
@@ -2907,7 +2910,8 @@ export default {
     status_failed: "Komprimierung fehlgeschlagen",
     status_cancelled: "Abgebrochen",
     panel_title: "Komprimierung",
-    in_progress_note: "Arbeitet in begrenzten Stapeln — Sie können weiter chatten.",
+    in_progress_note:
+      "Arbeitet in begrenzten Stapeln — Sie können weiter chatten.",
     view_history: "Frühere Nachrichten ansehen",
     completed_detail:
       "Frühere Nachrichten bleiben durchsuchbar. Die aktive Ansicht behält aktuelle Runden und eine begrenzte Übersicht.",
@@ -2916,7 +2920,8 @@ export default {
     cancelled_detail:
       "Komprimierung abgebrochen. Gespeicherte Abschnitte bleiben für den nächsten Lauf erhalten.",
     joined_detail: "Einer bereits laufenden Komprimierung beigetreten.",
-    running_detail: "Frühere Verläufe werden in begrenzten Abschnitten komprimiert.",
+    running_detail:
+      "Frühere Verläufe werden in begrenzten Abschnitten komprimiert.",
     idle_detail: "Die Komprimierung ist inaktiv.",
     compaction_in_progress:
       "Komprimierung läuft ({packed} Abschnitte gepackt).",

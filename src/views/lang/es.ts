@@ -2672,6 +2672,9 @@ export default {
       "El razonamiento no está disponible para este modelo.",
     copy_reasoning: "Copiar razonamiento",
     reasoning_copied: "Razonamiento copiado",
+    copy_message: "Copiar mensaje",
+    copied: "Copiado",
+    copy_message_aria: "Copiar esta respuesta de IA",
     new_conversation: "Nueva conversación",
     empty_title: "Inicia una conversación",
     empty_description:
@@ -2913,7 +2916,8 @@ export default {
     status_failed: "Error de compactación",
     status_cancelled: "Cancelado",
     panel_title: "Compactación",
-    in_progress_note: "Trabajando por lotes limitados — puede seguir chateando.",
+    in_progress_note:
+      "Trabajando por lotes limitados — puede seguir chateando.",
     view_history: "Ver mensajes anteriores",
     completed_detail:
       "Los mensajes anteriores siguen disponibles. La vista activa conserva turnos recientes y un resumen limitado.",
@@ -2921,8 +2925,10 @@ export default {
       "La compactación se detuvo por un error. Su conversación está intacta — reintente cuando quiera.",
     cancelled_detail:
       "Compactación cancelada. Las secciones guardadas se conservan para la próxima ejecución.",
-    joined_detail: "Unido a una compactación ya en curso para esta conversación.",
-    running_detail: "Compactando el historial anterior por secciones limitadas.",
+    joined_detail:
+      "Unido a una compactación ya en curso para esta conversación.",
+    running_detail:
+      "Compactando el historial anterior por secciones limitadas.",
     idle_detail: "La compactación está inactiva.",
     compaction_in_progress:
       "Compactación en curso ({packed} secciones empaquetadas).",
