@@ -41,6 +41,7 @@ import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import {
   getQueryEngine,
+  getQueueService,
   canUseChat,
   parseMetadata,
   serializeHistoryTimestamp,
@@ -86,6 +87,64 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
       scheduler,
       turnCoordinator: AIChatConversationTurnCoordinator.getInstance(),
       canUseChat,
+      // Cross-path terminal notification (shell / message-queue unification):
+      // a coordinator-run terminal re-drains or holds durable rows queued
+      // behind it. Failures must never break the coordinator path itself.
+      onRunTerminal: (conversationId, status) => {
+        if (
+          status !== "completed" &&
+          status !== "cancelled" &&
+          status !== "failed"
+        ) {
+          return;
+        }
+        void getQueueService()
+          .notifyExternalTurnTerminal(conversationId, status)
+          .catch((err: unknown) => {
+            console.warn(
+              "[ai-chat-workspace] queue terminal notification failed:",
+              err
+            );
+          });
+      },
+      // Busy-conversation send delegation (message-queue §9.2): the send
+      // becomes a durable pending row; the coordinator rejection is kept
+      // only when the queue declines. forceQueue: the coordinator owns the
+      // live turn — its terminal notification drains or holds the row, so
+      // the queue must never auto-dispatch it mid-turn (e.g. while the
+      // engine reports idle between transport retries).
+      busySubmit: async (request) => {
+        try {
+          const receipt = await getQueueService().submit({
+            forceQueue: true,
+            clientRequestId: request.clientRequestId,
+            request: {
+              conversationId: request.conversationId,
+              message: request.message,
+              model: request.model,
+              mode: request.mode,
+              toolApprovalMode: request.toolApprovalMode,
+              showReasoning: request.showReasoning,
+              uploadedFiles: request.uploadedFiles
+                ? [...request.uploadedFiles]
+                : undefined,
+              generatedImageReferences: request.generatedImageReferences
+                ? [...request.generatedImageReferences]
+                : undefined,
+            },
+          });
+          if (!receipt.pendingMessage) return null;
+          return {
+            pendingRunId: `pending-${receipt.pendingMessage.pendingMessageId}`,
+          };
+        } catch (err) {
+          console.warn(
+            "[ai-chat-workspace] busy-send queue delegation failed:",
+            err
+          );
+          return null;
+        }
+      },
     });
   }
   return coordinatorInstance;

@@ -293,8 +293,9 @@ export const useSelectedConversationStore = defineStore(
       if (!conversationId || text.trim().length === 0) return;
 
       // Optimistic user message; history reload replaces it durably.
+      const optimisticId = `local-user-${Date.now()}`;
       presenter.appendLocalUserMessage({
-        id: `local-user-${Date.now()}`,
+        id: optimisticId,
         conversationId,
         role: "user",
         content: text,
@@ -320,6 +321,16 @@ export const useSelectedConversationStore = defineStore(
         runtimeStatus.value = response.status;
         streamStatus.value =
           response.status === "running" ? "streaming" : "idle";
+        // A busy-conversation send was accepted into the durable pending
+        // queue (main-process delegation): the pending bubble replaces the
+        // optimistic row, and the queue drains FIFO at the turn terminal.
+        if (
+          response.status === "queued" &&
+          response.runId.startsWith("pending-")
+        ) {
+          presenter.removeMessage(optimisticId);
+          syncFromPresenter();
+        }
       } catch (err) {
         errorMessage.value =
           err instanceof Error ? err.message : "Failed to start the run";

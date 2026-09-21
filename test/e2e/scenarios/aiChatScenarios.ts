@@ -23,6 +23,8 @@ export type ScenarioPlan =
       readonly kind: "http-error";
       readonly status: number;
       readonly body: string;
+      /** Hold the request before answering (ms) — a failure window. */
+      readonly delayMs?: number;
     }
   | { readonly kind: "raw-bytes"; readonly bytes: string }
   | {
@@ -137,6 +139,16 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         kind: "http-error",
         status: 500,
         body: JSON.stringify({ error: { message: "simulated server error" } }),
+      };
+    case "http-500-delayed":
+      // Hold the request 4s before failing: the turn stays busy (no
+      // transport retries for a definite 5xx), leaving a deterministic
+      // window to queue a follow-up behind the failing turn.
+      return {
+        kind: "http-error",
+        status: 500,
+        body: JSON.stringify({ error: { message: "simulated server error" } }),
+        delayMs: 4_000,
       };
     case "malformed-sse":
       // Not valid SSE data lines — the parser skips them and the stream ends

@@ -33,7 +33,9 @@ function uuid(): string {
  * Defensively parse the JSON `metadata` column into a record. Returns null for
  * absent/corrupt/non-object payloads instead of throwing.
  */
-function parseMetadataRecord(raw: string | undefined): Record<string, unknown> | null {
+function parseMetadataRecord(
+  raw: string | undefined
+): Record<string, unknown> | null {
   if (!raw) {
     return null;
   }
@@ -195,7 +197,13 @@ export class AIChatV2Module extends BaseModule {
           ? ("error" as const)
           : ("success" as const),
       toolResultSummary:
-        typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+        typeof toolResult.summary === "string"
+          ? toolResult.summary
+          : // Steering-skipped tools carry a stable reason code instead of
+          // a summary — surface it so receipts explain the skip.
+          typeof toolResult.reason === "string"
+          ? toolResult.reason
+          : undefined,
       success: toolResult.success !== false,
       executionTimeMs:
         typeof toolResult.executionTimeMs === "number"
@@ -244,11 +252,10 @@ export class AIChatV2Module extends BaseModule {
     if (!conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
       return null;
     }
-    const message =
-      await this.chatModule.getMessageByConversationAndMessageId(
-        conversationId,
-        messageId
-      );
+    const message = await this.chatModule.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
     if (!message || message.role !== "assistant") {
       return null;
     }
@@ -276,19 +283,13 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteByConversation(conversationId);
     } catch (err) {
-      log.error(
-        "[ai-chat-v2] clearConversation: compact clear failed:",
-        err
-      );
+      log.error("[ai-chat-v2] clearConversation: compact clear failed:", err);
     }
     // Cascade artifact clear so generated HTML is removed with the chat.
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
-      log.error(
-        "[ai-chat-v2] clearConversation: artifact clear failed:",
-        err
-      );
+      log.error("[ai-chat-v2] clearConversation: artifact clear failed:", err);
     }
     return deleted;
   }

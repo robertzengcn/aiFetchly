@@ -1353,7 +1353,16 @@ function syncAtMentionFromKeyboardEvent(event: KeyboardEvent): void {
 
 const onSend = (): void => {
   const text = draft.value.trim();
-  if ((!text && selectedFiles.value.length === 0 && selectedGeneratedImages.value.length === 0) || props.isStreaming) return;
+  // NOTE: sends while streaming are ALLOWED (message-queue PRD §7.1 — the
+  // composer stays usable so follow-ups queue behind the running turn; Stop
+  // is the separate adjacent action). Only an empty composer is a no-op.
+  if (
+    !text &&
+    selectedFiles.value.length === 0 &&
+    selectedGeneratedImages.value.length === 0
+  ) {
+    return;
+  }
   closeAtMention();
   const files = [...selectedFiles.value];
   const pastedContents =

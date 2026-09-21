@@ -447,6 +447,9 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       }
 
       if (plan.kind === "http-error") {
+        if (plan.delayMs && plan.delayMs > 0) {
+          await Promise.race([sleep(plan.delayMs), clientGone]);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         res.writeHead(plan.status, { "Content-Type": "application/json" });
         res.end(plan.body);

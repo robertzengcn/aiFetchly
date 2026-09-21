@@ -39,6 +39,26 @@ export interface AIChatCoordinatorDeps {
   readonly turnCoordinator: AIChatConversationTurnCoordinator;
   /** AI enablement gate — checked before any AI work executes. */
   readonly canUseChat: () => { ok: true } | { ok: false; message: string };
+  /**
+   * Cross-path terminal notification (chat-first shell / message-queue
+   * unification): invoked once per run terminal so the durable pending queue
+   * can re-drain rows queued behind this turn (completed) or hold them
+   * (cancelled/failed). Optional so non-production wiring stays untouched.
+   */
+  readonly onRunTerminal?: (
+    conversationId: string,
+    status: ChatRunStatus
+  ) => void;
+  /**
+   * Busy-conversation send delegation (message-queue PRD §9.2): when the
+   * conversation already has a live/running turn, a new send is routed into
+   * the durable pending queue instead of being rejected. Returns the
+   * pending-row run marker, or null when the queue declined (limit, gate) so
+   * the caller keeps the legacy rejection.
+   */
+  readonly busySubmit?: (
+    request: StartChatRunRequestPayload
+  ) => Promise<{ pendingRunId: string } | null>;
 }
 
 interface LiveRunState {
@@ -106,8 +126,27 @@ export class AIChatCoordinator {
 
     // One live run per conversation (PRD §19.4 / turn-coordinator
     // semantics): a second send before the first resolves would overwrite
-    // the live slot and strand run B as permanently queued.
-    if (this.liveRuns.has(request.conversationId)) {
+    // the live slot and strand run B as permanently queued. Route it into
+    // the durable pending queue instead (message-queue PRD §9.2: every busy
+    // send becomes a pending row — the bubble is the rendered surface and
+    // the queue drains FIFO at the turn terminal).
+    const engineBusy =
+      this.deps.engine.getConversationRuntimeStatus(request.conversationId) !==
+      "idle";
+    if (this.liveRuns.has(request.conversationId) || engineBusy) {
+      const delegated = this.deps.busySubmit
+        ? await this.deps.busySubmit(request)
+        : null;
+      if (delegated) {
+        const queuedResponse: StartChatRunResponse = {
+          conversationId: request.conversationId,
+          runId: delegated.pendingRunId,
+          status: "queued",
+          acceptedAt: new Date().toISOString(),
+        };
+        this.rememberClientRequest(request.clientRequestId, queuedResponse);
+        return { ok: true, response: queuedResponse };
+      }
       return {
         ok: false,
         message:
@@ -203,7 +242,23 @@ export class AIChatCoordinator {
       ? this.runIndex.get(input.runId) ?? input.conversationId
       : input.conversationId;
     const live = this.liveRuns.get(conversationId);
-    if (!live) return { cancelled: false };
+    if (!live) {
+      // Queue-owned turn (durable pending queue drained outside the
+      // coordinator): no run envelope exists here, but the engine turn is
+      // stoppable — its `cancelled` terminal makes the queue hold the
+      // remaining rows (FR-14 durable pause).
+      const queueStatus =
+        this.deps.engine.getConversationRuntimeStatus(conversationId);
+      if (
+        queueStatus === "running" ||
+        queueStatus === "awaiting_permission" ||
+        queueStatus === "awaiting_user"
+      ) {
+        this.deps.engine.stopActiveTurn(conversationId);
+        return { cancelled: true };
+      }
+      return { cancelled: false };
+    }
 
     if (this.deps.scheduler.isQueued(live.runId)) {
       this.deps.scheduler.cancelQueued(live.runId);
@@ -596,6 +651,9 @@ export class AIChatCoordinator {
     // reports `idle` (+ unread on completion) instead of a stuck running
     // state (design §8.6).
     this.liveRuns.delete(conversationId);
+    // Cross-path terminal notification: the durable pending queue re-drains
+    // or holds rows queued behind this (coordinator-run) turn.
+    this.deps.onRunTerminal?.(conversationId, status);
     const reason: ConversationSummaryEvent["reason"] =
       status === "completed"
         ? "run_completed"

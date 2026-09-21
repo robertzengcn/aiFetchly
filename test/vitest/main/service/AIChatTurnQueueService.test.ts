@@ -21,6 +21,7 @@ vi.mock("@/modules/AIChatAttachmentModule", () => ({
 import {
   AIChatTurnQueueService,
   AIChatTurnQueueError,
+  createSteeringPromoter,
   type AIChatTurnQueueEngine,
   type AIChatQueueLease,
 } from "@/service/AIChatTurnQueueService";
@@ -114,7 +115,9 @@ function makeEngineStub() {
   };
 }
 
-function makeService(engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>) {
+function makeService(
+  engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>
+) {
   const stub = makeEngineStub();
   Object.assign(stub, engineOverrides ?? {});
   const module = new AIChatPendingMessageModule(fakePrep());
@@ -172,7 +175,9 @@ describe("AIChatTurnQueueService submit + drain", () => {
     await vi.waitFor(() =>
       expect(
         events.some(
-          (e) => e.pendingMessageId === receipt.pendingMessage.pendingMessageId && e.status === "sent"
+          (e) =>
+            e.pendingMessageId === receipt.pendingMessage.pendingMessageId &&
+            e.status === "sent"
         )
       ).toBe(true)
     );
@@ -210,7 +215,11 @@ describe("AIChatTurnQueueService submit + drain", () => {
     expect(receiptB.disposition).toBe("queued");
 
     stub.statuses.set("v2-fifo", "idle");
-    first.resolve({ type: "completed", conversationId: "v2-fifo", assistantMessageId: "a1" });
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-fifo",
+      assistantMessageId: "a1",
+    });
     await vi.waitFor(() => expect(stub.submitted.length).toBe(2));
     expect(stub.submitted[1].modelContent).toBe("B");
   });
@@ -231,7 +240,11 @@ describe("AIChatTurnQueueService submit + drain", () => {
     });
 
     stub.statuses.set("v2-stop", "idle");
-    first.resolve({ type: "cancelled", conversationId: "v2-stop", assistantMessageId: "a1" });
+    first.resolve({
+      type: "cancelled",
+      conversationId: "v2-stop",
+      assistantMessageId: "a1",
+    });
     await vi.waitFor(async () => {
       const views = await service.list("v2-stop");
       return views.some((v) => v.status === "paused");
@@ -259,7 +272,11 @@ describe("AIChatTurnQueueService submit + drain", () => {
 
     // Stop the active turn: the remaining queue pauses.
     stub.statuses.set("v2-resume", "idle");
-    first.resolve({ type: "cancelled", conversationId: "v2-resume", assistantMessageId: "a" });
+    first.resolve({
+      type: "cancelled",
+      conversationId: "v2-resume",
+      assistantMessageId: "a",
+    });
     await vi.waitFor(async () => {
       const views = await service.list("v2-resume");
       return views.find((v) => v.content === "B")?.status === "paused";
@@ -287,7 +304,87 @@ describe("AIChatTurnQueueService submit + drain", () => {
     });
     await vi.waitFor(() => expect(stub.submitted.length).toBe(2));
     expect(stub.submitted[1].conversationId).toBe("v2-y");
-    first.resolve({ type: "completed", conversationId: "v2-x", assistantMessageId: "a" });
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-x",
+      assistantMessageId: "a",
+    });
+  });
+
+  it("external completed terminal re-drains queued rows (shell-run turn finished)", async () => {
+    // The chat-first shell starts turns through the workspace coordinator,
+    // not the queue. A row queued behind that turn must still drain when the
+    // coordinator reports the turn terminal (design §9.3 cross-path drain).
+    const { service, stub } = makeService();
+    stub.statuses.set("v2-shell", "running");
+    await service.submit({
+      clientRequestId: "cr-shell-b",
+      request: { message: "B", conversationId: "v2-shell" },
+    });
+    expect(stub.submitted.length).toBe(0);
+
+    stub.statuses.set("v2-shell", "idle");
+    await service.notifyExternalTurnTerminal("v2-shell", "completed");
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    expect(stub.submitted[0].modelContent).toBe("B");
+  });
+
+  it("external cancelled terminal holds the queue as paused", async () => {
+    const { service, stub } = makeService();
+    stub.statuses.set("v2-shell-stop", "running");
+    await service.submit({
+      clientRequestId: "cr-shell-stop",
+      request: { message: "B", conversationId: "v2-shell-stop" },
+    });
+
+    stub.statuses.set("v2-shell-stop", "idle");
+    await service.notifyExternalTurnTerminal("v2-shell-stop", "cancelled");
+    await vi.waitFor(async () => {
+      const views = await service.list("v2-shell-stop");
+      return views.some((v) => v.status === "paused");
+    });
+    expect(stub.submitted.length).toBe(0);
+  });
+
+  it("external failed terminal holds the queue as paused", async () => {
+    const { service, stub } = makeService();
+    stub.statuses.set("v2-shell-fail", "running");
+    await service.submit({
+      clientRequestId: "cr-shell-fail",
+      request: { message: "B", conversationId: "v2-shell-fail" },
+    });
+
+    stub.statuses.set("v2-shell-fail", "idle");
+    await service.notifyExternalTurnTerminal("v2-shell-fail", "failed");
+    await vi.waitFor(async () => {
+      const views = await service.list("v2-shell-fail");
+      return views.some((v) => v.status === "paused");
+    });
+    expect(stub.submitted.length).toBe(0);
+  });
+
+  it("external terminal for an idle empty conversation is a no-op", async () => {
+    const { service, stub } = makeService();
+    await service.notifyExternalTurnTerminal("v2-empty", "completed");
+    expect(stub.submitted.length).toBe(0);
+  });
+
+  it("forceQueue (coordinator delegation) never auto-dispatches on an idle engine report", async () => {
+    // The coordinator owns the live turn; the engine may briefly report
+    // idle inside it (transport-retry backoff). The delegated row must stay
+    // queued — the coordinator's terminal notification drains it.
+    const { service, stub } = makeService();
+    const receipt = await service.submit({
+      clientRequestId: "cr-force",
+      forceQueue: true,
+      request: { message: "B", conversationId: "v2-force" },
+    });
+    expect(receipt.disposition).toBe("queued");
+    expect(stub.submitted.length).toBe(0);
+    // The coordinator's terminal notification drains it (production path).
+    await service.notifyExternalTurnTerminal("v2-force", "completed");
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    expect(stub.submitted[0].modelContent).toBe("B");
   });
 
   it("lease busy releases the claim back to queued without dispatching", async () => {
@@ -336,7 +433,11 @@ describe("AIChatTurnQueueService submit + drain", () => {
         request: { message: "B", conversationId: "v2-held" },
       });
     })();
-    first.resolve({ type: "cancelled", conversationId: "v2-held", assistantMessageId: "a" });
+    first.resolve({
+      type: "cancelled",
+      conversationId: "v2-held",
+      assistantMessageId: "a",
+    });
     await vi.waitFor(async () => {
       const views = await service.list("v2-held");
       return views.find((v) => v.content === "B")?.status === "paused";
@@ -385,7 +486,71 @@ describe("AIChatTurnQueueService steer", () => {
     expect(view.status).toBe("steering");
     expect(events.some((e) => e.status === "steering")).toBe(true);
 
-    first.resolve({ type: "completed", conversationId: "v2-st", assistantMessageId: "a" });
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-st",
+      assistantMessageId: "a",
+    });
+  });
+
+  it("steering promoter broadcasts the applied flip via onApplied", async () => {
+    const applied: Array<{
+      conversationId: string;
+      pendingMessageId: string;
+    }> = [];
+    const { service, stub, module } = makeService();
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-proa",
+      request: { message: "A", conversationId: "v2-pro" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    stub.statuses.set("v2-pro", "running");
+
+    const receiptB = await service.submit({
+      clientRequestId: "cr-pro",
+      request: { message: "focus on Europe", conversationId: "v2-pro" },
+    });
+    stub.setReserve({
+      reservationId: "r1",
+      targetAssistantMessageId: "assistant-9",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+    stub.setCommit(true);
+    await service.steer({
+      conversationId: "v2-pro",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+
+    // The engine consumes the mailbox through the promoter; a successful
+    // promote must notify the wiring so the applied lifecycle event reaches
+    // every renderer surface (the shell store removes bubbles on it).
+    const promoter = createSteeringPromoter(module, (event) =>
+      applied.push(event)
+    );
+    await promoter({
+      instruction: {
+        pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+        clientRequestId: "cr-pro",
+        displayContent: "focus on Europe",
+        modelContent: "focus on Europe",
+        createdAt: new Date().toISOString(),
+        targetAssistantMessageId: "assistant-9",
+      },
+      boundary: "after_model",
+    });
+
+    expect(applied).toEqual([
+      {
+        conversationId: "v2-pro",
+        pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+      },
+    ]);
+    const views = await service.list("v2-pro");
+    expect(views.find((v) => v.content === "focus on Europe")?.status).toBe(
+      "applied"
+    );
   });
 
   it("no running turn → TURN_NOT_STEERABLE, row stays queued", async () => {
@@ -479,9 +644,9 @@ describe("AIChatTurnQueueService clear + recovery", () => {
     expect(stub.submitted.length).toBe(before);
     const views = await service.list("v2-rec");
     expect(views.find((v) => v.content === "B")?.status).toBe("paused");
-    expect(
-      views.find((v) => v.content === "B")?.recoveryReason
-    ).toBe("recovered_after_restart");
+    expect(views.find((v) => v.content === "B")?.recoveryReason).toBe(
+      "recovered_after_restart"
+    );
   });
 });
 

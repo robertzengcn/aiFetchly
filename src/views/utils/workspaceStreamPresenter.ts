@@ -116,6 +116,12 @@ export function createWorkspaceStreamPresenter(
   /** Optimistic user message shown while the run request is in flight. */
   appendLocalUserMessage(view: ChatV2MessageView): void;
   /**
+   * Remove one row by id (a send accepted into the durable pending queue:
+   * the pending bubble replaces the optimistic user row). Returns false
+   * when no row with that id exists.
+   */
+  removeMessage(messageId: string): boolean;
+  /**
    * Rewrite one row in place (permission grant/deny local presentation).
    * Returns false when no row with that id exists.
    */
@@ -369,6 +375,10 @@ export function createWorkspaceStreamPresenter(
           toolResultSummary:
             typeof toolResult?.summary === "string"
               ? toolResult.summary
+              : // Steering-skipped tools carry a stable reason code instead
+              // of a summary — surface it so the receipt explains the skip.
+              typeof toolResult?.reason === "string"
+              ? toolResult.reason
               : undefined,
           success: toolResult?.success !== false,
           ...(artifact ? { artifact } : {}),
@@ -665,6 +675,19 @@ export function createWorkspaceStreamPresenter(
     /** Optimistic user message shown while the run request is in flight. */
     appendLocalUserMessage(view: ChatV2MessageView): void {
       appendMessage(view);
+    },
+    /**
+     * Remove one row by id (a send accepted into the durable pending queue:
+     * the pending bubble replaces the optimistic user row). Returns false
+     * when no row with that id exists.
+     */
+    removeMessage(messageId: string): boolean {
+      const exists = messages.some((m) => m.id === messageId);
+      if (exists) {
+        flushNow();
+        messages = messages.filter((m) => m.id !== messageId);
+      }
+      return exists;
     },
     /**
      * Rewrite one row in place (permission grant/deny local presentation —

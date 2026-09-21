@@ -6,6 +6,7 @@ import { SqliteDb } from "@/config/SqliteDb";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
+import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { CoordinatorEngine } from "@/service/AIChatCoordinator";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
@@ -138,7 +139,12 @@ async function waitFor(
   }
 }
 
-function buildCoordinator(): {
+function buildCoordinator(
+  onRunTerminal?: (conversationId: string, status: ChatRunStatus) => void,
+  busySubmit?: (
+    request: Parameters<AIChatCoordinator["startRun"]>[0]
+  ) => Promise<{ pendingRunId: string } | null>
+): {
   coordinator: AIChatCoordinator;
   router: AIChatEventRouter;
   fake: ReturnType<typeof makeFakeEngine>;
@@ -155,6 +161,8 @@ function buildCoordinator(): {
     scheduler,
     turnCoordinator: AIChatConversationTurnCoordinator.getInstance(),
     canUseChat: () => ({ ok: true }),
+    ...(onRunTerminal ? { onRunTerminal } : {}),
+    ...(busySubmit ? { busySubmit } : {}),
   });
   return { coordinator, router, fake, runModel: new AIChatRunModel(tmpDir) };
 }
@@ -251,6 +259,88 @@ describe("AIChatCoordinator", () => {
 
     // Live registry cleared after terminal.
     expect(coordinator.getLiveRuntime("v2-test-1")).toBeNull();
+  });
+
+  it("notifies onRunTerminal once per run terminal (queue cross-path drain)", async () => {
+    const terminals: Array<{ conversationId: string; status: ChatRunStatus }> =
+      [];
+    const { coordinator, fake } = buildCoordinator((conversationId, status) => {
+      terminals.push({ conversationId, status });
+    });
+    await SqliteDb.ensureInitialized();
+
+    const accepted = await coordinator.startRun(request(3));
+    expect(accepted.ok).toBe(true);
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+
+    emit(turn.input.eventSink, {
+      type: "complete",
+      conversationId: "v2-test-3",
+      messageId: "assistant-3",
+      fullContent: "done",
+      finishReason: "stop",
+    });
+    turn.resolve();
+
+    await waitFor(() => terminals.length === 1);
+    expect(terminals[0]).toEqual({
+      conversationId: "v2-test-3",
+      status: "completed",
+    });
+  });
+
+  it("delegates a busy-conversation send to the durable queue instead of rejecting", async () => {
+    const busySubmits: Array<{ conversationId: string; message: string }> = [];
+    const { coordinator, fake } = buildCoordinator(
+      undefined,
+      async (request) => {
+        busySubmits.push({
+          conversationId: request.conversationId,
+          message: request.message,
+        });
+        return { pendingRunId: "pending-p-1" };
+      }
+    );
+    await SqliteDb.ensureInitialized();
+
+    // An engine-owned running turn (e.g. a queue-drained turn) makes the
+    // conversation busy even without a coordinator live run.
+    fake.setStatus("v2-test-4", "running");
+    const accepted = await coordinator.startRun(request(4));
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.response.status).toBe("queued");
+    expect(accepted.response.runId).toBe("pending-p-1");
+    expect(busySubmits).toHaveLength(1);
+    expect(busySubmits[0].message).toBe("hello 4");
+    // No run envelope / engine dispatch happened for the delegated send.
+    expect(fake.turns).toHaveLength(0);
+  });
+
+  it("keeps the legacy rejection when the busy-send queue declines", async () => {
+    const { coordinator, fake } = buildCoordinator(undefined, async () => null);
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-test-5", "running");
+    const rejected = await coordinator.startRun(request(5));
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.message).toContain("already active");
+    }
+    expect(fake.turns).toHaveLength(0);
+  });
+
+  it("cancel stops a queue-owned engine turn with no coordinator run", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-queue-owned", "running");
+    const result = await coordinator.cancelRun({
+      conversationId: "v2-queue-owned",
+    });
+    expect(result.cancelled).toBe(true);
+    expect(fake.stopCalls).toContain("v2-queue-owned");
   });
 
   it("gates AI use before executing any work", async () => {
