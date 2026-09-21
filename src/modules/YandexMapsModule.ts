@@ -1,5 +1,9 @@
-import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
-import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  spawnOwned,
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
 /**
  * Yandex Maps Module -- orchestration layer shared by AI skill and UI page.
  *
@@ -169,6 +173,7 @@ export class YandexMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
+      let ownedWorkerRecordId: string | null = null;
       const requestId = options?.externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
@@ -183,20 +188,25 @@ export class YandexMapsModule extends BaseModule {
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc).
         // buildPackagedWorkerEnv sets NODE_PATH so unpacked workers can resolve deps that
         // live inside app.asar/node_modules (e.g. puppeteer).
-        worker = spawnOwned(
+        const ownedProcess = spawnOwned(
           "yandex-maps",
           () =>
             spawn(process.execPath, [resolvedWorkerPath], {
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: buildPackagedWorkerEnv({
-            runAsNode: true,
-            extraEnv: {
-              ELECTRON_APP_NAME: app.getName(),
-              ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-            },
-          }),
-        })
+              stdio: ["pipe", "pipe", "pipe", "ipc"],
+              env: buildPackagedWorkerEnv({
+                runAsNode: true,
+                extraEnv: {
+                  ELECTRON_APP_NAME: app.getName(),
+                  ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+                },
+              }),
+            })
         );
+        worker = ownedProcess;
+        ownedWorkerRecordId =
+          getOwnedProcessRegistry()
+            .listByOwner("yandex-maps")
+            .find((r) => r.pid === ownedProcess.pid)?.id ?? null;
       } catch (err) {
         reject(
           new Error(
@@ -226,6 +236,17 @@ export class YandexMapsModule extends BaseModule {
       worker.on("message", (raw: unknown) => {
         const data = parseWorkerMessage(raw);
         if (!data) return;
+        if (data.type === "descendant-report") {
+          // T01 (design §7): store the worker-reported browser identity.
+          void getOwnedProcessRegistry()
+            .recordDescendantReport(
+              ownedWorkerRecordId ?? "",
+              Number(data.pid),
+              String(data.label ?? "browser")
+            )
+            .catch(() => undefined);
+          return;
+        }
         if (data.type === "progress" && data.requestId === requestId) {
           const progress = parseYandexMapsProgressEvent(data);
           if (search.progressCallback && progress) {
