@@ -1203,11 +1203,14 @@ export class AIChatQueryLoop {
               startRound: input.startRound,
               exposedToolNames: exposedTools.map((t) => t.function.name),
             }),
-            // MVP: the `reasoning` server option is intentionally NOT forwarded.
-            // Reasoning is parsed passively from provider-emitted fields (see
-            // OpenAIStreamAccumulator). Forwarding would 400 on strict servers
-            // for non-reasoning models until per-model capability detection
-            // lands (PRD Phase 5). showReasoning is a renderer display pref.
+            // Hosted path copies this only when enabled. Local payload
+            // builders omit it so strict OpenAI-compatible servers do not
+            // 400 on an unknown field.
+            reasoning: input.request.reasoning
+              ? input.request.reasoning
+              : input.request.showReasoning
+                ? { enabled: true, summary: "auto" }
+                : undefined,
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;

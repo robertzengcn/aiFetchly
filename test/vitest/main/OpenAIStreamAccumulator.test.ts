@@ -58,6 +58,13 @@ describe("OpenAIStreamAccumulator — reasoning", () => {
     expect(r2.reasoningDelta).toBe("C");
   });
 
+  it("falls back to a plain reasoning string when alias fields are absent", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(chunk({ reasoning: "step by step" }));
+    expect(r.reasoningDelta).toBe("step by step");
+    expect(acc.state.reasoningContent).toBe("step by step");
+  });
+
   it("returns empty deltas on usage-only chunks but still captures usage", () => {
     const acc = new OpenAIStreamAccumulator();
     const r = acc.ingest({

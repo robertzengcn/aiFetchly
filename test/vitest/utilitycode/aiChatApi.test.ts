@@ -1332,6 +1332,78 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       "AI server error code=500: database connection is not open"
     );
   });
+
+  it("forwards reasoning onto the hosted stream payload when enabled", async () => {
+    const encoder = new TextEncoder();
+    mockPostStreamShared.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode("data: [DONE]\n\n")
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }
+      )
+    );
+
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+        reasoning: { enabled: true, summary: "auto" },
+      },
+      () => undefined
+    );
+
+    expect(mockPostStreamShared).toHaveBeenCalledWith(
+      "/api/ai/v1/chat/completions",
+      expect.objectContaining({
+        stream: true,
+        reasoning: { enabled: true, summary: "auto" },
+      }),
+      {}
+    );
+  });
+
+  it("omits reasoning from the hosted stream payload when disabled", async () => {
+    const encoder = new TextEncoder();
+    mockPostStreamShared.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode("data: [DONE]\n\n")
+            );
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }
+      )
+    );
+
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: "Hi" }],
+        reasoning: { enabled: false },
+      },
+      () => undefined
+    );
+
+    const payload = mockPostStreamShared.mock.calls[0]?.[1] as
+      | { reasoning?: unknown }
+      | undefined;
+    expect(payload?.reasoning).toBeUndefined();
+  });
 });
 
 describe("AiChatApi - Recovery-driven streaming retry", () => {

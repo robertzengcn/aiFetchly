@@ -24,7 +24,8 @@ export interface OpenAIStreamIngestResult {
 
 /**
  * Extract the first non-empty reasoning delta from a choice delta, using the
- * priority order reasoning_delta → reasoning_content → reasoning_summary.
+ * priority order reasoning_delta → reasoning_content → reasoning_summary →
+ * reasoning.
  * Only string values are honoured; malformed non-string fields are ignored so
  * a provider that emits a non-string structure cannot corrupt the transcript.
  */
@@ -36,6 +37,7 @@ function extractReasoningDelta(delta: OpenAIStreamDelta | undefined): string {
     delta.reasoning_delta,
     delta.reasoning_content,
     delta.reasoning_summary,
+    delta.reasoning,
   ];
   for (const value of candidates) {
     if (typeof value === "string" && value.length > 0) {

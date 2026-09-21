@@ -613,6 +613,8 @@ export interface OpenAIStreamDelta {
   reasoning_content?: string | null;
   reasoning_summary?: string | null;
   reasoning_delta?: string | null;
+  /** OpenRouter / some hosted models emit a plain `reasoning` string. */
+  reasoning?: string | null;
   tool_calls?: OpenAIStreamToolCallDelta[];
   images?: OpenAIChatImage[];
 }
@@ -2115,6 +2117,25 @@ export class AiChatApi {
     return this.openAIChatCompletionHosted(request);
   }
 
+  /**
+   * Copy the opt-in reasoning request onto a hosted payload. Local providers
+   * omit this field (strict OpenAI-compatible servers 400 on it). The hosted
+   * server uses it as the gate for emitting reasoning_delta / reasoning_content.
+   */
+  private copyEnabledReasoningOption(
+    request: OpenAIChatCompletionRequest,
+    data: OpenAIChatCompletionRequest
+  ): void {
+    if (!request.reasoning?.enabled) {
+      return;
+    }
+    data.reasoning = {
+      enabled: true,
+      effort: request.reasoning.effort,
+      summary: request.reasoning.summary ?? "auto",
+    };
+  }
+
   /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
   private async openAIChatCompletionHosted(
     request: OpenAIChatCompletionRequest
@@ -2144,6 +2165,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this.copyEnabledReasoningOption(request, data);
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
     try {
       return await this._httpClient.postJson(
@@ -2270,6 +2292,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this.copyEnabledReasoningOption(request, data);
     // Ask the server to include token usage in the final stream chunk so we
     // can display live context-usage percentage in the UI. Servers that do
     // not implement stream_options simply ignore it.

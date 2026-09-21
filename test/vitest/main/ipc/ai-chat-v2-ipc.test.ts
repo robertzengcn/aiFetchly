@@ -1321,6 +1321,13 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     expect(reasoningChunk).toMatchObject({
       reasoningDelta: "Thinking...",
     });
+    expect(mockOpenAIChatCompletionStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoning: { enabled: true, summary: "auto" },
+      }),
+      expect.any(Function),
+      expect.anything()
+    );
 
     // 2. The answer token chunk was sent too, and stays separate.
     const tokenChunks = senderSend.mock.calls

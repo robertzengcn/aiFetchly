@@ -4293,14 +4293,17 @@ const onSend = async (
               truncated: over,
             },
           };
-          const reasoningIdx = messages.value.findIndex(
+          const currentMessages = streamMessageListController.get();
+          const reasoningIdx = currentMessages.findIndex(
             (m) => m.id === assistant.id
           );
           if (reasoningIdx !== -1) {
-            messages.value[reasoningIdx] = {
-              ...messages.value[reasoningIdx],
+            const nextMessages = [...currentMessages];
+            nextMessages[reasoningIdx] = {
+              ...nextMessages[reasoningIdx],
               metadata: assistant.metadata,
             };
+            streamMessageListController.set(nextMessages);
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
@@ -4380,6 +4383,8 @@ const onSend = async (
               nextMessages[idx] = {
                 ...nextMessages[idx],
                 content: assistant.content,
+                metadata:
+                  assistant.metadata ?? nextMessages[idx].metadata,
               };
               streamMessageListController.set(nextMessages);
             }
