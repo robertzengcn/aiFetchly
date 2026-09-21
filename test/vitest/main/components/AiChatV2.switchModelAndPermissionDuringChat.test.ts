@@ -211,8 +211,8 @@ function mountChat() {
         AiChatV2Composer: ComposerStub,
         AiChatV2ModeSelector: true,
         // AiChatV2ModelSelector and AiChatV2ToolApprovalModeSelector are
-        // intentionally NOT stubbed — these tests assert their real disabled
-        // state mid-stream (model enabled, tool-approval locked).
+        // intentionally NOT stubbed — these tests assert their real enabled
+        // state mid-stream (both selectors stay editable while a stream runs).
         AiChatV2PlanStatusBadge: true,
         AiChatV2ContextBadge: true,
         // Recoverable-history components (added on test branch). Stubbed —
@@ -270,11 +270,13 @@ describe("AiChatV2 switch model & permission during chat", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps the model selector enabled and locks the tool-approval selector while a stream is running", async () => {
+  it("keeps the model selector and tool-approval selector enabled while a stream is running", async () => {
     const wrapper = mountChat();
     await flushPromises();
 
-    // Start a never-resolving stream → chatIsRunning becomes true.
+    // Start a never-resolving stream → chatIsRunning becomes true for the
+    // duration of the test (streamChatV2Message never resolves, so the
+    // terminal chunk never flips isStreaming back to false).
     await wrapper.find('[data-testid="send-first"]').trigger("click");
     await flushPromises();
 
@@ -291,20 +293,24 @@ describe("AiChatV2 switch model & permission during chat", () => {
     expect(modelSelect.attributes("disabled")).toBeFalsy();
     expect((modelSelect.element as HTMLSelectElement).disabled).toBe(false);
 
-    // The tool-approval selector is intentionally locked mid-stream. The
+    // The tool-approval selector stays enabled mid-stream too. The user must
+    // be able to change AI permissions during a chat — e.g. escalate to
+    // "Approve for me" / "Full access" when a permission prompt is blocking
+    // the in-flight turn, or lock back down to "Ask for approval". The
     // backend re-reads the persisted approval mode on EVERY tool call inside
     // a stream (ai-chat-v2-ipc.ts executeTool → AIChatToolApprovalModule
-    // .getMode), so switching to full_access/approve_for_me mid-stream would
-    // escalate permissions for the in-flight turn. Locking the selector
-    // closes that trust-boundary race; changes take effect on the next turn.
+    // .getMode), so a mid-stream change takes effect on the next tool
+    // execution in the same turn. "Full access" stays guarded by its own
+    // confirmation dialog; the selector itself must not be greyed out.
     const toolSelect = wrapper
       .findComponent({ name: "AiChatV2ToolApprovalModeSelector" })
       .find('[data-testid="v-select"]');
     expect(toolSelect.exists()).toBe(true);
-    expect((toolSelect.element as HTMLSelectElement).disabled).toBe(true);
+    expect(toolSelect.attributes("disabled")).toBeFalsy();
+    expect((toolSelect.element as HTMLSelectElement).disabled).toBe(false);
   });
 
-  it("does not persist a tool-approval-mode change while a stream is running (selector is locked)", async () => {
+  it("persists a tool-approval-mode change mid-stream so it applies to the in-flight turn", async () => {
     const wrapper = mountChat();
     await flushPromises();
 
@@ -313,10 +319,24 @@ describe("AiChatV2 switch model & permission during chat", () => {
 
     expect(streamChatV2Message).toHaveBeenCalledTimes(1);
 
-    // The selector is disabled mid-stream, so the user cannot trigger a
-    // change through it. Assert that no persist IPC has fired yet for a
-    // mode change. (A programmatic emit would bypass the disabled prop, but
-    // the UI surface itself is closed — confirmed by the previous test.)
-    expect(setChatV2ToolApprovalMode).not.toHaveBeenCalled();
+    // The selector is enabled mid-stream (previous test), so the user can
+    // switch the mode through the UI. Drive the real
+    // AiChatV2ToolApprovalModeSelector's v-select to "Approve for me".
+    // "approve_for_me" is chosen (not "full_access") so the selector emits
+    // immediately without routing through the full-access confirmation
+    // dialog.
+    const toolSelect = wrapper
+      .findComponent({ name: "AiChatV2ToolApprovalModeSelector" })
+      .find('[data-testid="v-select"]');
+    (toolSelect.element as HTMLSelectElement).value = "approve_for_me";
+    await toolSelect.trigger("change");
+    await flushPromises();
+
+    // The change must persist immediately via IPC so the next tool execution
+    // in the running stream observes the new mode.
+    expect(setChatV2ToolApprovalMode).toHaveBeenCalledWith(
+      expect.any(String),
+      "approve_for_me"
+    );
   });
 });

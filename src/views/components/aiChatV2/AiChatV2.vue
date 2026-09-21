@@ -491,7 +491,6 @@
           />
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
             class="ml-2"
             @update:model-value="onToolApprovalModeChange"
           />
