@@ -54,6 +54,18 @@ describe("verify-packaged-childprocess layout detection", () => {
       fs.mkdirSync(path.dirname(rendererHtml), { recursive: true });
       fs.writeFileSync(rendererHtml, "<!doctype html><title>ci</title>");
 
+      // Real packages always carry an app manifest — the prune-closure gate
+      // (verifyDeclaredDependenciesPresent) reads it to walk the runtime
+      // transitive closure.
+      fs.writeFileSync(
+        path.join(appRoot, "package.json"),
+        JSON.stringify({
+          name: "aiFetchly",
+          version: "0.0.0-test",
+          dependencies: { uuid: "*", "electron-store": "*" },
+        })
+      );
+
       fs.mkdirSync(path.join(appRoot, "node_modules", "uuid"), {
         recursive: true,
       });
