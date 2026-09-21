@@ -384,4 +384,36 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     expect(param.Setting.replyTo).toBe("replies@example.com");
     expect(param.Setting.id).toBe(9);
   });
+
+  it("coerces a numeric port (v-number-input emits numbers) to a string in the submit payload", async () => {
+    // Regression: v-number-input yields a number at runtime, but the IPC
+    // schema + storage contract expect a string. The form must coerce.
+    const numericPortService = {
+      ...STORED_SERVICE,
+      port: 465 as unknown as string,
+      imapPort: 993 as unknown as string,
+      pop3Port: 995 as unknown as string,
+      receiveEnabled: 1,
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(numericPortService);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      port: unknown;
+      imapPort: unknown;
+      pop3Port: unknown;
+    };
+    expect(typeof payload.port).toBe("string");
+    expect(payload.port).toBe("465");
+    expect(typeof payload.imapPort).toBe("string");
+    expect(payload.imapPort).toBe("993");
+    expect(typeof payload.pop3Port).toBe("string");
+    expect(payload.pop3Port).toBe("995");
+  });
 });

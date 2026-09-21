@@ -62,6 +62,17 @@ export const emailMarketingUpdateInputSchema = lazySchema(() =>
  * is written. The schema remains a length-bound guard, not the complete
  * security boundary; `validateEmailService` is the authoritative check.
  */
+/**
+ * Port fields are stored as VARCHAR(10) but the renderer form uses
+ * <v-number-input v-model="port">, which emits a number (e.g. 465) instead
+ * of a string. Accept both and normalize numbers to strings so numeric
+ * payloads don't fail validation before reaching the handler.
+ */
+const portStringSchema = z.union([
+  z.string().max(10),
+  z.number().int().min(1).max(65535).transform((n) => String(n)),
+]);
+
 export const emailServiceUpdateInputSchema = lazySchema(() =>
   z.object({
     id: z.union([z.number(), z.string().min(1)]).optional(),
@@ -71,14 +82,14 @@ export const emailServiceUpdateInputSchema = lazySchema(() =>
     replyTo: z.string().max(320).nullable().optional(),
     password: z.string().optional(),
     host: z.string().max(255).optional(),
-    port: z.string().max(10).optional(),
+    port: portStringSchema.optional(),
     ssl: z.number().optional(),
     receiveProtocol: z.string().max(10).optional(),
     imapHost: z.string().max(255).nullable().optional(),
-    imapPort: z.string().max(10).nullable().optional(),
+    imapPort: portStringSchema.nullable().optional(),
     imapSsl: z.number().optional(),
     pop3Host: z.string().max(255).nullable().optional(),
-    pop3Port: z.string().max(10).nullable().optional(),
+    pop3Port: portStringSchema.nullable().optional(),
     pop3Ssl: z.number().optional(),
     receiveUsername: z.string().max(255).nullable().optional(),
     receivePassword: z.string().nullable().optional(),

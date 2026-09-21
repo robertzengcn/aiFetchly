@@ -301,7 +301,12 @@ export function registerEmailMarketingIpcHandlers() {
         const entity = new EmailServiceEntity();
         entity.name = qdata.name ?? existing.name;
         entity.host = qdata.host ?? existing.host;
-        entity.port = qdata.port ?? existing.port;
+        // Schema normalizes numeric ports to strings, but coerce defensively:
+        // v-number-input emits numbers and validateEmailService calls .trim().
+        entity.port =
+          qdata.port !== undefined && qdata.port !== null
+            ? String(qdata.port)
+            : existing.port;
         entity.from = qdata.from ?? existing.from;
         entity.smtpUsername =
           qdata.smtpUsername !== undefined
@@ -326,10 +331,16 @@ export function registerEmailMarketingIpcHandlers() {
         entity.receiveProtocol =
           qdata.receiveProtocol ?? existing.receiveProtocol ?? "imap";
         entity.imapHost = qdata.imapHost ?? existing.imapHost ?? null;
-        entity.imapPort = qdata.imapPort ?? existing.imapPort ?? null;
+        entity.imapPort =
+          qdata.imapPort !== undefined && qdata.imapPort !== null
+            ? String(qdata.imapPort)
+            : existing.imapPort ?? null;
         entity.imapSsl = qdata.imapSsl ?? existing.imapSsl ?? 1;
         entity.pop3Host = qdata.pop3Host ?? existing.pop3Host ?? null;
-        entity.pop3Port = qdata.pop3Port ?? existing.pop3Port ?? null;
+        entity.pop3Port =
+          qdata.pop3Port !== undefined && qdata.pop3Port !== null
+            ? String(qdata.pop3Port)
+            : existing.pop3Port ?? null;
         entity.pop3Ssl = qdata.pop3Ssl ?? existing.pop3Ssl ?? 1;
         entity.receiveUsername =
           qdata.receiveUsername ?? existing.receiveUsername ?? null;
@@ -358,7 +369,10 @@ export function registerEmailMarketingIpcHandlers() {
       const createEntity = new EmailServiceEntity();
       createEntity.name = qdata.name;
       createEntity.host = qdata.host;
-      createEntity.port = qdata.port;
+      createEntity.port =
+        qdata.port !== undefined && qdata.port !== null
+          ? String(qdata.port)
+          : qdata.port;
       createEntity.from = qdata.from;
       createEntity.smtpUsername = qdata.smtpUsername ?? null;
       createEntity.replyTo = qdata.replyTo ?? null;
@@ -366,10 +380,16 @@ export function registerEmailMarketingIpcHandlers() {
       createEntity.ssl = qdata.ssl;
       createEntity.receiveProtocol = qdata.receiveProtocol ?? "imap";
       createEntity.imapHost = qdata.imapHost ?? null;
-      createEntity.imapPort = qdata.imapPort ?? null;
+      createEntity.imapPort =
+        qdata.imapPort !== undefined && qdata.imapPort !== null
+          ? String(qdata.imapPort)
+          : null;
       createEntity.imapSsl = qdata.imapSsl ?? 1;
       createEntity.pop3Host = qdata.pop3Host ?? null;
-      createEntity.pop3Port = qdata.pop3Port ?? null;
+      createEntity.pop3Port =
+        qdata.pop3Port !== undefined && qdata.pop3Port !== null
+          ? String(qdata.pop3Port)
+          : null;
       createEntity.pop3Ssl = qdata.pop3Ssl ?? 1;
       createEntity.receiveUsername = qdata.receiveUsername ?? null;
       createEntity.receivePassword = qdata.receivePassword ?? null;

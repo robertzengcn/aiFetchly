@@ -653,5 +653,32 @@ describe("Email Marketing IPC Handlers", () => {
       expect(mockValidateEmailServiceForSave).not.toHaveBeenCalled();
       expect(mockUpdateEmailService).not.toHaveBeenCalled();
     });
+
+    test("accepts numeric ports (v-number-input emits numbers) and persists them as strings", async () => {
+      // Regression: the renderer form uses <v-number-input v-model="port">,
+      // which sends a JSON number. The schema must accept it and the handler
+      // must normalize to the VARCHAR storage contract.
+      const result = (await mockIpcMain.callHandler(
+        EMAILSERVICEUPDATE,
+        {},
+        JSON.stringify({
+          id: 5,
+          name: "Primary",
+          from: "sender@example.com",
+          host: "smtp.example.com",
+          port: 465,
+          ssl: 1,
+        })
+      )) as CommonMessage<{ id: number }>;
+
+      expect(result.status).toBe(true);
+      expect(result.data!.id).toBe(5);
+      expect(mockUpdateEmailService).toHaveBeenCalledTimes(1);
+      const [updatedId, updatedEntity] = mockUpdateEmailService.mock
+        .calls[0] as [number, EmailServiceEntity];
+      expect(updatedId).toBe(5);
+      expect(typeof updatedEntity.port).toBe("string");
+      expect(updatedEntity.port).toBe("465");
+    });
   });
 });

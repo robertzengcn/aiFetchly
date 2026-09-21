@@ -385,17 +385,19 @@ const initialize = async () => {
         replyTo.value = res.replyTo ?? "";
         password.value = res.password;
         host.value = res.host;
-        port.value = res.port;
+        // Ports are VARCHAR in storage but v-number-input emits numbers at
+        // runtime — coerce so the form state stays a string for the contract.
+        port.value = res.port != null ? String(res.port) : "";
         name.value = res.name;
         ssl.value = res.ssl;
         // receive settings (optional)
         receiveEnabled.value = res.receiveEnabled ?? 0;
         receiveProtocol.value = (res.receiveProtocol === "pop3" ? "pop3" : "imap");
         imapHost.value = res.imapHost ?? "";
-        imapPort.value = res.imapPort ?? "";
+        imapPort.value = res.imapPort != null ? String(res.imapPort) : "";
         imapSsl.value = res.imapSsl ?? 1;
         pop3Host.value = res.pop3Host ?? "";
-        pop3Port.value = res.pop3Port ?? "";
+        pop3Port.value = res.pop3Port != null ? String(res.pop3Port) : "";
         pop3Ssl.value = res.pop3Ssl ?? 1;
         receiveUsername.value = res.receiveUsername ?? "";
         receivePassword.value = res.receivePassword ?? "";
@@ -479,7 +481,9 @@ async function onSubmit() {
     loading.value = false;
     return
   } else {
-    if (port.value.length > 5) {
+    // v-number-input emits a number at runtime (port is ref<string> for the
+    // EmailServiceEntitydata contract), so coerce before measuring/sending.
+    if (String(port.value ?? "").length > 5) {
 
       alert.value = true;
       alertcolor.value = "error";
@@ -494,15 +498,15 @@ async function onSubmit() {
       replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
       password: password.value,
       host: host.value,
-      port: port.value,
+      port: String(port.value ?? ""),
       ssl: ssl.value,
       receiveEnabled: receiveEnabled.value,
       receiveProtocol: receiveProtocol.value,
       imapHost: imapHost.value || null,
-      imapPort: imapPort.value || null,
+      imapPort: imapPort.value != null && String(imapPort.value).length > 0 ? String(imapPort.value) : null,
       imapSsl: imapSsl.value,
       pop3Host: pop3Host.value || null,
-      pop3Port: pop3Port.value || null,
+      pop3Port: pop3Port.value != null && String(pop3Port.value).length > 0 ? String(pop3Port.value) : null,
       pop3Ssl: pop3Ssl.value,
       receiveUsername: receiveUsername.value || null,
       receivePassword: receivePassword.value || null,
@@ -588,7 +592,7 @@ const submitTestemail = async () => {
     replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
     password: password.value,
     host: host.value,
-    port: port.value,
+    port: String(port.value ?? ""),
     ssl: ssl.value
   }
   // Carry the id so a test send in edit mode can reuse the stored password
