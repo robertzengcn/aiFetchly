@@ -200,6 +200,12 @@ export class OwnedProcessRegistry {
     return record ? this.view(record) : null;
   }
 
+  /** True when the record still holds a usable transport handle. */
+  hasHandle(recordId: string): boolean {
+    const record = this.records.get(recordId);
+    return Boolean(record && !record.exited && record.handle);
+  }
+
   /**
    * Cooperative termination via the stored transport handle. Returns false
    * when no handle exists (callers fall back to signals).

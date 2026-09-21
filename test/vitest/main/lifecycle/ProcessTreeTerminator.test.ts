@@ -212,6 +212,114 @@ describe("ProcessTreeTerminator — simulated table", () => {
   });
 });
 
+describe("ProcessTreeTerminator — 2026-09-21 audit regressions (T02–T04)", () => {
+  it("kills and verifies the COMPLETE transitive tree, 3+ levels deep (T02)", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    const childPid = ops.spawn(rootPid);
+    const grandChildPid = ops.spawn(childPid);
+    const greatGrandPid = ops.spawn(grandChildPid);
+    registry.register({ ownerId: "deep", pid: rootPid });
+    const terminator = new ProcessTreeTerminator(registry, ops, () => 0);
+    const summary = await terminator.terminateAll(FULL_BUDGET);
+    expect(summary.verificationFailures).toEqual([]);
+    expect(ops.isAlive(rootPid)).toBe(false);
+    expect(ops.isAlive(childPid)).toBe(false);
+    expect(ops.isAlive(grandChildPid)).toBe(false);
+    expect(ops.isAlive(greatGrandPid)).toBe(false);
+  });
+
+  it("grandchild survival is a verification failure, not silent success (T02)", async () => {
+    const ops = new FakeProcessOps();
+    // SIGKILL-immune grandchild under a killable child.
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    const childPid = ops.spawn(rootPid);
+    const grandPid = ops.spawn(childPid);
+    ops.immunePids.add(grandPid);
+    registry.register({ ownerId: "leak", pid: rootPid });
+    const terminator = new ProcessTreeTerminator(registry, ops);
+    const summary = await terminator.terminateAll(() => 400);
+    expect(summary.verificationFailures.length).toBeGreaterThan(0);
+    expect(summary.verificationFailures[0]).toContain("still alive");
+    expect(ops.isAlive(grandPid)).toBe(true);
+  });
+
+  it("never signals a descendant whose PID was reused after discovery (T03)", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    const childPid = ops.spawn(rootPid);
+    registry.register({ ownerId: "reuse-guard", pid: rootPid });
+    // Simulate reuse between discovery and signal: recycle the child AFTER
+    // discovery captured its identity. We hook signal to recycle on first call.
+    let firstSignal = true;
+    const originalSignal = ops.signal.bind(ops);
+    ops.signal = (pid: number, sig: NodeJS.Signals) => {
+      if (firstSignal) {
+        firstSignal = false;
+        // Root signaled; recycle the child BEFORE the descendant loop runs.
+        ops.recycle(childPid);
+      }
+      return originalSignal(pid, sig);
+    };
+    // Real clock: the verify loop must terminate against the budget even
+    // though the recycled (unrelated) pid legitimately stays alive.
+    const terminator = new ProcessTreeTerminator(registry, ops);
+    const summary = await terminator.terminateAll(() => 300);
+    // The recycled (unrelated) pid must NOT be signaled and must survive.
+    expect(ops.isAlive(childPid)).toBe(true);
+    expect(summary.verificationFailures.some((f) => f.includes("PID reuse"))).toBe(true);
+  });
+
+  it("a pending-spawn record with no resolvable kill is RETAINED and reported, never silently discarded (T04)", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const record = registry.register({ ownerId: "ghost-spawn" }); // no pid, no handle
+    const terminator = new ProcessTreeTerminator(registry, ops, () => 0);
+    const summary = await terminator.terminateAll(FULL_BUDGET);
+    expect(summary.verificationFailures.length).toBeGreaterThan(0);
+    expect(summary.verificationFailures[0]).toContain("incomplete cleanup");
+    // The record is retained for honest post-mortem inspection.
+    expect(registry.get(record.id)?.exited).toBe(false);
+  });
+
+  it("a pending-spawn whose handle kill fails (throwing kill) is retained as a failure (T04)", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const record = registry.register({
+      ownerId: "bad-handle",
+      handle: {
+        kill: () => {
+          throw new Error("kill broken");
+        },
+        once: () => undefined,
+      },
+    });
+    const terminator = new ProcessTreeTerminator(registry, ops, () => 0);
+    const summary = await terminator.terminateAll(FULL_BUDGET);
+    expect(summary.verificationFailures[0]).toContain("handle kill failed");
+    expect(registry.get(record.id)?.exited).toBe(false);
+  });
+
+  it("a discovery failure is reported instead of producing an empty tree (T02)", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    ops.spawn(rootPid); // a child exists
+    registry.register({ ownerId: "enum-fail", pid: rootPid });
+    ops.listChildren = async () => {
+      throw new Error("pgrep unavailable");
+    };
+    const terminator = new ProcessTreeTerminator(registry, ops, () => 0);
+    const summary = await terminator.terminateAll(FULL_BUDGET);
+    expect(
+      summary.verificationFailures.some((f) => f.includes("discovery failed"))
+    ).toBe(true);
+  });
+});
+
 describe("ProcessTreeTerminator — real processes (linux integration)", () => {
   /**
    * Independent-observer flavor of AC-14: real OS processes verified dead

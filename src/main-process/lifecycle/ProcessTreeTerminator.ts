@@ -4,22 +4,28 @@ import type { OwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcess
 
 /**
  * ProcessTreeTerminator — verified, platform-specific process-tree
- * termination (technical design §8).
+ * termination (technical design §8; 2026-09-21 audit T02–T04).
  *
  * Runs in the coordinator's force-and-verify phase. Rules implemented:
- *  - Windows: `taskkill /PID <pid> /T /F` (argument array, awaited), then
- *    liveness-verified. A root that already exited may not expose a tree —
- *    descendants captured while the root was alive are terminated
- *    individually afterwards.
- *  - macOS/Linux: an ISOLATED process group created at launch is signaled
- *    via its negative pgid (never the app's own group); otherwise
- *    descendants are discovered (with a post-kill re-check for spawn
- *    races) and terminated leaves+root with verified results.
+ *  - The COMPLETE TRANSITIVE tree is captured while the root is alive
+ *    (recursive child walk with a per-node budget), not just direct
+ *    children; discovery failures surface as incomplete cleanup instead of
+ *    silently emptying the tree (T02).
+ *  - Every discovered descendant's start-time identity is captured at
+ *    discovery and RE-CHECKED immediately before signaling; a changed
+ *    identity (PID reuse) is never signaled and is recorded as incomplete
+ *    cleanup (T03, AC-07).
  *  - Already-exited processes are SUCCESS after verification (identity
- *    check first — a reused PID is never signaled, AC-07).
+ *    check first — a reused PID is never signaled).
+ *  - A pending-spawn record whose PID never resolved CANNOT be marked
+ *    exited without proof: a failed/absent handle kill keeps the record
+ *    and reports an explicit failure so the report stays honest (T04).
+ *  - Windows: `taskkill /PID <pid> /T /F` (argument array, awaited) walks
+ *    the tree; the POSIX-side transitive walk also runs there when the
+ *    platform ops support it so surviving members are still verified.
  *  - Unvalidated worker-reported descendants are logged and NOT force
  *    killed (ambiguous ownership, §8); they surface as verification
- *    failures so the shutdown report stays honest (AC-15).
+ *    failures (AC-15).
  *  - Termination helpers respect the remaining phase budget (§8).
  */
 
@@ -35,6 +41,15 @@ type RecordOutcome =
   | { kind: "failure"; detail: string };
 
 const VERIFY_POLL_MS = 50;
+/** Per-node discovery budget slice (bounded from the phase deadline). */
+const DISCOVER_NODE_BUDGET_MS = 250;
+/** Max transitive depth — cycle/insane-tree backstop, well past real trees. */
+const MAX_TREE_DEPTH = 24;
+
+interface DiscoveredMember {
+  readonly pid: number;
+  readonly startedAtIdentity: string | null;
+}
 
 export class ProcessTreeTerminator {
   private readonly registry: OwnedProcessRegistry;
@@ -112,23 +127,37 @@ export class ProcessTreeTerminator {
       };
     }
 
-    // Pending spawn that never resolved a pid: best-effort handle kill.
+    // Pending spawn that never resolved a pid (T04): a successful handle
+    // kill plus observed exit proves termination; ANYTHING LESS keeps the
+    // record and reports an explicit failure — never a silent discard.
     if (record.pid === null) {
       if (this.registry.killViaHandle(recordId, "SIGKILL")) {
         const exited = await this.registry.observeExit(
           recordId,
           deadline - this.now()
         );
-        return exited
-          ? { kind: "forced", count: 1 }
-          : { kind: "failure", detail: "pending-spawn handle kill unverified" };
+        if (exited) return { kind: "forced", count: 1 };
+        return {
+          kind: "failure",
+          detail:
+            "pending-spawn (pid never resolved) survived handle kill; record retained as incomplete cleanup",
+        };
       }
-      this.registry.markObservedExit(recordId);
-      this.registry.forget(recordId);
-      return { kind: "already-exited" };
+      if (this.registry.hasHandle(recordId)) {
+        return {
+          kind: "failure",
+          detail:
+            "pending-spawn handle kill failed; record retained as incomplete cleanup",
+        };
+      }
+      return {
+        kind: "failure",
+        detail:
+          "pending-spawn resolved neither pid nor usable handle; record retained as incomplete cleanup",
+      };
     }
 
-    // Identity check FIRST — never signal a reused PID (AC-07).
+    // Identity check FIRST — never signal a reused PID (AC-07, T03).
     const identity = await this.registry.verifyIdentity(recordId);
     if (identity === "reuse" || identity === "gone") {
       this.registry.markObservedExit(recordId);
@@ -136,14 +165,18 @@ export class ProcessTreeTerminator {
       return { kind: "already-exited" };
     }
 
-    // Capture descendant identity while the root is alive (§8: a root that
-    // already exited may no longer provide a discoverable tree).
-    let descendants: number[] = [];
-    if (this.ops.platform !== "win32") {
-      descendants = await this.registry.listChildPids(recordId);
-    }
+    // Capture the COMPLETE transitive tree while the root is alive (T02).
+    // Discovery runs on every platform whose ops enumerate children; a
+    // discovery ERROR is recorded, never silently treated as "no children".
+    const tree = await this.collectTree(record.pid, deadline);
+    const descendants = tree.members;
 
     let signaled = 0;
+    const failures: string[] = [];
+    if (tree.discoveryError !== null) {
+      failures.push(`descendant discovery failed: ${tree.discoveryError}`);
+    }
+
     if (this.ops.platform === "win32") {
       const result = await this.ops.runTaskkillTree(record.pid);
       if (result === "error") {
@@ -177,33 +210,49 @@ export class ProcessTreeTerminator {
     }
 
     // Post-kill re-check for spawn races (§8): children spawned between the
-    // pre-kill capture and the root's death.
+    // pre-kill capture and the root's death, found via the parent pid for
+    // as long as the OS still reports it.
     if (this.ops.platform !== "win32") {
-      const postChildren = await this.registry.listChildPids(recordId);
-      for (const pid of postChildren) {
-        if (!descendants.includes(pid)) descendants.push(pid);
+      try {
+        const postChildren = await this.ops.listChildren(record.pid);
+        for (const pid of postChildren) {
+          if (!descendants.some((d) => d.pid === pid)) {
+            descendants.push({ pid, startedAtIdentity: null });
+          }
+        }
+      } catch (err) {
+        failures.push(
+          `post-kill child re-check failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
       }
     }
 
-    // Terminate surviving descendants individually (root may already be
-    // gone; the captured identity lets us still reach them, §8).
-    for (const pid of descendants) {
-      if (!this.ops.isAlive(pid)) continue;
-      const result = this.ops.signal(pid, "SIGKILL");
+    // Terminate surviving descendants individually, each guarded by an
+    // identity RE-CHECK (T03): a pid whose start identity changed since
+    // discovery is PID REUSE — never signal it, record incomplete cleanup.
+    for (const member of descendants) {
+      if (!this.ops.isAlive(member.pid)) continue;
+      if (
+        await this.identityChangedAsync(member.pid, member.startedAtIdentity)
+      ) {
+        failures.push(
+          `descendant pid ${member.pid} identity changed (PID reuse); not signaled`
+        );
+        continue;
+      }
+      const result = this.ops.signal(member.pid, "SIGKILL");
       if (result === "ok") {
         signaled += 1;
       } else if (result === "error") {
-        log.warn(`[terminator] failed to signal descendant pid ${pid}`);
+        failures.push(`failed to signal descendant pid ${member.pid}`);
       }
     }
 
-    // Verify observed exit for root AND descendants within the budget.
-    const failures: string[] = [];
-    const targets = [record.pid, ...descendants];
-    const verifyDeadline = Math.min(
-      deadline,
-      this.now() + Math.max(VERIFY_POLL_MS, deadline - this.now())
-    );
+    // Verify observed exit for root AND every tree member within the budget.
+    const targets = [record.pid, ...descendants.map((d) => d.pid)];
+    const verifyDeadline = deadline;
     const pending = new Set(targets);
     while (pending.size > 0 && this.now() < verifyDeadline) {
       for (const pid of pending) {
@@ -228,7 +277,7 @@ export class ProcessTreeTerminator {
       if (
         other.pid !== null &&
         other.pid !== record.pid &&
-        descendants.includes(other.pid) &&
+        descendants.some((d) => d.pid === other.pid) &&
         !this.ops.isAlive(other.pid)
       ) {
         this.registry.markObservedExit(other.id);
@@ -240,6 +289,80 @@ export class ProcessTreeTerminator {
       return { kind: "failure", detail: failures.join("; ") };
     }
     return { kind: "forced", count: signaled };
+  }
+
+  /**
+   * Recursively collect the transitive process tree under `rootPid`,
+   * capturing each member's start-time identity at discovery (T02/T03).
+   * A failed enumeration at any level aborts collection and reports the
+   * error — never a silent empty tree.
+   */
+  private async collectTree(
+    rootPid: number,
+    deadline: number
+  ): Promise<{
+    members: DiscoveredMember[];
+    discoveryError: string | null;
+  }> {
+    const members: DiscoveredMember[] = [];
+    let frontier = [rootPid];
+    const seen = new Set<number>([rootPid]);
+    let discoveryError: string | null = null;
+
+    for (let depth = 0; depth < MAX_TREE_DEPTH; depth += 1) {
+      if (frontier.length === 0) break;
+      if (this.now() >= deadline) {
+        discoveryError =
+          discoveryError ?? `discovery budget exhausted at depth ${depth}`;
+        break;
+      }
+      const next: number[] = [];
+      for (const parent of frontier) {
+        let children: number[];
+        try {
+          children = await this.ops.listChildren(parent);
+        } catch (err) {
+          discoveryError = err instanceof Error ? err.message : String(err);
+          continue;
+        }
+        for (const child of children) {
+          if (seen.has(child)) continue; // defensive against table cycles
+          seen.add(child);
+          let startedAtIdentity: string | null = null;
+          try {
+            startedAtIdentity = await this.ops.readStartTimeIdentity(child);
+          } catch {
+            startedAtIdentity = null;
+          }
+          members.push({ pid: child, startedAtIdentity });
+          next.push(child);
+        }
+      }
+      frontier = next;
+    }
+    return { members, discoveryError };
+  }
+
+  /**
+   * Async identity re-check for a discovered member (T03): true when the
+   * pid's start identity no longer matches the discovery snapshot (PID
+   * reuse) or can no longer be read — either way, never signal it.
+   */
+  private async identityChangedAsync(
+    pid: number,
+    snapshot: string | null
+  ): Promise<boolean> {
+    if (snapshot === null) {
+      // Discovery captured no identity (platform limitation): membership in
+      // the verified root's tree at discovery is the ownership evidence.
+      return false;
+    }
+    try {
+      const current = await this.ops.readStartTimeIdentity(pid);
+      return current !== snapshot;
+    } catch {
+      return true; // unreadable now → do not signal
+    }
   }
 }
 
