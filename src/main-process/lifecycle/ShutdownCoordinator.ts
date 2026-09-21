@@ -127,10 +127,7 @@ function describeError(err: unknown): string {
   // FR-09 privacy: messages can quote filesystem paths (ENOENT etc.).
   // Collapse absolute/posix/win32 path-shaped runs to <path>.
   return truncateMessage(
-    raw.replace(
-      /(?:[A-Za-z]:)?(?:[\/][\w .@()-]+){2,}/g,
-      "<path>"
-    )
+    raw.replace(/(?:[A-Za-z]:)?(?:[/][\w .@()-]+){2,}/g, "<path>")
   );
 }
 
