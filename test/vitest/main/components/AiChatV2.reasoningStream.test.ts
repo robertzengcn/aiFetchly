@@ -158,6 +158,8 @@ const i18n = createI18n({
         conversation_history: "Conversation history",
         manage_mcp_tools: "Manage MCP Tools",
         new_conversation: "New conversation",
+        show_reasoning: "Show reasoning",
+        hide_reasoning: "Hide reasoning",
         voice: {
           enable_spoken_responses: "Enable spoken responses",
           disable_spoken_responses: "Disable spoken responses",
@@ -225,8 +227,7 @@ function mountChat() {
         ScheduledLoopToolApprovalDialog: true,
         AIConversationReportButton: true,
         VBtn: {
-          template:
-            '<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>',
+          template: '<button v-bind="$attrs"><slot /></button>',
         },
         VAlert: true,
         VCard: true,
@@ -314,5 +315,81 @@ describe("AiChatV2 live reasoning panel", () => {
     expect(
       wrapper.find('[data-role="assistant"] [data-testid="content"]').text()
     ).toContain("Final answer.");
+  });
+
+  it("recovers reasoning from the complete event when live deltas were missed", async () => {
+    vi.mocked(streamChatV2Message).mockImplementation(
+      async (request, onChunk, onComplete) => {
+        const conversationId = request.conversationId ?? "v2-test";
+        onChunk({
+          eventType: "start",
+          conversationId,
+          messageId: "asst-complete-1",
+        });
+        onChunk({
+          eventType: "token",
+          conversationId,
+          messageId: "asst-complete-1",
+          contentDelta: "Final answer.",
+        });
+        onComplete({
+          eventType: "complete",
+          conversationId,
+          messageId: "asst-complete-1",
+          fullContent: "Final answer.",
+          reasoningContent: "Recovered reasoning.",
+        });
+      }
+    );
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="reasoning"]').text()).toBe(
+      "Recovered reasoning."
+    );
+  });
+
+  it("hides the live reasoning panel when the header toggle is turned off", async () => {
+    vi.mocked(streamChatV2Message).mockImplementation(
+      async (request, onChunk, onComplete) => {
+        const conversationId = request.conversationId ?? "v2-test";
+        onChunk({
+          eventType: "start",
+          conversationId,
+          messageId: "asst-toggle-1",
+        });
+        onChunk({
+          eventType: "reasoning_delta",
+          conversationId,
+          messageId: "asst-toggle-1",
+          reasoningDelta: "Visible until toggled off.",
+        });
+        onChunk({
+          eventType: "token",
+          conversationId,
+          messageId: "asst-toggle-1",
+          contentDelta: "Answer.",
+        });
+        onComplete({
+          eventType: "complete",
+          conversationId,
+          messageId: "asst-toggle-1",
+          fullContent: "Answer.",
+        });
+      }
+    );
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="send-first"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="toggle-reasoning"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(false);
   });
 });

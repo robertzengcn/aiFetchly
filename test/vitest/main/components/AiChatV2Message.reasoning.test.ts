@@ -15,7 +15,14 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 const i18n = createI18n({
   legacy: false,
   locale: "en",
-  messages: { en: { aiChatV2: { reasoning_title: "Reasoning" } } },
+  messages: {
+    en: {
+      aiChatV2: {
+        reasoning_title: "Reasoning",
+        reasoning_streaming: "Reasoning…",
+      },
+    },
+  },
 });
 
 function makeAssistantMessage(reasoning?: {
@@ -73,6 +80,15 @@ describe("AiChatV2Message reasoning panel", () => {
     );
     await flushPromises();
     expect(wrapper.find(".v2-message__reasoning").attributes("open")).toBe("");
+  });
+
+  it("labels the panel as streaming while the assistant turn is in progress", async () => {
+    const wrapper = mountWith(
+      makeAssistantMessage({ content: "Live thoughts." })
+    );
+    await wrapper.setProps({ status: "streaming" });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reasoning…");
   });
 
   it("omits the panel when there is no reasoning metadata", async () => {

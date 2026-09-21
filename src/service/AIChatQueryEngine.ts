@@ -1818,7 +1818,12 @@ export class AIChatQueryEngine {
           assistantMessageId,
           images: result.images,
         });
-        if (result.fullContent.length > 0 || generatedImages) {
+        if (
+          result.fullContent.length > 0 ||
+          generatedImages ||
+          (typeof result.reasoningContent === "string" &&
+            result.reasoningContent.length > 0)
+        ) {
           await module.saveAssistantMessage({
             conversationId,
             content: result.fullContent,
@@ -1847,6 +1852,7 @@ export class AIChatQueryEngine {
           totalTokens: result.totalTokens,
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
+          reasoningContent: result.reasoningContent,
         });
         // Post-turn compaction. The durable incremental coordinator (§11) takes
         // precedence when injected — it dedups concurrent requests, acquires a

@@ -63,9 +63,11 @@ function goBack(): void {
 }
 
 function onReasoningVisibilityChange(value: boolean | null): void {
-  const visible = value === true;
-  showReasoningProcess.value = visible;
-  writeAiChatReasoningVisible(visible);
+  if (typeof value !== "boolean") {
+    return;
+  }
+  showReasoningProcess.value = value;
+  writeAiChatReasoningVisible(value);
 }
 </script>
 

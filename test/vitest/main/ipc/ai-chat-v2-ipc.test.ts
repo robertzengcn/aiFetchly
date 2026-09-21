@@ -1337,6 +1337,14 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     expect(tokenChunks).toHaveLength(1);
     expect(tokenChunks[0].contentDelta).toBe("Answer");
 
+    const completeChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_COMPLETE)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "complete");
+    expect(completeChunk).toMatchObject({
+      reasoningContent: "Thinking...",
+    });
+
     // 3. Reasoning was persisted on the assistant message, separate from content.
     expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({

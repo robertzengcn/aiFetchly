@@ -186,6 +186,8 @@ export interface AIChatQueryCompleteEvent {
   totalTokens?: number;
   promptTokens?: number;
   completionTokens?: number;
+  /** Final accumulated reasoning so the renderer can recover if live deltas were missed. */
+  reasoningContent?: string;
 }
 
 export interface AIChatQueryCancelledEvent {

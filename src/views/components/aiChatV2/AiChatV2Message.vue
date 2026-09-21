@@ -142,20 +142,25 @@
         </template>
       </template>
       <template v-else>
-        <div v-if="displayContent" class="v2-message__content">
-          {{ displayContent }}
-        </div>
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
-          :open="hasReasoning"
+          data-testid="reasoning"
+          open
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
-            {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+            {{
+              status === "streaming"
+                ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
+                : t("aiChatV2.reasoning_title") || "Reasoning"
+            }}
           </summary>
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
+        <div v-if="displayContent" class="v2-message__content">
+          {{ displayContent }}
+        </div>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
           <template v-for="image in generatedImages" :key="image.key">
             <a

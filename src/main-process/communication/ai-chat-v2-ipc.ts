@@ -282,9 +282,7 @@ function getCompactAgent(): AIChatCompactAgentService {
       // legacy-summary rollback (design §15/§18 — the removed all-history
       // model call is never restored; only a bounded recent window is
       // summarized and no generation is published).
-      ...(flag
-        ? { compactionCoordinator: getCompactionCoordinator() }
-        : {}),
+      ...(flag ? { compactionCoordinator: getCompactionCoordinator() } : {}),
     });
     compactAgentDbPath = dbPath;
     singletonNewCompactionFlag = flag;
@@ -716,6 +714,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             promptTokens: e.promptTokens,
             completionTokens: e.completionTokens,
             totalTokens: e.totalTokens,
+            reasoningContent: e.reasoningContent,
           });
           break;
         case "cancelled":

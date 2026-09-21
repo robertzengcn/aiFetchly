@@ -180,6 +180,22 @@
           icon
           size="small"
           variant="text"
+          data-testid="toggle-reasoning"
+          @click="toggleReasoningVisible"
+          :title="
+            showReasoning
+              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
+              : t('aiChatV2.show_reasoning') || 'Show reasoning'
+          "
+        >
+          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
+            mdi-brain
+          </v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           @click="onClearMessages"
           :disabled="messages.length === 0"
           :title="t('aiChatV2.clear_chat') || 'Clear chat'"
@@ -921,6 +937,7 @@ import {
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
+  writeAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import {
@@ -1234,9 +1251,14 @@ const mergePersistedAndLiveMessages = (
         liveMessage.metadata?.generatedImages?.length ?? 0;
       const persistedImageCount =
         persistedMessage.metadata?.generatedImages?.length ?? 0;
+      const liveReasoningLen =
+        liveMessage.metadata?.reasoning?.content?.length ?? 0;
+      const persistedReasoningLen =
+        persistedMessage.metadata?.reasoning?.content?.length ?? 0;
       if (
         liveMessage.content.length > persistedMessage.content.length ||
-        liveImageCount > persistedImageCount
+        liveImageCount > persistedImageCount ||
+        liveReasoningLen > persistedReasoningLen
       ) {
         const metadataSource =
           liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
@@ -2220,6 +2242,11 @@ const handleReasoningVisibilityChanged = (event: Event): void => {
     typeof customEvent.detail?.visible === "boolean"
       ? customEvent.detail.visible
       : readAiChatReasoningVisible();
+};
+const toggleReasoningVisible = (): void => {
+  const next = !showReasoning.value;
+  showReasoning.value = next;
+  writeAiChatReasoningVisible(next);
 };
 
 const resolveContextWindowLocal = (model?: string): number =>
@@ -4183,11 +4210,26 @@ const onSend = async (
             tempUser.conversationId = chunk.conversationId;
             assistant.conversationId = chunk.conversationId;
           }
-          if (chunk.messageId) {
+          if (chunk.messageId && chunk.messageId !== assistant.id) {
+            const previousId = assistant.id;
             assistant.id = chunk.messageId;
             patchConversationRuntimeState(streamConversationId, {
               activeAssistantMessageId: chunk.messageId,
             });
+            if (assistantAdded) {
+              const currentMessages = streamMessageListController.get();
+              const idx = currentMessages.findIndex(
+                (m) => m.id === previousId
+              );
+              if (idx !== -1) {
+                const nextMessages = [...currentMessages];
+                nextMessages[idx] = {
+                  ...nextMessages[idx],
+                  id: chunk.messageId,
+                };
+                streamMessageListController.set(nextMessages);
+              }
+            }
           }
           // `start` marks acceptance/persistence (§13.3): clear ONLY the
           // selected passages the backend actually accepted — those are now
@@ -4577,6 +4619,30 @@ const onSend = async (
             source: "chat-v2",
             generatedImages,
           };
+        }
+        if (
+          showReasoning.value &&
+          typeof complete.reasoningContent === "string" &&
+          complete.reasoningContent.length > 0
+        ) {
+          ensureAssistantAdded();
+          const existing = assistant.metadata?.reasoning?.content ?? "";
+          if (complete.reasoningContent.length >= existing.length) {
+            const truncated =
+              complete.reasoningContent.length > REASONING_LIVE_MAX_CHARS;
+            assistant.metadata = {
+              ...(assistant.metadata ?? { source: "chat-v2" }),
+              reasoning: {
+                content: truncated
+                  ? complete.reasoningContent.slice(0, REASONING_LIVE_MAX_CHARS)
+                  : complete.reasoningContent,
+                format: "plain_text",
+                source: "server",
+                model: complete.model,
+                truncated,
+              },
+            };
+          }
         }
         if (assistantAdded) {
           const currentMessages = streamMessageListController.get();

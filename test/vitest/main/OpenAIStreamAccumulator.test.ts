@@ -117,4 +117,34 @@ describe("OpenAIStreamAccumulator — reasoning", () => {
     expect(r.reasoningDelta).toBe("");
     expect(acc.state.reasoningContent).toBe("");
   });
+
+  it("extracts Ollama-style thinking strings", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(chunk({ thinking: "step one" }));
+    expect(r.reasoningDelta).toBe("step one");
+    expect(acc.state.reasoningContent).toBe("step one");
+  });
+
+  it("flattens structured reasoning summary objects", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(
+      chunk({
+        reasoning: {
+          summary: [{ type: "summary_text", text: "Inspect the contract." }],
+        },
+      } as never)
+    );
+    expect(r.reasoningDelta).toBe("Inspect the contract.");
+    expect(acc.state.reasoningContent).toBe("Inspect the contract.");
+  });
+
+  it("flattens OpenRouter reasoning_details parts", () => {
+    const acc = new OpenAIStreamAccumulator();
+    const r = acc.ingest(
+      chunk({
+        reasoning_details: [{ type: "reasoning.text", text: "Plan A." }],
+      } as never)
+    );
+    expect(r.reasoningDelta).toBe("Plan A.");
+  });
 });

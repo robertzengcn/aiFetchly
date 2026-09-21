@@ -23,25 +23,73 @@ export interface OpenAIStreamIngestResult {
 }
 
 /**
- * Extract the first non-empty reasoning delta from a choice delta, using the
- * priority order reasoning_delta → reasoning_content → reasoning_summary →
- * reasoning.
- * Only string values are honoured; malformed non-string fields are ignored so
- * a provider that emits a non-string structure cannot corrupt the transcript.
+ * Field names providers emit for safe reasoning text, checked in priority
+ * order. Matches the hosted server helper so local OpenAI-compatible
+ * streams (Ollama thinking, OpenRouter, vLLM) and hosted deltas stay aligned.
+ */
+const REASONING_FIELD_CANDIDATES: readonly string[] = [
+  "reasoning_delta",
+  "reasoning_content",
+  "reasoning_summary",
+  "reasoning",
+  "thinking",
+  "thought",
+  "reasoning_details",
+];
+
+const MAX_REASONING_COERCE_DEPTH = 4;
+
+const REASONING_OBJECT_TEXT_KEYS: readonly string[] = [
+  "text",
+  "content",
+  "summary",
+];
+
+/**
+ * Coerce a provider reasoning value to plain text. Strings pass through.
+ * Arrays of summary parts and objects with text/content/summary are flattened.
+ * Booleans, numbers, and unrelated objects yield "".
+ */
+export function coerceReasoningText(value: unknown, depth: number = 0): string {
+  if (depth > MAX_REASONING_COERCE_DEPTH || value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    let combined = "";
+    for (const item of value) {
+      combined += coerceReasoningText(item, depth + 1);
+    }
+    return combined;
+  }
+  if (typeof value === "object") {
+    const rec = value as Record<string, unknown>;
+    for (const key of REASONING_OBJECT_TEXT_KEYS) {
+      const piece = coerceReasoningText(rec[key], depth + 1);
+      if (piece.length > 0) {
+        return piece;
+      }
+    }
+  }
+  return "";
+}
+
+/**
+ * Extract the first non-empty reasoning delta from a choice delta.
+ * Accepts string aliases and structured objects (OpenAI summary parts,
+ * OpenRouter reasoning_details, Ollama `thinking`).
  */
 function extractReasoningDelta(delta: OpenAIStreamDelta | undefined): string {
   if (!delta) {
     return "";
   }
-  const candidates: (string | null | undefined)[] = [
-    delta.reasoning_delta,
-    delta.reasoning_content,
-    delta.reasoning_summary,
-    delta.reasoning,
-  ];
-  for (const value of candidates) {
-    if (typeof value === "string" && value.length > 0) {
-      return value;
+  const rec = delta as unknown as Record<string, unknown>;
+  for (const field of REASONING_FIELD_CANDIDATES) {
+    const text = coerceReasoningText(rec[field]);
+    if (text.length > 0) {
+      return text;
     }
   }
   return "";

@@ -352,6 +352,8 @@ export interface ChatV2StreamChunk {
   contentDelta?: string;
   /** reasoning_delta: incremental safe-to-show reasoning text. */
   reasoningDelta?: string;
+  /** complete: final accumulated reasoning when live deltas were missed. */
+  reasoningContent?: string;
   fullContent?: string;
   model?: string;
   finishReason?: string | null;
