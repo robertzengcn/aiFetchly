@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Remaining vs PRD 1.0 after 2026-09-20 evening re-audit |
+| Status | Code-complete vs PRD 1.0 (2026-09-21 close-out); packaged/OS manual matrix (task 1) + leftover-ticket close-out (task 2) remain |
 | Date | 2026-09-20 |
 | Worktree | `.claude/worktrees/app-exit-system-tray` |
 | Branch | `worktree-app-exit-system-tray` |
@@ -71,7 +71,7 @@ Fixture E2E is not a substitute for the original identity. The evidence file cor
 
 ---
 
-## 3. Worker-side graceful browser / scraper shutdown (design section 7, FR-05)
+## 3. Worker-side graceful shutdown — CLOSED (code): §7 responder at EVERY real worker entry point
 
 ### Why incomplete
 
@@ -111,7 +111,7 @@ Until then, **do not claim complete browser-descendant cleanup.** Commit the WIP
 
 ---
 
-## 4. At-exit task outcome mapping for social and bulk-email (FR-06, AC-09)
+## 4. At-exit mapping for social + bulk-email — CLOSED (code): durable-tasks participant (bulk-email → Error + [interrupted] note; social live-run registry → marker); tests in durableTaskReconciliation.test.ts
 
 ### Why incomplete
 
@@ -162,7 +162,7 @@ Keep the written exclusion everywhere “clean exit” is claimed, **or** implem
 
 ---
 
-## 6. Finish or revert uncommitted worker-responder WIP
+## 6. Documentation drift + WIP — CLOSED: inventory FR-06 rows match the code; responder WIP committed (see commits)
 
 ### Why incomplete
 
