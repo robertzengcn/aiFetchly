@@ -790,4 +790,17 @@ export class BuckEmailTaskModule extends BaseModule {
   getBuckEmailTypeName(type: BuckEmailType): string {
     return this.buckEmailTaskModel.getBuckEmailTypeName(type);
   }
+
+  /**
+   * FR-06/AC-09 at-exit reconciliation: map Processing rows to the existing
+   * Error state with an [interrupted] note in the error file. Completed and
+   * not-started rows untouched; nothing is requeued (retry stays a user
+   * action, so uncertain SMTP outcomes are never blindly retried).
+   */
+  public async reconcileInterruptedTasks(reason: string): Promise<number[]> {
+    const {
+      reconcileBulkEmailAtExit,
+    } = await import("@/main-process/communication/durableTaskReconciliation");
+    return reconcileBulkEmailAtExit(this.buckEmailTaskModel, reason);
+  }
 }

@@ -179,6 +179,41 @@ export function createShutdownParticipants(
     finalize: async () => undefined,
   };
 
+  const durableTasks: ShutdownParticipant = {
+    id: "durable-tasks",
+    freeze: () => undefined,
+    stop: async () => {
+      // FR-06/AC-09 at-exit mapping for the remaining durable families:
+      // bulk-email Processing rows -> existing Error + [interrupted] note;
+      // social live runs -> module-registry interruption marker (entity has
+      // no status column). Completed rows untouched; nothing auto-retried.
+      const { BuckEmailTaskModule } = await import(
+        "@/modules/buckEmailTaskModule"
+      );
+      const interruptedEmails =
+        await new BuckEmailTaskModule().reconcileInterruptedTasks(
+          "Application exited while the email batch was running"
+        );
+      if (interruptedEmails.length > 0) {
+        log.info(
+          `[bulk-email] marked ${interruptedEmails.length} processing task(s) interrupted`
+        );
+      }
+      const { reconcileInterruptedSocialRuns } = await import(
+        "@/modules/socialtask"
+      );
+      const interruptedRuns = await reconcileInterruptedSocialRuns(
+        "Application exited while the social task run was in progress"
+      );
+      if (interruptedRuns.length > 0) {
+        log.info(
+          `[social] marked ${interruptedRuns.length} live run(s) interrupted`
+        );
+      }
+    },
+    finalize: async () => undefined,
+  };
+
   const workerProtocol: ShutdownParticipant = {
     id: "worker-graceful-protocol",
     freeze: () => undefined,
@@ -299,6 +334,7 @@ export function createShutdownParticipants(
     workspaceWatch,
     yellowPages,
     searchScraper,
+    durableTasks,
     workerProtocol,
     appResources,
   ];

@@ -27,7 +27,31 @@ import {
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
 // const fileLocation = path.join(__static, 'myText.txt')
+/**
+ * FR-06/AC-09: live social task runs (taskrun_num -> child pid), tracked
+ * from spawn to child exit. SocialTask is instantiated per request, so this
+ * registry is MODULE-level; the SocialTaskRun entity has no status column,
+ * so at-exit reconciliation works from this map and logs an interruption
+ * marker per run (the next run is a NEW taskrun row — nothing auto-retries).
+ */
+const activeSocialRuns = new Map<string, { childPid: number | null }>();
+
+/** Record a live run; auto-removed when its child exits. */
+function trackSocialRun(
+  runNum: string,
+  child: { pid?: number | null; once(event: string, cb: () => void): unknown }
+): void {
+  activeSocialRuns.set(runNum, { childPid: child.pid ?? null });
+  try {
+    child.once("exit", () => activeSocialRuns.delete(runNum));
+  } catch {
+    activeSocialRuns.delete(runNum);
+  }
+}
+
 export class SocialTask {
+
+
   private _httpClient: HttpClient;
   //construct
   constructor() {
@@ -212,6 +236,7 @@ export class SocialTask {
       }
     )
     );
+    trackSocialRun(entity.taskrun_num, child);
     //console.log(path.join(__dirname, 'utilityCode.js'))
 
     // child.postMessage({ message: 'hello' }, [port1])
@@ -240,4 +265,35 @@ export class SocialTask {
       // Intentionally no console logging here to avoid spamming terminal output.
     });
   }
+
+}
+
+/**
+ * FR-06/AC-09 at-exit reconciliation: log an interruption marker for every
+ * live run and clear the registry (the entity has no status column; the
+ * marker + a fresh taskrun row on the next user-initiated run is the
+ * durable semantics — nothing is auto-retried). Returns interrupted ids.
+ */
+export async function reconcileInterruptedSocialRuns(
+  reason: string
+): Promise<number[]> {
+  const runModel = new SocialTaskRun();
+  const interrupted: number[] = [];
+  for (const runNum of Array.from(activeSocialRuns.keys())) {
+    try {
+      const id = await runModel.TaskidbytaskrunNum(runNum);
+      activeSocialRuns.delete(runNum);
+      if (!id) continue;
+      interrupted.push(id.id);
+      log.info(
+        `[social] run ${runNum} (task ${id.task_id}) interrupted: ${reason}`
+      );
+    } catch (err) {
+      log.warn(
+        `[social] failed to reconcile run ${runNum}:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  return interrupted;
 }
