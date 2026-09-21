@@ -203,6 +203,85 @@ function getPackageRootName(packageName) {
   return packageName.split("/")[0];
 }
 
+// Galactus can strip or EMPTY (directory husk, contents destroyed) modules
+// that the packaged main process requires at RUNTIME — typeorm's hoisted
+// tslib/ansis/dayjs boot-crashed Linux package builds ("Cannot find module
+// 'tslib'" from PlatformTools.js). Declaring them in package.json is not
+// enough: galactus walks an intermediate manifest during finalize, AFTER
+// the afterPrune hook.
+//
+// The restore below walks the runtime transitive closure to a fixpoint:
+// start from packages PRESENT with real content, queue each one's own
+// "dependencies", and restore any queued module that is missing or an
+// emptied husk from the project node_modules. Vite-bundled renderer deps
+// (vue, vuetify, pinia, ...) are never in the closure of a main-process
+// package, so they stay pruned — the package does not bloat.
+function restorePrunedRuntimeDependencies(buildPath) {
+  const stagedNodeModules = join(buildPath, "node_modules");
+  const stagedManifestPath = join(buildPath, "package.json");
+  if (!existsSync(stagedManifestPath)) {
+    throw new Error(
+      `[forge] restorePrunedRuntimeDependencies: no staged package.json at ${stagedManifestPath}`
+    );
+  }
+  const stagedManifest = JSON.parse(readFileSync(stagedManifestPath, "utf8"));
+
+  const isRealModule = (name) =>
+    existsSync(join(stagedNodeModules, name, "package.json"));
+
+  const readDeps = (name) => {
+    try {
+      const pkg = JSON.parse(
+        readFileSync(join(stagedNodeModules, name, "package.json"), "utf8")
+      );
+      return Object.keys(pkg.dependencies ?? {});
+    } catch {
+      return [];
+    }
+  };
+
+  // Seed: direct dependencies that survived the prune with content.
+  const queue = Object.keys(stagedManifest.dependencies ?? {}).filter(
+    (name) => isRealModule(name)
+  );
+  if (queue.length === 0) {
+    throw new Error(
+      "[forge] restorePrunedRuntimeDependencies: no staged dependencies survived the prune — packaging is broken upstream"
+    );
+  }
+  const visited = new Set(queue);
+  const restored = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const dep of readDeps(current)) {
+      if (visited.has(dep)) continue;
+      visited.add(dep);
+      if (!isRealModule(dep)) {
+        const source = join(__dirname, "node_modules", dep);
+        if (!existsSync(source)) {
+          // Optional peer deps (e.g. bufferutil on some platforms) may be
+          // legitimately absent from the project tree — skip those.
+          continue;
+        }
+        cpSync(source, join(stagedNodeModules, dep), {
+          recursive: true,
+          dereference: true,
+        });
+        restored.push(dep);
+        console.log(
+          `[forge] restored pruned runtime dependency into the package: ${dep}`
+        );
+      }
+      queue.push(dep);
+    }
+  }
+  if (restored.length > 0) {
+    console.log(
+      `[forge] restored ${restored.length} pruned runtime dependenc${restored.length === 1 ? "y" : "ies"} (runtime transitive closure)`
+    );
+  }
+}
+
 function removeEmptyDirectories(rootDir) {
   if (!existsSync(rootDir)) {
     return;
@@ -1081,9 +1160,31 @@ module.exports = {
 
     //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
+      restorePrunedRuntimeDependencies(buildPath);
       removeEmptyDirectories(buildPath);
       verifyStagedRendererHtml(buildPath);
       verifyGeneratedRuntimeRequires(buildPath);
+    },
+    // Galactus can empty pruned module CONTENTS during finalize — AFTER the
+    // afterPrune hook ran — leaving directory husks that pass an existsSync
+    // check but crash the packaged main process ("Cannot find module
+    // 'tslib'" from typeorm). postPackage sees the FINAL layout, so the
+    // restore runs once more there and the invariant is verified where it
+    // matters. See also verify-packaged-app (the CI gate) which fails loud
+    // on the same condition.
+    postPackage: async (_forgeConfig, packageResult) => {
+      for (const outputPath of packageResult.outputPaths) {
+        const candidates = [
+          join(outputPath, "resources", "app"),
+          // ASAR builds keep the manifest outside the archive.
+          join(outputPath, "resources", "app.asar.unpacked"),
+        ];
+        for (const appDir of candidates) {
+          if (existsSync(join(appDir, "package.json"))) {
+            restorePrunedRuntimeDependencies(appDir);
+          }
+        }
+      }
     },
   },
 };

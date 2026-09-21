@@ -589,6 +589,100 @@ function verifyPackagedRenderer(resourcesDir) {
   return true;
 }
 
+/**
+ * Galactus prune gate (runtime transitive closure): starting from staged
+ * dependencies that are PRESENT with real content, every package's own
+ * "dependencies" must resolve to a module with a package.json. Galactus can
+ * empty pruned module CONTENTS during finalize, leaving directory husks
+ * that pass an existsSync check but crash the packaged main process
+ * ("Cannot find module 'tslib'" from typeorm's CJS output — seen on Linux
+ * package builds). The forge postPackage hook restores the closure at
+ * package time; this gate fails loud if any husk/missing module survived,
+ * so CI never ships a package that cannot boot. Renderer-only deps that
+ * Vite bundles (vue, vuetify, ...) are not in the closure and stay pruned
+ * by design.
+ */
+function verifyDeclaredDependenciesPresent(resourcesDir) {
+  const layout = resolvePackagedLayout(resourcesDir);
+  if (!layout.diskRoot) {
+    // ASAR-only layout: the archive was built from the staged dir the
+    // postPackage hook restored; husk extraction is covered by
+    // verifyRuntimeRequires.
+    return true;
+  }
+  const nodeModulesRoot = path.join(layout.diskRoot, "node_modules");
+  const manifestPath = path.join(layout.diskRoot, "package.json");
+  if (!fs.existsSync(manifestPath)) {
+    console.error(
+      `No packaged app manifest at ${manifestPath} — cannot verify the runtime dependency closure.`
+    );
+    return false;
+  }
+  const isRealModule = (name) =>
+    fs.existsSync(path.join(nodeModulesRoot, name, "package.json"));
+  const readDeps = (name) => {
+    try {
+      return Object.keys(
+        JSON.parse(
+          fs.readFileSync(path.join(nodeModulesRoot, name, "package.json"), "utf8")
+        ).dependencies ?? {}
+      );
+    } catch {
+      return [];
+    }
+  };
+  const seed = (() => {
+    try {
+      return Object.keys(
+        JSON.parse(fs.readFileSync(manifestPath, "utf8")).dependencies ?? {}
+      ).filter((name) => isRealModule(name));
+    } catch (err) {
+      console.error(
+        `Packaged app manifest is unreadable (${manifestPath}): ${err.message}`
+      );
+      return null;
+    }
+  })();
+  if (seed === null) return false;
+  if (seed.length === 0) {
+    console.error(
+      `No staged dependencies with content found in the packaged app (${manifestPath}) — packaging is broken upstream.`
+    );
+    return false;
+  }
+  let ok = true;
+  const visited = new Set(seed);
+  const queue = [...seed];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const dep of readDeps(current)) {
+      if (visited.has(dep)) continue;
+      visited.add(dep);
+      if (!isRealModule(dep)) {
+        // Absent from the closure entirely (optional peer dep skipped by the
+        // packager) — only a failure when the requiring package actually
+        // loads it, which verifyRuntimeRequires' static analysis covers for
+        // direct requires. Here we only fail on husks: a directory exists
+        // but its manifest is gone (galactus emptied it).
+        if (fs.existsSync(path.join(nodeModulesRoot, dep))) {
+          ok = false;
+          console.error(
+            `Runtime dependency '${dep}' (required by '${current}') is an EMPTIED HUSK in the packaged app (galactus prune) — the packaged main process cannot require it: ${path.join(nodeModulesRoot, dep)}`
+          );
+        }
+        continue;
+      }
+      queue.push(dep);
+    }
+  }
+  if (ok) {
+    console.log(
+      `Runtime dependency closure intact across ${visited.size} packages in the packaged app.`
+    );
+  }
+  return ok;
+}
+
 function run() {
   const resourcesDirs = findResourcesDirs();
   if (resourcesDirs.length === 0) {
@@ -625,6 +719,9 @@ function run() {
     if (!verifyPackagedRenderer(resourcesDir)) {
       failed = true;
     }
+    if (!verifyDeclaredDependenciesPresent(resourcesDir)) {
+      failed = true;
+    }
   }
 
   return failed ? 1 : 0;
@@ -636,6 +733,8 @@ if (require.main === module) {
 
 module.exports = {
   REQUIRED_WORKERS,
+  hasPackagedNodeModule,
+  verifyDeclaredDependenciesPresent,
   RENDERER_HTML_RELATIVE,
   UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST,
   extractRuntimePackageRequires,
