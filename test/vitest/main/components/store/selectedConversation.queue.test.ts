@@ -149,6 +149,27 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.messages.some((m) => m.content === "rejected B")).toBe(true);
   });
 
+  it("appendDeliveredUserRow adds the persisted row once (id-keyed)", async () => {
+    await seedStore("idle");
+    const store = useSelectedConversationStore();
+
+    store.appendDeliveredUserRow({
+      id: "user-pending-p-1",
+      content: "delivered B",
+      timestamp: new Date(2026, 8, 18, 10, 0, 5).toISOString(),
+    });
+    store.appendDeliveredUserRow({
+      id: "user-pending-p-1",
+      content: "delivered B",
+      timestamp: new Date(2026, 8, 18, 10, 0, 5).toISOString(),
+    });
+
+    const rows = store.messages.filter((m) => m.id === "user-pending-p-1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toBe("delivered B");
+    expect(rows[0].role).toBe("user");
+  });
+
   it("an idle send runs through startRun with the optimistic row", async () => {
     await seedStore("idle");
     const store = useSelectedConversationStore();

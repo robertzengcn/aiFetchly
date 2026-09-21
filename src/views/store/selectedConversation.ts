@@ -353,6 +353,34 @@ export const useSelectedConversationStore = defineStore(
     // Tool permission actions (design §15.5)
     // -------------------------------------------------------------------------
 
+    /**
+     * Append the durable user row a queue-drained turn just delivered
+     * (message-queue §7): the delegated send's optimistic row was swapped for
+     * the pending bubble, and the bubble is removed at delivery — without
+     * this append the live transcript would lose the user's message until a
+     * re-selection reloads history. The persisted id makes the later history
+     * reload dedupe seamlessly.
+     */
+    function appendDeliveredUserRow(input: {
+      readonly id: string;
+      readonly content: string;
+      readonly timestamp: string;
+    }): void {
+      const current = workspaceStore.selectedConversationId;
+      if (!current) return;
+      if (messages.value.some((m) => m.id === input.id)) return; // idempotent
+      presenter.appendLocalUserMessage({
+        id: input.id,
+        conversationId: current,
+        role: "user",
+        content: input.content,
+        timestamp: input.timestamp,
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2" },
+      });
+      syncFromPresenter();
+    }
+
     /** One in-flight resume per tool id — double clicks are no-ops. */
     const permissionResumeInFlightToolIds = new Set<string>();
 
@@ -505,6 +533,7 @@ export const useSelectedConversationStore = defineStore(
       loadSelection,
       loadOlder,
       sendMessage,
+      appendDeliveredUserRow,
       stopActiveRun,
       grantToolPermission,
       denyToolPermission,

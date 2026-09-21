@@ -492,6 +492,7 @@ import {
   cancelChatV2PendingMessage,
   resumeChatV2PendingQueue,
   steerChatV2PendingMessage,
+  subscribeChatV2PendingEvents,
 } from "@/views/api/aiChatV2";
 import {
   useSelectedConversationStore,
@@ -702,6 +703,28 @@ async function onResumePending(targetConversationId: string): Promise<void> {
   } catch {
     // Non-fatal: the queue retries the drain.
   }
+}
+
+/**
+ * Delivered-row swap (message-queue §7): a delegated send's pending bubble is
+ * removed at delivery, and the live transcript only learns the persisted user
+ * row from a history reload — so append it here (durable id → the later
+ * reload dedupes). Steering-applied rows promote the same way.
+ */
+let deliveredRowsUnsubscribe: (() => void) | null = null;
+function ensureDeliveredRowsSubscription(): void {
+  if (deliveredRowsUnsubscribe) return;
+  deliveredRowsUnsubscribe = subscribeChatV2PendingEvents((event) => {
+    if (event.status !== "sent" && event.status !== "applied") return;
+    const view = event.pendingMessage;
+    if (!view || view.conversationId !== conversationId.value) return;
+    if (!view.sentMessageId) return;
+    selectedStore.appendDeliveredUserRow({
+      id: view.sentMessageId,
+      content: view.content,
+      timestamp: view.updatedAt,
+    });
+  });
 }
 /** Store key for the selected conversation (pending sentinel when null). */
 const composerDraftKey = computed(() => composerDraftKeyFor(conversationId.value));
@@ -1365,6 +1388,7 @@ watch(
 onMounted(async () => {
   void loadModels();
   void voice.loadSettings();
+  ensureDeliveredRowsSubscription();
   if (conversationId.value) {
     void loadApprovalMode(conversationId.value);
     // Focus transfer (PRD §19.1): mounting with a conversation already
@@ -1390,6 +1414,8 @@ onMounted(async () => {
  * surface itself (the composable's onScopeDispose handles it).
  */
 onUnmounted(() => {
+  deliveredRowsUnsubscribe?.();
+  deliveredRowsUnsubscribe = null;
   pendingMessages.teardown();
   voice.dispose();
   // Release the conversation's filesystem-watch claim (review fix): this
