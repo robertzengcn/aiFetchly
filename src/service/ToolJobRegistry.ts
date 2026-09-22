@@ -88,6 +88,7 @@ export class ToolJobRegistry {
   private jobs = new Map<string, InternalJob>();
   private queue: string[] = [];
   private running = 0;
+  private closed = false;
   private readonly limits: ToolJobLimits;
 
   constructor(limits?: Partial<ToolJobLimits>) {
@@ -104,6 +105,12 @@ export class ToolJobRegistry {
     ctx: { conversationId: string; toolCallId: string },
     spawn: (handle: ToolJobSpawnHandle) => Promise<unknown>
   ): { jobId: string; queued: boolean } {
+    if (this.closed) {
+      // T06/AC-05: no job may be admitted after shutdown seals the registry.
+      throw new Error(
+        "ToolJobRegistry is closed (application shutting down); job refused"
+      );
+    }
     const jobId = randomUUID();
     // One AbortController per job. Aborting is the authoritative cancellation
     // request for the underlying tool work; the handlers below only relabel
@@ -310,6 +317,7 @@ export class ToolJobRegistry {
   }
 
   shutdown(): void {
+    this.closed = true; // T06/AC-05: no job may be admitted after freeze
     for (const job of this.jobs.values()) {
       if (job.status === "running" || job.status === "queued") {
         job.abortController.abort();
@@ -327,6 +335,11 @@ export class ToolJobRegistry {
     this.jobs.clear();
     this.queue = [];
     this.running = 0;
+  }
+
+  /** True once shutdown() sealed the registry — start() refuses new jobs (T06). */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   private snapshot(job: InternalJob): ToolJobSnapshot {

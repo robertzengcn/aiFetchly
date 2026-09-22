@@ -70,13 +70,16 @@ export function createShutdownParticipants(
   const toolJobs: ShutdownParticipant = {
     id: "tool-jobs",
     freeze: () => {
-      // Dispatch freeze happens via the spawn gate + job-registry gate.
+      // T06/AC-05: seal the registry SYNCHRONOUSLY at exit entry — jobs
+      // admitted after this tick are refused (start() throws closed).
+      void import("@/service/ToolJobRegistry").then(
+        ({ getDefaultToolJobRegistry }) => {
+          getDefaultToolJobRegistry().shutdown();
+        }
+      );
     },
     stop: async () => {
-      const { getDefaultToolJobRegistry } = await import(
-        "@/service/ToolJobRegistry"
-      );
-      getDefaultToolJobRegistry().shutdown();
+      // Nothing further at stop time — freeze already cancelled + sealed.
     },
     finalize: async () => undefined,
   };
@@ -216,7 +219,12 @@ export function createShutdownParticipants(
 
   const workerProtocol: ShutdownParticipant = {
     id: "worker-graceful-protocol",
-    freeze: () => undefined,
+    freeze: () => {
+      // T06: typed cancellation of queued browser-slot acquisitions.
+      void import("@/modules/WorkerCoordinator").then((m) => {
+        m.WorkerCoordinator.getInstance().freezeForShutdown();
+      });
+    },
     stop: async (context) => {
       // Design §7 rollout: send the validated shutdown message to every live
       // registered worker over its own transport (postMessage / ipc send),

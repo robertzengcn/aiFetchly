@@ -116,11 +116,14 @@ describe("createShutdownParticipants — owner mapping", () => {
     vi.clearAllMocks();
   });
 
-  it("tool-jobs calls the registry shutdown", async () => {
+  it("tool-jobs seals the registry in freeze() (T06)", async () => {
     const participants = createShutdownParticipants(makeDeps());
     const toolJobs = participants.find((p) => p.id === "tool-jobs")!;
-    await toolJobs.stop(contextOf(10_000));
+    toolJobs.freeze();
+    // freeze() fires the shutdown via dynamic import — flush the microtask.
+    await new Promise((r) => setImmediate(r));
     expect(toolJobShutdown).toHaveBeenCalledTimes(1);
+    await toolJobs.stop(contextOf(10_000));
   });
 
   it("managed-browsers caps its budget at 5s and the remaining deadline", async () => {

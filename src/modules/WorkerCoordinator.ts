@@ -23,6 +23,8 @@ export class WorkerCoordinator {
   private activeBrowserWorkers = 0;
   private readonly maxBrowserWorkers: number;
   private waiters: Array<() => void> = [];
+  private waiterRejects: Array<(err: Error) => void> = [];
+  private shuttingDown = false;
 
   private constructor(maxBrowserWorkers = 3) {
     this.maxBrowserWorkers = maxBrowserWorkers;
@@ -48,6 +50,11 @@ export class WorkerCoordinator {
    * budget; otherwise queues and resolves when a slot is released.
    */
   async acquireBrowserSlot(): Promise<void> {
+    if (this.shuttingDown) {
+      // T06/AC-05: typed cancellation — a queued acquisition during
+      // shutdown rejects instead of resolving into a killed worker.
+      throw new BrowserSlotShutdownError();
+    }
     if (this.activeBrowserWorkers < this.maxBrowserWorkers) {
       this.activeBrowserWorkers++;
       return;
@@ -55,9 +62,26 @@ export class WorkerCoordinator {
     log.warn(
       `[WorkerCoordinator] Browser budget exhausted (${this.activeBrowserWorkers}/${this.maxBrowserWorkers}); queuing request`
     );
-    return new Promise<void>((resolve) => {
-      this.waiters.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      this.waiters.push(() => {
+        if (this.shuttingDown) reject(new BrowserSlotShutdownError());
+        else resolve();
+      });
+      this.waiterRejects.push(reject);
     });
+  }
+
+  /**
+   * T06 (design §6): freeze queued acquisitions at shutdown entry — every
+   * waiter rejects with the typed error; callers treat it as refused work.
+   */
+  freezeForShutdown(): void {
+    this.shuttingDown = true;
+    const rejects = this.waiterRejects.splice(0);
+    this.waiters.splice(0);
+    for (const reject of rejects) {
+      reject(new BrowserSlotShutdownError());
+    }
   }
 
   /**
@@ -84,5 +108,13 @@ export class WorkerCoordinator {
 
   get budget(): number {
     return this.maxBrowserWorkers;
+  }
+}
+
+/** T06: a browser-slot acquisition refused because the app is shutting down. */
+export class BrowserSlotShutdownError extends Error {
+  constructor() {
+    super("Application is shutting down; browser slot refused");
+    this.name = "BrowserSlotShutdownError";
   }
 }
