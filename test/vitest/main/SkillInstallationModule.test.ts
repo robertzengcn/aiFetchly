@@ -827,15 +827,15 @@ describe("approveDependency — typed dependency approval (PRD §18 / FR-14)", (
     expect(snapshot.safeSummary).toContain("installation_failed");
   }, 120_000);
 
-  it("declining rolls the activation back, unregisters, and cancels (§10.1)", async () => {
+  it("declining cancels cleanly — under §18.4 the hold precedes activation, so there is nothing to roll back", async () => {
     const module = new SkillInstallationModule();
     const held = await driveToHold(module, "conv-dep-decline");
-    const statusBefore = await module.getStatus(held.sessionId);
+    // Audit finding 6 fix: the dependency hold now happens BEFORE
+    // activation, so no skill root exists at the hold point.
     const activationRoot =
       getDefaultPromptSkillCatalog().resolve("video-use", {}).definition
         ?.canonicalRoot ?? "";
-    expect(activationRoot).not.toBe("");
-    void statusBefore;
+    expect(activationRoot).toBe("");
 
     const snapshot = await module.approveDependency({
       sessionId: held.sessionId,
@@ -1533,3 +1533,208 @@ function classifyIntent(
 ): ReturnType<typeof classifySkillRequestIntent> {
   return classifySkillRequestIntent(message);
 }
+
+// ---------------------------------------------------------------------------
+// Audit findings 5 + 6 (2026-09-22): credential completeness gating and
+// dependency-hold rollback.
+// ---------------------------------------------------------------------------
+// Credentials default to CONFIGURED so pre-existing lifecycle tests pass
+// their resume step; the finding-5 test opts variables OUT via this set.
+const credState = { unconfigured: new Set<string>() };
+vi.mock("@/modules/SkillCredentialModule", () => ({
+  SkillCredentialModule: class {
+    async store(): Promise<{ ok: true }> {
+      return { ok: true };
+    }
+    isConfigured(_installationId: string, environmentVariable: string): boolean {
+      return !credState.unconfigured.has(environmentVariable);
+    }
+  },
+}));
+
+describe("credential completeness + dependency ordering (audit findings 5/6)", () => {
+  beforeEach(async () => {
+    credState.unconfigured.clear();
+    const mod = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as { __setForceDependencyMissing: (v: boolean) => void };
+    mod.__setForceDependencyMissing(true);
+  });
+
+  afterEach(async () => {
+    const mod = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as { __setForceDependencyMissing: (v: boolean) => void };
+    mod.__setForceDependencyMissing(false);
+  });
+
+  /** install.md declaring TWO required credentials (no deps). */
+  function makeTwoSecretFixture(root: string): string {
+    const dir = path.join(root, "fixtures", "video-use-2sec");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "SKILL.md"),
+      "---\nname: video-use-2sec\ndescription: Two-secret fixture\n---\n\n# Usage\n\nEdit."
+    );
+    fs.writeFileSync(
+      path.join(dir, "install.md"),
+      "# Install\n\nSet FIRST_API_KEY= and SECOND_API_KEY= for access.\n"
+    );
+    return dir;
+  }
+
+  it("credential detection finds EVERY UPPER_SNAKE variable, not just the last (finding 5)", async () => {
+    const { detectCredentialRequirements } = await import(
+      "@/service/SkillInstallPlanner"
+    );
+    const found = detectCredentialRequirements([
+      "Set GITHUB_TOKEN= x\nSet CLIENT_SECRET= y\nSet ELEVENLABS_API_KEY= z",
+    ]).map((c) => c.environmentVariable);
+    expect(found).toEqual(
+      expect.arrayContaining([
+        "GITHUB_TOKEN",
+        "CLIENT_SECRET",
+        "ELEVENLABS_API_KEY",
+      ])
+    );
+    expect(found).toHaveLength(3);
+  });
+
+  it("resumeAfterSecret stays at awaiting_secret until EVERY required credential is configured (finding 5)", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeTwoSecretFixture(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-f5",
+      source: fixture,
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: token,
+    });
+    expect(approved.state).toBe("awaiting_secret");
+    const installationId = approved.installationId;
+    expect(installationId).toBeTruthy();
+
+    // Nothing configured: resume must NOT leave the secret state.
+    credState.unconfigured.add("FIRST_API_KEY");
+    credState.unconfigured.add("SECOND_API_KEY");
+    const none = await module.resumeAfterSecret(prepared.sessionId);
+    expect(none.state).toBe("awaiting_secret");
+    expect(none.nextAction).toBe("provide-secret-securely");
+
+    // Only ONE of TWO configured: still paused.
+    credState.unconfigured.delete("FIRST_API_KEY");
+    const partial = await module.resumeAfterSecret(prepared.sessionId);
+    expect(partial.state).toBe("awaiting_secret");
+
+    // ALL configured: the flow proceeds past the pause.
+    credState.unconfigured.delete("SECOND_API_KEY");
+    const complete = await module.resumeAfterSecret(prepared.sessionId);
+    expect(["ready", "installing_dependencies"]).toContain(complete.state);
+  });
+
+  /** Dependency-only fixture (no credential): install.md requires ffmpeg. */
+  function makeDependencyFixture(root: string): string {
+    const dir = path.join(root, "fixtures", "video-use-dep-f6");
+    fs.mkdirSync(path.join(dir, "helpers"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "SKILL.md"),
+      "---\nname: video-use-dep-f6\ndescription: Dependency fixture\n---\n\n# Usage\n\nUse ffmpeg via helpers/."
+    );
+    fs.writeFileSync(
+      path.join(dir, "install.md"),
+      "# Install\n\nRequires ffmpeg on PATH.\n"
+    );
+    fs.writeFileSync(path.join(dir, "helpers", "cut.py"), "# helper\n");
+    return dir;
+  }
+
+  it("missing dependencies hold BEFORE activation; cancelling the hold leaves no trace (finding 6)", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeDependencyFixture(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-f6",
+      source: fixture,
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: token,
+    });
+    // §18.4: the dependency hold now precedes BOTH credential collection
+    // and activation, so nothing is activated yet.
+    expect(approved.state).toBe("installing_dependencies");
+    const activationDir = path.join(
+      configHome,
+      ".aifetchly",
+      "skills",
+      "video-use-dep-f6"
+    );
+    expect(fs.existsSync(activationDir)).toBe(false);
+
+    const cancelled = await module.cancel(prepared.sessionId);
+    expect(cancelled.state).toBe("cancelled");
+    // No enabled/ready installation row, no catalog entry, no files.
+    const listed = await module.listInstallations();
+    const rows = listed.filter(
+      (r) => "name" in r && (r as { name?: string }).name === "video-use-dep-f6"
+    );
+    expect(
+      rows.filter((r) => "enabled" in r && (r as { enabled?: unknown }).enabled)
+    ).toHaveLength(0);
+    expect(
+      getDefaultPromptSkillCatalog().resolve("video-use-dep-f6", {}).definition
+    ).toBeNull();
+    expect(fs.existsSync(activationDir)).toBe(false);
+    // The fixture source survives.
+    expect(fs.existsSync(path.join(fixture, "SKILL.md"))).toBe(true);
+  });
+
+  it("a failed verification rollback surfaces rollback_required with the recovery detail (finding 6)", async () => {
+    // This scenario needs deps satisfied so the flow reaches activation.
+    const orch = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as { __setForceDependencyMissing: (v: boolean) => void };
+    orch.__setForceDependencyMissing(false);
+    const { SkillActivationService } = await import(
+      "@/service/SkillActivationService"
+    );
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-f6b",
+      source: fixtureRoot,
+    });
+    const realVerify = SkillActivationService.prototype.verifyActivation;
+    const realRollback = SkillActivationService.prototype.rollback;
+    SkillActivationService.prototype.verifyActivation = () => false;
+    SkillActivationService.prototype.rollback = () => ({
+      ok: false as const,
+      message: "simulated rollback failure",
+    });
+    try {
+      const token = (await module.getApprovalToken(prepared.sessionId)) ?? "";
+      let failed = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: token,
+      });
+      if (failed.state === "awaiting_secret") {
+        failed = await module.resumeAfterSecret(prepared.sessionId);
+      }
+      expect(failed.state).toBe("rollback_required");
+      expect(failed.errorCode).toBe("ROLLBACK_FAILED");
+      expect(failed.safeSummary).toContain("simulated rollback failure");
+    } finally {
+      SkillActivationService.prototype.verifyActivation = realVerify;
+      SkillActivationService.prototype.rollback = realRollback;
+    }
+  }, 120_000);
+});

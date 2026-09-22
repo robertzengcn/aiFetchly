@@ -558,14 +558,16 @@ test.describe("Installer E2E matrix (final-audit 2)", () => {
     const dep = held.safePlan?.dependencies?.find((d) => d.id === "dep:ffmpeg");
     expect(dep).toMatchObject({ name: "ffmpeg", status: "missing" });
 
-    // The activated skill exists BEFORE the decline (rollback precondition).
+    // §18.4 ordering (audit finding 6 fix): the dependency hold now
+    // precedes activation, so NOTHING is activated yet — decline cancels
+    // without any rollback precondition.
     const activationDir = path.join(
       app.testRoot.rootPath,
       ".aifetchly",
       "skills",
       "video-use-dep"
     );
-    expect(fs.existsSync(activationDir)).toBe(true);
+    expect(fs.existsSync(activationDir)).toBe(false);
 
     // Decline through the renderer channel with the same approval token.
     const token = await approvalToken(app, held.sessionId);

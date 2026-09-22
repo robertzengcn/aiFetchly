@@ -537,6 +537,21 @@ export class SkillInstallationModule extends BaseModule {
       );
     }
 
+    // §18.4 ordering: missing dependencies are prepared BEFORE credentials
+    // are collected (the ElevenLabs sequence — deps first, then keys).
+    // The hold precedes activation, so cancelling it needs no rollback of
+    // a live skill (finding 6).
+    if (plan.dependencies.some((d) => d.currentStatus === "missing")) {
+      await this.transition(
+        sessions,
+        events,
+        input.sessionId,
+        "installing_dependencies"
+      );
+      const held = await sessions.findBySessionId(input.sessionId);
+      return this.snapshotFromEntity(held ?? session, plan);
+    }
+
     // A required credential pauses the flow BEFORE activation (§19.3) — the
     // value itself arrives only through the secure renderer channel.
     if (plan.credentials.length > 0) {
@@ -865,18 +880,67 @@ export class SkillInstallationModule extends BaseModule {
     );
 
     if (rechecked.every((d) => d.currentStatus === "satisfied")) {
-      await this.transition(sessions, events, input.sessionId, "verifying");
-      await this.transition(sessions, events, input.sessionId, "ready");
       await this.appendEvent(
         events,
         input.sessionId,
         "installation-ready",
-        "verifying",
-        "ready",
+        "installing_dependencies",
+        "installing_dependencies",
         `dependency ${dependency.name} installed and verified`
       );
-      const ready = await sessions.findBySessionId(input.sessionId);
-      return this.snapshotFromEntity(ready ?? session, updatedPlan);
+      // Continue the §18.4 sequence instead of jumping to ready: with
+      // dependencies satisfied the flow still owes the credential pause
+      // (if any remain unconfigured) and activation + verification.
+      if (updatedPlan.credentials.length > 0) {
+        const stillMissing = await this.unconfiguredCredentials(
+          session,
+          updatedPlan
+        );
+        if (stillMissing.length > 0) {
+          await this.transition(
+            sessions,
+            events,
+            input.sessionId,
+            "awaiting_secret"
+          );
+          const awaiting = await sessions.findBySessionId(input.sessionId);
+          return this.snapshotFromEntity(awaiting ?? session, updatedPlan);
+        }
+      }
+      const selected =
+        updatedPlan.discoveredSkills.find(
+          (c) => c.candidateId === updatedPlan.selectedSkillIds[0]
+        ) ?? updatedPlan.discoveredSkills[0];
+      if (!selected) {
+        return this.errorSnapshot(
+          "installing_dependencies",
+          "SKILL_AMBIGUOUS",
+          "Select which discovered skill(s) to activate.",
+          input.sessionId
+        );
+      }
+      if (selected.kind === "plugin") {
+        return this.routeToPluginService(
+          input.sessionId,
+          updatedPlan,
+          events,
+          sessions
+        );
+      }
+      if (selected.kind === "executable") {
+        return this.routeToExecutableService(
+          input.sessionId,
+          updatedPlan,
+          events,
+          sessions
+        );
+      }
+      return this.runActivation(
+        input.sessionId,
+        updatedPlan,
+        selected,
+        session
+      );
     }
 
     await this.appendEvent(
@@ -988,7 +1052,7 @@ export class SkillInstallationModule extends BaseModule {
     sessionId: string,
     conversationId?: string
   ): Promise<InstallSnapshot> {
-    const { sessions } = await this.getModels();
+    const { sessions, events } = await this.getModels();
     const session = await sessions.findBySessionId(sessionId);
     if (!session) {
       return this.errorSnapshot(
@@ -1010,11 +1074,66 @@ export class SkillInstallationModule extends BaseModule {
       return this.snapshotFromEntity(session);
     }
     const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
+    // FR-15/FR-17 gate: the session leaves awaiting_secret ONLY when every
+    // REQUIRED credential named by the plan is configured. A partial
+    // submission keeps the pause (finding 5).
+    const missing = await this.unconfiguredCredentials(session, plan);
+    if (missing.length > 0) {
+      await this.appendEvent(
+        events,
+        sessionId,
+        "secret-still-missing",
+        "awaiting_secret",
+        "awaiting_secret",
+        missing.join(", ")
+      );
+      const awaiting = await sessions.findBySessionId(sessionId);
+      return this.snapshotFromEntity(awaiting ?? session, plan);
+    }
     const selected =
       plan.discoveredSkills.find(
         (s) => s.candidateId === plan.selectedSkillIds[0]
       ) ?? plan.discoveredSkills[0];
+    if (!selected) {
+      return this.errorSnapshot(
+        "awaiting_secret",
+        "SKILL_AMBIGUOUS",
+        "Select which discovered skill(s) to activate.",
+        sessionId
+      );
+    }
+    // FR-27 routing parity: plugin/executable plans resume through their
+    // dedicated services, never the prompt activation path (finding 5).
+    if (selected.kind === "plugin") {
+      return this.routeToPluginService(sessionId, plan, events, sessions);
+    }
+    if (selected.kind === "executable") {
+      return this.routeToExecutableService(sessionId, plan, events, sessions);
+    }
     return this.runActivation(sessionId, plan, selected, session);
+  }
+
+  /**
+   * Required plan credentials that are NOT yet configured for this
+   * session's installation identity. Values are never read here — only
+   * the credential module's configured-status check (§19.2).
+   */
+  private async unconfiguredCredentials(
+    session: SkillInstallationSessionEntity,
+    plan: SkillInstallPlan
+  ): Promise<readonly string[]> {
+    const required = plan.credentials
+      .filter((c) => c.required)
+      .map((c) => c.environmentVariable);
+    if (required.length === 0 || !session.installationId) return [];
+    const { SkillCredentialModule } = await import(
+      "@/modules/SkillCredentialModule"
+    );
+    const credentialModule = new SkillCredentialModule();
+    return required.filter(
+      (name) =>
+        !credentialModule.isConfigured(session.installationId as string, name)
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1146,7 +1265,11 @@ export class SkillInstallationModule extends BaseModule {
     // activation back IMMEDIATELY (§10.1 / NFR-05) — cancelling must not
     // leave a half-activated skill behind. A rollback failure surfaces
     // rollback_required with the recovery detail instead of cancelling.
-    if (["activating", "verifying"].includes(session.state)) {
+    if (
+      ["activating", "verifying", "installing_dependencies"].includes(
+        session.state
+      )
+    ) {
       let rollbackDetail = "";
       if (session.installationId) {
         const { installations } = await this.getModels();
@@ -2125,19 +2248,36 @@ export class SkillInstallationModule extends BaseModule {
       } catch {
         /* best-effort status update — the session failure below governs */
       }
-      await this.fail(
-        sessions,
+      if (rolledBack.ok) {
+        await this.fail(
+          sessions,
+          events,
+          sessionId,
+          "ACTIVATION_VERIFICATION_FAILED",
+          "Activation verification failed; rolled back to the previous state."
+        );
+        return this.errorSnapshot(
+          "failed",
+          "ACTIVATION_VERIFICATION_FAILED",
+          "Activation verification failed; rolled back to the previous state.",
+          sessionId
+        );
+      }
+      // §10.1: a FAILED rollback must surface rollback_required with the
+      // recovery detail preserved — never a plain failed (finding 6).
+      await this.appendEvent(
         events,
         sessionId,
-        "ACTIVATION_VERIFICATION_FAILED",
-        rolledBack.ok
-          ? "Activation verification failed; rolled back to the previous state."
-          : `Activation verification failed; rollback failed: ${rolledBack.message}`
+        "rollback-failed",
+        "verifying",
+        "rollback_required",
+        rolledBack.message
       );
+      await this.transition(sessions, events, sessionId, "rollback_required");
       return this.errorSnapshot(
-        "failed",
-        "ACTIVATION_VERIFICATION_FAILED",
-        rolledBack.message,
+        "rollback_required",
+        "ROLLBACK_FAILED",
+        `Activation verification failed and rollback failed: ${rolledBack.message}`,
         sessionId
       );
     }

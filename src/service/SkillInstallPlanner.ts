@@ -37,9 +37,16 @@ export interface PlanInput {
   readonly constraints: readonly string[];
 }
 
-/** Known credential environment variables requested by repository prose. */
+/**
+ * Known credential environment variables requested by repository prose.
+ * Matches full UPPER_SNAKE names whose last segment is a credential word
+ * (…_KEY / …_TOKEN / …_SECRET / …_PASSWORD) followed by = or :. The
+ * previous shape anchored on a single alternation and consumed overlapping
+ * text, so multi-variable instructions (GITHUB_TOKEN=, CLIENT_SECRET=,
+ * ELEVENLABS_API_KEY=) discovered only the LAST one (audit finding 5).
+ */
 const CREDENTIAL_ENV_RE =
-  /\b([A-Z][A-Z0-9]*(?:_API)?_?(?:API_)?KEY|_TOKEN|_SECRET)\s*[=:]/g;
+  /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*(?:_API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD))\s*[=:]/g;
 
 export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
   const dependencies = detectDependencyProposals(

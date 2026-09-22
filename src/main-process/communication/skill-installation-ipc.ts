@@ -310,6 +310,18 @@ export function registerSkillInstallationIpcHandlers(): void {
       if (!installationId) {
         return denied("The installation identity is not resolved yet.");
       }
+      // FR-15 gate: the submitted name must be one the plan actually
+      // requires — the secure channel is not a general-purpose store.
+      // (SafePlanView lists required credential NAMES only.)
+      if (
+        !(status.safePlan?.credentials ?? []).includes(
+          decoded.value.environmentVariable
+        )
+      ) {
+        return denied(
+          `'${decoded.value.environmentVariable}' is not required by this installation plan.`
+        );
+      }
       // SkillCredentialModule (TODO 9): fail-closed store + opaque binding
       // row in SQLite, per design §14.1/§20.3.
       const { SkillCredentialModule } = await import(
@@ -322,6 +334,33 @@ export function registerSkillInstallationIpcHandlers(): void {
         decoded.value.value
       );
       if (!stored.ok) return denied(stored.message);
+      // FR-15/FR-17 completeness gate: resume ONLY when every required
+      // credential is configured; a partial submission keeps the pause so
+      // the card still shows the remaining variables (finding 5).
+      const { SkillCredentialModule: CredModule } = await import(
+        "@/modules/SkillCredentialModule"
+      );
+      const credentialStatus = new CredModule();
+      const stillMissing = (status.safePlan?.credentials ?? []).filter(
+        (name) => !credentialStatus.isConfigured(installationId, name)
+      );
+      if (stillMissing.length > 0 && !stillMissing.includes(decoded.value.environmentVariable)) {
+        // The just-submitted value is configured; other required ones are
+        // not — stay paused for them.
+        const current = await module.getStatus(decoded.value.sessionId);
+        return ok({
+          configured: true,
+          environmentVariable: decoded.value.environmentVariable,
+          snapshot: current,
+        });
+      }
+      if (stillMissing.includes(decoded.value.environmentVariable)) {
+        // The store refused to persist the just-submitted value (fail-closed
+        // storage) — the variable remains unconfigured.
+        return denied(
+          `The value for '${decoded.value.environmentVariable}' could not be stored securely; it is still required.`
+        );
+      }
       // Resume the state machine; the value never enters it.
       const snapshot = await module.resumeAfterSecret(decoded.value.sessionId);
       return ok({
