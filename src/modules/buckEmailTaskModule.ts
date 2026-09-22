@@ -26,6 +26,7 @@ import {
   getRecorddatetime,
 } from "@/modules/lib/function";
 import { v4 as uuidv4 } from "uuid";
+import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
@@ -801,6 +802,31 @@ export class BuckEmailTaskModule extends BaseModule {
     const {
       reconcileBulkEmailAtExit,
     } = await import("@/main-process/communication/durableTaskReconciliation");
-    return reconcileBulkEmailAtExit(this.buckEmailTaskModel, reason);
+    // T08: the interruption note goes into a real per-task log file whose
+    // PATH is stored — exactly like the normal sender's error handling.
+    return reconcileBulkEmailAtExit(
+      this.buckEmailTaskModel,
+      reason,
+      async (taskId, note) => {
+        let logpath = "";
+        try {
+          logpath = new Token().getValue(USERLOGPATH) || "";
+        } catch {
+          logpath = "";
+        }
+        if (!logpath) {
+          // No configured log dir: fall back to a temp-scoped path so the
+          // entity still stores a PATH, never the message text.
+          logpath = path.join(os.tmpdir(), "aifetchly-bulk-email");
+          fs.mkdirSync(logpath, { recursive: true });
+        }
+        const file = path.join(
+          logpath,
+          `emailsend_interrupted_${taskId}_${Date.now()}.error.log`
+        );
+        WriteLog(file, note);
+        return file;
+      }
+    );
   }
 }

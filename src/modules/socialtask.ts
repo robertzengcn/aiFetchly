@@ -1,4 +1,8 @@
 import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import * as os from "os";
+import { WriteLog } from "@/modules/lib/function";
+import { USERLOGPATH } from "@/config/usersetting";
+import { Token } from "@/modules/token";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import url from "url";
 //import request from "@/modules/lib/request"
@@ -282,8 +286,21 @@ export async function reconcileInterruptedSocialRuns(
   for (const runNum of Array.from(activeSocialRuns.keys())) {
     try {
       const id = await runModel.TaskidbytaskrunNum(runNum);
+      if (!id) {
+        // Unknown row: still remove the in-memory entry (nothing durable to
+        // write to), but do not count it as reconciled.
+        activeSocialRuns.delete(runNum);
+        continue;
+      }
+      // T08: DURABLE interruption record — append the marker to the run's
+      // own log file (the run entity's log_path), so restart exposes the
+      // uncertainty. Only after a successful write do we clear the entry.
+      const runLogPath = resolveSocialRunLogPath(runNum);
+      WriteLog(
+        runLogPath,
+        `[INTERRUPTED ${new Date().toISOString()}] ${reason}`
+      );
       activeSocialRuns.delete(runNum);
-      if (!id) continue;
       interrupted.push(id.id);
       log.info(
         `[social] run ${runNum} (task ${id.task_id}) interrupted: ${reason}`
@@ -296,4 +313,28 @@ export async function reconcileInterruptedSocialRuns(
     }
   }
   return interrupted;
+}
+
+/**
+ * T08: the run's durable log file. taskrun_num is unique per run; the runs
+ * log lives under the user log path (same convention as the module's own
+ * task logs). Falls back to the OS temp dir when no log path is set so the
+ * write NEVER silently no-ops.
+ */
+function resolveSocialRunLogPath(runNum: string): string {
+  let base = "";
+  try {
+    base = new Token().getValue(USERLOGPATH) || "";
+  } catch {
+    base = "";
+  }
+  if (!base) {
+    base = path.join(os.tmpdir(), "aifetchly-social-runs");
+    try {
+      fs.mkdirSync(base, { recursive: true });
+    } catch {
+      /* best-effort dir creation */
+    }
+  }
+  return path.join(base, `socialrun_${encodeURIComponent(runNum)}.log`);
 }

@@ -14,82 +14,94 @@ import { TaskStatus } from "@/entityTypes/commonType";
  * nothing auto-retried; a failing row never blocks siblings.
  */
 
-describe("reconcileBulkEmailAtExit", () => {
+describe("reconcileBulkEmailAtExit (T08 semantics)", () => {
   function makeModel(ids: number[]): {
-    model: BulkEmailReconcileModel;
+    model: import("@/main-process/communication/durableTaskReconciliation").BulkEmailReconcileModel;
     statuses: Array<[number, TaskStatus]>;
-    logs: Array<[number, string]>;
+    storedPaths: Array<[number, string]>;
+    writtenNotes: Array<[number, string]>;
   } {
     const statuses: Array<[number, TaskStatus]> = [];
-    const logs: Array<[number, string]> = [];
+    const storedPaths: Array<[number, string]> = [];
+    const writtenNotes: Array<[number, string]> = [];
+    let live = [...ids];
     return {
       statuses,
-      logs,
+      storedPaths,
+      writtenNotes,
       model: {
         listTaskIdsByStatus: async (status) => {
           expect(status).toBe(TaskStatus.Processing);
-          return ids;
+          return [...live];
         },
         updateTaskStatus: async (id, status) => {
           statuses.push([id, status]);
+          if (status === TaskStatus.Error) {
+            live = live.filter((x) => x !== id);
+          }
         },
-        updateTaskErrorFile: async (id, message) => {
-          logs.push([id, message]);
+        updateTaskErrorFile: async (id, errorLogPath) => {
+          storedPaths.push([id, errorLogPath]);
         },
+        getTaskErrorFilePath: async () => undefined,
       },
     };
   }
 
-  it("maps Processing rows to the existing Error state with an [interrupted] note", async () => {
+  const writer = async (taskId: number, note: string): Promise<string> => {
+    return `/tmp/logs/task-${taskId}-interrupted.error.log:${note}`;
+  };
+
+  it("stores the LOG PATH (never message text) and flips to Error", async () => {
     const h = makeModel([7, 8]);
-    const ids = await reconcileBulkEmailAtExit(h.model, "app exit");
+    const ids = await reconcileBulkEmailAtExit(h.model, "app exit", writer);
     expect(ids).toEqual([7, 8]);
     expect(h.statuses).toEqual([
       [7, TaskStatus.Error],
       [8, TaskStatus.Error],
     ]);
-    for (const [, message] of h.logs) {
-      expect(message).toBe("[interrupted] app exit");
+    for (const [id, p] of h.storedPaths) {
+      expect(p).toContain(`/tmp/logs/task-${id}-interrupted.error.log`);
+      expect(p).not.toContain("app exit]"); // path only — the note is in the file
     }
   });
 
-  it("never touches completed rows (only Processing is queried)", async () => {
-    const queried: TaskStatus[] = [];
-    const model: BulkEmailReconcileModel = {
-      listTaskIdsByStatus: async (status) => {
-        queried.push(status);
-        return [];
-      },
-      updateTaskStatus: async () => undefined,
-      updateTaskErrorFile: async () => undefined,
+  it("a row that leaves Processing before the write is untouched", async () => {
+    const h = makeModel([7]);
+    // Simulate concurrent completion: second listing no longer contains 7.
+    const original = h.model.listTaskIdsByStatus;
+    let calls = 0;
+    h.model.listTaskIdsByStatus = async (status) => {
+      calls += 1;
+      if (calls > 1) return [];
+      return original(status);
     };
-    const ids = await reconcileBulkEmailAtExit(model, "app exit");
+    const ids = await reconcileBulkEmailAtExit(h.model, "r", writer);
     expect(ids).toEqual([]);
-    expect(queried).toEqual([TaskStatus.Processing]);
+    expect(h.statuses).toEqual([]);
   });
 
-  it("a failing row never blocks its siblings; a list failure returns []", async () => {
-    const statuses: Array<[number, TaskStatus]> = [];
-    const model: BulkEmailReconcileModel = {
-      listTaskIdsByStatus: async () => [1, 2],
-      updateTaskStatus: async (id) => {
-        if (id === 1) throw new Error("db gone");
-        statuses.push([id, TaskStatus.Error]);
-      },
-      updateTaskErrorFile: async () => undefined,
+  it("only successfully-written rows are returned (truthful reconcile)", async () => {
+    const h = makeModel([1, 2]);
+    h.model.updateTaskStatus = async (id) => {
+      if (id === 1) throw new Error("db gone");
     };
-    const ids = await reconcileBulkEmailAtExit(model, "app exit");
-    expect(ids).toEqual([1, 2]);
-    expect(statuses).toEqual([[2, TaskStatus.Error]]);
+    const ids = await reconcileBulkEmailAtExit(h.model, "r", writer);
+    expect(ids).toEqual([2]);
+  });
 
-    const broken: BulkEmailReconcileModel = {
-      listTaskIdsByStatus: async () => {
+  it("a list failure degrades to no-op", async () => {
+    const model = {
+      listTaskIdsByStatus: async (): Promise<number[]> => {
         throw new Error("no table");
       },
-      updateTaskStatus: async () => undefined,
-      updateTaskErrorFile: async () => undefined,
-    };
-    await expect(reconcileBulkEmailAtExit(broken, "r")).resolves.toEqual([]);
+      updateTaskStatus: async (): Promise<void> => undefined,
+      updateTaskErrorFile: async (): Promise<void> => undefined,
+      getTaskErrorFilePath: async (): Promise<string | undefined> => undefined,
+    } as unknown as Parameters<typeof reconcileBulkEmailAtExit>[0];
+    await expect(reconcileBulkEmailAtExit(model, "r", writer)).resolves.toEqual(
+      []
+    );
   });
 });
 

@@ -79,6 +79,12 @@ export class BuckEmailTaskModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  /** T08: read a task's current error-file path (preserved on reconcile). */
+  async getTaskErrorFilePath(id: number): Promise<string | undefined> {
+    const entity = await this.repository.findOne({ where: { id } });
+    return entity?.error_file;
+  }
+
   async updateTaskErrorFile(id: number, errorLog: string): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;
