@@ -428,8 +428,16 @@ locally, components 35 files / 202 tests, utilityCode suites green.
   runners), so the local leg could not complete. The ubuntu CI job stays
   failing-loud to record the third OS as soon as runner eviction subsides;
   Windows + macOS provide the recorded zero-Git + plugin-row proof until
-  then. Side finding for follow-up: electron-packager's prune strips
-  typeorm's hoisted runtime deps (tslib/ansis/dayjs) from the Linux
-  package on some trees — CI runners' installs nest them and boot fine,
-  but the prod-vs-dev hoisting deserves a look before the next release.
+  then. Side finding — FIXED and CI-proven (2026-09-21, head 3401341c):
+  the galactus prune emptied up to 300 hoisted runtime modules (typeorm's
+  tslib/ansis/dayjs, ajv internals, puppeteer-page-proxy's proxy chain) —
+  macOS packages were affected too, not just Linux. Fix: manifest edges
+  for typeorm's runtime deps + a runtime-transitive-closure restore at
+  packageAfterPrune AND postPackage in forge.config.js + a fail-loud
+  closure gate in verify-packaged-app. Recorded proof: run 35646743261 —
+  macOS leg logs "restored 300 pruned runtime dependencies" and
+  "Runtime dependency closure intact across 359 packages" with the
+  git-free smoke green; the Windows leg logs the same closure-intact
+  gate; Lint+unit and Electron E2E green on the same head. Ubuntu remains
+  blocked only by the documented runner-eviction infra issue.
 - Branch protection now requires `windows-shell-matrix` (NL-9).
