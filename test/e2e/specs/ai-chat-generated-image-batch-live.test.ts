@@ -26,6 +26,7 @@
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import {
+  chatRoot,
   composerTextarea,
   seedGeneratedImagesOnLastTurn,
   startNewConversation,
@@ -83,7 +84,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
 
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
+    const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
 
@@ -246,7 +247,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
 
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
+    const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
     for (let i = 0; i < 4; i += 1) {
@@ -387,7 +388,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
 
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
+    const root = chatRoot(aiApp);
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(4);
     for (let i = 0; i < 4; i += 1) {

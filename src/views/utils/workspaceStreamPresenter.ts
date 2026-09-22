@@ -1,6 +1,7 @@
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2MessageMetadata } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2GeneratedImage } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatRunDetailEvent,
   ConversationRuntimeStatus,
@@ -545,6 +546,11 @@ export function createWorkspaceStreamPresenter(
         bufferedOnly = false;
         flushNow();
         const fullContent = str(chunk.fullContent);
+        const images: ChatV2GeneratedImage[] | undefined = Array.isArray(
+          chunk.images
+        )
+          ? chunk.images
+          : undefined;
         if (messageId) {
           updateMessage(messageId, (m) => ({
             ...m,
@@ -554,6 +560,15 @@ export function createWorkspaceStreamPresenter(
               typeof chunk.totalTokens === "number"
                 ? chunk.totalTokens
                 : m.tokensUsed,
+            ...(images
+              ? {
+                  metadata: {
+                    ...m.metadata,
+                    source: m.metadata?.source ?? "chat-v2",
+                    generatedImages: images,
+                  },
+                }
+              : {}),
           }));
         }
         streamStatus = "idle";

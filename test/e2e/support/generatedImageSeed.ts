@@ -89,6 +89,18 @@ export function composerTextarea(app: LaunchedApp): Locator {
     .first();
 }
 
+/**
+ * The chat content root: the chat-first shell renders the transcript as
+ * `workspace-transcript`; the legacy dock uses `ai-chat-root`.
+ */
+export function chatRoot(app: LaunchedApp): Locator {
+  return app.mainWindow
+    .locator(
+      '[data-testid="workspace-transcript"], [data-testid="ai-chat-root"]'
+    )
+    .first();
+}
+
 /** Open the AI chat dock and wait for the composer to be actionable. */
 export async function openChat(app: LaunchedApp): Promise<void> {
   // The chat workspace is the default landing route; the dock toggle only
@@ -101,6 +113,17 @@ export async function openChat(app: LaunchedApp): Promise<void> {
     /* already on the chat workspace */
   }
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+  // Under the chat-first shell the composer renders on the empty state too,
+  // but sends need a selected conversation — start one (the legacy dock
+  // created a conversation implicitly on first send).
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  try {
+    await newChat.waitFor({ state: "visible", timeout: 5_000 });
+    await newChat.click();
+    await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+  } catch {
+    /* legacy dock: no shell strip button */
+  }
 }
 
 /**
@@ -295,7 +318,7 @@ export async function switchToConversationByMarker(
   // reply, not the marker), so resolve the target's title through the real
   // history IPC first. Tests that switch back run in a fresh root with the
   // seeded conversation as the only one, so a title match is unambiguous.
-  const title = await app.mainWindow.evaluate(async (titleMarker: string) => {
+  const target = await app.mainWindow.evaluate(async (titleMarker: string) => {
     const api = (
       window as unknown as {
         api: {
@@ -325,18 +348,40 @@ export async function switchToConversationByMarker(
       const hasMarker = (histData.messages ?? []).some(
         (m) => m.role === "user" && m.content === titleMarker
       );
-      if (hasMarker) return conv.title;
+      if (hasMarker) {
+        return { id: conv.conversationId, title: conv.title };
+      }
     }
     return null;
   }, marker);
-  if (!title) {
+  if (!target) {
     throw new Error(`No conversation found containing marker ${marker}`);
   }
 
+  // Chat-first shell: select the sidebar row by its EXACT conversation
+  // testid (the marker-derived title is enough for a text match, but the id
+  // is collision-free). A fresh boot may render the tree group collapsed —
+  // expand and retry. Legacy dock fallback: the history dialog.
+  const sidebarRow = app.mainWindow.getByTestId(
+    `workspace-conversation-${target.id}`
+  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await sidebarRow.isVisible().catch(() => false)) break;
+    await app.mainWindow
+      .getByRole("treeitem", { name: /Other chats/ })
+      .click()
+      .catch(() => undefined);
+    await app.mainWindow.waitForTimeout(500);
+  }
+  if (await sidebarRow.isVisible().catch(() => false)) {
+    await sidebarRow.click();
+    await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+    return;
+  }
   await app.mainWindow.getByTitle("Conversation history").click();
   const listItem = app.mainWindow
     .locator(".v-list-item")
-    .filter({ hasText: title })
+    .filter({ hasText: target.title })
     .first();
   await expect(listItem).toBeVisible({ timeout: 30_000 });
   await listItem.click();
@@ -345,7 +390,13 @@ export async function switchToConversationByMarker(
 
 /** Create a fresh (workspace-less) conversation view. */
 export async function startNewConversation(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("new-conversation").click();
+  // Chat-first shell strip button; legacy dock header button fallback.
+  const shellNewChat = app.mainWindow.getByTestId("workspace-new-chat");
+  if (await shellNewChat.isVisible().catch(() => false)) {
+    await shellNewChat.click();
+  } else {
+    await app.mainWindow.getByTestId("new-conversation").click();
+  }
   await expect(
     app.mainWindow.getByTestId("ai-chat-generated-ref-tray")
   ).toHaveCount(0);
@@ -359,10 +410,9 @@ export async function createConversationWithStreamedTurn(
   await openChat(app);
   await composerTextarea(app).fill(marker);
   await app.mainWindow.getByTestId("ai-chat-send").click();
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    STREAM_TEXT_FINAL,
-    { timeout: 30_000 }
-  );
+  await expect(chatRoot(app)).toContainText(STREAM_TEXT_FINAL, {
+    timeout: 30_000,
+  });
   // The composer returns to an actionable state (the send BUTTON stays
   // disabled while the composer is empty — disable-on-empty is correct).
   await expect(composerTextarea(app)).not.toBeDisabled({ timeout: 30_000 });
