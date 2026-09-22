@@ -425,6 +425,11 @@ let trayController: TrayController | null = null;
  * show/restore/focus the EXISTING window (AC-03: no duplicate initialization).
  */
 function showMainWindowFromTray(): void {
+  // T12: after exit acceptance NO restore path may show or create a window.
+  if (lifecycle.isQuitting()) {
+    log.info("[lifecycle] restore refused: application is quitting");
+    return;
+  }
   lifecycle.restoreFromTray(); // hidden -> visible (no-op otherwise)
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
@@ -576,6 +581,39 @@ lifecycle.addStateListener((event) => {
  * (close-dialog Exit) reach it: arm the final-exit guard, run the terminal
  * action exactly once (quit, or the updater's install).
  */
+/** T09: bounded fallback after terminal handoff. If normal quit/install does
+ * not terminate the process (beforeunload prevented, updater callback
+ * returned silently, window close swallowed), force-exit so the app can
+ * never hang post-cleanup. Guards prevent repeat invocations. */
+const TERMINAL_FALLBACK_MS = 5_000;
+let terminalFallbackArmed = false;
+
+function armTerminalFallback(label: string): void {
+  if (terminalFallbackArmed) return;
+  terminalFallbackArmed = true;
+  const timer = setTimeout(() => {
+    if (process.exitCode === null) process.exitCode = 0;
+    log.error(
+      `[lifecycle] terminal fallback engaged (${label}): process had not exited ${TERMINAL_FALLBACK_MS}ms after terminal handoff; forcing exit`
+    );
+    try {
+      clearStartupMarker();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      (app as unknown as { exit: (code?: number) => void }).exit(
+        process.exitCode
+      );
+    } catch {
+      process.exit(process.exitCode);
+    }
+  }, TERMINAL_FALLBACK_MS);
+  // KEPT REFERENCED through the handoff (design §5): the fallback must
+  // fire even if every pending promise has settled and Node would exit
+  // naturally — no unref() here.
+}
+
 function runTerminalExitSequence(outcome: {
   intent: "quit" | "update-restart";
 }): void {
@@ -584,6 +622,7 @@ function runTerminalExitSequence(outcome: {
     const action = takeUpdateRestartAction();
     if (action) {
       try {
+        armTerminalFallback("update-restart");
         action();
         return;
       } catch (err) {
@@ -599,6 +638,7 @@ function runTerminalExitSequence(outcome: {
   } catch {
     /* best-effort */
   }
+  armTerminalFallback("quit");
   app.quit();
 }
 lifecycle.setExitCompletionHook(runTerminalExitSequence);
@@ -1497,6 +1537,12 @@ function initialize() {
   }
 
   onSecondInstanceActivate = () => {
+    // T12: a second launch during shutdown neither shows nor creates a
+    // window and does not restart initialization.
+    if (lifecycle.isQuitting()) {
+      log.info("[second-instance] activation ignored: application is quitting");
+      return;
+    }
     // Relaunch while hidden in tray: restore the existing session instead
     // of spawning a duplicate worker set (PRD §4, AC-03).
     if (lifecycle.getState() === "hidden") {
@@ -1538,6 +1584,19 @@ function initialize() {
   // while the coordinated cleanup runs; the final re-quit passes through
   // once the final-exit guard is armed. An async listener alone is not a
   // shutdown barrier.
+  app.on("activate", () => {
+    // T12: quitting apps never show/recreate a window on dock activation.
+    if (lifecycle.isQuitting()) return;
+    // On macOS it's common to re-create a window in the app when the
+    // dock icon is clicked and there are no other windows open. A hidden
+    // (tray-mode) window is restored, not recreated (AC-03).
+    if (lifecycle.getState() === "hidden") {
+      showMainWindowFromTray();
+      return;
+    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
   app.on("before-quit", (event: unknown) => {
     if (lifecycle.isFinalExitAuthorized()) {
       // Cleanup already completed — let this quit pass through untouched.

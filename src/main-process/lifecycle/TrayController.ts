@@ -84,6 +84,7 @@ export class TrayController {
   private destroyed = false;
   private exiting = false;
   private readonly clickHandler = (): void => {
+    if (this.exiting) return; // T12: click during shutdown is a no-op
     this.restore();
   };
 
@@ -170,7 +171,9 @@ export class TrayController {
 
   /** Tray Open / click: restore the existing window (AC-03). */
   restore(): void {
-    if (this.destroyed) return;
+    // T12: quitting apps reject restoration from EVERY path (tray click,
+    // menu Open) — not just the menu no-op wrappers.
+    if (this.destroyed || this.exiting) return;
     this.ports.restoreWindow();
   }
 
