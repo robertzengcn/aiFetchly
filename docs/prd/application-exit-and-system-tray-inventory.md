@@ -46,6 +46,7 @@ of the recorded PID with start-time identity (AC-04/AC-14).
 | 27 | `doc-skill-script` | src/service/DocSkillScriptRunnerService.ts | child_process.spawn | Skill scripts |
 | 28 | `hooks-command` | src/service/hooks/executors/CommandHookExecutor.ts | child_process.spawn | User hook commands; refused with a structured failure result while quitting (covered by the wiring guard) |
 | 29 | `npm-plugin-fetch` / `npm-plugin-extract` (gated) | src/service/pluginSources/NpmPluginFetcher.ts | spawn (npm pack / tar) | Split row: both transports gated AND registered |
+| 30 | `skill-env-installer` | src/service/SkillEnvironmentManager.ts | spawn (pip/venv, up to 5 min) | T05: gated + registered; refused during shutdown; force phase cancels within the exit budget. Partial-environment cleanup remains documented (state file marks partial installs) |
 
 ## Excluded launch sites (documented + rationale)
 
@@ -55,8 +56,8 @@ of the recorded PID with start-time identity (AC-04/AC-14).
 | src/controller/searchProcessKill.ts | kill helpers | Termination helper, not a launcher. |
 | src/utils/packagedWorkerPath.ts | fs only | Path resolution, no process. |
 | src/modules/lib/function.ts, src/modules/lib/pipUtils.ts | execFile/spawnSync one-shots (pip show/install, version probes) | Awaited seconds-scale commands; SystemDependencyInstaller drives them and has its own audit/cancel UX. Covered by force-phase descendant capture only if still running; accepted residual (≤ pip install duration). |
-| src/service/SystemDependencyInstaller.ts | spawnSync probes | Synchronous version probes — cannot outlive their caller. Installs route through pipUtils (above). |
-| src/service/SkillEnvironmentManager.ts | spawnSync probes | Same: `--version` probes only. |
+| src/service/SystemDependencyInstaller.ts | spawnSync probes | Synchronous version probes — cannot outlive their caller. Long installs route through SkillEnvironmentManager (#30). |
+| src/service/SkillEnvironmentManager.ts | spawnSync `--version` probes only | Probes are synchronous (cannot outlive caller); the 5-minute pip/venv installs are registered family #30. |
 | src/service/WorkspaceKeyService.ts | execFileAsync (git one-shots) | Awaited seconds-scale git status operations. |
 | src/service/PortableWorkspaceMemoryGitStatusService.ts | execFileAsync (git) | Same. |
 | src/controller/extramoduleController.ts | execFile (pip show) | Same pattern. |

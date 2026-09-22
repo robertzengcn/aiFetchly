@@ -50,7 +50,6 @@ const EXCLUDED_FILES = [
   "src/modules/lib/function.ts", // awaited seconds-scale one-shots (inventory)
   "src/modules/lib/pipUtils.ts",
   "src/service/SystemDependencyInstaller.ts", // spawnSync probes
-  "src/service/SkillEnvironmentManager.ts",
   "src/service/WorkspaceKeyService.ts",
   "src/service/PortableWorkspaceMemoryGitStatusService.ts",
   "src/controller/extramoduleController.ts",
