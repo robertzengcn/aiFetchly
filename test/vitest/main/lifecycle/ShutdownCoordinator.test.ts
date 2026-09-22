@@ -209,14 +209,16 @@ describe("ShutdownCoordinator — failure isolation (AC-04, AC-06)", () => {
     expect(fastStop?.status).toBe("ok");
   });
 
-  it("a throwing participant provider still resolves", async () => {
+  it("a throwing participant provider resolves UNCLEAN (T14)", async () => {
     const coordinator = new ShutdownCoordinator({
       participants: (): ShutdownParticipant[] => {
         throw new Error("provider boom");
       },
     });
     const { clean } = await coordinator.run(CONTEXT);
-    expect(clean).toBe(true); // no participants ran, nothing failed
+    // T14 (2026-09-21 audit): a failed provider is an incomplete shutdown —
+    // the empty participant list must never masquerade as a clean outcome.
+    expect(clean).toBe(false);
   });
 });
 

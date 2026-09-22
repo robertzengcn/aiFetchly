@@ -226,16 +226,35 @@ describe("createShutdownParticipants — owner mapping", () => {
 });
 
 describe("reportSinkAdapter — clean-marker decision (AC-15)", () => {
-  it("clears the startup marker only for a clean report", () => {
+  it("clears the marker only when the DURABLE write succeeded (T14)", () => {
     const deps = makeDeps();
     const sink = reportSinkAdapter(deps);
+    // No durable writer wired -> legacy path: clear only on clean reports.
     const cleanReport = { clean: true } as ShutdownReport;
     const forcedReport = { clean: false } as ShutdownReport;
     sink(cleanReport);
     expect(deps.clearStartupMarker).toHaveBeenCalledTimes(1);
-    expect(deps.writeShutdownReport).toHaveBeenCalledWith(cleanReport);
     sink(forcedReport);
-    expect(deps.clearStartupMarker).toHaveBeenCalledTimes(2);
+    expect(deps.clearStartupMarker).toHaveBeenCalledTimes(1); // not clean
+  });
+
+  it("a failed durable report write KEEPS the marker (T14)", () => {
+    const deps = makeDeps({
+      appendShutdownReportDurable: () => false, // write failed
+    });
+    const sink = reportSinkAdapter(deps);
+    sink({ clean: true } as ShutdownReport);
+    expect(deps.clearStartupMarker).not.toHaveBeenCalled();
+  });
+
+  it("a successful durable write clears the marker even when forced (T14)", () => {
+    const deps = makeDeps({
+      appendShutdownReportDurable: () => true,
+    });
+    const sink = reportSinkAdapter(deps);
+    sink({ clean: false } as ShutdownReport);
+    // Durable + coordinated (not a crash): marker off; report distinguishes.
+    expect(deps.clearStartupMarker).toHaveBeenCalledTimes(1);
   });
 
   it("a throwing writer never breaks the sink", () => {

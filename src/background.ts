@@ -444,6 +444,16 @@ function showMainWindowFromTray(): void {
   }
 }
 
+/**
+ * T13: OS session-end exit — sets the exit reason to os-session-end and
+ * routes through the same coordinated cleanup WITHOUT the close-choice
+ * dialog (FR-07/AC-16). OS deadlines are shorter than our 10s budget, but
+ * the coordinator degrades gracefully (persist-incomplete + fallback).
+ */
+function osSessionEndExit(): void {
+  void requestAppExit("os-session-end");
+}
+
 /** Ordinary close → close-choice flow (FR-01). */
 const closeChoiceFlow = new CloseChoiceFlow(lifecycle, {
   sendRendererRequest: (token, backgroundAvailable, activeTaskCount) => {
@@ -525,6 +535,7 @@ const shutdownDeps = {
    */
   clearStartupMarker: (): void => clearStartupMarker(),
   writeShutdownReport: appendShutdownReport,
+  appendShutdownReportDurable: appendShutdownReport,
   hasUserData: (): boolean => {
     try {
       const p = new Token().getValue(USERSDBPATH);
@@ -1138,6 +1149,27 @@ function initialize() {
     // until the final-exit guard arms; after that the close passes through.
     // (Structural event typing — the electron tsconfig mock types `.on`
     // without the preventDefault surface, same pattern as WS-7 R7.2.)
+    // T13 (2026-09-21 audit): session-end/query-session-end are WINDOW
+    // events (BrowserWindow/BaseWindow), not App events. The old app-level
+    // listener was attached to the wrong object and never fired. Wire both
+    // here at window creation: set the OS-shutdown intent BEFORE ordinary
+    // close handling and bypass the interactive close-choice dialog
+    // (FR-07/AC-16).
+    win.on("query-session-end", (_event: unknown) => {
+      log.info("[lifecycle] OS query-session-end (Windows)");
+      // Do NOT preventDefault — allow the OS to end the session; our
+      // before-quit barrier runs the bounded best-effort cleanup.
+      if (!lifecycle.isQuitting()) {
+        osSessionEndExit();
+      }
+    });
+    win.on("session-end", () => {
+      log.info("[lifecycle] OS session-end (Windows)");
+      if (!lifecycle.isQuitting()) {
+        osSessionEndExit();
+      }
+    });
+
     win.on("close", (event: unknown) => {
       const preventable = event as { preventDefault?: () => void };
       if (lifecycle.isFinalExitAuthorized()) {
@@ -1520,27 +1552,6 @@ function initialize() {
     void requestAppExit("programmatic");
   });
 
-  // OS session end (Windows): no interactive close-choice dialog; run the
-  // bounded best-effort cleanup directly (FR-07 / AC-16).
-  (app as unknown as { on: (event: string, fn: () => void) => void }).on(
-    "session-end",
-    () => {
-      if (!lifecycle.isQuitting()) {
-        void requestAppExit("os-session-end");
-      }
-    }
-  );
-
-  app.on("activate", () => {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open. A hidden
-    // (tray-mode) window is restored, not recreated (AC-03).
-    if (lifecycle.getState() === "hidden") {
-      showMainWindowFromTray();
-      return;
-    }
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
 
   (app as any).on(
     "open-url",

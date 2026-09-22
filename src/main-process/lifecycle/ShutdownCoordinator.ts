@@ -222,9 +222,12 @@ export class ShutdownCoordinator {
     let deadlineExpired = false;
 
     let participants: ShutdownParticipant[] = [];
+    let providerFailed = false;
     try {
       participants = this.participants();
     } catch (err) {
+      // T14: a failed provider is an incomplete shutdown — never clean.
+      providerFailed = true;
       log.error(
         "[shutdown] participant provider failed:",
         err instanceof Error ? err.message : String(err)
@@ -334,6 +337,7 @@ export class ShutdownCoordinator {
     controller.abort();
 
     const clean =
+      !providerFailed && // T14: setup failure cannot yield a clean outcome
       !deadlineExpired &&
       verificationFailures.length === 0 &&
       participantOutcomes.every((o) => o.status === "ok");

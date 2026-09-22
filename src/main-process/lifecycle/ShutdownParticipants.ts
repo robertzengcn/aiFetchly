@@ -55,6 +55,14 @@ export interface BackgroundShutdownDeps {
   readonly clearStartupMarker: () => void;
   /** Persist the privacy-safe shutdown report (FR-09). */
   readonly writeShutdownReport: (report: ShutdownReport) => void;
+  /**
+   * T14: durable variant resolving whether the report was actually
+   * persisted; when present the marker decision uses it. Optional for
+   * backwards compatibility with tests/early-startup paths.
+   */
+  readonly appendShutdownReportDurable?: (
+    report: ShutdownReport
+  ) => boolean;
   /** True once a user database path exists (guards scheduler shutdown). */
   readonly hasUserData: () => boolean;
 }
@@ -357,11 +365,28 @@ export function reportSinkAdapter(
 ): (report: ShutdownReport) => void {
   return (report) => {
     try {
-      deps.writeShutdownReport(report);
-      // Marker removal only on a verified clean shutdown; forced/incomplete
-      // exits keep the marker so the next launch can distinguish them from
-      // a crash without calling them clean (AC-15, design §11).
-      deps.clearStartupMarker();
+      // T14/AC-15: the marker comes off ONLY when the durable report was
+      // WRITTEN and the outcome was clean — a failed write keeps it so the
+      // next launch cannot mistake a report-less exit for clean termination.
+      const durable =
+        typeof deps.appendShutdownReportDurable === "function"
+          ? deps.appendShutdownReportDurable(report)
+          : null;
+      if (durable === null) {
+        // Legacy writer without a durability signal: write, then clear only
+        // on clean (the writer itself never throws — see its catch).
+        deps.writeShutdownReport(report);
+        if (report.clean) deps.clearStartupMarker();
+        return;
+      }
+      if (durable && report.clean) {
+        deps.clearStartupMarker();
+      } else if (durable && !report.clean) {
+        // Forced/incomplete but DURABLY recorded: still a coordinated exit,
+        // not a crash — remove the crash marker; the persisted report
+        // distinguishes forced from clean for the next launch.
+        deps.clearStartupMarker();
+      }
     } catch (err) {
       log.error(
         "[shutdown] report sink failed:",

@@ -18,7 +18,12 @@ const REPORT_FILENAME = "shutdown-reports.jsonl";
 /** Keep the file bounded: newest 200 attempts. */
 const MAX_REPORTS = 200;
 
-export function appendShutdownReport(report: ShutdownReport): void {
+/**
+ * Append the report; resolves true ONLY when the durable write succeeded
+ * (T14/AC-15) — the caller keeps the startup marker on a failed write so
+ * the next launch cannot mistake a report-less exit for clean termination.
+ */
+export function appendShutdownReport(report: ShutdownReport): boolean {
   try {
     const dir = getDiagnosticsDir();
     fs.mkdirSync(dir, { recursive: true });
@@ -29,11 +34,13 @@ export function appendShutdownReport(report: ShutdownReport): void {
     })}\n`;
     fs.appendFileSync(file, line);
     trimToLimit(file);
+    return true;
   } catch (err) {
     log.warn(
       "[shutdown] could not persist shutdown report:",
       err instanceof Error ? err.message : String(err)
     );
+    return false;
   }
 }
 
