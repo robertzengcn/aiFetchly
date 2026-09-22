@@ -65,6 +65,16 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     }
   });
 
+  // DEFERRED (chat-first shell): the >3-reference batch confirmation dialog
+  // and the legacy ambiguity/inference offers are legacy-dock surfaces the
+  // shell explicitly excluded (its preflight rejects over-limit references
+  // with a notice). Porting the batch surface to the shell is tracked in
+  // docs/todo/; these scenarios stay skipped until then.
+  test.skip(
+    true,
+    "batch confirmation surface not yet ported to the chat-first shell"
+  );
+
   test("R-1: a no-workspace 4-image batch renders progress and durable re-homed outputs", async ({
     aiApp,
     fakeAi,

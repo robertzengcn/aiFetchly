@@ -10,6 +10,7 @@
 
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 
 test.describe("Electron application launch", () => {
   test.afterEach(({ app }) => {
@@ -25,8 +26,12 @@ test.describe("Electron application launch", () => {
     // Exactly one primary window (dev bridge + second-instance are disabled).
     expect(electronApp.windows().length).toBe(1);
 
-    // Renderer navigated to the Vite dev-server origin.
-    await expect(mainWindow).toHaveURL(/127\.0\.0\.1:5173/);
+    // Renderer navigated to the Vite dev-server origin (port follows the
+    // harness's AIFETCHLY_E2E_RENDERER_ORIGIN override for run isolation).
+    const originPattern = new RegExp(
+      `^${RENDERER_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`
+    );
+    await expect(mainWindow).toHaveURL(originPattern);
 
     // App landmark is mounted.
     await expect(mainWindow.locator("#app")).toHaveCount(1);
