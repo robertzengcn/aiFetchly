@@ -108,26 +108,44 @@ export class CloseChoiceFlow {
     this.deliver(token, choice);
   }
 
-  /** Native fallback choice (token validated against the live one). */
+  /** Native fallback choice (owns the decision once shown — T11). */
   private async runNativeFallback(token: string): Promise<void> {
+    // T11 (2026-09-21 audit): the native flow takes ownership the moment
+    // it opens — invalidate the renderer token FIRST so a renderer dialog
+    // surfacing after the timeout cannot race the native decision, and a
+    // concurrent renderer submission is rejected as stale by the service.
+    this.lifecycle.cancelCloseChoice(token);
     try {
       const choice = await this.ports.showNativeFallback(
         this.lifecycle.isBackgroundAvailable()
       );
-      if (!this.lifecycle.isCloseChoiceTokenLive(token)) {
-        // Renderer answered concurrently — its answer wins.
-        return;
+      if (this.lifecycle.isQuitting()) {
+        return; // exit accepted elsewhere while the native dialog was up
       }
       this.active = false;
-      this.deliver(token, choice);
+      this.deliverNative(choice);
     } catch (err) {
       log.error(
         "[close-choice] native fallback failed:",
         err instanceof Error ? err.message : String(err)
       );
-      // Cancel: consume the token, keep the window open (dismiss semantics).
+      // Cancel: keep the window open (dismiss semantics); the token was
+      // already consumed when native ownership began (T11).
       this.active = false;
-      this.lifecycle.cancelCloseChoice(token);
+    }
+  }
+
+  /**
+   * T11: deliver a native decision through a FRESH single-use token so a
+   * late renderer submission can never interfere: begin a new token,
+   * submit the native choice against it in the same tick.
+   */
+  private deliverNative(choice: ApplicationCloseChoice): void {
+    const issued = this.lifecycle.beginCloseChoice();
+    if (issued.result !== "issued") return;
+    const result = this.lifecycle.submitCloseChoice(issued.token, choice);
+    if (result.result === "accepted" && result.choice === "hide") {
+      this.ports.hideWindow();
     }
   }
 
