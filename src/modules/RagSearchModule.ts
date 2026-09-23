@@ -47,6 +47,7 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import { RAGDocumentModel } from "@/model/RAGDocument.model";
 import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
@@ -1294,14 +1295,28 @@ export class RagSearchModule extends BaseModule {
       // 2. Resolve allowed document IDs from metadata filters
       const allowedDocIds = await this.resolveAllowedDocumentIds(request);
 
+      if (allowedDocIds && allowedDocIds.length === 0) {
+        return {
+          success: true,
+          query: request.query,
+          totalCandidates: 0,
+          rerankUsed: false,
+          truncated: false,
+          results: [],
+          timing: {
+            vectorMs: Date.now() - vectorStart,
+            keywordMs: 0,
+            rerankMs: 0,
+            totalMs: Date.now() - totalStart,
+          },
+        };
+      }
+
       // 3. Collect hybrid candidates
       const candidates = await this.searchService.searchCandidates(
         request.query,
         {
-          documentIds:
-            allowedDocIds && allowedDocIds.length > 0
-              ? allowedDocIds
-              : undefined,
+          documentIds: allowedDocIds,
         }
       );
 
@@ -1468,77 +1483,38 @@ export class RagSearchModule extends BaseModule {
   private async resolveAllowedDocumentIds(
     request: KnowledgeSearchRequest
   ): Promise<number[] | undefined> {
-    const hasFilters =
-      (request.documentIds && request.documentIds.length > 0) ||
-      (request.documentTypes && request.documentTypes.length > 0) ||
-      (request.tags && request.tags.length > 0) ||
-      request.author ||
-      request.dateRange;
+    const hasAuthor: boolean = (request.author ?? "").trim().length > 0;
+    const hasTags: boolean = (request.tags ?? []).length > 0;
+    const hasIds: boolean = (request.documentIds ?? []).length > 0;
+    const hasTypes: boolean = (request.documentTypes ?? []).length > 0;
+    const hasDates: boolean = request.dateRange !== undefined;
 
-    if (!hasFilters) {
+    if (!hasAuthor && !hasTags && !hasIds && !hasTypes && !hasDates) {
       return undefined;
     }
 
     // If only documentIds are specified, use them directly
-    if (
-      request.documentIds &&
-      request.documentIds.length > 0 &&
-      !request.documentTypes &&
-      !request.tags &&
-      !request.author &&
-      !request.dateRange
-    ) {
+    if (hasIds && !hasTypes && !hasTags && !hasAuthor && !hasDates) {
       return request.documentIds;
     }
 
-    // Otherwise, query documents with filters
     try {
-      const documents = await this.documentService.getDocuments({
-        status: "active",
-        processingStatus: "completed",
+      const model = new RAGDocumentModel(this.dbpath);
+      const uploadedFrom: Date | undefined = request.dateRange?.start
+        ? new Date(request.dateRange.start)
+        : undefined;
+      const uploadedTo: Date | undefined = request.dateRange?.end
+        ? new Date(request.dateRange.end)
+        : undefined;
+      const ids: number[] = await model.findSearchableDocumentIds({
+        documentIds: request.documentIds,
+        fileTypes: request.documentTypes,
+        author: request.author,
+        tags: request.tags,
+        uploadedFrom,
+        uploadedTo,
       });
-
-      let filtered = documents;
-
-      if (request.documentIds && request.documentIds.length > 0) {
-        const idSet = new Set(request.documentIds);
-        filtered = filtered.filter((d) => idSet.has(d.id));
-      }
-
-      if (request.documentTypes && request.documentTypes.length > 0) {
-        const types = new Set(request.documentTypes);
-        filtered = filtered.filter((d) => types.has(d.fileType));
-      }
-
-      if (request.tags && request.tags.length > 0) {
-        filtered = filtered.filter((d) => {
-          if (!d.tags) return false;
-          try {
-            const docTags = JSON.parse(d.tags) as string[];
-            return request.tags!.some((t) => docTags.includes(t));
-          } catch {
-            return false;
-          }
-        });
-      }
-
-      if (request.author) {
-        const authorLower = request.author.toLowerCase();
-        filtered = filtered.filter(
-          (d) => d.author && d.author.toLowerCase().includes(authorLower)
-        );
-      }
-
-      if (request.dateRange) {
-        const start = new Date(request.dateRange.start);
-        const end = new Date(request.dateRange.end);
-        filtered = filtered.filter((d) => {
-          const uploaded = d.uploadedAt ? new Date(d.uploadedAt) : null;
-          return uploaded && uploaded >= start && uploaded <= end;
-        });
-      }
-
-      return filtered.map((d) => d.id);
+      return ids;
     } catch (error) {
       console.warn("Failed to resolve document filters:", error);
       return undefined;

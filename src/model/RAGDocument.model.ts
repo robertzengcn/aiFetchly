@@ -207,6 +207,67 @@ export class RAGDocumentModel extends BaseDb {
     return await queryBuilder.getMany();
   }
 
+  async findSearchableDocumentIds(filters: {
+    documentIds?: number[];
+    fileTypes?: string[];
+    author?: string;
+    tags?: string[];
+    uploadedFrom?: Date;
+    uploadedTo?: Date;
+  }): Promise<number[]> {
+    const queryBuilder = this.repository.createQueryBuilder("document");
+    queryBuilder.select("document.id", "id");
+    queryBuilder.where("document.status = :status", { status: "active" });
+    queryBuilder.andWhere("document.processingStatus = :processingStatus", {
+      processingStatus: "completed",
+    });
+    if (filters.documentIds && filters.documentIds.length > 0) {
+      queryBuilder.andWhere("document.id IN (:...filterDocumentIds)", {
+        filterDocumentIds: filters.documentIds,
+      });
+    }
+    if (filters.fileTypes && filters.fileTypes.length > 0) {
+      queryBuilder.andWhere("document.fileType IN (:...filterFileTypes)", {
+        filterFileTypes: filters.fileTypes,
+      });
+    }
+    const authorTrimmed: string = (filters.author ?? "").trim();
+    if (authorTrimmed.length > 0) {
+      const escaped: string = authorTrimmed.replace(/[\\%_]/g, (m: string) => `\\${m}`);
+      queryBuilder.andWhere(
+        "LOWER(document.author) LIKE :filterAuthor ESCAPE '\\'",
+        { filterAuthor: `%${escaped.toLowerCase()}%` }
+      );
+    }
+    const tags: string[] = (filters.tags ?? [])
+      .map((t: string) => t.trim())
+      .filter((t: string) => t.length > 0);
+    if (tags.length > 0) {
+      const tagClauses: string[] = [];
+      const params: Record<string, string> = {};
+      tags.forEach((tag: string, index: number) => {
+        const escaped: string = tag
+          .replace(/[\\%_"]/g, (m: string) => `\\${m}`)
+          .toLowerCase();
+        tagClauses.push(`LOWER(document.tags) LIKE :filterTag${index} ESCAPE '\\'`);
+        params[`filterTag${index}`] = `%"${escaped}"%`;
+      });
+      queryBuilder.andWhere(`(${tagClauses.join(" OR ")})`, params);
+    }
+    if (filters.uploadedFrom) {
+      queryBuilder.andWhere("document.uploadedAt >= :uploadedFrom", {
+        uploadedFrom: filters.uploadedFrom,
+      });
+    }
+    if (filters.uploadedTo) {
+      queryBuilder.andWhere("document.uploadedAt <= :uploadedTo", {
+        uploadedTo: filters.uploadedTo,
+      });
+    }
+    const rows: Array<{ id: number }> = await queryBuilder.getRawMany();
+    return rows.map((r: { id: number }) => r.id);
+  }
+
   async getDocumentStats(): Promise<{
     total: number;
     byStatus: Record<string, number>;
