@@ -9,6 +9,7 @@ import {
   TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   parseTextToolCalls,
   resolveToolChoiceForRound,
+  splitConcatenatedToolCallArguments,
   type AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
@@ -200,6 +201,106 @@ describe("AIChatQueryLoop", () => {
         expect(result.model).toBe("test-model");
       }
       expect(emitted.join("")).toBe("Hello, world!");
+    });
+  });
+
+  describe("splitConcatenatedToolCallArguments", () => {
+    const malformedCall = (rawArgumentsJson: string) => ({
+      index: 0,
+      id: "call-1",
+      name: "glob_files",
+      ok: false as const,
+      rawArgumentsJson,
+    });
+
+    it("splits concatenated JSON objects into individual calls", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"}{"pattern":"src/**"}')
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0]).toMatchObject({
+        id: "call-1__split_0",
+        name: "glob_files",
+        ok: true,
+        arguments: { pattern: "*" },
+      });
+      expect(calls?.[1]).toMatchObject({
+        id: "call-1__split_1",
+        name: "glob_files",
+        ok: true,
+        arguments: { pattern: "src/**" },
+      });
+    });
+
+    it("handles braces and escaped quotes inside string values", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"query":"a } \\"b\\" {c"}{"query":"plain"}')
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ query: 'a } "b" {c' });
+      expect(calls?.[1].arguments).toEqual({ query: "plain" });
+    });
+
+    it("collapses identical duplicate segments", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"}{"pattern":"*"}{"pattern":"*"}')
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+    });
+
+    it("allows whitespace between concatenated segments", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"a":1}  \n {"b":2}')
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("returns null for a single object (nothing to salvage)", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}'))
+      ).toBeNull();
+    });
+
+    it("returns null when any segment is not valid JSON", () => {
+      expect(
+        splitConcatenatedToolCallArguments(
+          malformedCall('{"a":1}{invalid}')
+        )
+      ).toBeNull();
+    });
+
+    it("returns null for trailing non-object content", () => {
+      expect(
+        splitConcatenatedToolCallArguments(
+          malformedCall('{"a":1} trailing-garbage')
+        )
+      ).toBeNull();
+    });
+
+    it("returns null for truncated input", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}{"b":2'))
+      ).toBeNull();
+    });
+
+    it("returns null when a segment is a JSON array", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}[1,2]'))
+      ).toBeNull();
+    });
+
+    it("returns null for already-valid calls", () => {
+      expect(
+        splitConcatenatedToolCallArguments({
+          index: 0,
+          id: "call-1",
+          name: "glob_files",
+          ok: true,
+          arguments: { pattern: "*" },
+          rawArgumentsJson: '{"pattern":"*"}',
+        })
+      ).toBeNull();
     });
   });
 
@@ -1228,6 +1329,183 @@ describe("AIChatQueryLoop", () => {
       };
       const result = await loop.run(input);
       expect(result.type).toBe("failed");
+    });
+
+    it("salvages provider-merged parallel calls from concatenated JSON arguments", async () => {
+      // Some providers merge several parallel tool calls into one tool_call,
+      // producing concatenated JSON arguments. The loop must split and
+      // execute each call instead of failing the turn.
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      let secondRoundMessages: readonly OpenAIChatMessage[] = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          secondRoundMessages = request.messages;
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "src/**" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+      // The assistant message and tool results sent in the next round must
+      // use the split ids consistently so the provider accepts them.
+      const serialized = JSON.stringify(secondRoundMessages);
+      expect(serialized).toContain("call-1__split_0");
+      expect(serialized).toContain("call-1__split_1");
+    });
+
+    it("dedupes identical segments in provider-merged concatenated arguments", async () => {
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"pattern":"*"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+    });
+
+    it("does not salvage concatenated arguments with unparseable trailing content", async () => {
+      const badChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"} trailing-garbage'
+      );
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(badChunk);
+        }
+      );
+      const fakeExecute = vi.fn();
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("failed");
+      expect(fakeExecute).not.toHaveBeenCalled();
     });
 
     it("returns failed when stream ends after an unusable tool call delta", async () => {

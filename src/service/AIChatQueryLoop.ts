@@ -525,6 +525,92 @@ export function parseTextToolCalls(
   return calls;
 }
 
+/**
+ * Salvage provider-merged parallel tool calls. Some OpenAI-compatible
+ * providers stream several parallel tool calls under a single tool_call
+ * index, so the accumulated arguments arrive as concatenated JSON objects:
+ * `{"pattern": "*"}{"query": "a"}{"query": "a"}`. JSON.parse rejects the
+ * whole string, which previously forced the model to retry — but the
+ * provider merged the parallel calls again on every retry, burning all
+ * MAX_MALFORMED_ARGUMENT_RETRIES rounds until the turn failed with
+ * "Arguments were not valid JSON". When the raw arguments decompose cleanly
+ * into 2+ complete JSON objects (whitespace-only between them), split them
+ * into individual tool calls and execute each one. Identical duplicate
+ * segments (common when deltas are merged) are collapsed into a single
+ * call. Returns null when the raw arguments are not cleanly splittable so
+ * the normal malformed-argument retry path stays in place.
+ */
+export function splitConcatenatedToolCallArguments(
+  call: ParsedToolCallResult
+): ParsedToolCallResult[] | null {
+  if (call.ok) return null;
+  const raw = call.rawArgumentsJson ?? "";
+  const segments: string[] = [];
+  const length = raw.length;
+  let cursor = 0;
+  while (cursor < length) {
+    // Only whitespace may separate concatenated segments.
+    while (cursor < length && /\s/.test(raw[cursor])) cursor++;
+    if (cursor >= length) break;
+    if (raw[cursor] !== "{") return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    const start = cursor;
+    for (; cursor < length; cursor++) {
+      const ch = raw[cursor];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          cursor++;
+          break;
+        }
+      }
+    }
+    if (depth !== 0 || inString) return null; // Unterminated segment.
+    segments.push(raw.slice(start, cursor));
+  }
+  if (segments.length < 2) return null;
+  const seen = new Set<string>();
+  const parsedSegments: Record<string, unknown>[] = [];
+  for (const segment of segments) {
+    if (seen.has(segment)) continue;
+    seen.add(segment);
+    let value: unknown;
+    try {
+      value = JSON.parse(segment);
+    } catch {
+      return null;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    parsedSegments.push(value as Record<string, unknown>);
+  }
+  return parsedSegments.map((args, splitIndex) => ({
+    index: call.index,
+    id: call.id ? `${call.id}__split_${splitIndex}` : undefined,
+    name: call.name,
+    ok: true,
+    arguments: args,
+    rawArgumentsJson: JSON.stringify(args),
+  }));
+}
+
 function shouldForceShellExecute(input: {
   message: string;
   round: number;
@@ -1322,7 +1408,23 @@ export class AIChatQueryLoop {
 
         const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
-          .filter((call) => call.name && call.id);
+          .filter((call) => call.name && call.id)
+          .flatMap((call) => {
+            if (call.ok) return [call];
+            // Some providers merge parallel tool calls into one tool_call
+            // whose arguments are concatenated JSON objects. Salvage the
+            // individual calls instead of burning a malformed-argument
+            // retry — the provider would merge them again on every retry
+            // until the consecutive-malformed cap aborts the whole turn.
+            const salvaged = splitConcatenatedToolCallArguments(call);
+            if (salvaged) {
+              console.warn(
+                `[ai-chat-v2] round ${round}: salvaged ${salvaged.length} provider-merged parallel calls from concatenated arguments (tool=${call.name} id=${call.id})`
+              );
+              return salvaged;
+            }
+            return [call];
+          });
         const textualParsedCalls =
           nativeParsedCalls.length === 0 && !accumulator.state.sawToolCallDelta
             ? parseTextToolCalls(
@@ -1759,7 +1861,7 @@ export class AIChatQueryLoop {
             errorDetail = `Arguments were not valid JSON: "${raw.slice(
               0,
               500
-            )}". Please retry with properly formatted JSON arguments.`;
+            )}". Please retry with a single properly formatted JSON object. If you intended to make multiple tool calls, emit them as separate tool_call entries instead of concatenating several JSON objects into one call.`;
           }
           const errorContent = serializeToolResultContent({
             success: false,
