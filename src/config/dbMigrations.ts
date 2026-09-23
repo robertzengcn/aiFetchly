@@ -17,9 +17,11 @@ import type { MigrationInterface } from "typeorm";
 import { Baseline00001788088086796 } from "../migrations/1788088086796-0000-baseline";
 import { SkillInstallation00011788088148864 } from "../migrations/1788088148864-0001-skill-installation";
 import { SkillInstallationSessionIdempotency00021788192000000 } from "../migrations/1788192000000-0002-skill-install-session-idempotency";
+import { SkillInstallationSessionRequestIdentity00031788326400000 } from "../migrations/1788326400000-0003-skill-install-session-request-identity";
 
 export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [
   Baseline00001788088086796,
   SkillInstallation00011788088148864,
   SkillInstallationSessionIdempotency00021788192000000,
+  SkillInstallationSessionRequestIdentity00031788326400000,
 ];

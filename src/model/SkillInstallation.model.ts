@@ -145,6 +145,35 @@ export class SkillInstallationSessionModel extends BaseDb {
   }
 
   /**
+   * Full request-identity comparison (audit finding 1 / FR-02): a session
+   * is reusable ONLY when ref, subdirectory, and activation mode match the
+   * incoming request. Legacy rows (columns NULL) match only when the
+   * incoming request also omits the field, so old sessions are never
+   * handed to a request that pins something they did not record.
+   */
+  static requestIdentityMatches(
+    session: Pick<
+      SkillInstallationSessionEntity,
+      | "requestedRevision"
+      | "requestedSubdirectory"
+      | "requestedMode"
+    >,
+    request: {
+      readonly ref?: string;
+      readonly subdirectory?: string;
+      readonly mode?: string;
+    }
+  ): boolean {
+    const norm = (v: string | null | undefined): string | null =>
+      v === undefined || v === null || v === "" ? null : v;
+    return (
+      norm(session.requestedRevision) === norm(request.ref) &&
+      norm(session.requestedSubdirectory) === norm(request.subdirectory) &&
+      norm(session.requestedMode) === norm(request.mode)
+    );
+  }
+
+  /**
    * Transactional active-session claim (FR-02/NFR-01): inside ONE SQLite
    * transaction, (1) fail active sessions whose mutation lease has expired
    * (stale owner — crashed mid-mutation), then (2) return the remaining
@@ -176,6 +205,17 @@ export class SkillInstallationSessionModel extends BaseDb {
         if (stale) staleTakenOver.push(s.sessionId);
         return !stale;
       });
+      // Identity-scoped claim (audit finding 1): a live session belongs to
+      // this prepare ONLY when the full request identity matches; a
+      // different ref/subdirectory/mode gets its OWN session.
+      const identity = {
+        ref: entity.requestedRevision ?? undefined,
+        subdirectory: entity.requestedSubdirectory ?? undefined,
+        mode: entity.requestedMode ?? undefined,
+      };
+      const matching = live.filter((s) =>
+        SkillInstallationSessionModel.requestIdentityMatches(s, identity)
+      );
       for (const stale of active) {
         if (!live.includes(stale)) {
           stale.state = "failed";
@@ -185,8 +225,8 @@ export class SkillInstallationSessionModel extends BaseDb {
           await repo.save(stale);
         }
       }
-      if (live.length > 0) {
-        return { created: false, session: live[0], staleTakenOver };
+      if (matching.length > 0) {
+        return { created: false, session: matching[0], staleTakenOver };
       }
       return {
         created: true,

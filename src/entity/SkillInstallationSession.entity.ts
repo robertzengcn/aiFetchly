@@ -104,4 +104,23 @@ export class SkillInstallationSessionEntity extends AuditableEntity {
   @Order(16)
   @Column("varchar", { length: 64, nullable: true })
   lastFailureCause?: string;
+
+  /**
+   * Full installation REQUEST identity persisted AT CREATION (audit
+   * finding 1 / FR-02 / FR-29): idempotent reuse and the transactional
+   * claim compare these against the incoming request so a different
+   * ref/subdirectory/mode NEVER receives a foreign session.
+   */
+  @Order(17)
+  @Column("varchar", { length: 200, nullable: true })
+  requestedRevision?: string | null;
+
+  @Order(18)
+  @Column("varchar", { length: 300, nullable: true })
+  requestedSubdirectory?: string | null;
+
+  /** "managed-copy" | "symbolic-link" | "junction". */
+  @Order(19)
+  @Column("varchar", { length: 20, nullable: true })
+  requestedMode?: string | null;
 }

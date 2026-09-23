@@ -1743,3 +1743,70 @@ describe("credential completeness + dependency ordering (audit findings 5/6)", (
     }
   }, 120_000);
 });
+
+describe("request-identity session isolation (audit finding 1)", () => {
+  it("a different ref/mode request gets its OWN session, never a foreign active one", async () => {
+    const module = new SkillInstallationModule();
+    // Conversation A: managed-copy, no pinned ref.
+    const first = await module.prepare({
+      conversationId: "conv-id-a",
+      source: fixtureRoot,
+    });
+    expect(first?.state).toBe("awaiting_approval");
+
+    // Conversation B: SAME source, DIFFERENT pinned ref + linked mode.
+    // Before the fix this received A's session id.
+    const second = await module.prepare({
+      conversationId: "conv-id-b",
+      source: fixtureRoot,
+      ref: "v2",
+      mode: "linked",
+    });
+    expect(second?.state).toBe("awaiting_approval");
+    expect(second?.sessionId).not.toBe(first?.sessionId);
+
+    // Same conversation + same identity still resumes (idempotency holds).
+    const resume = await module.prepare({
+      conversationId: "conv-id-a",
+      source: fixtureRoot,
+    });
+    expect(resume?.sessionId).toBe(first?.sessionId);
+  });
+
+  it("a pinned-ref request is not answered by a different-revision ready row", async () => {
+    const module = new SkillInstallationModule();
+    // Install with defaults (revision = resolved head).
+    const prepared = await module.prepare({
+      conversationId: "conv-id-ready",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken:
+        (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+
+    // An UNPINNED repeat still reports ready.
+    const unpinned = await module.prepare({
+      conversationId: "conv-id-ready2",
+      source: fixtureRoot,
+    });
+    expect(unpinned?.state).toBe("ready");
+
+    // A PINNED different revision must NOT be satisfied by that row —
+    // it gets its own session (a new plan/approval cycle).
+    const pinned = await module.prepare({
+      conversationId: "conv-id-ready3",
+      source: fixtureRoot,
+      ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    });
+    expect(pinned?.state).not.toBe("ready");
+    expect(pinned?.sessionId).not.toContain("installation:");
+  }, 120_000);
+});

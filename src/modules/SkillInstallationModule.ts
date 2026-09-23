@@ -258,13 +258,22 @@ export class SkillInstallationModule extends BaseModule {
     };
 
     // Idempotency (§10.2): an active session for the same canonical source
-    // resumes instead of re-acquiring.
+    // AND the same full request identity resumes instead of re-acquiring
+    // (audit finding 1 — ref/subdirectory/mode must match, or the request
+    // gets its OWN session rather than a foreign one).
     if (!request.sessionId) {
       const active = await sessions.findActiveByCanonicalUri(
         descriptor.canonicalUri
       );
-      if (active.length > 0) {
-        return this.snapshotFromEntity(active[0]);
+      const matching = active.filter((s) =>
+        SkillInstallationSessionModel.requestIdentityMatches(s, {
+          ref: request.ref,
+          subdirectory: request.subdirectory,
+          mode: request.mode,
+        })
+      );
+      if (matching.length > 0) {
+        return this.snapshotFromEntity(matching[0]);
       }
       // A healthy ready installation of the same source is REPORTED as
       // ready — never re-acquired because the model asked again.
@@ -272,17 +281,31 @@ export class SkillInstallationModule extends BaseModule {
         descriptor.canonicalUri
       );
       if (ready.length > 0) {
-        const verified = new SkillActivationService().verifyActivation(
-          ready[0].activationPath
+        // Ready reuse requires the full request identity too (audit
+        // finding 1): a pinned ref or linked-mode request must not be
+        // answered with a managed-copy ready row of a different revision.
+        const identityReady = ready.filter(
+          (r) =>
+            // Compare a field ONLY when the request explicitly pins it —
+            // an unpinned request accepts the installed default.
+            (descriptor.requestedRevision
+              ? (r.sourceRevision ?? null) === descriptor.requestedRevision
+              : true) &&
+            (request.mode
+              ? (r.activationMode ?? null) === request.mode
+              : true)
         );
-        if (verified) {
+        const verified = identityReady.some((r) =>
+          new SkillActivationService().verifyActivation(r.activationPath)
+        );
+        if (verified && identityReady.length > 0) {
           return {
-            sessionId: `installation:${ready[0].installationId}`,
-            installationId: ready[0].installationId,
+            sessionId: `installation:${identityReady[0].installationId}`,
+            installationId: identityReady[0].installationId,
             state: "ready",
             nextAction: "ready",
             planRevision: null,
-            safeSummary: `'${ready[0].name}' is already installed and healthy; no changes made.`,
+            safeSummary: `'${identityReady[0].name}' is already installed and healthy; no changes made.`,
             recoverable: true,
           };
         }
@@ -323,6 +346,11 @@ export class SkillInstallationModule extends BaseModule {
           planRevision: "none",
           stateRevision: 0,
           canonicalUri: descriptor.canonicalUri,
+          // Full request identity persisted AT CREATION (audit finding 1):
+          // idempotent reuse and the transactional claim compare these.
+          requestedRevision: descriptor.requestedRevision ?? null,
+          requestedSubdirectory: descriptor.subdirectory ?? null,
+          requestedMode: request.mode ?? null,
           leaseOwner: `${process.pid}-${crypto.randomBytes(6).toString("hex")}`,
           leaseExpiresAt: String(now + SESSION_LEASE_TTL_MS),
           ...(prior
