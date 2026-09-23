@@ -7,6 +7,7 @@
 - **Created**: 2026-09-23
 - **Owner**: Engineering Team
 - **Related systems**: Knowledge Library UI, RAG upload, chunking, embeddings, `knowledge_library_search`, `knowledge_library_list_documents`, `knowledge_library_import_attachment`, website import
+- **Technical design**: `docs/prd/knowledge-library-document-metadata-technical-design.md`
 - **Related PRDs**:
   - `docs/prd/knowledge-library-management-ai-tools-prd.md`
   - `docs/prd/knowledge-library-website-import-ai-tool-prd.md`
