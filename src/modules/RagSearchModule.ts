@@ -48,6 +48,10 @@ import {
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 import { RAGDocumentModel } from "@/model/RAGDocument.model";
+import {
+  buildEmbeddingInput,
+  type EmbeddingHeaderSource,
+} from "@/service/knowledgeMetadataHeader";
 import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
@@ -75,6 +79,31 @@ export interface DocumentUploadResponse {
   chunksCreated: number;
   processingTime: number;
   document: RAGDocumentEntity;
+}
+
+function toEmbeddingHeaderSource(doc: {
+  name: string;
+  title?: string | null;
+  author?: string | null;
+  tags?: string | null;
+  description?: string | null;
+}): EmbeddingHeaderSource {
+  let tags: string[] | undefined;
+  try {
+    const parsed: unknown = doc.tags ? JSON.parse(doc.tags) : undefined;
+    if (Array.isArray(parsed)) {
+      tags = parsed.filter((t: unknown): t is string => typeof t === "string");
+    }
+  } catch {
+    tags = undefined;
+  }
+  return {
+    fileName: doc.name,
+    title: doc.title ?? undefined,
+    author: doc.author ?? undefined,
+    tags,
+    description: doc.description ?? undefined,
+  };
 }
 
 /**
@@ -195,7 +224,8 @@ export class RagSearchModule extends BaseModule {
       const embeddingResult = await this.generateChunkEmbeddings(
         chunks,
         modelName,
-        vectorDimensions
+        vectorDimensions,
+        toEmbeddingHeaderSource(document)
       );
 
       if (embeddingResult) {
@@ -303,7 +333,8 @@ export class RagSearchModule extends BaseModule {
   private async generateChunkEmbeddings(
     chunks: RAGChunkEntity[],
     modelName: string,
-    dimension: number
+    dimension: number,
+    headerSource: EmbeddingHeaderSource
   ): Promise<{
     vectorIndexPath: string;
     modelName: string;
@@ -328,7 +359,8 @@ export class RagSearchModule extends BaseModule {
         await this.embedAndStoreChunks(
           chunks,
           (texts: string[]) => provider.embedBatch(texts),
-          requestedIndexPath
+          requestedIndexPath,
+          headerSource
         );
         console.log(
           `[RagSearchModule] Embedded ${chunks.length} chunks locally for document ${documentId}`
@@ -347,7 +379,8 @@ export class RagSearchModule extends BaseModule {
         await this.embedAndStoreChunks(
           chunks,
           (texts: string[]) => retryService.embedBatch(provider, texts),
-          requestedIndexPath
+          requestedIndexPath,
+          headerSource
         );
         console.log(
           `[RagSearchModule] Embedded ${chunks.length} chunks via remote model ${provider.modelName} for document ${documentId}`
@@ -362,7 +395,8 @@ export class RagSearchModule extends BaseModule {
           chunks,
           documentId,
           provider,
-          remoteError
+          remoteError,
+          headerSource
         );
       }
     } catch (error) {
@@ -398,7 +432,8 @@ export class RagSearchModule extends BaseModule {
     chunks: RAGChunkEntity[],
     documentId: number,
     remoteProvider: EmbeddingProvider,
-    remoteError: unknown
+    remoteError: unknown,
+    headerSource: EmbeddingHeaderSource
   ): Promise<{
     vectorIndexPath: string;
     modelName: string;
@@ -434,7 +469,8 @@ export class RagSearchModule extends BaseModule {
       await this.embedAndStoreChunks(
         chunks,
         (texts: string[]) => localProvider.embedBatch(texts),
-        localIndexPath
+        localIndexPath,
+        headerSource
       );
     } catch (localError) {
       const localFailureMessage =
@@ -468,13 +504,21 @@ export class RagSearchModule extends BaseModule {
   private async embedAndStoreChunks(
     chunks: RAGChunkEntity[],
     embedBatchFn: (texts: string[]) => Promise<EmbeddingResult[]>,
-    vectorIndexPath: string
+    vectorIndexPath: string,
+    headerSource: EmbeddingHeaderSource
   ): Promise<void> {
     const batchSize = LOCAL_EMBEDDING_MAX_BATCH_SIZE;
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      const texts = batch.map((chunk) => chunk.content);
+      const texts: string[] = batch.map((chunk) =>
+        buildEmbeddingInput(headerSource, chunk.content)
+      );
       const results = await embedBatchFn(texts);
+      if (results.length !== batch.length) {
+        throw new Error(
+          `Embedding batch returned ${results.length} results for ${batch.length} chunks`
+        );
+      }
       for (let j = 0; j < batch.length; j++) {
         const chunk = batch[j];
         const result = results[j];
@@ -1000,10 +1044,14 @@ export class RagSearchModule extends BaseModule {
 
       // Generate embeddings. The result carries the FINAL model metadata,
       // which may differ from the requested model after a local fallback.
+      const reembedDoc = await this.documentService.findDocumentById(documentId);
       const embeddingResult = await this.generateChunkEmbeddings(
         chunksWithoutEmbeddings,
         modelName,
-        dimension
+        dimension,
+        reembedDoc
+          ? toEmbeddingHeaderSource(reembedDoc)
+          : { fileName: "" }
       );
 
       // Save final vector index path and model metadata to document entity
