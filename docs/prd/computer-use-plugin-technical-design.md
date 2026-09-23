@@ -4,284 +4,377 @@
 
 | Field | Value |
 | --- | --- |
-| Version | 1.0 |
-| Status | Proposed architecture; no feature implementation is claimed |
+| Version | 1.1 |
+| Status | Proposed architecture, revised after feasibility review. No implementation is claimed |
 | Date | 2026-09-23 |
 | Product requirements | [Computer Use Plugin PRD](computer-use-plugin-prd.md) |
 | Source repositories | `aiFetchly`, proposed `aifetchly-computer-use`, `aifetchly-hub-go` |
-| Initial adapters | Windows-MCP + local ShowUI; Ghost OS + its existing local vision sidecar |
-| Transport | Persistent local MCP over stdio |
-| Packaging | One plugin identity, target-specific dependencies/artifacts, optional model resources |
+| Adapters | Windows-MCP (Windows); macOS backend chosen by spike (pinned Ghost OS fork or in-house Swift helper) |
+| Grounder | GUI-Actor-2B exported to ONNX, running on ONNX Runtime in an app-owned worker |
+| Transport | Persistent MCP over stdio via the official MCP TypeScript SDK |
+| Packaging | One plugin identity; target-specific adapters, runtime binding, and optional model resources |
 
-All new interfaces, services, commands, and data structures below are proposed unless explicitly labeled existing. Example module names are implementation contracts to create, not commands available today.
+All interfaces, services, commands, and data structures below are proposed unless labeled **existing**.
+
+### Revision 1.1 summary
+
+- Screenshots reach the planner only in opt-in visual planner mode (§12).
+- ShowUI-2B is replaced by GUI-Actor-2B; GUI-Actor-3B is blocked by its base-model licence (§5.1).
+- One inference runtime: ONNX Runtime with DirectML/CPU on Windows and CoreML/CPU on macOS; no PyTorch, CUDA toolkit, or MLX on customer machines (§5).
+- The Python gateway is removed. The host `ComputerUseSupervisor` owns sessions, target store, transforms, grants, lease, and stop (§3, §4, §10).
+- The macOS backend is chosen by a spike; Ghost OS's MLX sidecar is not used (§6.2).
+- The host MCP client is rebuilt on the official SDK with persistent sessions as a Phase 0 deliverable (§4.1).
+- Delivery is a thin vertical slice: Windows accessibility-first, then local vision, then macOS (§16).
 
 ## 1. Architecture decisions
 
-1. Keep the plugin in one independent repository. Share protocol, sessions, transforms, diagnostics, and tests; separate OS adapters and release resources.
-2. Maintain one public plugin listing. Source layout is independent of download selection.
-3. Use a Python MCP gateway to normalize Windows-MCP and Ghost OS behavior. Prefer their public MCP boundaries over imports of unstable internal functions.
-4. Keep task planning, model credentials/routing, user authorization, global desktop ownership, supervision, and audit persistence in AiFetchly.
-5. Use ShowUI initially for bounded target grounding. Accessibility is the first target resolver when it supplies reliable identity; vision covers unresolved controls.
-6. Keep screenshots local for local grounding. An optional remote visual planner path is separate, permissioned, and multimodal.
-7. Keep one authoritative execution loop. Do not expose an unrestricted `run_computer_task(prompt)` that hides action planning, approval, and retries inside another agent.
-8. Provision uv/Python/dependencies during installation. Start prepared environments without downloading or resolving packages.
-9. Supervise the entire process tree. Stop and lease revocation must not wait for synchronous model inference.
-10. Make coordinate mapping, locate-only overlays, and offline replay available before autonomous input.
-
-The previous Midscene/browser-first design remains relevant to browser-only integration. Native desktop work uses the adapters above; do not claim browser testing validates native input. Model adapters remain replaceable for future UI-TARS, another local grounder, or a remote computer-use model, after equivalent evaluation.
+1. **Host owns authority.** Sessions, the target store, coordinate transforms, action grants, the desktop lease, stop, and audit live in the AiFetchly main process. No plugin or adapter process can authorize input.
+2. **Thin adapters, no gateway.** Adapters are the upstream backend processes themselves (Windows-MCP, the Mac helper) behind a host-side allowlist wrapper. No intermediate Python gateway.
+3. **One inference runtime.** The grounder runs on ONNX Runtime on every OS, in an app-owned worker under `src/childprocess/computer-use/`. The model is exported once in CI and tested for parity against the PyTorch reference.
+4. **GUI-Actor-2B is the default grounder.** Its licence chain (Qwen2-VL-2B Apache-2.0 → MIT) permits commercial distribution. The grounder is replaceable behind a stable internal contract.
+5. **Accessibility first.** The grounder resolves only targets accessibility cannot identify reliably.
+6. **Two planner modes.** Local-only (default) sends structured text; visual planner mode (opt-in) additionally sends target-window screenshots as transient image inputs.
+7. **One authoritative task loop.** No `run_computer_task(prompt)` that hides planning, approval, and retries in another agent.
+8. **Installation provisions; sessions only start.** No package resolution or model download during session startup.
+9. **Whole-tree supervision.** Stop and lease revocation never wait for model inference.
+10. **Read-only diagnostics first.** Coordinate mapping, locate-only overlays, and offline replay exist before autonomous input on vision targets.
+11. **Independent repository for non-authority code.** Contracts, adapter packaging, the Mac helper, the ONNX export pipeline, fixtures, and evaluation tools live in `aifetchly-computer-use`.
 
 ## 2. Verified code anchors and gaps
 
-Paths are relative to the indicated repository and were inspected during the 2026-09-23 discussion. These findings are scoped to the inspected paths, not a full implementation audit.
+Paths were inspected on 2026-09-23. Findings are scoped to these paths, not a full audit.
 
-| Repository / anchor | Existing behavior | Required work |
+### 2.1 Desktop (`aiFetchly`)
+
+| Anchor | Existing behavior | Required work |
 | --- | --- | --- |
-| Desktop `src/entityTypes/pluginTypes.ts` | Plugin skills/agents/MCP declarations; command/args/env; stdio transport | Preserve plugin identity; do not assume proposed target/resource fields are already validated |
-| Desktop `src/service/PluginInstallService.ts` | Local ZIP/folder, git/GitHub, npm, URL acquisition then import | Reuse validated import; Hub managed resources remain a distinct acquisition path |
-| Desktop `src/modules/MCPClient.ts`, `connectStdio()` | Spawns command with piped stdio, sanitized environment, plugin cwd | Retain shell-free argument arrays; validate required Windows environment and negotiated protocol |
-| Same, initialization | Sends `initialize` with `2024-11-05`; inspected path lacks `notifications/initialized` | Implement complete version/capability negotiation and initialized notification |
-| Same, `callTool()` | Returns first text content when present; otherwise unwraps first data block | Preserve mixed text/image/structured results and errors |
-| Same, `connectSSE()` | Throws “SSE transport not yet implemented” | Use stdio; do not select SSE just because the type includes it |
-| Same, disconnect/exit | Direct child kill and pending-map clearing | Reject pending requests, coordinate timers, graceful shutdown and process-tree cleanup |
-| Desktop `src/service/MCPToolService.ts`, `executeMCPTool()` | Creates/connects/disconnects client per invocation | Add supervised session reuse; avoid reloading native services/model weights |
-| Same, `assertStdioTrusted()` | Explicit trust check before local process spawn | Preserve this check; distinguish process trust from current action authorization |
-| Desktop `src/service/ToolExecutor.ts` | Resolves plugin MCP names and wraps results | Propagate trusted session context/cancellation without accepting model-forged authority |
-| Desktop `src/service/ManagedBrowserAiToolService.ts` | AI gate, handoff/risk patterns; screenshot returns metadata only | Reuse principles; do not mistake existing screenshot metadata for a model image input |
-| Desktop `src/entityTypes/aiImageAttachmentToolTypes.ts` | Transient `ImageModelArtifact`/`ModelArtifact` | Reuse/extend for authorized remote visual input; no raw bytes in persisted tool JSON |
-| Desktop `src/service/ManagedBrowserLeaseService.ts` | In-process account lease pattern | Desktop lease must cover chats/windows and same-user host processes as applicable |
-| Desktop `src/service/AIChatToolApprovalPolicyService.ts` | Explicit denials, dependency approval, request-scoped actions | Integrate computer actions explicitly; generic MCP naming/category is insufficient |
-| Desktop `src/service/SkillEnvironmentManager.ts` | Existing Python skill setup, hash checks | Not proof of complete managed-uv install-plan consumption |
-| Hub `internal/httpapi/routes/install_plan.go` | Target-aware plan, uv provision records, uv toolchain URL/hash selection | Preserve; verify complete desktop consumer and runtime provenance |
-| Hub same, `BuildManagedPlan()` | Models/environments appended from version-only queries | Filter resource closure by selected target/backend/features |
-| Hub `queries/plugin_version_targets.sql` | `ListPlanModelRevisions` / `ListPlanEnvironments` filter by version | Add target applicability; do not mark all platform environments required |
-| Hub `internal/managed/target.go` | Iterates every requirement when resolving target | Add explicit conditional requirements so Windows-only and Mac-only backends do not block each other |
-| Hub `internal/resources/plan.go` | Plugin/runtime/environment/model/toolchain resource types; provision/bootstrap fields | Native Ghost binary representation and optional feature closure need a deliberate schema extension |
-| Hub `internal/artifacts/plugin_package.go` | One canonical code archive, strips environments/caches, fixed file mode `0644` | Keep native executables outside canonical code ZIP; safe native extractor must restore validated executable metadata |
-| Hub uv-runtime design | `uv pip install --require-hashes` from Hub JSON lock, not author `uv.lock` | Generate/validate production lock separately from development workflow |
+| `package.json` | No `@modelcontextprotocol/sdk` dependency; MCP protocol is hand-rolled | Add the official SDK (verify its `zod` peer range against the project's `zod ^3.24`) |
+| `src/modules/MCPClient.ts`, `connectStdio()` | Spawns with piped stdio, sanitized env allow/deny lists, plugin cwd | Keep the env sanitization and trust checks; move them into a custom SDK `Transport` (§4.1) |
+| Same, stdout handler (~line 259) | `buffer += data.toString()` decodes each chunk separately | Multi-byte UTF-8 (CJK) split across chunks is corrupted. Buffer bytes and decode complete lines |
+| Same, initialize (~line 292) | Sends `initialize` with `2024-11-05`; no `notifications/initialized` | Full version negotiation and initialized notification (SDK `Client`) |
+| Same, `handleMessage()` | Handles responses only; drops notifications and server requests | Notifications, progress, cancellation (SDK) |
+| Same, `callTool()` | Returns the first text block, else the first `data` block | Preserve all content blocks, structured content, and `isError` semantics |
+| Same, `disconnect()` | Direct child `kill()`, clears pending map without rejecting | Reject pending requests; graceful close; process-tree termination |
+| Same, `connectSSE()` | Throws "not yet implemented" | Out of scope; Computer Use uses stdio |
+| `src/service/MCPToolService.ts`, `executeMCPTool()` | Connects and disconnects a client per invocation | Persistent session pool (§4.2) |
+| Same, `assertStdioTrusted()` | Trust check before spawning a local process | Keep; process trust is separate from action authorization |
+| `src/service/ToolExecutor.ts` | Resolves plugin MCP tool names | Route Computer Use tools to the supervisor; never expose raw adapter tools to the model |
+| `src/service/ManagedBrowserAiToolService.ts` | AI gate, handoff/risk patterns; screenshots return metadata only | Reuse the patterns |
+| `src/entityTypes/aiImageAttachmentToolTypes.ts` | Transient `ImageModelArtifact` / `ModelArtifact` | Carrier for visual planner images (§12) |
+| `src/service/ManagedBrowserLeaseService.ts` | In-process account lease | Pattern for the desktop lease |
+| `src/service/AIChatToolApprovalPolicyService.ts` | Denials, dependency approval, request-scoped actions | Add explicit computer-action classes |
+| `src/childprocess/embedding/LocalEmbeddingWorker.ts` | App-owned worker running ONNX models via `@xenova/transformers`, loaded at runtime from a downloaded runtime | Precedent for an app-owned ONNX Runtime worker and runtime-loaded native bindings |
+| `src/modules/LocalAiRuntimeModule.ts`, `src/entityTypes/localAiRuntimeTypes.ts` | First-party downloadable runtimes (`embedding-xenova`, `voice-sherpa`): per-platform/arch catalog, SHA-256, Electron ABI fields, atomic `active.json`, operation leases | Candidate delivery path for the ONNX Runtime binding and model (open decision §17) |
+| `src/utils/packagedWorkerPath.ts` | `buildPackagedWorkerEnv`, `resolvePackagedWorkerPath` | Required for the grounding worker spawn |
+| Desktop `src/` | No uv or Python install-plan consumer | Needed only for the Windows-MCP environment (§8) |
 
-The generic desktop plugin package limit observed in `pluginTypes.ts` is 50 MiB compressed / 250 MiB extracted, while the Hub canonical packager has different limits. Do not use either code-package path for multi-gigabyte model resources. Reconcile package limits during installer contract tests.
+The generic plugin package limit in `pluginTypes.ts` (50 MiB compressed / 250 MiB extracted) and the Hub canonical packager limits both rule out model weights in code packages. Models are separate resources.
+
+### 2.2 Hub (`aifetchly-hub-go`)
+
+| Anchor | Existing behavior | Required work (phase) |
+| --- | --- | --- |
+| `internal/httpapi/routes/install_plan.go` | Target-aware plan, uv provision records, uv toolchain selection | Preserve (Phase 1) |
+| Same, `BuildManagedPlan()` | Models/environments appended from version-only queries | Filter by target, execution provider, and features (Phase 3, when two targets exist) |
+| `queries/plugin_version_targets.sql` | `ListPlanModelRevisions` / `ListPlanEnvironments` filter by version | Add target applicability (Phase 3) |
+| `internal/managed/target.go` | Iterates every requirement when resolving a target | Conditional requirements so Windows-only and Mac-only resources do not block each other (Phase 3) |
+| `internal/resources/plan.go` | Plugin/runtime/environment/model/toolchain types | Native-component resource type for the Mac helper (Phase 3) |
+| `internal/artifacts/plugin_package.go` | One code archive, fixed file mode `0644` | Native executables stay outside the code ZIP; a safe native extractor restores validated executable bits (Phase 3) |
+| uv-runtime design | `uv pip install --require-hashes` from a Hub JSON lock | Applies to the Windows-MCP environment only |
+
+### 2.3 Document reconciliation
+
+The older managed-installation PRD disallows public package installation at runtime. The Hub uv design adds hash-pinned provisioning during installation. This feature uses the uv provisioner only during installation, only for the Windows-MCP environment, and only from a validated plan; session startup never installs packages. Developer `uv.lock` workflows and the Hub JSON lock are different formats; release tooling generates and verifies the Hub lock.
 
 ## 3. Repository and responsibility boundaries
 
-### 3.1 Proposed independent repository
+### 3.1 Independent repository
 
 ```text
 aifetchly-computer-use/
-├── plugin/                       # Manifest, skills, MCP declaration templates
-├── contracts/                    # Versioned JSON Schemas and fixtures
-├── src/
-│   ├── aifetchly_computer_use/
-│   │   ├── sessions/
-│   │   ├── coordinates/
-│   │   ├── authorization/
-│   │   ├── observations/
-│   │   ├── actions/
-│   │   ├── diagnostics/
-│   │   └── adapters/
-│   │       ├── windows/
-│   │       └── macos/
-│   └── childprocess/             # Gateway/vision worker entrypoints
-├── environments/                 # Separate target/vision locks as needed
+├── plugin/                        # Manifest, skills, tool descriptions
+├── contracts/                     # Versioned JSON Schemas + fixtures shared with the host
+│   ├── tools/
+│   ├── traces/
+│   └── fixtures/transforms/       # Golden geometry cases consumed by host tests
+├── adapters/
+│   ├── windows/                   # Windows-MCP pin, tool allowlist, launch profile, lock generation
+│   └── macos/                     # Swift helper source or pinned Ghost OS patch set (spike outcome)
+├── grounding/
+│   ├── reference/                 # PyTorch reference runner (CI and developer machines only)
+│   ├── export/                    # PyTorch → ONNX export, quantization, manifest generation
+│   └── parity/                    # Stage-by-stage golden tensors and tolerance checks
+├── eval/                          # Benchmark datasets metadata, evaluate/replay CLI
 ├── packaging/
 │   ├── windows/
 │   └── macos/
-├── debug/                        # Local viewer, offline replay, annotation
 ├── tests/
-│   ├── contracts/
-│   ├── coordinates/
-│   ├── fixtures/
-│   ├── integration/
-│   └── desktop/
-├── pyproject.toml
-├── uv.lock                       # Development lock; not the Hub JSON lock
-└── THIRD_PARTY_NOTICES
+└── THIRD_PARTY_NOTICES            # Code and model licences, including base-model chains
 ```
 
-Do not commit models, Python distributions, virtualenvs, dependency caches, credentials, or customer traces. Generate release bundles from clean builds. Upstream backends are pinned dependencies or audited patches, not untracked copies. Maintain licenses/notices for code, weights, and redistribution independently.
+PyTorch and Python are used here only in CI and on developer machines to export and verify models. Customer machines receive ONNX files. Do not commit weights, Python distributions, virtualenvs, caches, credentials, or customer traces.
+
+The host and this repository share **schemas and fixtures, not code**. Host TypeScript types are generated from or validated against the JSON Schemas, and host transform tests consume `contracts/fixtures/transforms`.
 
 ### 3.2 Host responsibility
 
-- User-facing Plugin Manager/session controls and translations.
-- AI enable gate before AI IPC work, planner and provider routing.
-- Trusted action grants, desktop lease, independent stop control, subprocess supervision.
-- Managed resources and executable-path resolution from trusted plans.
-- Result normalization, transient multimodal delivery when permitted, audit persistence.
-- Plugin disable/uninstall/app-quit cleanup.
+- Plugin Manager integration, Computer Use settings, session control strip, translations.
+- AI enable gate, planner and provider routing, planner mode enforcement.
+- `ComputerUseSupervisor`: session state machine, target store, coordinate transforms, grants, desktop lease, stop and stop hotkey, adapter and worker supervision.
+- Grounding worker (ONNX Runtime) and its preprocessing/postprocessing.
+- Managed resource resolution from trusted plans.
+- Result normalization, transient image delivery in visual planner mode, audit persistence through Modules/Models.
+- Cleanup on plugin disable/uninstall and app quit.
 
-All DB operations remain in Models/Modules using existing Token/USERSDBPATH conventions. IPC handlers validate, authorize, and dispatch; workers and plugin processes do not access the DB. New app-owned worker entrypoints belong in `src/childprocess/` and applicable build configuration.
+IPC handlers validate, check the AI gate, authorize, and dispatch. Workers and adapter processes never access the database. The grounding worker entrypoint lives in `src/childprocess/computer-use/` and is registered in the build configuration.
 
 ### 3.3 Hub responsibility
 
-Resolve target/features into an immutable dependency closure; distribute verified resources, requirements, compatibility, and revocation. The Hub does not execute desktop input, proxy live screenshots, infer OS permissions, or certify that a local GPU is healthy.
+Resolve target and features into an immutable resource closure; distribute verified resources, compatibility, and revocation. The Hub does not execute input, proxy screenshots, infer OS permissions, or certify local GPU health.
 
-## 4. Runtime topology and Python interoperability
+## 4. Runtime topology
 
 ```mermaid
 flowchart TD
-    R[Vue renderer] --> I[Validated main-process IPC]
-    I --> H[AiFetchly planner, grants, desktop lease]
-    H --> S[Computer Use supervisor]
-    S <-->|persistent MCP stdio| P[Python gateway]
-    P --> W[Windows adapter]
-    W <-->|MCP stdio| WM[Windows-MCP process]
-    W <-->|bounded local requests| V[ShowUI inference worker]
-    P --> M[macOS adapter]
-    M <-->|MCP stdio| G[Ghost OS native process]
-    G --> GV[Existing MLX vision sidecar]
-    S --> STOP[Independent cancellation and process-tree control]
+    R[Vue renderer] --> I[Validated main-process IPC + AI gate]
+    I --> H[Planner loop, planner mode, approvals]
+    H --> S[ComputerUseSupervisor<br/>sessions, target store, transforms, grants, lease]
+    S <-->|MCP SDK, persistent stdio| WM[Windows-MCP<br/>managed Python env]
+    S <-->|stdio| MH[macOS helper<br/>native, signed]
+    S <-->|utilityProcess messages| GW[Grounding worker<br/>ONNX Runtime + GUI-Actor-2B]
+    S --> STOP[Stop hotkey, cancellation, process-tree control]
+    H -. visual planner mode only .-> P[Remote image-capable planner]
 ```
 
-Electron already supports `spawn(command, args, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] })`. MCP exchanges JSON-RPC messages through pipes; language runtimes are independent. Python does not run inside Electron, the renderer, or Node's native-module ABI.
+- Windows-MCP runs in the interactive Windows user session as a child of AiFetchly. It is not an elevated service or login task. WSL-hosted code is never a Windows desktop executor.
+- The macOS helper is a native subprocess. macOS normally attributes a spawned helper's Accessibility and Screen Recording use to the responsible app (AiFetchly.app); verify this in the packaged build (§6.2).
+- The grounding worker is an Electron `utilityProcess` spawned with `buildPackagedWorkerEnv`. It loads the ONNX Runtime Node binding and the model from resolved managed resources and has no network or database access.
+- Screenshot bytes flow from the adapter to the supervisor to the worker. They reach the planner only in visual planner mode.
 
-Production launch resolves `<managedEnv>/Scripts/python.exe` on Windows or `<managedEnv>/bin/python` on POSIX and a validated installed entrypoint. Use unbuffered Python (`-u`) and package-compatible import layout. The installer, not the renderer or model, selects the executable, entrypoint, cwd, model paths, and resource IDs.
+### 4.1 MCP client on the official SDK
 
-Windows-MCP must run in the interactive Windows user session. WSL-hosted code must not be mistaken for a Windows desktop executor. Do not install the backend as an elevated background service or persistent login task by default. The host owns its lifetime.
+- Use `@modelcontextprotocol/sdk` `Client` for protocol handling: initialize, version negotiation, `notifications/initialized`, capabilities, notifications, progress, cancellation, and complete content blocks.
+- Implement a custom SDK `Transport` over the host's own spawn, rather than the SDK's stock stdio transport, so these stay in host code: `assertStdioTrusted`, env allow/deny lists, cwd, shell-free argv, bounded message size, and process-tree ownership (Windows Job Object; POSIX process group).
+- Decode stdout from buffered bytes on newline boundaries (fixes the existing UTF-8 split bug). Keep stdout exclusively for protocol messages; stderr is bounded and redacted.
+- Pin supported protocol versions; disconnect on an unsupported negotiated version.
+- Separate deadlines for spawn, initialize, model warm-up, and each tool call.
+- On exit or cancellation, reject all pending requests and clear timers.
+- Normalize results to a typed union of text, image, and structured content without `any`. Image content from adapters is routed to the supervisor, never into persisted tool JSON.
 
-Ghost OS is a native subprocess; its Python/MLX sidecar is a distinct runtime resource. Reuse its existing grounding path instead of starting a duplicate Mac ShowUI service. Do not assume Python dependency compatibility between the gateway, Windows grounder, and Ghost sidecar; isolate environments when necessary.
+This is a Phase 0 deliverable. It ships independently and benefits every MCP plugin.
 
-### 4.1 MCP client contract
+### 4.2 Persistent session pool
 
-- Implement the full initialize/version negotiation/initialized sequence using a tested SDK or equivalently conformant client.
-- Pin supported protocol versions; disconnect on unsupported negotiated version rather than changing only a version string.
-- Preserve content blocks, structured results, tool error semantics, pagination where relevant, notifications, and request IDs.
-- Define startup/model-load/tool-call deadlines separately; model warm-up must not masquerade as a hung handshake.
-- Buffer UTF-8 across pipe chunks correctly; bound message size and screenshot payloads without logging full payloads on parse failures.
-- Keep stdout exclusively for protocol output; stderr is bounded and redacted diagnostics.
-- Reject pending requests immediately on exit/cancellation and clear timers; do not leave unresolved promises after clearing a map.
-- Scope a persistent backend to the supervised plugin/session generation; never reuse one whose grants, paths, version, or owner changed.
+- Key sessions by server identity + resolved launch configuration hash + trust generation.
+- Reuse a live session for repeated calls; close after a configurable idle timeout.
+- Never reuse a session whose grants, paths, version, or owner changed.
+- Computer Use sessions are pinned for their lifetime and closed by the supervisor on stop.
 - Drain and close stdin for graceful shutdown, then terminate the owned process tree after bounded deadlines.
 
-MCP tool discovery is not sufficient readiness: also require control/capture permissions, a supported target, and model health when vision is selected.
+Tool discovery alone is not readiness. Computer Use readiness also requires OS permissions, a supported target, and (when local vision is selected) a healthy grounding worker.
 
-## 5. Platform packaging and Hub changes
+## 5. Local grounding: GUI-Actor on ONNX Runtime
 
-### 5.1 Resource model
+### 5.1 Model selection
 
-One plugin version has a small common package containing contracts, skills, and gateway code. Conditional dependencies supply only the selected platform adapter/native backend, Python environments, inference implementation, and model format.
+| Model | Base and licence chain | Parameters | Weights (published) | Status |
+| --- | --- | --- | --- | --- |
+| GUI-Actor-2B-Qwen2-VL | Qwen2-VL-2B-Instruct (Apache-2.0) → MIT | ~2B, 28 decoder layers, hidden 1536 | bf16 safetensors ≈ 4.45 GB | **Default** |
+| GUI-Actor-3B-Qwen2.5-VL | Qwen2.5-VL-3B-Instruct (Qwen Research License, non-commercial) → MIT | ~3B | — | **Blocked** pending commercial licence |
+| GUI-Actor-7B-Qwen2.5-VL | Qwen2.5-VL-7B-Instruct (Apache-2.0) → MIT | ~7B | — | Future high-memory tier |
+| GUI-Actor-Verifier-2B | UI-TARS-2B-SFT → MIT | ~2B | — | Future; licence chain to confirm |
+
+Release tooling records the licence of every weight file and its base model, and fails publication on a non-commercial licence.
+
+### 5.2 Inference path
+
+GUI-Actor adds an attention-based pointer head to Qwen2-VL. The reference implementation's placeholder mode (`inference(..., use_placeholder=True)`) needs **one forward pass and no token-by-token generation**:
+
+1. Build the chat prompt with the system grounding message, the image, and the instruction, then append the assistant starter `<|im_start|>assistant<|recipient|>os\npyautogui.click(<|pointer_start|><|pointer_pad|><|pointer_end|>)`.
+2. Run the vision encoder on the image patches.
+3. Run the decoder over the full prompt (prefill only, no KV cache output).
+4. Take the input-embedding-layer hidden states at `<|image_pad|>` positions and the final-layer hidden state at `<|pointer_pad|>` (`pointer_pad_token_id` 151661 in the 2B config).
+5. Run the pointer head to get attention scores over the merged patch grid (`image_grid_thw / merge_size`).
+6. Postprocess: keep patches above 0.3 × max activation, group 4-connected regions, rank regions by mean activation, and return activation-weighted centers normalized to `[0,1]` in model-input image space.
+
+Steps 1 and 6 run in TypeScript in the worker. Steps 2–5 are ONNX graphs.
+
+### 5.3 Export pipeline (CI, in the plugin repository)
+
+- Export three graphs, or fewer if fusion is verified: `vision_encoder.onnx`, `decoder_prefill.onnx` (returns the two hidden-state tensors needed, not logits), and `pointer_head.onnx`.
+- Pin the opset and exporter versions. Record them in the model manifest.
+- Produce configurations as separate, independently benchmarked resources: fp16 baseline; int8 or int4 weight-only decoder (for example `MatMulNBits`) with fp16 vision encoder. Verify each operator is supported by each target execution provider before publishing.
+- Ship `tokenizer.json`, special-token map, chat template, and `preprocessor_config.json` alongside the graphs.
+- Manifest identity includes model revision, export pipeline version, opset, quantization, preprocessing configuration, and per-file hashes.
+
+**Parity tests** (hard gate for every configuration): for each fixture, compare the ONNX pipeline against the PyTorch reference at every stage — `pixel_values`, `image_grid_thw`, position ids, image-token embeddings, pointer hidden state, attention scores, ranked regions, and final points — with recorded tolerances. The final check is region-hit agreement on the labeled fixture set.
+
+### 5.4 Preprocessing in TypeScript
+
+Port `Qwen2VLImageProcessor` exactly, using values from the pinned `preprocessor_config.json` (GUI-Actor-2B: `patch_size` 14, `merge_size` 2, `temporal_patch_size` 2, `min_pixels` 3136, `max_pixels` 5720064, CLIP mean/std, bicubic resample):
+
+- `smart_resize`: round each dimension to a multiple of 28 (`patch_size × merge_size`) within the pixel budget. Each axis is rounded independently, so the resize is slightly **anisotropic**; the transform stores separate `sx` and `sy` (§11).
+- Rescale, normalize, duplicate the frame to `temporal_patch_size`, patchify, and order patches to match the 2×2 merge layout.
+- Tokenize with the pinned tokenizer and apply the chat template byte-for-byte.
+- Compute Qwen2-VL multimodal rotary position ids (`get_rope_index`). Prefer embedding this computation in the decoder graph to avoid drift; if computed in TypeScript, cover it with golden tests.
+
+**Pixel budget is the main latency lever.** At the default `max_pixels` (~5.7 MP), a full-screen 4K capture becomes about 7,200 merged visual tokens of decoder prefill. Crop to the target window first. The benchmark evaluates smaller budgets (for example 1–2 MP plus crop-and-re-ground) against accuracy. The chosen budget is part of the model configuration identity.
+
+Static-shape buckets (a few fixed grids with recorded padding) are an optimization candidate for CoreML and DirectML. Dynamic shapes are the baseline until measurements justify buckets; any padding is recorded in the transform.
+
+### 5.5 Execution providers
+
+| Target | Primary | Fallback | Notes |
+| --- | --- | --- | --- |
+| Windows 10/11 x64 with a DirectX 12 GPU | DirectML EP | CPU EP | Covers NVIDIA, AMD, and Intel GPUs. DirectML is in sustained engineering (maintained, no new features). Requires sequential execution and memory-pattern optimization disabled. bf16 weights are converted to fp16 or quantized |
+| Windows CPU only | CPU EP | — | Local vision enabled only if measured latency meets the budget |
+| Windows 11 24H2+ | Windows ML vendor EPs (TensorRT for RTX, OpenVINO, MIGraphX) | DirectML / CPU | Phase 5 evaluation; not in the Node binding path today |
+| macOS Apple Silicon | CoreML EP | CPU EP | Measure per-operator offload; partial offload is common for dynamic-shape VLMs |
+
+- The worker probes available providers at load time, initializes the best one, and falls back to CPU on initialization failure. The chosen provider is recorded in every observation's grounding metadata.
+- The provider never changes during a session. A provider failure mid-session fails the grounding call with `backend_unavailable` and requires a worker restart.
+- CUDA EP is not shipped initially (binary size and driver coupling); it may be evaluated later.
+
+### 5.6 Grounding worker
+
+`src/childprocess/computer-use/GroundingWorker.ts`, spawned by the supervisor via `utilityProcess.fork` with `buildPackagedWorkerEnv` and `resolvePackagedWorkerPath`.
+
+| Message | Direction | Semantics |
+| --- | --- | --- |
+| `load` | host → worker | Resolved model/runtime paths, configuration identity, preferred providers. Replies with provider, load time, memory estimate |
+| `ground` | host → worker | Request ID, session generation, image reference, target description, optional crop. One in flight; queue depth 1 |
+| `cancel` | host → worker | Discard the result for a request ID; terminate the run if the binding supports it |
+| `unload` | host → worker | Release sessions and memory |
+| `result` / `error` | worker → host | Ranked regions, attention grid dimensions, timings, provider; or a typed error |
+
+- Image bytes are transferred as `ArrayBuffer` over the worker message port or via a private temp file. They are never logged.
+- The host discards any result whose session generation is stale. On Stop, if a run cannot be terminated promptly, the supervisor kills the worker; model reload is the cost of a guaranteed stop.
+- Weights load lazily on first vision need or during an explicit warm-up with visible progress, stay warm during the session, and unload on idle or memory pressure.
+- The ONNX Runtime Node binding is a native module matched to the Electron ABI. It is delivered as a managed resource with the same ABI and target fields as the existing local runtime packages and loaded at runtime (the `LocalTransformersLoader` pattern), not bundled into the base installer.
+
+### 5.7 Candidates, ambiguity, and absence
+
+GUI-Actor always produces an attention peak; it has no native "not present" output.
+
+- **Ambiguous:** the second-ranked region's score is at least a calibrated ratio of the top score and its center is outside the top region → `target_ambiguous`.
+- **Likely absent:** the top region's mean activation is below a threshold calibrated on absent-target fixtures → `target_not_found`.
+- **Cross-check:** when accessibility data exists for the region, a contradiction (for example a disabled element or a different role) downgrades to ambiguous.
+- In visual planner mode, the planner can confirm a proposed target before a consequential action.
+- Activation scores are metadata for ranking and diagnostics. They are never probabilities and never authorization.
+
+### 5.8 Precision
+
+GUI-Actor grounds at merged-patch granularity (28 × 28 px in model-input space), refined by activation weighting. For small targets, or when the top region is large relative to the expected control, crop the original capture around the candidate and re-ground at a higher effective resolution. Crops map back through the same transform path.
+
+## 6. Platform adapters
+
+### 6.1 Windows: Windows-MCP
+
+- Pin a Windows-MCP revision (MIT, actively maintained). The observed docs require Python 3.13+; it is the only Python component in the system.
+- The host wrapper enforces an allowlist on both `tools/list` and `tools/call`: screenshot/state, display inventory, app/window focus, click, type, scroll, move/drag, and keys. Upstream allowlist settings are also configured. PowerShell, registry, filesystem, and process tools are unreachable.
+- Adapter tools are never registered as model-visible tools. Only the supervisor calls them, after grant validation.
+- Normalize the UI Automation tree and capture bounds into the observation contract.
+- Elevated target windows are rejected with `unsupported_target` (UIPI blocks injection from a non-elevated process).
+- Disable upstream telemetry and verify the setting in the pinned version.
+- Test Unicode/CJK input and non-English application names for all six locales.
+
+### 6.2 macOS: backend decided by spike
+
+| Option | Description | Considerations |
+| --- | --- | --- |
+| A — pinned Ghost OS fork | MIT, macOS 14+, Swift 6.2. Created February 2026; last upstream push March 2026 | Accessibility tools and input exist today. We would build, sign, and notarize it ourselves, disable its MLX vision sidecar and learning features, and own maintenance of the fork |
+| B — in-house Swift helper | Accessibility API tree (`AXUIElement`), `CGEvent` input, ScreenCaptureKit capture, NSWorkspace app/window listing, exposing the same tool subset over stdio MCP | Full ownership and a smaller surface; more initial work |
+
+Spike criteria (time-boxed, Phase 0): accessibility coverage on the target workflows' Mac apps, CJK input, capture geometry correctness, binary size, signing/notarization effort, and estimated maintenance cost. The decision is recorded before Phase 3.
+
+Either way:
+
+- The shared ONNX grounder is used; no Mac-specific model format or sidecar.
+- Qualify permission attribution in the packaged app. A helper spawned by AiFetchly is normally attributed to AiFetchly.app as the responsible process, so prompts name AiFetchly, the app's signing identity must stay stable across updates, and development builds attribute to the terminal or IDE.
+- Accessibility and Screen Recording are required; Input Monitoring only for later recording/learning features.
+
+## 7. Packaging and Hub changes
+
+### 7.1 Resource model
 
 | Resource | Identity includes | Download policy |
 | --- | --- | --- |
-| Common code | Plugin version + artifact hash | Install/update when changed |
-| Native backend | Backend revision + OS + architecture + artifact hash | Only matching target |
-| uv toolchain | Version + OS + architecture + hash | On demand, shared if compatible |
-| Python | Exact implementation/version + OS + architecture + verified distribution provenance | Shared compatible runtime |
-| Environment | Runtime identity + target + backend + full dependency lock hash + packaging schema | Prepared per exact identity |
-| Model | Revision + format + quantization + preprocessing/config identity + file manifest hash | Only selected local-vision path; independent of code updates |
+| Common code | Plugin version + hash | When changed |
+| Windows-MCP environment | Python runtime identity + full dependency lock hash + target | Windows only |
+| uv toolchain + Python runtime | Version + OS + architecture + hash | Windows only, shared when compatible |
+| macOS helper | Helper revision + architecture + hash + signing identity | macOS only |
+| ONNX Runtime Node binding | ORT version + execution providers + OS + architecture + Electron ABI + hash | When local vision is selected |
+| Grounder model | Model revision + export pipeline version + opset + quantization + pixel budget + preprocessing identity + file manifest hash | When local vision is selected; independent of code updates |
 
-Apple MLX and Windows PyTorch representations must not share cache identity merely because both are named ShowUI-2B. The Hub's `mps` target vocabulary is not the same thing as the inference implementation `mlx`; declare both target compatibility and backend explicitly. Validate CPU fallback separately.
+The model is one ONNX format for all targets; configurations differ only by quantization and budget. Execution provider support is a property of the runtime binding resource.
 
-### 5.2 Selection algorithm
+### 7.2 Selection
 
-1. Host detects platform/architecture and supported accelerator/backend capabilities, then records selected features (for example local vision enabled).
-2. Hub evaluates applicable requirements for that target and feature set.
-3. Resolve exactly the required dependency closure, plus separately offered optional resources. Missing optional vision resources do not disable an explicitly supported accessibility-only mode.
-4. Return exact artifact identities and provisioning descriptors; deduplicate by immutable resource identity.
-5. Include target, selected features, backend, resolved resource set, and contract schema in the plan digest/cache key and prepare-install validation.
-6. Desktop independently validates every resource against the selection before downloading; reject contradictions rather than ignoring unsupported required resources.
+1. The host detects platform, architecture, available execution providers, and selected features (local vision on/off).
+2. The Hub (or the local runtime catalog, per §17) resolves the applicable closure.
+3. The desktop validates every resource against the selection before downloading and rejects contradictions.
+4. The plan digest includes target, features, execution provider set, and the resolved resource set.
 
-Windows-only requirements must not be evaluated as mandatory Mac requirements and vice versa. Platform labels alone are insufficient where two model formats or GPU backends share a platform.
+### 7.3 Hub extensions by phase
 
-### 5.3 Required Hub extensions
+- **Phase 1 (Windows only):** Mac is marked unsupported for the listing; existing uv provisioning covers the Windows-MCP environment.
+- **Phase 2:** grounder model and runtime binding resources, unless delivered through the local runtime catalog.
+- **Phase 3 (two targets):** conditional requirement applicability; target-aware `ListPlanEnvironments` / `ListPlanModelRevisions`; identical selection in compatibility, install plan, prepare-install, tickets, and revocation; a reviewed native-component resource type for the Mac helper; safe extraction of executables. Old clients fail closed on unknown required resource kinds.
 
-- Add explicit applicability/feature/backend bindings for requirements and models. Do not infer them from a filename or description.
-- Make `ListPlanEnvironments` and `ListPlanModelRevisions` target/feature-aware; current version-only projection is insufficient.
-- Apply identical selection in compatibility computation, install plan, prepare-install, ticket authorization, and revocation handling.
-- Native backend delivery needs a reviewed representation (for example a versioned native-component resource). The existing registry reserves `tool` runtime type for uv; do not register Ghost OS as an arbitrary toolchain without an intentional contract/schema change.
-- Keep the canonical code artifact or add explicit artifact variants if needed; do not require multiple public listings to get per-target bytes.
-- Preserve old clients through schema/min-app-version gating; unknown required resource kinds must fail closed.
-- Bind all selected resources to provenance/checksum and existing entitlement/revocation checks.
+Tests assert the absence of the other platform's resources, not only the presence of the right ones.
 
-Unit/integration tests must assert the absence of the other platform's resources, not merely the presence of the correct one. Include vision-off, unavailable backend, wrong model format, and cached-plan feature changes.
+## 8. Managed Python for Windows-MCP
 
-## 6. Managed uv, Python, and dependency installation
+Python is needed only on Windows, only for Windows-MCP.
 
-### 6.1 Bootstrap without system tools
+- The desktop downloads the pinned standalone uv archive from the trusted plan, verifies its hash, extracts it into an app-managed directory, and launches it by absolute path. No installer scripts, no PATH changes, and any existing user uv is ignored unless an explicit developer override is set.
+- Provisioning (argv built from validated fields, `shell: false`): install the exact Python, create the environment, then `uv pip install --require-hashes --only-binary :all:` from the generated Hub lock. No source builds on customer machines; missing wheels mean unsupported.
+- Launch the environment's `python.exe -u` with a validated entrypoint. Session startup never resolves packages.
+- Record exact uv, Python, and package versions in the installation record. Prepare updates in a new versioned directory and activate via a host-owned pointer; roll back on failed health checks.
 
-The desktop downloads the exact platform-specific standalone uv archive from the trusted plan, verifies its SHA-256 and signature when supplied/required by distribution policy, extracts safely, and checks the executable's identity/version. It does not need Python to do this. Store uv in a user-writable application-managed directory and launch its absolute path.
+**Alternative evaluated in Phase 0:** ship Windows-MCP as a prebuilt bundle (embeddable Python + prebuilt wheels) as a single verified artifact. This avoids install-time resolution and the uv consumer entirely, at the cost of a larger download and bundling work per Windows-MCP update. Decision recorded in §17.
 
-Prefer direct pinned artifacts over executing downloaded PowerShell/shell installer scripts. Existing Hub bootstrap URLs are not a reason to mutate global PATH or run arbitrary scripts. Existing user uv installations are ignored by default for reproducibility; a developer override must be explicit and appear in diagnostics.
+## 9. Public tool contract
 
-```text
-<managed resource root>/
-├── toolchains/uv/<version>/<target>/
-├── runtimes/python/<exact-runtime-id>/
-├── environments/<environment-id>/
-├── models/<manifest-hash>/
-├── staging/<operation-id>/
-└── cache/
-```
+Versioned JSON Schemas are shared by the host (Zod validation) and plugin contract tests. Generated types never use `any`. Application functions have explicit return types; caught values are `unknown`.
 
-Configure uv directories explicitly (including managed Python/cache/environment locations), retain the host environment allowlist, and validate what Windows requires for subprocess execution. Do not inherit tokens/DB paths or re-enable blocked loader variables to make an import work. Use installed packages or explicit safe entrypoint layout instead of plugin-controlled `PYTHONPATH`.
-
-### 6.2 Production lock contract versus development
-
-The current Hub uv design specifies an exact Python spec and a hash-pinned JSON package lock. It does not ship author `uv.lock` as an interchangeable format. Follow that production contract:
-
-```text
-ensure verified managed uv
-uv python install <exactPythonSpec>
-uv venv --python <resolvedManagedPython> <environmentDir>
-uv pip install --python <environmentPython>
-    --require-hashes --only-binary :all: -r <validatedGeneratedRequirements>
-```
-
-These are argument-vector sketches; the installer constructs each argv from validated fields with `shell:false`, never from a plugin-supplied command string. Require a complete transitive lock and approved artifact/index origins. Do not permit source builds or arbitrary setup scripts on customer machines. If compatible wheels are unavailable, publish unsupported rather than installing a compiler or silently building.
-
-A stronger offline mode uses a verified target-specific wheelhouse and no network package resolution. This is an extension: the existing Hub uv v1 design explicitly defers offline wheel bundles. It must not be advertised as already present.
-
-The verified uv hash does not itself pin every Python/package byte it can download. Record exact Python distribution provenance and use the provisioner's integrity checks; environments require full dependency hashes. Immutable/offline distribution must additionally supply verified Python/wheel artifacts and approved origins.
-
-For development, use the repository's `uv.lock` and selected extras/environment projects:
-
-```bash
-uv sync --locked --extra windows
-uv run --no-sync python -u -m aifetchly_computer_use
-```
-
-The example assumes these package extras and module entrypoint have been created. CI generates the corresponding Hub JSON lock with artifact hashes and checks dependency equivalence. Separate environment projects/locks are allowed for incompatible Windows GPU and Mac MLX dependency sets.
-
-### 6.3 Startup and updates
-
-Production can launch the prepared Python directly, or a managed uv `run --no-sync` command against a verified project environment. Direct Python is the initial recommendation because it removes an unnecessary wrapper from the supervised process tree. uv remains the provisioner.
-
-Normal startup must not resolve/update packages, select a new Python, or download models. Disable implicit online model fetches by resolving local model files. Missing resources return `runtime_not_ready` / `model_not_ready` and route to repair.
-
-Keep exact uv/Python/package/model versions in the installation record. Cache resource identity, not just semantic version labels. Use installation locks and reference counts/leases; two simultaneous installs cannot corrupt a shared runtime.
-
-Prepare updates in a separate versioned directory; validate before atomic activation. Python environments can contain absolute interpreter paths, so do not assume that a staged virtualenv can be moved arbitrarily. Prepare it at its stable final versioned path while marked inactive, then activate a host-owned pointer. Incomplete directories are never launchable.
-
-On cancellation, retain only verified resumable bytes and mark installation incomplete. Roll back to the prior activation pointer if health checks fail. Uninstall removes plugin bindings and unreferenced resources, never another plugin's live environment/model.
-
-## 7. Public tool contract
-
-Use versioned JSON Schemas shared by Python implementation, host TypeScript/Zod validation, and contract tests. Generated types must not use `any`. All application TypeScript functions have explicit return types; caught values are `unknown` and validated.
-
-### 7.1 Tools
+### 9.1 Tools
 
 | Tool | Inputs | Result / semantics |
 | --- | --- | --- |
-| `computer_capabilities` | None or target query | Backend/protocol versions, supported actions, permissions, model state, display support |
-| `computer_start_session` | User-selected target reference, purpose | Session ID and scoped capabilities; host obtains lease before dispatch |
-| `computer_observe` | Session ID, allowed region/mode | Observation ID, structured state, transient local capture reference |
-| `computer_find` | Session ID, observation ID, target description | Bounded target handle or not-found/ambiguous result, grounding source |
-| `computer_act` | Session ID, target handle, typed action, action ID | Dispatched/failed/uncertain state and post-observation reference |
-| `computer_verify` | Session ID, expected state, observation ID | Satisfied/unsatisfied/unknown plus evidence; not an arbitrary success assertion |
+| `computer_capabilities` | None or target query | Backend and protocol versions, supported actions, permissions, grounder state and provider, planner mode, display support |
+| `computer_start_session` | User-selected target reference, purpose | Session ID and scoped capabilities; the host takes the lease first |
+| `computer_observe` | Session ID, region/mode | Observation ID and structured state. In visual planner mode the host attaches a transient image artifact |
+| `computer_find` | Session ID, observation ID, target description | Opaque target handle, or `target_not_found` / `target_ambiguous`, with grounding source |
+| `computer_act` | Session ID, target handle, typed action, action ID | Dispatched / failed / uncertain, with a post-observation reference |
+| `computer_verify` | Session ID, expected state, observation ID | Satisfied / unsatisfied / unknown with evidence |
 | `computer_request_handoff` | Session ID, reason | Revokes automatic input until trusted resume |
 | `computer_resume_after_handoff` | Session ID | Host-approved resume with a fresh observation |
-| `computer_stop_session` | Session ID | Idempotent cancellation/release result |
+| `computer_stop_session` | Session ID | Idempotent cancellation and release |
 
-The normal AI-facing act schema accepts target handles rather than unbound desktop coordinates. Internal native adapters and a guarded developer calibration path may use raw coordinates. Keyboard operations without a visual target still require a current session/window observation and authorization.
+The model-facing act schema accepts target handles, not raw desktop coordinates. Raw coordinates exist only inside the supervisor and a guarded developer calibration path. Keyboard actions without a visual target still require a current session, target window focus, and authorization.
 
-### 7.2 Proposed core records
+### 9.2 Core records
 
 ```typescript
 type GroundingSource = 'accessibility' | 'vision';
+type PlannerMode = 'local_only' | 'visual_planner';
 type VerificationState = 'satisfied' | 'unsatisfied' | 'unknown';
 type ExecutorUnits = 'desktop_physical_pixels' | 'desktop_logical_points';
+type ExecutionProviderId = 'dml' | 'coreml' | 'cpu';
 
 interface Point2D {
   readonly x: number;
   readonly y: number;
+}
+
+interface GroundingMetadata {
+  readonly modelConfigurationId: string;
+  readonly executionProvider: ExecutionProviderId;
+  readonly onnxRuntimeVersion: string;
+  readonly patchGridWidth: number;
+  readonly patchGridHeight: number;
+  readonly inferenceMs: number;
 }
 
 interface ObservationMetadata {
@@ -294,9 +387,8 @@ interface ObservationMetadata {
   readonly executorUnits: ExecutorUnits;
   readonly captureWidthPx: number;
   readonly captureHeightPx: number;
-  readonly modelWidthPx: number;
-  readonly modelHeightPx: number;
-  readonly transformId: string;
+  readonly plannerMode: PlannerMode;
+  readonly plannerImageAttached: boolean;
   readonly imageSha256: string;
 }
 
@@ -317,17 +409,17 @@ interface ActionOutcome {
 }
 ```
 
-The model-visible target is opaque. Coordinates, native identifiers, transforms, generation, and expiry are held in a bounded local target store. Authority tokens and raw image bytes are not fields supplied by the model or included in ordinary tool results.
+Coordinates, native identifiers, transforms, grounding metadata, generation, and expiry live in the supervisor's bounded target store. Grants and raw image bytes are never model-supplied fields or part of ordinary tool results.
 
-### 7.3 Errors
+### 9.3 Errors
 
-Use stable codes: `ai_disabled`, `permission_required`, `desktop_busy`, `unsupported_target`, `unsupported_display_configuration`, `runtime_not_ready`, `model_not_ready`, `target_not_found`, `target_ambiguous`, `invalid_grounding_output`, `stale_observation`, `focus_changed`, `action_not_authorized`, `action_cancelled`, `execution_uncertain`, `verification_failed`, `backend_unavailable`, `resource_limit`, `protocol_mismatch`.
+Stable codes: `ai_disabled`, `permission_required`, `desktop_busy`, `unsupported_target`, `unsupported_display_configuration`, `runtime_not_ready`, `model_not_ready`, `target_not_found`, `target_ambiguous`, `invalid_grounding_output`, `stale_observation`, `focus_changed`, `action_not_authorized`, `action_cancelled`, `execution_uncertain`, `verification_failed`, `backend_unavailable`, `resource_limit`, `protocol_mismatch`, `planner_mode_unavailable`.
 
-Include a safe message, stage, retry classification, and correlation ID. Do not expose raw traceback, secrets, screenshot bytes, absolute resource paths, or executable arguments in ordinary renderer results.
+Each error has a safe message, stage, retry classification, and correlation ID. No tracebacks, secrets, image bytes, absolute paths, or argv in renderer results.
 
-## 8. Sessions, action authority, and cancellation
+## 10. Sessions, authority, and cancellation
 
-### 8.1 State machine
+### 10.1 State machine
 
 ```text
 STARTING → READY → OBSERVING → GROUNDING → AWAITING_AUTHORIZATION
@@ -339,54 +431,46 @@ Any state → STOPPING → STOPPED
 Backend failure → FAILED (no automatic input replay)
 ```
 
-Read-only observations may skip grounding; already authorized reversible input need not repeatedly prompt. User authorization comes from trusted current-task state, not a free-form `approved:true` argument. Consequential actions must remain within the specific approved scope; ambiguity is a pause condition.
+The state machine lives only in the supervisor. Adapters are stateless with respect to authority.
 
-### 8.2 Ownership and generation
+### 10.2 Ownership and generation
 
-Acquire a desktop lease before starting native input services. A single main-process singleton is insufficient if multiple app processes can run: use the app's verified single-instance guarantee or an OS-level same-user lease/broker. Initial lease scope is the whole interactive desktop, not individual windows that share one physical cursor.
+- Acquire the desktop lease before starting adapters. Rely on the app's single-instance lock, or an OS-level same-user lease if multiple app processes can run. The lease covers the whole interactive desktop.
+- The session generation increments on stop, revoke, adapter or worker restart, handoff, planner mode change, and invalidating desktop changes. Every target, action, and late worker result is checked against it.
+- Input dispatch is serialized; one action per observation cycle initially.
 
-Lease/session generation increments on stop, revoke, backend restart, handoff, or invalidating desktop changes. Every target, action, and late worker result is checked against that generation. Never let a response from a previous generation schedule an action.
+### 10.3 Trusted action grants
 
-Input dispatch is serialized. Observation may overlap only where it cannot race the action's state snapshot. Start with one action per observation cycle; short batches are a future optimization requiring per-action validation and stop checks.
+The host computes authorization from the active user request, target scope, action class, and current state, and mints a short-lived grant bound to session generation, action ID, normalized action hash, and target/observation identity. The supervisor validates the grant immediately before calling the adapter's input tool. The model cannot provide or mint grants, and adapter tools are unreachable through generic MCP execution.
 
-### 8.3 Trusted action grants
+Trusted adapter code still runs with local OS privileges. Grants protect the normal tool path, not against a malicious native binary.
 
-Host computes authorization from the active user request, target scope, action class, and current state. It injects a short-lived action grant bound to session generation, action ID, normalized action hash, and target/observation identity through a host-only dispatch context. The model cannot provide or mint the grant.
+### 10.4 Stop behavior
 
-The gateway validates the grant at dispatch and denies calls through generic MCP execution that bypass this host context. Do not expose the underlying Windows/Ghost MCP servers as additional unrestricted model tools. Use a typed host wrapper/registry integration so ordinary plugin discovery cannot bypass the computer-action policy.
+- The Stop button and the global stop hotkey (Electron `globalShortcut`, registered only while a session is active) revoke the generation immediately and clear pending actions.
+- Human mouse or keyboard activity detected by the adapter, or an unexpected foreground change, pauses automation.
+- Late grounding results are discarded; the worker is killed if it cannot stop promptly.
+- Tracked pressed keys and buttons are released on cleanup; drags and key holds have bounded durations.
+- If cooperative stop fails, the supervisor terminates the whole adapter process tree (Job Object on Windows).
+- Handoff pauses input but keeps ownership unless relinquished.
+- A post-dispatch timeout or crash becomes `execution_uncertain` and requires observation before any retry. Action IDs deduplicate within known session history; exactly-once across crashes is not claimed.
+- Actions whose resolved point lands on an AiFetchly window, including the control strip, are rejected.
 
-Trusted plugin code still executes with local OS privileges. This grant design protects normal tool paths and accidental misuse, not a malicious native binary with separately granted OS permissions.
+Test stop during model load, inference, queued input, drag, adapter hang, disconnect, and app quit. Measure stop acknowledgment and last possible input separately.
 
-### 8.4 Stop behavior
+## 11. Coordinate system
 
-- UI Stop revokes the host generation immediately and clears pending actions.
-- Gateway control handling remains responsive while inference executes in a separate worker.
-- Discard late grounding results; cancel upstream calls when supported.
-- Release tracked pressed keys/buttons during ordinary cleanup; use bounded drag/key-hold durations.
-- If cooperative stop fails, supervisor terminates the entire owned process tree. Windows needs an appropriate process-tree ownership mechanism (such as a Job Object where supported), not only a POSIX signal to the direct child.
-- Handoff pauses input but retains exclusive ownership unless explicitly relinquished.
-- A completed OS click cannot be undone by cancellation. Post-dispatch timeout/crash becomes `execution_uncertain`, requiring observation before any retry.
-- Action IDs deduplicate within the known session history. Do not claim exactly-once behavior across a crash between OS dispatch and response persistence.
+### 11.1 Spaces
 
-Test stop during model load, inference, queued input, drag, backend hang, disconnect, and app quit. Measure stop acknowledgment and last possible input separately; choose a release SLO from native evidence.
+1. Executor desktop units (physical pixels or logical points, per adapter).
+2. Original capture pixels.
+3. Crop pixels relative to the capture.
+4. Model-input pixels after `smart_resize` (and any bucket padding).
+5. Normalized model output in `[0,1]` over the model-input image.
 
-## 9. Coordinate system and preprocessing design
+### 11.2 Transform composition
 
-### 9.1 Coordinate spaces
-
-Distinguish:
-
-1. Executor desktop units (physical pixels or logical points, adapter-defined).
-2. Original screenshot pixels.
-3. Crop pixels relative to that screenshot.
-4. Resized/padded image supplied to the model.
-5. Model output coordinates, normalized under the pinned model's documented convention.
-
-ShowUI's grounding example uses normalized `[x,y]` in `[0,1]`. Do not silently guess another convention from the numeric values. The adapter pins the convention and validates its response.
-
-### 9.2 Transform composition
-
-Let normalized model output be `(nx, ny)`. The exact model input has size `(Wm, Hm)`. A crop beginning at `(cx, cy)` in the original screenshot was resized by `(sx, sy)` and padded by `(px, py)` in model pixels.
+Let normalized output be `(nx, ny)`, model-input size `(Wm, Hm)`, crop origin `(cx, cy)`, per-axis scale `(sx, sy)` from crop pixels to model pixels, and padding `(px, py)` in model pixels.
 
 ```text
 x_model = nx × Wm
@@ -398,230 +482,239 @@ y_capture = cy + (y_model - py) / sy
 [x_executor, y_executor, 1]ᵀ = T_capture_to_executor × [x_capture, y_capture, 1]ᵀ
 ```
 
-`T_capture_to_executor` records scale, translation, axis orientation, and any supported display rotation. Store forward/inverse transforms in full precision and apply rounding only at the executor boundary. Coordinates outside the unpadded image/crop/target are invalid; do not silently clamp a bad prediction onto another control. Define a tested boundary rule for exact normalized endpoints.
+`smart_resize` rounds each axis to a multiple of 28 independently, so `sx ≠ sy` in general. Never assume a single scale factor. Store transforms in full precision and round only at the executor boundary. Points outside the unpadded image or crop are invalid; never clamp a bad prediction onto another control.
 
-For a full-screen aspect-preserving resize without padding, a 3840×2160 capture resized to 1280×720 and output `(0.75, 0.50)` maps to capture pixel `(2880,1080)`. Clicking `(960,360)` incorrectly uses model-input pixels as desktop pixels.
+Example: a 1920×1080 window capture with a 2,000,000-pixel budget resizes to 1876×1036 (multiples of 28), so `sx = 1876/1920 ≈ 0.9771` and `sy = 1036/1080 ≈ 0.9593`. An output of `(0.5, 0.5)` maps to model pixel `(938, 518)` and capture pixel `(960, 540)`. Clicking model pixels as desktop pixels would miss by about 22 px here and by far more at larger downscales. With the default budget, the same capture is slightly *upscaled* to 1932×1092, which is why the transform must never assume a downscale.
 
-For a 2× Retina capture representing 1920×1080 logical points, the same normalized point maps to `(1440,540)` logical points before adding the window/monitor origin. This is an example, not a fixed global multiplier: obtain actual geometry from the adapter.
+For a 2× Retina capture of a 1920×1080-point window, capture pixel `(1920, 1080)` maps to `(960, 540)` points before adding the window origin. Obtain real geometry from the adapter; do not assume a global multiplier.
 
-### 9.3 Platform requirements
+### 11.3 Platform requirements
 
-- Windows adapter establishes and tests its DPI-awareness behavior. Do not combine DPI-virtualized window bounds with physical screenshot pixels.
-- Use backend display inventory/capture metadata, not renderer CSS dimensions or a guessed monitor scale.
-- Mac adapter explicitly translates capture pixels, window bounds, and input points, including origin conventions.
-- Initial capture is restricted to one qualified display; reject unsupported spanning/mixed-DPI cases.
-- Later multi-display support uses per-display mappings. A single affine scale for a mixed-DPI stitched desktop is not necessarily valid.
-- Preserve aspect ratio. Resizing can reduce grounding accuracy through lost detail even when coordinate mapping is mathematically correct.
-- Record all preprocessing, including implicit processor resizing/token-budget choices. Save the exact preprocessor input and processor revision in debug mode.
+- The Windows adapter's DPI-awareness behavior is established and tested; never mix DPI-virtualized bounds with physical pixels.
+- Use adapter display inventory and capture metadata, not renderer CSS dimensions.
+- The Mac adapter translates capture pixels, window bounds, and input points explicitly, including origin conventions.
+- Initial capture is one qualified display; spanning and mixed-DPI windows are rejected.
+- Record all preprocessing, including the pixel budget and processor revision; debug mode saves the exact model input.
 
-### 9.4 Staleness and validation
+### 11.4 Staleness
 
-Bind observations to monotonic capture time, wall time for diagnostics, target identity, foreground window, bounds, display configuration, and session generation. Before dispatch, verify focus/target, geometry, age budget, and relevant UI state. A screenshot hash alone is not a stable freshness check because clocks/animations change unrelated pixels.
+Bind observations to monotonic capture time, target identity, foreground window, bounds, display configuration, and session generation. Before dispatch, verify focus, geometry, age, and relevant UI state through accessibility revalidation or a bounded fresh target-region check. If validation is impossible, re-observe. Verify outcomes afterward; no strategy removes every last-millisecond race.
 
-Use backend state revision/accessibility revalidation or a bounded fresh target-region check where available. If the state cannot be validated, re-observe. No observation strategy eliminates every last-millisecond OS race; bound it and verify the result afterward.
+## 12. Planner modes and image routing
 
-## 10. Local vision and platform adapters
+### 12.1 Local-only (default)
 
-### Windows
+Capture → supervisor → grounding worker → target handle → safe metadata. The planner receives structured observation text, grounding results, and action outcomes. Screenshots stay local, but task content and UI text still go to the planner; product messaging states this.
 
-- Pin a Windows-MCP revision and use an explicit allowlist for screenshot/snapshot/display inventory, necessary app/window focus, click, type, scroll, move/drag, and key operations.
-- Do not enable PowerShell, Registry, broad filesystem/process tools, or automatic login tasks as a side effect.
-- Normalize structured UI state and capture bounds; send local image bytes directly to the ShowUI worker.
-- The observed Windows-MCP docs specify Python 3.13+. Qualify this against exact inference dependencies; use a separate worker environment if necessary.
-- Test Unicode/CJK input and non-English application lookup; do not assume English-only naming works for AiFetchly's six locales.
-- Disable upstream telemetry by default for this integration and verify settings in the pinned version.
+### 12.2 Visual planner (opt-in)
 
-### macOS
+- Enabled by a user setting with consent text naming the configured provider and model (PRD CU-PLAN-01/02). The setting is stored through the existing settings path and validated with Zod at load.
+- Available only when the planner model supports image input; otherwise `planner_mode_unavailable`.
+- `computer_observe` attaches a target-window image as an `ImageModelArtifact`, delivered as a provider-native image input. Base64 inside text JSON is not an image input.
+- Images are downscaled to a configured maximum and cropped to the target window.
+- Suppressed during handoff and sensitive states (password fields, login and verification screens detected by accessibility role or handoff reason).
+- Never persisted in tool JSON, chat history, logs, or hook payloads. `plannerImageAttached` is recorded per observation.
+- Turning the mode off increments the session generation and takes effect from the next observation.
+- The local grounder is still used for precise coordinates; the planner never supplies raw coordinates.
 
-- Use Ghost OS's structured accessibility tools and specific-target grounding path.
-- Reuse its native input and MLX sidecar, with explicit process ownership and resource-path integration.
-- Qualify Accessibility and Screen Recording permission attribution in the packaged launch path; Input Monitoring is only needed for features that require it, such as later learning/recording.
-- Preserve a stable native helper identity and validate signing/notarization requirements so updates do not unexpectedly break permissions. uv cannot grant OS permissions.
-- The inspected `vision-sidecar/server.py` implements `/ground`, but `/detect` and `/parse` return placeholder responses. Do not advertise visual full-screen enumeration based on those names.
-- The same implementation emits fixed `confidence` values (for example 0.8 for parsed normalized coordinates), not calibrated probabilities. It can return center coordinates with an error when parsing fails: reject the error, never execute that fallback point.
-- Validate dependency pins/model file format and health responses against the pinned release, not the README alone.
+### 12.3 Previews and storage
 
-### Model operations
+Local previews use a separate, bounded, permissioned channel, and do not reuse the model-only artifact type in a way that breaks its "never emitted to renderer" invariant. Debug export is another explicit channel.
 
-Load lazily or during explicit warm-up; keep weights warm during the session and release on configured idle/memory policy. Serialize inference where required by the backend. Use bounded requests/queues, inference timeout, and cancellation/discard semantics. Record model revision, tokenizer/processor revision, precision/quantization, device/backend, and generation settings.
+The host records session and action summaries through Models/Modules. The target store is in memory. Debug bundles use an approved local path with bounded retention. Logs never contain image bytes, credentials, or complete typed values. Screenshots can contain secrets even when text is redacted, so export requires a review step.
 
-Prefer a narrow target description with context; if detail is insufficient, crop from original capture at higher effective resolution. Do not fine-tune to compensate for transform/focus errors. Benchmark alternatives before choosing a permanent default.
+## 13. Debugging
 
-## 11. Image routing, storage, and permissions
-
-### Local path
-
-Capture → gateway-local image reference → local grounder → target handle → host-safe metadata. The remote planner receives structured observation text as permitted, not automatic image bytes. Screenshot processing remains local, but structured text/task content can still leave the machine through the planner. Product messaging must state this distinction.
-
-### Optional remote visual path
-
-When separately enabled, translate image content into provider-native image inputs using an extended transient artifact mechanism. Base64 embedded in text JSON is not an image input. Preserve metadata/content types throughout MCP handling and explicitly filter what is persisted or sent to hooks.
-
-Local UI previews use a separate bounded permissioned preview channel. Do not reuse a model-only artifact type in a way that violates its current “never emitted to renderer” invariant. Debug image export is another distinct, explicit channel.
-
-### Storage
-
-Host records session/action summaries through Models/Modules. Gateway keeps ephemeral target/observation state in memory or private temporary storage. Debug bundles use an approved local path and bounded lifecycle; ordinary logs contain no screenshot base64, credentials, or complete typed values. Sensitive handoff states suppress capture/recording where applicable.
-
-No automatic cloud upload, training collection, or assumption that a “local model” means a fully local agent. Secrets and action grants are excluded from bundles. Screenshots can contain secrets even when text logs are redacted, so export needs a review surface.
-
-## 12. Debugging architecture
-
-### 12.1 Modes
+### 13.1 Modes
 
 | Mode | Behavior | Enforcement |
 | --- | --- | --- |
-| Locate only | Capture/find/overlay; no native input | Dispatch disabled in gateway; not merely hidden UI buttons |
-| Step through | Pause before input, show proposed target/action | Revalidate after developer delay; changed state requires re-observation |
-| Offline replay | Load saved evidence, rerun grounder/transform | Executor backend not instantiated; no live screen control |
-| Live guarded run | Normal controlled execution with optional trace capture | Same grants, freshness, lease, and stop rules |
+| Locate only | Capture, find, overlay; no input | The supervisor refuses dispatch in this mode, not just the UI |
+| Step through | Pause before input and show the proposed target | Revalidate after the delay; changed state forces re-observation |
+| Offline replay | Load saved evidence and rerun preprocessing, grounding, and transforms | No adapter is started |
+| Live guarded run | Normal execution with optional trace capture | Same grants, freshness, lease, and stop rules |
 
-### 12.2 Proposed trace bundle
+Offline replay reuses the same grounding worker and TypeScript transform code as live runs. The plugin repository's `eval` CLI can also replay bundles against the PyTorch reference to separate export errors from model errors.
+
+### 13.2 Trace bundle
 
 ```text
 trace-<id>/
-├── manifest.json                 # Schema, versions, target, routing, consent
-├── events.jsonl                  # Timed stage transitions and safe errors
+├── manifest.json                 # Schema, versions, target, planner mode, consent
+├── events.jsonl                  # Stage transitions, timings, safe errors
 ├── steps/<step-id>/
-│   ├── observation.json          # Window/display geometry and transforms
+│   ├── observation.json          # Geometry, transforms, planner image flag
 │   ├── original.png              # Opt-in original capture
-│   ├── model-input.png           # Exact crop/resize/pad input
-│   ├── grounding.json            # Prompt, raw parsed output, engine config
+│   ├── model-input.png           # Exact resized/cropped model input
+│   ├── attention.json            # Patch-grid activations and ranked regions
+│   ├── grounding.json            # Description, model configuration, provider, timings, parse result
 │   ├── action.json               # Intended input, transformed target, outcome
 │   ├── after.png                 # Opt-in post-action capture
 │   └── verification.json         # Expected state and evidence
-└── annotations.json              # Human labels/clickable regions
+└── annotations.json              # Human labels, clickable regions, absent flags
 ```
 
-Record trace/session/observation/action correlation, stage timings, image hashes, native backend IDs and revisions, Python/uv/environment/model identities, OS/display/DPI metadata, target description, transform matrices, output parse errors, dispatch timestamp, foreground-window state, and verification result. Typed content is omitted/redacted by default; a replay task may use synthetic replacement data.
+Also record ONNX Runtime version, execution provider, model manifest hash, Python/Windows-MCP identity, OS/display/DPI metadata, dispatch timestamp, and foreground window. Typed content is redacted by default.
 
-Actual delivered pointer position may be sampled if the backend supports it. Label it separately from requested coordinates; a requested position is not proof of delivered input. A pointer sample alone also does not prove the correct control received the action.
+### 13.3 Viewer
 
-### 12.3 Viewer
+Shows original capture, model input, and after-state side by side, with overlays for the attention heatmap, candidate regions with scores, predicted point, mapped point, crop rectangle, known target bounds, and a coordinate grid. Actions: inspect a stage, rerun grounding offline, compare configurations (for example two pixel budgets or quantizations), annotate the expected region, mark target absent, export a reviewed bundle, and promote a sanitized example to a fixture. Replay never executes a recorded click.
 
-Show original screenshot, exact model input, and after-state side by side. Overlay predicted point, mapped point, crop rectangle, target bounds when known, and coordinate grid. Display units and transform stages explicitly. Highlight model/runtime/configuration differences between two runs.
-
-Viewer actions: inspect stage; rerun grounding offline; compare configurations; annotate expected clickable region; mark target absent; export reviewed bundle; promote a sanitized example to a regression fixture. The viewer never executes a recorded live click as its replay behavior.
-
-Proposed developer entrypoints include `doctor`, `locate`, `replay`, and `evaluate`. These are commands to implement, not existing upstream commands. Keep their schemas stable and allow running the independent plugin without Electron.
-
-### 12.4 Failure classification
+### 13.4 Failure classification
 
 | Evidence | Classification | Next investigation |
 | --- | --- | --- |
-| Prediction wrong on model-input image | Grounding | Target description, detail, model, preprocessing |
-| Model-input prediction right, original overlay wrong | Transform | Crop, padding, scale, axis orientation |
-| Both overlays right, native click different | Executor mapping | DPI virtualization, unit contract, origin |
-| Correct coordinates but another window receives input | Focus/scope | Foreground ownership and stale target |
-| Correct old target but layout moved | Staleness | Observation/dispatch gap and UI revision |
-| Input lands correctly, desired state absent | Interaction/verification | Disabled element, action type, timing, wrong expected state |
+| Attention peaks on the wrong element in the model input | Grounding | Description, pixel budget, crop, model configuration |
+| ONNX and PyTorch reference disagree on the same input | Export | Parity stage where divergence starts, quantization, provider |
+| Model-input prediction right, capture overlay wrong | Transform | Crop, padding, per-axis scale |
+| Both overlays right, click lands elsewhere | Executor mapping | DPI virtualization, units, origin |
+| Correct coordinates, another window receives input | Focus/scope | Foreground ownership, staleness |
+| Correct old target, layout moved | Staleness | Observation-to-dispatch gap |
+| Input lands correctly, desired state absent | Interaction/verification | Disabled element, action type, timing |
 
-Coordinate calibration fixtures bypass ShowUI and inject known points into the adapter. Grounding fixtures never inject input. Native tests cover the remaining connection between executor coordinates and actual OS delivery.
+## 14. Tests and evaluation
 
-## 13. Tests and evaluation
+### 14.1 Plugin repository
 
-### 13.1 Independent plugin tests
+- ONNX parity per configuration and execution provider at every stage (§5.3).
+- Transform fixtures: exact geometry, inverse round trips, anisotropic resize, crops, padding, negative origins, mixed-scale rejection.
+- Contract tests for both adapters: field meanings, units, errors, absent capabilities, allowlists.
+- Licence-chain check for every published model.
 
-- Pure transform tests with exact known geometry, inverse round trips, finite/bounds validation, crops, letterboxing, negative origins, rotation when supported, mixed-scale rejection.
-- Parser tests for malformed/extra text, nonfinite/out-of-range coordinates, target-absent output, and upstream error with fallback coordinates.
-- Contract tests for both adapters: same field meanings, units, errors, absent capabilities, and tool allowlists.
-- MCP tests: initialize notification, version mismatch, chunked Unicode, mixed image/text results, progress, process exit, timeout, cancellation, output limits.
-- Session tests: competing owners, revoked generations, stale target handles, duplicate action IDs, crashes before/after dispatch, no replay of uncertain input.
-- Debug tests: locate-only and offline replay cannot instantiate/dispatch native input; redaction, retention, reviewed export.
+### 14.2 Host
 
-### 13.2 Native desktop tests
+- MCP SDK transport: initialize and initialized notification, version mismatch, chunked multi-byte UTF-8, mixed content results, progress, exit, timeout, cancellation, output limits, process-tree cleanup, session pool reuse and invalidation. Under `test/vitest/main/`.
+- Grounding worker: preprocessing golden tensors, postprocessing regions, ambiguity and absence thresholds, stale-generation discard, kill-on-stop, provider fallback.
+- Supervisor: competing owners, revoked generations, stale handles, duplicate action IDs, crashes before/after dispatch, no replay of uncertain input, rejection of targets on AiFetchly windows.
+- Planner modes: no image bytes in planner requests, logs, persisted tool JSON, or hook payloads in local-only mode; suppression during sensitive states; mode toggle mid-session.
+- Debug: locate-only and replay never dispatch; redaction, retention, reviewed export.
+- UI: component tests for settings, consent, control strip, and failure states in `test/vitest/main/components/` (`yarn test:components`); Playwright E2E for start → observe → act → stop and the hotkey path in `test/e2e/specs/`. All six locale files updated.
 
-Use controlled native test applications and a headed interactive user session. Ordinary headless CI is insufficient for permission/focus/DPI validation. Cover window movement, display changes, 100/125/150/200-percent Windows scaling where qualified, Retina points, target closure, occlusion, lock/sleep/resume, CJK input, scroll/drag, and permissions denied/revoked.
+### 14.3 Native desktop
 
-Begin with one display. Multi-display/negative origins and windows spanning different scales are separate release gates, not inferred from pure math tests alone.
+Controlled test applications in a headed interactive session. Cover window movement, display changes, 100/125/150/200% Windows scaling, Retina points, target closure, occlusion, lock/sleep/resume, CJK input, scroll/drag, elevated windows, and permission denial/revocation. One display first; multi-display is a separate gate.
 
-### 13.3 Host and Hub tests
+### 14.4 Hub
 
-Host tests go in existing `test/` conventions: main-process/MCP/IPC tests under `test/vitest/main/`; UI component tests under `test/vitest/main/components/`; critical streaming/control/install flows under `test/e2e/specs/`. Run `yarn test:components` for UI work and relevant Playwright E2E tests. Update all six language files with new UI strings. Docs-only changes do not require running application suites.
+Conditional resolution and absence of wrong-platform resources, feature selection in digests/caches/tickets, revocation, incompatible app versions, and resource integrity. Clean-machine tests start without uv or Python and verify no global mutations.
 
-Hub tests verify conditional requirement resolution and absent wrong-platform/model resources, feature selection in digests/caches/tickets, resource revocation, incompatible app versions, and uv/native resource integrity. Clean-machine tests start without uv/Python and verify no global environment mutations.
+### 14.5 Benchmark
 
-### 13.4 Benchmark design
+Labeled clickable regions (any point inside counts), absent targets, distractors, repeated labels, icons, custom controls, small targets, Chinese/English UI, themes, and layout changes, drawn from the target workflows. Held-out evaluation is separate from regression fixtures.
 
-Maintain labeled target regions rather than only one exact pixel: any point inside the correct clickable region can be valid. Include absent targets, distractors, repeated labels, icons, custom controls, small targets, Chinese/English interfaces, theme/layout changes, and native/browser examples. Keep training/tuning fixtures separate from held-out evaluation.
+Compare on identical tasks:
 
-Compare accessibility-only, ShowUI-only, and combined paths on identical tasks. Report sample counts, software/model revisions, hardware, resolution, success/uncertainty, wrong-click and absent-target action rates, recovery/intervention counts, end-to-end completion, cold/warm stage latency, peak RAM/VRAM, and any remote API cost. Quantization can alter accuracy and memory and must be evaluated as a separate configuration.
+- accessibility-only, grounder-only, and combined target resolution;
+- local-only vs. visual planner mode;
+- pixel budgets and quantization configurations per execution provider;
+- GUI-Actor-2B vs. ShowUI-2B vs. an end-to-end computer-use model baseline.
 
-Hard correctness gates: no input from read-only modes; no default-position click on parse error; no foreign-target artifacts; no queued action after revoked generation; no unapproved consequential action; no blind retry of uncertain input. Performance and workflow thresholds must be set from pilot evidence before GA.
+Report sample counts, revisions, hardware, resolution, region hits, wrong-action rate on absent targets, uncertainty, interventions, recovery, end-to-end completion, cold/warm stage latency, peak RAM/VRAM, and API cost.
 
-## 14. Suggested implementation ownership and change map
+Hard gates: no input from read-only modes; no click on parse error, absence, or ambiguity; no wrong-platform artifacts; no action after a revoked generation; no unapproved consequential action; no blind retry of uncertain input; no screenshot to the planner in local-only mode.
 
-| Repository | Proposed work |
+## 15. Change map
+
+| Repository | Work |
 | --- | --- |
-| Plugin | Gateway and schemas; Windows/Ghost adapters; coordinate library; vision worker; trace/replay tools; packaging; native evaluation |
-| Desktop | MCP lifecycle/result fixes; `ComputerUseSupervisor`, desktop lease, trusted tool wrapper; managed uv/resource installer; session UI and diagnostics integration |
-| Hub | Conditional target/features; environment/model filtering; native resource contract; digest/prepare/cache parity; clean target fixtures |
+| Desktop | MCP SDK client + custom transport + session pool; `ComputerUseSupervisor` and related services; grounding worker; planner mode routing; Windows-MCP provisioning; UI and translations |
+| Plugin | Contracts and fixtures; Windows-MCP packaging and allowlist; Mac helper or Ghost OS fork; ONNX export, quantization, and parity pipeline; eval/replay CLI; notices |
+| Hub | Phase 1: listing and Windows environment. Phase 3: conditional target resolution and native-component resources |
 
-Proposed host source organization:
+Proposed host files:
 
 ```text
+src/modules/MCPClient.ts                               # Rebuilt on @modelcontextprotocol/sdk Client
+src/modules/mcp/SupervisedStdioTransport.ts            # Custom SDK Transport over host spawn
+src/service/MCPSessionPool.ts
 src/entityTypes/computerUseTypes.ts
 src/schemas/ipc/computerUse.ts
-src/modules/ComputerUseModule.ts
+src/modules/ComputerUseModule.ts                       # Persistence of session/action summaries
 src/service/computerUse/ComputerUseSupervisor.ts
+src/service/computerUse/ComputerUseTargetStore.ts
+src/service/computerUse/ComputerUseCoordinateTransforms.ts
 src/service/computerUse/ComputerUseLeaseService.ts
 src/service/computerUse/ComputerUseActionAuthorization.ts
-src/service/computerUse/ComputerUseToolService.ts
+src/service/computerUse/ComputerUseAdapterRegistry.ts  # Allowlisted adapter wrappers
+src/service/computerUse/ComputerUseGroundingClient.ts  # Host side of the worker protocol
+src/service/computerUse/ComputerUsePlannerImageService.ts
 src/service/computerUse/ComputerUseTraceService.ts
 src/main-process/communication/computer-use-ipc.ts
-src/childprocess/computer-use/          # Only if app-owned worker entrypoints are needed
+src/childprocess/computer-use/GroundingWorker.ts
+src/childprocess/computer-use/GuiActorPreprocessor.ts
+src/childprocess/computer-use/GuiActorPostprocessor.ts
+src/childprocess/computer-use/OnnxRuntimeLoader.ts
 src/views/components/computerUse/
 ```
 
-Reuse existing managed-installation services where implemented; avoid building a second private resource manager just for this plugin. Introduce entities only for data that must persist; keep DB access in Models/Modules. Native plugin subprocesses are external installed resources, not source files copied into `src/modules/`.
+Reuse existing managed-installation and local-runtime services where they apply; do not build a second private resource manager. Introduce entities only for data that must persist.
 
-## 15. Release sequence and compatibility
+## 16. Release sequence
 
-1. Establish public schemas, exact upstream candidates, diagnostic fixtures, and Hub gap tests.
-2. Implement persistent Python MCP and read-only capture/mapping/locate/replay.
-3. Implement Windows action path with leases, grants, stop, native mapping and verification.
-4. Implement Mac adapter parity and packaged permission checks.
-5. Complete managed uv/Python/dependency/model/native distribution and clean-machine update/repair.
-6. Publish benchmark-based support matrix, then add qualified displays/hardware/offline bundles.
+| Phase | Deliverables |
+| --- | --- |
+| 0 | MCP SDK client, transport, and session pool (independent PR); schemas and fixtures; target workflows confirmed; GUI-Actor-2B export + parity + provider latency/memory spike; Mac backend spike; Windows-MCP delivery decision; end-to-end baseline |
+| 1 | Windows MVP: Windows-MCP provisioning, supervisor, lease, grants, Stop + hotkey, control strip, one display, opt-in visual planner, draft-only workflows, limited beta |
+| 2 | Windows local vision: grounding worker (DirectML/CPU), crops, ambiguity/absence calibration, locate-only, offline replay, trace viewer |
+| 3 | macOS: chosen backend, CoreML/CPU grounder, permissions, Hub conditional resolution |
+| 4 | Update/repair, clean-machine matrix, published support matrix and SLOs, GA |
+| 5 | Multi-display, Windows ML vendor providers, larger grounder tier or verifier, offline bundles |
 
-Version independently: plugin code, tool-contract schema, trace schema, adapter/backend versions, runtime, dependency lock, model/processor/quantization. Record the full compatibility manifest per release. Reject a host below minimum contract/install-plan version. Never replace an active backend/model in the middle of a session.
+If the Phase 0 export spike fails, Phase 1 proceeds and Phase 2 re-plans around another exportable grounder.
 
-A shared repository may later produce separate packages with independently pinned backends. Separate public Windows/Mac plugin products are only justified by different product features or support/release policies, not download size alone.
+Version independently: plugin code, tool contract, trace schema, adapter revisions, Python environment, ONNX Runtime binding, model configuration. Record the full compatibility manifest per release. Never replace an adapter or model mid-session.
 
-## 16. Important limitations and open decisions
+## 17. Limitations and open decisions
 
-- A small local grounder does not automatically provide robust high-level planning or outcome understanding.
-- A local Python process is not an OS privilege sandbox; native input is shared with the human desktop.
-- No hard-coded upstream confidence value is used as a calibrated probability or authorization criterion.
+Limitations:
+
+- A small grounder does not provide planning or outcome understanding; local-only mode has lower task success on visually complex apps.
+- GUI-Actor has no native absence output; absence relies on calibration and cross-checks.
+- DirectML is maintained but no longer developed; long-term Windows GPU acceleration may move to Windows ML.
+- A local process is not a privilege sandbox; native input is shared with the human.
 - UI state can change after validation; post-action verification and uncertainty handling remain necessary.
-- Exact OS/GPU/minimum memory, model precision, stop SLO, and benchmark thresholds require measurement.
-- Offline wheel/model/native distribution is additional work beyond the current uv runtime provisioner.
-- Native Ghost resource schema/signing, target-specific model bindings, and the complete desktop uv consumer are implementation prerequisites, not already-complete Hub features.
-- Mac OS permissions and Windows secure/elevated desktop restrictions remain OS boundaries; the installer cannot bypass them.
+- OS permission models (macOS TCC, Windows secure desktop and UIPI) cannot be bypassed.
 
-## 17. Requirement traceability
+Open decisions:
+
+1. macOS backend (spike outcome).
+2. Delivery of the ONNX Runtime binding and model: existing local runtime catalog (`LocalAiRuntimeModule`) vs. Hub managed resources.
+3. Windows-MCP delivery: managed uv environment vs. prebuilt embeddable-Python bundle.
+4. Pixel budget, quantization, and whether static-shape buckets are used, per provider.
+5. Ambiguity and absence thresholds (calibrated in Phase 2).
+6. Visual planner image size, crop policy, and supported providers.
+7. GUI-Actor-3B commercial licence, only if 2B is insufficient.
+8. Stop-latency and grounding-latency SLOs replacing the PRD's provisional targets.
+9. Debug retention and storage cap.
+
+## 18. Requirement traceability
 
 | PRD requirements | Design sections | Verification |
 | --- | --- | --- |
-| CU-INST-01–04 | §5 | Hub target/feature closure and no-wrong-platform tests |
-| CU-INST-05–08 | §6 | No-uv/Python clean-machine install, identity/integrity/cache tests |
-| CU-INST-09–10 | §6.3, §15 | Atomic activation/rollback; complete offline bundle qualification |
-| CU-SESSION-01–07 | §3, §4, §8 | Lease, cancellation, takeover, DB boundary, native lifecycle tests |
-| CU-VISION-01–02 | §7, §10 | Adapter contracts and comparative benchmark |
-| CU-VISION-03, CU-VISION-10 | §11 | Local routing assertions and explicit remote-image path |
-| CU-VISION-04–08 | §9 | Pure mapping, parser, freshness, and native calibration tests |
-| CU-VISION-09 | §8, §10 | Inference timeout/OOM and independent stop tests |
-| CU-PERM-01–08 | §3, §8, §11 | AI gate, grants, allowlist, handoff, export/routing tests |
-| CU-DEBUG-01–08 | §12, §13 | Read-only enforcement, replay, labeling, redaction, regression suite |
+| CU-INST-01–04 | §7 | Target/feature closure; absence of wrong-platform resources |
+| CU-INST-05–09 | §7, §8 | Clean-machine install; identity, integrity, cache, atomic activation |
+| CU-INST-10 | §16 | Offline bundle qualification (Phase 5) |
+| CU-INST-11 | §5.1, §14.1 | Licence-chain check in release tooling |
+| CU-SESSION-01–07 | §3, §4, §10 | Lease, cancellation, takeover, DB boundary, lifecycle tests |
+| CU-SESSION-08–10 | §10.4 | Hotkey stop, control strip, own-window rejection tests |
+| CU-VISION-01–02 | §5, §6, §9 | Adapter contracts; comparative benchmark |
+| CU-VISION-03 | §12 | No image bytes leave the device in local-only mode |
+| CU-VISION-04–08 | §5.4, §5.8, §11 | Transform, parser, freshness, native calibration tests |
+| CU-VISION-09–10 | §5.5, §5.6 | Provider fallback, inference timeout/OOM, kill-on-stop |
+| CU-VISION-11 | §5.7 | Ambiguity/absence calibration on fixtures |
+| CU-PLAN-01–08 | §12.2 | Consent, capability gating, suppression, transience, toggle tests |
+| CU-PERM-01–08 | §3, §6.1, §10, §12 | AI gate, grants, allowlist, handoff, export tests |
+| CU-DEBUG-01–08 | §13, §14 | Read-only enforcement, replay, labeling, redaction, regression suite |
 
-## 18. References
+## 19. References
 
-Sources inspected during the discussion; upstream links refer to moving branches/docs and must be pinned to exact releases during implementation.
+Upstream links refer to moving branches; pin exact revisions when implementing.
 
-- [ShowUI grounding and quantization](https://github.com/showlab/ShowUI/blob/main/QUICK_START.md).
-- [Windows-MCP tooling, Python prerequisites, and configuration](https://github.com/CursorTouch/Windows-MCP).
-- [Ghost OS architecture](https://github.com/ghostwright/ghost-os); [vision-sidecar source](https://github.com/ghostwright/ghost-os/blob/main/vision-sidecar/server.py).
-- [MCP lifecycle and cancellation expectations](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle).
-- [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/); [lock/sync behavior](https://docs.astral.sh/uv/concepts/projects/sync/); [Python script execution](https://docs.astral.sh/uv/guides/scripts/).
-- [Desktop managed-installation PRD](plugin-hub-managed-installation-prd.md) and [technical design](plugin-hub-managed-installation-technical-design.md).
-- Hub documents in `/home/robertzeng/project/aifetchly-hub-go`: `docs/prd/plugin-hub-uv-managed-runtime-technical-design.md`, `docs/prd/plugin-hub-uv-managed-runtime-prd.md`, `docs/plugin-runtime-requirements-crud.md`.
+- [GUI-Actor repository and inference code](https://github.com/microsoft/GUI-Actor) (`src/gui_actor/inference.py`, placeholder mode); [GUI-Actor-2B model](https://huggingface.co/microsoft/GUI-Actor-2B-Qwen2-VL) (config and `preprocessor_config.json`).
+- [Qwen2-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct); [Qwen2.5-VL-3B-Instruct licence](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/blob/main/LICENSE).
+- [ONNX Runtime DirectML EP](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html); [DirectML maintenance notice](https://github.com/microsoft/DirectML); [Windows ML execution providers](https://learn.microsoft.com/en-us/windows/ai/new-windows-ml/supported-execution-providers).
+- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk); [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle).
+- [Windows-MCP](https://github.com/CursorTouch/Windows-MCP); [Ghost OS](https://github.com/ghostwright/ghost-os).
+- [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/).
+- Desktop: [managed installation PRD](plugin-hub-managed-installation-prd.md) and [technical design](plugin-hub-managed-installation-technical-design.md); [downloadable local AI runtimes technical design](downloadable-local-ai-runtimes-technical-design.md).
+- Hub (`aifetchly-hub-go`): `docs/prd/plugin-hub-uv-managed-runtime-technical-design.md`, `docs/prd/plugin-hub-uv-managed-runtime-prd.md`, `docs/plugin-runtime-requirements-crud.md`.
