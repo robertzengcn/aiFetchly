@@ -122,5 +122,127 @@ describe("EmailServiceImportDialog", () => {
     expect(wrapper.emitted("imported")).toBeTruthy();
     const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
     expect(snackbar.attributes("data-type")).toBe("success");
+    expect(snackbar.attributes("data-message")).toContain("2");
+  });
+
+  it("closes the dialog after a successful import", async () => {
+    apiMocks.importEmailServices.mockResolvedValue({
+      imported: 2,
+      skipped: 0,
+      errors: [],
+    });
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+    });
+  });
+
+  it("shows a warning snackbar and closes on partial import", async () => {
+    apiMocks.importEmailServices.mockResolvedValue({
+      imported: 1,
+      skipped: 2,
+      errors: ["row 2: password is required"],
+    });
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-type")).toBe("warning");
+      expect(snackbar.attributes("data-message")).toContain("1");
+      expect(snackbar.attributes("data-message")).toContain("2");
+    });
+    expect(wrapper.emitted("imported")).toBeTruthy();
+    expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+  });
+
+  it("shows a cancelled notice and keeps the dialog open on cancel", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("Import cancelled by user")
+    );
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-type")).toBe("info");
+      expect(snackbar.attributes("data-message")).toContain("Import cancelled");
+    });
+    expect(wrapper.emitted("imported")).toBeFalsy();
+    expect(wrapper.emitted("update:modelValue")).toBeFalsy();
+  });
+
+  it("shows an error notice and keeps the dialog open on failure", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(new Error("disk full"));
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-type")).toBe("error");
+      expect(snackbar.attributes("data-message")).toContain("Import failed");
+      expect(snackbar.attributes("data-message")).toContain("disk full");
+    });
+    expect(wrapper.emitted("imported")).toBeFalsy();
+    expect(wrapper.emitted("update:modelValue")).toBeFalsy();
+  });
+
+  it("maps the bare import_failed key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(new Error("import_failed"));
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain("Import failed");
+      expect(snackbar.attributes("data-message")).not.toContain(
+        "import_failed"
+      );
+    });
+  });
+
+  it("maps the bare import_no_valid_rows key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("import_no_valid_rows")
+    );
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain(
+        "No valid services found in file"
+      );
+    });
+  });
+
+  it("maps the bare import_invalid_file key to a friendly message", async () => {
+    apiMocks.importEmailServices.mockRejectedValue(
+      new Error("import_invalid_file")
+    );
+    const wrapper = mountDialog();
+    await wrapper
+      .find('[data-testid="email-service-import-select-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
+      expect(snackbar.exists()).toBe(true);
+      expect(snackbar.attributes("data-message")).toContain(
+        "Invalid file format"
+      );
+    });
   });
 });

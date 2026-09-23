@@ -107,6 +107,10 @@ async function handleSelectFile(): Promise<void> {
       };
     }
     emit("imported");
+    // The result notice lives outside v-dialog, so closing here keeps the
+    // notice visible while returning the user to the reloaded table.
+    // Cancel/error paths stay open so the user can retry.
+    emit("update:modelValue", false);
   } catch (error: unknown) {
     const msg: string = error instanceof Error ? error.message : String(error);
     const cancelled: boolean = /cancel/i.test(msg);
