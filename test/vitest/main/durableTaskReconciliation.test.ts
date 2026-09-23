@@ -175,7 +175,16 @@ describe("durable-tasks participant wiring", () => {
       (p) => p.id === "durable-tasks"
     );
     expect(participant).toBeDefined();
+    // T07: reconciliation runs in finalize(), after the stop stage drained.
     await participant!.stop({
+      attemptId: "a",
+      deadlineMonotonicMs: 0,
+      signal: new AbortController().signal,
+      remainingMs: () => 10_000,
+    });
+    expect(bulk).not.toHaveBeenCalled();
+    expect(social).not.toHaveBeenCalled();
+    await participant!.finalize({
       attemptId: "a",
       deadlineMonotonicMs: 0,
       signal: new AbortController().signal,

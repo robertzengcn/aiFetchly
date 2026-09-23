@@ -60,9 +60,7 @@ export interface BackgroundShutdownDeps {
    * persisted; when present the marker decision uses it. Optional for
    * backwards compatibility with tests/early-startup paths.
    */
-  readonly appendShutdownReportDurable?: (
-    report: ShutdownReport
-  ) => boolean;
+  readonly appendShutdownReportDurable?: (report: ShutdownReport) => boolean;
   /** True once a user database path exists (guards scheduler shutdown). */
   readonly hasUserData: () => boolean;
 }
@@ -118,7 +116,8 @@ export function createShutdownParticipants(
       const { getDefaultManagedBrowserCacheModule } = await import(
         "@/modules/ManagedBrowserCacheModule"
       );
-      const settings = await new ManagedBrowserSettingsModule().getEffectiveSettings();
+      const settings =
+        await new ManagedBrowserSettingsModule().getEffectiveSettings();
       if (settings.clearCacheOnExit) {
         await getDefaultManagedBrowserCacheModule().queueAllForShutdown();
       }
@@ -132,17 +131,6 @@ export function createShutdownParticipants(
       const contactIpc = await import(
         "@/main-process/communication/contactExtraction-ipc"
       );
-      // FR-06/AC-09 first: map in-flight rows to the existing failed state
-      // (with interruption reason) BEFORE stopping the worker, so completed
-      // results stay and interrupted work is never blindly retried.
-      const interrupted = await contactIpc.reconcileInterruptedExtractions(
-        "Application exited while extraction was in progress"
-      );
-      if (interrupted.length > 0) {
-        log.info(
-          `[contact-extraction] marked ${interrupted.length} in-flight job(s) interrupted`
-        );
-      }
       // Send the §7 shutdown protocol and wait for OBSERVED exit within a
       // bounded slice; survivors are force-verified in the force phase.
       const budget = Math.min(
@@ -151,7 +139,23 @@ export function createShutdownParticipants(
       );
       await contactIpc.cleanupContactExtractionWorker(budget);
     },
-    finalize: async () => undefined,
+    finalize: async () => {
+      // T07 (design §5/§11): settle task outcomes AFTER the stop stage —
+      // worker shutdown and final-result handlers have drained, so a row
+      // completing during shutdown lands terminal and is never flipped.
+      // Still before the report/marker decision, which happens post-run.
+      const contactIpc = await import(
+        "@/main-process/communication/contactExtraction-ipc"
+      );
+      const interrupted = await contactIpc.reconcileInterruptedExtractions(
+        "Application exited while extraction was in progress"
+      );
+      if (interrupted.length > 0) {
+        log.info(
+          `[contact-extraction] marked ${interrupted.length} in-flight job(s) interrupted`
+        );
+      }
+    },
   };
 
   const schedulers: ShutdownParticipant = {
@@ -174,9 +178,13 @@ export function createShutdownParticipants(
     id: "search-scraper",
     freeze: () => undefined,
     stop: async () => {
-      // FR-06/AC-09: map running search rows to the existing Error state
-      // (with interruption note) BEFORE the force kill — the module's own
-      // child-exit handler races app termination and can miss the DB write.
+      // Graceful stop of the search worker happens via the §7 protocol
+      // broadcast + force phase; rows settle in finalize (T07).
+    },
+    finalize: async () => {
+      // T07 (design §5/§11): settle rows AFTER the stop stage drained final
+      // results — the module's own child-exit handler races app termination
+      // and can miss the DB write, so the at-exit mapping runs here.
       const { SearchModule } = await import("@/modules/SearchModule");
       const interrupted = await new SearchModule().reconcileInterruptedTasks(
         "Application exited while the search task was running"
@@ -187,17 +195,20 @@ export function createShutdownParticipants(
         );
       }
     },
-    finalize: async () => undefined,
   };
 
   const durableTasks: ShutdownParticipant = {
     id: "durable-tasks",
     freeze: () => undefined,
     stop: async () => {
-      // FR-06/AC-09 at-exit mapping for the remaining durable families:
-      // bulk-email Processing rows -> existing Error + [interrupted] note;
-      // social live runs -> module-registry interruption marker (entity has
-      // no status column). Completed rows untouched; nothing auto-retried.
+      // Workers stop in the stop stage; rows settle in finalize (T07).
+    },
+    finalize: async () => {
+      // FR-06/AC-09 at-exit mapping for the remaining durable families,
+      // ordered AFTER the stop stage (T07): bulk-email Processing rows ->
+      // existing Error + [interrupted] note; social live runs ->
+      // module-registry interruption marker (entity has no status column).
+      // Completed rows untouched; nothing auto-retried.
       const { BuckEmailTaskModule } = await import(
         "@/modules/buckEmailTaskModule"
       );
@@ -222,7 +233,6 @@ export function createShutdownParticipants(
         );
       }
     },
-    finalize: async () => undefined,
   };
 
   const workerProtocol: ShutdownParticipant = {
