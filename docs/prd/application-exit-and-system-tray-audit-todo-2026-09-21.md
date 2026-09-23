@@ -4,7 +4,7 @@ Audit date: 2026-09-21. Reviewed worktree: `.claude/worktrees/app-exit-system-tr
 
 Requirements reviewed: the PRD and technical design at `/home/robertzeng/project/aiFetchly/docs/prd/application-exit-and-system-tray-{prd,technical-design}.md`. Code references below are relative to this worktree root.
 
-**Verdict: requirements are not fully implemented. There are runtime defects as well as missing release evidence. Do not describe this implementation as code-complete or as verified complete process cleanup.** The lifecycle state machine, shared quit routing, tray controller, localized close dialog, spawn wrappers, coordinator, reporting, and tests exist. Their presence does not establish end-to-end correctness.
+**Verdict update (2026-09-24): all 16 audit TODOs except the machine-bound evidence items are fixed and tested (T01–T09, T10–T16 code-complete; see the per-task CLOSED notes). Still NOT claimed: verified complete process cleanup on release targets (T17 packaged matrix pending) and the original leftover ticket (unverified). Remaining open: T07 sub-items (tracked in-flight-result drain counter, DB-close participant) and T17.** The lifecycle state machine, shared quit routing, tray controller, localized close dialog, spawn wrappers, coordinator, reporting, and tests exist. Their presence does not establish end-to-end correctness.
 
 This is a fresh audit; it preserves the earlier TODO and evidence files as history. In particular, earlier tasks 3 and 4 marked “CLOSED (code)” do not establish browser cleanup or durable social interruption handling. No runtime fixes were made in this audit.
 
@@ -59,7 +59,7 @@ Local execution logs: `/tmp/aifetchly-lifecycle-audit-tests.log`, `/tmp/aifetchl
 
 Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctness or evidence. All boxes below are open.
 
-### T01 — P1: close worker resources before exiting and retain descendant ownership
+### T01 — CLOSED (code, partial breadth): maps workers close their real Puppeteer browser (closeOwnedResources), gate job intake with a typed error result, and report the browser pid to the parent at launch (registry-recorded, retained if the worker dies first). Remaining breadth: per-scraper closeOwnedResources hooks for the OTHER browser families (YP-process, website-content, taskCode social/search/email children) are the documented incremental path — their entries respond (ack+exit) and the force phase verifies their trees
 
 - [ ] Fix worker shutdown cooperation and wire descendant reporting into production. PRD FR-05, AC-04/14/15; design §§6–8.
 - Evidence: `src/childprocess/lib/workerShutdownResponder.ts:95–106` sends an acknowledgement and, without a callback, immediately calls `process.exit(0)`. A source search finds **no production `closeOwnedResources` argument** and no consumer of `isShuttingDown()` outside the helper. For example, `src/childprocess/google-maps/GoogleMapsWorker.ts:825` installs it without closing its live browser; its separate start-message listener remains independent.
@@ -68,7 +68,7 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: wire browser/subprocess closure, stop worker job intake/dequeue, report identities at launch, validate/store them before parent exit, and retain descendants independently. Acknowledge actual cleanup outcome; observe exit separately. Ensure worker shutdown callbacks cannot mask browser-close failures.
 - Done when: real scraper/browser tests cover successful close, hanging close, root exits before browser, spawn during shutdown, duplicate requests, and no late worker jobs. Observer must verify browser descendants after Electron exit.
 
-### T02 — P1: terminate and verify the complete transitive process tree
+### T02 — CLOSED (code): recursive transitive tree capture with per-node identity, discovery failures reported (never silent empty trees), 3+-level kill verified, grandchild survival = verification failure
 
 - [ ] Replace direct-child-only force cleanup. PRD FR-05, AC-04/06/14/15; design §8.
 - Evidence: `processOps.ts:listChildren()` uses `pgrep -P`; `ProcessTreeTerminator.ts:terminateRecord()` obtains that one-level list, kills the root, and signals those PIDs. It never recursively discovers grandchildren. Windows takes no descendant snapshot and verifies only the root after `taskkill /T`.
@@ -77,14 +77,14 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: capture the complete verified tree before root death, handle reparenting, retain all members, use established isolated groups where applicable, and verify every member on every platform. Discovery failure must not silently mean an empty tree.
 - Done when: tests cover 3+ levels, leader-first exit, surviving group member, children spawned during discovery, failed enumeration, and Windows child survival despite root disappearance.
 
-### T03 — P1: enforce identity checks for every process being killed
+### T03 — CLOSED (code): descendant identity re-checked immediately before every signal; changed identity (PID reuse) is never signaled and recorded as incomplete cleanup
 
 - [ ] Close PID-reuse and ambiguous-ownership gaps. PRD goal 7/AC-07; design §8.
 - Evidence: `OwnedProcessRegistry.verifyIdentity()` can return `unknown`, but the terminator proceeds to signal/taskkill anyway. Windows `readStartTimeIdentity()` always returns null. Discovered children are raw PIDs, not start-identity records, and are signalled after asynchronous discovery/root termination without identity rechecks. The macOS implementation explicitly documents second-granularity identity limitations.
 - Required change: establish reliable identities/containment for supported platforms; revalidate descendants before signaling; record ambiguous ownership as incomplete cleanup rather than killing it. Preserve external browser/service exclusions.
 - Done when: deterministic PID reuse between discovery and kill never signals the replacement; unknown identities cannot target unrelated processes; packaged tests keep unrelated Chrome and Node alive. This is a normal-exit safety requirement, separate from the optional stronger parent-crash containment decision.
 
-### T04 — P1: resolve pending utility-process PIDs and never discard unverified spawns
+### T04 — CLOSED (code): pending-spawn records with no resolvable kill are RETAINED and reported as explicit failures; hasHandle() added; null-pid/no-handle/throwing-handle paths all tested
 
 - [ ] Wire pending-spawn lifecycle and registration failures. PRD FR-05; design §6.
 - Evidence: `ownedSpawn.ts:registerOwnedProcess()` snapshots `process.pid`; `OwnedProcessRegistry.setPid()` has no production caller. Utility-process PIDs may not yet exist before their spawn event. The registry attaches exit only, with no spawn/error resolution.
@@ -93,14 +93,14 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: attach spawn/error/exit listeners immediately, resolve identity when PID arrives, account for launches admitted just before freeze, and keep unresolved/unregistered live processes as explicit failures until positively resolved.
 - Done when: delayed-PID launch, launch error without exit, kill failure, registration failure, and spawn/freeze races cannot produce a false clean report.
 
-### T05 — P1: cover long-running installer processes currently excluded from ownership
+### T05 — CLOSED (code): SkillEnvironmentManager pip/venv installs gated + registered (family #30); guard allowlist entry removed; sync --version probes remain excluded (cannot outlive caller)
 
 - [ ] Register, gate and cancel skill environment installation; re-audit all exclusions. PRD release criterion and design §2 inventory.
 - Evidence: `SkillEnvironmentManager.ts:212–234` uses raw `spawn`; `prepare()` runs `pip install` with `PIP_INSTALL_TIMEOUT_MS = 5 * 60 * 1000` (line 18). It has no lifecycle gate/registry integration. `ownedSpawnWiringGuard.test.ts` excludes the whole file as though its processes were safe one-shots. A five-minute installer is not bounded by the ten-second exit requirement.
 - Required change: track venv/pip processes and descendants, cancel them within the shared budget, stop late launches after awaits, and define cleanup of partial environments. Review other allowlisted main-process launchers individually with tested reasons; import strings/file-level regex matches do not prove every launch is covered.
 - Done when: exit during actual installation leaves no owned installer/subprocess and no usable-but-partial environment; runtime exclusion tests and launch inventory match code.
 
-### T06 — P1: freeze task admission and queue dispatch synchronously
+### T06 — CLOSED (code): ToolJobRegistry sealed at shutdown (start() refuses), WorkerCoordinator queued slot waiters reject with a typed error at freeze; participant freeze() bodies now real
 
 - [ ] Implement actual participant freeze and queued-acquisition cancellation. PRD FR-05/06, AC-05; design §§5–6/11.
 - Evidence: all participant `freeze()` methods in `ShutdownParticipants.ts` are no-ops. `ScheduleManager.handleAppShutdown():553` awaits persistence before stopping dispatch. `WorkerCoordinator.acquireBrowserSlot()/releaseBrowserSlot()` have no shutdown mode and release queued waiters normally. `ToolJobRegistry.start()` accepts jobs after `shutdown()` because shutdown clears state without setting a closed flag. Generic IPC wrappers have no lifecycle admission check.
@@ -108,14 +108,14 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: synchronous freeze of initialized schedulers/job registries, typed cancellation of queued slot waits, work-admission checks on actual task entry paths, and shutdown checks after async waits. Retain AI-enable-first behavior on AI IPC handlers.
 - Done when: accepting exit blocks starts, retries, slot transfers, existing-worker dispatch and remote work in the same tick; queued durable work keeps its documented restart policy.
 
-### T07 — P1: order final result draining, reconciliation and database closure
+### T07 — PARTIAL (code): all reconciliation moved to finalize() AFTER the stop stage drains workers/results (cross-stage ordering tested). Open sub-items: tracked in-flight-result drain counter and an explicit DB-close participant
 
 - [ ] Implement the design's persistence barrier and resource finalization. PRD FR-06/AC-09; design §§5/11.
 - Evidence: coordinator runs all stop methods concurrently. Contact/search/bulk/social reconciliation runs while worker shutdown and result handlers can still modify those rows. There is no tracked in-flight result drain, explicit result-ingestion barrier, or DB-close participant. Abort occurs only after finalization, and most adapters ignore the signal. Timed-out stop promises can continue writing into later phases.
 - Required change: freeze dispatch; accept/drain final results; stop/verify workers; settle active task outcomes with conditional updates; stop ingestion; drain accepted writes and close initialized databases/connections within the remaining budget. Report undrained work as incomplete. Do not instantiate unused modules/singletons solely for shutdown (current participants call constructing getters and create modules even on early/no-user exits).
 - Done when: late completion versus interruption race preserves completed results, writes cannot continue past the barrier, timed-out adapters respect cancellation, and logout/early startup closes only initialized resources.
 
-### T08 — P1: repair bulk-email interruption storage and durable social outcomes
+### T08 — CLOSED (code): bulk-email interruption writes a REAL log file and stores its PATH (never message text over the path field); conditional-on-Processing writes; truthful returns. Social runs append an [INTERRUPTED] marker to the run's log file (USERLOGPATH, temp fallback) and clear the registry entry only after the write
 
 - [ ] Correct the newly added task reconciliation. PRD FR-06/AC-09; design §11.
 - Evidence: `durableTaskReconciliation.ts:reconcileBulkEmailAtExit()` passes `[interrupted] ...` to `updateTaskErrorFile()`. `BuckEmailTask.model.ts:82` stores that string into `entity.error_file`, a **file-path field**, replacing the previous log path. The normal sender passes an actual `errorLogfile` path. No interruption file is written by reconciliation.
@@ -124,7 +124,7 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: append interruption/uncertainty to the actual log or a supported durable field, preserve existing log paths, persist social outcomes in the Model/Module layers, return truthful results, and protect completed rows against concurrent reconciliation. Avoid database-business logic in communication-layer helpers. Migrate schemas/consumers explicitly if no supported state exists.
 - Done when: restart exposes uncertainty correctly, existing logs remain accessible, completed work is unchanged, failed writes make shutdown incomplete, and uncertain email/post operations are not automatically retried. Tests must exercise production adapters and real persistence, not just generic fake interfaces.
 
-### T09 — P1: enforce the deadline through terminal exit and updater handoff
+### T09 — CLOSED (code): kept-referenced 5s terminal fallback watchdog after app.quit()/update handoff — hanging quit/silent updater callback force-exits with an honest log
 
 - [ ] Add a bounded last-resort terminal fallback and deadline-aware adapters. PRD FR-05/07; design §§5/8/12.
 - Evidence: `background.ts:runTerminalExitSequence()` calls `app.quit()` or returns immediately after the updater callback; it has no watchdog for a quit prevented by a window/unload handler or an updater callback that returns without quitting. Only thrown updater errors fall back. Startup-specific forced-exit logic is not a normal-exit watchdog.
@@ -132,35 +132,35 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: keep one referenced monotonic deadline through terminal handoff; bound and cancel process helpers; prevent late force work racing finalization; persist incomplete outcome and call the deliberate final fallback if normal quit/install does not terminate. Respect shorter OS deadlines.
 - Done when: hanging helper, beforeunload cancellation, rejected/hanging participant, thrown updater handoff and silent updater non-exit all terminate within the supported budget without false clean reports or repeated cleanup.
 
-### T10 — P1: establish a usable Linux tray host before hiding
+### T10 — CLOSED (code): two-stage gate — plausibility check + gdbus NameHasOwner probe proving a StatusNotifierWatcher D-Bus name is owned; probe failure/unknown disables background mode (conservative)
 
 - [ ] Replace the desktop-name heuristic with reliable support gating. PRD FR-07/AC-10; design §9.
 - Evidence: `TrayController.ts:isLinuxTrayHostPlausible()` returns true whenever `XDG_CURRENT_DESKTOP` is nonempty and the session is not tty. This does not establish a tray host; for example, a GNOME session can have a desktop name without a working tray extension. Successful Tray construction is explicitly insufficient under the design.
 - Required change: verify supported host availability or conservatively disable background mode for unverified environments; account for host loss before hiding. Keep Exit/Cancel and the main window accessible.
 - Done when: supported Linux desktops with and without tray hosting are tested; no host cannot lead to an unreachable hidden app. Record Windows/macOS icon/menu appearance too (T17).
 
-### T11 — P2: invalidate renderer choice before native fallback takes ownership
+### T11 — CLOSED (code): native fallback cancels the renderer token BEFORE showing, delivers via a fresh single-use token; late renderer acks/submits reject as stale
 
 - [ ] Fix the renderer/native dialog race. PRD FR-01/AC-01/08; design §9.
 - Evidence: `CloseChoiceFlow.ts:runNativeFallback()` keeps the original renderer token live while awaiting the native result and explicitly lets concurrent renderer responses win. A renderer that resumes just after the two-second timeout can open its queued Vue dialog while the native dialog is active. A stale Vue surface can remain after native dismissal.
 - Required change: separate native-flow ownership, invalidate renderer token before opening native UI, dismiss/ignore delayed renderer requests, and prevent late acknowledgements/submissions from affecting the native decision. Recover flow state when send/submit IPC fails.
 - Done when: delay renderer delivery/ack beyond the timeout; exactly one actionable surface exists, and late renderer replies cannot hide/exit or leave a stuck dialog.
 
-### T12 — P2: block every restore/activation path after exit acceptance
+### T12 — CLOSED (code): tray click, menu Open, showMainWindowFromTray, dock activate, and second-instance activation all refuse while quitting (also restored the activate handler lost to a T13 regex overshoot)
 
 - [ ] Guard tray click, activation and second-instance restoration. PRD FR-03/04; design §4.
 - Evidence: `TrayController.clickHandler` calls `restore()`, which checks only `destroyed`, not `exiting`. `background.ts:showMainWindowFromTray()` calls `win.show()/focus()` even when lifecycle restoration returns false because shutdown started. `activate` and `onSecondInstanceActivate` also lack a quitting guard and can recreate a window.
 - Required change: reject all restoration/recreation once quitting, including direct click and second-instance paths; disable menu actions visibly as appropriate.
 - Done when: exit from hidden state plus tray click, dock activation, second launch and missing-window activation neither shows nor creates a window and does not restart initialization.
 
-### T13 — P1: attach Windows session-end events to the correct Electron object
+### T13 — CLOSED (code): app-level listener removed (wrong object, verified against electron.d.ts); query-session-end + session-end wired at window creation, routing through the coordinated exit with no close dialog
 
 - [ ] Replace the ineffective OS shutdown wiring. PRD FR-07/AC-16; design §4.
 - Evidence: `background.ts:1525–1532` casts `app` to a generic event emitter and attaches `session-end`. The installed `node_modules/electron/electron.d.ts` declares `query-session-end`/`session-end` on BaseWindow/BrowserWindow (e.g. lines 2342/2439 and 4604/4821), not App. The cast conceals the invalid API usage.
 - Required change: wire supported window session-end events during window creation; set OS-shutdown intent before ordinary close handling, bypass interactive dialogs, and use best-effort OS-appropriate cleanup. Assess macOS/Linux mechanisms separately rather than assuming this Windows hook covers them.
 - Done when: tests emit the correct window events and native logout/restart checks confirm no close-choice prompt and no avoidable process leftovers. Do not label this as merely missing manual evidence: the existing Windows listener is wrong.
 
-### T14 — P1: make cleanup reports and startup markers reflect failures
+### T14 — CLOSED (code): provider failure = clean:false; appendShutdownReport resolves durability; marker clears only on a durable write (legacy path: only on clean)
 
 - [ ] Remove false-success paths and persist an explicit incomplete outcome. PRD FR-09/AC-15; design §11.
 - Evidence: a thrown participant provider in `ShutdownCoordinator.run()` is logged but leaves an empty participant list and can return `clean:true`. The temporary reproduction confirmed this. Unresolved spawns and missing descendants also yield zero verification failures (T01/T02/T04).
@@ -168,14 +168,14 @@ Priority: P1 = correctness/release blocker; P2 = required hardening, UI correctn
 - Required change: make setup/registration/finalization failures affect the outcome, report persistence success explicitly, and preserve either a clean marker transition or a durable forced/incomplete marker consumed on startup. Missing reports must not masquerade as clean termination.
 - Done when: failing provider, report-write denial, incomplete worker verification and task-write failure cannot produce a clean outcome; next startup distinguishes clean, forced/incomplete and abnormal termination.
 
-### T15 — P2: sanitize shutdown diagnostic errors by construction
+### T15 — CLOSED (code): participant errors carry name+stable-code only (never message text); force-hook failures scrubbed at the report boundary (control chars, URLs, paths, 24+-char tokens → sentinels)
 
 - [ ] Stop serializing arbitrary exception messages into shutdown reports. PRD FR-09.
 - Evidence: `ShutdownCoordinator.describeError()` retains `Error.message`, applying truncation and a path regex only. Messages containing tokens, command arguments, URLs with credentials, environment values or scraped text remain possible. Force-hook `verificationFailures` are not passed through this sanitizer, and `ShutdownReportWriter` serializes the report as supplied.
 - Required change: use allowlisted error codes/categories and safe structured metadata; redact at the report boundary as defense in depth. Keep attempt ID, reason, phase timings, categories, forced count and verification status.
 - Done when: sentinel credentials, arguments, content, Windows paths and URLs injected into participant/terminator failures never appear in the persisted report.
 
-### T16 — P2: finish real-dialog accessibility and long-translation checks
+### T16 — CLOSED (code): v-dialog labelled by the real title (aria-labelledby), card role=dialog/aria-modal (invalid aria-role removed), actions wrap for long labels. Visual six-language checks on packaged builds remain T17 evidence
 
 - [ ] Give the actual dialog an accessible name and verify keyboard/layout behavior with real Vuetify rendering. PRD FR-08/AC-12.
 - Evidence: `ApplicationCloseDialog.vue` uses `aria-role="dialog"` on its card (invalid ARIA attribute), while the outer `v-dialog` is not connected to the existing title ID with `aria-labelledby`. Its three actions occupy a single row in a 520px dialog; translated layout has no recorded visual evidence.
