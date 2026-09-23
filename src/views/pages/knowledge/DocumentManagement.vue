@@ -215,6 +215,12 @@
             chips
             :hint="t('knowledge.tags_hint')"
           />
+          <v-text-field
+            v-model="uploadData.author"
+            :label="t('knowledge.author') || 'Author'"
+            maxlength="255"
+            class="mt-4"
+          />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -289,7 +295,8 @@ const { t } = useI18n();
     const uploadData = ref({
       title: '',
       description: '',
-      tags: []
+      tags: [] as string[],
+      author: ''
     });
     const reembeddingDocIds = ref<number[]>([]);
 
@@ -521,7 +528,8 @@ const { t } = useI18n();
           name: file.name,
           title: uploadData.value.title,
           description: uploadData.value.description,
-          tags: uploadData.value.tags
+          tags: uploadData.value.tags,
+          author: uploadData.value.author.trim() || undefined
         });
         
         if (result.success) {
@@ -531,7 +539,7 @@ const { t } = useI18n();
           // Close dialog and reset form
           showUploadDialog.value = false;
           uploadFile.value = undefined;
-          uploadData.value = { title: '', description: '', tags: [] };
+          uploadData.value = { title: '', description: '', tags: [], author: '' };
 
         } else {
           console.error('❌ Document upload failed:', result.message);
