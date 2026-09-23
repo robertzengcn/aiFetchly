@@ -14,12 +14,9 @@
  */
 
 import { spawn } from "child_process";
-import * as path from "path";
-import * as os from "os";
 import { FilePathGuard } from "@/service/FilePathGuard";
 import { getDefaultWorkspaceRoots } from "@/config/fileToolConfig";
 import {
-  SHELL_DEFAULT_TIMEOUT_MS,
   SHELL_MAX_TIMEOUT_MS,
   SHELL_MIN_TIMEOUT_MS,
   SHELL_STDOUT_MAX_CHARS,
@@ -28,6 +25,7 @@ import {
   SHELL_AUTO_BACKGROUND_DEFAULT,
 } from "@/config/shellToolConfig";
 import { getDefaultBackgroundShellRegistry } from "@/service/BackgroundShellRegistry";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { ShellExecutionRequestSchema } from "@/entityTypes/shellTypes";
 import type {
   ShellExecutionResult,
@@ -59,8 +57,14 @@ export async function executeShellCommand(
   }
   const request = parsed.data;
 
-  // 2. Resolve and validate cwd FIRST — the permission layer needs the guard
-  const cwdResult = resolveCwd(request.cwd);
+  // 2. Resolve the effective workspace roots for this conversation. When the
+  //    conversation has an approved workspace, the shell is jailed to that
+  //    workspace root (strict workspace mode, mirroring FileToolService);
+  //    otherwise fall back to the legacy default roots (home + userData).
+  const roots = await resolveWorkspaceRoots(conversationId);
+
+  // 3. Resolve and validate cwd FIRST — the permission layer needs the guard
+  const cwdResult = resolveCwd(request.cwd, roots);
   if (!cwdResult.valid) {
     return makeErrorResult(
       cwdResult.error ?? "Invalid working directory",
@@ -68,11 +72,11 @@ export async function executeShellCommand(
     );
   }
 
-  // 3. Layered permission check (parse → hazards → split → paths → rules).
+  // 4. Layered permission check (parse → hazards → split → paths → rules).
   //    This subsumes the legacy regex denylist — the same SHELL_DENYLIST_PATTERNS
   //    are now applied inside checkShellPermission via tieredRegexRules, so
   //    running them again here would be pure duplication.
-  const guard = new FilePathGuard(getDefaultWorkspaceRoots(), []);
+  const guard = new FilePathGuard(roots, []);
   const verdict = checkShellPermission(request.command, guard);
   if (verdict.tier !== "allow") {
     return {
@@ -87,20 +91,20 @@ export async function executeShellCommand(
     };
   }
 
-  // 4. Resolve timeout (clamp to allowed range)
+  // 5. Resolve timeout (clamp to allowed range)
   const timeoutMs = clampTimeout(request.timeout_ms);
 
-  // 4b. Resolve auto-background flag (caller can explicitly disable)
+  // 5b. Resolve auto-background flag (caller can explicitly disable)
   const autoBackground =
     request.autoBackground ?? SHELL_AUTO_BACKGROUND_DEFAULT;
 
-  // 5. Select shell interpreter
+  // 6. Select shell interpreter
   const interpreter = resolveInterpreter(request.shell);
 
-  // 6. Build scrubbed environment
+  // 7. Build scrubbed environment
   const env = scrubEnvironment();
 
-  // 7. Execute with timeout and output caps
+  // 8. Execute with timeout and output caps
   const result = await runShell(
     interpreter,
     request.command,
@@ -123,6 +127,37 @@ export async function executeShellCommand(
 }
 
 // ---------------------------------------------------------------------------
+// Workspace root resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the effective workspace roots for a conversation.
+ *
+ * When the conversation has an approved workspace, the shell is confined to
+ * that workspace root (strict workspace mode, mirroring FileToolService), so
+ * paths like `E:\ai_test\canada_trade` that live outside the user's home
+ * directory are still accepted. When no workspace is approved — or the
+ * lookup fails (e.g. DB unavailable in tests) — fall back to the legacy
+ * default roots (home + userData) so non-chat callers keep working.
+ */
+async function resolveWorkspaceRoots(
+  conversationId: string
+): Promise<readonly string[]> {
+  if (conversationId) {
+    try {
+      const resolver = new WorkspaceResolver();
+      const workspace = await resolver.resolve(conversationId);
+      if (workspace && workspace.rootPath) {
+        return [workspace.rootPath];
+      }
+    } catch {
+      // Workspace lookup failed — fall back to default roots below.
+    }
+  }
+  return getDefaultWorkspaceRoots();
+}
+
+// ---------------------------------------------------------------------------
 // CWD resolution
 // ---------------------------------------------------------------------------
 
@@ -132,8 +167,7 @@ interface CwdResult {
   readonly error?: string;
 }
 
-function resolveCwd(cwd?: string): CwdResult {
-  const roots = getDefaultWorkspaceRoots();
+function resolveCwd(cwd: string | undefined, roots: readonly string[]): CwdResult {
   const guard = new FilePathGuard(roots, []);
 
   if (!cwd) {
@@ -277,7 +311,7 @@ async function runShell(
             "Poll with check_shell_status(shell_id) to retrieve full output.",
         });
       } else {
-        killProcessTree(child.pid, cwd);
+        killProcessTree(child.pid);
       }
     }, timeoutMs);
 
@@ -350,7 +384,7 @@ async function runShell(
 // Process-tree kill
 // ---------------------------------------------------------------------------
 
-function killProcessTree(pid: number | undefined, _cwd: string): void {
+function killProcessTree(pid: number | undefined): void {
   if (pid === undefined) {
     return;
   }

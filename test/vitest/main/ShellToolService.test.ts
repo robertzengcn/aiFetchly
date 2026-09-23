@@ -15,10 +15,31 @@ import * as fs from "fs";
 import { executeShellCommand } from "@/service/ShellToolService";
 
 // ---------------------------------------------------------------------------
+// Mock WorkspaceResolver so tests control the per-conversation workspace
+// without touching the database. Default: no approved workspace (legacy
+// default-roots behavior).
+// ---------------------------------------------------------------------------
+
+const resolveWorkspaceMock = vi.hoisted(() =>
+  vi.fn<(id: string) => Promise<{ workspaceId: number; rootPath: string } | null>>()
+);
+
+vi.mock("@/service/WorkspaceResolver", () => ({
+  WorkspaceResolver: class {
+    readonly resolve = resolveWorkspaceMock;
+  },
+}));
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const CONVERSATION_ID = "test-conv-001";
+
+beforeEach(() => {
+  resolveWorkspaceMock.mockReset();
+  resolveWorkspaceMock.mockResolvedValue(null);
+});
 
 // ---------------------------------------------------------------------------
 // T008: Success path
@@ -183,5 +204,93 @@ describe("ShellToolService — interpreter selection", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conversation-scoped workspace roots (regression: shell_execute rejected a
+// cwd inside the user's AI-chat workspace because it only consulted the
+// default roots of home + userData)
+// ---------------------------------------------------------------------------
+
+describe("ShellToolService — conversation workspace roots", () => {
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shell-ws-"))
+    );
+    resolveWorkspaceMock.mockResolvedValue({
+      workspaceId: 1,
+      rootPath: workspaceRoot,
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("accepts cwd inside the conversation's approved workspace even when outside default roots", async () => {
+    const result = await executeShellCommand(
+      { command: "pwd", cwd: workspaceRoot },
+      CONVERSATION_ID
+    );
+
+    expect(resolveWorkspaceMock).toHaveBeenCalledWith(CONVERSATION_ID);
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(fs.realpathSync(result.stdout.trim())).toBe(workspaceRoot);
+  });
+
+  it("defaults cwd to the approved workspace root when omitted", async () => {
+    const result = await executeShellCommand(
+      { command: "pwd" },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(fs.realpathSync(result.stdout.trim())).toBe(workspaceRoot);
+  });
+
+  it("rejects cwd outside the approved workspace root (strict workspace mode)", async () => {
+    const outside = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shell-outside-"))
+    );
+    try {
+      const result = await executeShellCommand(
+        { command: "echo test", cwd: outside },
+        CONVERSATION_ID
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("outside allowed workspace roots");
+      expect(result.exit_code).toBeNull();
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to default roots when no workspace is approved", async () => {
+    resolveWorkspaceMock.mockResolvedValue(null);
+
+    const result = await executeShellCommand(
+      { command: "pwd" },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.exit_code).toBe(0);
+  });
+
+  it("falls back to default roots when workspace lookup throws", async () => {
+    resolveWorkspaceMock.mockRejectedValue(new Error("db unavailable"));
+
+    const result = await executeShellCommand(
+      { command: "pwd" },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.exit_code).toBe(0);
   });
 });
