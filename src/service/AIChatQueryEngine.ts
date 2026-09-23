@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
@@ -601,6 +602,24 @@ export class AIChatQueryEngine {
     const { eventSink, request, scheduledContext } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
+
+    // FR-31 / NFR-03 (audit finding 8): a pasted credential is rejected at
+    // the ORDINARY CHAT boundary — BEFORE any persistence, provider call,
+    // or conversation creation. The message text never reaches the
+    // transcript; the user gets the typed error with secure-input guidance.
+    if (!scheduledContext) {
+      const credentialCheck = checkChatMessageForCredentials(
+        request.message || ""
+      );
+      if (credentialCheck.rejected) {
+        eventSink.emit({
+          type: "error",
+          conversationId: request.conversationId || "",
+          errorMessage: `${credentialCheck.errorCode}: ${credentialCheck.message}`,
+        });
+        return;
+      }
+    }
 
     // ------------------------------------------------------------------
     // 1. Resolve plan state

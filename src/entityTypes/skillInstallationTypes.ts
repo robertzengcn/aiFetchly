@@ -277,7 +277,7 @@ export type SkillInstallErrorCode =
  */
 const SECRET_KEY_RE =
   /(api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|bearer|authorization)/i;
-const SECRET_VALUE_RE =
+export const SECRET_VALUE_RE =
   /(?:^|[\s=:,(])(sk-[a-zA-Z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})/;
 
 export function rejectSecretShaped(value: unknown, path: string[]): string[] {
