@@ -166,6 +166,7 @@ export async function processRAGQuery(query: {
 export async function uploadDocument(options: {
   filePath: string;
   name: string;
+  modelName?: string;
   title?: string;
   description?: string;
   tags?: string[];

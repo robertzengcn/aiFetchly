@@ -209,6 +209,37 @@
             </v-list>
           </div>
           
+          <!-- Upload metadata: one set of values for every file in this upload -->
+          <div v-if="uploadFiles.length > 0" class="upload-metadata mt-4">
+            <div class="text-caption text-grey mb-2">
+              {{ t('knowledge.upload_metadata_hint') || 'Optional. Applied to every file in this upload.' }}
+            </div>
+            <v-text-field
+              v-model="uploadAuthor"
+              :label="t('knowledge.author') || 'Author'"
+              maxlength="255"
+              density="compact"
+              class="mb-2"
+            />
+            <v-combobox
+              v-model="uploadTags"
+              :label="t('knowledge.tags') || 'Tags'"
+              :hint="t('knowledge.tags_hint') || 'Press Enter to add tags'"
+              multiple
+              chips
+              closable-chips
+              density="compact"
+              class="mb-2"
+            />
+            <v-textarea
+              v-model="uploadDescription"
+              :label="t('knowledge.description') || 'Description'"
+              maxlength="2000"
+              rows="2"
+              density="compact"
+            />
+          </div>
+          
           <v-alert
             v-if="uploadError"
             type="error"
@@ -469,7 +500,8 @@ import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
 import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
-import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
+import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, uploadDocument as uploadDocumentAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
+import { buildFileUploadMetadata } from '@/views/pages/knowledge/fileUploadMetadata';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
@@ -538,6 +570,42 @@ const uploading = ref(false);
 const uploadError = ref('');
 const isDragOver = ref(false);
 const fileInput = ref<HTMLInputElement>();
+const uploadAuthor = ref<string>('');
+const uploadDescription = ref<string>('');
+const uploadTags = ref<string[]>([]);
+
+function clearUploadMetadata(): void {
+  uploadAuthor.value = '';
+  uploadDescription.value = '';
+  uploadTags.value = [];
+}
+
+function isNativePathObject(file: File): boolean {
+  const maybePath: unknown = (file as unknown as { path?: unknown }).path;
+  return typeof maybePath === 'string' && (maybePath as string).length > 0 && !(file instanceof File);
+}
+
+function toUploadedDocumentFromResponse(response: unknown, fallbackName: string, fallbackPath: string): UploadedDocument {
+  if (typeof response === 'object' && response !== null && 'document' in response) {
+    const doc: unknown = (response as { document: unknown }).document;
+    if (typeof doc === 'object' && doc !== null && 'name' in doc) {
+      return doc as UploadedDocument;
+    }
+  }
+  if (typeof response === 'object' && response !== null && 'id' in response && 'name' in response) {
+    return response as unknown as UploadedDocument;
+  }
+  return {
+    id: Date.now(),
+    name: fallbackName,
+    title: fallbackName.replace(/\.[^/.]+$/, ''),
+    filePath: fallbackPath,
+    status: 'pending',
+    description: `Uploaded document: ${fallbackName}`,
+    tags: ['uploaded', 'knowledge'],
+    author: 'User',
+  } as UploadedDocument;
+}
 
 // Progress tracking
 const uploadProgress = ref<Map<string, FileUploadProgress>>(new Map());
@@ -1054,6 +1122,7 @@ function cancelUpload() {
   isDragOver.value = false;
   currentUploadingFile.value = '';
   uploadProgress.value.clear();
+  clearUploadMetadata();
 }
 
 async function confirmUpload() {
@@ -1138,24 +1207,44 @@ async function doUpload(files: File[]) {
   uploadProgress.value.clear();
 
   try {
-    // Upload each file with progress tracking
+    // Upload each file with progress tracking. One metadata set applies to
+    // every file in this batch; the default description still uses each file's name.
     const uploadPromises = files.map(async (file): Promise<UploadedDocument | null> => {
-      // For Electron, we can access the file path directly if available
-      // Otherwise, use the webkitRelativePath or create a temporary file
+      const metadata = buildFileUploadMetadata(file.name, {
+        author: uploadAuthor.value,
+        description: uploadDescription.value,
+        tags: uploadTags.value,
+      });
+      const rawPath: unknown = (file as unknown as { path?: unknown }).path;
+      const nativePath: string | null =
+        typeof rawPath === 'string' && rawPath.length > 0 && isNativePathObject(file) ? rawPath : null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let filePath = (file as any).path || file.webkitRelativePath;
-      
+      let filePath: any = nativePath || (file as any).path || file.webkitRelativePath;
+
+      if (nativePath) {
+        const response: unknown = await uploadDocumentAPI({
+          filePath: nativePath,
+          name: file.name,
+          modelName: currentModel.value || 'text-embedding-3-small',
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+        });
+        return toUploadedDocumentFromResponse(response, file.name, nativePath);
+      }
+
       if (!filePath) {
         // Set current uploading file for progress display
         currentUploadingFile.value = file.name;
-        
-        // Fallback: create temporary file for browser-like behavior with progress callbacks
+
+        // Sandboxed drag/drop + browse path: no usable File.path, goes through copyFileToTemp.
         const uploadResult = await copyFileToTempAPI(file, {
-          title: file.name.replace(/\.[^/.]+$/, ""),
-          description: `Uploaded document: ${file.name}`,
-          tags: ['uploaded', 'knowledge'],
-          // model_name: currentModel.value
-        }, 
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+        },
         // Progress callback
         (progress: FileUploadProgress) => {
           uploadProgress.value.set(file.name, progress);
@@ -1165,13 +1254,13 @@ async function doUpload(files: File[]) {
         (result: FileUploadComplete) => {
           console.log(`Complete for ${file.name}:`, result);
           uploadProgress.value.delete(file.name);
-         
+
         });
-        
+
         console.log("uploadResult is ready")
         console.log(uploadResult)
         filePath = uploadResult.tempFilePath;
-        
+
         // Return document info from temp file upload result (already processed)
         if (uploadResult.document) {
           return uploadResult.document;
@@ -1180,25 +1269,43 @@ async function doUpload(files: File[]) {
           return {
             id: Date.now(), // Temporary ID
             name: file.name,
-            title: file.name.replace(/\.[^/.]+$/, ""),
+            title: metadata.title,
             filePath: filePath,
             status: 'pending',
-            description: `Uploaded document: ${file.name}`,
-            tags: ['uploaded', 'knowledge'],
-            author: 'User'
+            description: metadata.description,
+            tags: metadata.tags,
+            author: metadata.author
           } as UploadedDocument;
         }
       } else {
-        // Fallback document info if no database document available
+        // Real File that carries a path stays on copyFileToTemp: RAG_UPLOAD_DOCUMENT
+        // rejects paths that were not granted by the native dialog.
+        currentUploadingFile.value = file.name;
+        const uploadResult = await copyFileToTempAPI(file, {
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+        },
+        (progress: FileUploadProgress) => {
+          uploadProgress.value.set(file.name, progress);
+        },
+        (result: FileUploadComplete) => {
+          uploadProgress.value.delete(file.name);
+        });
+        filePath = uploadResult.tempFilePath;
+        if (uploadResult.document) {
+          return uploadResult.document;
+        }
         return {
           id: Date.now(), // Temporary ID
           name: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ""),
+          title: metadata.title,
           filePath: filePath,
           status: 'pending',
-          description: `Uploaded document: ${file.name}`,
-          tags: ['uploaded', 'knowledge'],
-          author: 'User'
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author
         } as UploadedDocument;
       }
     });
