@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
   EMPTY_STOP_AFTER_TOOLS_PROMPT,
+  GOAL_TEXT_STOP_CONTINUATION_PROMPT,
   GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+  MAX_GOAL_TEXT_STOP_CONTINUATIONS,
   TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   parseTextToolCalls,
   resolveToolChoiceForRound,
@@ -624,9 +626,20 @@ describe("AIChatQueryLoop", () => {
           const lastUser = [...req.messages]
             .reverse()
             .find((m) => m.role === "user");
-          expect(lastUser?.content).toBe(
-            GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
-          );
+          if (callCount === 3) {
+            // First continuation past the round cap uses the goal prompt.
+            expect(lastUser?.content).toBe(
+              GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+            );
+          } else {
+            // After that, continuations are either goal text-stop nudges
+            // or further round-cap continuations (a text stop consumes a
+            // round, so with maxToolRounds=2 the two interleave).
+            expect([
+              GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+              GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+            ]).toContain(lastUser?.content);
+          }
           onChunk(makeChunk("Contacts saved. Goal complete.", "stop"));
         }
       );
@@ -659,12 +672,127 @@ describe("AIChatQueryLoop", () => {
       });
       expect(result.type).toBe("completed");
       if (result.type === "completed") {
-        expect(result.fullContent).toBe("Contacts saved. Goal complete.");
+        expect(result.fullContent).toContain("Contacts saved. Goal complete.");
         expect(result.fullContent).not.toContain("/loop");
       }
-      expect(fakeStream).toHaveBeenCalledTimes(3);
+      // 2 tool rounds + 1 round-cap continuation + MAX_GOAL_TEXT_STOP_CONTINUATIONS
+      // text-stop nudges + 1 final accepted text stop. With maxToolRounds=2,
+      // one extra round-cap continuation interleaves between the 2nd and 3rd
+      // text-stop nudges (a text stop consumes a round).
+      expect(fakeStream).toHaveBeenCalledTimes(
+        3 + MAX_GOAL_TEXT_STOP_CONTINUATIONS
+      );
       expect(fakeExecute).toHaveBeenCalledTimes(2);
     });
+
+    it("nudges the model when a /goal turn text-stops after tools mid-task", async () => {
+      // Reproduces the real-world premature stop: mid-goal the model writes
+      // "Now at 54 records. Let me continue building volume..." with
+      // finish_reason=stop and NO tool call. The turn must not end — the
+      // loop injects a hidden continuation so the goal keeps executing.
+      let callCount = 0;
+      const recoveryAttempts: number[] = [];
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-text-stop-1", "search", '{"q":"canada"}')
+            );
+            return;
+          }
+          if (callCount === 2) {
+            onChunk(
+              makeChunk(
+                "Now at **54 records**. Let me continue building volume with more Bing SERP queries.",
+                "stop"
+              )
+            );
+            return;
+          }
+          if (callCount === 3) {
+            // The nudge must preserve the streamed text as an assistant
+            // message and append the hidden continuation prompt.
+            const tail = req.messages.slice(-2);
+            expect(tail[0]).toEqual({
+              role: "assistant",
+              content:
+                "Now at **54 records**. Let me continue building volume with more Bing SERP queries.",
+            });
+            expect(tail[1]).toEqual({
+              role: "user",
+              content: GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+            });
+            // After the nudge the model goes back to calling tools; this
+            // resets the consecutive text-stop budget.
+            onChunk(
+              makeToolCallChunk("call-text-stop-2", "search", '{"q":"ontario"}')
+            );
+            return;
+          }
+          // The model then insists on text-only replies; after
+          // MAX_GOAL_TEXT_STOP_CONTINUATIONS consecutive nudges the loop
+          // accepts the reply and completes the turn.
+          onChunk(makeChunk("All reachable leads collected.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-text-stop",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "/goal find 1000+ companies that trade in Canada",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "recovery_status" && e.attempt !== undefined) {
+              recoveryAttempts.push(e.attempt);
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+        goalAutoContinue: true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        // The mid-task progress text survives in the persisted content.
+        expect(result.fullContent).toContain("Now at **54 records**.");
+        expect(result.fullContent).toContain("All reachable leads collected.");
+      }
+      // 1 tool round + 1 text stop + 1 nudged tool round +
+      // MAX_GOAL_TEXT_STOP_CONTINUATIONS nudged text stops + 1 accepted stop.
+      expect(fakeStream).toHaveBeenCalledTimes(
+        3 + MAX_GOAL_TEXT_STOP_CONTINUATIONS + 1
+      );
+      // The tool round after the first nudge resets the consecutive budget:
+      // attempts go 1 (first text stop), then 1..MAX again after the reset.
+      expect(recoveryAttempts).toEqual([
+        1,
+        ...Array.from(
+          { length: MAX_GOAL_TEXT_STOP_CONTINUATIONS },
+          (_, i) => i + 1
+        ),
+      ]);
+    });
+
 
     it("retries when provider emits a tool-call marker as plain text", async () => {
       const events: Array<{ type: string; message?: string }> = [];

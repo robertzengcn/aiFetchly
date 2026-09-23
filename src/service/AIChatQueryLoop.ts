@@ -147,6 +147,21 @@ export const EMPTY_STOP_AFTER_TOOLS_PROMPT =
   "Continue the current plan now. Call the next tool or write a short progress update with blockers. Do not end the turn with an empty reply.";
 
 /**
+ * How many times to nudge the model when, during an active /goal turn, it
+ * returns finish_reason=stop with TEXT but no tool calls after tools already
+ * ran. A text-only reply mid-goal (e.g. "Now at 54 records. Let me continue
+ * building volume...") is a premature end, not goal completion — the model
+ * announced more work but stopped without calling the next tool. The counter
+ * resets whenever a tool round commits, so the budget only limits
+ * CONSECUTIVE unproductive text stops.
+ */
+export const MAX_GOAL_TEXT_STOP_CONTINUATIONS = 3;
+
+/** In-memory (not persisted) nudge sent when the model text-stops mid-goal. */
+export const GOAL_TEXT_STOP_CONTINUATION_PROMPT =
+  "You ended your reply with text only and no tool call, but the goal is not finished. Continue executing the plan now: call the next tool. Do not stop until the goal's completion conditions are met. If you are blocked or need user input, state that clearly as your final reply.";
+
+/**
  * In-memory (not persisted) prompt injected when /goal hits the per-cycle
  * tool-round cap and should keep executing instead of pausing.
  */
@@ -1008,6 +1023,7 @@ export class AIChatQueryLoop {
     let textToolCallMarkerRetryCount = 0;
     let executedToolRound = false;
     let emptyStopContinuations = 0;
+    let goalTextStopContinuations = 0;
     let roundCapContinuations = 0;
     const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
     const maxRoundCapContinuations =
@@ -1613,6 +1629,57 @@ export class AIChatQueryLoop {
             break;
           }
 
+          // Goal mode (/goal or /loop): after tools already ran this turn,
+          // finish_reason=stop with TEXT but no tool calls is usually a
+          // premature end, not goal completion — e.g. the model writes
+          // "Now at 54 records. Let me continue building volume..." and
+          // stops without calling the next tool, silently abandoning the
+          // goal. Nudge it back to work instead of ending the goal turn
+          // early. Skipped in plan mode, where a text stop can be a
+          // legitimate plan question/summary, and after a failed tool,
+          // where the text may be the failure explanation.
+          const goalTextStop =
+            input.goalAutoContinue === true &&
+            !planContext &&
+            executedToolRound &&
+            lastFailedTool === null &&
+            accumulator.state.fullContent.trim().length > 0;
+          if (
+            goalTextStop &&
+            goalTextStopContinuations < MAX_GOAL_TEXT_STOP_CONTINUATIONS &&
+            !input.abortController.signal.aborted &&
+            input.isActiveTurn()
+          ) {
+            goalTextStopContinuations += 1;
+            // Preserve the streamed text so the persisted assistant message
+            // still includes it (same pattern as continue_output recovery).
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...recoveryState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
+            messages.push({ role: "assistant", content: partial });
+            messages.push({
+              role: "user",
+              content: GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "persistent_retry",
+              reason: "server_error",
+              attempt: goalTextStopContinuations,
+              maxAttempts: MAX_GOAL_TEXT_STOP_CONTINUATIONS,
+              message: "Continuing goal after premature text-only stop",
+            });
+            console.log(
+              `[ai-chat-v2] goal text stop after tools; continuation ${goalTextStopContinuations}/${MAX_GOAL_TEXT_STOP_CONTINUATIONS}`
+            );
+            continue;
+          }
+
           break;
         }
 
@@ -1646,6 +1713,10 @@ export class AIChatQueryLoop {
         // (which would duplicate those events and orphan the persisted rows).
         tracker.delivered = true;
         executedToolRound = true;
+        // A committed tool round is real progress: refresh the consecutive
+        // goal text-stop nudge budget so a long /goal run is not capped by
+        // text stops that happened before productive rounds.
+        goalTextStopContinuations = 0;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
