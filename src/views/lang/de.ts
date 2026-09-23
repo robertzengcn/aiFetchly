@@ -238,6 +238,8 @@ export default {
     description: "Beschreibung",
     tags: "Tags",
     tags_hint: "Enter drücken zum Hinzufügen",
+    author: "Autor",
+    upload_metadata_hint: "Optional. Gilt für jede Datei dieses Uploads.",
     loading_content: "Inhalt wird geladen...",
     confirm_delete_document:
       'Sind Sie sicher, dass Sie "{name}" löschen möchten?',

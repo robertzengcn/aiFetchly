@@ -223,6 +223,8 @@ export default {
     description: "描述",
     tags: "标签",
     tags_hint: "按回车键添加标签",
+    author: "作者",
+    upload_metadata_hint: "可选。将应用于本次上传的每个文件。",
     loading_content: "正在加载内容...",
     confirm_delete_document: '您确定要删除 "{name}" 吗？',
     confirm_bulk_delete: "您确定要删除 {count} 个文档吗？",

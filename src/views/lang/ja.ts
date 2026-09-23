@@ -237,6 +237,8 @@ export default {
     description: "説明",
     tags: "タグ",
     tags_hint: "Enterキーでタグを追加",
+    author: "作成者",
+    upload_metadata_hint: "任意。このアップロードのすべてのファイルに適用されます。",
     loading_content: "コンテンツを読み込み中...",
     confirm_delete_document: "「{name}」を削除してもよろしいですか？",
     confirm_bulk_delete: "{count}件のドキュメントを削除してもよろしいですか？",

@@ -235,6 +235,8 @@ export default {
     description: "Description",
     tags: "Tags",
     tags_hint: "Press Enter to add tags",
+    author: "Author",
+    upload_metadata_hint: "Optional. Applied to every file in this upload.",
     loading_content: "Loading content...",
     confirm_delete_document: 'Are you sure you want to delete "{name}"?',
     confirm_bulk_delete: "Are you sure you want to delete {count} documents?",

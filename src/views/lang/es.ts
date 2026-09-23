@@ -237,6 +237,8 @@ export default {
     description: "Descripción",
     tags: "Etiquetas",
     tags_hint: "Presione Enter para agregar etiquetas",
+    author: "Autor",
+    upload_metadata_hint: "Opcional. Se aplica a todos los archivos de esta subida.",
     loading_content: "Cargando contenido...",
     confirm_delete_document: '¿Está seguro de que desea eliminar "{name}"?',
     confirm_bulk_delete:
