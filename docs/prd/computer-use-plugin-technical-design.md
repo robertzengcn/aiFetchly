@@ -4,15 +4,16 @@
 
 | Field | Value |
 | --- | --- |
-| Version | 1.1 |
-| Status | Proposed architecture, revised after feasibility review. No implementation is claimed |
+| Version | 1.2 |
+| Status | Proposed architecture, revised after feasibility review and product decisions. No implementation is claimed |
 | Date | 2026-09-23 |
 | Product requirements | [Computer Use Plugin PRD](computer-use-plugin-prd.md) |
 | Source repositories | `aiFetchly`, proposed `aifetchly-computer-use`, `aifetchly-hub-go` |
 | Adapters | Windows-MCP (Windows); macOS backend chosen by spike (pinned Ghost OS fork or in-house Swift helper) |
 | Grounder | GUI-Actor-2B exported to ONNX, running on ONNX Runtime in an app-owned worker |
 | Transport | Persistent MCP over stdio via the official MCP TypeScript SDK |
-| Packaging | One plugin identity; target-specific adapters, runtime binding, and optional model resources |
+| Packaging | One plugin identity. Hub: plugin code, Windows-MCP environment, Mac helper. Downloadable local AI runtime system (`LocalAiRuntimeModule`): ONNX Runtime binding and GUI-Actor model |
+| First target workflow | W-1: build and format a lead list in Microsoft Excel for Windows |
 
 All interfaces, services, commands, and data structures below are proposed unless labeled **existing**.
 
@@ -25,6 +26,12 @@ All interfaces, services, commands, and data structures below are proposed unles
 - The macOS backend is chosen by a spike; Ghost OS's MLX sidecar is not used (§6.2).
 - The host MCP client is rebuilt on the official SDK with persistent sessions as a Phase 0 deliverable (§4.1).
 - Delivery is a thin vertical slice: Windows accessibility-first, then local vision, then macOS (§16).
+
+### Revision 1.2 summary
+
+- W-1 (Excel lead list) is the confirmed target workflow; adapter and benchmark notes are in §6.3 and §14.5.
+- Safety controls are specified in detail: stop hotkey, control strip, own-window rejection, elevated-window rejection, refusal while AiFetchly is elevated, and a measurement harness for the provisional targets (§10.5).
+- The ONNX Runtime binding and GUI-Actor model are delivered through `LocalAiRuntimeModule`. This needs a v2 catalog, a resumable file-set package format for models, two new runtime IDs, install-set consent, reference-counted worker leases, version pruning, and grounding health probes (§7).
 
 ## 1. Architecture decisions
 
@@ -39,6 +46,8 @@ All interfaces, services, commands, and data structures below are proposed unles
 9. **Whole-tree supervision.** Stop and lease revocation never wait for model inference.
 10. **Read-only diagnostics first.** Coordinate mapping, locate-only overlays, and offline replay exist before autonomous input on vision targets.
 11. **Independent repository for non-authority code.** Contracts, adapter packaging, the Mac helper, the ONNX export pipeline, fixtures, and evaluation tools live in `aifetchly-computer-use`.
+12. **One local AI component manager.** The grounding runtime and model are local AI runtimes managed by `LocalAiRuntimeModule`, not a second private resource manager and not Hub resources. The subsystem is extended where the model's size and platform independence require it (§7).
+13. **Safety controls are host features.** Stop hotkey, control strip, own-window rejection, and elevation checks are enforced by the supervisor before every dispatch, not by adapters or skill text (§10.5).
 
 ## 2. Verified code anchors and gaps
 
@@ -64,11 +73,20 @@ Paths were inspected on 2026-09-23. Findings are scoped to these paths, not a fu
 | `src/service/ManagedBrowserLeaseService.ts` | In-process account lease | Pattern for the desktop lease |
 | `src/service/AIChatToolApprovalPolicyService.ts` | Denials, dependency approval, request-scoped actions | Add explicit computer-action classes |
 | `src/childprocess/embedding/LocalEmbeddingWorker.ts` | App-owned worker running ONNX models via `@xenova/transformers`, loaded at runtime from a downloaded runtime | Precedent for an app-owned ONNX Runtime worker and runtime-loaded native bindings |
-| `src/modules/LocalAiRuntimeModule.ts`, `src/entityTypes/localAiRuntimeTypes.ts` | First-party downloadable runtimes (`embedding-xenova`, `voice-sherpa`): per-platform/arch catalog, SHA-256, Electron ABI fields, atomic `active.json`, operation leases | Candidate delivery path for the ONNX Runtime binding and model (open decision §17) |
+| `src/modules/LocalAiRuntimeModule.ts`, `src/entityTypes/localAiRuntimeTypes.ts` | First-party downloadable runtimes (`embedding-xenova`, `voice-sherpa`): compile-time ID allowlist, per-platform/arch/ABI catalog, consent-bound install, SHA-256, safe ZIP extraction, side-by-side versions, atomic `active.json`, operation coordinator | **Delivery path for the ONNX Runtime binding and model (§7).** Extensions listed in §7.9 |
+| `src/schemas/localAiRuntime.ts` | Catalog entries are `.strict()` and `runtimeId` is `z.enum(LOCAL_AI_RUNTIME_IDS)`; `expectedArchiveFileName()` hard-codes the `voice`/`embedding` prefixes | A new runtime ID in the shared catalog would make older apps reject the whole catalog. New IDs go in a v2 catalog (§7.3) |
+| `src/service/localAiRuntime/localAiRuntimeConstants.ts` | 768 MiB archive, 2 GiB extracted, 1 GiB per entry, 10-minute total download timeout | Too small for GUI-Actor weights; models use a separate file-set format and limits (§7.5) |
+| `LocalAiRuntimeDownloadService` | Single-file stream opened with `wx`; no HTTP range resume | Resumable per-file downloader for models (§7.5) |
+| `LocalAiRuntimeOperationCoordinator` | Worker version leases are a `Set`, not reference-counted; one mutable operation per runtime ID | Reference-counted leases (§7.8) |
+| `LocalAiRuntimeModule.listStatuses()` | Hard-codes the two existing IDs | Group-aware listing (§7.9) |
+| `LocalAiRuntimeStateStore.listInstalledVersions()` | Exists but nothing prunes old versions | Pruning for multi-GB model versions (§7.8) |
+| `DisposableVoiceRuntimeProbe` | Health probe in a disposable utility process so native DLLs never lock files in the main process | Pattern for the grounding runtime and model probes (§7.7) |
+| `src/main-process/communication/local-ai-runtime-ipc.ts` | Composition root; catalog URL from `AIFETCHLY_RUNTIME_CATALOG_URL` or the GitHub release `local-ai-runtimes.json`; `disposeIdleWorkersForRuntime`; worker resolver injection | v2 catalog source, grounding disposer and resolver, install-set channels (§7.9) |
+| `.github/workflows/local-ai-runtime-release.yml` | Builds per-platform runtime archives, verifies them, generates and publishes the catalog | Adds the ONNX Runtime package, model entries, and dual v1/v2 catalog output (§7.10) |
 | `src/utils/packagedWorkerPath.ts` | `buildPackagedWorkerEnv`, `resolvePackagedWorkerPath` | Required for the grounding worker spawn |
 | Desktop `src/` | No uv or Python install-plan consumer | Needed only for the Windows-MCP environment (§8) |
 
-The generic plugin package limit in `pluginTypes.ts` (50 MiB compressed / 250 MiB extracted) and the Hub canonical packager limits both rule out model weights in code packages. Models are separate resources.
+The generic plugin package limit in `pluginTypes.ts` (50 MiB compressed / 250 MiB extracted) and the Hub canonical packager limits both rule out model weights in code packages. Models are delivered as local AI runtime model packages (§7.5).
 
 ### 2.2 Hub (`aifetchly-hub-go`)
 
@@ -122,7 +140,7 @@ The host and this repository share **schemas and fixtures, not code**. Host Type
 - AI enable gate, planner and provider routing, planner mode enforcement.
 - `ComputerUseSupervisor`: session state machine, target store, coordinate transforms, grants, desktop lease, stop and stop hotkey, adapter and worker supervision.
 - Grounding worker (ONNX Runtime) and its preprocessing/postprocessing.
-- Managed resource resolution from trusted plans.
+- Local AI runtime extensions that deliver the grounding runtime and model (§7), and managed resource resolution from trusted Hub plans for the rest.
 - Result normalization, transient image delivery in visual planner mode, audit persistence through Modules/Models.
 - Cleanup on plugin disable/uninstall and app quit.
 
@@ -148,7 +166,7 @@ flowchart TD
 
 - Windows-MCP runs in the interactive Windows user session as a child of AiFetchly. It is not an elevated service or login task. WSL-hosted code is never a Windows desktop executor.
 - The macOS helper is a native subprocess. macOS normally attributes a spawned helper's Accessibility and Screen Recording use to the responsible app (AiFetchly.app); verify this in the packaged build (§6.2).
-- The grounding worker is an Electron `utilityProcess` spawned with `buildPackagedWorkerEnv`. It loads the ONNX Runtime Node binding and the model from resolved managed resources and has no network or database access.
+- The grounding worker is an Electron `utilityProcess` spawned with `buildPackagedWorkerEnv`. It loads the ONNX Runtime Node binding and the model from version roots resolved by `LocalAiRuntimeResolver` in the main process, and has no network or database access.
 - Screenshot bytes flow from the adapter to the supervisor to the worker. They reach the planner only in visual planner mode.
 
 ### 4.1 MCP client on the official SDK
@@ -201,9 +219,10 @@ Steps 1 and 6 run in TypeScript in the worker. Steps 2–5 are ONNX graphs.
 
 ### 5.3 Export pipeline (CI, in the plugin repository)
 
-- Export three graphs, or fewer if fusion is verified: `vision_encoder.onnx`, `decoder_prefill.onnx` (returns the two hidden-state tensors needed, not logits), and `pointer_head.onnx`.
+- Export three graphs, or fewer if fusion is verified: `vision_encoder.onnx`, `decoder_prefill.onnx` (returns the two hidden-state tensors needed, not logits, so the vocabulary projection is never computed), and `pointer_head.onnx`.
+- Save weights as ONNX external data, sharded by the export pipeline into files of at most 512 MiB, so every file fits the model package limits and GitHub release asset limits (§7.5).
 - Pin the opset and exporter versions. Record them in the model manifest.
-- Produce configurations as separate, independently benchmarked resources: fp16 baseline; int8 or int4 weight-only decoder (for example `MatMulNBits`) with fp16 vision encoder. Verify each operator is supported by each target execution provider before publishing.
+- Produce configurations as separate, independently benchmarked model packages, each with its own local runtime ID (§7.4): fp16 baseline; int8 or int4 weight-only decoder (for example `MatMulNBits`) with fp16 vision encoder. Verify each operator is supported by each target execution provider before publishing. Size estimates to confirm in Phase 0: about 4.4 GB for fp16 (the published bf16 checkpoint is about 4.45 GB; the 2B model ties its input and output embeddings, so dropping the LM head saves little), and about 2.2–2.7 GB for an int4 decoder with fp16 vision encoder.
 - Ship `tokenizer.json`, special-token map, chat template, and `preprocessor_config.json` alongside the graphs.
 - Manifest identity includes model revision, export pipeline version, opset, quantization, preprocessing configuration, and per-file hashes.
 
@@ -218,7 +237,7 @@ Port `Qwen2VLImageProcessor` exactly, using values from the pinned `preprocessor
 - Tokenize with the pinned tokenizer and apply the chat template byte-for-byte.
 - Compute Qwen2-VL multimodal rotary position ids (`get_rope_index`). Prefer embedding this computation in the decoder graph to avoid drift; if computed in TypeScript, cover it with golden tests.
 
-**Pixel budget is the main latency lever.** At the default `max_pixels` (~5.7 MP), a full-screen 4K capture becomes about 7,200 merged visual tokens of decoder prefill. Crop to the target window first. The benchmark evaluates smaller budgets (for example 1–2 MP plus crop-and-re-ground) against accuracy. The chosen budget is part of the model configuration identity.
+**Pixel budget is the main latency lever.** At the default `max_pixels` (~5.7 MP), a full-screen 4K capture becomes about 7,200 merged visual tokens of decoder prefill. Crop to the target window first. The benchmark evaluates smaller budgets (for example 1–2 MP plus crop-and-re-ground) against accuracy. The default budget is recorded in the model package manifest and every observation's grounding metadata. It is a runtime parameter, not part of the download identity, so changing it never redownloads weights.
 
 Static-shape buckets (a few fixed grids with recorded padding) are an optimization candidate for CoreML and DirectML. Dynamic shapes are the baseline until measurements justify buckets; any padding is recorded in the transform.
 
@@ -250,7 +269,8 @@ Static-shape buckets (a few fixed grids with recorded padding) are an optimizati
 - Image bytes are transferred as `ArrayBuffer` over the worker message port or via a private temp file. They are never logged.
 - The host discards any result whose session generation is stale. On Stop, if a run cannot be terminated promptly, the supervisor kills the worker; model reload is the cost of a guaranteed stop.
 - Weights load lazily on first vision need or during an explicit warm-up with visible progress, stay warm during the session, and unload on idle or memory pressure.
-- The ONNX Runtime Node binding is a native module matched to the Electron ABI. It is delivered as a managed resource with the same ABI and target fields as the existing local runtime packages and loaded at runtime (the `LocalTransformersLoader` pattern), not bundled into the base installer.
+- The worker code (preprocessing, postprocessing, protocol) stays in the app bundle and is tested with the app. Only the native binding and the model are downloaded. `OnnxRuntimeLoader` loads `onnxruntime-node` from the resolved `grounding-onnxruntime` root with a scoped `createRequire`, the same pattern as the voice runtime's `SherpaOnnxNative`. It then checks the loaded version against the package manifest (§7.6).
+- The worker receives the runtime root, model root, and versions in `load`. These paths come from the main process and are never sent to the renderer. The host holds version leases on both while the worker is loaded (§7.8).
 
 ### 5.7 Candidates, ambiguity, and absence
 
@@ -274,7 +294,9 @@ GUI-Actor grounds at merged-patch granularity (28 × 28 px in model-input space)
 - The host wrapper enforces an allowlist on both `tools/list` and `tools/call`: screenshot/state, display inventory, app/window focus, click, type, scroll, move/drag, and keys. Upstream allowlist settings are also configured. PowerShell, registry, filesystem, and process tools are unreachable.
 - Adapter tools are never registered as model-visible tools. Only the supervisor calls them, after grant validation.
 - Normalize the UI Automation tree and capture bounds into the observation contract.
-- Elevated target windows are rejected with `unsupported_target` (UIPI blocks injection from a non-elevated process).
+- Elevated target windows are rejected with `unsupported_target`. UIPI blocks injection from a lower-integrity process, and `SendInput` reports neither an error nor a distinguishable return value when UIPI blocks it, so the check must happen before dispatch (§10.5.4).
+- The plugin adds one read-only tool to the allowlisted surface, `process_integrity`. Given a window handle or process ID, it returns the owning process ID and integrity level (`low`, `medium`, `high`, `system`), using `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` and `GetTokenInformation(TokenIntegrityLevel)` through `ctypes`. The same tool reports AiFetchly's own integrity level. It ships either as an extension module loaded by the plugin's launch entrypoint or as a patch in a pinned fork, decided with the Windows-MCP pin in Phase 0. The host has no FFI dependency today and does not add one for this.
+- Window-at-point: the adapter returns the top-level window handle and owning process ID for a desktop point (`WindowFromPoint` → `GetAncestor(GA_ROOT)` → `GetWindowThreadProcessId`). The supervisor uses this for own-window and elevation checks.
 - Disable upstream telemetry and verify the setting in the pinned version.
 - Test Unicode/CJK input and non-English application names for all six locales.
 
@@ -293,35 +315,339 @@ Either way:
 - Qualify permission attribution in the packaged app. A helper spawned by AiFetchly is normally attributed to AiFetchly.app as the responsible process, so prompts name AiFetchly, the app's signing identity must stay stable across updates, and development builds attribute to the terminal or IDE.
 - Accessibility and Screen Recording are required; Input Monitoring only for later recording/learning features.
 
-## 7. Packaging and Hub changes
+### 6.3 Target workflow W-1: Excel lead list
 
-### 7.1 Resource model
+W-1 (PRD §3.1) drives adapter qualification, fixtures, and the benchmark for Phases 1 and 2.
 
-| Resource | Identity includes | Download policy |
-| --- | --- | --- |
-| Common code | Plugin version + hash | When changed |
-| Windows-MCP environment | Python runtime identity + full dependency lock hash + target | Windows only |
-| uv toolchain + Python runtime | Version + OS + architecture + hash | Windows only, shared when compatible |
-| macOS helper | Helper revision + architecture + hash + signing identity | macOS only |
-| ONNX Runtime Node binding | ORT version + execution providers + OS + architecture + Electron ABI + hash | When local vision is selected |
-| Grounder model | Model revision + export pipeline version + opset + quantization + pixel budget + preprocessing identity + file manifest hash | When local vision is selected; independent of code updates |
+**Observation.**
 
-The model is one ONNX format for all targets; configurations differ only by quantization and budget. Execution provider support is a property of the runtime binding resource.
+- Excel exposes the worksheet grid, cells, the Name Box, the formula bar, sheet tabs, and ribbon controls through UI Automation. The adapter normalizes a bounded subset: header row, used range limited to the visible rows plus row count, active cell, selection, sheet tabs, and the ribbon controls needed by W-1.
+- The full grid tree can be very large. The adapter caps depth and element count and reads cell values for the header row and at most the rows being verified. Observation time is measured against the 2 s planning target.
+- Cell values are read through the UI Automation value and grid patterns, never by OCR, and are treated as untrusted text (CU-PERM-07).
 
-### 7.2 Selection
+**Entry.**
 
-1. The host detects platform, architecture, available execution providers, and selected features (local vision on/off).
-2. The Hub (or the local runtime catalog, per §17) resolves the applicable closure.
-3. The desktop validates every resource against the selection before downloading and rejects contradictions.
-4. The plan digest includes target, features, execution provider set, and the resolved resource set.
+- Rows are inserted by paste, not by typing cell by cell. The host writes tab-separated text to the clipboard with Electron's main-process `clipboard` API, the agent selects the first empty cell (via the Name Box or `Ctrl+G`) and sends `Ctrl+V`, and the host then restores the user's previous clipboard text. Windows-MCP clipboard tools are not added to the allowlist. Rich clipboard formats other than text are not preserved and the user is told so on first use.
+- Before paste, the supervisor verifies that the destination range is empty by reading it back. A non-empty range requires confirmation.
+- Before paste, phone, postal code, and ID columns are set to Text format. Cells containing `=`, `+`, `-`, or `@` at the start are prefixed with an apostrophe so pasted lead data can never become a formula (formula-injection guard).
+- Excel cell edit mode and IME composition are detected from the accessibility state; the agent presses `Esc` to leave edit mode before navigation, and never sends keys while an IME candidate window is open.
 
-### 7.3 Hub extensions by phase
+**Formatting.** Header bold, table style or AutoFilter, column autofit, and conditional formatting for duplicate emails, through ribbon controls. Ribbon galleries, colour swatches, and filter dropdown arrows are the Excel targets used to qualify the vision path in Phase 2.
+
+**Verification.** Read back the row count and a sample of cells (all cells for runs up to 50 rows; otherwise the first, last, and a random sample of rows, plus every column containing a formatted type) and compare them with the source rows after normalizing whitespace. Any mismatch is reported to the user with row and column; the run never reports success with a known mismatch.
+
+**Stop points.** Save, Save As, Share, closing the workbook, deleting rows or columns, and Remove Duplicates are consequential action classes in `AIChatToolApprovalPolicyService` and always need current-task authorization. Protected View, "Enable Editing", co-authoring conflicts, and sign-in prompts trigger a handoff.
+
+## 7. Packaging and delivery
+
+### 7.1 Delivery channels
+
+| Resource | Channel | Identity includes | Download policy |
+| --- | --- | --- | --- |
+| Common plugin code | Hub | Plugin version + hash | When changed |
+| Windows-MCP environment | Hub (managed uv, §8) | Python runtime identity + full dependency lock hash + target | Windows only |
+| uv toolchain + Python runtime | Hub | Version + OS + architecture + hash | Windows only, shared when compatible |
+| macOS helper | Hub (native-component resource, Phase 3) | Helper revision + architecture + hash + signing identity | macOS only |
+| ONNX Runtime Node binding | Local AI runtime catalog v2, runtime ID `grounding-onnxruntime` | ONNX Runtime version + execution providers + platform + architecture + Electron ABI + SHA-256 | When the user turns on local vision |
+| GUI-Actor model configuration | Local AI runtime catalog v2, runtime ID `grounding-model-gui-actor-2b-<config>` | Model revision + export pipeline version + opset + quantization + preprocessing identity + per-file SHA-256 | When the user turns on local vision; independent of plugin code |
+
+The Hub install plan for Computer Use contains no model or ONNX Runtime resource. The plugin manifest declares which local runtime IDs it can use (`localAiRuntimes: [{ runtimeId, minVersion }]`). The host accepts only IDs in its compiled allowlist, so a plugin can never add a runtime, change a download URL, or select a different model file.
+
+### 7.2 Why `LocalAiRuntimeModule`
+
+The existing subsystem (design: [downloadable local AI runtimes](downloadable-local-ai-runtimes-technical-design.md)) already provides what the grounding runtime and model need, and it is covered by tests under `test/vitest/main/service/LocalAiRuntime*.test.ts`. Reused unchanged:
+
+- a compile-time allowlist of runtime IDs, so network data never selects package names or entry points;
+- HTTPS catalog fetch with size and time limits, ETag caching, and Zod validation, where an invalid response never replaces a valid cache;
+- exact platform, architecture, Node-module-ABI, and app-version matching, with no silent fallback;
+- a consent token bound to runtime ID, version, and SHA-256, with a 5-minute expiry;
+- streaming SHA-256 downloads with per-hop HTTPS, bounded redirects, and cancellation;
+- safe ZIP extraction (path, link, size, and entry-count checks);
+- side-by-side version directories, atomic `active.json`, `previousVersion`, and staging cleanup on failure;
+- one mutable operation per runtime ID, and worker version leases that block removal of a version in use;
+- health checks before activation, including a disposable-process probe pattern;
+- progress IPC, the Settings → Local AI components panel, and repair and remove.
+
+What it does not do today, and this design adds:
+
+- a way to add runtime IDs without breaking older apps (§7.3);
+- a package format for platform-independent, multi-GB, resumable model files (§7.5);
+- dependencies between packages, one consent covering two packages, memory checks, reference-counted leases, and version pruning (§7.8).
+
+### 7.3 Catalog v2
+
+Today's schema parses `runtimeId` with `z.enum(LOCAL_AI_RUNTIME_IDS)` and `.strict()` entries. An older app that meets an unknown ID rejects the entire catalog, which would break its embedding and voice installs. Therefore:
+
+- **Two catalog files in the same GitHub release.** `local-ai-runtimes.json` (v1) keeps exactly its current entries and shape. `local-ai-runtimes.v2.json` (`schemaVersion: 2`) contains every runtime, including the embedding and voice runtimes re-expressed as `native_runtime` entries. The release workflow always publishes both.
+- **New apps read only v2.** `resolveCatalogSource()` builds the v2 URL. `AIFETCHLY_RUNTIME_CATALOG_URL` must now point to a v2 document; a v1 document fails with `runtime_catalog_invalid` and a diagnostic naming the schema version.
+- **Separate caches.** The v2 catalog is cached as `catalog-cache.v2.json` and `catalog-cache.v2.meta.json`, so upgrades and downgrades never parse the other schema's cache.
+- **Forward compatibility.** The v2 parser first reads `runtimes` as `unknown[]`. Entries whose `runtimeId` is not in this app's allowlist, or whose `packageKind` it does not know, are skipped and logged. Entries with a known ID are validated strictly, and a malformed known entry still rejects the catalog. Future runtime IDs therefore never break this app.
+
+```typescript
+type LocalAiRuntimePackageKind = 'native_runtime' | 'model';
+
+interface NativeRuntimeCatalogEntryV2 extends LocalAiRuntimeCatalogEntry {
+  readonly packageKind: 'native_runtime';
+  readonly executionProviders?: readonly ExecutionProviderId[]; // grounding-onnxruntime only
+}
+
+interface ModelPackageFile {
+  readonly path: string;      // safe relative path (isSafeRelativeRuntimePath)
+  readonly url: string;       // https only
+  readonly sizeBytes: number;
+  readonly sha256: string;    // lowercase hex
+}
+
+interface ModelCatalogEntryV2 {
+  readonly packageKind: 'model';
+  readonly runtimeId: LocalAiRuntimeId;
+  readonly runtimeVersion: string;
+  readonly platform: 'any';
+  readonly arch: 'any';
+  readonly minAppVersion: string;
+  readonly maxAppVersion?: string;
+  readonly downloadSizeBytes: number;   // equals the sum of file sizes
+  readonly installedSizeBytes: number;
+  readonly minSystemMemoryBytes: number;
+  readonly requiresRuntime: { readonly runtimeId: 'grounding-onnxruntime'; readonly minVersion: string };
+  readonly supportedExecutionProviders: readonly ExecutionProviderId[];
+  readonly license: {
+    readonly model: string;       // e.g. "MIT"
+    readonly baseModel: string;   // e.g. "Apache-2.0"
+    readonly baseModelId: string; // e.g. "Qwen/Qwen2-VL-2B-Instruct"
+  };
+  readonly manifestSha256: string;
+  readonly files: readonly ModelPackageFile[];
+}
+
+interface LocalAiRuntimeCatalogV2 {
+  readonly schemaVersion: 2;
+  readonly catalogVersion: string;
+  readonly releaseTag: string;
+  readonly publishedAt: string;
+  readonly runtimes: readonly (NativeRuntimeCatalogEntryV2 | ModelCatalogEntryV2)[];
+}
+```
+
+Model entry validation also requires:
+
+- unique file paths;
+- `manifest.json` present, with a hash equal to `manifestSha256`;
+- a file count and every file size within the local limits (§7.5);
+- the size sum equal to `downloadSizeBytes`;
+- licence fields present and not on a non-commercial blocklist. This is defence in depth; the primary check is in release tooling (CU-INST-11).
+
+The per-runtime entry rules that are `if` chains today (`entryPoint` only for embedding, `entryModule` only for voice) become a table keyed by runtime ID, and `expectedArchiveFileName()` uses `LOCAL_AI_RUNTIME_ARTIFACT_PREFIX` instead of hard-coding two prefixes.
+
+### 7.4 Runtime IDs and model configurations
+
+| Runtime ID | Package kind | Targets | Contents |
+| --- | --- | --- | --- |
+| `grounding-onnxruntime` | `native_runtime` (ZIP) | win32-x64 (DirectML, CPU); darwin-arm64 (CoreML, CPU) from Phase 3 | `onnxruntime-node` binding and shared libraries (§7.6) |
+| `grounding-model-gui-actor-2b-int4` (example; Phase 0 fixes the default configuration) | `model` (file set) | any | Three ONNX graphs, sharded external data, tokenizer and preprocessing files, health fixture, licences (§7.5) |
+| `grounding-model-gui-actor-2b-fp16` (only if measurements justify a second configuration) | `model` (file set) | any | Same layout |
+
+Each model configuration gets its own runtime ID instead of a variant field on one ID:
+
+- the path layout (`<runtimeDir>/<version>`), `active.json`, update checks, and leases all key on runtime ID plus semantic version, so a variant field would add a selection dimension everywhere;
+- a configuration is coupled to worker code (graph inputs, quantized operators), so a new one needs an app release anyway;
+- the compile-time allowlist stays the security boundary.
+
+Computer Use uses one model configuration at a time, recorded in the Computer Use settings as `groundingModelRuntimeId` and validated against the allowlist.
+
+Two runtime groups drive UI listing: `local-ai` (`embedding-xenova`, `voice-sherpa`) and `computer-use` (the grounding IDs).
+
+### 7.5 Model package format (file set)
+
+ZIP is not used for models:
+
+- GUI-Actor weights exceed the current 768 MiB archive, 1 GiB entry, and 2 GiB extracted limits.
+- Weights barely compress.
+- Extraction doubles the disk needed.
+- A single archive cannot resume per part, and GitHub release assets are limited to 2 GiB each.
+
+A model package is instead a set of individually hashed files downloaded straight into staging.
+
+```text
+<userData>/local-ai-runtimes/grounding-model-gui-actor-2b-int4/
+├── active.json
+└── 1.0.0/
+    ├── manifest.json
+    ├── vision_encoder.onnx
+    ├── vision_encoder.data.000 … .NNN     # external data shards, each ≤ 512 MiB
+    ├── decoder_prefill.onnx
+    ├── decoder_prefill.data.000 … .NNN
+    ├── pointer_head.onnx
+    ├── tokenizer.json
+    ├── special_tokens_map.json
+    ├── chat_template.jinja
+    ├── preprocessor_config.json
+    ├── health/fixture.png
+    ├── health/expected.json
+    └── LICENSES/                          # GUI-Actor (MIT), Qwen2-VL (Apache-2.0), NOTICE
+```
+
+The model `manifest.json` (Zod-validated as `LocalAiModelPackageManifest`) records:
+
+- package kind, runtime ID, and version;
+- upstream model ID and commit revision;
+- export pipeline version, exporter, opset, and quantization;
+- preprocessing constants (patch 14, merge 2, temporal patch 2, pixel bounds, default budget, `pointer_pad_token_id`);
+- graph file names and their input/output names;
+- supported execution providers;
+- the file list with sizes and hashes;
+- licences, the parity report hash and fixture count, and build provenance.
+
+**Download algorithm** (`LocalAiRuntimeFileSetDownloadService`):
+
+1. **Disk preflight.** Require free space of at least the remaining bytes plus a 512 MiB margin; otherwise `runtime_disk_space_insufficient`. Files are renamed into place on the same volume, so there is no second copy.
+2. **Manifest first.** Download `manifest.json`, check `manifestSha256`, parse it, and require its file list to equal the catalog entry's (path, size, hash). A mismatch fails with `runtime_manifest_invalid` before any weight is downloaded.
+3. **Resumable partial files**, keyed by content hash: `<runtimeRoot>/.downloads/files/<sha256>.part`. Keying by hash lets any later operation resume, and lets identical files (for example the tokenizer) be reused across versions. If a `.part` exists and is shorter than the expected size, hash its existing bytes to seed SHA-256, then request `Range: bytes=<n>-`.
+   - Continue only on `206` with a matching `Content-Range` total.
+   - On `200`, restart from zero.
+   - A `.part` of full size is verified and reused.
+4. **Network policy** is the existing one: per-hop HTTPS, no URL credentials, at most 5 redirects. It is extracted into a helper shared with `LocalAiRuntimeDownloadService`.
+5. **Idle timeout** of 60 s without bytes (`runtime_download_stalled`) instead of a whole-download timeout. The lease's `AbortController` cancels.
+6. **Finalize each file.** Check the exact size and SHA-256, then rename the `.part` into staging at its relative path. On mismatch, delete the `.part` and retry that file once from zero; a second mismatch fails with `runtime_checksum_mismatch`.
+7. **Progress** aggregates bytes across files, throttled to the existing 10 events per second.
+
+After all files are in staging, the pipeline continues exactly like the ZIP path: validate, health check (§7.7), atomic rename to the version directory, write `active.json`.
+
+**Limits** (`LOCAL_AI_MODEL_PACKAGE_LIMITS`, local ceilings that the catalog can lower but never raise): 1 GiB per file, 128 files, 8 GiB total, 60 s idle timeout, 5 redirects.
+
+**Cleanup.** At startup reconciliation, `.part` files older than 14 days or not referenced by the cached catalog are deleted. Removing a model deletes its `.part` files.
+
+### 7.6 ONNX Runtime package (`grounding-onnxruntime`)
+
+```text
+grounding-runtime-win32-x64-<version>.zip
+├── manifest.json                       # existing package manifest + executionProviders
+├── package.json                        # private package pinning onnxruntime-node exactly
+├── node_modules/onnxruntime-node/**    # binding + ONNX Runtime shared libraries (+ DirectML.dll on win32)
+├── node_modules/onnxruntime-common/**
+├── health/add.onnx                     # tiny graph for the runtime-only probe
+└── THIRD_PARTY_NOTICES                 # ONNX Runtime (MIT), DirectML redistributable terms
+```
+
+- `entryModule: "onnxruntime-node"`, loaded with a scoped `createRequire(<versionRoot>/package.json)`. This is the voice runtime's pattern, and the per-ID rule table (§7.3) allows it for this ID.
+- `executionProviders`: `["dml", "cpu"]` on win32-x64, `["coreml", "cpu"]` on darwin-arm64.
+- `onnxruntime-node` uses Node-API, so the binary does not depend on Electron's module ABI. Entries still carry `electronVersion` and `nodeModuleAbi`, and the exact-match rule is kept, so compatibility logic stays uniform. The release workflow re-stamps the package on each Electron upgrade.
+- Phase 0 verifies that the pinned `onnxruntime-node` prebuilt exposes `dml` on win32-x64 and `coreml` on darwin-arm64. If it does not, the runtime job builds ONNX Runtime from source with those providers and packages the resulting binding.
+- The embedding runtime ships its own, older `onnxruntime-node` through `@xenova/transformers`. The two live in different version roots and load in different processes, so they never conflict. They are not deduplicated; the disk cost of tens of MB is accepted.
+- No package is built for linux, win32-arm64, or darwin-x64. Selection returns `runtime_catalog_target_missing`, and the local vision toggle is disabled with an explanation.
+
+### 7.7 Health probes
+
+- **Why a disposable process.** Loading ONNX Runtime and DirectML DLLs into the main process would lock files on Windows and make the staging-to-version rename fail. This is the reason `DisposableVoiceRuntimeProbe` exists. `DisposableGroundingRuntimeProbe` forks `src/childprocess/computer-use/GroundingRuntimeProbeWorker.ts` in a `utilityProcess` for every probe and exits it afterwards.
+- **Runtime probe (`runtime_only`, at install).**
+  1. Scoped-require the binding and check its version against the manifest.
+  2. Run `health/add.onnx` on the CPU provider and check the output.
+  3. Try to create a session with each declared GPU provider, recording the result in `details`, for example `{ dml: true }`.
+
+  A GPU provider that fails is not an install failure, because CPU is the fallback.
+- **Model probe (`full`, at install and repair).** Requires an active `grounding-onnxruntime`; otherwise the install fails with `runtime_dependency_missing`.
+  1. Load the three graphs on the CPU provider.
+  2. Ground `health/fixture.png` at a small fixed budget.
+  3. Require the top region to hit `health/expected.json` within tolerance.
+
+  The timeout is 180 s. The probe uses CPU so install results do not depend on GPU drivers; provider selection happens when the worker loads (§5.5).
+- `LocalAiRuntimeHealthService` registers both probes, and the model pipeline passes it the resolved active runtime.
+
+### 7.8 Install, activation, leases, updates, and removal
+
+**One consent for runtime and model (CU-INST-13).**
+
+- `prepareInstallSet(runtimeIds)`:
+  1. Selects entries, runtime first and then model.
+  2. Checks the target and memory: `os.totalmem() < minSystemMemoryBytes` fails with `runtime_insufficient_memory`.
+  3. Checks `requiresRuntime` against the selected runtime version.
+  4. Returns one offer: `operationId`, per-entry ID, version, and sizes, totals, `consentToken`, and expiry.
+
+  The grant stores each entry's version and hash (`sha256` for ZIP packages, `manifestSha256` for models).
+- `installSet(request)`:
+  1. Validates the grant once. The 5-minute expiry limits when the install may start, not how long a multi-GB download may take.
+  2. Runs the pipelines in order. The runtime is skipped if the same version is already active and healthy. Each pipeline takes its own coordinator operation, so the existing per-ID `runtime_busy` rule still holds. Progress events carry the set `operationId` and the current runtime ID.
+- **Failure handling.** If the runtime fails, the model is not attempted. If the model fails, the runtime stays installed for later reuse. Cancelling stops the current step and keeps completed steps.
+
+**Readiness** (`ComputerUseGroundingReadinessService`, computed from both statuses and compatibility; the renderer shows it in Computer Use settings):
+
+```typescript
+type GroundingReadiness =
+  | 'unsupported_target'
+  | 'insufficient_memory'
+  | 'not_installed'
+  | 'runtime_required'
+  | 'model_required'
+  | 'installing'
+  | 'ready'
+  | 'update_available'
+  | 'repair_required';
+```
+
+**Leases.**
+
+- `LocalAiRuntimeOperationCoordinator.versionLeases` changes from `Set<string>` to a reference-counted `Map<string, number>`. Otherwise two holders of the same version, such as the live worker and a repair probe, could clear each other's lease.
+- `ComputerUseGroundingClient` acquires leases on the runtime and model versions at `load`, and releases them on `unload`, worker exit, or crash.
+
+**Activation while a session runs (CU-INST-16).**
+
+- Activation is side by side: a new version directory, then `active.json` flips. `activate()` already throws `runtime_busy` only when the *target* version is leased, so a new version can be activated while the old one is in use.
+- `disposeIdleWorkersForRuntime()` gains the grounding IDs. An idle grounding worker is disposed, and the next `load` resolves the new version. During a session it only sets `restartAfterSession`; the supervisor restarts the worker when the session ends. A worker never switches versions mid-session.
+
+**Updates and rollback.**
+
+- `checkForUpdate()` is unchanged. Model updates are never downloaded automatically; Settings shows "Update available" with the size, and the user installs through an install set.
+- Native runtime packages keep `previousVersion` for rollback, as today.
+- Model packages: after a new version passes its `full` probe and activates, `pruneInactiveVersions(runtimeId)` deletes every version that is neither active nor leased. A leased old version is pruned when its lease is released. Rolling a model back means downloading again; this is accepted to avoid keeping two multi-GB copies.
+
+**Removal (CU-INST-17).**
+
+- Removing a model deletes its unleased versions and its `.part` files.
+- Removing `grounding-onnxruntime` while a model is installed is allowed; readiness becomes `runtime_required`.
+- Turning off local vision in Computer Use settings offers to remove both.
+- Removal during a session fails with the existing `runtime_busy` lease check.
+
+**Startup reconciliation** adds three steps to the existing staging cleanup: delete stale `.part` files, prune unleased inactive model versions, and delete any orphaned version directories not referenced by `active.json`.
+
+### 7.9 Code changes in the local AI runtime subsystem
+
+| File | Change |
+| --- | --- |
+| `src/entityTypes/localAiRuntimeTypes.ts` | Add the grounding IDs, `LOCAL_AI_RUNTIME_PACKAGE_KIND`, `LOCAL_AI_RUNTIME_GROUPS`, the `grounding` artifact prefix, v2 catalog and model manifest types, and install-set offer/request/result types. Add error codes `runtime_dependency_missing`, `runtime_insufficient_memory`, and `runtime_download_stalled` |
+| `src/schemas/localAiRuntime.ts` | v2 catalog schema (package-kind union, per-ID rule table, unknown-ID skipping), model manifest schema, prefix-driven `expectedArchiveFileName()`. The v1 schema stays for the release compatibility test |
+| `src/schemas/ipc/localAiRuntime.ts`, `src/config/channellist.ts` | New IDs in the runtime ID enum; optional `group` for listing; `LOCAL_AI_RUNTIME_PREPARE_INSTALL_SET` and `LOCAL_AI_RUNTIME_INSTALL_SET` |
+| `localAiRuntimeConstants.ts` | `LOCAL_AI_MODEL_PACKAGE_LIMITS` |
+| `LocalAiRuntimePathService.ts` | v2 cache paths; `getResumablePartPath(sha256)` beneath `.downloads/files/`, validating a 64-character hex name |
+| `LocalAiRuntimeStateStore.ts` | v2 cache read/write; model manifest read/write; version listing used by pruning |
+| `LocalAiRuntimeCatalogService.ts` | v2 parsing with unknown-entry skipping |
+| `LocalAiRuntimeCompatibilityService.ts` | Selection by package kind, `requiresRuntime`, memory check, supported targets for `grounding-onnxruntime` |
+| `LocalAiRuntimeDownloadService.ts` | Extract the shared redirect/URL policy helper |
+| `LocalAiRuntimeFileSetDownloadService.ts` (new) | §7.5 |
+| `LocalAiRuntimeResolver.ts` | Model kind: no ABI check; required files are checked by `stat` and size, not hashed on the hot path. Native kind unchanged |
+| `LocalAiRuntimeOperationCoordinator.ts` | Reference-counted version leases |
+| `LocalAiRuntimeHealthService.ts`, `DisposableGroundingRuntimeProbe.ts` (new), `src/childprocess/computer-use/GroundingRuntimeProbeWorker.ts` (new) | §7.7 |
+| `src/modules/LocalAiRuntimeModule.ts` | `listStatuses(group)`, `prepareInstallSet`, `installSet`, pipeline branch by package kind, dependency check, `pruneInactiveVersions` |
+| `src/main-process/communication/local-ai-runtime-ipc.ts` | v2 catalog source, grounding disposer, resolver injection into `ComputerUseGroundingClient`, install-set handlers. Like the existing channels these use `registerValidatedHandler`: component management is not an AI request. The AI gate applies to the Computer Use session IPC |
+| `src/views/api/localAiRuntime.ts`, `LocalAiComponentsPanel.vue`, `src/views/utils/localAiRuntimeUi.ts` | "Computer Use" group, install-set consent dialog with combined sizes, model download phases, readiness labels |
+| `src/views/lang/{en,zh,es,fr,de,ja}.ts` | New strings in all six locales |
+
+Tests extend the existing suites: `LocalAiRuntimeSchema`, `CatalogService`, `CompatibilityService`, `DownloadService`, `OperationCoordinator`, `Resolver`, `HealthService`, the module, and the IPC handlers. New suites cover the file-set downloader and the grounding probe, and component tests cover the panel and the consent dialog.
+
+### 7.10 Release workflow
+
+- **Runtime build.** `local-ai-runtime-release.yml` adds `grounding-onnxruntime` for win32-x64 and, from Phase 3, darwin-arm64. The job installs the pinned `onnxruntime-node` into a staging package, copies its closure, adds the health graph, notices, and manifest, and zips with the existing structured ZIP tooling.
+- **Verification.** Under the target Electron (`ELECTRON_RUN_AS_NODE=1`): scoped require, then `add.onnx` on CPU. GPU providers need real hardware, so DirectML and CoreML initialization is verified on a GPU runner or in the native test lab before publishing, and the result is recorded in the release notes.
+- **Model entries.** Model packages are produced by the plugin repository's export pipeline after parity and licence-chain checks pass, and are published to an immutable release (hosting location is open decision 9). AiFetchly keeps a reviewed lock file, `scripts/local-ai-runtime/grounding-models.lock.json`, listing each model runtime ID's version, manifest URL, and manifest hash. The catalog generator downloads only the manifest, verifies its hash, and turns it into a v2 model entry. It never downloads weights.
+- **Catalogs.** The generator writes `local-ai-runtimes.json` (v1, embedding and voice only, unchanged) and `local-ai-runtimes.v2.json`. A workflow test parses the v1 file with a pinned copy of the previous release's schema, proving older apps still accept it (CU-INST-15).
+- **Publishing** remains the protected manual step.
+
+### 7.11 Hub extensions by phase
 
 - **Phase 1 (Windows only):** Mac is marked unsupported for the listing; existing uv provisioning covers the Windows-MCP environment.
-- **Phase 2:** grounder model and runtime binding resources, unless delivered through the local runtime catalog.
+- **Phase 2:** no Hub changes. Local vision is delivered by the local AI runtime catalog; the plugin manifest's `localAiRuntimes` declaration is used for compatibility display only.
 - **Phase 3 (two targets):** conditional requirement applicability; target-aware `ListPlanEnvironments` / `ListPlanModelRevisions`; identical selection in compatibility, install plan, prepare-install, tickets, and revocation; a reviewed native-component resource type for the Mac helper; safe extraction of executables. Old clients fail closed on unknown required resource kinds.
 
-Tests assert the absence of the other platform's resources, not only the presence of the right ones.
+Tests assert the absence of the other platform's resources, not only the presence of the right ones, for both the Hub plan and the local runtime catalog selection.
 
 ## 8. Managed Python for Windows-MCP
 
@@ -413,7 +739,9 @@ Coordinates, native identifiers, transforms, grounding metadata, generation, and
 
 ### 9.3 Errors
 
-Stable codes: `ai_disabled`, `permission_required`, `desktop_busy`, `unsupported_target`, `unsupported_display_configuration`, `runtime_not_ready`, `model_not_ready`, `target_not_found`, `target_ambiguous`, `invalid_grounding_output`, `stale_observation`, `focus_changed`, `action_not_authorized`, `action_cancelled`, `execution_uncertain`, `verification_failed`, `backend_unavailable`, `resource_limit`, `protocol_mismatch`, `planner_mode_unavailable`.
+Stable codes: `ai_disabled`, `permission_required`, `desktop_busy`, `unsupported_target`, `unsupported_display_configuration`, `runtime_not_ready`, `model_not_ready`, `target_not_found`, `target_ambiguous`, `invalid_grounding_output`, `stale_observation`, `focus_changed`, `action_not_authorized`, `action_cancelled`, `execution_uncertain`, `verification_failed`, `backend_unavailable`, `resource_limit`, `protocol_mismatch`, `planner_mode_unavailable`, `stop_hotkey_unavailable` (the global stop hotkey could not be registered, so the session does not start), `host_elevated` (AiFetchly itself is running elevated, so sessions are refused).
+
+`unsupported_target` carries a reason: `elevated_window`, `own_window`, `protected_view`, `unsupported_app`, or `unsupported_display`. `model_not_ready` carries the `GroundingReadiness` value (§7.8).
 
 Each error has a safe message, stage, retry classification, and correlation ID. No tracebacks, secrets, image bytes, absolute paths, or argv in renderer results.
 
@@ -447,16 +775,71 @@ Trusted adapter code still runs with local OS privileges. Grants protect the nor
 
 ### 10.4 Stop behavior
 
-- The Stop button and the global stop hotkey (Electron `globalShortcut`, registered only while a session is active) revoke the generation immediately and clear pending actions.
+- The Stop button, the control strip's Stop button, and the global stop hotkey (§10.5.1) revoke the generation immediately and clear pending actions.
 - Human mouse or keyboard activity detected by the adapter, or an unexpected foreground change, pauses automation.
 - Late grounding results are discarded; the worker is killed if it cannot stop promptly.
 - Tracked pressed keys and buttons are released on cleanup; drags and key holds have bounded durations.
 - If cooperative stop fails, the supervisor terminates the whole adapter process tree (Job Object on Windows).
 - Handoff pauses input but keeps ownership unless relinquished.
 - A post-dispatch timeout or crash becomes `execution_uncertain` and requires observation before any retry. Action IDs deduplicate within known session history; exactly-once across crashes is not claimed.
-- Actions whose resolved point lands on an AiFetchly window, including the control strip, are rejected.
+- Actions whose resolved point lands on an AiFetchly window, including the control strip, are rejected (§10.5.3).
 
-Test stop during model load, inference, queued input, drag, adapter hang, disconnect, and app quit. Measure stop acknowledgment and last possible input separately.
+Test stop during model load, inference, queued input, drag, adapter hang, disconnect, and app quit. Measure stop acknowledgment and last possible input separately (§10.5.5).
+
+### 10.5 Safety controls
+
+These controls live in the supervisor (`ComputerUseSafetyService`) and run for every session and every dispatch, whatever the adapter or skill says (decision 13).
+
+#### 10.5.1 Global stop hotkey
+
+- Registered with Electron `globalShortcut.register()` when a session enters `STARTING`, and unregistered on `STOPPED` or `FAILED`. It is never registered outside a session, so it does not take a key combination from other apps permanently.
+- Default candidate: `Ctrl+Alt+Shift+S` on Windows and `Ctrl+Option+Cmd+S` on macOS (open decision 8). On Windows, `Ctrl+Alt` is also AltGr, so the final default must be checked against German, French, and Spanish layouts and against Excel shortcuts. The user can change it in Computer Use settings; the value is validated as an Electron accelerator that includes at least two modifiers.
+- If `register()` returns `false` (another app holds the combination), the session does not start and returns `stop_hotkey_unavailable`, with a prompt to choose another combination. A session never runs without a working hotkey.
+- The hotkey callback runs in the main process and calls the same `revoke()` path as the Stop button. It does not depend on the renderer, the adapter, or the grounding worker, so it works while the main window is hidden or unresponsive.
+- `SendInput` keystrokes from the adapter could in principle trigger the registered hotkey. The supervisor refuses any `type_text` or key action whose content or chord matches the current hotkey.
+
+#### 10.5.2 Always-on-top control strip
+
+- A separate `BrowserWindow` (`ComputerUseControlStrip`) created at session start and destroyed at session end: frameless, `alwaysOnTop: true` at level `screen-saver`, `skipTaskbar: true`, `focusable: false`, `resizable: false`, no close button. Its preload exposes only the strip's own IPC channels (state updates in, Stop/Pause/Take over out) through `contextBridge`, with context isolation and sandbox on.
+- `focusable: false` means clicking Stop never takes focus from the target app. The strip cannot be dismissed except by stopping the session.
+- Content shows the state (observing, grounding, awaiting approval, executing, paused, handoff), the target app name, the current step summary, the planner mode (local-only or visual), the stop hotkey hint, and Pause, Take over, and Stop buttons. All text uses i18n keys in the six locales.
+- It is positioned at the top centre of the display containing the target window, outside the target window's bounds when there is room; otherwise it is placed at the display edge farthest from the next target point.
+- `setContentProtection(true)` sets `WDA_EXCLUDEFROMCAPTURE` on Windows 10 2004 and later (and `NSWindowSharingNone` on macOS), so the strip is absent from screenshots. Because this is not guaranteed on every capture path, the supervisor also masks the strip's screen rectangle in every observation before grounding, and no crop includes it.
+- A second click-through overlay outlines the target window (`setIgnoreMouseEvents(true)`, `focusable: false`, content-protected and masked the same way) so the user can see which window the agent controls.
+
+#### 10.5.3 Own-window rejection
+
+- **Target selection.** The target picker lists windows from the adapter and removes any whose process ID is in AiFetchly's process set (`app.getAppMetrics()` process IDs, refreshed at every observation).
+- **Pointer actions.** Immediately before dispatch the supervisor:
+  1. converts every AiFetchly `BrowserWindow`'s bounds from device-independent pixels to physical desktop pixels (`screen.dipToScreenRect`);
+  2. rejects the action if the resolved point is inside any visible one, including the strip, the overlay, and dialogs;
+  3. calls the adapter's window-at-point check (§6.1) and rejects the action if the owning process is in AiFetchly's process set.
+  Rejections return `unsupported_target` with reason `own_window`.
+- **Keyboard actions.** Refused while AiFetchly has foreground focus (`BrowserWindow.getFocusedWindow()` is not null, or the adapter reports an AiFetchly process as foreground).
+- This prevents the agent from approving its own prompts, changing its own settings, or typing into AI Chat.
+
+#### 10.5.4 Elevated windows and elevated host
+
+- At session start the supervisor calls `process_integrity` (§6.1) for AiFetchly's own process. If AiFetchly is running at high or system integrity, the session is refused with `host_elevated`: an elevated agent could drive administrator windows, and the product does not support that.
+- Before every dispatch, the supervisor queries the integrity level of the target window's process (cached per process ID for the observation). A level above AiFetchly's level returns `unsupported_target` with reason `elevated_window` and pauses the session with an explanation. A query failure is treated as elevated (fail closed).
+- The check happens before dispatch because a UIPI-blocked `SendInput` gives no reliable failure signal (§6.1).
+- On macOS the equivalent checks (secure input, system dialogs) are defined by the Phase 3 spike.
+
+#### 10.5.5 Measurement harness for provisional targets
+
+The PRD targets (§8) are planning values to be replaced by measured baselines. The harness records them with the same monotonic clock in the main process:
+
+| Metric | Start event | End event |
+| --- | --- | --- |
+| Stop acknowledgment | Hotkey callback or Stop IPC received | Generation revoked and strip shows "Stopping" |
+| Last possible input | Generation revoked | Last `SendInput`/CGEvent call returns, reported by the adapter with its monotonic timestamp and correlated by action ID |
+| Stop completion | Generation revoked | Adapter confirms released keys and idle, or process tree terminated |
+| Observation latency | Observe request sent | Normalized observation returned |
+| Grounding latency (warm) | Worker `ground` sent | Candidates returned, recorded per execution provider |
+| Worker cold start | `load` sent | Worker ready |
+
+- The hard gate "no input after stop acknowledgment" is tested with adapter-side timestamps: any dispatch whose timestamp is later than the acknowledgment fails the run.
+- Runs repeat each metric at least 50 times on the reference devices (§14.3) and report p50, p95, and max. The Phase 1 exit report replaces the PRD's provisional values with the measured p95 plus margin.
 
 ## 11. Coordinate system
 
@@ -585,14 +968,42 @@ Shows original capture, model input, and after-state side by side, with overlays
 
 - MCP SDK transport: initialize and initialized notification, version mismatch, chunked multi-byte UTF-8, mixed content results, progress, exit, timeout, cancellation, output limits, process-tree cleanup, session pool reuse and invalidation. Under `test/vitest/main/`.
 - Grounding worker: preprocessing golden tensors, postprocessing regions, ambiguity and absence thresholds, stale-generation discard, kill-on-stop, provider fallback.
-- Supervisor: competing owners, revoked generations, stale handles, duplicate action IDs, crashes before/after dispatch, no replay of uncertain input, rejection of targets on AiFetchly windows.
+- Supervisor: competing owners, revoked generations, stale handles, duplicate action IDs, crashes before/after dispatch, no replay of uncertain input.
+- Safety controls (§10.5): hotkey registered only during a session and unregistered on every exit path; `register()` failure blocks start with `stop_hotkey_unavailable`; the hotkey callback revokes with the renderer mocked as unresponsive; typed text matching the hotkey is refused; own-window rejection for points inside each AiFetchly window at 100/150/200% scaling (DIP-to-screen conversion) and for window-at-point results owned by AiFetchly processes; keyboard refused while AiFetchly has focus; `host_elevated` at start; elevated and unknown integrity levels rejected before dispatch; the strip's rectangle masked in every observation.
+- Local runtime delivery (§7): v2 catalog parsing with unknown IDs and package kinds skipped and malformed known entries rejected; v1 catalog unaffected; model entry validation (duplicate paths, size sum, limits, manifest hash, licences); `requiresRuntime` and memory selection; install-set consent bound to both versions and hashes, expiry checked only at start, runtime-then-model order, partial failure keeps the runtime; file-set download resume on `206`, restart on `200`, a mismatched `Content-Range` rejected, idle timeout, a hash mismatch retried once then failed, hex-validated `.part` paths; reference-counted leases; activation deferred during a session; pruning skips leased versions; disposable probes in both modes, with the model probe failing when no runtime is active. These extend the existing `LocalAiRuntime*` suites.
+- W-1 Excel logic: TSV construction with formula-injection prefixes; Text-format column detection; clipboard save and restore on success, failure, and stop; the non-empty destination check; read-back comparison with whitespace normalization and mismatch reporting by row and column.
 - Planner modes: no image bytes in planner requests, logs, persisted tool JSON, or hook payloads in local-only mode; suppression during sensitive states; mode toggle mid-session.
 - Debug: locate-only and replay never dispatch; redaction, retention, reviewed export.
-- UI: component tests for settings, consent, control strip, and failure states in `test/vitest/main/components/` (`yarn test:components`); Playwright E2E for start → observe → act → stop and the hotkey path in `test/e2e/specs/`. All six locale files updated.
+- UI: component tests in `test/vitest/main/components/` (`yarn test:components`) for Computer Use settings (local vision readiness states, hotkey editor validation), the install-set consent dialog, the "Computer Use" group in `LocalAiComponentsPanel`, the control strip states, and failure states. Playwright E2E in `test/e2e/specs/` for start → observe → act → stop, the hotkey path, and local vision install against a loopback catalog and file server (the E2E network guard allows loopback only). All six locale files updated.
 
 ### 14.3 Native desktop
 
 Controlled test applications in a headed interactive session. Cover window movement, display changes, 100/125/150/200% Windows scaling, Retina points, target closure, occlusion, lock/sleep/resume, CJK input, scroll/drag, elevated windows, and permission denial/revocation. One display first; multi-display is a separate gate.
+
+Safety-control cases on the reference Windows devices:
+
+- the stop hotkey while Excel, a browser, and a full-screen app have focus, and while AiFetchly is minimized;
+- the control strip absent from Windows-MCP and Electron captures (`WDA_EXCLUDEFROMCAPTURE`), and masked when capture exclusion is forced off;
+- clicking the strip leaves the target focused;
+- an elevated Notepad or Task Manager target rejected before any input;
+- AiFetchly started "Run as administrator" refuses sessions;
+- the measurement harness (§10.5.5) run at least 50 times per metric.
+
+Excel cases, using fixture workbooks under version control for Microsoft 365 Current Channel and Excel 2021, in English and Simplified Chinese UI, at 100% and 150% scaling:
+
+- empty sheet; sheet with an existing header; header in a different column order; ambiguous header names;
+- non-empty destination range; leading-zero phone and postal values; long numeric IDs; dates;
+- values starting with `=`, `+`, `-`, or `@`;
+- a Protected View file and a read-only file;
+- 500 rows × 15 columns for observation timing.
+
+### 14.3.1 Local runtime delivery (native and CI)
+
+- The release workflow loads `grounding-onnxruntime` under the target Electron and runs `add.onnx`. DirectML and CoreML initialization is verified on GPU hardware before publishing.
+- The model probe passes on the reference CPU machine within its timeout.
+- Kill the network and the app during a model download, then resume; corrupt one shard and confirm activation is blocked and that file alone is downloaded again.
+- Update the model while a session is running; activation waits for session end, and the old version is pruned after release.
+- The v1 catalog from the same release installs the embedding and voice runtimes in the previous app release.
 
 ### 14.4 Hub
 
@@ -601,6 +1012,13 @@ Conditional resolution and absence of wrong-platform resources, feature selectio
 ### 14.5 Benchmark
 
 Labeled clickable regions (any point inside counts), absent targets, distractors, repeated labels, icons, custom controls, small targets, Chinese/English UI, themes, and layout changes, drawn from the target workflows. Held-out evaluation is separate from regression fixtures.
+
+**W-1 Excel benchmark.**
+
+- **Tasks.** Paste 20, 200, and 500 lead rows into each fixture workbook, then format and verify. Source rows are synthetic leads with realistic edge cases (CJK names, leading zeros, long IDs, duplicate emails, values starting with `=` or `+`).
+- **Grounding targets.** Labeled from Excel screenshots at 100% and 150% scaling, light and dark Office themes, and full and collapsed ribbons: Name Box, sheet tabs, header cells, filter dropdown arrows, table style gallery swatches, conditional formatting menu items, and icon-only ribbon buttons. Absent-target variants remove the control, for example a collapsed ribbon group.
+- **Arms.** Accessibility-only (Phase 1), grounder-only (Phase 2, grounding every step through the vision path so the grounder is qualified on its own), combined, and visual planner mode.
+- **Metrics.** Task success, handoffs, cell mismatches after verification (hard gate: 0), unauthorized consequential actions (hard gate: 0), run time per 200 rows, planner steps, and API cost.
 
 Compare on identical tasks:
 
@@ -611,15 +1029,15 @@ Compare on identical tasks:
 
 Report sample counts, revisions, hardware, resolution, region hits, wrong-action rate on absent targets, uncertainty, interventions, recovery, end-to-end completion, cold/warm stage latency, peak RAM/VRAM, and API cost.
 
-Hard gates: no input from read-only modes; no click on parse error, absence, or ambiguity; no wrong-platform artifacts; no action after a revoked generation; no unapproved consequential action; no blind retry of uncertain input; no screenshot to the planner in local-only mode.
+Hard gates: no input from read-only modes; no click on parse error, absence, or ambiguity; no wrong-platform artifacts; no action after a revoked generation or stop acknowledgment; no unapproved consequential action; no blind retry of uncertain input; no screenshot to the planner in local-only mode; no action on an AiFetchly window or an elevated window; no remaining cell mismatch after W-1 verification.
 
 ## 15. Change map
 
 | Repository | Work |
 | --- | --- |
-| Desktop | MCP SDK client + custom transport + session pool; `ComputerUseSupervisor` and related services; grounding worker; planner mode routing; Windows-MCP provisioning; UI and translations |
-| Plugin | Contracts and fixtures; Windows-MCP packaging and allowlist; Mac helper or Ghost OS fork; ONNX export, quantization, and parity pipeline; eval/replay CLI; notices |
-| Hub | Phase 1: listing and Windows environment. Phase 3: conditional target resolution and native-component resources |
+| Desktop | MCP SDK client + custom transport + session pool; `ComputerUseSupervisor` and related services; safety controls (hotkey, control strip, own-window and elevation checks, measurement harness); grounding worker; planner mode routing; Windows-MCP provisioning; local AI runtime extensions (§7.9); runtime release workflow (§7.10); UI and translations |
+| Plugin | Contracts and fixtures; Windows-MCP packaging, allowlist, and the `process_integrity` / window-at-point tools; W-1 Excel fixture workbooks and benchmark; Mac helper or Ghost OS fork; ONNX export, sharding, quantization, and parity pipeline that publishes model packages; eval/replay CLI; notices |
+| Hub | Phase 1: listing and Windows environment. Phase 2: none. Phase 3: conditional target resolution and native-component resources |
 
 Proposed host files:
 
@@ -639,30 +1057,43 @@ src/service/computerUse/ComputerUseAdapterRegistry.ts  # Allowlisted adapter wra
 src/service/computerUse/ComputerUseGroundingClient.ts  # Host side of the worker protocol
 src/service/computerUse/ComputerUsePlannerImageService.ts
 src/service/computerUse/ComputerUseTraceService.ts
+src/service/computerUse/ComputerUseSafetyService.ts        # Own-window, elevation, hotkey-chord checks before dispatch
+src/service/computerUse/ComputerUseStopHotkeyService.ts    # globalShortcut register/unregister per session
+src/service/computerUse/ComputerUseElevationService.ts     # process_integrity queries and per-observation cache
+src/service/computerUse/ComputerUseMeasurementService.ts   # Safety and latency timestamps (§10.5.5)
+src/service/computerUse/ComputerUseGroundingReadinessService.ts
+src/service/computerUse/excel/ExcelLeadListPlanner.ts      # Column mapping, TSV, Text-format columns, read-back diff
+src/service/computerUse/ComputerUseClipboardService.ts     # Save/write/restore clipboard text around paste
+src/main-process/windows/ComputerUseControlStrip.ts        # Always-on-top strip and target overlay windows
 src/main-process/communication/computer-use-ipc.ts
 src/childprocess/computer-use/GroundingWorker.ts
 src/childprocess/computer-use/GuiActorPreprocessor.ts
 src/childprocess/computer-use/GuiActorPostprocessor.ts
 src/childprocess/computer-use/OnnxRuntimeLoader.ts
-src/views/components/computerUse/
+src/childprocess/computer-use/GroundingRuntimeProbeWorker.ts
+src/service/localAiRuntime/LocalAiRuntimeFileSetDownloadService.ts
+src/service/localAiRuntime/DisposableGroundingRuntimeProbe.ts
+src/views/components/computerUse/                          # Settings, consent, strip UI, readiness
+src/views/pages/computerUse/controlStrip.html              # Strip renderer entry (own preload)
+scripts/local-ai-runtime/grounding-models.lock.json
 ```
 
-Reuse existing managed-installation and local-runtime services where they apply; do not build a second private resource manager. Introduce entities only for data that must persist.
+Modified local AI runtime files are listed in §7.9. Reuse existing managed-installation and local-runtime services where they apply; do not build a second private resource manager. Introduce entities only for data that must persist.
 
 ## 16. Release sequence
 
 | Phase | Deliverables |
 | --- | --- |
-| 0 | MCP SDK client, transport, and session pool (independent PR); schemas and fixtures; target workflows confirmed; GUI-Actor-2B export + parity + provider latency/memory spike; Mac backend spike; Windows-MCP delivery decision; end-to-end baseline |
-| 1 | Windows MVP: Windows-MCP provisioning, supervisor, lease, grants, Stop + hotkey, control strip, one display, opt-in visual planner, draft-only workflows, limited beta |
-| 2 | Windows local vision: grounding worker (DirectML/CPU), crops, ambiguity/absence calibration, locate-only, offline replay, trace viewer |
-| 3 | macOS: chosen backend, CoreML/CPU grounder, permissions, Hub conditional resolution |
+| 0 | MCP SDK client, transport, and session pool (independent PR); schemas; W-1 Excel fixture workbooks and benchmark tasks; Excel UI Automation exposure check; GUI-Actor-2B export + sharding + parity + provider latency/memory/file-size spike and default configuration; `onnxruntime-node` provider check (DirectML, CoreML); `process_integrity` prototype; Mac backend spike; Windows-MCP delivery decision; end-to-end baseline; measurement harness |
+| 1 | Windows MVP: Windows-MCP provisioning, supervisor, lease, grants, Stop, stop hotkey, control strip and overlay, own-window and elevated-window rejection, `host_elevated`, one display, opt-in visual planner, W-1 up to its stop point on the accessibility path, measured baselines replacing provisional targets, limited beta |
+| 2 | Windows local vision: catalog v2 and dual catalog publishing; file-set model packages and resumable downloader; install sets; reference-counted leases and pruning; grounding runtime and model probes; `grounding-onnxruntime` (win32-x64) and the default model configuration; grounding worker (DirectML/CPU); crops; ambiguity/absence calibration on Excel targets; locate-only, offline replay, trace viewer |
+| 3 | macOS: chosen backend, `grounding-onnxruntime` for darwin-arm64 (CoreML/CPU) from the same catalog, permissions, Mac safety-control equivalents, Hub conditional resolution for the helper |
 | 4 | Update/repair, clean-machine matrix, published support matrix and SLOs, GA |
 | 5 | Multi-display, Windows ML vendor providers, larger grounder tier or verifier, offline bundles |
 
 If the Phase 0 export spike fails, Phase 1 proceeds and Phase 2 re-plans around another exportable grounder.
 
-Version independently: plugin code, tool contract, trace schema, adapter revisions, Python environment, ONNX Runtime binding, model configuration. Record the full compatibility manifest per release. Never replace an adapter or model mid-session.
+Version independently: plugin code, tool contract, trace schema, adapter revisions, Python environment, `grounding-onnxruntime`, and each model configuration's runtime ID. Record the full compatibility manifest per release. Never replace an adapter, runtime, or model mid-session.
 
 ## 17. Limitations and open decisions
 
@@ -674,18 +1105,25 @@ Limitations:
 - A local process is not a privilege sandbox; native input is shared with the human.
 - UI state can change after validation; post-action verification and uncertainty handling remain necessary.
 - OS permission models (macOS TCC, Windows secure desktop and UIPI) cannot be bypassed.
+- Capture exclusion for the control strip depends on the OS and capture path; masking is the guarantee.
+- Clipboard restore preserves text only; other formats on the user's clipboard are lost during a W-1 paste, and the user is told so.
+- Rolling back a model version means downloading it again, because superseded model versions are pruned.
 
-Open decisions:
+Resolved in version 1.2: target workflow (W-1 Excel lead list) and delivery of the runtime binding and model (`LocalAiRuntimeModule`, §7).
+
+Open decisions (numbering used in this document):
 
 1. macOS backend (spike outcome).
-2. Delivery of the ONNX Runtime binding and model: existing local runtime catalog (`LocalAiRuntimeModule`) vs. Hub managed resources.
-3. Windows-MCP delivery: managed uv environment vs. prebuilt embeddable-Python bundle.
-4. Pixel budget, quantization, and whether static-shape buckets are used, per provider.
-5. Ambiguity and absence thresholds (calibrated in Phase 2).
-6. Visual planner image size, crop policy, and supported providers.
-7. GUI-Actor-3B commercial licence, only if 2B is insufficient.
-8. Stop-latency and grounding-latency SLOs replacing the PRD's provisional targets.
-9. Debug retention and storage cap.
+2. Windows-MCP delivery: managed uv environment vs. prebuilt embeddable-Python bundle.
+3. Default model configuration (quantization, default pixel budget, static-shape buckets), execution-provider matrix, reference hardware, and `minSystemMemoryBytes`, from the Phase 0 spike.
+4. Ambiguity and absence thresholds (calibrated in Phase 2 on Excel targets).
+5. Visual planner image size, crop policy, and supported providers.
+6. GUI-Actor-3B commercial licence, only if 2B is insufficient.
+7. SLOs replacing the PRD's provisional targets.
+8. Default stop hotkey.
+9. Hosting location for model files (plugin repository releases or the AiFetchly runtime release).
+10. Delivery of `process_integrity` and window-at-point: Windows-MCP extension module vs. patch in a pinned fork.
+11. Debug retention and storage cap.
 
 ## 18. Requirement traceability
 
@@ -694,9 +1132,22 @@ Open decisions:
 | CU-INST-01–04 | §7 | Target/feature closure; absence of wrong-platform resources |
 | CU-INST-05–09 | §7, §8 | Clean-machine install; identity, integrity, cache, atomic activation |
 | CU-INST-10 | §16 | Offline bundle qualification (Phase 5) |
-| CU-INST-11 | §5.1, §14.1 | Licence-chain check in release tooling |
+| CU-INST-11 | §5.1, §7.3, §7.10, §14.1 | Licence-chain check in release tooling; catalog licence validation |
+| CU-INST-12 | §7.1, §7.2, §7.4, §7.9 | Components listed in the "Computer Use" group with update, repair, remove |
+| CU-INST-13 | §7.8 | Install-set consent binding and expiry tests; consent dialog component test |
+| CU-INST-14 | §7.5 | Resume, restart, idle timeout, corrupted-shard tests; native interrupted-download case |
+| CU-INST-15 | §7.3, §7.10 | v2 unknown-entry skipping; v1 compatibility test in the release workflow |
+| CU-INST-16 | §7.8 | Reference-counted leases; deferred activation during a session |
+| CU-INST-17 | §7.8 | Removal and pruning tests; leased versions protected |
+| CU-INST-18 | §7.3, §7.5, §7.8 | Memory selection test; disk preflight test |
 | CU-SESSION-01–07 | §3, §4, §10 | Lease, cancellation, takeover, DB boundary, lifecycle tests |
-| CU-SESSION-08–10 | §10.4 | Hotkey stop, control strip, own-window rejection tests |
+| CU-SESSION-08 | §10.4, §10.5.1 | Hotkey lifecycle, registration failure, hidden-window stop |
+| CU-SESSION-09 | §10.5.2 | Control strip component and native capture-exclusion/masking tests |
+| CU-SESSION-10 | §10.5.3 | Own-window rejection at multiple scales; keyboard refusal while focused |
+| CU-SESSION-11 | §6.1, §10.5.4 | Elevated target rejected before dispatch; unknown integrity fails closed |
+| CU-SESSION-12 | §10.5.4 | `host_elevated` at session start |
+| CU-SESSION-13 | §10.5.5, §14.3 | Measurement harness runs and Phase 1 baseline report |
+| W-1 workflow (PRD §3.1) | §6.3, §14.5 | Excel fixture cases and benchmark arms |
 | CU-VISION-01–02 | §5, §6, §9 | Adapter contracts; comparative benchmark |
 | CU-VISION-03 | §12 | No image bytes leave the device in local-only mode |
 | CU-VISION-04–08 | §5.4, §5.8, §11 | Transform, parser, freshness, native calibration tests |
@@ -716,5 +1167,9 @@ Upstream links refer to moving branches; pin exact revisions when implementing.
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk); [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle).
 - [Windows-MCP](https://github.com/CursorTouch/Windows-MCP); [Ghost OS](https://github.com/ghostwright/ghost-os).
 - [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/).
+- [Electron `globalShortcut`](https://www.electronjs.org/docs/latest/api/global-shortcut); [`BrowserWindow.setContentProtection`](https://www.electronjs.org/docs/latest/api/browser-window#winsetcontentprotectionenable); [`screen.dipToScreenRect`](https://www.electronjs.org/docs/latest/api/screen#screendiptoscreenrectwindow-rect-windows); [`SetWindowDisplayAffinity` / `WDA_EXCLUDEFROMCAPTURE`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
+- [UI Automation security and UIPI](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-securityoverview); [`SendInput`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) (UIPI blocking is not reported); [`GetTokenInformation` / `TokenIntegrityLevel`](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation); [mandatory integrity control](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control).
+- [UI Automation overview](https://learn.microsoft.com/en-us/windows/win32/winauto/entry-uiauto-win32) (grid, table, and value patterns used by W-1).
+- [ONNX Runtime Node.js binding](https://onnxruntime.ai/docs/get-started/with-javascript/node.html); [ONNX external data](https://onnx.ai/onnx/repo-docs/ExternalData.html); [HTTP range requests (RFC 9110 §14)](https://www.rfc-editor.org/rfc/rfc9110#name-range-requests); [GitHub release asset size limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#storage-and-bandwidth-quotas).
 - Desktop: [managed installation PRD](plugin-hub-managed-installation-prd.md) and [technical design](plugin-hub-managed-installation-technical-design.md); [downloadable local AI runtimes technical design](downloadable-local-ai-runtimes-technical-design.md).
 - Hub (`aifetchly-hub-go`): `docs/prd/plugin-hub-uv-managed-runtime-technical-design.md`, `docs/prd/plugin-hub-uv-managed-runtime-prd.md`, `docs/plugin-runtime-requirements-crud.md`.
