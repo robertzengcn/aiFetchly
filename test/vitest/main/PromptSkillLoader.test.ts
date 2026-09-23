@@ -462,3 +462,56 @@ describe("extractBody", () => {
     expect(extractBody("plain text")).toBe("plain text");
   });
 });
+
+describe("PromptSkillTokenBudgetService — mandatory safety contract (audit finding 7)", () => {
+  const service = new PromptSkillTokenBudgetService();
+
+  it("refuses when a mandatory Safety section cannot fit, even though other sections can", () => {
+    // 100-token budget: short preamble + short Examples fit, but the long
+    // Safety section does not. The previous condition only refused when the
+    // selection was EMPTY — this exact shape selected preamble+Examples and
+    // silently omitted Safety.
+    const md = [
+      "short preamble contract",
+      "",
+      "## Safety",
+      "",
+      "s".repeat(2_000),
+      "",
+      "## Examples",
+      "",
+      "short examples list",
+    ].join("\n");
+    const decision = service.decide({
+      normalizedBody: md,
+      availableTokens: 100,
+      perSkillMaxTokens: 100,
+    });
+    expect(decision.mode).toBe("metadata-only");
+    expect(decision.selectedSections).toEqual([]);
+    expect(decision.omittedSections).toContain("Safety");
+    expect(decision.resourceReadRequired).toBe(true);
+  });
+
+  it("still succeeds when every essential section fits alongside optional ones", () => {
+    const md = [
+      "preamble",
+      "",
+      "## Safety",
+      "",
+      "do not delete footage",
+      "",
+      "## Changelog Trivia",
+      "",
+      "z".repeat(4_000),
+    ].join("\n");
+    const decision = service.decide({
+      normalizedBody: md,
+      availableTokens: 400,
+      perSkillMaxTokens: 400,
+    });
+    expect(decision.mode).toBe("section-selected");
+    expect(decision.selectedSections).toContain("Safety");
+    expect(decision.omittedSections).toContain("Changelog Trivia");
+  });
+});

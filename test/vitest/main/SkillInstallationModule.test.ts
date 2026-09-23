@@ -1475,14 +1475,19 @@ describe("session-aware installer tool boundary + manual-action transition (FR-3
     expect(foreign.errorCode).toBe("INSTALL_SESSION_CONVERSATION_MISMATCH");
 
     // Correct binding → audited transition; boundary sees it.
-    expect(await module.hasApprovedManualAction(prepared.sessionId)).toBe(false);
+    expect((await module.hasApprovedManualAction(prepared.sessionId)).approved).toBe(false);
     const approved = await module.approveManualAction({
       sessionId: prepared.sessionId,
       approvalToken: token,
       conversationId: "conv-manual",
     });
     expect(approved.state).toBe("awaiting_approval");
-    expect(await module.hasApprovedManualAction(prepared.sessionId)).toBe(true);
+    const approval = await module.hasApprovedManualAction(prepared.sessionId);
+    expect(approval.approved).toBe(true);
+    // Bounded fallback (finding 9): the audit record names the EXACT
+    // canonical target the approval covers.
+    expect(typeof approval.target).toBe("string");
+    expect(approval.target).toContain("video-use");
   }, 120_000);
 
   it("the conversation's persisted session activates the boundary across turns", async () => {

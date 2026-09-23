@@ -216,6 +216,15 @@ export interface SkillExecutionContext {
   readonly model?: string;
 
   /**
+   * FR-24 budget input: the caller's estimate of tokens still available in
+   * the active context window. Prompt-skill invocation uses it to bound the
+   * hidden instruction block against the REAL remaining budget instead of a
+   * fixed default. Optional — older callers omit it and the invocation
+   * falls back to its documented defaults.
+   */
+  readonly remainingContextTokens?: number;
+
+  /**
    * When true, the caller has already obtained user consent (e.g. via
    * resume-after-permission-grant). SkillExecutor should skip the
    * permission check and proceed directly to execution.

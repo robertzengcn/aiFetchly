@@ -33,8 +33,15 @@ export interface ToolPolicyInput {
   readonly toolArguments: Record<string, unknown>;
   /** Normalized install target when an explicit intent is active. */
   readonly installTarget?: string;
-  /** True when the installer returned an approved manual-action transition. */
-  readonly manualActionApproved?: boolean;
+  /**
+   * Manual-action fallback approval. `true` (legacy boolean) approves the
+   * current routing decision's target; a record approves ONLY the exact
+   * target it names (audit finding 9 — the fallback must not become a
+   * process-wide allow-all).
+   */
+  readonly manualActionApproved?:
+    | boolean
+    | { readonly target: string };
 }
 
 export type ToolPolicyVerdict =
@@ -45,9 +52,15 @@ export type ToolPolicyVerdict =
       readonly message: string;
     };
 
-/** Commands that constitute installation acquisition/setup by shell. */
+/**
+ * Commands that constitute installation acquisition/setup by shell.
+ * Flag-tolerant shapes (audit finding 9): `git -c advice.detachedHead=false
+ * clone <target>` and `git --depth 1 clone <target>` carry options between
+ * the verb and the action, so the pattern allows tokens between them and
+ * stops at shell separators (| ; &&) — each segment is judged on its own.
+ */
 const SHELL_INSTALL_RE =
-  /\b(?:git\s+clone|gh\s+repo\s+clone|curl\s+[^\n]*\b(?:zip|tar\.gz|tgz)\b|wget\s|unzip\s|tar\s+[xf]|\bcp\s+-r?\s|\bmv\s+.*(?:skills|\.aifetchly)|pip\s+install|npm\s+install|brew\s+install|apt(?:-get)?\s+install|winget\s+install|ln\s+-s)\b/i;
+  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\b-[xf]\b|\bcp\b[^\n|;&]*\b-r\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
 
 /** File writes that mutate the install destination. */
 const INSTALL_DEST_RE =
@@ -62,11 +75,31 @@ export function evaluateSkillInstallationToolPolicy(
   if (!routing || routing.confidence !== "explicit") {
     return { allowed: true };
   }
-  if (input.manualActionApproved) {
-    return { allowed: true };
-  }
-
   const target = (input.installTarget ?? routing.source ?? "").toLowerCase();
+
+  if (input.manualActionApproved !== undefined) {
+    // Bounded fallback (audit finding 9): the approval applies to THIS
+    // explicit-install routing decision's target, not to every future
+    // call. When the caller records the approved target, a different
+    // target (or a later, unrelated decision) is NOT covered.
+    const approvedTarget = (
+      input.manualActionApproved as unknown as
+        | { target?: string }
+        | string
+        | undefined
+    );
+    const approvedTargetStr =
+      typeof approvedTarget === "string"
+        ? approvedTarget
+        : approvedTarget?.target;
+    if (
+      approvedTargetStr === undefined ||
+      !target ||
+      approvedTargetStr.toLowerCase() === target
+    ) {
+      return { allowed: true };
+    }
+  }
 
   // 1. tool_catalog_search must not be used to find Git/filesystem
   //    substitutes for installation (FR-28).
@@ -94,15 +127,13 @@ export function evaluateSkillInstallationToolPolicy(
   //    unrelated commands (the user's actual work) stay legal.
   if (input.toolName === "shell_execute") {
     const command = String(input.toolArguments.command ?? "");
+    // Audit finding 9: acquisition/setup commands are blocked under an
+    // explicit install decision REGARDLESS of whether the target string
+    // appears — `git -c advice.detachedHead=false clone <target>`,
+    // `pip install <anything>`, and archive curls all belong to the typed
+    // installer (or a bounded, per-target manual approval above).
     if (SHELL_INSTALL_RE.test(command)) {
-      // If the command references the recognized install target, block.
-      if (
-        !target ||
-        command.toLowerCase().includes(target) ||
-        /\bclone\b/i.test(command)
-      ) {
-        return blocked();
-      }
+      return blocked();
     }
     return { allowed: true };
   }

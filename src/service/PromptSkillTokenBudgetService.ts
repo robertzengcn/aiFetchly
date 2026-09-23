@@ -146,8 +146,13 @@ export class PromptSkillTokenBudgetService {
       .filter((s) => s.essential)
       .every((s) => selectedSet.has(s.index));
 
-    if (!essentialIncluded && selected.length === 0) {
-      // Even the essential block cannot fit.
+    // FR-24 / §14.3 (audit finding 7): the essential contract is
+    // all-or-nothing. A selection that fits a short preamble plus filler
+    // but omits a mandatory Safety section is NOT a success — when ANY
+    // essential section cannot fit, the service refuses (metadata-only)
+    // so the model is told to read the full instructions instead of
+    // operating without the safety contract.
+    if (!essentialIncluded) {
       return {
         mode: "metadata-only",
         availableTokens: budget,

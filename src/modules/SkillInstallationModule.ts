@@ -1888,10 +1888,21 @@ export class SkillInstallationModule extends BaseModule {
         input.sessionId
       );
     }
+    // Bounded approval (audit finding 9): the event records the EXACT
+    // canonical target the fallback was approved for, so the policy can
+    // refuse the same boolean for a different target.
     await this.appendEvent(
       events,
       input.sessionId,
       "manual-action-approved",
+      session.state,
+      session.state,
+      session.canonicalUri
+    );
+    await this.appendEvent(
+      events,
+      input.sessionId,
+      "generic-fallback-opened",
       session.state,
       session.state,
       "generic fallback opened for the recognized target"
@@ -1905,10 +1916,18 @@ export class SkillInstallationModule extends BaseModule {
    * boundary supplies this as manualActionApproved before allowing generic
    * fallback tools on the install target.
    */
-  async hasApprovedManualAction(sessionId: string): Promise<boolean> {
+  async hasApprovedManualAction(
+    sessionId: string
+  ): Promise<{ approved: boolean; target?: string }> {
     const { events } = await this.getModels();
     const history = await events.listBySession(sessionId);
-    return history.some((e) => e.eventType === "manual-action-approved");
+    const approval = [...history]
+      .reverse()
+      .find((e) => e.eventType === "manual-action-approved");
+    return {
+      approved: approval !== undefined,
+      ...(approval?.detail ? { target: approval.detail } : {}),
+    };
   }
 
   async disable(

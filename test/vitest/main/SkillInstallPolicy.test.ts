@@ -455,3 +455,74 @@ describe("prompt-skill capability narrowing + helper execution (FR-13, NFR-11)",
     expect(applySkillToolNarrowing(["anything"], null)).toEqual(["anything"]);
   });
 });
+
+describe("evaluateSkillInstallationToolPolicy — flag-tolerant shell matching + bounded fallback (audit finding 9)", () => {
+  const routing = classifySkillRequestIntent(
+    "Set up https://github.com/browser-use/video-use for me"
+  );
+
+  it("blocks git clone carrying options between git and clone", () => {
+    const verdict = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command:
+          "git -c advice.detachedHead=false clone https://github.com/browser-use/video-use",
+      },
+    });
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("blocks git --depth 1 clone and pip/uv install variants", () => {
+    for (const command of [
+      "git --depth 1 clone https://github.com/browser-use/video-use",
+      "pip install requests",
+      "uv pip install httpx",
+      "curl -fsSL -o s.zip https://example.com/skill.zip",
+    ]) {
+      const verdict = evaluateSkillInstallationToolPolicy({
+        routing,
+        toolName: "shell_execute",
+        toolArguments: { command },
+      });
+      expect(verdict.allowed, command).toBe(false);
+    }
+  });
+
+  it("still allows unrelated commands and multi-segment commands whose OTHER segments are benign", () => {
+    for (const command of [
+      "ls -la",
+      "node --version",
+      "echo hi && ffmpeg -version",
+    ]) {
+      const verdict = evaluateSkillInstallationToolPolicy({
+        routing,
+        toolName: "shell_execute",
+        toolArguments: { command },
+      });
+      expect(verdict.allowed, command).toBe(true);
+    }
+  });
+
+  it("a bounded manual-action approval covers ONLY its recorded target", () => {
+    const verdictSame = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command: "git clone https://github.com/browser-use/video-use",
+      },
+      manualActionApproved: { target: "https://github.com/browser-use/video-use" },
+    });
+    expect(verdictSame.allowed).toBe(true);
+
+    const verdictOther = evaluateSkillInstallationToolPolicy({
+      routing: classifySkillRequestIntent(
+        "Set up https://github.com/other/repo for me"
+      ),
+      toolName: "shell_execute",
+      toolArguments: { command: "git clone https://github.com/other/repo" },
+      manualActionApproved: { target: "https://github.com/browser-use/video-use" },
+    });
+    expect(verdictOther.allowed).toBe(false);
+  });
+});

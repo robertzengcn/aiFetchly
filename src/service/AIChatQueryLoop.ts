@@ -680,7 +680,8 @@ export class AIChatQueryLoop {
   private installBoundaryDirty = true;
   /** FR-30: cached manual-action approval for the active session (fail
    *  closed until the audit lookup completes). */
-  private manualActionApprovedCache = false;
+  private manualActionApprovedCache: { approved: boolean; target?: string } =
+    { approved: false };
 
   /** FR-13: async allowlist refresh — caches the intersection for later
    *  rounds; never blocks (and never rejects) on the critical path. */
@@ -731,7 +732,7 @@ export class AIChatQueryLoop {
       );
       this.manualActionApprovedCache = this.activeInstallSession
         ? await module.hasApprovedManualAction(this.activeInstallSession.sessionId)
-        : false;
+        : { approved: false };
     } catch (boundaryError) {
       log.warn(
         "[install-boundary] session lookup failed:",
@@ -1958,7 +1959,14 @@ export class AIChatQueryLoop {
               routing: installRouting,
               toolName: call.name,
               toolArguments: call.arguments ?? {},
-              manualActionApproved,
+              manualActionApproved: manualActionApproved.approved
+                ? {
+                    target:
+                      manualActionApproved.target ??
+                      installRouting.source ??
+                      "",
+                  }
+                : undefined,
             });
             if (!verdict.allowed) {
               await emitToolCall(call.arguments ?? {});

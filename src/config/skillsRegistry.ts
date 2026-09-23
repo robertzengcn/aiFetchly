@@ -2426,6 +2426,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             ? { workspaceId: scope.workspaceId }
             : {}),
           invocationSource: "model",
+          // FR-24 (audit finding 7): bound the hidden instruction block by
+          // the caller's REAL remaining-context estimate when available.
+          ...(context.remainingContextTokens !== undefined &&
+          Number.isFinite(context.remainingContextTokens) &&
+          context.remainingContextTokens > 0
+            ? {
+                availableTokens: Math.min(
+                  Math.floor(context.remainingContextTokens),
+                  16_000
+                ),
+              }
+            : {}),
         }
       );
       if (!outcome.ok) {
