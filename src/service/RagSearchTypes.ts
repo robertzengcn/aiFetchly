@@ -63,6 +63,9 @@ export interface RagSearchCandidate {
     name: string;
     title?: string;
     fileType: string;
+    author?: string;
+    description?: string;
+    tags?: string[];
   };
 }
 
@@ -90,6 +93,9 @@ export interface KnowledgeSearchResultItem {
   documentName: string;
   title?: string;
   fileType: string;
+  author?: string;
+  tags?: string[];
+  description?: string;
   chunkId: number;
   chunkIndex: number;
   /** Combined or rerank score */

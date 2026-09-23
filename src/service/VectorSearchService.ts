@@ -26,6 +26,9 @@ export interface SearchResult {
     name: string;
     title?: string;
     fileType: string;
+    author?: string;
+    description?: string;
+    tags?: string[];
   };
   metadata: {
     chunkIndex: number;
@@ -73,6 +76,21 @@ export interface SkippedModelGroup {
 export interface VectorSearchResponse {
   results: SearchResult[];
   skippedModelGroups: SkippedModelGroup[];
+}
+
+function parseDocumentTags(tags: string | null | undefined): string[] | undefined {
+  if (!tags) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(tags);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((t: unknown): t is string => typeof t === "string");
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export class VectorSearchService {
@@ -354,6 +372,9 @@ export class VectorSearchService {
                 name: chunk.document.name,
                 title: chunk.document.title,
                 fileType: chunk.document.fileType,
+                author: chunk.document.author ?? undefined,
+                description: chunk.document.description ?? undefined,
+                tags: parseDocumentTags(chunk.document.tags),
               }
             : { id: hit.documentId, name: "Unknown", fileType: "unknown" },
         });
@@ -692,6 +713,9 @@ export class VectorSearchService {
             name: chunk.document.name,
             title: chunk.document.title,
             fileType: chunk.document.fileType,
+            author: chunk.document.author ?? undefined,
+            description: chunk.document.description ?? undefined,
+            tags: parseDocumentTags(chunk.document.tags),
           },
           metadata: {
             chunkIndex: chunk.chunkIndex,
