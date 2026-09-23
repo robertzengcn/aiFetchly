@@ -209,11 +209,28 @@ export class SkillSourceAcquisitionService {
       }
 
       const contentHash = staged.result.contentHash;
-      const resolvedRevision = await this.resolveRevision(
-        localRoot,
-        target,
-        descriptor
-      );
+
+      // FR-03 (audit finding 10): the fetcher's TRUSTED provenance wins.
+      // The GitHub archive fetcher already knows the immutable commit SHA
+      // it resolved and downloaded; rev-parse against the archive checkout
+      // cannot work (no .git) and a staged-tree hash is a CONTENT
+      // identity, not a commit. Only when the fetcher supplied none (git
+      // clones, local sources) do we fall back to rev-parse / tree hash.
+      const fetcherProvenance = acquired.source.provenance;
+      const fetcherSha =
+        fetcherProvenance?.sourceMeta &&
+        typeof fetcherProvenance.sourceMeta.resolvedCommitSha === "string" &&
+        /^[0-9a-f]{40}$/i.test(fetcherProvenance.sourceMeta.resolvedCommitSha)
+          ? (fetcherProvenance.sourceMeta.resolvedCommitSha as string).toLowerCase()
+          : null;
+      const fetcherAcquisition =
+        fetcherProvenance?.sourceMeta &&
+        typeof fetcherProvenance.sourceMeta.acquisition === "string"
+          ? (fetcherProvenance.sourceMeta.acquisition as string)
+          : null;
+      const resolvedRevision =
+        fetcherSha ??
+        (await this.resolveRevision(localRoot, target, descriptor));
 
       return {
         ok: true,
@@ -226,9 +243,12 @@ export class SkillSourceAcquisitionService {
           acquiredRoot: target,
           contentHash,
           acquisitionMethod:
-            descriptor.kind === "git" || descriptor.kind === "github"
-              ? "git"
-              : "local-copy",
+            fetcherAcquisition === "github-archive" ||
+            fetcherAcquisition === "github-release-asset"
+              ? fetcherAcquisition
+              : descriptor.kind === "git" || descriptor.kind === "github"
+                ? "git"
+                : "local-copy",
         },
       };
     } catch (err) {

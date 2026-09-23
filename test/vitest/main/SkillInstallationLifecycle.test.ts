@@ -764,3 +764,73 @@ describe("real Git provenance + GitHub archive fallback (FR-03)", () => {
     expect(localIdentity).toMatch(/^[0-9a-f]{64}$/);
   }, 120_000);
 });
+
+describe("fetcher provenance wins over rev-parse fallback (FR-03, audit finding 10)", () => {
+  it("a github fetcher supplying resolvedCommitSha is recorded verbatim with its acquisition method", async () => {
+    const { SkillSourceAcquisitionService } = await import(
+      "@/service/SkillSourceAcquisitionService"
+    );
+    const service = new SkillSourceAcquisitionService(
+      undefined,
+      path.join(configHome, "staging")
+    );
+    const RESOLVED = "d".repeat(40);
+    // Inject a github fetcher whose acquire() returns TRUSTED provenance
+    // (what GitHubPluginFetcher produces for archive installs).
+    (
+      service as unknown as { github: unknown }
+    ).github = {
+      acquire: async () => ({
+        success: true as const,
+        source: {
+          localRoot: fixtureRoot,
+          cleanup: async () => undefined,
+          provenance: {
+            sourceUri: "https://github.com/o/r",
+            sourceMeta: {
+              acquisition: "github-archive",
+              resolvedCommitSha: RESOLVED,
+              repositoryHost: "github.com",
+            },
+          },
+        },
+      }),
+    };
+
+    const result = await service.acquire("prov-fetcher-1", {
+      kind: "github",
+      canonicalUri: "https://github.com/o/r",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The fetcher's SHA — NOT a git rev-parse (which cannot work on an
+    // archive checkout) and NOT the staged tree hash.
+    expect(result.source.resolvedRevision).toBe(RESOLVED);
+    expect(result.source.acquisitionMethod).toBe("github-archive");
+    // The staged content hash remains the SEPARATE content identity.
+    expect(result.source.contentHash).not.toBe(RESOLVED);
+  }, 120_000);
+
+  it("sources without fetcher provenance keep the rev-parse/tree-hash fallback", async () => {
+    const { SkillSourceAcquisitionService } = await import(
+      "@/service/SkillSourceAcquisitionService"
+    );
+    const service = new SkillSourceAcquisitionService(
+      undefined,
+      path.join(configHome, "staging")
+    );
+    const result = await service.acquire("prov-local-1", {
+      kind: "local-directory",
+      canonicalUri: fixtureRoot,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.source.acquisitionMethod).toBe("local-copy");
+    const { hashTree } = await import(
+      "@/childprocess/skill-installation/stagePackage"
+    );
+    expect(result.source.resolvedRevision).toBe(
+      hashTree(result.source.acquiredRoot)
+    );
+  }, 120_000);
+});

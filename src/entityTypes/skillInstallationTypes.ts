@@ -54,7 +54,11 @@ export interface ResolvedSkillSource {
   readonly resolvedRevision: string;
   readonly acquiredRoot: string;
   readonly contentHash: string;
-  readonly acquisitionMethod: "git" | "github-archive" | "local-copy";
+  readonly acquisitionMethod:
+    | "git"
+    | "github-archive"
+    | "github-release-asset"
+    | "local-copy";
 }
 
 // ---------------------------------------------------------------------------
