@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ShutdownCoordinator,
+  sanitizeVerificationFailure,
   type ForceStopHook,
   type ShutdownParticipant,
   type ShutdownReport,
@@ -165,7 +166,8 @@ describe("ShutdownCoordinator — failure isolation (AC-04, AC-06)", () => {
       (o) => o.id === "bad" && o.stage === "stop"
     );
     expect(badStop?.status).toBe("error");
-    expect(badStop?.errorMessage).toContain("bad stop failed");
+    // T15: only the error NAME + stable code — never the message text.
+    expect(badStop?.errorMessage).toBe("Error[Er5]");
     const goodStop = report.participantOutcomes.find(
       (o) => o.id === "good" && o.stage === "stop"
     );
@@ -335,11 +337,8 @@ describe("ShutdownCoordinator — deadline math and context", () => {
 });
 
 describe("ShutdownCoordinator — report privacy (FR-09)", () => {
-  it("truncates long error messages to 200 characters", async () => {
-    const recording = makeRecordingParticipants(["noisy"], {
-      noisy: { rejectStop: true },
-    });
-    // Make the participant throw a very long message.
+  it("long messages are dropped entirely (name+code only, T15)", async () => {
+    const recording = makeRecordingParticipants(["noisy"]);
     recording.participants[0] = {
       ...recording.participants[0],
       stop: () => Promise.reject(new Error("x".repeat(500))),
@@ -347,23 +346,50 @@ describe("ShutdownCoordinator — report privacy (FR-09)", () => {
     const coordinator = makeCoordinator(recording);
     const { report } = await coordinator.run(CONTEXT);
     const outcome = report.participantOutcomes[0];
-    expect(outcome?.errorMessage?.length ?? 0).toBeLessThanOrEqual(201);
+    expect(outcome?.errorMessage).toBe("Error[Er5]");
   });
 
-  it("redacts path-shaped substrings from participant error messages (FR-09)", async () => {
+  it("participant errors carry only the name+code, never message text (T15)", async () => {
     const recording = makeRecordingParticipants(["leaky"]);
     recording.participants[0] = {
       ...recording.participants[0],
       stop: () =>
         Promise.reject(
-          new Error("ENOENT: no such file /home/robertzeng/secrets/config.json")
+          new Error(
+            "ENOENT: no such file /home/robertzeng/secrets/config.json sk-token https://evil/?t=abc"
+          )
         ),
     };
     const coordinator = makeCoordinator(recording);
     const { report } = await coordinator.run(CONTEXT);
     const outcome = report.participantOutcomes[0];
-    expect(outcome?.errorMessage).toContain("<path>");
-    expect(outcome?.errorMessage).not.toContain("/home/robertzeng");
+    // Name+code only: paths/URLs/credentials cannot appear by construction.
+    expect(outcome?.errorMessage).toBe("Error[Er5]");
+  });
+
+  it("sanitizeVerificationFailure scrubs paths, URLs, and long tokens (T15)", () => {
+    const sanitized = sanitizeVerificationFailure(
+      "pgrep failed at /home/robert/secrets see https://evil.example/?t=abc token=abcdefghijklmnopqrstuvwx1234 still-alive-pid-42"
+    );
+    expect(sanitized).toContain("<path>");
+    expect(sanitized).toContain("<url>");
+    expect(sanitized).toContain("<token>");
+    expect(sanitized).not.toContain("/robert");
+    expect(sanitized).toContain("still-alive-pid-42"); // allowlisted shape
+  });
+
+  it("report verificationFailures pass through the scrubber (T15)", async () => {
+    const recording = makeRecordingParticipants([]);
+    const coordinator = makeCoordinator(recording, {
+      forceStop: async () => ({
+        forcedCount: 1,
+        verificationFailures: ["yp-scraper: pids still alive after force-kill: 7"],
+      }),
+    });
+    const { report } = await coordinator.run(CONTEXT);
+    expect(report.verificationFailures[0]).toContain("still alive");
+    expect(report.verificationFailures[0]).toContain("7");
+    expect(report.verificationFailures[0]).toContain("yp-scraper");
   });
 
   it("carries attempt/reason/intent correlation fields", async () => {

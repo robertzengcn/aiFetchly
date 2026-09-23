@@ -118,17 +118,35 @@ function truncateMessage(message: string): string {
     : message;
 }
 
+/**
+ * T15 (FR-09): reports NEVER serialize arbitrary exception text. Each
+ * participant outcome carries only the error NAME (constructor identity,
+ * e.g. TypeError / BrowserSlotShutdownError) plus a stable code —
+ * credentials, command arguments, URLs, env values, and scraped content
+ * embedded in messages cannot leak by construction.
+ */
 function describeError(err: unknown): string {
-  const raw =
-    err instanceof Error
-      ? // Error.message only — name+message, never stack traces (may embed paths).
-        `${err.name}: ${err.message}`
-      : String(err);
-  // FR-09 privacy: messages can quote filesystem paths (ENOENT etc.).
-  // Collapse absolute/posix/win32 path-shaped runs to <path>.
-  return truncateMessage(
-    raw.replace(/(?:[A-Za-z]:)?(?:[/][\w .@()-]+){2,}/g, "<path>")
+  const name = err instanceof Error && err.name.length > 0 ? err.name : "Error";
+  return `${name}[${name.slice(0, 2)}${name.length}]`;
+}
+
+/**
+ * T15 defense-in-depth: scrub anything reported through a legacy
+ * free-text path (force-hook verification failures) — strip control
+ * chars, collapse URLs, path-shaped runs, and long opaque tokens to
+ * sentinels. Allowlisted fields (owner ids, pids, outcome kinds) pass
+ * through unchanged.
+ */
+export function sanitizeVerificationFailure(detail: string): string {
+  const CONTROL_CHARS = new RegExp(
+    "[" + String.fromCharCode(0) + "-" + String.fromCharCode(31) + String.fromCharCode(127) + "]",
+    "g"
   );
+  let out = detail.replace(CONTROL_CHARS, " ");
+  out = out.replace(/https?:\/\/\S+/g, "<url>");
+  out = out.replace(/(?:[A-Za-z]:)?(?:[/][\w .@()-]+){2,}/g, "<path>");
+  out = out.replace(/\b[A-Za-z0-9_]{24,}\b/g, "<token>");
+  return truncateMessage(out);
 }
 
 /**
@@ -350,7 +368,10 @@ export class ShutdownCoordinator {
       phaseTimings,
       participantOutcomes,
       forcedTerminationCount: forcedCount,
-      verificationFailures,
+      // T15: scrub legacy free-text failures at the report boundary.
+      verificationFailures: verificationFailures.map(
+        sanitizeVerificationFailure
+      ),
       deadlineExpired,
       clean,
     };
