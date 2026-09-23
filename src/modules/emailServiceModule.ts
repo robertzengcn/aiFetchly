@@ -373,27 +373,34 @@ export class EmailServiceModule
 
     if (!service.port || service.port.trim().length === 0) {
       push("port_required", "Port is required");
-    } else {
-      const portStr = service.port.trim();
-      const portNum = Number(portStr);
+    } else if (!this.isCanonicalPort(service.port)) {
       // Canonical decimal digits only: fractional ("4.65"), hex ("0x1f"),
       // and scientific notation ("1e2") coerce to passing numbers via
       // Number() but are not valid port literals (§8.2).
-      if (
-        !/^[0-9]+$/.test(portStr) ||
-        isNaN(portNum) ||
-        !Number.isInteger(portNum) ||
-        portNum < 1 ||
-        portNum > 65535
-      ) {
-        push("port_invalid", "Port must be a valid number between 1 and 65535");
-      }
+      push("port_invalid", "Port must be a valid number between 1 and 65535");
+    }
+
+    const rawProtocol = service.receiveProtocol;
+    const protocolIsKnown = rawProtocol === "imap" || rawProtocol === "pop3";
+    if (
+      typeof rawProtocol === "string" &&
+      rawProtocol.length > 0 &&
+      !protocolIsKnown
+    ) {
+      push("receive_config_invalid", "Receive protocol must be imap or pop3");
     }
 
     // Receive settings only validated when receive is enabled (§8.3).
-    if (service.receiveEnabled === 1) {
+    // A non-empty unknown protocol is already rejected above. Missing
+    // protocol still falls back to IMAP so a receive-enabled row must
+    // name an IMAP host.
+    const protocolExplicitlyInvalid =
+      typeof rawProtocol === "string" &&
+      rawProtocol.length > 0 &&
+      !protocolIsKnown;
+    if (service.receiveEnabled === 1 && !protocolExplicitlyInvalid) {
       const protocol: EmailReceiveProtocol =
-        service.receiveProtocol === "pop3" ? "pop3" : "imap";
+        rawProtocol === "pop3" ? "pop3" : "imap";
       const host = protocol === "imap" ? service.imapHost : service.pop3Host;
       const portStr = protocol === "imap" ? service.imapPort : service.pop3Port;
       const receiveErrors: string[] = [];
@@ -402,9 +409,21 @@ export class EmailServiceModule
           `Receive ${protocol.toUpperCase()} host is required when receive is enabled`
         );
       }
-      if (!portStr || portStr.trim().length === 0 || isNaN(Number(portStr))) {
+      if (!portStr || !this.isCanonicalPort(portStr)) {
         receiveErrors.push(
-          `Receive ${protocol.toUpperCase()} port must be a valid number when receive is enabled`
+          `Receive ${protocol.toUpperCase()} port must be a valid number between 1 and 65535 when receive is enabled`
+        );
+      }
+      const inactivePort =
+        protocol === "imap" ? service.pop3Port : service.imapPort;
+      const inactiveLabel = protocol === "imap" ? "POP3" : "IMAP";
+      if (
+        inactivePort &&
+        inactivePort.trim().length > 0 &&
+        !this.isCanonicalPort(inactivePort)
+      ) {
+        receiveErrors.push(
+          `Receive ${inactiveLabel} port must be a valid number between 1 and 65535 when receive is enabled`
         );
       }
       // 3-level receive fallback: explicit → SMTP username → From (§8.3).
@@ -434,6 +453,17 @@ export class EmailServiceModule
   private isValidEmail(email: string): boolean {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  }
+
+  /**
+   * True for a decimal port literal in 1..65535. Rejects fractions, hex,
+   * and scientific notation, which Number() would otherwise accept.
+   */
+  private isCanonicalPort(portStr: string): boolean {
+    const trimmed = portStr.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return false;
+    const portNum = Number(trimmed);
+    return Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535;
   }
 
   private async encryptCredentialsForStorage(

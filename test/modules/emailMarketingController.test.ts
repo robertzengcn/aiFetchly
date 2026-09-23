@@ -4,6 +4,7 @@ import { expect } from "chai";
 import sinon from "sinon";
 import { EmailMarketingController } from "@/controller/emailMarketingController";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailServiceModuleInterface } from "@/modules/interface/EmailServiceModuleInterface";
 import type { EmailServiceImportResult } from "@/entityTypes/emailmarketingType";
 
@@ -575,6 +576,71 @@ describe("EmailMarketingController", () => {
       expect(result.imported).to.equal(0);
       expect(result.skipped).to.equal(1);
       expect(result.errors.join(" ")).to.contain("imapSsl");
+      expect(create.called).to.equal(false);
+    });
+
+    it("rejects a receiveProtocol other than imap or pop3", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol,pop3Host,pop3Port,receiveEnabled\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,pop,pop.example.com,995,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.join(" ")).to.contain(
+        "receiveProtocol must be imap or pop3"
+      );
+      expect(create.called).to.equal(false);
+    });
+
+    it("accepts POP3 regardless of letter case", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,POP3\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("pop3");
+    });
+
+    it("rejects an out-of-range receive port when receive is enabled", async () => {
+      const create = sinon.stub().resolves(11);
+      const realModule = new EmailServiceModule();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+        validateEmailService: realModule.validateEmailService.bind(realModule),
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol,imapHost,imapPort,receiveEnabled\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,imap,imap.example.com,99999,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.join(" ")).to.contain("1 and 65535");
       expect(create.called).to.equal(false);
     });
 

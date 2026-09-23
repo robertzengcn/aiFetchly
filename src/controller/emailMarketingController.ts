@@ -823,8 +823,7 @@ export class EmailMarketingController {
       presentFields.add(field);
       switch (field) {
         case "ssl":
-          (values as Record<string, unknown>)[field] =
-            this.parseImportSsl(str);
+          (values as Record<string, unknown>)[field] = this.parseImportSsl(str);
           break;
         case "imapSsl":
         case "pop3Ssl":
@@ -846,6 +845,12 @@ export class EmailMarketingController {
         case "receiveProtocol": {
           const lower = str.toLowerCase();
           if (lower.length > 0) {
+            if (lower !== "imap" && lower !== "pop3") {
+              return {
+                row: null,
+                error: "receiveProtocol must be imap or pop3",
+              };
+            }
             (values as Record<string, unknown>).receiveProtocol =
               lower as EmailServiceEntitydata["receiveProtocol"];
           }

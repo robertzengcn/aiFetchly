@@ -187,4 +187,69 @@ describe("EmailServiceModule.validateEmailService (options-aware)", function () 
     );
     expect(result.valid).to.be(true);
   });
+
+  it("rejects a receive protocol other than imap or pop3", async function () {
+    const module = new EmailServiceModule();
+    const result = await module.validateEmailService(
+      makeService({ receiveProtocol: "pop" as "imap" }),
+      { mode: "update", hasStoredPassword: true }
+    );
+    expect(result.valid).to.be(false);
+    expect(result.errors.map((e) => e.code)).to.contain(
+      "receive_config_invalid"
+    );
+    expect(result.errors.map((e) => e.message).join(" ")).to.contain(
+      "imap or pop3"
+    );
+  });
+
+  it("rejects receive ports outside 1..65535 when receive is enabled", async function () {
+    const module = new EmailServiceModule();
+    for (const imapPort of ["99999", "0", "4.65", "1e3", "0x3e1"]) {
+      const result = await module.validateEmailService(
+        makeService({
+          receiveEnabled: 1,
+          imapHost: "imap.example.com",
+          imapPort,
+        }),
+        { mode: "create" }
+      );
+      expect(result.valid).to.be(false);
+      expect(result.errors.map((e) => e.code)).to.contain(
+        "receive_config_invalid"
+      );
+    }
+    const unusedPopPort = await module.validateEmailService(
+      makeService({
+        receiveEnabled: 1,
+        imapHost: "imap.example.com",
+        imapPort: "993",
+        pop3Port: "99999",
+      }),
+      { mode: "create" }
+    );
+    expect(unusedPopPort.valid).to.be(false);
+    expect(unusedPopPort.errors.map((e) => e.message).join(" ")).to.contain(
+      "POP3"
+    );
+  });
+
+  it("accepts a canonical receive port and ignores a bad port while receive is off", async function () {
+    const module = new EmailServiceModule();
+    const enabled = await module.validateEmailService(
+      makeService({
+        receiveEnabled: 1,
+        receiveProtocol: "pop3",
+        pop3Host: "pop.example.com",
+        pop3Port: "995",
+      }),
+      { mode: "create" }
+    );
+    expect(enabled.valid).to.be(true);
+    const disabled = await module.validateEmailService(
+      makeService({ receiveEnabled: 0, imapPort: "99999" }),
+      { mode: "update", hasStoredPassword: true }
+    );
+    expect(disabled.valid).to.be(true);
+  });
 });
