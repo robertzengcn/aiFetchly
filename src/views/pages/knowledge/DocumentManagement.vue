@@ -131,6 +131,21 @@
         {{ formatFileSize(item.fileSize) }}
       </template>
 
+      <template v-slot:item.author="{ item }">
+        {{ displayAuthor(item) }}
+      </template>
+
+      <template v-slot:item.tags="{ item }">
+        <v-chip
+          v-for="tag in visibleTags(item)"
+          :key="tag"
+          size="small"
+          class="mr-1"
+        >
+          {{ tag }}
+        </v-chip>
+      </template>
+
       <template v-slot:item.uploadDate="{ item }">
         {{ formatDate(item.uploadDate) }}
       </template>
@@ -333,6 +348,8 @@ const { t } = useI18n();
     headers.value = [
       { title: t('knowledge.name'), sortable: true, key: 'name' },
       { title: t('knowledge.title'), sortable: true, key: 'title' },
+      { title: t('knowledge.author') || 'Author', sortable: true, key: 'author' },
+      { title: t('knowledge.tags') || 'Tags', sortable: false, key: 'tags' },
       { title: t('knowledge.status'), sortable: true, key: 'status' },
       { title: t('knowledge.processing'), sortable: true, key: 'processingStatus' },
       { title: t('knowledge.file_type'), sortable: true, key: 'fileType' },
@@ -828,6 +845,29 @@ const { t } = useI18n();
 
     const formatDate = (date) => {
       return new Date(date).toLocaleDateString();
+    };
+
+    const displayAuthor = (doc: DocumentInfo): string => {
+      if (!doc.author || doc.author === 'User') {
+        return '';
+      }
+      return doc.author;
+    };
+
+    const visibleTags = (doc: DocumentInfo): string[] => {
+      const tags: string[] = doc.tags ?? [];
+      if (tags.length === 0) {
+        return [];
+      }
+      const folded: string[] = tags.map((t: string) => t.toLowerCase());
+      if (
+        folded.length === 2 &&
+        folded.includes('uploaded') &&
+        folded.includes('knowledge')
+      ) {
+        return [];
+      }
+      return tags;
     };
 
     const translateStatus = (status: string | undefined) => {
