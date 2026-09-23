@@ -294,3 +294,147 @@ describe("ShellToolService — conversation workspace roots", () => {
     expect(result.exit_code).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression suite for the exact reported failure: the LLM called
+// shell_execute with { command: "wc -l canada_trade_companies.csv",
+// cwd: "<chat workspace>" } and was rejected because the workspace lived
+// outside the default roots (home + userData). These tests pin the
+// conversation-scoped root resolution so the bug cannot silently return.
+// ---------------------------------------------------------------------------
+
+describe("ShellToolService — reported-scenario regressions", () => {
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shell-repro-ws-"))
+    );
+    resolveWorkspaceMock.mockResolvedValue({
+      workspaceId: 7,
+      rootPath: workspaceRoot,
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("runs `wc -l <file>` with cwd set to the chat workspace (exact reported call)", async () => {
+    // Recreate the user's scenario: a CSV inside the chat workspace, which
+    // itself lives outside the default roots (tmpdir is not under $HOME).
+    fs.writeFileSync(
+      path.join(workspaceRoot, "canada_trade_companies.csv"),
+      "name,country\nAcme,CA\nGlobex,CA\n"
+    );
+
+    const result = await executeShellCommand(
+      { command: "wc -l canada_trade_companies.csv", cwd: workspaceRoot },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.stdout).toContain("3");
+    expect(result.stdout).toContain("canada_trade_companies.csv");
+  });
+
+  it("accepts an absolute path argument inside the chat workspace", async () => {
+    const csvPath = path.join(workspaceRoot, "data.csv");
+    fs.writeFileSync(csvPath, "a\nb\n");
+
+    const result = await executeShellCommand(
+      { command: `wc -l ${JSON.stringify(csvPath)}`, cwd: workspaceRoot },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.stdout).toContain("2");
+  });
+
+  it("accepts a cwd that is a subdirectory of the chat workspace", async () => {
+    const subDir = path.join(workspaceRoot, "nested", "deeper");
+    fs.mkdirSync(subDir, { recursive: true });
+
+    const result = await executeShellCommand(
+      { command: "pwd", cwd: subDir },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(fs.realpathSync(result.stdout.trim())).toBe(
+      fs.realpathSync(subDir)
+    );
+    expect(result.validatedCwd).toBe(fs.realpathSync(subDir));
+  });
+
+  it("blocks path arguments outside the chat workspace at the permission layer", async () => {
+    // With an approved workspace, reads outside the workspace must not
+    // auto-execute — the permission layer escalates them to `ask`.
+    const result = await executeShellCommand(
+      { command: "wc -l /etc/hosts", cwd: workspaceRoot },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.permission_verdict).toBe("ask");
+    expect(result.error).toContain("requires approval");
+  });
+
+  it("re-resolves workspace roots on every execution (no stale root caching)", async () => {
+    const workspaceB = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shell-repro-ws-b-"))
+    );
+    try {
+      resolveWorkspaceMock.mockReset();
+      resolveWorkspaceMock
+        .mockResolvedValueOnce({ workspaceId: 1, rootPath: workspaceRoot })
+        .mockResolvedValueOnce({ workspaceId: 2, rootPath: workspaceB });
+
+      // First execution: roots = workspaceRoot, so cwd in workspaceB fails.
+      const first = await executeShellCommand(
+        { command: "pwd", cwd: workspaceB },
+        CONVERSATION_ID
+      );
+      expect(first.success).toBe(false);
+      expect(first.error).toContain("outside allowed workspace roots");
+
+      // Second execution (e.g. user switched workspace): roots = workspaceB.
+      const second = await executeShellCommand(
+        { command: "pwd", cwd: workspaceB },
+        CONVERSATION_ID
+      );
+      expect(second.success).toBe(true);
+      expect(fs.realpathSync(second.stdout.trim())).toBe(workspaceB);
+
+      // The resolver must be consulted for EVERY execution — a module-level
+      // cached guard would make the second call fail.
+      expect(resolveWorkspaceMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(workspaceB, { recursive: true, force: true });
+    }
+  });
+
+  it("never consults the workspace resolver for an empty conversationId", async () => {
+    resolveWorkspaceMock.mockClear();
+
+    const result = await executeShellCommand({ command: "pwd" }, "");
+
+    expect(resolveWorkspaceMock).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    expect(result.exit_code).toBe(0);
+  });
+
+  it("reports the workspace root in validatedCwd when cwd is omitted", async () => {
+    const result = await executeShellCommand(
+      { command: "pwd" },
+      CONVERSATION_ID
+    );
+
+    expect(result.success).toBe(true);
+    // Audit fields must reflect the effective (workspace) root so logs show
+    // where the command actually ran.
+    expect(fs.realpathSync(result.validatedCwd ?? "")).toBe(workspaceRoot);
+  });
+});
