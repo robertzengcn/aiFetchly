@@ -49,6 +49,7 @@ export interface SearchOptions {
     start: Date;
     end: Date;
   };
+  documentIds?: number[];
 }
 
 /**
@@ -119,12 +120,17 @@ export class VectorSearchService {
       // Get all documents with embeddings
       const documents = await this.getAllDocumentsWithEmbeddings();
 
-      if (documents.length === 0) {
+      const documentsInScope =
+        options.documentIds && options.documentIds.length > 0
+          ? documents.filter((d) => options.documentIds!.includes(d.id))
+          : documents;
+
+      if (documentsInScope.length === 0) {
         return [];
       }
 
       // Group documents by their embedding model
-      const documentsByModel = await this.groupDocumentsByModel(documents);
+      const documentsByModel = await this.groupDocumentsByModel(documentsInScope);
 
       if (documentsByModel.size === 0) {
         return [];
@@ -277,6 +283,7 @@ export class VectorSearchService {
     const vectorResults = await this.search(query, {
       limit: vectorLimit,
       maxDistance,
+      documentIds: options.documentIds,
     });
 
     // 2. Collect keyword candidates
@@ -356,6 +363,11 @@ export class VectorSearchService {
     // 4. Sort by combined score descending
     const candidates = Array.from(candidateMap.values());
     candidates.sort((a, b) => b.combinedScore - a.combinedScore);
+
+    if (options.documentIds && options.documentIds.length > 0) {
+      const allowed = new Set<number>(options.documentIds);
+      return candidates.filter((c) => allowed.has(c.documentId));
+    }
 
     return candidates;
   }
