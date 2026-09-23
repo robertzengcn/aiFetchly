@@ -1508,6 +1508,363 @@ describe("AIChatQueryLoop", () => {
       expect(fakeExecute).not.toHaveBeenCalled();
     });
 
+    it("recovers on the next round when the model self-corrects malformed arguments", async () => {
+      // Regression: a malformed round must feed an error tool result back to
+      // the model and continue, so a follow-up round with valid arguments
+      // completes the turn instead of failing it.
+      // Ends without a closing brace so the loop takes the "not valid JSON"
+      // branch (a `{...}` prefix without a trailing `}` is treated as
+      // truncated instead).
+      const badChunk = makeToolCallChunk("call-1", "glob_files", "not-json");
+      const goodChunk = makeToolCallChunk(
+        "call-2",
+        "glob_files",
+        '{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      // Snapshot the transcript at the start of the retry round — the request
+      // messages array is mutated in place as later rounds complete.
+      let retryRoundMessages: Array<{ role: string; content: string }> = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          const round = callCount++;
+          if (round === 0) {
+            onChunk(badChunk);
+            return;
+          }
+          if (round === 1) {
+            retryRoundMessages = request.messages.map((m) => ({
+              role: m.role,
+              content: String(m.content),
+            }));
+            onChunk(goodChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "src/**" },
+        expect.objectContaining({ toolCallId: "call-2" })
+      );
+      // The retry round must carry the error tool result for the malformed
+      // call, including the nudge to emit separate tool_call entries.
+      const toolMessages = retryRoundMessages.filter((m) => m.role === "tool");
+      expect(toolMessages).toHaveLength(1);
+      const content = toolMessages[0].content;
+      expect(content).toContain("not valid JSON");
+      expect(content).toContain("separate tool_call entries");
+    });
+
+    it("splits three-way concatenated arguments from a provider-merged call", async () => {
+      // Matches the production failure trace payload shape, where a provider
+      // merged three parallel calls into one tool_call:
+      // {"pattern":"*"}{"query":...}{"query":...}
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"query":"email marketing"}{"query":"lead generation"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "glob_files",
+        { query: "email marketing" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        3,
+        "glob_files",
+        { query: "lead generation" },
+        expect.objectContaining({ toolCallId: "call-1__split_2" })
+      );
+    });
+
+    it("salvages concatenated arguments streamed across multiple delta chunks", async () => {
+      // Real providers stream the merged call incrementally — the
+      // concatenation only becomes visible after the accumulator joins the
+      // argument deltas, so the salvage must operate on the joined buffer.
+      const firstDelta: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-1",
+                  type: "function",
+                  function: { name: "glob_files", arguments: '{"pattern":"*' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      };
+      const secondDelta: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  function: { arguments: '"}{"query":"email marketing"}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      };
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(firstDelta);
+            onChunk(secondDelta);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "glob_files",
+        { query: "email marketing" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+    });
+
+    it("does not count a salvaged round toward the malformed retry budget", async () => {
+      // A provider-merged round that gets salvaged contains no malformed
+      // calls, so it must reset consecutiveMalformedRounds. If it were still
+      // counted, the sequence below (salvaged round + 3 malformed rounds)
+      // would exceed MAX_MALFORMED_ARGUMENT_RETRIES and fail the turn.
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"query":"x"}'
+      );
+      const badChunk = makeToolCallChunk(
+        "call-bad",
+        "glob_files",
+        '{"pattern":"*"}garbage'
+      );
+      const goodChunk = makeToolCallChunk(
+        "call-good",
+        "glob_files",
+        '{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          const round = callCount++;
+          if (round === 0) {
+            onChunk(mergedChunk);
+            return;
+          }
+          if (round >= 1 && round <= 3) {
+            onChunk(badChunk);
+            return;
+          }
+          if (round === 4) {
+            onChunk(goodChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      // 2 salvaged executions (round 0) + 1 self-corrected execution (round 4)
+      expect(fakeExecute).toHaveBeenCalledTimes(3);
+      expect(fakeStream).toHaveBeenCalledTimes(6);
+    });
+
     it("returns failed when stream ends after an unusable tool call delta", async () => {
       const incompleteChunk: OpenAIChatCompletionChunk = {
         id: "resp-1",

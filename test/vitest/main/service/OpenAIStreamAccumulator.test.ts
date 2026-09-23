@@ -190,6 +190,68 @@ describe("OpenAIStreamAccumulator", () => {
     expect(parsed[0].rawArgumentsJson).toBe("{bad");
   });
 
+  it("buffers provider-merged concatenated arguments verbatim and reports them malformed", () => {
+    // Contract guard for AIChatQueryLoop's concatenated-arguments salvage:
+    // when a provider merges parallel calls into a single tool_call index,
+    // the accumulator must keep the raw concatenated string intact and report
+    // ok:false so the query loop can split it. Do NOT "fix" this layer by
+    // parsing only the first object — that would silently drop calls.
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c1",
+                  function: {
+                    name: "glob_files",
+                    arguments: '{"pattern":"*',
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      })
+    );
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  function: {
+                    arguments: '"}{"query":"email marketing"}',
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      })
+    );
+    const buffered = acc.getBufferedToolCalls();
+    expect(buffered.length).toBe(1);
+    expect(buffered[0].argumentsJson).toBe(
+      '{"pattern":"*"}{"query":"email marketing"}'
+    );
+    const parsed = acc.tryParseToolCallArguments();
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].ok).toBe(false);
+    expect(parsed[0].rawArgumentsJson).toBe(
+      '{"pattern":"*"}{"query":"email marketing"}'
+    );
+  });
+
   it("treats empty arguments as valid {}", () => {
     const acc = new OpenAIStreamAccumulator();
     acc.ingest(

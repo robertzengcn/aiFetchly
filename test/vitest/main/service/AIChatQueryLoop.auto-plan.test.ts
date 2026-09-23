@@ -4,10 +4,17 @@ import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type {
   AIChatAutoPlanLoopConfig,
+  AIChatQueryEvent,
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type { SkillDefinition } from "@/entityTypes/skillTypes";
+import type {
+  OpenAIChatCompletionChunk,
+  OpenAIChatCompletionRequest,
+  OpenAIChatMessage,
+} from "@/api/aiChatApi";
 
 /**
  * Fake streamChatCompletion that emits a scripted assistant response per round.
@@ -24,22 +31,32 @@ function makeScriptedStream(
   }>
 ) {
   let call = 0;
-  return vi.fn(async (_req: any, onChunk: (c: any) => void) => {
-    const r = responses[Math.min(call, responses.length - 1)];
-    call += 1;
-    onChunk({
-      choices: [
-        {
-          delta: {
-            content: r.content ?? "",
-            tool_calls: r.toolCalls,
-            role: "assistant",
+  return vi.fn(
+    async (
+      _req: OpenAIChatCompletionRequest,
+      onChunk: (c: OpenAIChatCompletionChunk) => void
+    ) => {
+      const r = responses[Math.min(call, responses.length - 1)];
+      call += 1;
+      onChunk({
+        id: "resp-scripted",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: r.content ?? "",
+              tool_calls: r.toolCalls,
+              role: "assistant",
+            },
+            finish_reason: r.toolCalls ? "tool_calls" : "stop",
           },
-          finish_reason: r.toolCalls ? "tool_calls" : "stop",
-        },
-      ],
-    });
-  });
+        ],
+      });
+    }
+  );
 }
 
 describe("AIChatQueryLoop auto-plan transition", () => {
@@ -67,7 +84,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       planTools,
     };
 
-    const events: any[] = [];
+    const events: AIChatQueryEvent[] = [];
     const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
 
     const stream = makeScriptedStream([
@@ -87,12 +104,12 @@ describe("AIChatQueryLoop auto-plan transition", () => {
     ]);
 
     const loop = new AIChatQueryLoop({
-      streamChatCompletion: stream as any,
+      streamChatCompletion: stream,
       executeTool: vi.fn(),
       getSkillDefinition: () => undefined,
     });
 
-    const messages: any[] = [
+    const messages: OpenAIChatMessage[] = [
       { role: "system", content: "You are a helpful assistant." },
       { role: "user", content: "build me a campaign" },
     ];
@@ -101,7 +118,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       conversationId: "v2-conv-1",
       assistantMessageId: "asst-1",
       messages,
-      request: { message: "build me a campaign" } as any,
+      request: { message: "build me a campaign" },
       openAITools: [ENTER_PLAN_MODE_TOOL],
       abortController: new AbortController(),
       eventSink,
@@ -118,10 +135,12 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       title: "build me a campaign".slice(0, 80),
       objective: expect.any(String),
     });
-    const planStateEvent = events.find((e) => e.type === "plan_state");
+    const planStateEvent = events.find((e) => e.type === "plan_state") as
+      | { planState: AIChatPlanStateView; autoEntered: boolean }
+      | undefined;
     expect(planStateEvent).toBeDefined();
-    expect(planStateEvent.planState.planId).toBe("plan-test-1");
-    expect(planStateEvent.autoEntered).toBe(true);
+    expect(planStateEvent?.planState.planId).toBe("plan-test-1");
+    expect(planStateEvent?.autoEntered).toBe(true);
     const systemReminder = messages.find(
       (m) =>
         m.role === "system" &&
@@ -132,7 +151,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
   });
 
   it("returns error tool result when autoPlan config is absent", async () => {
-    const events: any[] = [];
+    const events: AIChatQueryEvent[] = [];
     const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
 
     const stream = makeScriptedStream([
@@ -149,12 +168,12 @@ describe("AIChatQueryLoop auto-plan transition", () => {
     ]);
 
     const loop = new AIChatQueryLoop({
-      streamChatCompletion: stream as any,
+      streamChatCompletion: stream,
       executeTool: vi.fn(),
       getSkillDefinition: () => undefined,
     });
 
-    const messages: any[] = [
+    const messages: OpenAIChatMessage[] = [
       { role: "system", content: "sys" },
       { role: "user", content: "go" },
     ];
@@ -163,7 +182,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       conversationId: "v2-conv-1",
       assistantMessageId: "asst-1",
       messages,
-      request: { message: "go" } as any,
+      request: { message: "go" },
       openAITools: [ENTER_PLAN_MODE_TOOL],
       abortController: new AbortController(),
       eventSink,
@@ -209,7 +228,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       planTools: PlanModeToolRegistry.toOpenAITools(),
     };
 
-    const events: any[] = [];
+    const events: AIChatQueryEvent[] = [];
     const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
     const stream = makeScriptedStream([
       {
@@ -225,12 +244,12 @@ describe("AIChatQueryLoop auto-plan transition", () => {
     ]);
 
     const loop = new AIChatQueryLoop({
-      streamChatCompletion: stream as any,
+      streamChatCompletion: stream,
       executeTool: vi.fn(),
       getSkillDefinition: () => undefined,
     });
 
-    const messages: any[] = [
+    const messages: OpenAIChatMessage[] = [
       { role: "system", content: "sys" },
       { role: "user", content: "go" },
     ];
@@ -239,7 +258,7 @@ describe("AIChatQueryLoop auto-plan transition", () => {
       conversationId: "v2-conv-1",
       assistantMessageId: "asst-1",
       messages,
-      request: { message: "go" } as any,
+      request: { message: "go" },
       openAITools: [ENTER_PLAN_MODE_TOOL],
       abortController: new AbortController(),
       eventSink,
@@ -287,7 +306,7 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
       planTools: PlanModeToolRegistry.toOpenAITools(),
     };
 
-    const events: any[] = [];
+    const events: AIChatQueryEvent[] = [];
     const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
 
     const stream = makeScriptedStream([
@@ -305,12 +324,12 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
     ]);
 
     const loop = new AIChatQueryLoop({
-      streamChatCompletion: stream as any,
+      streamChatCompletion: stream,
       executeTool: vi.fn(),
       getSkillDefinition: () => undefined,
     });
 
-    const messages: any[] = [
+    const messages: OpenAIChatMessage[] = [
       { role: "system", content: "sys" },
       { role: "user", content: "go" },
     ];
@@ -319,7 +338,7 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
       conversationId: "v2-conv-cleanup",
       assistantMessageId: "asst-1",
       messages,
-      request: { message: "go" } as any,
+      request: { message: "go" },
       openAITools: [ENTER_PLAN_MODE_TOOL],
       abortController: new AbortController(),
       eventSink,
@@ -368,7 +387,7 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
       planTools: PlanModeToolRegistry.toOpenAITools(),
     };
 
-    const events: any[] = [];
+    const events: AIChatQueryEvent[] = [];
     const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
 
     const stream = makeScriptedStream([
@@ -397,7 +416,7 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
     ]);
 
     const loop = new AIChatQueryLoop({
-      streamChatCompletion: stream as any,
+      streamChatCompletion: stream,
       executeTool: vi.fn(),
       getSkillDefinition: () => undefined,
     });
@@ -409,7 +428,7 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
         { role: "system", content: "sys" },
         { role: "user", content: "go" },
       ],
-      request: { message: "go" } as any,
+      request: { message: "go" },
       openAITools: [ENTER_PLAN_MODE_TOOL],
       abortController: new AbortController(),
       eventSink,
@@ -420,5 +439,120 @@ describe("AIChatQueryLoop orphan draft cleanup", () => {
 
     expect(result.type).toBe("paused_for_plan_question");
     expect(cancelDraft).not.toHaveBeenCalled();
+  });
+
+  it("executes provider-merged tool calls issued alongside EnterPlanMode in the same round", async () => {
+    // Regression for the production failure: the model entered plan mode and
+    // in the same assistant turn issued a glob_files call whose arguments
+    // were the concatenation of two JSON objects (provider-merged parallel
+    // calls). The turn used to fail with "Arguments were not valid JSON"
+    // after 3 retries; the loop must now split and execute both calls while
+    // the plan-mode transition still succeeds.
+    const planState: AIChatPlanStateView = {
+      planId: "plan-merged-1",
+      conversationId: "v2-conv-merged",
+      status: "draft",
+      title: "T",
+      objective: "o",
+      currentVersion: 0,
+    } as AIChatPlanStateView;
+
+    const ensurePlan = vi.fn().mockResolvedValue(planState);
+    const autoPlan: AIChatAutoPlanLoopConfig = {
+      planModule: {
+        ensurePlanForConversation: ensurePlan,
+        cancelDraft: vi.fn(),
+        saveQuestion: vi.fn(),
+        submitPlanForApproval: vi.fn(),
+        getPlanStateByPlanId: vi.fn(),
+        answerQuestion: vi.fn(),
+      },
+      planTools: PlanModeToolRegistry.toOpenAITools(),
+    };
+
+    const events: AIChatQueryEvent[] = [];
+    const eventSink: AIChatQueryEventSink = { emit: (e) => events.push(e) };
+
+    const executeTool = vi.fn(
+      async (
+        name: string,
+        _args: Record<string, unknown>,
+        meta: { toolCallId: string }
+      ) => ({
+        tool_call_id: meta.toolCallId,
+        tool_name: name,
+        success: true,
+        result: { files: [] },
+        execution_time_ms: 1,
+      })
+    );
+
+    const stream = makeScriptedStream([
+      {
+        toolCalls: [
+          {
+            index: 0,
+            id: "call_enter",
+            function: {
+              name: "EnterPlanMode",
+              arguments: '{"rationale":"complex campaign"}',
+            },
+          },
+          {
+            index: 1,
+            id: "call_glob",
+            function: {
+              name: "glob_files",
+              arguments: '{"pattern":"*"}{"query":"email marketing"}',
+            },
+          },
+        ],
+      },
+      { content: "Plan mode ready." },
+    ]);
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: executeTool,
+      // glob_files is a read-only ("pure") tool, so the plan-mode tool
+      // policy keeps allowing it after the mid-round transition.
+      getSkillDefinition: (name: string): SkillDefinition | undefined =>
+        name === "glob_files"
+          ? ({ permissionCategory: "pure" } as SkillDefinition)
+          : undefined,
+    });
+
+    const result = await loop.run({
+      conversationId: "v2-conv-merged",
+      assistantMessageId: "asst-1",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "audit my campaign assets" },
+      ],
+      request: { message: "audit my campaign assets" },
+      openAITools: [ENTER_PLAN_MODE_TOOL],
+      abortController: new AbortController(),
+      eventSink,
+      startRound: 0,
+      autoPlan,
+      isActiveTurn: () => true,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(ensurePlan).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(executeTool).toHaveBeenNthCalledWith(
+      1,
+      "glob_files",
+      { pattern: "*" },
+      expect.objectContaining({ toolCallId: "call_glob__split_0" })
+    );
+    expect(executeTool).toHaveBeenNthCalledWith(
+      2,
+      "glob_files",
+      { query: "email marketing" },
+      expect.objectContaining({ toolCallId: "call_glob__split_1" })
+    );
+    expect(events.some((e) => e.type === "plan_state")).toBe(true);
   });
 });
