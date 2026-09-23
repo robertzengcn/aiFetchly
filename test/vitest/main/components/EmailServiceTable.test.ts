@@ -92,6 +92,13 @@ const stubs = {
   },
   VIcon: true,
   DeleteDialog: true,
+  EmailServiceImportDialog: {
+    name: "EmailServiceImportDialog",
+    props: ["modelValue"],
+    emits: ["update:modelValue", "imported"],
+    template:
+      '<div data-testid="email-service-import-dialog" v-if="modelValue" />',
+  },
   NoticeSnackbar: {
     props: ["modelValue", "message", "type"],
     emits: ["update:modelValue"],
@@ -206,136 +213,39 @@ describe("EmailServiceTable import", () => {
     ).toBe(false);
   });
 
-  it("shows a success snackbar and reloads the list on full success", async () => {
-    apiMocks.importEmailServices.mockResolvedValue({
-      imported: 3,
-      skipped: 0,
-      errors: [],
-    });
+  it("opens the import dialog instead of calling the import IPC directly", async () => {
     const wrapper = mountTable();
 
     await wrapper
       .find('[data-testid="email-service-import-btn"]')
       .trigger("click");
-    await vi.waitFor(() => {
-      expect(apiMocks.importEmailServices).toHaveBeenCalled();
-    });
 
-    const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-    expect(snackbar.exists()).toBe(true);
-    expect(snackbar.attributes("data-type")).toBe("success");
-    expect(snackbar.attributes("data-message")).toContain("3");
-    // A successful import reloads the list so imported services appear.
-    // (The stubbed data table emits no update:options, so this call can
-    // only come from handleImport's reload.)
     await vi.waitFor(() => {
-      expect(apiMocks.getEmailServiceList).toHaveBeenCalled();
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
     });
+    expect(apiMocks.importEmailServices).not.toHaveBeenCalled();
   });
 
-  it("shows a warning snackbar on partial import", async () => {
-    apiMocks.importEmailServices.mockResolvedValue({
-      imported: 1,
-      skipped: 2,
-      errors: ["row 2: password is required"],
-    });
+  it("reloads the list when the dialog reports an import", async () => {
     const wrapper = mountTable();
-
     await wrapper
       .find('[data-testid="email-service-import-btn"]')
       .trigger("click");
     await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes("data-type")).toBe("warning");
-      expect(snackbar.attributes("data-message")).toContain("1");
-      expect(snackbar.attributes("data-message")).toContain("2");
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
     });
-  });
 
-  it("shows a cancelled notice when the user cancels the open dialog", async () => {
-    apiMocks.importEmailServices.mockRejectedValue(
-      new Error("Import cancelled by user")
-    );
-    const wrapper = mountTable();
-
+    const callsBefore = apiMocks.getEmailServiceList.mock.calls.length;
     await wrapper
-      .find('[data-testid="email-service-import-btn"]')
-      .trigger("click");
+      .findComponent({ name: "EmailServiceImportDialog" })
+      .vm.$emit("imported");
     await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      // Cancel is a benign outcome per the design spec — info, not error.
-      expect(snackbar.attributes("data-type")).toBe("info");
-      expect(snackbar.attributes("data-message")).toContain("Import cancelled");
-    });
-  });
-
-  it("shows an error notice when the import fails for another reason", async () => {
-    apiMocks.importEmailServices.mockRejectedValue(new Error("disk full"));
-    const wrapper = mountTable();
-
-    await wrapper
-      .find('[data-testid="email-service-import-btn"]')
-      .trigger("click");
-    await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes("data-type")).toBe("error");
-      expect(snackbar.attributes("data-message")).toContain("Import failed");
-      expect(snackbar.attributes("data-message")).toContain("disk full");
-    });
-  });
-
-  it("maps the bare import_failed key to a friendly message", async () => {
-    apiMocks.importEmailServices.mockRejectedValue(new Error("import_failed"));
-    const wrapper = mountTable();
-
-    await wrapper
-      .find('[data-testid="email-service-import-btn"]')
-      .trigger("click");
-    await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes("data-message")).toContain("Import failed");
-      expect(snackbar.attributes("data-message")).not.toContain(
-        "import_failed"
-      );
-    });
-  });
-
-  it("maps the bare import_no_valid_rows key to a friendly message", async () => {
-    apiMocks.importEmailServices.mockRejectedValue(
-      new Error("import_no_valid_rows")
-    );
-    const wrapper = mountTable();
-
-    await wrapper
-      .find('[data-testid="email-service-import-btn"]')
-      .trigger("click");
-    await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes("data-message")).toContain(
-        "No valid services found in file"
-      );
-    });
-  });
-
-  it("maps the bare import_invalid_file key to a friendly message", async () => {
-    apiMocks.importEmailServices.mockRejectedValue(
-      new Error("import_invalid_file")
-    );
-    const wrapper = mountTable();
-
-    await wrapper
-      .find('[data-testid="email-service-import-btn"]')
-      .trigger("click");
-    await vi.waitFor(() => {
-      const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
-      expect(snackbar.exists()).toBe(true);
-      expect(snackbar.attributes("data-message")).toContain(
-        "Invalid file format"
+      expect(apiMocks.getEmailServiceList.mock.calls.length).toBeGreaterThan(
+        callsBefore
       );
     });
   });

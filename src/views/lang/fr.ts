@@ -81,6 +81,7 @@ export default {
     export_cancelled: "Export annulé",
     exporting: "Exportation...",
     download_template: "Télécharger le modèle",
+    select_file_import: "Sélectionner un fichier et importer",
     drag_drop_file:
       "Glissez-déposez votre fichier ici ou cliquez pour sélectionner un fichier",
     search: "Veille Marché",
@@ -1306,6 +1307,9 @@ export default {
       "Un mot de passe est requis pour importer cette ligne de service de messagerie.",
     identity_header_break_forbidden:
       "Les sauts de ligne ne sont pas autorisés dans ce champ.",
+    import_dialog_title: "Importer des services e-mail",
+    import_dialog_hint:
+      "Téléchargez le modèle CSV, renseignez vos services (mot de passe requis pour les nouveaux services), puis sélectionnez le fichier à importer.",
   },
   emailReplyBinding: {
     draft_token_mismatch:

@@ -81,6 +81,7 @@ export default {
     export_cancelled: "Export cancelled",
     exporting: "Exporting...",
     download_template: "Download Template",
+    select_file_import: "Select file and import",
     drag_drop_file: "Drag and drop your file here or click to select file",
     search: "Search",
     replace: "Replace",
@@ -1322,6 +1323,9 @@ export default {
       "A password is required to import this email service row.",
     identity_header_break_forbidden:
       "Line breaks are not allowed in this field.",
+    import_dialog_title: "Import email services",
+    import_dialog_hint:
+      "Download the CSV template, fill in your services (password is required for new services), then select the file to import.",
   },
   // Approved-reply send binding failures (P1.2, FR-013). Distinct messages so
   // the user can tell exactly which binding check failed.

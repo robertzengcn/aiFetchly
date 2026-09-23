@@ -81,6 +81,7 @@ export default {
     export_cancelled: "Exportación cancelada",
     exporting: "Exportando...",
     download_template: "Descargar plantilla",
+    select_file_import: "Seleccionar archivo e importar",
     drag_drop_file:
       "Arrastre y suelte su archivo aquí o haga clic para seleccionar un archivo",
     search: "Información de Mercado",
@@ -1317,6 +1318,9 @@ export default {
       "Se requiere una contraseña para importar esta fila de servicio de correo.",
     identity_header_break_forbidden:
       "No se permiten saltos de línea en este campo.",
+    import_dialog_title: "Importar servicios de correo",
+    import_dialog_hint:
+      "Descargue la plantilla CSV, complete sus servicios (la contraseña es obligatoria para servicios nuevos) y seleccione el archivo para importar.",
   },
   emailReplyBinding: {
     draft_token_mismatch:

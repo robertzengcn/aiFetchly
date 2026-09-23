@@ -81,6 +81,7 @@ export default {
     export_cancelled: "エクスポートをキャンセルしました",
     exporting: "エクスポート中...",
     download_template: "テンプレートをダウンロード",
+    select_file_import: "ファイルを選択してインポート",
     drag_drop_file:
       "ここにファイルをドラッグ＆ドロップするか、クリックして選択してください",
     search: "市場インサイト",
@@ -1291,6 +1292,9 @@ export default {
     identity_import_password_required:
       "このメールサービス行をインポートするにはパスワードが必要です。",
     identity_header_break_forbidden: "このフィールドに改行は使用できません。",
+    import_dialog_title: "メールサービスをインポート",
+    import_dialog_hint:
+      "CSVテンプレートをダウンロードしてサービス情報を入力し（新規サービスにはパスワードが必須）、ファイルを選択してインポートしてください。",
   },
   emailReplyBinding: {
     draft_token_mismatch:

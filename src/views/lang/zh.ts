@@ -72,6 +72,7 @@ export default {
     export_cancelled: "导出已取消",
     exporting: "导出中...",
     download_template: "下载模板",
+    select_file_import: "选择文件并导入",
     drag_drop_file: "拖拽文件到此处或点击选择文件",
     search: "Search",
     replace: "替换",
@@ -1254,6 +1255,9 @@ export default {
       "审核通过后发件身份（SMTP 用户名、发件地址或回复地址）已更改。发送前需要重新审核。",
     identity_import_password_required: "导入此邮件服务记录需要提供密码。",
     identity_header_break_forbidden: "此字段不允许包含换行符。",
+    import_dialog_title: "导入邮件服务",
+    import_dialog_hint:
+      "下载 CSV 模板并填写邮件服务信息（新服务必须填写密码），然后选择文件导入。",
   },
   emailReplyBinding: {
     draft_token_mismatch: "发送审批与该草稿不匹配。请重新审批此回复。",

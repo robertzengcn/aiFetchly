@@ -82,6 +82,7 @@ export default {
     export_cancelled: "Export abgebrochen",
     exporting: "Exportiere...",
     download_template: "Vorlage herunterladen",
+    select_file_import: "Datei auswählen und importieren",
     drag_drop_file:
       "Datei hierher ziehen oder klicken, um eine Datei auszuwählen",
     search: "Markteinblicke",
@@ -1313,6 +1314,9 @@ export default {
       "Zum Importieren dieser E-Mail-Dienstzeile ist ein Passwort erforderlich.",
     identity_header_break_forbidden:
       "Zeilenumbrüche sind in diesem Feld nicht zulässig.",
+    import_dialog_title: "E-Mail-Dienste importieren",
+    import_dialog_hint:
+      "Laden Sie die CSV-Vorlage herunter, tragen Sie Ihre Dienste ein (Passwort für neue Dienste erforderlich) und wählen Sie dann die Datei für den Import.",
   },
   emailReplyBinding: {
     draft_token_mismatch:
