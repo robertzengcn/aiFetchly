@@ -3,8 +3,11 @@
  *
  * Mirrors the import whitelist in
  * `EmailMarketingController` (name, smtpUsername, from, replyTo, host,
- * port, password, ssl, receiveProtocol). Export deliberately omits
- * `password`, so the template carries a fill-in placeholder instead.
+ * port, password, ssl, receiveProtocol, imapHost, imapPort, imapSsl,
+ * pop3Host, pop3Port, pop3Ssl, receiveUsername, receivePassword,
+ * receiveFolder, receiveEnabled). Export deliberately omits `password`
+ * (and `receivePassword`), so the template carries fill-in placeholders
+ * instead.
  */
 
 export const EMAIL_SERVICE_IMPORT_TEMPLATE_HEADERS: string =

@@ -578,6 +578,64 @@ describe("EmailMarketingController", () => {
       expect(create.called).to.equal(false);
     });
 
+    it("preserves stored imapSsl/pop3Ssl on update when the cells are blank", async () => {
+      // Blank is not a value: it must fall back to the stored setting, not
+      // to the secure default (1).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Recv Service";
+      existing.imapSsl = 0;
+      existing.pop3Ssl = 0;
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapSsl,pop3Ssl\n" +
+        "Recv Service,user@example.com,smtp.example.com,465,1,smtppass,,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.firstCall.args[1].imapSsl).to.equal(0);
+      expect(update.firstCall.args[1].pop3Ssl).to.equal(0);
+    });
+
+    it("prefers the non-empty alias value when duplicate columns carry one blank and one value", async () => {
+      // A JSON row can carry BOTH aliases; the blank one must not win over
+      // the explicit value when they don't conflict.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const rows = JSON.stringify([
+        {
+          name: "Alias",
+          from: "user@x.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          password: "pw",
+          imapHost: "",
+          imap_host: "imap.example.com",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        rows,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].imapHost).to.equal("imap.example.com");
+    });
+
     it("defaults receiveProtocol to imap on create when the import row omits it", async () => {
       // A new service (no name match) always needs a valid protocol.
       const create = sinon.stub().resolves(1);

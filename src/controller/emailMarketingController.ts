@@ -816,15 +816,24 @@ export class EmailMarketingController {
         };
       }
 
-      const raw = found[0].raw;
+      // When aliases disagree only by blank-vs-value (no conflict), the
+      // explicit value wins — found[0] may be the blank entry.
+      const raw = (nonEmpty.length > 0 ? nonEmpty[0] : found[0]).raw;
       const str = this.rowValueToString(raw);
       presentFields.add(field);
       switch (field) {
         case "ssl":
-        case "imapSsl":
-        case "pop3Ssl":
           (values as Record<string, unknown>)[field] =
             this.parseImportSsl(str);
+          break;
+        case "imapSsl":
+        case "pop3Ssl":
+          // Unlike SMTP ssl, a blank cell must NOT flip the stored value to
+          // the secure default: skip it so the merge falls back to stored.
+          if (str.length > 0) {
+            (values as Record<string, unknown>)[field] =
+              this.parseImportSsl(str);
+          }
           break;
         case "receiveEnabled": {
           // Unlike ssl, a blank cell must NOT enable receive: skip it so the
