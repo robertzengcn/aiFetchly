@@ -8,7 +8,7 @@
  */
 
 export const EMAIL_SERVICE_IMPORT_TEMPLATE_HEADERS: string =
-  "name,smtpUsername,from,replyTo,host,port,password,ssl,receiveProtocol";
+  "name,smtpUsername,from,replyTo,host,port,password,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receivePassword,receiveFolder,receiveEnabled";
 
 export const EMAIL_SERVICE_IMPORT_TEMPLATE_FILENAME: string =
   "email_service_import_template.csv";
@@ -24,6 +24,16 @@ export function buildEmailServiceCsvTemplate(): string {
     "your-password-here",
     "1",
     "imap",
+    "imap.example.com",
+    "993",
+    "1",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "INBOX",
+    "0",
   ].join(",");
   return `${EMAIL_SERVICE_IMPORT_TEMPLATE_HEADERS}\n${example}\n`;
 }

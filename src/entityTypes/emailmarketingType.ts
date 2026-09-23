@@ -204,6 +204,15 @@ export type SafeEmailServiceExportRow = {
   port: string;
   ssl: number;
   receiveProtocol: EmailReceiveProtocol;
+  imapHost: string | null;
+  imapPort: string | null;
+  imapSsl: number;
+  pop3Host: string | null;
+  pop3Port: string | null;
+  pop3Ssl: number;
+  receiveUsername: string | null;
+  receiveFolder: string;
+  receiveEnabled: number;
   create_time: string;
 };
 

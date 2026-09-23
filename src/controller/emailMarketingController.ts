@@ -38,7 +38,17 @@ type EmailServiceImportField =
   | "port"
   | "password"
   | "ssl"
-  | "receiveProtocol";
+  | "receiveProtocol"
+  | "imapHost"
+  | "imapPort"
+  | "imapSsl"
+  | "pop3Host"
+  | "pop3Port"
+  | "pop3Ssl"
+  | "receiveUsername"
+  | "receivePassword"
+  | "receiveFolder"
+  | "receiveEnabled";
 
 interface ParsedEmailServiceImportRow {
   readonly values: Partial<EmailServiceEntitydata>;
@@ -56,6 +66,16 @@ const IMPORT_FIELD_ALIASES: Record<EmailServiceImportField, string[]> = {
   password: ["password"],
   ssl: ["ssl"],
   receiveProtocol: ["receiveProtocol", "receiveprotocol", "receive_protocol"],
+  imapHost: ["imapHost", "imaphost", "imap_host"],
+  imapPort: ["imapPort", "imapport", "imap_port"],
+  imapSsl: ["imapSsl", "imapssl", "imap_ssl"],
+  pop3Host: ["pop3Host", "pop3host", "pop3_host"],
+  pop3Port: ["pop3Port", "pop3port", "pop3_port"],
+  pop3Ssl: ["pop3Ssl", "pop3ssl", "pop3_ssl"],
+  receiveUsername: ["receiveUsername", "receiveusername", "receive_username"],
+  receivePassword: ["receivePassword", "receivepassword", "receive_password"],
+  receiveFolder: ["receiveFolder", "receivefolder", "receive_folder"],
+  receiveEnabled: ["receiveEnabled", "receiveenabled", "receive_enabled"],
 };
 
 export class EmailMarketingController {
@@ -389,6 +409,15 @@ export class EmailMarketingController {
         port: item.port,
         ssl: item.ssl,
         receiveProtocol: item.receiveProtocol,
+        imapHost: item.imapHost ?? null,
+        imapPort: item.imapPort ?? null,
+        imapSsl: item.imapSsl ?? 1,
+        pop3Host: item.pop3Host ?? null,
+        pop3Port: item.pop3Port ?? null,
+        pop3Ssl: item.pop3Ssl ?? 1,
+        receiveUsername: item.receiveUsername ?? null,
+        receiveFolder: item.receiveFolder ?? "INBOX",
+        receiveEnabled: item.receiveEnabled ?? 0,
         create_time: item.createdAt?.toISOString() || "",
       };
     });
@@ -411,6 +440,15 @@ export class EmailMarketingController {
       "port",
       "ssl",
       "receiveProtocol",
+      "imapHost",
+      "imapPort",
+      "imapSsl",
+      "pop3Host",
+      "pop3Port",
+      "pop3Ssl",
+      "receiveUsername",
+      "receiveFolder",
+      "receiveEnabled",
       "create_time",
     ];
     const csvRows = rows.map((row) => [
@@ -423,6 +461,17 @@ export class EmailMarketingController {
       row.port,
       row.ssl.toString(),
       row.receiveProtocol,
+      row.imapHost === null ? "" : this.escapeCsvField(row.imapHost),
+      row.imapPort === null ? "" : this.escapeCsvField(row.imapPort),
+      row.imapSsl.toString(),
+      row.pop3Host === null ? "" : this.escapeCsvField(row.pop3Host),
+      row.pop3Port === null ? "" : this.escapeCsvField(row.pop3Port),
+      row.pop3Ssl.toString(),
+      row.receiveUsername === null
+        ? ""
+        : this.escapeCsvField(row.receiveUsername),
+      this.escapeCsvField(row.receiveFolder),
+      row.receiveEnabled.toString(),
       row.create_time,
     ]);
     const csv = [headers.join(","), ...csvRows.map((r) => r.join(","))].join(
@@ -481,10 +530,15 @@ export class EmailMarketingController {
       const values = parsedRow.values;
       const present = parsedRow.presentFields;
 
-      // ssl unparseable → row error (NaN would bind as NULL in better-sqlite3).
-      if (Number.isNaN(values.ssl as number)) {
+      // 0/1 flags unparseable → row error (NaN would bind as NULL in
+      // better-sqlite3). Absent/blank-skipped fields stay undefined and are
+      // never NaN, so only explicitly provided garbage fails the row.
+      const badFlagField = (
+        ["ssl", "imapSsl", "pop3Ssl", "receiveEnabled"] as const
+      ).find((field) => Number.isNaN(values[field] as number));
+      if (badFlagField !== undefined) {
         skipped++;
-        errors.push(`row ${rowNumber}: ssl must be 0 or 1`);
+        errors.push(`row ${rowNumber}: ${badFlagField} must be 0 or 1`);
         continue;
       }
 
@@ -518,12 +572,27 @@ export class EmailMarketingController {
           present.has("receiveProtocol") && values.receiveProtocol
             ? values.receiveProtocol
             : ex.receiveProtocol ?? "imap";
-        candidate.imapHost = values.imapHost ?? ex.imapHost ?? null;
-        candidate.imapPort = values.imapPort ?? ex.imapPort ?? null;
-        candidate.imapSsl = values.imapSsl ?? ex.imapSsl ?? 1;
-        candidate.pop3Host = values.pop3Host ?? ex.pop3Host ?? null;
-        candidate.pop3Port = values.pop3Port ?? ex.pop3Port ?? null;
-        candidate.pop3Ssl = values.pop3Ssl ?? ex.pop3Ssl ?? 1;
+        // §10.4 merge matrix for receive hosts/ports/ssl:
+        //  absent = preserve stored, blank = clear to null (hosts/ports) /
+        //  keep stored (ssl falls back via ??), value = overwrite.
+        candidate.imapHost = present.has("imapHost")
+          ? values.imapHost ?? null
+          : ex.imapHost ?? null;
+        candidate.imapPort = present.has("imapPort")
+          ? values.imapPort ?? null
+          : ex.imapPort ?? null;
+        candidate.imapSsl = present.has("imapSsl")
+          ? values.imapSsl ?? ex.imapSsl ?? 1
+          : ex.imapSsl ?? 1;
+        candidate.pop3Host = present.has("pop3Host")
+          ? values.pop3Host ?? null
+          : ex.pop3Host ?? null;
+        candidate.pop3Port = present.has("pop3Port")
+          ? values.pop3Port ?? null
+          : ex.pop3Port ?? null;
+        candidate.pop3Ssl = present.has("pop3Ssl")
+          ? values.pop3Ssl ?? ex.pop3Ssl ?? 1
+          : ex.pop3Ssl ?? 1;
         candidate.receiveFolder =
           values.receiveFolder ?? ex.receiveFolder ?? "INBOX";
         candidate.receiveEnabled =
@@ -537,9 +606,17 @@ export class EmailMarketingController {
         candidate.replyTo = present.has("replyTo")
           ? values.replyTo ?? null
           : ex.replyTo ?? null;
-        //  Password: blank/absent NEVER clears — always preserve (§10.4).
-        candidate.receivePassword = ex.receivePassword;
-        candidate.receiveUsername = ex.receiveUsername ?? null;
+        //  Receive username: absent = preserve stored, blank = reset to the
+        //  runtime fallback chain (null), value = overwrite.
+        candidate.receiveUsername = present.has("receiveUsername")
+          ? values.receiveUsername ?? null
+          : ex.receiveUsername ?? null;
+        //  Receive password (like SMTP password): blank/absent NEVER clears
+        //  — always preserve (§10.4); a non-empty value overwrites.
+        candidate.receivePassword =
+          values.receivePassword && values.receivePassword.length > 0
+            ? values.receivePassword
+            : ex.receivePassword;
         candidate.status = ex.status;
       } else {
         // New service: absent SMTP username → From; absent Reply-To → null;
@@ -568,7 +645,14 @@ export class EmailMarketingController {
         candidate.receiveEnabled = values.receiveEnabled ?? 0;
         candidate.smtpUsername = values.smtpUsername ?? null;
         candidate.replyTo = values.replyTo ?? null;
-        candidate.receiveUsername = null;
+        candidate.receiveUsername = values.receiveUsername ?? null;
+        // Receive password is optional on create: when absent/blank the
+        // runtime falls back to the SMTP password (see validateEmailService
+        // and getEmailServiceReceiveConfig).
+        candidate.receivePassword =
+          values.receivePassword && values.receivePassword.length > 0
+            ? values.receivePassword
+            : null;
         candidate.status = 1;
       }
 
@@ -737,8 +821,19 @@ export class EmailMarketingController {
       presentFields.add(field);
       switch (field) {
         case "ssl":
-          (values as Record<string, unknown>).ssl = this.parseImportSsl(str);
+        case "imapSsl":
+        case "pop3Ssl":
+          (values as Record<string, unknown>)[field] =
+            this.parseImportSsl(str);
           break;
+        case "receiveEnabled": {
+          // Unlike ssl, a blank cell must NOT enable receive: skip it so the
+          // merge falls back to the stored value (update) or 0 (create).
+          if (str.length > 0) {
+            values.receiveEnabled = this.parseImportSsl(str);
+          }
+          break;
+        }
         case "receiveProtocol": {
           const lower = str.toLowerCase();
           if (lower.length > 0) {
@@ -747,11 +842,31 @@ export class EmailMarketingController {
           }
           break;
         }
+        case "receiveFolder": {
+          // Blank falls back to INBOX via the merge (same as receiveProtocol).
+          if (str.length > 0) {
+            values.receiveFolder = str;
+          }
+          break;
+        }
         case "smtpUsername":
-          values.smtpUsername = str.length > 0 ? str : null;
+        case "receiveUsername":
+          // Blank resets to the runtime fallback chain (null); the merge
+          // distinguishes absent (preserve) from blank (reset) via presence.
+          (values as Record<string, unknown>)[field] =
+            str.length > 0 ? str : null;
           break;
         case "replyTo":
           values.replyTo = str.length > 0 ? str : null;
+          break;
+        case "imapHost":
+        case "imapPort":
+        case "pop3Host":
+        case "pop3Port":
+          // Blank clears to null (presence-aware merge below); absent keeps
+          // the stored value.
+          (values as Record<string, unknown>)[field] =
+            str.length > 0 ? str : null;
           break;
         default:
           (values as Record<string, unknown>)[field] = str;
