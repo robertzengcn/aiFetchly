@@ -218,6 +218,75 @@ export function isLinuxTrayHostPlausible(
 }
 
 /**
+ * T10 (2026-09-21 audit): the desktop-name heuristic alone does not
+ * establish a tray host — GNOME sessions can have the name with no
+ * working status-notifier extension. Probe for the KDE/GNOME/appindicator
+ * host D-Bus names before allowing background mode; ANY probe hit counts
+ * (different hosts own different names). Conservative by design: unknown
+ * means DISABLED (the window stays reachable, FR-07) rather than risking
+ * an unreachable hidden app.
+ */
+const TRAY_HOST_DBUS_NAMES = [
+  "org.kde.StatusNotifierWatcher",
+  "org.freedesktop.StatusNotifierWatcher",
+  "org.awn.Project",
+] as const;
+
+/** Injectable D-Bus name-owner probe (gdbus call in production). */
+export type DbusNameOwnerProbe = (
+  name: string
+) => { hasOwner: boolean } | { error: string };
+
+/**
+ * Production probe: `gdbus call --session -d org.freedesktop.DBus
+ * -m org.freedesktop.DBus.NameHasOwner <name>` (sync, bounded by
+ * execFileSync's own cost; the session bus answers instantly). Returns
+ * {error} on any failure so callers treat it as unknown/disabled.
+ */
+export function createGdbusNameOwnerProbe(): DbusNameOwnerProbe {
+  return (name: string): { hasOwner: boolean } | { error: string } => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { execFileSync } = require("child_process") as {
+        execFileSync: (
+          cmd: string,
+          args: readonly string[]
+        ) => Buffer | string;
+      };
+      const out = execFileSync("gdbus", [
+        "call",
+        "--session",
+        "-d",
+        "org.freedesktop.DBus",
+        "-m",
+        "org.freedesktop.DBus.NameHasOwner",
+        name,
+      ]).toString();
+      return { hasOwner: out.includes("true") };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  };
+}
+
+/**
+ * T10 gate: a Linux session may hide only when a status-notifier host
+ * actually OWNS one of the known names. Host loss between checks is a
+ * documented residual; the Exit/Cancel path keeps the app reachable.
+ */
+export function isLinuxTrayHostAvailable(
+  platform: NodeJS.Platform,
+  probe: DbusNameOwnerProbe
+): boolean {
+  if (platform !== "linux") return true;
+  for (const name of TRAY_HOST_DBUS_NAMES) {
+    const result = probe(name);
+    if ("hasOwner" in result && result.hasOwner) return true;
+  }
+  return false;
+}
+
+/**
  * Resolve tray icon candidates (main bundle dir first, then packaged
  * resources) matching the platform-copy plugin's output location.
  */

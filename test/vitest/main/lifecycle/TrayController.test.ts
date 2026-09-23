@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   TrayController,
+  isLinuxTrayHostAvailable,
   isLinuxTrayHostPlausible,
   type TrayControllerPorts,
   type TrayLike,
@@ -226,6 +227,35 @@ describe("isLinuxTrayHostPlausible (FR-07 / TODO 9)", () => {
         XDG_SESSION_TYPE: "x11",
       })
     ).toBe(true);
+  });
+});
+
+describe("isLinuxTrayHostAvailable (T10 D-Bus probe)", () => {
+  const owned = (name: string): { hasOwner: boolean } | { error: string } =>
+    name === "org.kde.StatusNotifierWatcher"
+      ? { hasOwner: true }
+      : { hasOwner: false };
+
+  it("non-Linux platforms never probe", () => {
+    const probe = vi.fn(() => ({ hasOwner: false }));
+    expect(isLinuxTrayHostAvailable("win32", probe)).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("Linux + a host that owns a known name enables background mode", () => {
+    expect(isLinuxTrayHostAvailable("linux", owned)).toBe(true);
+  });
+
+  it("Linux + NO owning host disables background mode (conservative)", () => {
+    const none = vi.fn(() => ({ hasOwner: false }));
+    expect(isLinuxTrayHostAvailable("linux", none)).toBe(false);
+  });
+
+  it("probe ERRORS count as unknown -> disabled (never risk hiding)", () => {
+    const broken = vi.fn((): { hasOwner: boolean } | { error: string } => ({
+      error: "gdbus not found",
+    }));
+    expect(isLinuxTrayHostAvailable("linux", broken)).toBe(false);
   });
 });
 

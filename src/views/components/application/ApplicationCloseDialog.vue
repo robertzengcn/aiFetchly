@@ -11,13 +11,14 @@
       :persistent="true"
       max-width="520"
       content-testid="app-close-dialog"
+      aria-labelledby="app-close-dialog-title"
     >
       <v-card
         v-if="dialogOpen"
         data-testid="app-close-dialog-card"
-        aria-role="dialog"
+        role="dialog"
         aria-modal="true"
-        :aria-label="t('applicationLifecycle.closeTitle') || 'Close AiFetchly?'"
+        aria-labelledby="app-close-dialog-title"
       >
         <v-card-title
           id="app-close-dialog-title"
@@ -50,7 +51,9 @@
             }}
           </p>
         </v-card-text>
-        <v-card-actions class="px-4 pb-3">
+        <!-- T16: actions wrap so long German/French/Japanese labels stack
+             instead of clipping inside the 520px dialog. -->
+        <v-card-actions class="px-4 pb-3 d-flex flex-wrap ga-2">
           <v-btn
             v-if="backgroundAvailable"
             ref="keepRunningButton"

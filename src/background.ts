@@ -158,6 +158,8 @@ import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycl
 import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
 import {
   TrayController,
+  createGdbusNameOwnerProbe,
+  isLinuxTrayHostAvailable,
   isLinuxTrayHostPlausible,
   resolveTrayIconCandidates,
   type TrayLike,
@@ -678,6 +680,21 @@ function initializeSystemTray(): void {
   if (!e2eTrayOptIn && !isLinuxTrayHostPlausible(process.platform, process.env)) {
     log.info(
       "[tray] no plausible Linux tray host (XDG_CURRENT_DESKTOP/session); background mode disabled"
+    );
+    lifecycle.setBackgroundAvailable(false);
+    return;
+  }
+  // T10: stage 2 — prove a status-notifier host actually OWNS a known D-Bus
+  // name (GNOME without the extension fails here; Tray construction proves
+  // nothing). Conservative: unknown disables background mode so the window
+  // can never hide into an unreachable state. E2E opt-in bypasses (xvfb +
+  // the spec's own readiness assertion before hiding).
+  if (
+    !e2eTrayOptIn &&
+    !isLinuxTrayHostAvailable(process.platform, createGdbusNameOwnerProbe())
+  ) {
+    log.info(
+      "[tray] no status-notifier host owns a known D-Bus name; background mode disabled (window stays reachable)"
     );
     lifecycle.setBackgroundAvailable(false);
     return;
