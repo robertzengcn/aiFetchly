@@ -6,7 +6,6 @@ describe("buildEmbeddingInput", () => {
     const out: string = buildEmbeddingInput(
       {
         fileName: "memo.pdf",
-        title: "memo",
         author: "User",
         tags: ["uploaded", "knowledge"],
         description: "Uploaded document: memo.pdf",
