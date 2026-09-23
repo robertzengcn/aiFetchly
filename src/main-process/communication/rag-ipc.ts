@@ -18,6 +18,7 @@ import {
 } from "@/service/UploadGrantService";
 import * as fs from "fs";
 import * as path from "path";
+import { z } from "zod";
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -83,6 +84,13 @@ async function createRagController(): Promise<RagSearchController> {
   await controller.initialize();
   return controller;
 }
+
+const saveTempFileMetadataSchema = z.object({
+  title: z.string().trim().max(500).optional(),
+  description: z.string().trim().max(2000).optional(),
+  author: z.string().trim().max(255).optional(),
+  tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+});
 
 /**
  * Register RAG IPC handlers.
@@ -219,16 +227,32 @@ export function registerRagIpcHandlers(): void {
             tags?: string[];
             author?: string;
           };
+          const parsedMetadata = saveTempFileMetadataSchema.safeParse(metadataTyped);
+          if (!parsedMetadata.success) {
+            const errorResponse: CommonMessage<SaveTempFileResponse> = {
+              status: false,
+              msg: `Invalid upload metadata: ${parsedMetadata.error.issues.map((i) => i.message).join("; ")}`,
+              data: {
+                tempFilePath: "",
+                databaseSaved: false,
+                databaseError: "Invalid upload metadata",
+              },
+            };
+            (
+              event as { sender: { send: (c: string, m: string) => void } }
+            ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+            return;
+          }
           const uploadOptions = {
             filePath: appDataFilePath,
             name: originalFileName,
             title:
-              metadataTyped.title || originalFileName.replace(/\.[^/.]+$/, ""),
+              parsedMetadata.data.title || originalFileName.replace(/\.[^/.]+$/, ""),
             description:
-              metadataTyped.description ||
+              parsedMetadata.data.description ||
               `Uploaded document: ${originalFileName}`,
-            tags: metadataTyped.tags || ["uploaded", "knowledge"],
-            author: metadataTyped.author || "User",
+            tags: parsedMetadata.data.tags || ["uploaded", "knowledge"],
+            author: parsedMetadata.data.author || "User",
           };
 
           (

@@ -35,6 +35,10 @@ export const ragUploadDocumentInputSchema = lazySchema(() =>
       filePath: z.string().min(1, "filePath is required"),
       name: z.string().min(1, "name is required"),
       modelName: z.string().min(1, "modelName is required"),
+      title: z.string().trim().max(500).optional(),
+      description: z.string().trim().max(2000).optional(),
+      author: z.string().trim().max(255).optional(),
+      tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
     })
     .passthrough()
 );
