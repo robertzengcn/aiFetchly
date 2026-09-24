@@ -65,6 +65,10 @@ import {
   runScheduleNowForAi,
 } from "@/service/ScheduleAiTools";
 import {
+  createAiMessageTaskForAi,
+  listAiMessageTasksForAi,
+} from "@/service/AiMessageTaskAiTools";
+import {
   listProxiesForAi,
   getProxyForAi,
   createProxyForAi,
@@ -2839,7 +2843,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_schedule",
     description:
-      'Create a new automation schedule for an existing AI message task. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task. The schedule defaults to inactive (is_active: false) for safety. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.',
+      'Create a new automation schedule for an existing AI message task. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task — call list_ai_message_tasks to find one, or create_ai_message_task to create a new one first, then pass the returned task_id here. The schedule defaults to inactive (is_active: false) for safety. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.',
     parameters: {
       type: "object",
       properties: {
@@ -3075,6 +3079,108 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await runScheduleNowForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_ai_message_tasks",
+    description:
+      "List existing AI message tasks (the reusable prompt definitions that schedules run). Returns id, name, message preview, model, tool policy, status, and last-run info. Use this to find the task_id that create_schedule requires, before creating a new task with create_ai_message_task.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Page number (0-based)",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size (1-100)",
+          default: 20,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listAiMessageTasksForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_ai_message_task",
+    description:
+      'Create a new AI message task — a reusable natural-language prompt with an optional tool policy that schedules execute. Returns the new task_id. Workflow: call this first (or reuse an existing task via list_ai_message_tasks), then call create_schedule with task_type "ai_message" and the returned task_id. Set auto_approve_tools=true together with allowed_tools when the scheduled run must use tools unattended. This action requires user confirmation.',
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Short task name (1-255 chars)",
+        },
+        message: {
+          type: "string",
+          description:
+            "The natural-language prompt the AI executes on every scheduled run. Write it as a complete, self-contained instruction.",
+        },
+        description: {
+          type: "string",
+          description: "Optional longer description of what this task does",
+        },
+        system_prompt: {
+          type: "string",
+          description: "Optional system prompt override",
+        },
+        model: {
+          type: "string",
+          description: "Optional model name (default: app-configured model)",
+        },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional explicit allowlist of schedulable built-in tools (e.g. file_write, start_email_send_task) the task may use unattended. Read-only tools (file_read, list_*, get_*) never need listing. Only useful when auto_approve_tools is true.",
+        },
+        auto_approve_tools: {
+          type: "boolean",
+          description:
+            "Allow the task to call approved tools without a human in the loop. Required for scheduled runs to use any tool unattended.",
+          default: false,
+        },
+        max_tool_calls: {
+          type: "number",
+          description: "Max tool calls per run (1-50)",
+          default: 10,
+        },
+        max_runtime_ms: {
+          type: "number",
+          description: "Max runtime per run in milliseconds (1000-3600000)",
+          default: 300000,
+        },
+        max_continue_calls: {
+          type: "number",
+          description: "Max continue/round trips per run (0-50)",
+          default: 10,
+        },
+      },
+      required: ["name", "message"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createAiMessageTaskForAi(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

@@ -53,6 +53,11 @@ describe("SkillRegistry", () => {
     test("should return true for search_maps_businesses", () => {
       expect(SkillRegistry.isRegistered("search_maps_businesses")).toBe(true);
     });
+
+    test("should return true for AI message task tools", () => {
+      expect(SkillRegistry.isRegistered("list_ai_message_tasks")).toBe(true);
+      expect(SkillRegistry.isRegistered("create_ai_message_task")).toBe(true);
+    });
   });
 
   describe("getSkill", () => {
@@ -88,6 +93,24 @@ describe("SkillRegistry", () => {
       expect(skill!.tier).toBe("main");
       expect(skill!.source).toBe("built-in");
     });
+
+    test("AI message task list is a confirmation-free pure lookup", () => {
+      const skill = SkillRegistry.getSkill("list_ai_message_tasks");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("automation");
+      expect(skill!.requiresConfirmation).toBe(false);
+      expect(skill!.tier).toBe("main");
+      expect(skill!.source).toBe("built-in");
+    });
+
+    test("AI message task create requires confirmation", () => {
+      const skill = SkillRegistry.getSkill("create_ai_message_task");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("automation");
+      expect(skill!.requiresConfirmation).toBe(true);
+      expect(skill!.tier).toBe("main");
+      expect(skill!.source).toBe("built-in");
+    });
   });
 
   describe("getAllToolFunctions", () => {
@@ -109,6 +132,8 @@ describe("SkillRegistry", () => {
       expect(names).toContain("extract_contact_info");
       expect(names).toContain("search_maps_businesses");
       expect(names).toContain("conversation_tool_history");
+      expect(names).toContain("list_ai_message_tasks");
+      expect(names).toContain("create_ai_message_task");
     });
 
     test("should return ToolFunction with correct shape", async () => {

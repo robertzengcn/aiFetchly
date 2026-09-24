@@ -333,6 +333,29 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes AI message task tools for schedule intent and keeps them deferred otherwise", () => {
+    // Schedule phrasing promotes them (create_schedule needs an existing task
+    // id, so the task tools ride the same intent).
+    expect(
+      classify("list_ai_message_tasks", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    // Unrelated chat leaves them deferred (discoverable via catalog search).
+    expect(classify("list_ai_message_tasks", "builtin")).toBe("deferred");
+    expect(classify("create_ai_message_task", "builtin")).toBe("deferred");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "what is the weather today",
+      })
+    ).toBe("deferred");
+  });
+
   it("promotes create_html_artifact for 'show/render/display ... in html' phrasings", () => {
     const phrases = [
       "show result in html",

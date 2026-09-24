@@ -87,7 +87,7 @@ export function getScheduleToolsForLLM(): LLMTool[] {
       function: {
         name: "schedule_create",
         description:
-          'Create a new scheduled task with cron expression. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task.',
+          'Create a new scheduled task with cron expression. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task — call list_ai_message_tasks to find one, or create_ai_message_task to create a new one first, then pass the returned task_id here.',
         parameters: zodToJsonSchema(createScheduleInputSchema()),
       },
     },

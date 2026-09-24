@@ -34,6 +34,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "send_email_reply",
       "list_schedules",
       "create_schedule",
+      "list_ai_message_tasks",
+      "create_ai_message_task",
       "knowledge_library_import_attachment",
       "scrape_urls_from_search_engine",
       "shell_execute",
