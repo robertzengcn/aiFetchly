@@ -28,6 +28,7 @@ import {
 import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
 import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
 import type {
+  ApprovedCommandTemplate,
   InstallSnapshot,
   SafePlanView,
   SkillInstallPlan,
@@ -156,6 +157,7 @@ const STATE_TO_NEXT_ACTION: Record<
   awaiting_approval: "review-plan",
   installing_dependencies: "approve-dependency",
   awaiting_secret: "provide-secret-securely",
+  awaiting_commands: "run-commands",
   activating: "resume",
   verifying: "resume",
   ready: "ready",
@@ -619,6 +621,24 @@ export class SkillInstallationModule extends BaseModule {
         events,
         input.sessionId,
         "awaiting_secret"
+      );
+      const awaiting = await sessions.findBySessionId(input.sessionId);
+      return this.snapshotFromEntity(awaiting ?? session, plan);
+    }
+
+    // §18.4 / FR-06 (audit finding 4): REQUIRED SETUP cannot be skipped —
+    // when the plan carries approved command templates, hold at
+    // awaiting_commands until every one has been executed by the user from
+    // the card. The runner refuses templates not yet run; completion
+    // advances to activation. Commands are review-only (high-risk ones are
+    // never auto-executed) — this is a completion CHECKPOINT, not execution.
+    const pendingCommands = this.pendingCommandsFor(session, plan);
+    if (pendingCommands.length > 0) {
+      await this.transition(
+        sessions,
+        events,
+        input.sessionId,
+        "awaiting_commands"
       );
       const awaiting = await sessions.findBySessionId(input.sessionId);
       return this.snapshotFromEntity(awaiting ?? session, plan);
@@ -1265,6 +1285,53 @@ export class SkillInstallationModule extends BaseModule {
       cwd,
       session.installationId ?? null
     );
+    // Completion bookkeeping (audit finding 4): a successful run marks the
+    // command complete in the plan; once every template has completed, a
+    // session held at awaiting_commands advances.
+    if (result.ok && session.state === "awaiting_commands") {
+      const updatedPlan: SkillInstallPlan = {
+        ...plan,
+        commands: plan.commands.map((c) =>
+          c.id === commandId
+            ? {
+                ...c,
+                rationale: c.rationale.endsWith(" [completed]")
+                  ? c.rationale
+                  : `${c.rationale} [completed]`,
+              }
+            : c
+        ),
+      };
+      await sessions.savePlan(
+        sessionId,
+        session.planRevision,
+        JSON.stringify(updatedPlan)
+      );
+      if (this.pendingCommandsFor(session, updatedPlan).length === 0) {
+        // All commands complete: continue the §18.4 sequence (routing +
+        // activation) so the session reaches ready in the same gesture.
+        const refreshed = await sessions.findBySessionId(sessionId);
+        const selected2 =
+          updatedPlan.discoveredSkills.find(
+            (c) => c.candidateId === updatedPlan.selectedSkillIds[0]
+          ) ?? updatedPlan.discoveredSkills[0];
+        if (selected2 && selected2.kind !== "plugin" && selected2.kind !== "executable") {
+          await this.runActivation(
+            sessionId,
+            updatedPlan,
+            selected2,
+            refreshed ?? session
+          );
+        } else if (selected2) {
+          await this.transition(
+            sessions,
+            events,
+            sessionId,
+            "activating"
+          );
+        }
+      }
+    }
     await this.appendEvent(
       events,
       sessionId,
@@ -1280,6 +1347,15 @@ export class SkillInstallationModule extends BaseModule {
         (result.errorCode ? ` code=${result.errorCode}` : "")
     );
     return { ok: true, result };
+  }
+
+  /** Plan commands not yet executed (audit finding 4 checkpoint). */
+  private pendingCommandsFor(
+    _session: SkillInstallationSessionEntity,
+    plan: SkillInstallPlan
+  ): readonly ApprovedCommandTemplate[] {
+    void _session;
+    return plan.commands.filter((c) => !c.rationale.includes("[completed]"));
   }
 
   /**

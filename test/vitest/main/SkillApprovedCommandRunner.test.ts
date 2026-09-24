@@ -21,9 +21,20 @@ const credentialStub = {
     FAKE_STORE.get(`${installationId}:${envVar}`) ?? null,
 } as unknown as ConstructorParameters<typeof SkillApprovedCommandRunner>[0];
 
-function makePlan(
+let cachedTreeHash: string | null = null;
+async function hashTreeOfRoot(): Promise<string> {
+  if (cachedTreeHash === null) {
+    const mod = (await import("@/childprocess/skill-installation/stagePackage")) as {
+      hashTree: (root: string) => string;
+    };
+    cachedTreeHash = mod.hashTree(tmpRoot);
+  }
+  return cachedTreeHash;
+}
+
+async function makePlan(
   commands: SkillInstallPlan["commands"]
-): SkillInstallPlan {
+): Promise<SkillInstallPlan> {
   return {
     planVersion: 1,
     planRevision: "rev",
@@ -33,7 +44,9 @@ function makePlan(
       canonicalUri: "https://example.com/repo",
       resolvedRevision: "abc",
       acquiredRoot: tmpRoot,
-      contentHash: "h".repeat(64),
+      // Real tree hash so the runner's re-hash-before-spawn check passes
+      // (audit finding 4 tests construct the plan the way prepare does).
+      contentHash: await hashTreeOfRoot(),
       acquisitionMethod: "git",
     },
     discoveredSkills: [],
@@ -55,6 +68,8 @@ function makePlan(
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cmdrunner-"));
   FAKE_STORE.clear();
+  // The tree hash is per-tmpRoot — recompute every test.
+  cachedTreeHash = null;
 });
 
 afterEach(() => {
@@ -66,7 +81,7 @@ describe("SkillApprovedCommandRunner", () => {
 
   it("executes an approved benign template and captures output", async () => {
     fs.writeFileSync(path.join(tmpRoot, "out.txt"), "");
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:echo1",
         executable: "node",
@@ -86,7 +101,7 @@ describe("SkillApprovedCommandRunner", () => {
 
   it("injects declared credentials into the child env; audit names only", async () => {
     FAKE_STORE.set("inst-1:MY_TOOL_TOKEN", "sk-secret-value-do-not-log");
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:env",
         executable: "node",
@@ -113,7 +128,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("fails CLOSED when a declared credential is not stored", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:needs-secret",
         executable: "git",
@@ -133,7 +148,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("refuses high-risk templates even though the plan lists them", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:sudo",
         executable: "sudo",
@@ -152,7 +167,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("rejects command ids not in the approved plan", async () => {
-    const plan = makePlan([]);
+    const plan = await makePlan([]);
     const result = await runner.run(plan, "cmd:ghost", tmpRoot, null);
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -160,7 +175,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("refuses executables outside the package-manager allowlist (review fix)", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:unknown-bin",
         executable: "/tmp/repo-helper.sh",
@@ -179,7 +194,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("refuses planner-marked high-risk templates even with an allowlisted executable", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:marked-high",
         executable: "git",
@@ -198,7 +213,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("refuses curl piped to sh in args even at riskLevel low (review fix)", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:pipe-sh",
         executable: "bash",
@@ -218,7 +233,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("refuses declared credentials that would override PATH or NODE_OPTIONS", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:evil-env",
         executable: "git",
@@ -238,7 +253,7 @@ describe("SkillApprovedCommandRunner", () => {
 
   it("redacts injected secret values from stdout previews (review fix)", async () => {
     FAKE_STORE.set("inst-2:MY_TOOL_TOKEN", "sk-preview-secret-xyz");
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:echo-env",
         executable: "node",
@@ -259,7 +274,7 @@ describe("SkillApprovedCommandRunner", () => {
   }, 30_000);
 
   it("reports non-zero exits without treating them as success", async () => {
-    const plan = makePlan([
+    const plan = await makePlan([
       {
         id: "cmd:fail",
         executable: "node",

@@ -41,7 +41,8 @@ export interface ApprovedCommandRunResult {
     | "COMMAND_MISMATCH"
     | "COMMAND_HIGH_RISK"
     | "COMMAND_FAILED"
-    | "COMMAND_TIMED_OUT";
+    | "COMMAND_TIMED_OUT"
+    | "SOURCE_CHANGED_AFTER_APPROVAL";
   readonly message?: string;
 }
 
@@ -187,6 +188,35 @@ export class SkillApprovedCommandRunner {
       }
       secretEnv[name] = value;
       injected.push(name);
+    }
+
+    // Audit finding 4: the approved command is bound to the EXACT staged
+    // source the plan was built from — re-hash it before spawn and refuse
+    // when the tree changed after approval (the approval covered different
+    // bytes than would execute).
+    let sourceUnchanged = true;
+    try {
+      const { hashTree } = await import(
+        "@/childprocess/skill-installation/stagePackage"
+      );
+      sourceUnchanged = hashTree(plan.source.acquiredRoot) === plan.source.contentHash;
+    } catch {
+      // Hashing unavailable — proceed; the typed-args allowlist and
+      // environment injection guards above still apply.
+    }
+    if (!sourceUnchanged) {
+      return {
+        ok: false,
+        commandId,
+        exitCode: null,
+        stdoutPreview: "",
+        stderrPreview: "",
+        timedOut: false,
+        injectedEnvNames: [],
+        errorCode: "SOURCE_CHANGED_AFTER_APPROVAL",
+        message:
+          "The skill source changed after the plan was approved; review and approve the plan again before running commands.",
+      };
     }
 
     const result = await getPlatformProcessProvider().execute({

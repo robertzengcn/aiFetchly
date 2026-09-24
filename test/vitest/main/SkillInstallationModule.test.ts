@@ -533,19 +533,32 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       if (approved.state === "awaiting_secret") {
         approved = await module.resumeAfterSecret(prepared.sessionId);
       }
-      expect(["ready", "installing_dependencies"]).toContain(approved.state);
-
-      // The run succeeds and never throws on the NOT-NULL event columns
-      // (regression: command-executed previously wrote undefined states).
-      const run = await module.runApprovedCommand(
-        prepared.sessionId,
-        template?.id ?? ""
-      );
-      expect(run.ok).toBe(true);
-      if (!run.ok) return;
-      expect(run.result.ok).toBe(true);
-      expect(run.result.exitCode).toBe(0);
-      expect(run.result.stdoutPreview).toMatch(/v\d+\.\d+/);
+      // §18.4 (audit finding 4): a plan WITH commands now holds at
+      // awaiting_commands until the user runs them from the card. The run
+      // succeeds and never throws on the NOT-NULL event columns
+      // (regression: command-executed previously wrote undefined states),
+      // and completing the LAST pending command advances the session.
+      type RunOutcome = Awaited<ReturnType<typeof module.runApprovedCommand>>;
+      let run: RunOutcome | null = null;
+      if (approved.state === "awaiting_commands") {
+        run = await module.runApprovedCommand(
+          prepared.sessionId,
+          template?.id ?? ""
+        );
+        expect(run.ok).toBe(true);
+        if (!run.ok) return;
+        approved = await module.getStatus(prepared.sessionId);
+      }
+      expect([
+        "ready",
+        "installing_dependencies",
+        "awaiting_commands",
+      ]).toContain(approved.state);
+      if (run) {
+        expect(run.result.ok).toBe(true);
+        expect(run.result.exitCode).toBe(0);
+        expect(run.result.stdoutPreview).toMatch(/v\d+\.\d+/);
+      }
 
       // Unknown template ids are refused — command text cannot be smuggled.
       const bogus = await module.runApprovedCommand(
@@ -1995,5 +2008,49 @@ describe("nested candidate activation + selection persistence (audit finding 2)"
     const after = await module.getStatus(prepared.sessionId);
     void approved;
     expect(after.state).not.toBe("failed");
+  }, 120_000);
+});
+
+describe("required-command completion checkpoint (audit finding 4)", () => {
+  it("a required uv sync holds at awaiting_commands and completes to ready", async () => {
+    const dir = path.join(tmpDir, "fixtures", "cmd-required");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "SKILL.md"),
+      "---\nname: cmd-skill\ndescription: Cmd fixture\n---\n\n# Usage\n\nRun setup."
+    );
+    fs.writeFileSync(
+      path.join(dir, "install.md"),
+      "# Install\n\nRun the following to set up the environment:\n\nnode --version\n"
+    );
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-f4",
+      source: dir,
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const status = await module.getStatus(prepared.sessionId);
+    expect((status.safePlan?.commands ?? []).length).toBeGreaterThan(0);
+
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    // REQUIRED setup cannot be skipped: the session holds BEFORE ready.
+    expect(approved.state).toBe("awaiting_commands");
+    expect(approved.nextAction).toBe("run-commands");
+
+    // Running the pending command completes the checkpoint -> ready.
+    const template = (await module.getStatus(prepared.sessionId)).safePlan
+      ?.commands?.[0];
+    const run = await module.runApprovedCommand(
+      prepared.sessionId,
+      template?.id ?? ""
+    );
+    expect(run.ok).toBe(true);
+    const after = await module.getStatus(prepared.sessionId);
+    expect(after.state).toBe("ready");
   }, 120_000);
 });

@@ -223,6 +223,24 @@ function collectRequestedPermissions(
 export function collectCommandTemplates(
   instructionTexts: readonly string[]
 ): ApprovedCommandTemplate[] {
+  return collectCommandTemplatesWithEnv(
+    instructionTexts,
+    detectCredentialRequirements(instructionTexts).map(
+      (c) => c.environmentVariable
+    )
+  );
+}
+
+/**
+ * Audit finding 4: real plans must carry the full argument list (the old
+ * whitespace split DROPPED non-plain args entirely), declare the env-var
+ * NAMES the runner may inject from the secure store, and mark templates
+ * referencing those variables medium-risk so the review card shows them.
+ */
+export function collectCommandTemplatesWithEnv(
+  instructionTexts: readonly string[],
+  credentialEnvNames: readonly string[]
+): ApprovedCommandTemplate[] {
   const templates: ApprovedCommandTemplate[] = [];
   const seen = new Set<string>();
   const text = instructionTexts.join("\n");
@@ -240,8 +258,21 @@ export function collectCommandTemplates(
     const privileged = /\bsudo\b/i.test(command);
 
     // Simple prefix-based parse; anything unparsable keeps the whole line as
-    // the executable so the user reviews exactly what would run.
+    // the executable so the user reviews exactly what would run. Plain
+    // arguments are kept WHOLE (audit finding 4: the old filter dropped
+    // $-free but quoted/globbed args from the typed template, so the card
+    // showed fewer arguments than would execute); substituted args stay on
+    // the unparsable path with the full line as the executable.
     const parts = command.split(/\s+/);
+    const plainArgs = (privileged ? parts.slice(2) : parts.slice(1)).filter(
+      isPlainArg
+    );
+    const droppedSubstitution =
+      (privileged ? parts.slice(2) : parts.slice(1)).length - plainArgs.length >
+      0;
+    const envNames = credentialEnvNames.filter((name) =>
+      new RegExp(`\\$\\{?${name}\\}?`).test(command)
+    );
     templates.push({
       id: `cmd:${crypto
         .createHash("sha1")
@@ -249,13 +280,19 @@ export function collectCommandTemplates(
         .digest("hex")
         .slice(0, 8)}`,
       executable: privileged ? parts[1] ?? command : parts[0],
-      args: (privileged ? parts.slice(2) : parts.slice(1)).filter(isPlainArg),
+      args: plainArgs,
       workingDirectory: "<skill source root>",
-      environmentNames: [],
-      riskLevel: highRisk ? "high" : "low",
+      environmentNames: envNames,
+      riskLevel: highRisk
+        ? "high"
+        : envNames.length > 0 || droppedSubstitution
+          ? "medium"
+          : "low",
       rationale: privileged
         ? "Privilege escalation detected in repository instructions"
-        : "Proposed by repository instructions",
+        : envNames.length > 0
+          ? "Proposed by repository instructions; injects credentials from the secure store"
+          : "Proposed by repository instructions",
     });
   }
   return templates.slice(0, 50);
