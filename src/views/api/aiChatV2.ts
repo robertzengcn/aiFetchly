@@ -392,9 +392,7 @@ function buildTurnListeners(input: {
       }
     } catch (err) {
       const error =
-        err instanceof Error
-          ? err
-          : new Error("Stream completion parse error");
+        err instanceof Error ? err : new Error("Stream completion parse error");
       onError(error);
       rejectCompletion(error);
     } finally {
@@ -462,9 +460,7 @@ export async function streamChatV2Message(
   function cleanupAndReject(err: unknown): void {
     listeners.detachSelf();
     const error =
-      err instanceof Error
-        ? err
-        : new Error("Failed to start AI chat stream");
+      err instanceof Error ? err : new Error("Failed to start AI chat stream");
     onError(error);
     listeners.failSelf(error);
   }
@@ -601,7 +597,9 @@ export async function cancelChatV2PendingMessage(
 export async function resumeChatV2PendingQueue(
   conversationId: string
 ): Promise<boolean> {
-  const resp = await windowInvoke(AI_CHAT_V2_PENDING_RESUME, { conversationId });
+  const resp = await windowInvoke(AI_CHAT_V2_PENDING_RESUME, {
+    conversationId,
+  });
   return resp != null;
 }
 
@@ -615,9 +613,12 @@ export function subscribeChatV2PendingEvents(
   const listener = (event: unknown): void => {
     handler(event as AIChatPendingMessageEvent);
   };
-  windowReceive(AI_CHAT_V2_PENDING_EVENT, listener);
+  // Capture windowReceive's returned wrapper — removeListener is keyed by
+  // the registered wrapper, not the original callback; passing `listener`
+  // here would silently no-op and leak one ipcRenderer listener per mount.
+  const registered = windowReceive(AI_CHAT_V2_PENDING_EVENT, listener);
   return () => {
-    windowRemoveListener(AI_CHAT_V2_PENDING_EVENT, listener);
+    windowRemoveListener(AI_CHAT_V2_PENDING_EVENT, registered);
   };
 }
 

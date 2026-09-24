@@ -147,6 +147,18 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     await expect.poll(() => requestCount(fakeAi), { timeout: 45_000 }).toBe(2);
     // The pending bubble is gone once B is delivered.
     await expect(pending).toHaveCount(0, { timeout: 30_000 });
+    // BOTH responses stream into the shell transcript — B's turn is
+    // queue-dispatched, so this guards the detail-event bridge (a broken
+    // envelope conversationId silently drops every queue-turn event).
+    await expect
+      .poll(
+        async () =>
+          (
+            await chatRoot(aiApp).innerText()
+          ).split("Streaming-should-be-cancelled").length - 1,
+        { timeout: 45_000 }
+      )
+      .toBeGreaterThanOrEqual(2);
   });
 
   test("2. steering mid-stream skips superseded tools with synthetic results (§21.6-2)", async ({

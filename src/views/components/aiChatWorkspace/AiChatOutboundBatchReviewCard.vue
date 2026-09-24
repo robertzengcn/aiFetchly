@@ -15,7 +15,7 @@
       :batch-status="batch.batchStatus"
       :reason-code="batch.reasonCode"
       :sent-count="batch.sentCount"
-      @review-requested="reviewBatchId = $event"
+      @review-requested="onReviewRequested"
     />
     <OutboundEmailReviewDialog
       v-if="reviewBatchId !== null"
@@ -49,6 +49,14 @@ watch(reviewDialogOpen, (open) => {
     reviewBatchId.value = null;
   }
 });
+
+/** Review must set BOTH the target and the open flag — setting only the id
+ * would remount the dialog with modelValue still false (it was reset on the
+ * previous close), leaving a dismissed batch impossible to re-open. */
+function onReviewRequested(batchId: number): void {
+  reviewBatchId.value = batchId;
+  reviewDialogOpen.value = true;
+}
 </script>
 
 <style scoped>

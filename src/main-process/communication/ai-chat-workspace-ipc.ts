@@ -125,6 +125,12 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
               mode: request.mode,
               toolApprovalMode: request.toolApprovalMode,
               showReasoning: request.showReasoning,
+              // Parity with the coordinator path: a delegated send must not
+              // silently drop execution settings the schema accepts.
+              temperature: request.temperature,
+              maxTokens: request.maxTokens,
+              systemPrompt: request.systemPrompt,
+              ...(request.reasoning ? { reasoning: request.reasoning } : {}),
               uploadedFiles: request.uploadedFiles
                 ? [...request.uploadedFiles]
                 : undefined,
@@ -134,6 +140,19 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
             },
           });
           if (!receipt.pendingMessage) return null;
+          // The live turn can terminate WHILE the row was being persisted
+          // (submit awaits several DB ops): its terminal notification found
+          // zero rows and returned, and forceQueue suppresses the drain —
+          // the row would sit queued forever. Re-check and reconcile.
+          if (
+            getQueryEngine().getConversationRuntimeStatus(
+              request.conversationId
+            ) === "idle"
+          ) {
+            void getQueueService()
+              .notifyExternalTurnTerminal(request.conversationId, "completed")
+              .catch(() => undefined);
+          }
           return {
             pendingRunId: `pending-${receipt.pendingMessage.pendingMessageId}`,
           };

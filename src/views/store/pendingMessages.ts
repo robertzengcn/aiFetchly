@@ -33,7 +33,9 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
     });
   }
 
-  function rowsFor(conversationId: string | null): readonly AIChatPendingMessageView[] {
+  function rowsFor(
+    conversationId: string | null
+  ): readonly AIChatPendingMessageView[] {
     if (!conversationId) return [];
     return byConversation.value.get(conversationId) ?? [];
   }
@@ -46,16 +48,26 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
     if (!conversationId) return;
     try {
       const rows = await listChatV2PendingMessages(conversationId);
-      commit(conversationId, rows ?? []);
+      // The IPC list deliberately includes terminal rows (audit trail);
+      // only live queue states render as bubbles — committing terminal rows
+      // would resurrect sent/cancelled/applied bubbles on every
+      // re-selection. Lifecycle events already remove them at transition.
+      commit(
+        conversationId,
+        (rows ?? []).filter(
+          (row) =>
+            row.status !== "sent" &&
+            row.status !== "cancelled" &&
+            row.status !== "applied"
+        )
+      );
     } catch {
       // Non-fatal: lifecycle events still upsert; next load retries.
     }
   }
 
   function upsert(view: AIChatPendingMessageView): void {
-    const current = [
-      ...(byConversation.value.get(view.conversationId) ?? []),
-    ];
+    const current = [...(byConversation.value.get(view.conversationId) ?? [])];
     const exists = current.some(
       (entry) => entry.pendingMessageId === view.pendingMessageId
     );

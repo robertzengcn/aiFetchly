@@ -348,13 +348,17 @@ function createBroadcastEventSink(): AIChatQueryEventSink {
   pendingTurnSinkCounter += 1;
   const adapter = new AIChatRunEventAdapter(
     `pending-queue-${pendingTurnSinkCounter}`,
-    "" // per-chunk: chunks carry their own conversationId
+    "" // per-chunk: the envelope id is overridden below (chunks carry it)
   );
   const routeDetail = (chunk: ChatV2StreamChunk): void => {
     if (!chunk.conversationId) return;
-    sharedWorkspaceEventRouter.sendDetailEvent(
-      adapter.wrap({ ...chunk, conversationId: chunk.conversationId })
-    );
+    // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
+    // the chunk's real conversation here — the router only delivers events
+    // whose conversation matches the window's selection.
+    sharedWorkspaceEventRouter.sendDetailEvent({
+      ...adapter.wrap(chunk),
+      conversationId: chunk.conversationId,
+    });
   };
   return createChatV2StreamSink({
     sendChunk: (chunk) => {

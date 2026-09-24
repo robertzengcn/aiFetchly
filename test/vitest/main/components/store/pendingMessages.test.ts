@@ -87,6 +87,26 @@ describe("pendingMessages store (message-queue §7)", () => {
     expect(subscribeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("load filters terminal rows — only live queue states render as bubbles", async () => {
+    // The IPC list includes terminal rows (audit trail); re-selecting a
+    // conversation must not resurrect sent/cancelled/applied bubbles.
+    listMock.mockResolvedValue([
+      view("conv-1", "p-live", { status: "queued" }),
+      view("conv-1", "p-sent", { status: "sent" }),
+      view("conv-1", "p-cancelled", { status: "cancelled" }),
+      view("conv-1", "p-applied", { status: "applied" }),
+      view("conv-1", "p-paused", { status: "paused" }),
+    ]);
+    const store = usePendingMessagesStore();
+
+    await store.loadConversation("conv-1");
+
+    expect(store.rowsFor("conv-1").map((r) => r.pendingMessageId)).toEqual([
+      "p-live",
+      "p-paused",
+    ]);
+  });
+
   it("keeps rows isolated per conversation", () => {
     const store = usePendingMessagesStore();
     store.upsert(view("conv-1", "p-1"));

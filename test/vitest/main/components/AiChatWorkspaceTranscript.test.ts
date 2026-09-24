@@ -455,6 +455,53 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(review[0].attributes("data-batch-id")).toBe("7");
   });
 
+  it("§18: the review dialog re-opens after being dismissed", async () => {
+    // Review sets BOTH the target id and the open flag — setting only the
+    // id remounts the dialog with modelValue still false (reset on the
+    // previous close), leaving the batch impossible to re-open.
+    const messages = [
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-outbound-reopen",
+        toolName: "draft_outbound_email_batch",
+        toolResult: {
+          batchId: 11,
+          mode: "review_first",
+          draftCount: 1,
+          batchStatus: "draft_ready",
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const open = async (): Promise<void> => {
+      await wrapper
+        .find('[data-testid="outbound-batch-review"]')
+        .trigger("click");
+      await flushPromises();
+    };
+    await open();
+    const dialog = wrapper.findComponent({ name: "OutboundEmailReviewDialog" });
+    expect(dialog.exists()).toBe(true);
+    expect((dialog.vm.$props as { modelValue: unknown }).modelValue).toBe(true);
+
+    // Dismiss (close without sending), then review again — the dialog must
+    // come back.
+    dialog.vm.$emit("update:modelValue", false);
+    await flushPromises();
+    await open();
+    const reopened = wrapper.findComponent({
+      name: "OutboundEmailReviewDialog",
+    });
+    expect(reopened.exists()).toBe(true);
+    expect((reopened.vm.$props as { modelValue: unknown }).modelValue).toBe(
+      true
+    );
+  });
+
   it("§18: a terminal outbound batch (delivery_unknown) renders the card without the review action", async () => {
     const messages = [
       msg(MessageType.TOOL_RESULT, {
