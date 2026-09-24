@@ -553,6 +553,13 @@ export interface AIChatQueryLoopInput {
    * grouped by turn.
    */
   turnId?: string;
+  /**
+   * Called once per turn when the serialized request is at or over the
+   * compaction trigger (including when it already exceeds the window).
+   * Should compact, then return a rebuilt message list. Null keeps the
+   * current messages and lets preflight reject.
+   */
+  relieveBudgetPressure?: () => Promise<OpenAIChatMessage[] | null>;
 }
 
 /** Request payload for resumeToolAfterPermission. */

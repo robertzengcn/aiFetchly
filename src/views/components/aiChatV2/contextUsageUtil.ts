@@ -38,13 +38,9 @@ export function resolveContextWindow(
  * any non-finite or negative input as 0%.
  */
 export function computeContextPercent(inputs: ContextUsageInputs): number {
-  const used =
-    inputs.streamingEstimatedTokens || inputs.lastTotalTokens || 0;
+  const used = inputs.streamingEstimatedTokens || inputs.lastTotalTokens || 0;
   if (used <= 0) return 0;
-  const window = resolveContextWindow(
-    inputs.modelContextWindows,
-    inputs.model
-  );
+  const window = resolveContextWindow(inputs.modelContextWindows, inputs.model);
   if (window <= 0) return 0;
   const pct = (used / window) * 100;
   if (!Number.isFinite(pct) || pct < 0) return 0;
@@ -54,6 +50,22 @@ export function computeContextPercent(inputs: ContextUsageInputs): number {
 
 /** Tone buckets used by the badge to pick a color. */
 export type ContextUsageTone = "low" | "mid" | "high" | "critical";
+
+/**
+ * Rough token count of loaded transcript text. Used when no server usage
+ * report or persisted tokensUsed exists, so the header meter is not stuck
+ * at 0% on a long conversation.
+ */
+export function estimateVisibleContextTokens(
+  messages: ReadonlyArray<{ content?: string | null }>
+): number {
+  let chars = 0;
+  for (const message of messages) {
+    if (typeof message.content === "string") chars += message.content.length;
+  }
+  if (chars <= 0) return 0;
+  return Math.ceil(chars / 4);
+}
 
 export function toneForPercent(percent: number): ContextUsageTone {
   if (!Number.isFinite(percent) || percent < 0) return "low";

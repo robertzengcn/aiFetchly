@@ -881,6 +881,24 @@ export class AIChatQueryLoop {
     return (model?: string) => this.modelCatalogService.resolveLimits(model);
   }
 
+  /** Push the preflight input estimate to the context badge. */
+  private emitBudgetUsage(
+    input: AIChatQueryLoopInput,
+    model: string | undefined,
+    estimatedInputTokens: number
+  ): void {
+    if (estimatedInputTokens <= 0) return;
+    input.eventSink.emit({
+      type: "usage_update",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      model,
+      promptTokens: estimatedInputTokens,
+      completionTokens: 0,
+      totalTokens: estimatedInputTokens,
+    });
+  }
+
   /**
    * Run the deferred-catalog discovery search with a safe failure payload so a
    * search error never crashes the whole turn (design §22.2).
@@ -1127,6 +1145,9 @@ export class AIChatQueryLoop {
     // so the budget preflight and the provider dispatch always agree on the
     // same limits. Starts as the requested model; fallback updates it.
     let effectiveModel = input.request.model;
+    // One compact-and-rebuild per turn. Later rounds still preflight, but
+    // they must not loop compaction if the summary itself stays oversized.
+    let relievedBudgetPressure = false;
 
     try {
       // Load provider context/output limits before the first preflight.
@@ -1273,13 +1294,53 @@ export class AIChatQueryLoop {
             limits.outputLimit,
             maxFitOutput
           );
-          const budget = this.budgetService.preflight({
+          let budget = this.budgetService.preflight({
             messages,
             tools: hasExposedTools ? exposedTools : [],
             model: effectiveModel,
             outputReserve,
             modelLimitResolver: resolver,
           });
+          // The header badge only moves on usage_update. A rejected preflight
+          // never reaches the provider, so report the budget estimate first
+          // or the meter stays at 0% while the request is already over the
+          // window.
+          this.emitBudgetUsage(
+            input,
+            effectiveModel,
+            budget.estimatedInputTokens
+          );
+          const underPressure = !budget.ok || budget.needsCompaction;
+          if (
+            underPressure &&
+            !relievedBudgetPressure &&
+            input.relieveBudgetPressure
+          ) {
+            relievedBudgetPressure = true;
+            try {
+              const rebuilt = await input.relieveBudgetPressure();
+              if (rebuilt && rebuilt.length > 0) {
+                messages.splice(0, messages.length, ...rebuilt);
+                budget = this.budgetService.preflight({
+                  messages,
+                  tools: hasExposedTools ? exposedTools : [],
+                  model: effectiveModel,
+                  outputReserve,
+                  modelLimitResolver: resolver,
+                });
+                this.emitBudgetUsage(
+                  input,
+                  effectiveModel,
+                  budget.estimatedInputTokens
+                );
+              }
+            } catch (compactErr) {
+              console.error(
+                "[ai-chat-v2] budget-pressure compact failed:",
+                compactErr
+              );
+            }
+          }
           if (!budget.ok) {
             throw new RecoverableHistoryError(
               budget.errorCode ?? "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
@@ -1311,8 +1372,8 @@ export class AIChatQueryLoop {
             reasoning: input.request.reasoning
               ? input.request.reasoning
               : input.request.showReasoning
-                ? { enabled: true, summary: "auto" }
-                : undefined,
+              ? { enabled: true, summary: "auto" }
+              : undefined,
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;

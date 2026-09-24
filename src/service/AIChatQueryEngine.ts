@@ -464,6 +464,31 @@ export class AIChatQueryEngine {
   }
 
   /**
+   * Shrink the active context before a dispatch that is already at or over
+   * the budget. Awaited so the same turn can rebuild and retry preflight.
+   */
+  private async compactBeforeDispatch(
+    conversationId: string,
+    model?: string
+  ): Promise<void> {
+    if (this.compactionCoordinator) {
+      await this.compactionCoordinator.requestCompactionForTurn(
+        conversationId,
+        { trigger: "reactive-overflow", model }
+      );
+      return;
+    }
+    if (this.compactAgent) {
+      await this.compactAgent.enqueueAutoCompact({
+        conversationId,
+        reason: "budget-pressure",
+        promptTokens: Number.MAX_SAFE_INTEGER,
+        model,
+      });
+    }
+  }
+
+  /**
    * Reactive overflow compaction (AC-23, FR-07): after a budget-rejected turn,
    * shrink the active context through the same bounded coordinator every
    * other trigger uses. Without a coordinator, fall back to the compact
@@ -801,6 +826,7 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let turnId: string;
     let messages: OpenAIChatMessage[];
+    let reassembleMessages: (() => Promise<OpenAIChatMessage[]>) | null = null;
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
     let sourceUserMessageId: string | undefined;
@@ -1105,6 +1131,21 @@ export class AIChatQueryEngine {
         ? scheduledContext.assistantMessageId
         : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       messages = [...assembled.messages];
+      const assembleInput = {
+        conversationId,
+        currentUserMessage: userMessageForModel,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: (isPlanMode ? "plan" : "chat") as "plan" | "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts,
+      };
+      reassembleMessages = async () => {
+        const again = await this.contextAssembler.assemble(assembleInput);
+        return [...again.messages];
+      };
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
@@ -1309,6 +1350,10 @@ export class AIChatQueryEngine {
         conversationId,
         isPlanMode
       ),
+      relieveBudgetPressure: async () => {
+        await this.compactBeforeDispatch(conversationId, request.model);
+        return reassembleMessages ? reassembleMessages() : null;
+      },
     };
 
     try {

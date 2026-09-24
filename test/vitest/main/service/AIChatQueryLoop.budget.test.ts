@@ -183,4 +183,56 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
       /request budget rejected: serialized input .* exceeds context \(8192\)/
     );
   });
+
+  it("compacts once and retries when the serialized request exceeds the window", async () => {
+    const tools: OpenAITool[] = [
+      {
+        type: "function",
+        function: {
+          name: "echo",
+          description: "echo",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const stream = vi.fn(
+      async (
+        _req: unknown,
+        onChunk: (chunk: OpenAIChatCompletionChunk) => void
+      ) => {
+        onChunk(makeChunk("ok", "stop"));
+      }
+    );
+    const events: string[] = [];
+    const relieve = vi.fn(async () => [
+      { role: "system" as const, content: "compacted summary" },
+      { role: "user" as const, content: "continue" },
+    ]);
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+      resolveModelLimits: () => ({
+        contextLimit: 8_192,
+        outputLimit: 1_024,
+        limitSource: "configured",
+      }),
+    });
+    const input = goalSizedInput(tools);
+    input.messages = [
+      { role: "system", content: "s" },
+      { role: "user", content: "x".repeat(40_000) },
+    ];
+    input.eventSink = {
+      emit: (event) => {
+        events.push(event.type);
+      },
+    };
+    input.relieveBudgetPressure = relieve;
+    const result = await loop.run(input);
+    expect(relieve).toHaveBeenCalledTimes(1);
+    expect(events).toContain("usage_update");
+    expect(result.type).toBe("completed");
+    expect(stream).toHaveBeenCalledTimes(1);
+  });
 });

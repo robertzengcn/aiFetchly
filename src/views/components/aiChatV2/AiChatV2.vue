@@ -920,6 +920,7 @@ import {
 import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
+  estimateVisibleContextTokens,
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
@@ -3129,10 +3130,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       messages.value,
       activeWorkspace.value?.rootPath
     );
-    // Reset context-usage tracking for the loaded conversation. If any
-    // history rows carry tokensUsed, seed the baseline estimate from the
-    // most recent assistant message; otherwise start at zero until the
-    // next server usage_update arrives.
+    // Reset context-usage tracking for the loaded conversation. Prefer a
+    // persisted tokensUsed value. When history has none (the request was
+    // rejected before a usage report), estimate from the visible transcript
+    // so the header meter is not stuck at 0%.
     lastUsage.value = null;
     const latestWithTokens = [...messages.value]
       .reverse()
@@ -3142,10 +3143,14 @@ const loadHistory = async (conversationId: string): Promise<void> => {
           typeof m.tokensUsed === "number" &&
           m.tokensUsed > 0
       );
-    streamingEstimatedTokens.value =
+    const persistedTokens =
       typeof latestWithTokens?.tokensUsed === "number"
         ? latestWithTokens.tokensUsed
         : 0;
+    streamingEstimatedTokens.value =
+      persistedTokens > 0
+        ? persistedTokens
+        : estimateVisibleContextTokens(messages.value);
     if (latestWithTokens?.model) {
       activeModel.value = latestWithTokens.model;
     }
