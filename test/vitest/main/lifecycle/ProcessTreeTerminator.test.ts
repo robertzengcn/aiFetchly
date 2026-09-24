@@ -320,6 +320,48 @@ describe("ProcessTreeTerminator — 2026-09-21 audit regressions (T02–T04)", (
   });
 });
 
+describe("ProcessTreeTerminator — orphaned group members (T02 audit note)", () => {
+  it("an exited group leader's surviving group members are signaled and verified", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    // Group member shares the root's pgid but outlives the leader.
+    const memberPid = ops.spawn(rootPid, { pgid: rootPid });
+    registry.register({
+      ownerId: "detached-leader",
+      pid: rootPid,
+      isolatedProcessGroupId: rootPid,
+    });
+    // Leader exits BEFORE force phase; only the member remains.
+    ops.table.get(rootPid)!.alive = false;
+    const terminator = new ProcessTreeTerminator(registry, ops, () => 0);
+    const summary = await terminator.terminateAll(FULL_BUDGET);
+    expect(ops.isAlive(memberPid)).toBe(false);
+    expect(summary.verificationFailures).toEqual([]);
+  });
+
+  it("a member surviving the orphaned group signal is a verification failure", async () => {
+    const ops = new FakeProcessOps();
+    const registry = new OwnedProcessRegistry(ops);
+    const rootPid = ops.spawn(1);
+    const memberPid = ops.spawn(rootPid, { pgid: rootPid });
+    ops.immunePids.add(memberPid); // immune to signal but still 'alive'
+    registry.register({
+      ownerId: "stuck-group",
+      pid: rootPid,
+      isolatedProcessGroupId: rootPid,
+    });
+    ops.table.get(rootPid)!.alive = false;
+    // Real clock so the verify loop is bounded.
+    const terminator = new ProcessTreeTerminator(registry, ops);
+    const summary = await terminator.terminateAll(() => 300);
+    expect(ops.isAlive(memberPid)).toBe(true);
+    expect(
+      summary.verificationFailures.some((f) => f.includes("survived"))
+    ).toBe(true);
+  });
+});
+
 describe("ProcessTreeTerminator — real processes (linux integration)", () => {
   /**
    * Independent-observer flavor of AC-14: real OS processes verified dead

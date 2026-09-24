@@ -77,6 +77,13 @@ export class FakeProcessOps implements ProcessOps {
     return "ok";
   }
 
+  isGroupAlive(pgid: number): boolean {
+    for (const proc of this.table.values()) {
+      if (proc.pgid === pgid && proc.alive) return true;
+    }
+    return false;
+  }
+
   async listChildren(pid: number): Promise<number[]> {
     return [...this.table.values()]
       .filter((p) => p.ppid === pid && p.alive)

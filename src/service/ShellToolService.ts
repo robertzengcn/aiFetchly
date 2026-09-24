@@ -265,7 +265,12 @@ async function runShell(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    registerOwnedProcess("shell-tool", child);
+    // T02 (2026-09-21 audit): detached:true puts the child in its OWN
+    // process group (pgid === pid). Record it so force-verify signals the
+    // group (killing any subprocesses it forked) instead of root-only.
+    registerOwnedProcess("shell-tool", child, {
+      isolatedProcessGroupId: child.pid ?? undefined,
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;

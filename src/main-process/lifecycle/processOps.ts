@@ -36,6 +36,9 @@ export interface ProcessOps {
    */
   signalGroup(pgid: number, signal: NodeJS.Signals): SignalOutcome;
 
+  /** True when ANY member of the isolated group is still alive (T02). */
+  isGroupAlive(pgid: number): boolean;
+
   /** Direct children of a pid ([] when unsupported on the platform). */
   listChildren(pid: number): Promise<number[]>;
 
@@ -94,6 +97,18 @@ export function createDefaultProcessOps(): ProcessOps {
         return "ok";
       } catch (err) {
         return mapKillError(err);
+      }
+    },
+
+    isGroupAlive(pgid: number): boolean {
+      try {
+        // kill(-pgid, 0) succeeds when any group member exists; EPERM
+        // also proves a member is present (same semantics as isAlive).
+        process.kill(-pgid, 0);
+        return true;
+      } catch (err) {
+        const code = (err as { code?: unknown })?.code;
+        return code === "EPERM";
       }
     },
 

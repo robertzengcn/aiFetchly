@@ -159,7 +159,48 @@ export class ProcessTreeTerminator {
 
     // Identity check FIRST — never signal a reused PID (AC-07, T03).
     const identity = await this.registry.verifyIdentity(recordId);
-    if (identity === "reuse" || identity === "gone") {
+    if (identity === "reuse") {
+      this.registry.markObservedExit(recordId);
+      this.registry.forget(recordId);
+      return { kind: "already-exited" };
+    }
+    if (identity === "gone") {
+      // T02: an exited group LEADER may leave group members behind (the
+      // pgid outlives the leader on POSIX). Signal the recorded own-group
+      // once, verify its members, and only then treat the record as exited.
+      if (
+        record.isolatedProcessGroupId !== null &&
+        this.ops.platform !== "win32"
+      ) {
+        const failures: string[] = [];
+        const group = this.ops.signalGroup(
+          record.isolatedProcessGroupId,
+          "SIGKILL"
+        );
+        if (group === "error") {
+          failures.push(
+            `group signal failed for surviving pgid ${record.isolatedProcessGroupId}`
+          );
+        }
+        const verifyDeadline = deadline;
+        let groupAlive = this.ops.isGroupAlive(
+          record.isolatedProcessGroupId
+        );
+        while (groupAlive && this.now() < verifyDeadline) {
+          await sleep(VERIFY_POLL_MS);
+          groupAlive = this.ops.isGroupAlive(
+            record.isolatedProcessGroupId
+          );
+        }
+        if (groupAlive) {
+          failures.push("orphaned group members survived force-kill");
+        }
+        this.registry.markObservedExit(recordId);
+        this.registry.forget(recordId);
+        if (failures.length > 0) {
+          return { kind: "failure", detail: failures.join("; ") };
+        }
+      }
       this.registry.markObservedExit(recordId);
       this.registry.forget(recordId);
       return { kind: "already-exited" };
