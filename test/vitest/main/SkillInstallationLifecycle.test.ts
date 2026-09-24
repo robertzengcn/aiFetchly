@@ -208,9 +208,14 @@ describe("SkillInstallationModule lifecycle", () => {
       }
       expect(approvedSecond.installationId).toBeTruthy();
 
-      const ambiguous = await module.update({ name: "video-use" });
-      expect(ambiguous.errorCode).toBe("SKILL_AMBIGUOUS");
-      expect(ambiguous.safeSummary).toContain("installation id");
+      // Audit finding 3 fix: the second same-name install SUPERSEDED the
+      // first row (exactly one enabled row per name), so name resolution
+      // is no longer ambiguous — it resolves to the surviving installation.
+      const resolved = await module.update({ name: "video-use" });
+      expect(resolved.errorCode).not.toBe("SKILL_AMBIGUOUS");
+      expect([ "awaiting_approval", "ready", "installing_dependencies" ]).toContain(
+        resolved.state
+      );
     } finally {
       fs.rmSync(secondSource, { recursive: true, force: true });
     }

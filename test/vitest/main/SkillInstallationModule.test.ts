@@ -1810,3 +1810,106 @@ describe("request-identity session isolation (audit finding 1)", () => {
     expect(pinned?.sessionId).not.toContain("installation:");
   }, 120_000);
 });
+
+describe("update identity + same-name replacement (audit finding 3)", () => {
+  it("an update after content change keeps ONE enabled row and the identity", async () => {
+    const module = new SkillInstallationModule();
+    const first = await module.prepare({
+      conversationId: "conv-f3a",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: first.sessionId,
+      planRevision: first.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(first.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(first.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+    const originalId = approved.installationId;
+    expect(originalId).toBeTruthy();
+
+    // Change the source content, then run the update cycle.
+    fs.appendFileSync(
+      path.join(fixtureRoot, "SKILL.md"),
+      "\n## More\n\nupdated instructions\n"
+    );
+    const updatePrepared = await module.update({
+      installationId: originalId as string,
+      conversationId: "conv-f3a",
+    });
+    expect(updatePrepared.state).toBe("awaiting_approval");
+    const token = (await module.getApprovalToken(updatePrepared.sessionId)) ?? "";
+    let updated = await module.approve({
+      sessionId: updatePrepared.sessionId,
+      planRevision: updatePrepared.planRevision as string,
+      approve: true,
+      approvalToken: token,
+    });
+    if (updated.state === "awaiting_secret") {
+      updated = await module.resumeAfterSecret(updatePrepared.sessionId);
+    }
+    expect(["ready", "installing_dependencies"]).toContain(updated.state);
+
+    // Exactly ONE enabled row for the skill name remains (the old ready
+    // row was superseded, not left alongside).
+    const { execSync } = await import("child_process");
+    void execSync;
+    const listed = await module.listInstallations();
+    const videoUse = listed.filter(
+      (r) =>
+        "name" in r &&
+        (r as { name?: string }).name === "video-use" &&
+        "enabled" in r &&
+        (r as { enabled?: unknown }).enabled === true
+    );
+    expect(videoUse).toHaveLength(1);
+  }, 120_000);
+
+  it("installing the same skill NAME from a different source warns in the plan", async () => {
+    const module = new SkillInstallationModule();
+    const first = await module.prepare({
+      conversationId: "conv-f3b",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: first.sessionId,
+      planRevision: first.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(first.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(first.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+
+    // A SECOND source with the same skill name.
+    const secondSource = fs.mkdtempSync(
+      path.join(os.tmpdir(), "f3-second-")
+    );
+    try {
+      fs.writeFileSync(
+        path.join(secondSource, "SKILL.md"),
+        "---\nname: video-use\ndescription: Imposter\n---\n\n# Usage\n\nOther source."
+      );
+      fs.writeFileSync(
+        path.join(secondSource, "install.md"),
+        "# Install\n\nNothing.\n"
+      );
+      const prepared = await module.prepare({
+        conversationId: "conv-f3b2",
+        source: secondSource,
+      });
+      // The plan carries the replacement warning BEFORE approval.
+      const status = await module.getStatus(prepared.sessionId);
+      const warnings = (status.safePlan?.warnings ?? []) as string[];
+      expect(
+        warnings.some((w) => w.includes("replacing-existing-skill"))
+      ).toBe(true);
+    } finally {
+      fs.rmSync(secondSource, { recursive: true, force: true });
+    }
+  }, 120_000);
+});

@@ -443,6 +443,14 @@ export class SkillInstallationModule extends BaseModule {
     }
 
     // Detect dependency statuses through the platform provider.
+    // Same-name replacement detection (§24.1, audit finding 3): map of
+    // enabled skill NAME -> its source URI for the plan warning.
+    const existingEnabledByName = new Map<string, string>();
+    for (const pkg of inspection.discovered) {
+      const rows = await installations.findEnabledByName(pkg.name);
+      const enabled = rows.find((r) => r.enabled === true);
+      if (enabled) existingEnabledByName.set(pkg.name, enabled.sourceUri);
+    }
     const prePlan = buildSkillInstallPlan({
       sessionId,
       source: acquired.source,
@@ -451,6 +459,7 @@ export class SkillInstallationModule extends BaseModule {
       activationMode: request.mode === "linked" ? "linked" : "managed-copy",
       activationTargetDir: "<global prompt skills>",
       constraints: request.constraints ?? [],
+      existingEnabledByName,
     });
     const detectedDeps = await detectAll(
       prePlan.dependencies,
@@ -1537,7 +1546,7 @@ export class SkillInstallationModule extends BaseModule {
     // FR-26: the session carries the REAL calling conversation (the
     // synthetic update:<id> identity is only the legacy fallback), so
     // FR-29 correlation works for the follow-up approve.
-    return this.prepare({
+    const updateSession = await this.prepare({
       conversationId: input.conversationId ?? `update:${entity.installationId}`,
       source: entity.sourceUri,
       ...(entity.sourceSubdirectory
@@ -1550,6 +1559,17 @@ export class SkillInstallationModule extends BaseModule {
           : "managed-copy",
       sessionId: `update-${entity.installationId}-${Date.now()}`,
     });
+    if (typeof updateSession.sessionId !== "string") return updateSession;
+    // FR-19 (audit finding 3): the update session carries the EXISTING
+    // installation identity so credential bindings survive the revision
+    // change and the activation upsert supersedes the old row instead of
+    // leaving a second ready record.
+    await this.setInstallationId(
+      (await this.getModels()).sessions,
+      updateSession.sessionId,
+      entity.installationId
+    );
+    return updateSession;
   }
 
   /**
@@ -2263,8 +2283,48 @@ export class SkillInstallationModule extends BaseModule {
         );
         session.installationId = priorRow.installationId;
       }
+    } else {
+      // Audit finding 3: an UPDATE session carries the EXISTING identity
+      // (set by update()) while its NEW revision matches no prior identity
+      // row — UPDATE the existing row in place instead of inserting a
+      // duplicate installationId (UNIQUE) and leaving a stale ready twin.
+      const byExistingId = await installations.findByInstallationId(
+        installationId
+      );
+      if (byExistingId) {
+        entity.id = byExistingId.id;
+        entity.installationId = byExistingId.installationId;
+      }
     }
     await installations.save(entity);
+    // Audit finding 3 (FR-19/NFR-01): a changed revision (update) or a
+    // same-name install from a different source leaves the PREVIOUS row
+    // enabled and "ready" while the activation service already replaced
+    // its files — an ambiguous lifecycle target. Supersede every OTHER
+    // enabled row for this skill name so exactly ONE ready row exists.
+    const staleRows = (await installations.findEnabledByName(entity.name))
+      .filter(
+        (row) =>
+          row.installationId !== entity.installationId &&
+          row.enabled === true
+      );
+    for (const row of staleRows) {
+      row.status = "superseded";
+      row.enabled = false;
+      try {
+        await installations.save(row);
+        await this.appendEvent(
+          events,
+          sessionId,
+          "installation-superseded",
+          "activating",
+          "activating",
+          `previous row for '${row.name}' (${row.installationId}) superseded`
+        );
+      } catch {
+        /* best-effort row update — the new ready row governs */
+      }
+    }
     await this.transition(sessions, events, sessionId, "verifying");
 
     // Verification levels (design §18): activation structure + dependency
@@ -2561,7 +2621,7 @@ export class SkillInstallationModule extends BaseModule {
         // are injected directly into the child process by the runner.
         environmentNames: c.environmentNames,
       })),
-      warnings: plan.warnings.map((w) => w.message),
+      warnings: plan.warnings.map((w) => `[${w.code}] ${w.message}`),
     };
   }
 

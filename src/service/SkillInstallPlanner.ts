@@ -35,6 +35,9 @@ export interface PlanInput {
   readonly activationMode: SkillActivationMode | "linked";
   readonly activationTargetDir: string;
   readonly constraints: readonly string[];
+  /** Enabled installations by skill NAME (any source) for same-name
+   *  replacement warnings (audit finding 3 / §24.1). */
+  readonly existingEnabledByName?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -74,6 +77,23 @@ export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
   }
   for (const pkg of input.discovered) {
     warnings.push(...pkg.compatibilityWarnings);
+  }
+  // §24.1 / audit finding 3: activating a skill whose name is already
+  // installed from a DIFFERENT source replaces that activation's files —
+  // the plan must say so before approval, not silently overwrite.
+  for (const pkg of input.discovered) {
+    const existingSource = input.existingEnabledByName?.get(pkg.name);
+    if (
+      existingSource !== undefined &&
+      existingSource !== input.source.canonicalUri
+    ) {
+      warnings.push({
+        code: "replacing-existing-skill",
+        message:
+          `'${pkg.name}' is already installed from a different source ` +
+          `(${existingSource}). Approving this plan REPLACES that installation's files.`,
+      });
+    }
   }
   if (input.discovered.length > 1) {
     warnings.push({

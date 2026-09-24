@@ -42,6 +42,16 @@ export class SkillInstallationModel extends BaseDb {
    * Healthy ready installations for a source (PRD §10.2: a duplicate prepare
    * reports the verified ready installation instead of re-acquiring).
    */
+  /** Enabled rows for a skill NAME (any source) — same-name replacement
+   *  detection (audit finding 3). */
+  async findEnabledByName(name: string): Promise<SkillInstallationEntity[]> {
+    return this.repository
+      .createQueryBuilder("i")
+      .where("i.enabled = :enabled", { enabled: true })
+      .andWhere("i.name = :name", { name })
+      .getMany();
+  }
+
   async findReadyBySourceUri(
     sourceUri: string
   ): Promise<SkillInstallationEntity[]> {
