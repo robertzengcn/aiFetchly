@@ -25,6 +25,16 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
   let subscribed = false;
   let unsubscribe: (() => void) | null = null;
 
+  /**
+   * Event-vs-snapshot reconciliation bookkeeping: a slow list response must
+   * never overwrite lifecycle events that arrived while it was in flight
+   * (erasing a just-queued row, or resurrecting a just-removed one). Both
+   * maps record the sequence of the LAST event that touched a row.
+   */
+  let eventSeq = 0;
+  const lastUpsertSeq = new Map<string, number>();
+  const lastRemovalSeq = new Map<string, number>();
+
   function ensureSubscription(): void {
     if (subscribed) return;
     subscribed = true;
@@ -46,21 +56,32 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
   ): Promise<void> {
     ensureSubscription();
     if (!conversationId) return;
+    const requestSeq = eventSeq;
     try {
       const rows = await listChatV2PendingMessages(conversationId);
       // The IPC list deliberately includes terminal rows (audit trail);
       // only live queue states render as bubbles — committing terminal rows
       // would resurrect sent/cancelled/applied bubbles on every
       // re-selection. Lifecycle events already remove them at transition.
-      commit(
-        conversationId,
-        (rows ?? []).filter(
-          (row) =>
-            row.status !== "sent" &&
-            row.status !== "cancelled" &&
-            row.status !== "applied"
-        )
+      const live = (rows ?? []).filter(
+        (row) =>
+          row.status !== "sent" &&
+          row.status !== "cancelled" &&
+          row.status !== "applied"
       );
+      // Overlay events received DURING the request: rows those events
+      // removed stay removed; rows they added/updated keep their newer
+      // state. The snapshot only contributes rows no event has superseded.
+      const current = byConversation.value.get(conversationId) ?? [];
+      const currentIds = new Set(current.map((row) => row.pendingMessageId));
+      const snapshotRows = live.filter((row) => {
+        if (currentIds.has(row.pendingMessageId)) return false;
+        return (lastRemovalSeq.get(row.pendingMessageId) ?? 0) <= requestSeq;
+      });
+      const merged = [...snapshotRows, ...current].sort(
+        (a, b) => a.sequence - b.sequence
+      );
+      commit(conversationId, merged);
     } catch {
       // Non-fatal: lifecycle events still upsert; next load retries.
     }
@@ -89,8 +110,10 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
   }
 
   function applyEvent(event: AIChatPendingMessageEvent): void {
+    eventSeq += 1;
     if (event.pendingMessage) {
       upsert(event.pendingMessage);
+      lastUpsertSeq.set(event.pendingMessageId, eventSeq);
     }
     if (
       event.status === "sent" ||
@@ -98,6 +121,7 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
       event.status === "applied"
     ) {
       remove(event.conversationId, event.pendingMessageId);
+      lastRemovalSeq.set(event.pendingMessageId, eventSeq);
     }
   }
 
@@ -120,6 +144,9 @@ export const usePendingMessagesStore = defineStore("pendingMessages", () => {
     unsubscribe = null;
     subscribed = false;
     byConversation.value = new Map();
+    eventSeq = 0;
+    lastUpsertSeq.clear();
+    lastRemovalSeq.clear();
   }
 
   return {

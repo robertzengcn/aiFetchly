@@ -1140,7 +1140,7 @@ async function onComposerSend(
   if (generatedImageReferences.length > 0) {
     pendingDraftClearKey.value = composerDraftKey.value;
   }
-  await selectedStore.sendMessage(messageText, {
+  const accepted = await selectedStore.sendMessage(messageText, {
     model: selectedModel.value,
     mode: mode.value,
     toolApprovalMode: toolApprovalMode.value,
@@ -1149,9 +1149,10 @@ async function onComposerSend(
       generatedImageReferences.length > 0 ? generatedImageReferences : undefined,
   });
   // Accepted-send rule (composer contract): the draft (text/files/pasted)
-  // clears only when the run was actually accepted — a run id means the
-  // coordinator took the request; failures keep the draft for retry.
-  if (selectedStore.activeRunId) {
+  // clears only when THIS send was accepted — keying on shared run state
+  // would clear the draft of a rejected send whenever the previous run's id
+  // was still live (queue limit, gate, transport failure).
+  if (accepted) {
     options?.onAccepted?.();
   }
 }

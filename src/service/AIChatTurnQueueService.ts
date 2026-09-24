@@ -113,6 +113,8 @@ export function createSteeringPromoter(
   onApplied?: (input: {
     readonly conversationId: string;
     readonly pendingMessageId: string;
+    /** Promoted row view (sentMessageId bound) for delivered-row appends. */
+    readonly view?: AIChatPendingMessageView;
   }) => void
 ): (input: {
   readonly instruction: AIChatSteeringInstruction;
@@ -146,9 +148,16 @@ export function createSteeringPromoter(
         Date.now() - clickStartedAt
       );
     }
+    // The promoted view carries the persisted sentMessageId — without it the
+    // applied event cannot drive the delivered-row append and the steered
+    // message vanishes from live transcripts until a history reload.
+    const view = await pendingModule
+      .getView(instruction.pendingMessageId)
+      .catch(() => null);
     onApplied?.({
       conversationId: row.conversationId,
       pendingMessageId: instruction.pendingMessageId,
+      ...(view ? { view } : {}),
     });
   };
 }
@@ -588,6 +597,19 @@ export class AIChatTurnQueueService {
           err
         );
         return;
+      }
+
+      // Delivery event at PROMOTE time (message-queue §7): the row is
+      // persisted-and-sent NOW, so surfaces can swap the bubble for the
+      // transcript user row BEFORE the turn streams — a completion-only
+      // append would land the user's message after its answer, and failure
+      // paths would never deliver it at all. The re-fetched view carries
+      // the persisted sentMessageId the renderer binds to.
+      const promoted = await this.deps.pendingModule.getView(
+        row.pendingMessageId
+      );
+      if (promoted) {
+        this.emitEvent(promoted, "sent");
       }
 
       let terminal: AIChatTurnTerminalEvent;

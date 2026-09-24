@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/** Drain pending microtasks so an in-flight load's awaits settle. */
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 import { createPinia, setActivePinia } from "pinia";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import type {
@@ -151,6 +158,44 @@ describe("pendingMessages store (message-queue §7)", () => {
       expect(store.rowsFor("conv-1")).toEqual([]);
       store.applyEvent(event("conv-1", "p-1", "queued", view("conv-1", "p-1")));
     }
+  });
+
+  it("a slow list response never overwrites lifecycle events that raced it", async () => {
+    // Deferred list: the response is IN FLIGHT while a sent event removes
+    // the row and a queued event adds another — the stale snapshot must not
+    // resurrect the removed row nor erase the added one.
+    let resolveList: (rows: AIChatPendingMessageView[]) => void = () =>
+      undefined;
+    listMock.mockImplementation(
+      () =>
+        new Promise<AIChatPendingMessageView[]>((resolve) => {
+          resolveList = resolve;
+        })
+    );
+    const store = usePendingMessagesStore();
+    const load = store.loadConversation("conv-1");
+    await flushMicrotasks();
+
+    store.applyEvent(event("conv-1", "p-old", "sent", view("conv-1", "p-old")));
+    store.applyEvent(
+      event(
+        "conv-1",
+        "p-new",
+        "queued",
+        view("conv-1", "p-new", { sequence: 3 })
+      )
+    );
+
+    resolveList([
+      view("conv-1", "p-old"),
+      view("conv-1", "p-stale", { sequence: 2 }),
+    ]);
+    await load;
+
+    expect(store.rowsFor("conv-1").map((r) => r.pendingMessageId)).toEqual([
+      "p-stale",
+      "p-new",
+    ]);
   });
 
   it("teardown unsubscribes and clears state", async () => {

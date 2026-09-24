@@ -296,15 +296,29 @@ export function getQueryEngine(): AIChatQueryEngine {
       // surface's steering bubble clears (the shell store removes on it).
       steeringPromoter: createSteeringPromoter(
         new AIChatPendingMessageModule(),
-        ({ conversationId, pendingMessageId }) => {
+        ({ conversationId, pendingMessageId, view }) => {
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent({
             conversationId,
             pendingMessageId,
             status: "applied",
             occurredAt: new Date().toISOString(),
+            ...(view ? { pendingMessage: view } : {}),
           });
         }
       ),
+      // True-terminal notification for the durable queue: resumed-turn
+      // continuations (permission / plan-question grants) are fire-and-forget,
+      // so this is the only drain/hold trigger for rows queued behind them.
+      // Coordinator-run terminals notify through the same queue call — the
+      // double notification is idempotent (drain chains serialize; holds
+      // re-pause already-paused rows).
+      onTurnTerminal: (conversationId, outcome) => {
+        void getQueueService()
+          .notifyExternalTurnTerminal(conversationId, outcome)
+          .catch((err: unknown) => {
+            log.warn("[ai-chat-v2] queue terminal notification failed:", err);
+          });
+      },
     });
     queryEngineDbPath = dbPath;
   }

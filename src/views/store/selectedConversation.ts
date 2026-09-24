@@ -284,13 +284,19 @@ export const useSelectedConversationStore = defineStore(
       hasOlder.value = true;
     }
 
-    /** Send a message through the coordinator with send-button retry safety. */
+    /**
+     * Send a message through the coordinator with send-button retry safety.
+     * Returns whether THIS send was accepted (a run started or the durable
+     * queue took the row) — the composer keys its draft clear on the result,
+     * never on shared run state (a stale activeRunId from the previous run
+     * must not clear a rejected send's draft).
+     */
     async function sendMessage(
       text: string,
       options?: SendOptions
-    ): Promise<void> {
+    ): Promise<boolean> {
       const conversationId = workspaceStore.selectedConversationId;
-      if (!conversationId || text.trim().length === 0) return;
+      if (!conversationId || text.trim().length === 0) return false;
 
       // Optimistic user message; history reload replaces it durably.
       const optimisticId = `local-user-${Date.now()}`;
@@ -331,10 +337,12 @@ export const useSelectedConversationStore = defineStore(
           presenter.removeMessage(optimisticId);
           syncFromPresenter();
         }
+        return true;
       } catch (err) {
         errorMessage.value =
           err instanceof Error ? err.message : "Failed to start the run";
         streamStatus.value = "error";
+        return false;
       }
     }
 

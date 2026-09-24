@@ -545,12 +545,45 @@ describe("AIChatTurnQueueService steer", () => {
       {
         conversationId: "v2-pro",
         pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+        view: expect.objectContaining({
+          pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+        }),
       },
     ]);
     const views = await service.list("v2-pro");
     expect(views.find((v) => v.content === "focus on Europe")?.status).toBe(
       "applied"
     );
+  });
+
+  it("dispatch delivers at promote time: a sent event with sentMessageId precedes the turn", async () => {
+    const { service, stub, events } = makeService();
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-deliver",
+      request: { message: "B", conversationId: "v2-deliver" },
+    });
+    // The turn is in flight; wait for BOTH the dispatch and the terminal.
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    const sentEvents = events.filter(
+      (e) => e.status === "sent" && e.pendingMessage
+    );
+    // The promote-time sent event carries the durable user-row binding the
+    // renderer needs to append the delivered row BEFORE the turn streams.
+    expect(sentEvents.length).toBeGreaterThanOrEqual(1);
+    expect(
+      sentEvents.some(
+        (e) =>
+          typeof e.pendingMessage?.sentMessageId === "string" &&
+          e.pendingMessage.sentMessageId.length > 0
+      )
+    ).toBe(true);
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-deliver",
+      assistantMessageId: "a",
+    });
   });
 
   it("no running turn → TURN_NOT_STEERABLE, row stays queued", async () => {
