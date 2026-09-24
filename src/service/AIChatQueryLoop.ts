@@ -434,6 +434,77 @@ function estimateTokenUsage(
   };
 }
 
+const OLDER_TOOL_STUB_CHARS = 400;
+const LATEST_TOOL_RESULT_MAX_CHARS = 12_000;
+
+/**
+ * Drop older tool-call arguments and tool results down to stubs, and cap the
+ * newest tool result. Archive compaction keeps the in-progress turn, so a
+ * long tool loop (search, extract, send email) grows past the window inside
+ * one turn and must be shrunk in memory before the next model call.
+ */
+export function shrinkLiveTurnToolPayloads(
+  messages: OpenAIChatMessage[]
+): boolean {
+  let lastToolish = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const hasCalls =
+      Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    if (message.role === "tool" || hasCalls) lastToolish = i;
+  }
+  if (lastToolish < 0) return false;
+  let changed = false;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const hasCalls =
+      Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    if (message.role !== "tool" && !hasCalls) continue;
+    const cap =
+      i === lastToolish ? LATEST_TOOL_RESULT_MAX_CHARS : OLDER_TOOL_STUB_CHARS;
+    const stubbed = stubToolMessage(message, cap, i === lastToolish);
+    if (stubbed !== message) {
+      messages[i] = stubbed;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function stubToolMessage(
+  message: OpenAIChatMessage,
+  maxChars: number,
+  keepArguments: boolean
+): OpenAIChatMessage {
+  let next = message;
+  if (
+    typeof message.content === "string" &&
+    message.content.length > maxChars
+  ) {
+    next = {
+      ...next,
+      content:
+        message.content.slice(0, maxChars) +
+        "\n[omitted to fit the context window]",
+    };
+  }
+  if (!keepArguments && Array.isArray(message.tool_calls)) {
+    const calls = message.tool_calls.map((call) => {
+      const args = call.function.arguments;
+      if (args.length <= OLDER_TOOL_STUB_CHARS) return call;
+      return {
+        ...call,
+        function: { ...call.function, arguments: "{}" },
+      };
+    });
+    const changed = calls.some(
+      (call, index) => call !== message.tool_calls?.[index]
+    );
+    if (changed) next = { ...next, tool_calls: calls };
+  }
+  return next;
+}
+
 export function shouldForceSubmitPlanForApproval(message: string): boolean {
   const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return false;
@@ -1340,6 +1411,23 @@ export class AIChatQueryLoop {
                 compactErr
               );
             }
+          }
+          // The live turn's tool payloads are retained by compaction. When
+          // they are what pushed the request over the window, stub the older
+          // ones in this message list and retry preflight once.
+          if (!budget.ok && shrinkLiveTurnToolPayloads(messages)) {
+            budget = this.budgetService.preflight({
+              messages,
+              tools: hasExposedTools ? exposedTools : [],
+              model: effectiveModel,
+              outputReserve,
+              modelLimitResolver: resolver,
+            });
+            this.emitBudgetUsage(
+              input,
+              effectiveModel,
+              budget.estimatedInputTokens
+            );
           }
           if (!budget.ok) {
             throw new RecoverableHistoryError(

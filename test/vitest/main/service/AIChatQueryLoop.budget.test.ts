@@ -11,6 +11,7 @@ import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
 import type {
   OpenAIChatCompletionChunk,
+  OpenAIChatCompletionRequest,
   OpenAIModelsResponse,
   OpenAITool,
 } from "@/api/aiChatApi";
@@ -232,6 +233,73 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
     const result = await loop.run(input);
     expect(relieve).toHaveBeenCalledTimes(1);
     expect(events).toContain("usage_update");
+    expect(result.type).toBe("completed");
+    expect(stream).toHaveBeenCalledTimes(1);
+  });
+
+  it("stubs older tool payloads when the live turn exceeds the window", async () => {
+    const stream = vi.fn(
+      async (
+        req: OpenAIChatCompletionRequest,
+        onChunk: (chunk: OpenAIChatCompletionChunk) => void
+      ) => {
+        const toolMessages = req.messages.filter((m) => m.role === "tool");
+        const older = toolMessages.slice(0, -1);
+        expect(
+          older.every(
+            (m) => typeof m.content !== "string" || m.content.length < 500
+          )
+        ).toBe(true);
+        onChunk(makeChunk("ok", "stop"));
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+      resolveModelLimits: () => ({
+        contextLimit: 8_192,
+        outputLimit: 1_024,
+        limitSource: "configured",
+      }),
+    });
+    const input = goalSizedInput([
+      {
+        type: "function",
+        function: {
+          name: "extract_contact_info",
+          description: "extract",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+    const fat = "email html ".repeat(2_000);
+    input.messages = [
+      { role: "system", content: "system" },
+      { role: "user", content: "keep finding contacts" },
+      ...Array.from({ length: 8 }, (_, i) => [
+        {
+          role: "assistant" as const,
+          content: null,
+          tool_calls: [
+            {
+              id: `call_${i}`,
+              type: "function" as const,
+              function: {
+                name: "start_email_send_task",
+                arguments: JSON.stringify({ email_html_content: fat }),
+              },
+            },
+          ],
+        },
+        {
+          role: "tool" as const,
+          tool_call_id: `call_${i}`,
+          content: fat,
+        },
+      ]).flat(),
+    ];
+    const result = await loop.run(input);
     expect(result.type).toBe("completed");
     expect(stream).toHaveBeenCalledTimes(1);
   });
