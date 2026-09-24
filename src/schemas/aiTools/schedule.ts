@@ -11,8 +11,8 @@
  * 不修改 scheduleAiToolTypes.ts，保留所有现有调用点。
  */
 
-import { lazySchema } from '@/utils/lazySchema'
-import { zodToJsonSchema } from '@/utils/zodToJsonSchema'
+import { lazySchema } from "@/utils/lazySchema";
+import { zodToJsonSchema } from "@/utils/zodToJsonSchema";
 import {
   listSchedulesSchema,
   getScheduleDetailsSchema,
@@ -23,28 +23,32 @@ import {
   pauseScheduleSchema,
   resumeScheduleSchema,
   runScheduleNowSchema,
-} from '@/entityTypes/scheduleAiToolTypes'
+} from "@/entityTypes/scheduleAiToolTypes";
 
 // ─── lazySchema wrappers (reference-stable for WeakMap caching) ────────────
 
-export const listSchedulesInputSchema = lazySchema(() => listSchedulesSchema)
-export const getScheduleDetailsInputSchema = lazySchema(() => getScheduleDetailsSchema)
-export const listScheduleExecutionsInputSchema = lazySchema(() => listScheduleExecutionsSchema)
-export const createScheduleInputSchema = lazySchema(() => createScheduleSchema)
-export const updateScheduleInputSchema = lazySchema(() => updateScheduleSchema)
-export const deleteScheduleInputSchema = lazySchema(() => deleteScheduleSchema)
-export const pauseScheduleInputSchema = lazySchema(() => pauseScheduleSchema)
-export const resumeScheduleInputSchema = lazySchema(() => resumeScheduleSchema)
-export const runScheduleNowInputSchema = lazySchema(() => runScheduleNowSchema)
+export const listSchedulesInputSchema = lazySchema(() => listSchedulesSchema);
+export const getScheduleDetailsInputSchema = lazySchema(
+  () => getScheduleDetailsSchema
+);
+export const listScheduleExecutionsInputSchema = lazySchema(
+  () => listScheduleExecutionsSchema
+);
+export const createScheduleInputSchema = lazySchema(() => createScheduleSchema);
+export const updateScheduleInputSchema = lazySchema(() => updateScheduleSchema);
+export const deleteScheduleInputSchema = lazySchema(() => deleteScheduleSchema);
+export const pauseScheduleInputSchema = lazySchema(() => pauseScheduleSchema);
+export const resumeScheduleInputSchema = lazySchema(() => resumeScheduleSchema);
+export const runScheduleNowInputSchema = lazySchema(() => runScheduleNowSchema);
 
 type LLMTool = {
-  type: 'function'
+  type: "function";
   function: {
-    name: string
-    description: string
-    parameters: ReturnType<typeof zodToJsonSchema>
-  }
-}
+    name: string;
+    description: string;
+    parameters: ReturnType<typeof zodToJsonSchema>;
+  };
+};
 
 /**
  * 9 个 schedule tool 的 OpenAI function-calling envelope 数组。
@@ -55,76 +59,78 @@ type LLMTool = {
 export function getScheduleToolsForLLM(): LLMTool[] {
   return [
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_list',
-        description: 'List scheduled tasks with pagination and optional sort',
+        name: "schedule_list",
+        description: "List scheduled tasks with pagination and optional sort",
         parameters: zodToJsonSchema(listSchedulesInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_get_details',
-        description: 'Get detailed information about a specific schedule by ID',
+        name: "schedule_get_details",
+        description: "Get detailed information about a specific schedule by ID",
         parameters: zodToJsonSchema(getScheduleDetailsInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_list_executions',
-        description: 'List execution history for a specific schedule',
+        name: "schedule_list_executions",
+        description: "List execution history for a specific schedule",
         parameters: zodToJsonSchema(listScheduleExecutionsInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_create',
-        description: 'Create a new scheduled task with cron expression',
+        name: "schedule_create",
+        description:
+          'Create a new scheduled task with cron expression. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task.',
         parameters: zodToJsonSchema(createScheduleInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_update',
-        description: 'Update an existing scheduled task',
+        name: "schedule_update",
+        description:
+          'Update an existing scheduled task. If task_type is provided it must be "ai_message" (the only allowed value).',
         parameters: zodToJsonSchema(updateScheduleInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_delete',
-        description: 'Delete a scheduled task by ID',
+        name: "schedule_delete",
+        description: "Delete a scheduled task by ID",
         parameters: zodToJsonSchema(deleteScheduleInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_pause',
-        description: 'Pause an active scheduled task',
+        name: "schedule_pause",
+        description: "Pause an active scheduled task",
         parameters: zodToJsonSchema(pauseScheduleInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_resume',
-        description: 'Resume a paused scheduled task',
+        name: "schedule_resume",
+        description: "Resume a paused scheduled task",
         parameters: zodToJsonSchema(resumeScheduleInputSchema()),
       },
     },
     {
-      type: 'function',
+      type: "function",
       function: {
-        name: 'schedule_run_now',
-        description: 'Trigger an immediate execution of a scheduled task',
+        name: "schedule_run_now",
+        description: "Trigger an immediate execution of a scheduled task",
         parameters: zodToJsonSchema(runScheduleNowInputSchema()),
       },
     },
-  ]
+  ];
 }

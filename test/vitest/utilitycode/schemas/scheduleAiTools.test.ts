@@ -1,66 +1,88 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from "vitest";
 import {
   getScheduleToolsForLLM,
   listSchedulesInputSchema,
   createScheduleInputSchema,
-} from '@/schemas/aiTools/schedule'
-import type { JsonSchema7Type } from '@/utils/zodToJsonSchema'
+} from "@/schemas/aiTools/schedule";
+import type { JsonSchema7Type } from "@/utils/zodToJsonSchema";
 
-describe('Schedule AI tools → LLM function calling', () => {
-  describe('getScheduleToolsForLLM', () => {
-    it('returns 9 tool envelopes', () => {
-      const tools = getScheduleToolsForLLM()
-      expect(tools).toHaveLength(9)
+describe("Schedule AI tools → LLM function calling", () => {
+  describe("getScheduleToolsForLLM", () => {
+    it("returns 9 tool envelopes", () => {
+      const tools = getScheduleToolsForLLM();
+      expect(tools).toHaveLength(9);
       for (const t of tools) {
-        expect(t.type).toBe('function')
-        expect(typeof t.function.name).toBe('string')
-        expect(typeof t.function.description).toBe('string')
-        expect(t.function.parameters).toBeDefined()
+        expect(t.type).toBe("function");
+        expect(typeof t.function.name).toBe("string");
+        expect(typeof t.function.description).toBe("string");
+        expect(t.function.parameters).toBeDefined();
       }
-    })
+    });
 
-    it('exposes expected tool names', () => {
-      const names = getScheduleToolsForLLM().map((t) => t.function.name)
-      expect(names).toContain('schedule_list')
-      expect(names).toContain('schedule_create')
-      expect(names).toContain('schedule_update')
-      expect(names).toContain('schedule_delete')
-      expect(names).toContain('schedule_pause')
-      expect(names).toContain('schedule_resume')
-      expect(names).toContain('schedule_run_now')
-      expect(names).toContain('schedule_get_details')
-      expect(names).toContain('schedule_list_executions')
-    })
+    it("exposes expected tool names", () => {
+      const names = getScheduleToolsForLLM().map((t) => t.function.name);
+      expect(names).toContain("schedule_list");
+      expect(names).toContain("schedule_create");
+      expect(names).toContain("schedule_update");
+      expect(names).toContain("schedule_delete");
+      expect(names).toContain("schedule_pause");
+      expect(names).toContain("schedule_resume");
+      expect(names).toContain("schedule_run_now");
+      expect(names).toContain("schedule_get_details");
+      expect(names).toContain("schedule_list_executions");
+    });
 
-    it('emits JSON Schema with required fields for schedule_create', () => {
+    it("emits JSON Schema with required fields for schedule_create", () => {
       const create = getScheduleToolsForLLM().find(
-        (t) => t.function.name === 'schedule_create',
-      )!
-      const params = create.function.parameters as JsonSchema7Type
-      expect(params.type).toBe('object')
-      expect(params.properties).toHaveProperty('name')
-      expect(params.properties).toHaveProperty('task_type')
-      expect(params.properties).toHaveProperty('cron_expression')
-    })
+        (t) => t.function.name === "schedule_create"
+      )!;
+      const params = create.function.parameters as JsonSchema7Type;
+      expect(params.type).toBe("object");
+      expect(params.properties).toHaveProperty("name");
+      expect(params.properties).toHaveProperty("task_type");
+      expect(params.properties).toHaveProperty("cron_expression");
+    });
 
-    it('caches JSON Schema via WeakMap (referential equality)', () => {
+    it("restricts schedule_create task_type to ai_message only", () => {
+      // AI-created schedules must only manage ai_message tasks. The LLM-facing
+      // JSON Schema must not advertise any other task type (search, buck_email,
+      // etc.), otherwise the model picks a carrier type and creates the wrong
+      // kind of schedule.
+      const create = getScheduleToolsForLLM().find(
+        (t) => t.function.name === "schedule_create"
+      )!;
+      const params = create.function.parameters as JsonSchema7Type;
+      const taskType = params.properties?.task_type as JsonSchema7Type;
+      expect(taskType.enum).toEqual(["ai_message"]);
+    });
+
+    it("restricts schedule_update task_type to ai_message only", () => {
+      const update = getScheduleToolsForLLM().find(
+        (t) => t.function.name === "schedule_update"
+      )!;
+      const params = update.function.parameters as JsonSchema7Type;
+      const taskType = params.properties?.task_type as JsonSchema7Type;
+      expect(taskType.enum).toEqual(["ai_message"]);
+    });
+
+    it("caches JSON Schema via WeakMap (referential equality)", () => {
       // Two calls should return the same parameters object per tool because
       // lazySchema + zodToJsonSchema cache by WeakMap.
-      const first = getScheduleToolsForLLM()
-      const second = getScheduleToolsForLLM()
+      const first = getScheduleToolsForLLM();
+      const second = getScheduleToolsForLLM();
       first.forEach((t1, i) => {
-        expect(t1.function.parameters).toBe(second[i].function.parameters)
-      })
-    })
-  })
+        expect(t1.function.parameters).toBe(second[i].function.parameters);
+      });
+    });
+  });
 
-  describe('lazySchema wrappers', () => {
-    it('listSchedulesInputSchema returns same reference on repeat call', () => {
-      expect(listSchedulesInputSchema()).toBe(listSchedulesInputSchema())
-    })
+  describe("lazySchema wrappers", () => {
+    it("listSchedulesInputSchema returns same reference on repeat call", () => {
+      expect(listSchedulesInputSchema()).toBe(listSchedulesInputSchema());
+    });
 
-    it('createScheduleInputSchema returns same reference on repeat call', () => {
-      expect(createScheduleInputSchema()).toBe(createScheduleInputSchema())
-    })
-  })
-})
+    it("createScheduleInputSchema returns same reference on repeat call", () => {
+      expect(createScheduleInputSchema()).toBe(createScheduleInputSchema());
+    });
+  });
+});

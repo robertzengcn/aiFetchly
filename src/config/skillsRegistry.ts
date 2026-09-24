@@ -11,8 +11,15 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
-import type { SkillDefinition, SkillExecutionResult, SkillManifest } from "@/entityTypes/skillTypes";
-import { isArchiveReadsEnabled, isHistoryToolsEnabled } from "@/config/featureFlags";
+import type {
+  SkillDefinition,
+  SkillExecutionResult,
+  SkillManifest,
+} from "@/entityTypes/skillTypes";
+import {
+  isArchiveReadsEnabled,
+  isHistoryToolsEnabled,
+} from "@/config/featureFlags";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -1174,13 +1181,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         before: {
           type: "string",
-          description:
-            "Only matches before this ISO datetime (exclusive).",
+          description: "Only matches before this ISO datetime (exclusive).",
         },
         after: {
           type: "string",
-          description:
-            "Only matches after this ISO datetime (exclusive).",
+          description: "Only matches after this ISO datetime (exclusive).",
         },
         types: {
           type: "array",
@@ -2834,7 +2839,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_schedule",
     description:
-      "Create a new automation schedule for an existing task. The schedule defaults to inactive (is_active: false) for safety. Supported task types: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.",
+      'Create a new automation schedule for an existing AI message task. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task. The schedule defaults to inactive (is_active: false) for safety. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.',
     parameters: {
       type: "object",
       properties: {
@@ -2848,19 +2853,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         task_type: {
           type: "string",
-          enum: [
-            "search",
-            "email_extract",
-            "buck_email",
-            "yellow_pages",
-            "google_maps",
-            "yandex_maps",
-          ],
-          description: "Type of task this schedule manages",
+          enum: ["ai_message"],
+          description:
+            'Type of task this schedule manages. Only "ai_message" is allowed — AI-created schedules cannot manage other task types.',
         },
         task_id: {
           type: "number",
-          description: "ID of the existing task",
+          description: "ID of the existing AI message task",
         },
         cron_expression: {
           type: "string",
@@ -2911,7 +2910,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "update_schedule",
     description:
-      "Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.",
+      'Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
     parameters: {
       type: "object",
       properties: {
@@ -2929,15 +2928,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         task_type: {
           type: "string",
-          enum: [
-            "search",
-            "email_extract",
-            "buck_email",
-            "yellow_pages",
-            "google_maps",
-            "yandex_maps",
-          ],
-          description: "New task type",
+          enum: ["ai_message"],
+          description:
+            'New task type. Only "ai_message" is allowed — the schedule cannot be reassigned to another task type.',
         },
         task_id: {
           type: "number",

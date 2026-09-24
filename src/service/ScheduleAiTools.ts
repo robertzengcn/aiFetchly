@@ -14,6 +14,7 @@ import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
+import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import {
   ScheduleToolErrorCode,
   ScheduleToolFailure,
@@ -200,6 +201,15 @@ export async function validateTaskReference(
       const record = await module.getSearchRecord(taskId);
       if (record === null) {
         throw new Error(`Yandex maps task ${taskId} not found`);
+      }
+      break;
+    }
+
+    case TaskType.AI_MESSAGE: {
+      const module = new AiMessageTaskModule();
+      const task = await module.getTask(taskId);
+      if (task === null) {
+        throw new Error(`AI message task ${taskId} not found`);
       }
       break;
     }

@@ -30,6 +30,7 @@ import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
+import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 
 import {
   ScheduleTaskEntity,
@@ -41,7 +42,12 @@ import { ScheduleToolErrorCode } from "@/entityTypes/scheduleAiToolTypes";
 import {
   ExecutionStatus,
   TriggerType as LogTriggerType,
+  ScheduleExecutionLogEntity,
 } from "@/entity/ScheduleExecutionLog.entity";
+import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { SearchTaskEntity } from "@/entity/SearchTask.entity";
+import { EmailSearchTaskEntity } from "@/entity/EmailSearchTask.entity";
+import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 import { ZodError, ZodIssue } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -55,7 +61,9 @@ function mockSchedule(
     id: 1,
     name: "Test Schedule",
     description: null,
-    task_type: TaskType.SEARCH,
+    // AI-created schedules are restricted to ai_message (the only task type
+    // the AI-facing schema allows).
+    task_type: TaskType.AI_MESSAGE,
     task_id: 10,
     cron_expression: "0 9 * * *",
     is_active: true,
@@ -173,7 +181,7 @@ describe("ScheduleAiTools", () => {
       const payload = toSafeSchedulePayload(schedule);
       expect(payload.id).to.equal(1);
       expect(payload.name).to.equal("Test Schedule");
-      expect(payload.task_type).to.equal(TaskType.SEARCH);
+      expect(payload.task_type).to.equal(TaskType.AI_MESSAGE);
       expect(payload.is_active).to.be.true;
       expect(payload.last_run_time).to.equal("2026-06-05T09:00:00.000Z");
       expect(payload.next_run_time).to.equal("2026-06-06T09:00:00.000Z");
@@ -379,7 +387,10 @@ describe("ScheduleAiTools", () => {
       };
       sinon
         .stub(ScheduleExecutionLogModule.prototype, "listExecutions")
-        .resolves({ records: [execution as any], num: 1 });
+        .resolves({
+          records: [execution as unknown as ScheduleExecutionLogEntity],
+          num: 1,
+        });
       stubScheduleManager();
 
       const result = await listScheduleExecutionsForAi({ page: 0, size: 20 });
@@ -455,9 +466,10 @@ describe("ScheduleAiTools", () => {
   // =========================================================================
 
   describe("createScheduleForAi", () => {
+    // AI-created schedules are restricted to the ai_message task type.
     const validInput = {
-      name: "Daily Search",
-      task_type: TaskType.SEARCH,
+      name: "Daily AI Message",
+      task_type: TaskType.AI_MESSAGE,
       task_id: 10,
       cron_expression: "0 9 * * *",
     };
@@ -466,8 +478,10 @@ describe("ScheduleAiTools", () => {
       managerStubs: ReturnType<typeof stubScheduleManager>;
     } {
       const managerStubs = stubScheduleManager();
-      // Stub task validation — SearchTaskModule.read
-      sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
+      // Stub task validation — AiMessageTaskModule.getTask (ai_message type)
+      sinon
+        .stub(AiMessageTaskModule.prototype, "getTask")
+        .resolves({} as unknown as AiMessageTaskEntity);
       // Stub create + reload
       sinon.stub(ScheduleTaskModule.prototype, "createSchedule").resolves(1);
       sinon
@@ -506,7 +520,7 @@ describe("ScheduleAiTools", () => {
 
     it("should reject missing task references with TASK_NOT_FOUND", async () => {
       stubScheduleManager();
-      sinon.stub(SearchTaskModule.prototype, "read").resolves(null);
+      sinon.stub(AiMessageTaskModule.prototype, "getTask").resolves(null);
 
       const result = await createScheduleForAi(validInput);
 
@@ -522,7 +536,9 @@ describe("ScheduleAiTools", () => {
         .stub(ScheduleTaskModule.prototype, "createSchedule")
         .resolves(1);
       stubScheduleManager();
-      sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
+      sinon
+        .stub(AiMessageTaskModule.prototype, "getTask")
+        .resolves({} as unknown as AiMessageTaskEntity);
       const inactiveSchedule = mockSchedule({ is_active: false });
       sinon
         .stub(ScheduleTaskModule.prototype, "getScheduleById")
@@ -538,7 +554,7 @@ describe("ScheduleAiTools", () => {
 
     it("should reject missing name with VALIDATION_FAILED", async () => {
       const result = await createScheduleForAi({
-        task_type: TaskType.SEARCH,
+        task_type: TaskType.AI_MESSAGE,
         task_id: 10,
         cron_expression: "0 9 * * *",
       });
@@ -552,7 +568,37 @@ describe("ScheduleAiTools", () => {
     it("should reject empty name with VALIDATION_FAILED", async () => {
       const result = await createScheduleForAi({
         name: "   ",
+        task_type: TaskType.AI_MESSAGE,
+        task_id: 10,
+        cron_expression: "0 9 * * *",
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(ScheduleToolErrorCode.VALIDATION_FAILED);
+      }
+    });
+
+    it("should reject non-ai_message task types with VALIDATION_FAILED", async () => {
+      // The AI-facing schema only accepts ai_message. Any other task type
+      // (e.g. search, buck_email) must be rejected at the schema boundary.
+      const result = await createScheduleForAi({
+        name: "Sneaky Search Schedule",
         task_type: TaskType.SEARCH,
+        task_id: 10,
+        cron_expression: "0 9 * * *",
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(ScheduleToolErrorCode.VALIDATION_FAILED);
+      }
+    });
+
+    it("should reject buck_email task type with VALIDATION_FAILED", async () => {
+      const result = await createScheduleForAi({
+        name: "Buck Email Schedule",
+        task_type: TaskType.BUCK_EMAIL,
         task_id: 10,
         cron_expression: "0 9 * * *",
       });
@@ -565,7 +611,9 @@ describe("ScheduleAiTools", () => {
 
     it("should return DEPENDENCY_CONFLICT when parent schedule not found", async () => {
       stubScheduleManager();
-      sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
+      sinon
+        .stub(AiMessageTaskModule.prototype, "getTask")
+        .resolves({} as unknown as AiMessageTaskEntity);
       const getByIdStub = sinon.stub(
         ScheduleTaskModule.prototype,
         "getScheduleById"
@@ -592,7 +640,7 @@ describe("ScheduleAiTools", () => {
       // Make the created schedule active
       sinon.restore();
       // Re-stub everything
-      const { managerStubs: mgr2 } = ((): {
+      ((): {
         managerStubs: ReturnType<typeof stubScheduleManager>;
       } => {
         const managerStubs = stubScheduleManager();
@@ -600,7 +648,9 @@ describe("ScheduleAiTools", () => {
         managerStubs.instance.addSchedule.rejects(
           new Error("Scheduler unavailable")
         );
-        sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
+        sinon
+          .stub(AiMessageTaskModule.prototype, "getTask")
+          .resolves({} as unknown as AiMessageTaskEntity);
         sinon.stub(ScheduleTaskModule.prototype, "createSchedule").resolves(1);
         const activeSchedule = mockSchedule({ is_active: true });
         sinon
@@ -643,14 +693,32 @@ describe("ScheduleAiTools", () => {
       }
     });
 
-    it("should validate task reference when task_type changes", async () => {
+    it("should validate task reference when task_type is ai_message", async () => {
       const existing = mockSchedule();
       sinon
         .stub(ScheduleTaskModule.prototype, "getScheduleById")
         .resolves(existing);
       stubScheduleManager();
-      // Task not found
-      sinon.stub(SearchTaskModule.prototype, "read").resolves(null);
+      // ai_message task not found
+      sinon.stub(AiMessageTaskModule.prototype, "getTask").resolves(null);
+
+      const result = await updateScheduleForAi({
+        schedule_id: 1,
+        task_type: TaskType.AI_MESSAGE,
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(ScheduleToolErrorCode.TASK_NOT_FOUND);
+      }
+    });
+
+    it("should reject non-ai_message task_type with VALIDATION_FAILED", async () => {
+      const existing = mockSchedule();
+      sinon
+        .stub(ScheduleTaskModule.prototype, "getScheduleById")
+        .resolves(existing);
+      stubScheduleManager();
 
       const result = await updateScheduleForAi({
         schedule_id: 1,
@@ -659,7 +727,7 @@ describe("ScheduleAiTools", () => {
 
       expect(result.success).to.be.false;
       if (!result.success) {
-        expect(result.code).to.equal(ScheduleToolErrorCode.TASK_NOT_FOUND);
+        expect(result.code).to.equal(ScheduleToolErrorCode.VALIDATION_FAILED);
       }
     });
 
@@ -673,7 +741,6 @@ describe("ScheduleAiTools", () => {
       getByIdStub.onSecondCall().resolves(existing);
       const { instance } = stubScheduleManager();
       instance.validateCronExpression.returns(false);
-      sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
 
       const result = await updateScheduleForAi({
         schedule_id: 1,
@@ -727,8 +794,9 @@ describe("ScheduleAiTools", () => {
         .stub(ScheduleTaskModule.prototype, "getScheduleById")
         .resolves(existing);
       stubScheduleManager();
-      // Task not found for the new task_id
-      sinon.stub(SearchTaskModule.prototype, "read").resolves(null);
+      // Existing schedule is ai_message → validation uses AiMessageTaskModule.
+      // Task not found for the new task_id.
+      sinon.stub(AiMessageTaskModule.prototype, "getTask").resolves(null);
 
       const result = await updateScheduleForAi({
         schedule_id: 1,
@@ -1033,10 +1101,33 @@ describe("ScheduleAiTools", () => {
     });
 
     it("should not throw for SEARCH task when task exists", async () => {
-      sinon.stub(SearchTaskModule.prototype, "read").resolves({} as any);
+      sinon
+        .stub(SearchTaskModule.prototype, "read")
+        .resolves({} as unknown as SearchTaskEntity);
 
       // Should not throw
       await validateTaskReference(TaskType.SEARCH, 10);
+    });
+
+    it("should throw for AI_MESSAGE task when task not found", async () => {
+      sinon.stub(AiMessageTaskModule.prototype, "getTask").resolves(null);
+
+      try {
+        await validateTaskReference(TaskType.AI_MESSAGE, 88);
+        expect.fail("Should have thrown");
+      } catch (error: unknown) {
+        expect((error as Error).message).to.contain("88");
+        expect((error as Error).message).to.contain("not found");
+      }
+    });
+
+    it("should not throw for AI_MESSAGE task when task exists", async () => {
+      sinon
+        .stub(AiMessageTaskModule.prototype, "getTask")
+        .resolves({} as unknown as AiMessageTaskEntity);
+
+      // Should not throw
+      await validateTaskReference(TaskType.AI_MESSAGE, 88);
     });
 
     it("should throw for EMAIL_EXTRACT task when task not found", async () => {
@@ -1055,7 +1146,7 @@ describe("ScheduleAiTools", () => {
     it("should not throw for EMAIL_EXTRACT task when task exists", async () => {
       sinon
         .stub(EmailSearchTaskModule.prototype, "getTaskDetail")
-        .resolves({} as any);
+        .resolves({} as unknown as EmailSearchTaskEntity);
 
       await validateTaskReference(TaskType.EMAIL_EXTRACT, 50);
     });
@@ -1098,7 +1189,7 @@ describe("ScheduleAiTools", () => {
     it("should not throw for GOOGLE_MAPS task when task exists", async () => {
       sinon
         .stub(GoogleMapsModule.prototype, "getSearchRecord")
-        .resolves({} as any);
+        .resolves({} as unknown as GoogleMapsSearchRecordEntity);
 
       await validateTaskReference(TaskType.GOOGLE_MAPS, 60);
     });

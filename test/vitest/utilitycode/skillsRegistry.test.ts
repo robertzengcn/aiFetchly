@@ -124,6 +124,23 @@ describe("SkillRegistry", () => {
       expect(searchTool!.parameters).toBeDefined();
       expect(typeof searchTool!.description).toBe("string");
     });
+
+    test("schedule tools only allow the ai_message task type", async () => {
+      // AI-created schedules are restricted to ai_message tasks. The registry
+      // schema is what the model actually sees, so it must not advertise the
+      // legacy task types (search, buck_email, ...).
+      const tools = await SkillRegistry.getAllToolFunctions();
+
+      for (const toolName of ["create_schedule", "update_schedule"]) {
+        const tool = tools.find((t) => t.name === toolName);
+        expect(tool, `${toolName} should be registered`).toBeDefined();
+
+        const params = tool!.parameters as {
+          properties?: { task_type?: { enum?: string[] } };
+        };
+        expect(params.properties?.task_type?.enum).toEqual(["ai_message"]);
+      }
+    });
   });
 
   describe("registerSkill / unregisterSkill", () => {
