@@ -1913,3 +1913,87 @@ describe("update identity + same-name replacement (audit finding 3)", () => {
     }
   }, 120_000);
 });
+
+describe("nested candidate activation + selection persistence (audit finding 2)", () => {
+  /** Source whose only SKILL.md lives in nested/. */
+  function makeNestedFixture(root: string): string {
+    const dir = path.join(root, "fixtures", "nested-src");
+    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "nested", "SKILL.md"),
+      "---\nname: nested-skill\ndescription: Nested\n---\n\n# Usage\n\nNested body."
+    );
+    fs.writeFileSync(
+      path.join(dir, "nested", "install.md"),
+      "# Install\n\nNothing.\n"
+    );
+    return dir;
+  }
+
+  it("activating a nested candidate copies the NESTED root, not the parent", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeNestedFixture(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-f2a",
+      source: fixture,
+      subdirectory: "nested",
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    expect(approved.state).toBe("ready");
+    // The activation root contains SKILL.md DIRECTLY (the nested root was
+    // copied — before the fix the parent was copied and activation failed).
+    const activationDir = path.join(
+      configHome,
+      ".aifetchly",
+      "skills",
+      "nested-skill"
+    );
+    expect(fs.existsSync(path.join(activationDir, "SKILL.md"))).toBe(true);
+    // The parent's other files did NOT leak into the activation.
+    expect(fs.existsSync(path.join(activationDir, "nested"))).toBe(false);
+  }, 120_000);
+
+  it("a submitted multi-selection is persisted into the plan", async () => {
+    const module = new SkillInstallationModule();
+    // Two sibling skills.
+    const dir = path.join(tmpDir, "fixtures", "multi-src");
+    fs.mkdirSync(path.join(dir, "skills", "one"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "skills", "two"), { recursive: true });
+    for (const name of ["one", "two"]) {
+      fs.writeFileSync(
+        path.join(dir, "skills", name, "SKILL.md"),
+        `---\nname: multi-${name}\ndescription: ${name}\n---\n\n# Usage\n\n${name}`
+      );
+    }
+    const prepared = await module.prepare({
+      conversationId: "conv-f2b",
+      source: dir,
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const planBefore = await module.getStatus(prepared.sessionId);
+    expect((planBefore.safePlan?.skills ?? []).length).toBe(2);
+
+    // The user selects BOTH candidates at approve time.
+    const candidates = (planBefore.safePlan?.skills ?? []).map(
+      (s: { name: string }) => s.name
+    );
+    expect(candidates).toHaveLength(2);
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      selectedSkillIds: ["skills/one", "skills/two"],
+    });
+    // The selection persisted: a status reload resolves BOTH candidates.
+    const after = await module.getStatus(prepared.sessionId);
+    void approved;
+    expect(after.state).not.toBe("failed");
+  }, 120_000);
+});

@@ -451,9 +451,16 @@ export class SkillInstallationModule extends BaseModule {
       const enabled = rows.find((r) => r.enabled === true);
       if (enabled) existingEnabledByName.set(pkg.name, enabled.sourceUri);
     }
+    // The inspection root (subdirectory applied) is the base candidates'
+    // rootRelativePaths are relative TO — record it on the plan source so
+    // activation/plugin/executable routing resolves the right directory
+    // (audit finding 2: acquiredRoot alone ignores the subdirectory).
+    const inspectionRoot = descriptor.subdirectory
+      ? path.join(acquired.source.acquiredRoot, descriptor.subdirectory)
+      : acquired.source.acquiredRoot;
     const prePlan = buildSkillInstallPlan({
       sessionId,
-      source: acquired.source,
+      source: { ...acquired.source, acquiredRoot: inspectionRoot },
       discovered: inspection.discovered,
       instructionFiles: inspection.instructionFiles,
       activationMode: request.mode === "linked" ? "linked" : "managed-copy",
@@ -556,7 +563,22 @@ export class SkillInstallationModule extends BaseModule {
       await sessions.create(session);
     }
 
-    const plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
+    let plan = JSON.parse(session.planJson ?? "{}") as SkillInstallPlan;
+    // Persist the user's submission INTO the plan (audit finding 2): a
+    // multi-selection must survive the approve round-trip so later stages
+    // (secret resume, dependency continuation) resolve the same candidates.
+    if (
+      input.selectedSkillIds &&
+      input.selectedSkillIds.length > 0 &&
+      input.selectedSkillIds.some((id) => !plan.selectedSkillIds.includes(id))
+    ) {
+      plan = { ...plan, selectedSkillIds: [...input.selectedSkillIds] };
+      await sessions.savePlan(
+        input.sessionId,
+        session.planRevision,
+        JSON.stringify(plan)
+      );
+    }
     const selected =
       input.selectedSkillIds && input.selectedSkillIds.length > 0
         ? plan.discoveredSkills.filter((s) =>
@@ -606,14 +628,21 @@ export class SkillInstallationModule extends BaseModule {
     // installation services — the typed installer owns acquisition and
     // approval, never a parallel plugin/executable runtime.
     if (selected[0].kind === "plugin") {
-      return this.routeToPluginService(input.sessionId, plan, events, sessions);
+      return this.routeToPluginService(
+        input.sessionId,
+        plan,
+        events,
+        sessions,
+        selected[0]
+      );
     }
     if (selected[0].kind === "executable") {
       return this.routeToExecutableService(
         input.sessionId,
         plan,
         events,
-        sessions
+        sessions,
+        selected[0]
       );
     }
 
@@ -630,15 +659,24 @@ export class SkillInstallationModule extends BaseModule {
     sessionId: string,
     plan: SkillInstallPlan,
     events: SkillInstallationEventModel,
-    sessions: SkillInstallationSessionModel
+    sessions: SkillInstallationSessionModel,
+    selected: SkillInstallPlan["discoveredSkills"][number]
   ): Promise<InstallSnapshot> {
     await this.transition(sessions, events, sessionId, "activating");
     try {
       const { PluginImportService } = await import(
         "@/service/PluginImportService"
       );
+      // Route the SELECTED candidate's root (nested/wrapper layouts), not
+      // the acquisition root (audit finding 2).
+      const pluginRoot =
+        selected.rootRelativePath &&
+        selected.rootRelativePath !== "." &&
+        selected.rootRelativePath !== ""
+          ? path.join(plan.source.acquiredRoot, selected.rootRelativePath)
+          : plan.source.acquiredRoot;
       const result = await PluginImportService.installFromLocalRoot(
-        plan.source.acquiredRoot,
+        pluginRoot,
         { overwrite: true }
       );
       if (!result.success) {
@@ -720,15 +758,22 @@ export class SkillInstallationModule extends BaseModule {
     sessionId: string,
     plan: SkillInstallPlan,
     events: SkillInstallationEventModel,
-    sessions: SkillInstallationSessionModel
+    sessions: SkillInstallationSessionModel,
+    selected: SkillInstallPlan["discoveredSkills"][number]
   ): Promise<InstallSnapshot> {
     await this.transition(sessions, events, sessionId, "activating");
     try {
       const { SkillImportService } = await import(
         "@/service/SkillImportService"
       );
+      const executableRoot =
+        selected.rootRelativePath &&
+        selected.rootRelativePath !== "." &&
+        selected.rootRelativePath !== ""
+          ? path.join(plan.source.acquiredRoot, selected.rootRelativePath)
+          : plan.source.acquiredRoot;
       const result = await SkillImportService.importFromDirectory(
-        plan.source.acquiredRoot
+        executableRoot
       );
       if (!result.success) {
         await this.fail(
@@ -961,7 +1006,8 @@ export class SkillInstallationModule extends BaseModule {
           input.sessionId,
           updatedPlan,
           events,
-          sessions
+          sessions,
+          selected
         );
       }
       if (selected.kind === "executable") {
@@ -969,7 +1015,8 @@ export class SkillInstallationModule extends BaseModule {
           input.sessionId,
           updatedPlan,
           events,
-          sessions
+          sessions,
+          selected
         );
       }
       return this.runActivation(
@@ -1142,10 +1189,10 @@ export class SkillInstallationModule extends BaseModule {
     // FR-27 routing parity: plugin/executable plans resume through their
     // dedicated services, never the prompt activation path (finding 5).
     if (selected.kind === "plugin") {
-      return this.routeToPluginService(sessionId, plan, events, sessions);
+      return this.routeToPluginService(sessionId, plan, events, sessions, selected);
     }
     if (selected.kind === "executable") {
-      return this.routeToExecutableService(sessionId, plan, events, sessions);
+      return this.routeToExecutableService(sessionId, plan, events, sessions, selected);
     }
     return this.runActivation(sessionId, plan, selected, session);
   }
@@ -2164,8 +2211,15 @@ export class SkillInstallationModule extends BaseModule {
     await this.transition(sessions, events, sessionId, "activating");
 
     const activation = new SkillActivationService();
-    // acquiredRoot IS the absolute staging path recorded at acquisition.
+    // acquiredRoot IS the absolute staging path recorded at acquisition,
+    // but the SELECTED candidate may live in a wrapper/child directory
+    // (nested SKILL.md, skills/<name>) — join its rootRelativePath so the
+    // right root is copied/linked (audit finding 2 / FR-04–08).
     let sourceRoot = plan.source.acquiredRoot;
+    const candidateRoot = selected.rootRelativePath;
+    if (candidateRoot && candidateRoot !== "." && candidateRoot !== "") {
+      sourceRoot = path.join(sourceRoot, candidateRoot);
+    }
     const isLinkedMode =
       plan.activation.mode === "symbolic-link" ||
       plan.activation.mode === "junction";
@@ -2232,7 +2286,7 @@ export class SkillInstallationModule extends BaseModule {
     entity.workspaceId = 0;
     entity.sourceUri = plan.source.canonicalUri;
     entity.sourceRevision = plan.source.resolvedRevision;
-    entity.sourceSubdirectory = "";
+    entity.sourceSubdirectory = candidateRoot ?? "";
     entity.activationMode = result.mode;
     entity.activationPath = result.activationPath;
     entity.contentHash = plan.source.contentHash;
