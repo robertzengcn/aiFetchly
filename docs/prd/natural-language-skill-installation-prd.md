@@ -740,7 +740,7 @@ AiFetchly must track invoked skills as conversation runtime state. Each record i
 
 Repeated invocation of the same runtime identity and content hash is idempotent: it returns `already-loaded` and does not duplicate the hidden instruction block. If a linked skill changes, a new content hash creates a new context revision and the user/model receives a visible change notice before the new instructions take effect.
 
-Context compaction and conversation recovery must reattach all still-active invoked skills in deterministic invocation order. The restored message states that these skills were previously invoked and remain applicable. Disabled, uninstalled, missing, or hash-invalid skills are not silently restored; the conversation receives a structured diagnostic.
+Context compaction and conversation recovery must reattach all still-active invoked skills in deterministic invocation order. The restored message states that these skills were previously invoked and remain applicable. Disabled, uninstalled, or missing skills are not restored; the conversation receives a structured diagnostic. A skill whose linked source changed since invocation (hash mismatch) is reattached from the last VERIFIED snapshot — the changed file must not rewrite past context — accompanied by a structured `SKILL_HASH_CHANGED` diagnostic directing the user to re-invoke the skill to load the new instructions; the reattachment is never silent.
 
 Skills invoked inside an isolated subagent do not automatically become active in the parent conversation. Propagation requires an explicit runtime policy because subagent instructions may be task-specific.
 

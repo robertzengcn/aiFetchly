@@ -1432,9 +1432,16 @@ describe("compaction recovery reconciles durable invocations (FR-23)", () => {
         await new PromptSkillInvocationModule().reconcileForRecovery(
           "conv-recovery"
         );
-      expect(reattach.map((r) => r.runtimeId)).toEqual([
-        "prompt:user:healthy",
-      ]);
+      // Unified recovery semantics (design §10.10/§21.3 + PRD §14.6): the
+      // hash-CHANGED skill reattaches from its LAST VERIFIED snapshot
+      // alongside the diagnostic; uninstalled/disabled deactivate.
+      expect(reattach.map((r) => r.runtimeId)).toEqual(
+        expect.arrayContaining([
+          "prompt:user:healthy",
+          "prompt:user:changed",
+        ])
+      );
+      expect(reattach).toHaveLength(2);
       const codes = diagnostics.map((d) => d.code).sort();
       expect(codes).toEqual([
         "SKILL_DISABLED",
@@ -1442,15 +1449,20 @@ describe("compaction recovery reconciles durable invocations (FR-23)", () => {
         "SKILL_UNINSTALLED",
       ]);
 
-      // Invalid invocations are DEACTIVATED — a second reconciliation finds
-      // only the healthy one.
+      // The hash-changed invocation STAYS ACTIVE (snapshot reattachment is
+      // repeatable); the uninstalled/disabled ones are deactivated.
       const second = await new PromptSkillInvocationModule().reconcileForRecovery(
         "conv-recovery"
       );
-      expect(second.reattach.map((r) => r.runtimeId)).toEqual([
-        "prompt:user:healthy",
+      expect(second.reattach.map((r) => r.runtimeId)).toEqual(
+        expect.arrayContaining([
+          "prompt:user:healthy",
+          "prompt:user:changed",
+        ])
+      );
+      expect(second.diagnostics.map((d) => d.code)).toEqual([
+        "SKILL_HASH_CHANGED",
       ]);
-      expect(second.diagnostics).toHaveLength(0);
     } finally {
       for (const id of [
         "prompt:user:healthy",

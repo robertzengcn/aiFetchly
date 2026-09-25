@@ -91,10 +91,13 @@ export class PromptSkillInvocationModule extends BaseModule {
   /**
    * FR-23 / §14.6 compaction-recovery reconciliation: validate every ACTIVE
    * invocation against the CURRENT installation/catalog state. Still-valid
-   * skills reattach their immutable verified snapshot; invocations whose
-   * skill is uninstalled, disabled, or hash-changed (linked source edited)
-   * are DEACTIVATED and produce a bounded structured diagnostic — never
-   * silently restored, never silently dropped.
+   * skills reattach their immutable verified snapshot. A skill whose linked
+   * source CHANGED reattaches from the LAST VERIFIED snapshot plus a
+   * structured SKILL_HASH_CHANGED diagnostic (design §10.10/§21.3: changed
+   * files must not rewrite past context; PRD §14.6: the change is never
+   * silent). Uninstalled/disabled skills are deactivated with a bounded
+   * structured diagnostic — never silently restored, never silently
+   * dropped.
    */
   async reconcileForRecovery(
     conversationId: string,
@@ -141,15 +144,23 @@ export class PromptSkillInvocationModule extends BaseModule {
             `no longer active in this conversation.`,
         });
       } else if (definition.contentHash !== invocation.contentHash) {
+        // Unified recovery semantics (design §10.10/§21.3 + PRD §14.6):
+        // reattach from the LAST VERIFIED stored snapshot — the changed
+        // linked file must not rewrite past context — and emit the
+        // structured diagnostic so the user knows to re-invoke for the
+        // new instructions (never silent).
+        reattach.push(invocation);
         diagnostics.push({
           runtimeId: invocation.runtimeId,
           code: "SKILL_HASH_CHANGED",
           message:
             `Skill '${definition.name}' changed since it was invoked ` +
-            `(linked installs can change externally). The previous ` +
-            `instructions were deactivated — invoke the skill again to ` +
-            `review the new content before it takes effect.`,
+            `(linked installs can change externally). The previously ` +
+            `verified instructions remain active for this conversation; ` +
+            `invoke the skill again to review the new content before it ` +
+            `takes effect.`,
         });
+        continue;
       } else {
         reattach.push(invocation);
         continue;
