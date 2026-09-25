@@ -476,6 +476,12 @@ export class SkillInstallationModule extends BaseModule {
     );
     const plan: SkillInstallPlan = {
       ...prePlan,
+      // Audit finding 11: the request's non-secret constraints join the
+      // persisted contract (the planner already consumes them for
+      // instruction precedence; the plan is the durable home).
+      ...(request.constraints && request.constraints.length > 0
+        ? { constraints: request.constraints }
+        : {}),
       dependencies: detectedDeps,
     };
 
@@ -1570,10 +1576,25 @@ export class SkillInstallationModule extends BaseModule {
       `retry after ${session.retryCount} same-cause failure(s)`
     );
     // A failed session is not active, so prepare claims a FRESH session for
-    // the same canonical source and inherits the failure streak.
+    // the same canonical source and inherits the failure streak. The
+    // RETRY resumes the persisted checkpoint — ref, subdirectory, mode,
+    // and constraints recorded at creation — instead of collapsing the
+    // request to the bare source (audit finding 11 / FR-20 §10.1).
     return this.prepare({
       conversationId: session.conversationId,
       source,
+      ...(session.requestedRevision
+        ? { ref: session.requestedRevision }
+        : {}),
+      ...(session.requestedSubdirectory
+        ? { subdirectory: session.requestedSubdirectory }
+        : {}),
+      ...(session.requestedMode === "symbolic-link" ||
+      session.requestedMode === "junction"
+        ? { mode: "linked" as const }
+        : session.requestedMode === "managed-copy"
+          ? { mode: "managed-copy" as const }
+          : {}),
     });
   }
 

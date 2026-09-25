@@ -187,6 +187,11 @@ export interface SkillInstallPlan {
   readonly permissions: readonly RequestedSkillPermission[];
   readonly warnings: readonly InstallWarning[];
   readonly verification: readonly VerificationProbe[];
+  /** Non-secret user constraints from the request (PRD §9.2 / FR-04,
+   *  FR-18–20) — persisted so the session independently restores the
+   *  request contract (read-order, wait/do-not-transcribe, explicit
+   *  dependency asks) across retry and recovery. */
+  readonly constraints?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------

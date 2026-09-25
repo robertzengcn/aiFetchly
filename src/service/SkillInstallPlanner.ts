@@ -95,6 +95,36 @@ export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
       });
     }
   }
+  // Audit finding 11 / PRD §9.2: explicit user constraints become visible
+  // plan terms — an explicit dependency ask is reported when the plan does
+  // not carry it, and terminal instructions ("do not transcribe", "wait")
+  // are recorded so the contract is reviewable, not just in chat history.
+  for (const constraint of input.constraints) {
+    const lower = constraint.toLowerCase();
+    const depAsk = lower.match(
+      /\b(install|set up|wire up|configure)\s+(ffmpeg|ffprobe|python3?|node|git)\b/
+    );
+    if (depAsk) {
+      const asked = depAsk[2];
+      const known = dependencies.some((d) =>
+        d.name.toLowerCase().startsWith(asked)
+      );
+      if (!known) {
+        warnings.push({
+          code: "constraint-dependency-unplanned",
+          message:
+            `The request asked to set up '${asked}', but the instructions did ` +
+            `not produce a dependency plan item for it.`,
+        });
+      }
+    }
+    if (/\b(do not|don't|never)\s+transcribe\b|\bwait\b/.test(lower)) {
+      warnings.push({
+        code: "user-terminal-instruction",
+        message: `User constraint recorded: "${constraint}"`,
+      });
+    }
+  }
   if (input.discovered.length > 1) {
     warnings.push({
       code: "multiple-skills-found",
