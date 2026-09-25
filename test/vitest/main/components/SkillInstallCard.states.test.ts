@@ -150,8 +150,9 @@ describe("SkillInstallCard states (final-audit 5)", () => {
         },
       })
     );
+    // Localized mode label (audit finding 12) — the enum renders localized.
     expect(managed.find('[data-testid="skill-install-plan"]').text()).toContain(
-      "managed-copy"
+      "Managed copy"
     );
 
     const linked = mountCard(
@@ -168,9 +169,7 @@ describe("SkillInstallCard states (final-audit 5)", () => {
         },
       })
     );
-    expect(linked.find('[data-testid="skill-install-plan"]').text()).toContain(
-      "symbolic-link"
-    );
+    expect(linked.find('[data-testid="skill-install-plan"]').text()).toContain("Linked (development)");
   });
 });
 
