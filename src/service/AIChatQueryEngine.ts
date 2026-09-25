@@ -1673,6 +1673,157 @@ export class AIChatQueryEngine {
     }
   }
 
+  /**
+   * Deny a paused tool after the user declines permission (scheduled-loop
+   * deny-and-continue path). Unlike the interactive path (which stops the
+   * whole conversation on deny), this synthesizes a denied tool_result,
+   * pushes it to the conversation, and re-enters the loop from nextRound so
+   * the scheduled run can proceed WITHOUT the tool. The model receives a
+   * "permission denied" tool result and may continue with an alternate plan.
+   *
+   * Structural twin of {@link resumeToolAfterPermission} with three
+   * differences: (1) synthesizes a denied ToolExecutionResult instead of
+   * calling SkillExecutor.execute; (2) skips the isPermissionPromptResult
+   * re-check (a deny is terminal, the tool won't re-prompt); (3) skips the
+   * image-artifact handoff (a denied tool produces no artifacts).
+   */
+  async denyToolPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const convId = request.conversationId;
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== matchedByToolId.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
+
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
+      eventSink: matchedByToolId.eventSink,
+    });
+    const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(
+      module,
+      matchedByToolId.eventSink
+    );
+
+    try {
+      // Synthesize the denied tool result — do NOT re-execute the tool. The
+      // renderer's deny path (AiChatV2.vue handleSkillPermissionDeny) already
+      // expects a denied-message content, so we match that shape here.
+      const deniedPayload = {
+        success: false,
+        executionTimeMs: 0,
+        error: "Permission denied. The tool will not be executed.",
+      };
+      const toolContent = JSON.stringify(deniedPayload);
+      eventSink.emit({
+        type: "tool_result",
+        conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
+        fullContent: toolContent,
+        toolResult: deniedPayload,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+      });
+
+      matchedByToolId.conversationMessages.push({
+        role: "tool",
+        tool_call_id: matchedByToolId.toolCallId,
+        content: toolContent,
+      });
+
+      // Rebuild the deferred catalog (mirrors resumeToolAfterPermission).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: matchedByToolId.openAITools,
+        conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
+        autoPlanEnabled: false,
+        userMessage: matchedByToolId.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          matchedByToolId.conversationMessages
+        ),
+        model: matchedByToolId.request.model,
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
+      });
+
+      const loopInput: AIChatQueryLoopInput = {
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
+        eventSink,
+        skillRegistry: SkillRegistry,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: matchedByToolId.toolCatalogState,
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
+      };
+
+      void this.loop
+        .run(loopInput)
+        .then(async (result) => {
+          await this.handleLoopResult(result, module, eventSink);
+        })
+        .catch((err) => {
+          console.error("[ai-chat-v2] deny-resume loop failed:", err);
+          void redirectToLoginOnAuthExpired(err);
+          matchedByToolId.eventSink.emit({
+            type: "error",
+            conversationId,
+            messageId: matchedByToolId.assistantMessageId,
+            errorMessage: userSafeError(err),
+          });
+          this.clearConversationTurnState(conversationId);
+        });
+
+      return { ok: true };
+    } catch (err) {
+      this.clearActiveTurnState(conversationId);
+      return { ok: false, error: userSafeError(err) };
+    }
+  }
+
   /** Helper: return the first value from a Map, or undefined. */
   private firstEntry<V>(map: Map<string, V>): V | undefined {
     for (const v of map.values()) return v;
