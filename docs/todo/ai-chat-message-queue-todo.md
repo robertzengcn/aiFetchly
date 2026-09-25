@@ -25,12 +25,10 @@ The remaining work below covers the items in the PRD §15/§17.5 and technical d
 **Severity: High**
 
 - [x] `test/e2e/specs/aiChatQueueSteering.test.ts` implements all 8 §21.6 scenarios; the fake OpenAI server gained a multi-tool-call config with pre-emit delay; the E2E env pins the runtime-catalog URL to loopback (network guard). Two real product fixes fell out: the composer textarea is no longer disabled while streaming (PRD §7.1).
-- [ ] **Running the specs is blocked**: fresh launches now auto-redirect to the redesigned `#/aiworkspace` default landing (dev commit `57944b87`), whose chat surface has its own send path predating this feature — the legacy dock surface the specs (and this feature's renderer integration) target is only reachable before the redirect, and sends on the workspace surface do not reach the provider. Follow-ups:
-  1. Route the workspace chat surface's send path through the pending-message queue (it currently bypasses `AiChatV2.vue`'s queue integration), or expose a deterministic way for E2E to select the legacy surface (e.g. a state-manifest landing-route override).
-  2. Then re-run `yarn test:e2e` and debug the 8 specs against a stable surface.
+- [x] **Specs unblocked + green (2026-09-22)**: the workspace chat surface's send path is now unified with the pending-message queue — the coordinator delegates busy-conversation sends into the durable queue (`busySubmit` + `forceQueue`), coordinator-run terminals re-drain or hold the queue (`notifyExternalTurnTerminal`), queue-drained turns stream into the workspace detail channel, and the steering `applied` flip broadcasts so bubbles clear (commits `9a5e7b8d`, `62b2450a`). All 8 §21.6 scenarios pass (`aiChatQueueSteering` 8/8; full suite 69 passed / 6 skipped / 0 failed). Harness notes: the fake server's request log records on completion, not arrival (gate mid-stream actions on a UI liveness signal instead); definite 5xx gets no transport retries (use the `http-500-delayed` scenario for the pause window).
 
 Original audit note: no specs existed in `test/e2e/specs/` (zero matches for `queue|steer|pending`).
-- [ ] The technical design §21.6 defines 8 explicit scenarios that must run under `yarn test:e2e` (design §21.7 lists `yarn test:e2e` as a hard verification gate; §22 Phase 1/2 use the "between-tools E2E" as an exit gate; PRD §17.5 requires equivalent coverage):
+- [x] The technical design §21.6 defines 8 explicit scenarios that must run under `yarn test:e2e` — all 8 implemented and passing in `test/e2e/specs/aiChatQueueSteering.test.ts` (verified 2026-09-22, 8/8 in the full-suite run):
   1. Queue B behind delayed A and verify automatic B dispatch after A completes.
   2. Steer between tool A and tool B; verify B never executes and receives a synthetic result.
   3. Race Steer with A completion; verify the message is steering or the next turn, never both.
@@ -40,7 +38,7 @@ Original audit note: no specs existed in `test/e2e/specs/` (zero matches for `qu
   7. Relaunch with queued rows; verify no automatic provider request and explicit recovery works.
   8. Queue an attachment; verify it dispatches normally and cannot steer.
 
-**Reason not done:** unit/component/IPC coverage was implemented, but no Electron E2E specs were written for these flows. E2E requires the packaged/launched app (Playwright `_electron` launch), a stubbed/fake provider to control A/B/latency/errors, and cross-process timing assertions — a distinct testing layer that was not part of the completed unit test work. This is the largest outstanding item and a stated exit gate in the design (§21.7, §22 Phase 1/2).
+**Reason not done:** superseded — the specs exist and pass; see the 2026-09-22 note above for the harness truths that made them stable (completion-recorded request log, no 5xx retries, permission-gated tools, collapsed execution groups, sidebar selection).
 
 ---
 

@@ -39,6 +39,12 @@ export interface RedactedRequest {
   readonly roles: readonly string[];
   readonly stream: boolean;
   readonly toolNames: readonly string[];
+  /**
+   * SHA-256 of every `image_url` content-part URL in the request, in message
+   * then part order. Hashes (never base64/data URLs) let specs assert which
+   * images were attached and in which order without logging payloads.
+   */
+  readonly imagePartHashes: readonly string[];
   readonly clientDisconnected: boolean;
   readonly timestamp: number;
 }
@@ -129,6 +135,24 @@ function redactChatRequest(
   const toolNames = (Array.isArray(parsed.tools) ? parsed.tools : [])
     .map((t) => (t as { function?: { name?: string } })?.function?.name)
     .filter((n): n is string => typeof n === "string");
+  // Image parts are recorded as SHA-256 hashes only — never the data URLs.
+  const imagePartHashes: string[] = [];
+  for (const message of messages) {
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const url = (part as { type?: string; image_url?: { url?: unknown } })
+        ?.image_url?.url;
+      if (
+        (part as { type?: unknown })?.type === "image_url" &&
+        typeof url === "string"
+      ) {
+        imagePartHashes.push(
+          crypto.createHash("sha256").update(url, "utf8").digest("hex")
+        );
+      }
+    }
+  }
   return {
     method: req.method ?? "GET",
     path: req.url ?? "/",
@@ -137,6 +161,7 @@ function redactChatRequest(
     roles,
     stream: parsed.stream === true,
     toolNames,
+    imagePartHashes,
     clientDisconnected,
     timestamp: Date.now(),
   };
@@ -447,6 +472,9 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       }
 
       if (plan.kind === "http-error") {
+        if (plan.delayMs && plan.delayMs > 0) {
+          await Promise.race([sleep(plan.delayMs), clientGone]);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         res.writeHead(plan.status, { "Content-Type": "application/json" });
         res.end(plan.body);

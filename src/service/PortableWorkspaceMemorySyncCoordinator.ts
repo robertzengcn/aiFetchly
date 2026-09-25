@@ -37,6 +37,8 @@ import {
 } from "@/service/portableMemoryFrontmatter";
 import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryPortableStateModel } from "@/model/AIWorkspaceMemoryPortableState.model";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 
 export interface TrustedPortableSnapshotInput {
   /** Watch-manager workspace id (its own id space, NOT the memory scope). */
@@ -104,9 +106,15 @@ export class PortableWorkspaceMemorySyncCoordinator {
       options.portableModule ?? new PortableWorkspaceMemoryModule();
     this.scopeResolver =
       options.scopeResolver ?? new WorkspaceMemoryScopeResolver();
-    this.memoryModel = options.memoryModel ?? new AIWorkspaceMemoryModel("");
+    // Fallback models must resolve the trusted Token DB path — an empty
+    // path flips BaseDb onto the temp-test directory and resets the shared
+    // SqliteDb singleton mid-operation (see PortableWorkspaceMemoryService).
+    const defaultDbpath = new Token().getValue(USERSDBPATH);
+    this.memoryModel =
+      options.memoryModel ?? new AIWorkspaceMemoryModel(defaultDbpath);
     this.stateModel =
-      options.stateModel ?? new AIWorkspaceMemoryPortableStateModel("");
+      options.stateModel ??
+      new AIWorkspaceMemoryPortableStateModel(defaultDbpath);
     this.format = new PortableWorkspaceMemoryFormat();
     this.indexService = new PortableWorkspaceMemoryIndexService();
     this.identityService = new PortableWorkspaceIdentityService();

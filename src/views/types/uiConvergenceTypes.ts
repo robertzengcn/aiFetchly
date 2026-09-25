@@ -92,7 +92,7 @@ export interface TaskPresentationProjection {
 // ---------------------------------------------------------------------------
 
 export interface CollectionQuery<
-  TFilter extends Record<string, unknown> = Record<string, unknown>,
+  TFilter extends Record<string, unknown> = Record<string, unknown>
 > {
   search: string;
   filters: TFilter;
@@ -116,6 +116,8 @@ export type AppInspectorTarget =
   | {
       kind: "chat";
       ownerRoute: string;
+      /** Selected conversation — stale cross-conversation content is rejected. */
+      conversationId: string | null;
       tab: "artifacts" | "activity" | "context";
     };
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-composer">
+  <div ref="composerRoot" class="v2-composer">
     <div class="v2-composer__mention">
       <AiChatV2AtMentionSuggestions
         v-if="atMentionOpen"
@@ -146,11 +146,10 @@
 
     <v-textarea
       v-model="draft"
-      ref="textareaField"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
       auto-grow
-      rows="1"
+      rows="2"
       max-rows="6"
       hide-details
       density="comfortable"
@@ -163,17 +162,27 @@
       @click="onTextareaCursor"
       @paste="onPaste"
     >
-      <template v-if="voiceEnabled" #append-inner>
+      <!--
+        FR-VOICE-001/003/005 + FR-COMP-009: the microphone affordance stays
+        VISIBLE in every state on builds that support microphone capture —
+        policy-enabled (record), policy-disabled (setup affordance routing to
+        voice settings), or recoverable-unavailable (settings failed to load).
+        Only a permanently unsupported build (no getUserMedia) hides it, and
+        the accessible label always states WHY recording is currently
+        impossible.
+      -->
+      <template v-if="voiceSupportedByBuild" #append-inner>
         <v-btn
           icon
           size="small"
           variant="text"
-          class="v2-composer__voice-button"
+          class="v2-composer__voice-button v2-composer__icon-target"
           :color="isRecording ? 'error' : undefined"
-          :disabled="isStreaming || isProcessing || isTranscribing"
+          :disabled="micDisabled"
           :loading="isTranscribing"
-          :title="t('aiChatV2.voice.microphone') || 'Voice input'"
-          :aria-label="isRecording ? (t('aiChatV2.voice.stop_recording') || 'Stop recording') : (t('aiChatV2.voice.start_recording') || 'Start recording')"
+          :title="micTitle"
+          :aria-label="micTitle"
+          data-testid="ai-chat-microphone"
           @click.stop="onMicClick"
         >
           <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
@@ -206,6 +215,39 @@
       </div>
     </v-slide-y-reverse-transition>
 
+    <v-slide-y-reverse-transition>
+      <!--
+        FR-VOICE-005: recoverable settings-load failure keeps a visible
+        settings path — never a silently absent capability.
+      -->
+      <div
+        v-if="voiceSettingsUnavailable"
+        class="v2-composer__notice v2-composer__notice--voice"
+        role="status"
+        aria-live="polite"
+        data-testid="voice-settings-unavailable-notice"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">
+          mdi-microphone-off
+        </v-icon>
+        <span class="v2-composer__notice-text">
+          {{
+            t("aiChatV2.voice.settings_load_failed") ||
+            "Voice settings couldn't be loaded."
+          }}
+        </span>
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          data-testid="voice-settings-open-button"
+          @click="$emit('open-voice-settings')"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+        </v-btn>
+      </div>
+    </v-slide-y-reverse-transition>
     <v-slide-y-reverse-transition>
       <div v-if="showVoiceModelNotice" class="v2-composer__notice v2-composer__notice--voice">
         <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
@@ -265,31 +307,53 @@
       </div>
     </v-slide-y-reverse-transition>
     <div class="v2-composer__bar">
-      <!-- Attach file button. Rendered as its own flex item at the far
-           left of the bar so the mode/model/tool selectors in the prepend
-           slot can't push it off-screen on narrow chat panels. -->
+      <!-- Lower toolbar (chat-first shell design §10.3 / PRD §13.3): the
+           semantic `controls` slot (mode, model, tool approval, context)
+           renders FIRST, then the attach action — the PRD declares the
+           mode → model → approval → context → attachment → spoken-response
+           order fixed and authoritative. When the controls slot is absent
+           the legacy `prepend` slot renders instead so a flag rollback never
+           loses controls. -->
+      <div
+        v-if="$slots.controls || $slots.prepend"
+        class="v2-composer__prepend"
+        data-testid="v2-composer-controls"
+      >
+        <slot name="controls">
+          <slot name="prepend" />
+        </slot>
+      </div>
+      <!-- Attach file button: after the selectors, before the trailing
+           actions. -->
       <v-btn
         v-if="!isStreaming && !isProcessing"
         icon
         size="small"
         variant="text"
-        class="v2-composer__attach"
+        class="v2-composer__attach v2-composer__icon-target"
+        data-testid="ai-chat-attach"
         :title="t('aiChatV2.attachments.add') || 'Attach file'"
         @click="triggerFilePicker"
       >
         <v-icon size="small">mdi-paperclip</v-icon>
       </v-btn>
-      <div v-if="$slots.prepend" class="v2-composer__prepend">
-        <slot name="prepend" />
-      </div>
       <div class="v2-composer__actions">
+        <!-- Spoken-response and other trailing actions (design §10.1) render
+             before stop-speaking/send so Send stays the last control. -->
+        <div
+          v-if="$slots['toolbar-actions']"
+          class="v2-composer__toolbar-actions"
+          data-testid="v2-composer-toolbar-actions"
+        >
+          <slot name="toolbar-actions" />
+        </div>
         <v-btn
           v-if="voiceSpeaking"
           icon
           size="small"
           variant="text"
           color="primary"
-          class="v2-composer__stop-speaking"
+          class="v2-composer__stop-speaking v2-composer__icon-target"
           :title="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           :aria-label="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           @click="$emit('stop-speaking')"
@@ -303,6 +367,7 @@
           color="error"
           icon="mdi-stop"
           size="small"
+          class="v2-composer__icon-target"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
           data-testid="ai-chat-stop"
           @click="$emit('stop')"
@@ -311,6 +376,7 @@
           color="primary"
           icon="mdi-send"
           size="small"
+          class="v2-composer__icon-target"
           :disabled="hasNothingToSend || isProcessing"
           :loading="isProcessing"
           :aria-label="t('aiChatV2.send') || 'Send'"
@@ -334,6 +400,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useComposerDraftStore } from "@/views/store/composerDrafts";
 import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
 import AiChatV2AtMentionSuggestions from "./AiChatV2AtMentionSuggestions.vue";
 import { listSlashCommands, onAifetchlyConfigChanged } from "@/views/api/slashCommands";
@@ -409,6 +476,12 @@ const props = defineProps<{
    */
   voiceChatReady?: boolean;
   /**
+   * FR-VOICE-005: voice settings failed to LOAD (recoverable). The policy
+   * state is unknown rather than off, so the microphone must stay visible in
+   * a disabled/setup state with a settings action instead of disappearing.
+   */
+  voiceSettingsUnavailable?: boolean;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -416,6 +489,14 @@ const props = defineProps<{
    * just for suggestions (design §9.1).
    */
   conversationId?: string | null;
+  /**
+   * Durable per-conversation draft key (FR-COMP-011). When provided (the
+   * chat-center shell), typed text, selected files, and pasted-text blocks
+   * are mirrored into the app-scoped composerDrafts store so a center-route
+   * round trip or conversation switch restores them. Without a key (legacy
+   * dock) the composer keeps component-local state.
+   */
+  draftKey?: string | null;
   /**
    * Conversation-scoped generated-image references selected in the composer
    * tray. The parent owns this state; the composer only renders it and emits
@@ -484,17 +565,38 @@ function onMoveGeneratedImage(fromIndex: number, direction: -1 | 1): void {
   emit("reorder-generated-images", references);
 }
 
-interface FocusableTextarea {
-  focus: () => void;
-}
-
-const textareaField = ref<FocusableTextarea | null>(null);
+const composerRoot = ref<HTMLElement | null>(null);
 
 watch(
   () => props.generatedImageFocusSignal,
   (signal: number | undefined) => {
     if (!signal || signal <= 0) return;
-    void nextTick(() => textareaField.value?.focus());
+    void nextTick(() => {
+      // Vuetify builds that do not expose focus() on the component instance
+      // still render a real textarea; the auto-grow sizer is a hidden
+      // sibling with the same input class — always prefer the visible input.
+      const resolveTarget = (): HTMLTextAreaElement | null => {
+        const textarea = composerRoot.value?.querySelector(
+          "textarea.v-field__input:not(.v-textarea__sizer), textarea:not(.v-textarea__sizer)"
+        ) as HTMLTextAreaElement | null;
+        if (textarea) return textarea;
+        return null;
+      };
+      // Focus can land while the route-loading overlay still hides the
+      // composer (v-show → focus() is a silent no-op on hidden elements), so
+      // retry briefly until the element accepts focus.
+      const attempt = (remaining: number): void => {
+        const target = resolveTarget();
+        if (target) {
+          target.focus();
+          if (document.activeElement === target) return;
+        }
+        if (remaining > 0) {
+          window.setTimeout(() => attempt(remaining - 1), 50);
+        }
+      };
+      attempt(8); // ~400ms covers the route-loading overlay window
+    });
   }
 );
 
@@ -514,6 +616,49 @@ function resetPastedState(): void {
   nextPasteId = 1;
 }
 
+// --- Durable per-conversation draft (FR-COMP-011) --------------------------
+// With a draftKey (chat-center shell) the draft survives route changes: the
+// state above mirrors into the app-scoped store, which outlives the route-
+// mounted component. The store is only touched when a key is provided so
+// pinia-less legacy mounts are unaffected.
+const draftStore = props.draftKey ? useComposerDraftStore() : null;
+
+function loadDraftFromStore(): void {
+  if (!draftStore || !props.draftKey) return;
+  const saved = draftStore.getDraft(props.draftKey);
+  draft.value = saved?.text ?? "";
+  selectedFiles.value = saved ? [...saved.files] : [];
+  pastedContentsById.value = saved ? { ...saved.pastedContents } : {};
+  pastedChips.value = saved
+    ? saved.pastedChips.map((chip) => ({ ...chip }))
+    : [];
+  nextPasteId = pastedChips.value.reduce(
+    (max, chip) => Math.max(max, chip.id),
+    0
+  ) + 1;
+}
+
+if (draftStore) {
+  loadDraftFromStore();
+  watch(
+    [draft, selectedFiles, pastedContentsById, pastedChips],
+    () => {
+      if (!props.draftKey) return;
+      draftStore.updateComposerState(
+        props.draftKey,
+        draft.value,
+        selectedFiles.value,
+        pastedContentsById.value,
+        pastedChips.value
+      );
+    },
+    { deep: true }
+  );
+  // Conversation switch: restore the target conversation's draft (the echo
+  // write-back below persists the restored values under the new key).
+  watch(() => props.draftKey, () => loadDraftFromStore());
+}
+
 // --- Local voice input (push-to-talk; PRD §7.1/§7.2) ---
 // The composer owns the recorder + transcribe call for the MVP: the transcript
 // is appended to the draft for review (no auto-send). Auto-send + spoken
@@ -528,6 +673,58 @@ const voiceAvailabilityNotice = computed(() =>
       "Local voice runtime is unavailable."
     : t("aiChatV2.voice.model_missing") || "Voice model is not installed.",
 );
+
+/**
+ * FR-COMP-009: this build supports microphone capture when the Chromium
+ * embedding exposes getUserMedia. Permanently unsupported builds hide the
+ * affordance entirely; everything else keeps it visible (PRD §14.2/14.4).
+ */
+const voiceSupportedByBuild =
+  typeof navigator !== "undefined" &&
+  navigator.mediaDevices?.getUserMedia !== undefined;
+
+/**
+ * FR-VOICE-003: the microphone distinguishes ready, recording, transcribing,
+ * busy, and setup-required states. Busy covers an active run; setup covers a
+ * recoverable settings-load failure; policy-disabled routes to settings.
+ */
+const micPolicyDisabled = computed(
+  () => !props.voiceEnabled && !props.voiceSettingsUnavailable
+);
+const micBusy = computed(() => props.isStreaming || props.isProcessing);
+const micDisabled = computed(
+  () =>
+    isTranscribing.value ||
+    micBusy.value ||
+    props.voiceSettingsUnavailable === true
+);
+const micTitle = computed(() => {
+  if (isRecording.value) {
+    return t("aiChatV2.voice.stop_recording") || "Stop recording";
+  }
+  if (isTranscribing.value) {
+    return t("aiChatV2.voice.transcribing") || "Transcribing…";
+  }
+  if (props.voiceSettingsUnavailable === true) {
+    return (
+      t("aiChatV2.voice.settings_unavailable") ||
+      "Voice input unavailable — open settings"
+    );
+  }
+  if (micPolicyDisabled.value) {
+    return (
+      t("aiChatV2.voice.input_disabled") ||
+      "Voice input is off — open settings"
+    );
+  }
+  if (micBusy.value) {
+    return (
+      t("aiChatV2.voice.busy") ||
+      "Voice input is unavailable during the current run"
+    );
+  }
+  return t("aiChatV2.voice.start_recording") || "Start recording";
+});
 
 function appendTranscript(text: string): void {
   const clean = text.trim();
@@ -571,12 +768,29 @@ const VOICE_ERROR_L10N: Record<VoiceRecorderErrorKind, { key: string; fallback: 
 };
 
 function recorderErrorNotice(err: unknown): string {
-  const { key, fallback } = VOICE_ERROR_L10N[classifyRecorderError(err)];
-  return t(key) || fallback;
+  const kind = classifyRecorderError(err);
+  const { key, fallback } = VOICE_ERROR_L10N[kind];
+  const base = t(key) || fallback;
+  if (kind === "permission_denied") {
+    // Explicit retry guidance (FR-VOICE-003 / PRD §14.2): permission denial
+    // is recoverable by the user.
+    const hint =
+      t("aiChatV2.voice.permission_retry_hint") ||
+      "Allow microphone access, then try again.";
+    return `${base} ${hint}`;
+  }
+  return base;
 }
 
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
+  // Policy-disabled builds keep the affordance as a SETUP entry point: the
+  // click routes to voice settings instead of silently doing nothing
+  // (FR-VOICE-005 / PRD §14.4).
+  if (micPolicyDisabled.value) {
+    emit("open-voice-settings");
+    return;
+  }
   if (props.voiceRuntimeUnavailable) {
     emit("install-voice-runtime");
     return;
@@ -609,13 +823,13 @@ async function onMicClick(): Promise<void> {
           audioBase64,
           mimeType: "audio/wav",
         });
-      } catch (trErr) {
-        const detail = trErr instanceof Error ? trErr.message : String(trErr);
-        const base =
-          t("aiChatV2.voice.transcription_failed") ||
-          "Voice transcription failed.";
+      } catch {
+        // Bounded public message only (PRD §14.5/§23): the worker's raw
+        // exception can carry filesystem paths or provider details and is
+        // never appended to renderer-visible text.
         showNotice(
-          detail.trim().length > 0 ? `${base} ${detail}` : base,
+          t("aiChatV2.voice.transcription_failed") ||
+            "Voice transcription failed.",
         );
         return;
       }
@@ -1139,25 +1353,57 @@ function syncAtMentionFromKeyboardEvent(event: KeyboardEvent): void {
 
 const onSend = (): void => {
   const text = draft.value.trim();
-  if ((!text && selectedFiles.value.length === 0 && selectedGeneratedImages.value.length === 0) || props.isStreaming) return;
+  // NOTE: sends while streaming are ALLOWED (message-queue PRD §7.1 — the
+  // composer stays usable so follow-ups queue behind the running turn; Stop
+  // is the separate adjacent action). Only an empty composer is a no-op.
+  if (
+    !text &&
+    selectedFiles.value.length === 0 &&
+    selectedGeneratedImages.value.length === 0
+  ) {
+    return;
+  }
   closeAtMention();
   const files = [...selectedFiles.value];
   const pastedContents =
     Object.keys(pastedContentsById.value).length > 0
       ? { ...pastedContentsById.value }
       : undefined;
+  // Capture the ORIGINATING draft key: acceptance may return after the user
+  // switched conversations — clearing then would wipe the OTHER conversation's
+  // draft (and the stored draft for the wrong key). Clear the stored draft for
+  // the originating key always; touch the visible composer only when it still
+  // shows that same conversation (review: cross-conversation accept fix).
+  const originatingDraftKey = props.draftKey ?? null;
   emit("send", text, files, {
     pastedContents,
     onAccepted: () => {
-      draft.value = "";
-      selectedFiles.value = [];
-      resetPastedState();
+      if (draftStore && originatingDraftKey !== null) {
+        draftStore.clearDraft(originatingDraftKey);
+      }
+      if (
+        originatingDraftKey === null ||
+        (props.draftKey ?? null) === originatingDraftKey
+      ) {
+        draft.value = "";
+        selectedFiles.value = [];
+        resetPastedState();
+      }
       closeSlash();
     },
   });
 };
 
 const onKeydown = (event: KeyboardEvent): void => {
+  // IME composition guard (FR-COMP-004 / PRD §13.2): while an input method is
+  // composing (Chinese/Japanese/Korean…), Enter confirms the composition —
+  // it must neither send the message nor select a suggestion. Some Chromium
+  // versions leave isComposing false on the final keydown and report the
+  // legacy keyCode 229 instead, so both signals are honored.
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+
   if (atMentionOpen.value) {
     syncAtMentionFromKeyboardEvent(event);
   }
@@ -1357,9 +1603,18 @@ watch(
   align-items: center;
   gap: 8px;
 }
-/* Attach button never shrinks — always visible on the far left. */
+/* Attach button never shrinks — always visible after the selectors. */
 .v2-composer__attach {
   flex: 0 0 auto;
+}
+/*
+ * PRD §16.4: pointer/touch targets are at least 40x40px. Applied to the
+ * composer's compact icon-only controls (attach, microphone, stop-speaking,
+ * Send, Stop) without changing their visual icon size.
+ */
+.v2-composer__icon-target {
+  min-width: 40px;
+  min-height: 40px;
 }
 /* Prepend slot wraps and can shrink; selectors move to the next line on
    narrow panels instead of pushing the attach/send buttons off-screen. */
@@ -1376,5 +1631,10 @@ watch(
   display: flex;
   align-items: center;
   margin-left: auto;
+}
+.v2-composer__toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 </style>

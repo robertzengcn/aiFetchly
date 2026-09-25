@@ -6,8 +6,10 @@
     the host (the child page decides reload).
   -->
   <section
+    ref="hostRegion"
     class="app-center-route-host"
     :aria-busy="routeLoading"
+    tabindex="-1"
     data-testid="app-center-route-host"
   >
     <component :is="frameComponent">
@@ -33,13 +35,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onBeforeUnmount, ref, watch, type Component } from "vue";
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, ref, watch, type Component } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import LegacyPageFrame from "./LegacyPageFrame.vue";
 import { findSurfaceByRouteName } from "@/views/router/uiMigrationRegistry";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import { useInnerPageShellFlag } from "@/views/composables/useInnerPageShellFlag";
+import { emitShellDiagnostic } from "@/views/utils/shellDiagnostics";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -48,6 +51,7 @@ const shellFlag = useInnerPageShellFlag();
 
 const routeLoading = ref(false);
 let loadTimer: number | null = null;
+const hostRegion = ref<HTMLElement | null>(null);
 
 /**
  * Frame selection: a route whose surface is `converged` renders bare (its
@@ -63,12 +67,23 @@ const frameComponent = computed<Component>(() => {
   return Frame;
 });
 
+/** True until the route watcher's immediate (initial-mount) run completes. */
+let initialRouteWatch = true;
+
 /** Owner-route inspector cleanup (design §9.4). */
 watch(
   () => route.name,
-  (name) => {
+  (name, previousName) => {
     if (typeof name === "string") {
       inspector.onRouteChanged(String(route.path));
+    }
+    // Structured, content-free diagnostics (design §22): route names only.
+    if (!initialRouteWatch) {
+      emitShellDiagnostic({
+        type: "shell.route_changed",
+        from: typeof previousName === "string" ? previousName : null,
+        to: typeof name === "string" ? name : null,
+      });
     }
     // Brief loading affordance keeps the shell interactive (IPR-044);
     // it never blocks navigation or remounts the shell.
@@ -77,6 +92,17 @@ watch(
     loadTimer = window.setTimeout(() => {
       routeLoading.value = false;
     }, 150);
+    // Focus transfer (PRD §16.3/§19.1): after a center-route change, move
+    // focus into the newly active center landmark so keyboard users are not
+    // stranded on the navigation control they just left. The immediate
+    // (initial-mount) run keeps the app's default focus, and the chat route
+    // is excluded — the chat center surface owns focus there and moves it
+    // into the composer (selection / New chat), which must not be raced by
+    // this landmark focus.
+    if (!initialRouteWatch && name !== "AI_Chat_Workspace") {
+      void nextTick(() => hostRegion.value?.focus());
+    }
+    initialRouteWatch = false;
   },
   { immediate: true }
 );

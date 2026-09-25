@@ -53,6 +53,11 @@ export interface ToolExecutionView {
   readonly argumentsPreview?: string;
   /** FR-030: persisted artifact ID for reopen from history. */
   readonly artifactId?: string;
+  /**
+   * The result replaced an approved permission prompt (design §15.5) —
+   * the just-approved output must stay visible.
+   */
+  readonly permissionResumed?: boolean;
 }
 
 export interface ToolExecutionGroupView {
@@ -86,6 +91,10 @@ function assistantOwnerFor(
 /** Terminal statuses derived from a persisted TOOL_RESULT row. */
 function statusFromResult(message: ChatV2MessageView): ToolExecutionStatus {
   const metadata = message.metadata;
+  // A gated tool that has not been approved yet is parked mid-execution.
+  if (metadata?.toolResult?.needsPermissionPrompt === true) {
+    return "awaiting_permission";
+  }
   if (metadata?.toolResultStatus === "error") return "failed";
   return "completed";
 }
@@ -109,9 +118,7 @@ function classifyOutput(message: ChatV2MessageView): {
   // FR-047: permission (skill permission prompts awaiting decision)
   if (
     metadata?.toolName === "install_system_dependency" ||
-    (metadata?.toolResult &&
-      typeof metadata.toolResult === "object" &&
-      "needsPermission" in metadata.toolResult)
+    metadata?.toolResult?.needsPermissionPrompt === true
   ) {
     return { kind: "permission" };
   }
@@ -224,6 +231,7 @@ export function buildToolExecutionGroups(
               Number.isNaN(startedMs) || Number.isNaN(finishedMs)
                 ? undefined
                 : Math.max(0, finishedMs - startedMs),
+            permissionResumed: metadata?.permissionResumed === true,
           },
         });
       } else {
@@ -241,6 +249,7 @@ export function buildToolExecutionGroups(
             isError: classification.kind === "error",
             finishedAt,
             isLegacyUnpaired: true,
+            permissionResumed: metadata?.permissionResumed === true,
           },
         });
       }
@@ -289,13 +298,16 @@ export function buildToolExecutionGroups(
       ) {
         // Live terminal fence: a later persisted result stays authoritative
         // after reload; duplicates cannot reopen a terminal row.
+        const liveResult = payload.toolResult as
+          | { success?: boolean; needsPermissionPrompt?: boolean }
+          | undefined;
         entry.view = {
           ...entry.view,
-          status:
-            (payload.toolResult as { success?: boolean } | undefined)
-              ?.success === false
-              ? "failed"
-              : "completed",
+          status: liveResult?.needsPermissionPrompt
+            ? "awaiting_permission"
+            : liveResult?.success === false
+            ? "failed"
+            : "completed",
         };
       }
     }
@@ -334,6 +346,9 @@ export function buildToolExecutionGroups(
         e.status === "running"
     );
     const allCompleted = executions.every((e) => e.status === "completed");
+    const permissionResumedInGroup = executions.some(
+      (e) => e.permissionResumed === true
+    );
     groups.push({
       key: `group-${ownerKey}`,
       assistantMessageId: bucket.assistantMessageId,
@@ -342,8 +357,10 @@ export function buildToolExecutionGroups(
       totalCount: executions.length,
       hasUnresolvedAttention: unresolved,
       // Successful historical groups may collapse; running/unresolved stay
-      // expanded (FR-048).
-      defaultExpanded: unresolved || !allCompleted,
+      // expanded (FR-048). A permission-resumed result also stays expanded:
+      // the user just approved that tool, so its output must remain visible
+      // instead of vanishing behind an auto-collapse (design §15.5).
+      defaultExpanded: unresolved || !allCompleted || permissionResumedInGroup,
     });
   }
 

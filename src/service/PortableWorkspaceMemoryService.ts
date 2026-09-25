@@ -34,6 +34,8 @@ import { PortableWorkspaceMemoryGitStatusService } from "@/service/PortableWorks
 import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
 import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
 import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import { Token } from "@/modules/token";
+import { USERSDBPATH } from "@/config/usersetting";
 import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryPortableStateModel } from "@/model/AIWorkspaceMemoryPortableState.model";
 import type {
@@ -147,8 +149,14 @@ export class PortableWorkspaceMemoryService {
     this.bridgeService = new PortableWorkspaceMemoryBridgeService();
     this.gitStatusService = new PortableWorkspaceMemoryGitStatusService();
     this.coordinator = new PortableWorkspaceMemorySyncCoordinator({});
-    this.memoryModel = new AIWorkspaceMemoryModel("");
-    this.stateModel = new AIWorkspaceMemoryPortableStateModel("");
+    // Eager data-access models must resolve the SAME trusted DB path as the
+    // BaseModule-based modules. An empty path is falsy in BaseDb, which falls
+    // back to the temp-test directory and silently RESETS the process-wide
+    // SqliteDb singleton mid-operation ("path changed … resetting instance"),
+    // breaking concurrent repository metadata lookups.
+    const dbpath = new Token().getValue(USERSDBPATH);
+    this.memoryModel = new AIWorkspaceMemoryModel(dbpath);
+    this.stateModel = new AIWorkspaceMemoryPortableStateModel(dbpath);
   }
 
   // --- Status -------------------------------------------------------------------

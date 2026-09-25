@@ -25,6 +25,7 @@ export type FakeAiScenarioName =
   | "tool-requires-permission"
   | "tool-success-followup"
   | "http-500"
+  | "http-500-delayed"
   | "malformed-sse"
   | "disconnect-mid-stream";
 

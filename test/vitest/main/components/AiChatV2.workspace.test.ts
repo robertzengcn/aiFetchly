@@ -129,11 +129,15 @@ function mountChat() {
 }
 
 describe("AiChatV2 workspace picker", () => {
-  it("opens the workspace picker card when the unset badge is clicked", async () => {
+  it("opens the workspace picker card when the unset badge's Choose action is clicked", async () => {
     const wrapper = mountChat();
     await flushPromises();
 
-    await wrapper.find(".workspace-badge--unset").trigger("click");
+    // FR-WS-003: the unset state exposes an explicit Choose workspace action
+    // (the container itself is no longer the click target).
+    await wrapper
+      .find('[data-testid="workspace-badge-choose"]')
+      .trigger("click");
     await flushPromises();
 
     const card = wrapper.find("[data-testid='workspace-required']");

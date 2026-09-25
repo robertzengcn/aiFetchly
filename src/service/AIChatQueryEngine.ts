@@ -369,6 +369,18 @@ export interface AIChatQueryEngineDeps {
     readonly instruction: AIChatSteeringInstruction;
     readonly boundary: import("@/entityTypes/aiChatV2Types").AIChatSafeBoundary;
   }) => Promise<void>;
+  /**
+   * Optional. Notified at every turn's true terminal (completed/cancelled/
+   * failed), including turns resumed after a permission/plan-question pause —
+   * those resumed continuations are fire-and-forget, so their owner (the
+   * coordinator for its runs, the durable queue for its drained rows) would
+   * otherwise never learn the conversation freed up. Idempotent consumers
+   * only: coordinator-run turns also notify through their own path.
+   */
+  onTurnTerminal?: (
+    conversationId: string,
+    outcome: "completed" | "cancelled" | "failed"
+  ) => void;
 }
 
 /**
@@ -409,6 +421,7 @@ export class AIChatQueryEngine {
   private readonly toolFilter?: (toolName: string) => boolean;
   /** Persists steering instructions consumed by active turns' mailboxes. */
   private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
+  private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -431,6 +444,7 @@ export class AIChatQueryEngine {
       deps?.generatedImageReferenceResolver;
     this.toolFilter = deps?.toolFilter;
     this.steeringPromoter = deps?.steeringPromoter;
+    this.onTurnTerminalCb = deps?.onTurnTerminal;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -2123,6 +2137,16 @@ export class AIChatQueryEngine {
         conversationId: result.conversationId,
         snapshot: result.toolCatalogState,
       });
+    }
+    // True-terminal notification (see deps.onTurnTerminal): resumed-turn
+    // continuations are fire-and-forget, so this is the only place their
+    // owner learns the conversation freed up.
+    if (
+      result.type === "completed" ||
+      result.type === "cancelled" ||
+      result.type === "failed"
+    ) {
+      this.onTurnTerminalCb?.(result.conversationId, result.type);
     }
     switch (result.type) {
       case "completed": {

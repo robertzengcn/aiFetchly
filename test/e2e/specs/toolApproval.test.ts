@@ -23,20 +23,14 @@ function composer(app: LaunchedApp): Locator {
     .first();
 }
 async function openChat(app: LaunchedApp): Promise<void> {
-  // The chat workspace is the default landing route; the dock toggle only
-  // exists when the app landed elsewhere. Handle both.
-  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  try {
-    await toggle.waitFor({ state: "visible", timeout: 5_000 });
-    await toggle.click();
-  } catch {
-    /* already on the chat workspace */
-  }
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
-async function sendUnique(app: LaunchedApp, prefix: string): Promise<void> {
-  await composer(app).fill(`${prefix}-${Date.now()}`);
+async function sendUnique(app: LaunchedApp, prefix: string): Promise<string> {
+  const message = `${prefix}-${Date.now()}`;
+  await composer(app).fill(message);
   await app.mainWindow.getByTestId("ai-chat-send").click();
+  return message;
 }
 
 /**
@@ -77,12 +71,18 @@ async function setupGatedFileRead(
       "ai-chat-v2:conversations",
       JSON.stringify({})
     );
-    const convs = (convResp?.data ?? []) as Array<{ conversationId: string }>;
-    if (!convs.length) return "no conversation";
+    const convs = (convResp?.data ?? []) as Array<{
+      conversationId: string;
+      title: string;
+    }>;
+    // Conversations sort newest-first by last activity; the prep turn just
+    // completed, so the prep conversation is first.
+    const target = convs[0];
+    if (!target) return "no conversation";
     const setResp = await api.invoke(
       "ai-workspace:set",
       JSON.stringify({
-        conversationId: convs[0].conversationId,
+        conversationId: target.conversationId,
         rootPath,
         label: "e2e",
       })
@@ -90,7 +90,24 @@ async function setupGatedFileRead(
     const id = (setResp?.data as { id?: unknown } | undefined)?.id;
     if (typeof id !== "number")
       return `no workspace id (${setResp?.msg ?? "?"})`;
-    await api.invoke("ai-workspace:approve", JSON.stringify({ id }));
+    const approveResp = await api.invoke(
+      "ai-workspace:approve",
+      JSON.stringify({ id })
+    );
+    if (approveResp && approveResp.status === false)
+      return `approve failed (${approveResp.msg ?? "?"})`;
+    // Verify through the real get IPC: it returns the record only when a
+    // binding exists AND its approval state is "approved".
+    const getResp = await api.invoke(
+      "ai-workspace:get",
+      JSON.stringify({ conversationId: target.conversationId })
+    );
+    if (getResp && getResp.status === false) {
+      return `workspace get failed (${getResp.msg ?? "?"})`;
+    }
+    if (!getResp?.data) {
+      return `no approved workspace for conv=${target.conversationId}`;
+    }
     return undefined;
   }, wsRoot);
   expect(err, `workspace setup failed: ${err ?? ""}`).toBeUndefined();
@@ -121,7 +138,7 @@ test.describe("AI tool approval (Electron integration)", () => {
     // The permission card is shown (tool identified) but the file has NOT been
     // read yet -> the secret content is not in the conversation.
     await expect(
-      aiApp.mainWindow.getByTestId("ai-chat-root")
+      aiApp.mainWindow.getByTestId("workspace-transcript")
     ).not.toContainText(secret, { timeout: 5_000 });
   });
 
@@ -133,18 +150,16 @@ test.describe("AI tool approval (Electron integration)", () => {
     const { secret } = await setupGatedFileRead(aiApp, fakeAi);
     await aiApp.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
     // file_read executed against the workspace -> content + follow-up render.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      secret,
-      {
-        timeout: 30_000,
-      }
-    );
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      "Done.",
-      {
-        timeout: 30_000,
-      }
-    );
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText(secret, {
+      timeout: 30_000,
+    });
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText("Done.", {
+      timeout: 30_000,
+    });
   });
 
   test("denying prevents execution and leaves a rejection state (T-09)", async ({
@@ -156,7 +171,7 @@ test.describe("AI tool approval (Electron integration)", () => {
     await aiApp.mainWindow.getByTestId("ai-chat-permission-deny").click();
     // The tool never executes -> the secret content never appears.
     await expect(
-      aiApp.mainWindow.getByTestId("ai-chat-root")
+      aiApp.mainWindow.getByTestId("workspace-transcript")
     ).not.toContainText(secret, { timeout: 6_000 });
     // The composer returns to an actionable state.
     await expect(aiApp.mainWindow.getByTestId("ai-chat-send")).toBeVisible({

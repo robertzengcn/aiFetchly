@@ -104,10 +104,18 @@ export class AIChatTurnQueueError extends Error {
  * Build the steering promoter the engine's turn mailbox uses: persists one
  * claimed instruction atomically (user row + applied flip) using the row's
  * current claim token. Lives here so the IPC layer can wire it into the
- * engine without the engine importing the Module.
+ * engine without the engine importing the Module. `onApplied` is invoked
+ * after a successful promote so the wiring can broadcast the pending
+ * lifecycle event — without it the renderer's steering bubble never clears.
  */
 export function createSteeringPromoter(
-  pendingModule: AIChatPendingMessageModule
+  pendingModule: AIChatPendingMessageModule,
+  onApplied?: (input: {
+    readonly conversationId: string;
+    readonly pendingMessageId: string;
+    /** Promoted row view (sentMessageId bound) for delivered-row appends. */
+    readonly view?: AIChatPendingMessageView;
+  }) => void
 ): (input: {
   readonly instruction: AIChatSteeringInstruction;
   readonly boundary: import("@/entityTypes/aiChatV2Types").AIChatSafeBoundary;
@@ -140,6 +148,17 @@ export function createSteeringPromoter(
         Date.now() - clickStartedAt
       );
     }
+    // The promoted view carries the persisted sentMessageId — without it the
+    // applied event cannot drive the delivered-row append and the steered
+    // message vanishes from live transcripts until a history reload.
+    const view = await pendingModule
+      .getView(instruction.pendingMessageId)
+      .catch(() => null);
+    onApplied?.({
+      conversationId: row.conversationId,
+      pendingMessageId: instruction.pendingMessageId,
+      ...(view ? { view } : {}),
+    });
   };
 }
 
@@ -158,10 +177,17 @@ export class AIChatTurnQueueService {
    * busy — becomes a durable pending row first, closing the renderer/main
    * status race. Returns the durable receipt the renderer may only treat as
    * queued once this resolves.
+   *
+   * `forceQueue` (coordinator busy-send delegation): never auto-dispatch —
+   * the coordinator owns the live turn, and its terminal notification drains
+   * or holds the row. Without it, a row submitted while the engine briefly
+   * reports idle (e.g. transport-retry backoff inside the live turn) would
+   * dispatch immediately and jump the queue.
    */
   async submit(input: {
     readonly clientRequestId: string;
     readonly request: ChatV2StreamRequest;
+    readonly forceQueue?: boolean;
   }): Promise<AIChatPendingCreateResult> {
     if (!this.deps.isQueueEnabled()) {
       throw new AIChatTurnQueueError(
@@ -207,7 +233,12 @@ export class AIChatTurnQueueService {
 
     let disposition: AIChatPendingCreateResult["disposition"] =
       created.status === "paused" ? "paused" : "queued";
-    if (created.status === "queued" && runtimeStatus === "idle" && !queueHeld) {
+    if (
+      created.status === "queued" &&
+      runtimeStatus === "idle" &&
+      !queueHeld &&
+      !input.forceQueue
+    ) {
       this.scheduleDrain(created.conversationId);
       disposition = "dispatch_scheduled";
     }
@@ -377,6 +408,27 @@ export class AIChatTurnQueueService {
     }
   }
 
+  /**
+   * Cross-path terminal notification (chat-first shell unification): the
+   * workspace coordinator runs turns outside this queue, so its terminal is
+   * reported here. A completed terminal re-drains rows queued behind that
+   * turn (design §9.3 — the terminal re-drain contract); cancelled/failed
+   * terminals hold the queue exactly like a queue-owned turn terminal would
+   * (FR-14 durable pause). No-ops when the conversation has no pending rows.
+   */
+  async notifyExternalTurnTerminal(
+    conversationId: string,
+    outcome: "completed" | "cancelled" | "failed"
+  ): Promise<void> {
+    const rows = await this.deps.pendingModule.listViews(conversationId);
+    if (rows.length === 0) return;
+    if (outcome === "completed") {
+      this.scheduleDrain(conversationId);
+      return;
+    }
+    await this.holdQueue(conversationId, outcome);
+  }
+
   async list(conversationId: string): Promise<AIChatPendingMessageView[]> {
     const runtimeStatus =
       this.deps.engine.getConversationRuntimeStatus(conversationId);
@@ -394,7 +446,10 @@ export class AIChatTurnQueueService {
     await this.deps.pendingModule.recoverOnStartup();
     // Labeled recovery totals per PRE-recovery state (design §19.2).
     for (const state of beforeByStatus) {
-      aiChatQueueCounters.incrementLabeled("ai_chat_queue_recovered_total", state);
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_queue_recovered_total",
+        state
+      );
     }
     const model = this.deps.pendingModule.getModel();
     const rows = await model.listNonTerminalAll();
@@ -542,6 +597,19 @@ export class AIChatTurnQueueService {
           err
         );
         return;
+      }
+
+      // Delivery event at PROMOTE time (message-queue §7): the row is
+      // persisted-and-sent NOW, so surfaces can swap the bubble for the
+      // transcript user row BEFORE the turn streams — a completion-only
+      // append would land the user's message after its answer, and failure
+      // paths would never deliver it at all. The re-fetched view carries
+      // the persisted sentMessageId the renderer binds to.
+      const promoted = await this.deps.pendingModule.getView(
+        row.pendingMessageId
+      );
+      if (promoted) {
+        this.emitEvent(promoted, "sent");
       }
 
       let terminal: AIChatTurnTerminalEvent;

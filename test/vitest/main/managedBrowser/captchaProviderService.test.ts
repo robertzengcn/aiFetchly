@@ -109,7 +109,7 @@ describe("CaptchaProviderService gates (GAP-15)", () => {
   });
 
   it("suffix-exact authorization — subdomains pass, sibling domains refuse", async () => {
-    let clock = 1_000_000;
+    const clock = 1_000_000;
     const sub = makeService(
       { ...ALL_OPEN, "managed-browser-2captcha-domains": "example.com" },
       [],
@@ -182,7 +182,7 @@ describe("CaptchaProviderService gates (GAP-15)", () => {
   });
 
   it("never leaks the API token outside the request URL", async () => {
-    let clock = 1_000_000;
+    const clock = 1_000_000;
     const svc = makeService(ALL_OPEN, [], {
       transportResponses: [
         { ok: true, body: '{"status":0,"request":"ERROR_WRONG_USERKEY"}' },

@@ -6,6 +6,7 @@ import { SqliteDb } from "@/config/SqliteDb";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
+import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
 import type { CoordinatorEngine } from "@/service/AIChatCoordinator";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
@@ -43,7 +44,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
   AIChatConversationTurnCoordinator.getInstance().resetForTesting();
@@ -79,7 +81,9 @@ function makeFakeEngine(): {
       stopActiveTurn(conversationId?: string): void {
         stopCalls.push(conversationId ?? "(all)");
       },
-      getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
+      getConversationRuntimeStatus(
+        conversationId: string
+      ): ChatV2RuntimeStatus {
         return engineStatus.get(conversationId) ?? "idle";
       },
     },
@@ -114,7 +118,10 @@ function fakeWindow(id: number): {
   };
 }
 
-function emit(sink: AIChatQueryEventSink, event: Parameters<AIChatQueryEventSink["emit"]>[0]): void {
+function emit(
+  sink: AIChatQueryEventSink,
+  event: Parameters<AIChatQueryEventSink["emit"]>[0]
+): void {
   sink.emit(event);
 }
 
@@ -132,7 +139,12 @@ async function waitFor(
   }
 }
 
-function buildCoordinator(): {
+function buildCoordinator(
+  onRunTerminal?: (conversationId: string, status: ChatRunStatus) => void,
+  busySubmit?: (
+    request: Parameters<AIChatCoordinator["startRun"]>[0]
+  ) => Promise<{ pendingRunId: string } | null>
+): {
   coordinator: AIChatCoordinator;
   router: AIChatEventRouter;
   fake: ReturnType<typeof makeFakeEngine>;
@@ -149,6 +161,8 @@ function buildCoordinator(): {
     scheduler,
     turnCoordinator: AIChatConversationTurnCoordinator.getInstance(),
     canUseChat: () => ({ ok: true }),
+    ...(onRunTerminal ? { onRunTerminal } : {}),
+    ...(busySubmit ? { busySubmit } : {}),
   });
   return { coordinator, router, fake, runModel: new AIChatRunModel(tmpDir) };
 }
@@ -223,9 +237,7 @@ describe("AIChatCoordinator", () => {
     turn.resolve();
 
     // Terminal detail event arrives, and only AFTER the durable transition.
-    await waitFor(() =>
-      win.details.some((d) => d.eventType === "complete")
-    );
+    await waitFor(() => win.details.some((d) => d.eventType === "complete"));
     const row = await runModel.getByRunId(runId);
     expect(row?.status).toBe("completed");
     expect(row?.finishedAt).not.toBeNull();
@@ -240,8 +252,95 @@ describe("AIChatCoordinator", () => {
     expect(completedSummary?.unread).toBe(true);
     expect(completedSummary?.runtimeStatus).toBe("idle");
 
+    // The projection's generated title (first user message, design §8.6)
+    // rides the summaries so a locally-created sidebar row replaces its
+    // "New chat" fallback mid-session without a full bootstrap refresh.
+    await waitFor(() => win.summaries.some((s) => s.title === "hello 1"));
+
     // Live registry cleared after terminal.
     expect(coordinator.getLiveRuntime("v2-test-1")).toBeNull();
+  });
+
+  it("notifies onRunTerminal once per run terminal (queue cross-path drain)", async () => {
+    const terminals: Array<{ conversationId: string; status: ChatRunStatus }> =
+      [];
+    const { coordinator, fake } = buildCoordinator((conversationId, status) => {
+      terminals.push({ conversationId, status });
+    });
+    await SqliteDb.ensureInitialized();
+
+    const accepted = await coordinator.startRun(request(3));
+    expect(accepted.ok).toBe(true);
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+
+    emit(turn.input.eventSink, {
+      type: "complete",
+      conversationId: "v2-test-3",
+      messageId: "assistant-3",
+      fullContent: "done",
+      finishReason: "stop",
+    });
+    turn.resolve();
+
+    await waitFor(() => terminals.length === 1);
+    expect(terminals[0]).toEqual({
+      conversationId: "v2-test-3",
+      status: "completed",
+    });
+  });
+
+  it("delegates a busy-conversation send to the durable queue instead of rejecting", async () => {
+    const busySubmits: Array<{ conversationId: string; message: string }> = [];
+    const { coordinator, fake } = buildCoordinator(
+      undefined,
+      async (request) => {
+        busySubmits.push({
+          conversationId: request.conversationId,
+          message: request.message,
+        });
+        return { pendingRunId: "pending-p-1" };
+      }
+    );
+    await SqliteDb.ensureInitialized();
+
+    // An engine-owned running turn (e.g. a queue-drained turn) makes the
+    // conversation busy even without a coordinator live run.
+    fake.setStatus("v2-test-4", "running");
+    const accepted = await coordinator.startRun(request(4));
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.response.status).toBe("queued");
+    expect(accepted.response.runId).toBe("pending-p-1");
+    expect(busySubmits).toHaveLength(1);
+    expect(busySubmits[0].message).toBe("hello 4");
+    // No run envelope / engine dispatch happened for the delegated send.
+    expect(fake.turns).toHaveLength(0);
+  });
+
+  it("keeps the legacy rejection when the busy-send queue declines", async () => {
+    const { coordinator, fake } = buildCoordinator(undefined, async () => null);
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-test-5", "running");
+    const rejected = await coordinator.startRun(request(5));
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.message).toContain("already active");
+    }
+    expect(fake.turns).toHaveLength(0);
+  });
+
+  it("cancel stops a queue-owned engine turn with no coordinator run", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-queue-owned", "running");
+    const result = await coordinator.cancelRun({
+      conversationId: "v2-queue-owned",
+    });
+    expect(result.cancelled).toBe(true);
+    expect(fake.stopCalls).toContain("v2-queue-owned");
   });
 
   it("gates AI use before executing any work", async () => {
@@ -258,6 +357,9 @@ describe("AIChatCoordinator", () => {
         message: "AI features are disabled",
       }),
     });
+    // This test builds no Model (whose BaseDb constructor would create the
+    // singleton), so create + initialize it explicitly before use.
+    await SqliteDb.resetInstance(tmpDir);
     await SqliteDb.ensureInitialized();
     const result = await coordinator.startRun(request(2));
     expect(result.ok).toBe(false);
@@ -471,8 +573,11 @@ describe("summary event privacy (FR-022)", () => {
       }
     }
     const serialized = JSON.stringify(win.summaries);
+    // The generated conversation title IS derived from the first user message
+    // (design §8.6) and is sidebar-visible data every window already receives
+    // via the bootstrap projection — so the prompt body itself is not in the
+    // forbidden set, only assistant/tool/artifact RESULT bodies are.
     for (const secret of [
-      "SECRET-PROMPT-BODY",
       "SECRET-ASSISTANT-BODY",
       "SECRET-TOOL-RESULT",
       "SECRET-ARTIFACT",

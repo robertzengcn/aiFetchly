@@ -164,7 +164,7 @@ function registerElement(
 
 describe("PageReferenceRegistry", () => {
   it("issues opaque refs bound to the current revision", () => {
-    let clock = 1_000;
+    const clock = 1_000;
     const registry = new PageReferenceRegistry<FakeHandle>(1, () => clock);
     const ref = registry.register({
       element: new FakeHandle(),

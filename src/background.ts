@@ -9,6 +9,7 @@ import {
   shell,
   protocol,
   net,
+  screen,
 } from "electron";
 // Tray/nativeImage are not exported by the electron tsconfig mock (WS-7
 // pattern); require them structurally like `session`/`crashReporter` above.
@@ -154,7 +155,10 @@ import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRe
 import { ProcessTreeTerminator } from "@/main-process/lifecycle/ProcessTreeTerminator";
 import { createDefaultProcessOps } from "@/main-process/lifecycle/processOps";
 import { bindSpawnGateToLifecycle } from "@/main-process/lifecycle/spawnGate";
-import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
 import { appendShutdownReport } from "@/main-process/lifecycle/ShutdownReportWriter";
 import {
   TrayController,
@@ -182,6 +186,8 @@ import {
   broadcastLifecycleState,
 } from "@/main-process/communication/applicationLifecycle-ipc";
 import { APPLICATION_CLOSE_CHOICE_REQUEST } from "@/config/channellist";
+// dev-side feature (window-state persistence) — both sides retained
+import { MainWindowStateService } from "@/main-process/window/MainWindowStateService";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -468,9 +474,7 @@ const closeChoiceFlow = new CloseChoiceFlow(lifecycle, {
       win.webContents.send(APPLICATION_CLOSE_CHOICE_REQUEST, {
         token,
         backgroundAvailable,
-        ...(typeof activeTaskCount === "number"
-          ? { activeTaskCount }
-          : {}),
+        ...(typeof activeTaskCount === "number" ? { activeTaskCount } : {}),
       });
     }
   },
@@ -677,7 +681,10 @@ function initializeSystemTray(): void {
   // keep Keep-running disabled rather than hiding into an unreachable state.
   // The E2E tray opt-in bypasses the heuristic (xvfb provides the host and
   // the spec itself asserts readiness before hiding).
-  if (!e2eTrayOptIn && !isLinuxTrayHostPlausible(process.platform, process.env)) {
+  if (
+    !e2eTrayOptIn &&
+    !isLinuxTrayHostPlausible(process.platform, process.env)
+  ) {
     log.info(
       "[tray] no plausible Linux tray host (XDG_CURRENT_DESKTOP/session); background mode disabled"
     );
@@ -793,7 +800,11 @@ if (process.env.AIFETCHLY_E2E === "1") {
       }
       const child = nodeSpawn(
         process.execPath,
-        ["-e", "const fs=require('fs');const write=()=>{try{fs.writeFileSync(process.argv[1],String(Date.now()))}catch{}};write();setInterval(write,5000);setTimeout(()=>process.exit(0),15*60*1000);", markPath],
+        [
+          "-e",
+          "const fs=require('fs');const write=()=>{try{fs.writeFileSync(process.argv[1],String(Date.now()))}catch{}};write();setInterval(write,5000);setTimeout(()=>process.exit(0),15*60*1000);",
+          markPath,
+        ],
         {
           stdio: "ignore",
           env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -1174,13 +1185,25 @@ function initialize() {
 
   async function createWindowBody(): Promise<void> {
     rendererHtmlLoaded = false;
+    // Window geometry (chat-first shell design §14.6): resolve validated
+    // saved bounds or centered defaults BEFORE construction. The window is
+    // never maximized implicitly — only an explicit saved user choice is
+    // restored, and then before show() to avoid a visible resize flash.
+    const windowState = new MainWindowStateService({
+      screen,
+      e2e: process.env.AIFETCHLY_E2E === "1",
+    });
+    const initialState = windowState.resolveInitialState();
+    const initialBounds = initialState.normalBounds;
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
       autoHideMenuBar: process.platform !== "darwin",
       icon: path.join(__dirname, "/icon.png"),
-      width: 800,
-      height: 600,
+      x: initialBounds.x,
+      y: initialBounds.y,
+      width: initialBounds.width,
+      height: initialBounds.height,
       show: false,
       webPreferences: {
         // Use pluginOptions.nodeIntegration, leave this alone
@@ -1196,9 +1219,14 @@ function initialize() {
       },
     });
 
-    win.maximize();
+    if (initialState.maximized) {
+      // Restore ONLY the user's explicit maximized preference (FR-WIN-007),
+      // before the first show so no resize flash is visible.
+      win.maximize();
+    }
     win.show();
     setMainWindow(win);
+    windowState.attach(win);
 
     // Application exit & tray (FR-01, design §4 "Electron event wiring"):
     // an ordinary user close asks for a choice instead of destroying the
@@ -1269,10 +1297,16 @@ function initialize() {
         trustedOrigins: navGuardTrustedOrigins,
         trustedProtocols: ["aifetchly:"],
       });
-      // `as any` matches the file's pattern — the electron tsconfig mock (aliased
-      // in tsconfig.paths) does not type the EventEmitter `.on`. See WS-7 R7.2.
-      (win as any).webContents.on("will-navigate", onWillNavigate);
-      (win as any).webContents.on("will-redirect", onWillNavigate);
+      // The electron typing mock models webContents.on with a generic
+      // listener signature; cast to a minimal typed surface instead of any.
+      const webContentsOn = win.webContents as unknown as {
+        on(event: string, listener: (...args: unknown[]) => void): void;
+      };
+      const listener = onWillNavigate as unknown as (
+        ...args: unknown[]
+      ) => void;
+      webContentsOn.on("will-navigate", listener);
+      webContentsOn.on("will-redirect", listener);
 
       console.log(
         "Window exist, prepare to register communication ipc handlers"
@@ -1628,17 +1662,20 @@ function initialize() {
     void requestAppExit("programmatic");
   });
 
-
-  (app as any).on(
-    "open-url",
-    (event: { preventDefault: () => void }, url: string) => {
-      event.preventDefault();
-      // Log only that a deep link arrived — never the URL itself, which now
-      // carries the authorization code.
-      log.info("[open-url] received deep link");
-      handleDeepLink(url);
-    }
-  );
+  // dev-side typed open-url listener (retained; replaces the (app as any) form)
+  const onOpenUrl = (
+    event: {
+      preventDefault: () => void;
+    },
+    url: string
+  ): void => {
+    event.preventDefault();
+    // Log only that a deep link arrived — never the URL itself, which now
+    // carries the authorization code.
+    log.info("[open-url] received deep link");
+    handleDeepLink(url);
+  };
+  app.on("open-url", onOpenUrl as unknown as (...args: unknown[]) => void);
   // app.on('second-instance', (event, argv) => {
   //   console.log("second-instance call")
   //   const url = argv.find(arg => arg.startsWith(`${protocolScheme}://`));
@@ -1662,7 +1699,9 @@ function initialize() {
     configureContentSecurityPolicy();
 
     // Install Electron app-level crash handlers (render-process-gone, etc.).
-    __crashReporter.installAppHandlers(app as any);
+    __crashReporter.installAppHandlers(
+      app as unknown as import("@/modules/diagnostics/CrashReporterService").ElectronAppLike
+    );
 
     // Start Electron's native crashReporter to capture minidumps for the main
     // and render processes. Dumps stay local (no upload) and are routed to
@@ -2006,7 +2045,7 @@ function makeSingleInstance(): void {
   } else {
     // console.log('gotThelock:', gotThelock)
 
-    (app as any).on("second-instance", (event: unknown, argv: string[]) => {
+    const onSecondInstance = (event: unknown, argv: string[]): void => {
       try {
         if (onSecondInstanceActivate) {
           onSecondInstanceActivate();
@@ -2058,7 +2097,11 @@ function makeSingleInstance(): void {
       } else {
         log.warn("[second-instance] no deep link URL found in argv");
       }
-    });
+    };
+    app.on(
+      "second-instance",
+      onSecondInstance as unknown as (...args: unknown[]) => void
+    );
   }
 }
 

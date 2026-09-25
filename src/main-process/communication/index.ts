@@ -43,6 +43,7 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerManagedBrowserIpcHandlers } from "@/main-process/communication/managed-browser-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { registerCommunityPluginIpcHandlers } from "@/main-process/communication/community-plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
@@ -51,6 +52,7 @@ import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-p
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
+import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
@@ -131,6 +133,10 @@ export function registerCommunicationIpcHandlers(
     registerAgentDefinitionIpcHandlers();
     registerManagedBrowserIpcHandlers(win);
     registerPluginIpcHandlers();
+    // Community catalog (NON-AI-gated): the registration call was dropped by
+    // a dev-side merge, leaving plugin:community:* unregistered ("No handler
+    // registered") and the unified plugin page unable to load any catalog.
+    registerCommunityPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
@@ -139,6 +145,7 @@ export function registerCommunicationIpcHandlers(
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
+    registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
     // Best-effort reply-reliability startup: lift legacy drafts onto immutable
     // revisions and sweep stale in-flight send attempts to delivery_unknown.

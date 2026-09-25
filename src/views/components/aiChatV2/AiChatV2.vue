@@ -87,24 +87,13 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
-        <v-btn
-          icon
-          size="small"
-          variant="text"
+        <AiChatVoiceOutputToggle
+          :enabled="spokenResponseEnabled"
+          :saving="voiceSettingsSaving"
           class="v2-shell__speech-toggle"
-          data-testid="spoken-response-toggle"
-          :color="spokenResponseEnabled ? 'primary' : undefined"
-          :loading="voiceSettingsSaving"
-          :disabled="voiceSettingsSaving"
-          :title="spokenResponseToggleTitle"
-          :aria-label="spokenResponseToggleTitle"
-          :aria-pressed="spokenResponseEnabled"
-          @click="toggleSpokenResponse"
-        >
-          <v-icon size="small">
-            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
-          </v-icon>
-        </v-btn>
+          @toggle="toggleSpokenResponse"
+          @open-settings="openAIProviderSettings"
+        />
         <v-btn
           v-if="showCompactConversationButton"
           icon
@@ -325,7 +314,7 @@
           v-if="showWorkspaceRequired && activeConversationId"
           :conversation-id="activeConversationId"
           @approved="onWorkspaceApproved"
-          @cancel="showWorkspaceRequired = false"
+          @cancel="conversationWorkspace.closeSetup()"
         />
         <!-- Phase 14 (Plan 14-04): inline trust card (D-03). Renders only
              when an approved workspace with .aifetchly instructions is
@@ -642,89 +631,15 @@
       }}
     </v-snackbar>
 
-    <v-dialog
+    <AiChatVoiceRuntimeInstallDialog
       v-model="voiceRuntimeInstallDialog"
-      max-width="520"
-      persistent
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-microphone-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.voice.runtime_install_title") ||
-              "Install local voice runtime?"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t("aiChatV2.voice.runtime_install_message") ||
-              "Voice input needs the local voice runtime and Whisper Base voice model. Download and install them now?"
-            }}
-          </p>
-          <div
-            v-if="voiceRuntimeInstallSizeText"
-            class="text-caption text-medium-emphasis mb-3"
-          >
-            {{ voiceRuntimeInstallSizeText }}
-          </div>
-          <v-alert
-            v-if="voiceRuntimeInstallError"
-            type="error"
-            variant="tonal"
-            density="comfortable"
-            class="mb-3"
-          >
-            {{ voiceRuntimeInstallError }}
-          </v-alert>
-          <div v-if="voiceRuntimeInstalling" class="mt-3">
-            <div class="d-flex align-center mb-2">
-              <v-progress-circular
-                indeterminate
-                size="18"
-                width="2"
-                color="primary"
-                class="mr-2"
-              />
-              <span class="text-body-2">
-                {{ voiceRuntimeInstallProgressText }}
-              </span>
-            </div>
-            <v-progress-linear
-              v-if="voiceRuntimeInstallPercent !== undefined"
-              :model-value="voiceRuntimeInstallPercent"
-              color="primary"
-              height="6"
-              rounded
-            />
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            :disabled="voiceRuntimeInstalling"
-            @click="voiceRuntimeInstallDialog = false"
-          >
-            {{ t("common.cancel") || "Cancel" }}
-          </v-btn>
-          <v-btn
-            color="primary"
-            variant="flat"
-            :loading="voiceRuntimeInstalling"
-            :disabled="voiceRuntimeInstalling"
-            @click="confirmInstallVoiceRuntime"
-          >
-            {{
-              t("aiChatV2.voice.runtime_install_confirm") ||
-              "Download and install"
-            }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :installing="voiceRuntimeInstalling"
+      :error="voiceRuntimeInstallError"
+      :size-text="voiceRuntimeInstallSizeText"
+      :progress-text="voiceRuntimeInstallProgressText"
+      :percent="voiceRuntimeInstallPercent"
+      @confirm="confirmInstallVoiceRuntime"
+    />
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -903,36 +818,8 @@ import {
   detachChatV2ConversationStreamListeners,
   exportGeneratedImage,
 } from "@/views/api/aiChatV2";
-import {
-  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-  cancelVoiceJob,
-  downloadVoiceModel,
-  getVoiceSettings,
-  getVoiceStatus,
-  notifyVoiceModelsChanged,
-  onVoiceModelDownloadProgress,
-  setVoiceSettings,
-} from "@/views/api/aiChatV2Voice";
-import {
-  getLocalAiRuntimeStatus,
-  installLocalAiRuntime,
-  onLocalAiRuntimeProgress,
-  prepareLocalAiRuntimeInstall,
-} from "@/views/api/localAiRuntime";
-import type {
-  AiChatVoiceRuntimeStatus,
-  AiChatVoiceSettingsView,
-  AiChatVoiceTtsMode,
-  VoiceModelDownloadProgress,
-} from "@/entityTypes/aiChatVoiceTypes";
-import type {
-  LocalAiRuntimeDownloadProgress,
-  LocalAiRuntimeInstallOffer,
-  LocalAiRuntimeStatus,
-} from "@/entityTypes/localAiRuntimeTypes";
-import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
-import { SpeechResponseController } from "./voice/SpeechResponseController";
+import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
+import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -963,12 +850,9 @@ import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
-import { getWorkspace } from "@/views/api/workspace";
-import {
-  acquireWorkspaceWatch,
-  releaseWorkspaceWatch,
-  previewWorkspaceAgents,
-} from "@/views/api/workspaceWatch";
+import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
+import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
+import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import {
   createGoal,
   getActiveGoal,
@@ -996,9 +880,7 @@ import type {
   ChatV2ConversationUpdatedEvent,
   ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
-import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
-import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
@@ -1522,7 +1404,7 @@ async function attemptGeneratedImageExport(
       // approved for this conversation.
       enqueuePendingGeneratedImageExport(conversationId, reference);
       ensureWorkspaceConversationId();
-      showWorkspaceRequired.value = true;
+      conversationWorkspace.requestSetup();
       showGeneratedImageToast(
         t("aiChatV2.imageTool.errors.workspaceRequired") ||
           "An approved workspace is required first."
@@ -1828,17 +1710,28 @@ async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
-// Workspace tracking
+// Workspace tracking — shared composable (chat-first shell design §9.1).
+// The classic dock and the new chat center surface consume ONE implementation
+// of badge state, memory counting, setup flow, watch lifecycle, and trust
+// card. Read-only aliases keep the template bindings unchanged.
 // ---------------------------------------------------------------------------
-// Active workspace for the current conversation. Null when no conversation is
-// selected or the conversation has no workspace yet. Drives the badge.
-const activeWorkspace = ref<WorkspaceSummary | null>(null);
-// True when the active conversation has no workspace — shows the pick card.
-const showWorkspaceRequired = ref(false);
+const conversationWorkspace = useConversationWorkspace(activeConversationId);
+const activeWorkspace = computed(() => conversationWorkspace.workspace.value);
+const showWorkspaceRequired = computed(
+  () => conversationWorkspace.setupOpen.value
+);
+const workspaceMemoryCount = computed(
+  () => conversationWorkspace.memoryCount.value
+);
+const activeWorkspaceWatchId = computed(
+  () => conversationWorkspace.watchId.value
+);
+const showWorkspaceTrustCard = computed(
+  () => conversationWorkspace.trustCardVisible.value
+);
 
-// Workspace memory panel + count for the active approved workspace.
+// Workspace memory panel dialog (display state local to this surface).
 const showWorkspaceMemory = ref(false);
-const workspaceMemoryCount = ref(0);
 
 function openWorkspaceMemory(): void {
   if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
@@ -1848,26 +1741,22 @@ function openWorkspaceMemory(): void {
   showWorkspaceMemory.value = true;
 }
 
-async function refreshWorkspaceMemoryCount(): Promise<void> {
-  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
-    workspaceMemoryCount.value = 0;
-    return;
-  }
-  try {
-    // One IPC + DB round-trip: fetch up to 200 active memories and use the
-    // returned length as the badge count (capped at 200, which is plenty for
-    // a badge — beyond that the exact number doesn't matter to the user).
-    const resp = await workspaceMemoryApi.list({
-      conversationId: activeConversationId.value,
-      status: "active",
-      limit: 200,
-    });
-    workspaceMemoryCount.value =
-      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
-  } catch {
-    workspaceMemoryCount.value = 0;
-  }
+function refreshWorkspaceMemoryCount(): void {
+  void conversationWorkspace.refreshMemoryCount();
 }
+
+// Re-resolve relative file-op paths once the workspace root resolves (the
+// composable owns workspace refresh; this is the chat-specific side effect).
+watch(activeWorkspace, () => {
+  const conversationId = activeConversationId.value;
+  if (conversationId && messages.value.length > 0) {
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
+  }
+});
 
 function createLocalConversationId(): string {
   const randomId =
@@ -1897,50 +1786,7 @@ function handleWorkspaceSetupRequest(): void {
   // change folders. Re-picking creates a new pending workspace that supersedes
   // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
-  showWorkspaceRequired.value = true;
-}
-
-/**
- * Fetch the workspace (if any) for the given conversation and update the
- * badge/required-card state. Called on mount and whenever the active
- * conversation changes.
- */
-async function refreshWorkspace(conversationId: string | null): Promise<void> {
-  if (!conversationId) {
-    activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
-    void refreshWorkspaceMemoryCount();
-    return;
-  }
-  try {
-    const ws = await getWorkspace(conversationId);
-    activeWorkspace.value = ws
-      ? {
-          id: ws.id,
-          conversationId: ws.conversationId,
-          rootPath: ws.rootPath,
-          label: ws.label,
-          approvalState: ws.approvalState,
-        }
-      : null;
-    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
-  } catch {
-    // non-fatal; treat as no workspace
-    activeWorkspace.value = null;
-  }
-  void refreshWorkspaceMemoryCount();
-  // Re-resolve relative file-op paths once workspace root is known.
-  if (
-    conversationId &&
-    activeConversationId.value === conversationId &&
-    messages.value.length > 0
-  ) {
-    hydrateFileOpsFromMessages(
-      conversationId,
-      messages.value,
-      activeWorkspace.value?.rootPath
-    );
-  }
+  conversationWorkspace.requestSetup();
 }
 
 /**
@@ -2229,27 +2075,21 @@ async function runScheduledLoopControl(
 }
 
 /**
- * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
- * to reflect the newly-created + approved workspace and hides the card.
+ * Handler for the WorkspaceRequiredCard's `approved` event. Adopts the
+ * newly-created + approved workspace through the shared composable.
  */
 function onWorkspaceApproved(
   workspaceId: number,
   rootPath: string
 ): void {
-  activeWorkspace.value = {
-    id: workspaceId,
-    conversationId: activeConversationId.value ?? "",
-    rootPath,
-    label: null,
-    approvalState: "approved",
-  };
-  showWorkspaceRequired.value = false;
+  conversationWorkspace.applyApprovedWorkspace(workspaceId, rootPath);
   // A workspace just became ready — complete any save-to-workspace actions
   // that were queued while none existed.
   void retryPendingGeneratedImageExports();
 }
 
-// Refresh the workspace badge whenever the active conversation changes.
+// Workspace badge refresh on conversation change is owned by the shared
+// useConversationWorkspace composable (design §9.1).
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
@@ -2257,7 +2097,6 @@ watch(activeConversationId, (id, previousId) => {
     // conversation so it can never replay into the newly active one.
     cancelAmbiguityChooser();
   }
-  void refreshWorkspace(id);
   void refreshActiveGoal();
   if (id) {
     void refreshScheduledLoopStatus();
@@ -2289,176 +2128,27 @@ async function refreshSlashCommandCount(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card
+// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card now live
+// in the shared useConversationWorkspace composable (chat-first shell design
+// §9.1); this surface only maps the card's events onto composable calls.
 // ---------------------------------------------------------------------------
-// activeWorkspaceWatchId holds the workspaceId token returned by acquire.
-// Null before acquire resolves, after release, or when no approved workspace
-// exists. Drives BOTH the subscriber filter (compare against event.workspaceId
-// — D-04) and the trust-card mount condition.
-const activeWorkspaceWatchId = ref<string | null>(null);
-// True when the active workspace's preview carried AGENTS.md content (i.e.
-// the workspace contains .aifetchly). Used as the trust-card mount gate so
-// the card does NOT render for approved workspaces without .aifetchly.
-const activeWorkspaceHasAgents = ref(false);
-// Per-session dismissal set. The trust card does not reappear for a
-// workspace the user dismissed this session. Persistence across app
-// restarts is deferred to Phase 17 (AIFetchlyWorkspaceTrust entity) —
-// Plan 14-04 reuses in-session state per the plan's "do NOT create a new
-// persistence layer" rule.
-const dismissedTrustWorkspaces = ref<ReadonlySet<string>>(new Set());
-
-/**
- * Inline trust card mounts when ALL of:
- *   - active workspace is approved (existing approval state),
- *   - acquireWorkspaceWatch returned a watch token (worker is watching),
- *   - previewWorkspaceAgents returned non-empty content (workspace has
- *     AGENTS.md / .aifetchly instructions — TRS-07 preview path),
- *   - the user has not dismissed the card for this workspace this session.
- *
- * The card is rendered INLINE near the existing WorkspaceRequiredCard — NOT
- * a modal/banner (D-03).
- */
-const showWorkspaceTrustCard = computed(() => {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return false;
-  if (!activeWorkspace.value) return false;
-  if (activeWorkspace.value.approvalState !== "approved") return false;
-  if (!activeWorkspaceHasAgents.value) return false;
-  if (dismissedTrustWorkspaces.value.has(wid)) return false;
-  return true;
-});
-
-/**
- * Acquire a workspace watch for the supplied conversation. Idempotent —
- * releasing the previous watch (if any) before acquiring the new one
- * covers the workspace-switch path. Non-fatal on IPC failure: chat still
- * works without live-update; the user can /reload-config to retry.
- *
- * After a successful acquire, probes previewWorkspaceAgents to learn
- * whether the workspace contains .aifetchly content. That probe is the
- * sole source of the hasAgents flag (TRS-07 — the renderer NEVER touches
- * the filesystem).
- */
-async function acquireActiveWorkspaceWatch(
-  conversationId: string
-): Promise<void> {
-  // Release any previous watch first (covers switch).
-  await releaseActiveWorkspaceWatch();
-  // Reset hasAgents — the new workspace's probe repopulates it.
-  activeWorkspaceHasAgents.value = false;
-  try {
-    const result = await acquireWorkspaceWatch({ conversationId });
-    if (!result) {
-      // No approved workspace / resolver miss — fail-closed, no watch.
-      activeWorkspaceWatchId.value = null;
-      return;
-    }
-    activeWorkspaceWatchId.value = result.workspaceId;
-    // Probe for AGENTS.md content via the TRS-07 preview channel.
-    try {
-      const content = await previewWorkspaceAgents(result.workspaceId);
-      activeWorkspaceHasAgents.value = content.length > 0;
-    } catch {
-      // Preview failure is non-fatal — treat as "no agents content" so the
-      // card stays hidden. The user can still chat; the watcher is active.
-      activeWorkspaceHasAgents.value = false;
-    }
-  } catch (err) {
-    // Non-fatal: log and leave watchId null. Chat still works.
-    console.error(
-      "[AiChatV2] acquireWorkspaceWatch failed (non-fatal):",
-      err
-    );
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Release the active workspace watch, if any. Idempotent — safe to call on
- * unmount, on switch, or when no watch is active.
- */
-async function releaseActiveWorkspaceWatch(): Promise<void> {
-  const wid = activeWorkspaceWatchId.value;
-  const convId = activeConversationId.value;
-  if (!wid || !convId) {
-    activeWorkspaceWatchId.value = null;
-    return;
-  }
-  try {
-    await releaseWorkspaceWatch({ conversationId: convId, workspaceId: wid });
-  } catch (err) {
-    // Non-fatal: worst case is a transient consumer leak; main will GC the
-    // consumer when the worker sees no other consumers for this workspace.
-    console.error(
-      "[AiChatV2] releaseWorkspaceWatch failed (non-fatal):",
-      err
-    );
-  } finally {
-    activeWorkspaceWatchId.value = null;
-  }
-}
-
-/**
- * Watch the active workspace to drive acquire/release. Fires whenever the
- * resolved active workspace changes (conversation switch, pick-folder flow,
- * approval). The watcher is additive to the existing activeConversationId
- * watcher — that one refreshes the badge; this one manages the watcher
- * lifecycle.
- */
-watch(
-  activeWorkspace,
-  (next, prev) => {
-    // Only re-acquire when something material changed. approvalState flips
-    // from pending→approved after the WorkspaceRequiredCard flow, so we
-    // DO want to fire on that transition.
-    const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
-    const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
-    if (prevKey === nextKey) return;
-    if (!next || next.approvalState !== "approved") {
-      // Not eligible — release any stale watch and bail.
-      void releaseActiveWorkspaceWatch();
-      return;
-    }
-    const convId = activeConversationId.value;
-    if (!convId) return;
-    void acquireActiveWorkspaceWatch(convId);
-  }
-);
 
 /**
  * Trust-card 'trusted' handler. The IPC was already called inside the card
- * (setWorkspaceTrust). Hide the card by adding the workspace to the
- * dismissed set — Phase 14 binary gate reuses the approval state, so trust
- * equals the existing approval (already set by the card's setTrust call).
+ * (setWorkspaceTrust); dismissing hides the card for this session.
  */
 function onWorkspaceTrustAccepted(scope: WorkspaceTrustScope): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (wid) {
-    dismissedTrustWorkspaces.value = new Set([
-      ...dismissedTrustWorkspaces.value,
-      wid,
-    ]);
-  }
-  // The trust-set IPC triggers a manager.rescan → AIFETCHLY_CONFIG_CHANGED
-  // event with the matching workspaceId. The subscriber filter refreshes
-  // the command cache from that event.
+  conversationWorkspace.trustAccepted();
   void scope; // Phase 17 branches on scope for per-capability trust.
 }
 
 /**
  * Trust-card 'dismissed' handler (Keep disabled). Persist the dismissal
  * in-session so the card does not reappear on the next chat open for this
- * workspace. The user keeps chatting with the workspace config untrusted
- * (Phase 14: untrusted means the watcher still runs but applyWorkspaceSnapshot
- * drops instructions/commands at the trust-filter boundary — TRS-01).
+ * workspace. The user keeps chatting with the workspace config untrusted.
  */
 function onWorkspaceTrustDismissed(): void {
-  const wid = activeWorkspaceWatchId.value;
-  if (!wid) return;
-  dismissedTrustWorkspaces.value = new Set([
-    ...dismissedTrustWorkspaces.value,
-    wid,
-  ]);
+  conversationWorkspace.trustDismissed();
 }
 
 // Conversation search state
@@ -3547,7 +3237,7 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Release only the active-view fields — do NOT clear stream listeners. Each
   // conversation owns its own listener now; a backgrounded streaming turn must
   // keep its listener so its chunks keep updating conversationRuntime[conv]
@@ -3576,7 +3266,7 @@ const detachActiveStreamView = (): void => {
 };
 
 const onStop = (): void => {
-  speechController.stop();
+  stopSpeechPlayback();
   // Cancel in-flight STT/TTS worker work so the shared worker stops
   // synthesizing for a response the user has abandoned (TODO P0-5).
   void cancelVoiceJob();
@@ -4311,19 +4001,12 @@ const onSend = async (
   streamError.value = null;
 
   attachmentError.value = null;
-  voicePlaybackError.value = null;
   // Record whether this user message originated from voice input so the
   // `after_voice_input` TTS policy speaks only the reply to a voice send
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
-  // pass no `fromVoice`, which correctly clears the flag.
-  speechController.updateOptions({
-    latestInputWasVoice: options?.fromVoice === true,
-  });
-  // Start a fresh spoken-response session for every assistant turn. The
-  // controller is intentionally stopped by "Stop", conversation switching, and
-  // voice recording; without re-arming here, later replies can be silently
-  // ignored even when spoken responses are enabled.
-  speechController.start();
+  // pass no `fromVoice`, which correctly clears the flag. The composable
+  // clears any stale playback error when arming the new session.
+  beginAssistantResponse(options?.fromVoice === true);
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
@@ -4826,7 +4509,7 @@ const onSend = async (
             // user isn't looking at — every sibling active-view mutation below
             // is already gated by isCurrentStreamView().
             if (isCurrentStreamView()) {
-              speechController.pushDelta(chunk.contentDelta);
+              pushAssistantDelta(chunk.contentDelta);
             }
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
@@ -5034,9 +4717,9 @@ const onSend = async (
           // speech synth while the user is viewing a different conversation.
           if (isCurrentStreamView()) {
             if (!speechReceivedTextDelta) {
-              speechController.pushDelta(complete.fullContent);
+              pushAssistantDelta(complete.fullContent);
             }
-            speechController.flush();
+            completeAssistantResponse();
           }
         }
         const generatedImages =
@@ -5293,372 +4976,48 @@ watch(
   }
 );
 
-const voiceSpeaking = ref(false);
-const voicePlaybackError = ref<string | null>(null);
-const speechController = new SpeechResponseController(
-  {
-    ttsMode: "disabled",
-    latestInputWasVoice: false,
-  },
-  undefined,
-  undefined,
-  (error) => {
-    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
-    voicePlaybackError.value =
-      error.message.trim().length > 0
-        ? `${fallback} ${error.message}`
-        : fallback;
-  }
-);
-speechController.start();
-const voiceInputEnabled = ref(false);
-// Bridge the controller's imperative speaking state into Vue reactivity so the
-// composer can show a stop-speaking control (TODO P1-2).
-const unsubscribeSpeaking = speechController.subscribe((speaking) => {
-  voiceSpeaking.value = speaking;
+// ---------------------------------------------------------------------------
+// Voice orchestration — shared composable (chat-first shell design §11.1).
+// The classic dock and the chat center surface consume ONE implementation of
+// settings loading, availability detection, installs, and spoken-response
+// playback. Destructured aliases preserve the composer's prop bindings.
+// ---------------------------------------------------------------------------
+const {
+  inputEnabled: voiceInputEnabled,
+  autoSend: voiceAutoSend,
+  maxRecordingMs: voiceMaxRecordingMs,
+  spokenResponseEnabled,
+  speaking: voiceSpeaking,
+  settingsSaving: voiceSettingsSaving,
+  modelInstalling: voiceModelInstalling,
+  modelInstallError: voiceModelInstallError,
+  ttsInstallPrompt: voiceTtsInstallPrompt,
+  playbackError: voicePlaybackError,
+  missingInputModel: voiceMissingModel,
+  runtimeUnavailable: voiceRuntimeUnavailable,
+  chatReady: voiceChatReady,
+  runtimeInstallDialog: voiceRuntimeInstallDialog,
+  runtimeInstalling: voiceRuntimeInstalling,
+  runtimeInstallError: voiceRuntimeInstallError,
+  runtimeInstallSizeText: voiceRuntimeInstallSizeText,
+  runtimeInstallProgressText: voiceRuntimeInstallProgressText,
+  runtimeInstallPercent: voiceRuntimeInstallPercent,
+  loadSettings: loadVoiceSettings,
+  toggleSpokenResponse,
+  installRequiredModel: handleInstallVoiceModel,
+  installTtsModel: handleInstallTtsModel,
+  installRequiredRuntime: handleInstallVoiceRuntime,
+  confirmRuntimeInstall: confirmInstallVoiceRuntime,
+  stopSpeaking: onStopSpeaking,
+  onRecordingStart: onVoiceRecordingStart,
+  beginAssistantResponse,
+  pushAssistantDelta,
+  completeAssistantResponse,
+  stopSpeechPlayback,
+  dispose: disposeAiChatVoice,
+} = useAiChatVoice({
+  chatReady: () => availableModels.value.length > 0,
 });
-const voiceAutoSend = ref(false);
-const voiceMaxRecordingMs = ref<number>(60_000);
-const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
-const voiceLocalRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
-const VOICE_SHERPA_RUNTIME_ID = "voice-sherpa" as const;
-const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
-const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
-const voiceSettingsSaving = ref(false);
-const voiceModelInstalling = ref(false);
-const voiceModelInstallError = ref<string | null>(null);
-/**
- * True when the user tried to enable spoken responses (TTS) but the speech
- * model isn't installed. Drives an inline install affordance so we never
- * persist a TTS enablement that would silently fail on every reply. Mirrors
- * the STT model-missing notice in AiChatV2Composer.
- */
-const voiceTtsInstallPrompt = ref(false);
-const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
-const voiceRuntimeInstallDialog = ref(false);
-const voiceRuntimeInstalling = ref(false);
-const voiceRuntimeInstallError = ref<string | null>(null);
-const voiceRuntimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
-const voiceRuntimeInstallProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
-const voiceRuntimeModelProgress = ref<VoiceModelDownloadProgress | null>(null);
-let unsubscribeVoiceRuntimeProgress: (() => void) | null = null;
-let unsubscribeVoiceModelProgress: (() => void) | null = null;
-const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
-const spokenResponseToggleTitle = computed(() =>
-  spokenResponseEnabled.value
-    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
-    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
-);
-const voiceMissingModel = computed(
-  () =>
-    voiceInputEnabled.value &&
-    (voiceStatus.value?.sttState === "missing_model" ||
-      voiceStatus.value?.sttState === "unavailable"),
-);
-const voiceRuntimeUnavailable = computed(() => {
-  if (!voiceInputEnabled.value) return false;
-  // PRD §10.4: prompt for the downloadable voice-sherpa runtime when absent,
-  // even if a legacy bundled sherpa addon still satisfies sttState.
-  if (!isLocalAiRuntimeUsable(voiceLocalRuntimeStatus.value?.state)) {
-    return true;
-  }
-  return voiceStatus.value?.sttState === "unavailable";
-});
-/**
- * Whether the chat can accept a voice auto-send right now. The renderer has no
- * synchronous AI-entitlement flag, so model availability is the proxy: if no
- * model is selectable the main process would reject the send, so we keep the
- * transcript in the draft instead (PRD §7.13 / TODO P1-5).
- */
-const voiceChatReady = computed(() => availableModels.value.length > 0);
-const voiceRuntimeInstallPercent = computed<number | undefined>(() => {
-  if (voiceRuntimeModelProgress.value?.pct !== undefined) {
-    return voiceRuntimeModelProgress.value.pct;
-  }
-  return voiceRuntimeInstallProgress.value?.percent;
-});
-const voiceRuntimeInstallProgressText = computed(() => {
-  const modelProgress = voiceRuntimeModelProgress.value;
-  if (modelProgress) {
-    if (modelProgress.phase === "downloading") {
-      return (
-        t("aiChatV2.voice.runtime_install_downloading_model", {
-          pct: modelProgress.pct ?? 0,
-        }) || `Downloading Whisper Base... ${modelProgress.pct ?? 0}%`
-      );
-    }
-    if (modelProgress.phase === "verifying") {
-      return (
-        t("aiChatV2.voice.runtime_install_verifying_model") ||
-        "Verifying Whisper Base..."
-      );
-    }
-    if (modelProgress.phase === "extracting") {
-      return (
-        t("aiChatV2.voice.runtime_install_extracting_model") ||
-        "Installing Whisper Base..."
-      );
-    }
-  }
-
-  const runtimeProgress = voiceRuntimeInstallProgress.value;
-  if (!runtimeProgress) {
-    return (
-      t("aiChatV2.voice.runtime_install_preparing") ||
-      "Preparing download..."
-    );
-  }
-  const phaseKey = `localAiRuntime.${runtimeProgress.phase}`;
-  const phaseText = t(phaseKey) || runtimeProgress.phase;
-  if (runtimeProgress.percent !== undefined) {
-    return `${phaseText} ${runtimeProgress.percent}%`;
-  }
-  return phaseText;
-});
-const voiceRuntimeInstallSizeText = computed(() => {
-  const offer = voiceRuntimeInstallOffer.value;
-  if (!offer) return "";
-  return (
-    t("aiChatV2.voice.runtime_install_size", {
-      runtimeSize: formatBytes(offer.archiveSizeBytes),
-      modelSize: "198MB",
-    }) ||
-    `Runtime download: ${formatBytes(offer.archiveSizeBytes)}. Whisper Base model: ~198MB.`
-  );
-});
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
-  voiceSettings.value = settings;
-  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
-  voiceAutoSend.value = settings.autoSendTranscript;
-  voiceMaxRecordingMs.value = settings.maxRecordingMs;
-  voiceTtsMode.value = settings.ttsMode;
-  // Push the full TTS option set into the speech controller so spoken
-  // responses use the saved language/voice/speed (TODO P0-3). "auto"
-  // language defers detection to the worker; an unset voice id is omitted.
-  speechController.updateOptions({
-    ttsMode: settings.ttsMode,
-    ...(settings.ttsLanguage !== "auto"
-      ? { language: settings.ttsLanguage }
-      : {}),
-    ...(settings.ttsVoiceId !== undefined
-      ? { voiceId: settings.ttsVoiceId }
-      : {}),
-    speed: settings.ttsSpeed,
-  });
-}
-
-async function loadVoiceSettings(): Promise<void> {
-  try {
-    const [settings, status, localRuntimeStatus] = await Promise.all([
-      getVoiceSettings(),
-      getVoiceStatus(),
-      getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID).catch(() => null),
-    ]);
-    applyVoiceSettings(settings);
-    voiceStatus.value = status;
-    voiceLocalRuntimeStatus.value = localRuntimeStatus;
-    if (
-      status.sttState !== "missing_model" &&
-      status.sttState !== "unavailable"
-    ) {
-      voiceModelInstallError.value = null;
-    }
-  } catch {
-    voiceInputEnabled.value = false;
-    voiceAutoSend.value = false;
-    voiceMaxRecordingMs.value = 60_000;
-    voiceSettings.value = null;
-    voiceTtsMode.value = "disabled";
-    speechController.updateOptions({ ttsMode: "disabled" });
-    voiceStatus.value = null;
-    voiceLocalRuntimeStatus.value = null;
-  }
-}
-
-async function toggleSpokenResponse(): Promise<void> {
-  if (voiceSettingsSaving.value) return;
-  voiceSettingsSaving.value = true;
-  voiceModelInstallError.value = null;
-  voicePlaybackError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const enabling = current.ttsMode === "disabled";
-    if (enabling) {
-      // Verify the TTS runtime + model are installed before persisting an
-      // enablement that would otherwise silently fail synthesis on every
-      // assistant reply. Mirrors the voice-input (STT) prerequisite check in
-      // AiChatV2Composer.onMicClick.
-      const status = await getVoiceStatus();
-      voiceStatus.value = status;
-      if (status.ttsState === "unavailable") {
-        // Shared sherpa-onnx runtime missing -> offer the runtime installer
-        // (it fixes both STT and TTS). Do not persist ttsMode yet.
-        handleInstallVoiceRuntime();
-        return;
-      }
-      if (status.ttsState === "missing_model") {
-        // TTS model missing -> surface an install affordance in the chat.
-        // Do not persist ttsMode until the model is installed.
-        voiceTtsInstallPrompt.value = true;
-        return;
-      }
-    }
-    const nextTtsMode: AiChatVoiceTtsMode = enabling
-      ? "all_assistant_messages"
-      : "disabled";
-    const saved = await setVoiceSettings({
-      ...current,
-      ttsMode: nextTtsMode,
-    });
-    applyVoiceSettings(saved);
-  } catch (err) {
-    voiceModelInstallError.value =
-      err instanceof Error ? err.message : String(err);
-  } finally {
-    voiceSettingsSaving.value = false;
-  }
-}
-
-async function handleInstallVoiceModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  try {
-    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-/**
- * Download the configured TTS (speech response) model. Triggered when the user
- * tries to enable spoken responses before a TTS model is installed. Mirrors
- * `handleInstallVoiceModel` but targets `ttsModelId` instead of the STT model.
- */
-async function handleInstallTtsModel(): Promise<void> {
-  if (voiceModelInstalling.value) return;
-  voiceModelInstalling.value = true;
-  voiceModelInstallError.value = null;
-  voiceTtsInstallPrompt.value = false;
-  try {
-    const ttsModelId =
-      voiceSettings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
-    await downloadVoiceModel(ttsModelId);
-    notifyVoiceModelsChanged();
-    await loadVoiceSettings();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceModelInstallError.value =
-      `${t("aiChatV2.voice.tts_model_install_failed") || "Speech model installation failed."} ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceModelInstalling.value = false;
-  }
-}
-
-async function handleInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstallError.value = null;
-  voiceRuntimeInstallOffer.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  voiceRuntimeInstallDialog.value = true;
-  try {
-    voiceRuntimeInstallOffer.value =
-      await prepareLocalAiRuntimeInstall("voice-sherpa");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_prepare_failed") ||
-        "Could not prepare the voice runtime download."
-      } ${msg}`;
-  }
-}
-
-async function confirmInstallVoiceRuntime(): Promise<void> {
-  if (voiceRuntimeInstalling.value) return;
-  voiceRuntimeInstalling.value = true;
-  voiceModelInstalling.value = true;
-  voiceRuntimeInstallError.value = null;
-  voiceModelInstallError.value = null;
-  voiceRuntimeInstallProgress.value = null;
-  voiceRuntimeModelProgress.value = null;
-  try {
-    const offer = await prepareLocalAiRuntimeInstall("voice-sherpa");
-    voiceRuntimeInstallOffer.value = offer;
-    await installLocalAiRuntime({
-      operationId: offer.operationId,
-      runtimeId: offer.runtimeId,
-      expectedRuntimeVersion: offer.runtimeVersion,
-      consentToken: offer.consentToken,
-    });
-
-    await downloadVoiceModel(DEFAULT_VOICE_STT_MODEL_ID);
-    notifyVoiceModelsChanged();
-
-    const current = voiceSettings.value ?? (await getVoiceSettings());
-    const saved = await setVoiceSettings({
-      ...current,
-      inputMode: "push_to_talk",
-      sttModelId: DEFAULT_VOICE_STT_MODEL_ID,
-    });
-    applyVoiceSettings(saved);
-    await loadVoiceSettings();
-    voiceRuntimeInstallDialog.value = false;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    voiceRuntimeInstallError.value =
-      `${
-        t("aiChatV2.voice.runtime_install_failed") ||
-        "Voice runtime installation failed."
-      } ${msg}`;
-    await loadVoiceSettings();
-  } finally {
-    voiceRuntimeInstalling.value = false;
-    voiceModelInstalling.value = false;
-    voiceRuntimeInstallProgress.value = null;
-    voiceRuntimeModelProgress.value = null;
-  }
-}
-
-function handleVoiceSettingsChanged(): void {
-  void loadVoiceSettings();
-}
-
-/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
-function onVoiceRecordingStart(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
-
-/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
-function onStopSpeaking(): void {
-  voicePlaybackError.value = null;
-  speechController.stop();
-  void cancelVoiceJob();
-}
 
 onMounted(() => {
   // Pending lifecycle events drive queued-bubble state and activate parked
@@ -5673,34 +5032,9 @@ onMounted(() => {
     handleProviderSettingsChanged
   );
   window.addEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  // Model install/remove changes installed status without altering settings;
-  // reload voice status so the mic button reflects availability live.
-  window.addEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.addEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
-    if (progress.runtimeId !== VOICE_SHERPA_RUNTIME_ID) return;
-    voiceRuntimeInstallProgress.value = progress;
-    if (progress.phase === "done") {
-      void getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID)
-        .then((status) => {
-          voiceLocalRuntimeStatus.value = status;
-        })
-        .catch(() => undefined);
-    }
-  });
-  unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
-    if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;
-    voiceRuntimeModelProgress.value = progress;
-  });
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -5787,8 +5121,7 @@ function onSingleReportSubmitted(): void {
 onBeforeUnmount(() => {
   unsubscribePendingEvents?.();
   unsubscribePendingEvents = null;
-  speechController.stop();
-  unsubscribeSpeaking();
+  disposeAiChatVoice();
   stopRuntimeStatusPoll();
   detachActiveStreamView();
   window.removeEventListener(
@@ -5796,21 +5129,9 @@ onBeforeUnmount(() => {
     handleProviderSettingsChanged
   );
   window.removeEventListener(
-    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
-    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
-    handleVoiceSettingsChanged
-  );
-  window.removeEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
-  unsubscribeVoiceRuntimeProgress?.();
-  unsubscribeVoiceRuntimeProgress = null;
-  unsubscribeVoiceModelProgress?.();
-  unsubscribeVoiceModelProgress = null;
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
@@ -5826,7 +5147,7 @@ onBeforeUnmount(() => {
   // Phase 14 (Plan 14-04): release the active workspace watch so the worker
   // can GC consumers. Non-fatal on failure; main will eventually drop the
   // consumer when no other consumers reference the workspace.
-  void releaseActiveWorkspaceWatch();
+  void conversationWorkspace.dispose();
 });
 </script>
 

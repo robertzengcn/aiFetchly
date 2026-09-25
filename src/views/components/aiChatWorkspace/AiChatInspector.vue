@@ -1,7 +1,7 @@
 <template>
   <aside
     class="workspace-inspector"
-    :class="{ overlay: overlay === true }"
+    :class="{ overlay: overlay === true, docked: overlay !== true }"
     :style="overlay === true ? undefined : { width: `${width}px` }"
     :aria-label="t('workspaceChat.inspector.region') || 'Inspector'"
     data-testid="workspace-inspector"
@@ -163,6 +163,21 @@ function onResizerKeydown(event: KeyboardEvent): void {
   bottom: 0;
   width: min(92vw, 520px);
   z-index: 30;
+  box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
+}
+
+/*
+ * Docked (wide-mode) variant: the inspector host TELEPORTS this element to
+ * <body>, outside the shell's flex layout — without fixed positioning it
+ * renders in normal flow below the full-height app. Dock it to the viewport's
+ * right edge (the inline width style still applies, and the resizer works).
+ */
+.workspace-inspector.docked {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
   box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
 }
 

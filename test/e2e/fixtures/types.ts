@@ -38,4 +38,13 @@ export interface E2ETestRoot {
 }
 
 /** Origin allowed for renderer network traffic (the Vite dev server). */
-export const RENDERER_ORIGIN = "http://127.0.0.1:5173";
+/**
+ * Renderer origin for the whole E2E harness. Honors the same
+ * AIFETCHLY_E2E_RENDERER_ORIGIN env the E2E main bundle bakes in at build
+ * time (vite.e2e.main.config.mjs), so a session can move off the default
+ * 5173 when another worktree's dev server holds it. Everything (playwright
+ * webServer, sanitized-env origins, launch URL wait, spec helpers) derives
+ * from this single constant.
+ */
+export const RENDERER_ORIGIN =
+  process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173";

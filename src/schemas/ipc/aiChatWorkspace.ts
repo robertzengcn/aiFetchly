@@ -99,6 +99,23 @@ export const startChatRunRequestSchema = z
       )
       .max(20)
       .optional(),
+    /**
+     * Generated images attached as edit references (message + tile index).
+     * Capped at the PRD §12.4 composer tray limit (3 per request) so this
+     * boundary matches the legacy v2 stream edge, which enforces the same
+     * combined image budget (normalizeGeneratedImageReferences).
+     */
+    generatedImageReferences: z
+      .array(
+        z
+          .object({
+            messageId: z.string().min(1).max(100),
+            imageIndex: z.number().int().min(0).max(50),
+          })
+          .strict()
+      )
+      .max(3)
+      .optional(),
     resourceClass: z.literal("general").optional(),
   })
   .strict();

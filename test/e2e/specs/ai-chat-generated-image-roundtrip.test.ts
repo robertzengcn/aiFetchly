@@ -25,6 +25,7 @@
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import {
+  chatRoot,
   composerTextarea,
   createConversationWithStreamedTurn,
   openChat,
@@ -58,8 +59,7 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
     //    service persists it and the renderer maps it to a tile with actions.
     await composerTextarea(aiApp).fill(`${marker} draw a lion`);
     await aiApp.mainWindow.getByTestId("ai-chat-send").click();
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
-    const imageBlocks = root.locator(".v2-message__generated-image");
+    const imageBlocks = chatRoot(aiApp).locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(1, { timeout: 30_000 });
     await expect(
       imageBlocks.nth(0).getByRole("button", { name: "Use as reference" })
@@ -98,8 +98,10 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
     // 4. The turn completes with a SECOND generated image and never asks for
     //    a workspace.
     await expect(imageBlocks).toHaveCount(2, { timeout: 30_000 });
-    await expect(root.locator(".workspace-required-card")).toHaveCount(0);
-    await expect(root).not.toContainText("workspace_required");
+    await expect(
+      chatRoot(aiApp).locator(".workspace-required-card")
+    ).toHaveCount(0);
+    await expect(chatRoot(aiApp)).not.toContainText("workspace_required");
     // Success clears the tray.
     await expect(
       aiApp.mainWindow.getByTestId("ai-chat-generated-ref-tray")
@@ -120,9 +122,7 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
 
-    const imageBlocks = aiApp.mainWindow
-      .getByTestId("ai-chat-root")
-      .locator(".v2-message__generated-image");
+    const imageBlocks = chatRoot(aiApp).locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
 
     /** Send one edit turn with the currently selected references and return

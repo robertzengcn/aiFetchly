@@ -43,8 +43,39 @@ function composer(app: LaunchedApp): Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // The chat workspace is the default landing route; the legacy dock toggle
+  // only exists when the app landed elsewhere. Handle both.
+  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  try {
+    await toggle.waitFor({ state: "visible", timeout: 5_000 });
+    await toggle.click();
+  } catch {
+    /* already on the chat workspace */
+  }
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
+  // Under the chat-first shell, start a conversation so the send path has a
+  // conversation to append to (the legacy dock creates one implicitly).
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  try {
+    await newChat.waitFor({ state: "visible", timeout: 5_000 });
+    await newChat.click();
+    await expect(composer(app)).toBeVisible({ timeout: 30_000 });
+  } catch {
+    /* legacy dock: no shell strip button */
+  }
+}
+
+/**
+ * The chat content root: the chat-first shell renders the transcript as
+ * `workspace-transcript`; the legacy dock uses `ai-chat-root`. Scope text
+ * containment to whichever is present.
+ */
+function chatRoot(app: LaunchedApp): Locator {
+  return app.mainWindow
+    .locator(
+      '[data-testid="workspace-transcript"], [data-testid="ai-chat-root"]'
+    )
+    .first();
 }
 
 async function sendUnique(app: LaunchedApp, prefix: string): Promise<void> {
@@ -140,10 +171,9 @@ async function draftBatchViaTool(
   await openChat(app);
   await fakeAi.setScenario("stream-text");
   await sendUnique(app, "e2e-outbound-prep");
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    "Hello world!",
-    { timeout: 30_000 }
-  );
+  await expect(chatRoot(app)).toContainText("Hello world!", {
+    timeout: 30_000,
+  });
 
   // The next non-continuation request returns a draft_outbound_email_batch
   // tool call. Direct recipients keep the batch small and deterministic.
@@ -166,10 +196,9 @@ async function draftBatchViaTool(
 
   // Draft preparation is non-sending, so it executes without a permission
   // card. The fake server answers the continuation with "Done."
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    "Done.",
-    { timeout: 30_000 }
-  );
+  await expect(chatRoot(app)).toContainText("Done.", {
+    timeout: 30_000,
+  });
   const reviewAction = app.mainWindow.getByTestId("outbound-batch-review");
   await expect(reviewAction).toBeVisible({ timeout: 15_000 });
   const batchId = await reviewAction.getAttribute("data-batch-id");
@@ -245,7 +274,7 @@ test.describe("Outbound email review → approve → send (Electron integration)
       await expect(approveBtn).toBeHidden({ timeout: 15_000 });
 
       // The send was claimed and the dialog closed.
-      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toBeVisible();
+      await expect(chatRoot(aiApp)).toBeVisible();
 
       // Poll the authoritative batch status because delivery progress is
       // intentionally hidden with the closed dialog.

@@ -18,15 +18,28 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
+  // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
+  // self-contained — one command from a clean checkout starts the renderer,
+  // runs the suite, and shuts everything down. Playwright owns the vite dev
+  // server lifecycle (readiness = HTTP 200 on the renderer origin) and
+  // reuses an already-running server locally for tight inner loops.
   use: {
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
   outputDir: "./test-results/playwright",
+  // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
+  // self-contained — one command from a clean checkout starts the renderer,
+  // runs the suite, and shuts everything down. Playwright owns the vite dev
+  // server lifecycle (readiness = HTTP 200 on the renderer origin), reuses an
+  // already-running server locally, and pins the port so a second server
+  // fails loudly instead of silently double-serving.
   webServer: {
-    command: "yarn dev:renderer --host 127.0.0.1",
-    url: "http://127.0.0.1:5173",
+    command: `yarn dev:renderer --port ${
+      process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
+    } --strictPort --host 127.0.0.1`,
+    url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     // Poll instead of inotify: the worktree's file count can exceed the host's

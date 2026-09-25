@@ -2608,6 +2608,13 @@ export default {
         "Installation des Sprachmodells fehlgeschlagen.",
       tts_runtime_missing:
         "Gesprochene Antworten benötigen die lokale Sprachlaufzeit, die noch nicht installiert ist. Verwenden Sie die Spracheingabe im Chat, um sie zu installieren, und aktivieren Sie dann gesprochene Antworten.",
+      settings_unavailable: "Spracheingabe nicht verfügbar – Einstellungen öffnen",
+      input_disabled: "Spracheingabe ist aus – Einstellungen öffnen",
+      permission_retry_hint: "Erlaube den Mikrofonzugriff und versuche es erneut.",
+      busy: "Ein anderer Vorgang läuft.",
+      settings_load_failed: "Spracheinstellungen konnten nicht geladen werden.",
+      settings_save_failed: "Die Einstellung für gesprochene Antworten konnte nicht gespeichert werden.",
+      retry: "Erneut versuchen",
     },
     title: "KI-Assistent",
     show_reasoning: "Denkvorgang anzeigen",
@@ -2654,6 +2661,8 @@ export default {
     model_selector_label: "Modell",
     model_loading: "Modelle werden geladen…",
     model_none_available: "Keine Modelle verfügbar",
+    model_none_hint: "Es ist kein nutzbares Modell konfiguriert.",
+    model_open_settings: "Anbietereinstellungen öffnen",
     model_auto: "Automatisch",
     model_auto_default: "Standard",
     model_free: "Kostenlos",
@@ -3125,7 +3134,15 @@ export default {
       pick: "Ordner wählen",
       cancel: "Abbrechen",
     },
-  },
+    chooseAction: "Arbeitsbereich wählen",
+    loading: "Arbeitsbereich wird geladen…",
+    statusApproved: "Genehmigt",
+    statusPending: "Genehmigung ausstehend",
+    statusRevoked: "Zugriff widerrufen",
+    loadFailed: "Arbeitsbereich konnte nicht geladen werden.",
+    retry: "Erneut versuchen",
+    busyReason: "Verfügbar nach dem aktuellen Vorgang",
+},
   localAiRuntime: {
     title: "Lokale KI-Komponenten",
     embedding_title: "Lokale Embeddings (auf dem Gerät)",
@@ -3171,6 +3188,10 @@ export default {
       remove_failed:
         "Entfernen fehlgeschlagen. Nach Neustart erneut versuchen.",
     },
+    chooseHint:
+      "Wähle einen Ordner, damit KI-Dateiwerkzeuge lesen und schreiben können.",
+    pathUnavailable:
+      "Der Ordner des Arbeitsbereichs ist derzeit nicht erreichbar.",
   },
   portableMemory: {
     banner: "Portable Speicher",

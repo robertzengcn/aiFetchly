@@ -63,6 +63,8 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
+import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -290,9 +292,33 @@ export function getQueryEngine(): AIChatQueryEngine {
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
       // Turn mailboxes persist steering via the pending Module (design §10).
+      // The applied flip broadcasts as a pending lifecycle event so every
+      // surface's steering bubble clears (the shell store removes on it).
       steeringPromoter: createSteeringPromoter(
-        new AIChatPendingMessageModule()
+        new AIChatPendingMessageModule(),
+        ({ conversationId, pendingMessageId, view }) => {
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent({
+            conversationId,
+            pendingMessageId,
+            status: "applied",
+            occurredAt: new Date().toISOString(),
+            ...(view ? { pendingMessage: view } : {}),
+          });
+        }
       ),
+      // True-terminal notification for the durable queue: resumed-turn
+      // continuations (permission / plan-question grants) are fire-and-forget,
+      // so this is the only drain/hold trigger for rows queued behind them.
+      // Coordinator-run terminals notify through the same queue call — the
+      // double notification is idempotent (drain chains serialize; holds
+      // re-pause already-paused rows).
+      onTurnTerminal: (conversationId, outcome) => {
+        void getQueueService()
+          .notifyExternalTurnTerminal(conversationId, outcome)
+          .catch((err: unknown) => {
+            log.warn("[ai-chat-v2] queue terminal notification failed:", err);
+          });
+      },
     });
     queryEngineDbPath = dbPath;
   }
@@ -321,16 +347,46 @@ function isSteeringFeatureEnabled(): boolean {
  * Broadcaster-backed stream sink for queue-dispatched turns: reuses the
  * shared createChatV2StreamSink mapping and fans it out to every live
  * window, since queue turns start in the main process (design §14.2).
+ *
+ * The same chunks are ALSO wrapped with run identity and routed through the
+ * workspace detail channel (chat-first shell unification): the shell's
+ * transcript consumes ChatRunDetailEvent, not the legacy stream channel, so
+ * without this bridge a queue-drained turn would render only after a
+ * history reload. The sink instance is per dispatch, so the adapter's
+ * sequence stays monotonic within one turn; the synthetic runId is stable
+ * for the turn (the presenter binds runs by opening "start" events).
  */
+let pendingTurnSinkCounter = 0;
 function createBroadcastEventSink(): AIChatQueryEventSink {
   const broadcaster = AIChatV2EventBroadcaster.getInstance();
+  pendingTurnSinkCounter += 1;
+  const adapter = new AIChatRunEventAdapter(
+    `pending-queue-${pendingTurnSinkCounter}`,
+    "" // per-chunk: the envelope id is overridden below (chunks carry it)
+  );
+  const routeDetail = (chunk: ChatV2StreamChunk): void => {
+    if (!chunk.conversationId) return;
+    // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
+    // the chunk's real conversation here — the router only delivers events
+    // whose conversation matches the window's selection.
+    sharedWorkspaceEventRouter.sendDetailEvent({
+      ...adapter.wrap(chunk),
+      conversationId: chunk.conversationId,
+    });
+  };
   return createChatV2StreamSink({
-    sendChunk: (chunk) => broadcaster.emitStreamChunk(chunk),
-    sendComplete: (chunk) => broadcaster.emitStreamComplete(chunk),
+    sendChunk: (chunk) => {
+      broadcaster.emitStreamChunk(chunk);
+      routeDetail(chunk);
+    },
+    sendComplete: (chunk) => {
+      broadcaster.emitStreamComplete(chunk);
+      routeDetail(chunk);
+    },
   });
 }
 
-function getQueueService(): AIChatTurnQueueService {
+export function getQueueService(): AIChatTurnQueueService {
   if (!queueService) {
     const pendingModule = new AIChatPendingMessageModule();
     queueService = new AIChatTurnQueueService({
@@ -489,7 +545,10 @@ function sendToRenderer(
   } catch (error) {
     // The renderer can be destroyed between isDestroyed() and send(). That is
     // expected during window/app shutdown and must not become a chat error.
-    if (error instanceof Error && error.message === "Object has been destroyed") {
+    if (
+      error instanceof Error &&
+      error.message === "Object has been destroyed"
+    ) {
       return;
     }
     throw error;
@@ -506,11 +565,7 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
       chunk.errorMessage ? "yes" : "no"
     }`
   );
-  sendToRenderer(
-    event,
-    AI_CHAT_V2_STREAM_COMPLETE,
-    JSON.stringify(chunk)
-  );
+  sendToRenderer(event, AI_CHAT_V2_STREAM_COMPLETE, JSON.stringify(chunk));
 }
 
 /**

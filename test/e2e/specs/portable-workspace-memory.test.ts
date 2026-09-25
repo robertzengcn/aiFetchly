@@ -28,15 +28,7 @@ function memoryDir(root: E2ETestRoot): string {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  // The chat workspace is the default landing route; the dock toggle only
-  // exists when the app landed elsewhere. Handle both.
-  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  try {
-    await toggle.waitFor({ state: "visible", timeout: 5_000 });
-    await toggle.click();
-  } catch {
-    /* already on the chat workspace */
-  }
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(app.mainWindow.getByTestId("ai-chat-composer")).toBeVisible({
     timeout: 30_000,
   });
@@ -52,7 +44,7 @@ async function ensureConversation(app: LaunchedApp): Promise<void> {
   await textarea.fill(`setup ${Date.now()}`);
   await app.mainWindow.getByTestId("ai-chat-send").click();
   // Wait for the streamed response to complete (creates the conversation row).
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+  await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
     "Hello world!",
     { timeout: 30_000 }
   );

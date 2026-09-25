@@ -684,7 +684,7 @@ export class ManagedBrowserModule {
   > {
     try {
       // Lazy require avoids a module-load cycle with SocialAccountModule.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      /* eslint-disable @typescript-eslint/no-var-requires */
       const { SocialAccountModule: Sam } =
         require("@/modules/socialAccountModule") as {
           SocialAccountModule: new () => {
@@ -699,6 +699,7 @@ export class ManagedBrowserModule {
           };
         };
       const accounts = await new Sam().getAllSocialAccounts();
+      /* eslint-enable @typescript-eslint/no-var-requires */
       return accounts
         .filter((account) =>
           MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.social_type_id)
@@ -1533,7 +1534,7 @@ export class ManagedBrowserModule {
   ): Promise<AccountLookupResult | null> {
     try {
       // Lazy require avoids a module-load cycle with SocialAccountModule.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      /* eslint-disable @typescript-eslint/no-var-requires */
       const { SocialAccountModule: Sam } =
         require("@/modules/socialAccountModule") as {
           SocialAccountModule: new () => {
@@ -1548,6 +1549,7 @@ export class ManagedBrowserModule {
           };
         };
       const resp = await new Sam().getAccountDetail(accountId);
+      /* eslint-enable @typescript-eslint/no-var-requires */
       if (resp.status !== "success" || !resp.data) {
         return null;
       }
@@ -1698,7 +1700,7 @@ async function resolveAccountProxy(
   accountId: number
 ): Promise<ResolvedSessionProxy> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    /* eslint-disable @typescript-eslint/no-var-requires */
     const { SocialAccountModule: Sam } =
       require("@/modules/socialAccountModule") as {
         SocialAccountModule: new () => {
@@ -1717,6 +1719,7 @@ async function resolveAccountProxy(
         };
       };
     const accounts = await new Sam().getAllSocialAccounts();
+    /* eslint-enable @typescript-eslint/no-var-requires */
     const account = accounts.find((a) => a.id === accountId);
     const proxies = account?.proxy ?? [];
     if (proxies.length === 0) {

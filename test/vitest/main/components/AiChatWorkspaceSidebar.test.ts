@@ -6,10 +6,14 @@ import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWor
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
 
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+const { push, route } = vi.hoisted(() => ({
+  push: vi.fn(),
+  route: { path: "/aiworkspace", name: "AI_Chat_Workspace" },
+}));
 
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
+  useRoute: () => route,
 }));
 
 const i18n = createI18n({
@@ -24,7 +28,6 @@ const i18n = createI18n({
         insights: "Insights",
         knowledgeLibrary: "Knowledge Library",
         plugins: "Plugins",
-        backToApp: "Back to app",
         mode: {
           classic: "Use classic chat",
           makeDefault: "Make this my default chat",
@@ -44,6 +47,8 @@ const i18n = createI18n({
 
 beforeEach(() => {
   push.mockClear();
+  route.path = "/aiworkspace";
+  route.name = "AI_Chat_Workspace";
   setActivePinia(createPinia());
 });
 
@@ -57,11 +62,15 @@ function mountSidebar() {
 describe("AiChatWorkspaceSidebar global nav", () => {
   it("renders the Insights, Knowledge Library, and Plugins nav links", () => {
     const wrapper = mountSidebar();
-    expect(wrapper.get('[data-testid="workspace-insights"]').text()).toContain("Insights");
+    expect(wrapper.get('[data-testid="workspace-insights"]').text()).toContain(
+      "Insights"
+    );
     expect(
       wrapper.get('[data-testid="workspace-knowledge-library"]').text()
     ).toContain("Knowledge Library");
-    expect(wrapper.get('[data-testid="workspace-plugins"]').text()).toContain("Plugins");
+    expect(wrapper.get('[data-testid="workspace-plugins"]').text()).toContain(
+      "Plugins"
+    );
   });
 
   it("navigates to /insights when Insights is clicked", async () => {
@@ -72,7 +81,9 @@ describe("AiChatWorkspaceSidebar global nav", () => {
 
   it("navigates to /knowledge/library when Knowledge Library is clicked", async () => {
     const wrapper = mountSidebar();
-    await wrapper.get('[data-testid="workspace-knowledge-library"]').trigger("click");
+    await wrapper
+      .get('[data-testid="workspace-knowledge-library"]')
+      .trigger("click");
     expect(push).toHaveBeenCalledWith("/knowledge/library");
   });
 
@@ -108,7 +119,9 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
     const wrapper = mountWithUnassigned();
     const header = wrapper.get('[data-nav-row="unassigned"]');
     expect(header.attributes("aria-expanded")).toBe("false");
-    expect(wrapper.findAll('[data-testid="workspace-conversation-u1"]').length).toBe(0);
+    expect(
+      wrapper.findAll('[data-testid="workspace-conversation-u1"]').length
+    ).toBe(0);
     expect(wrapper.text()).not.toContain("Chat u1");
   });
 
@@ -129,7 +142,160 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
     await flushPromises();
     await header.trigger("click");
     await flushPromises();
-    expect(wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")).toBe("false");
+    expect(
+      wrapper.get('[data-nav-row="unassigned"]').attributes("aria-expanded")
+    ).toBe("false");
     expect(wrapper.text()).not.toContain("Chat u1");
+  });
+});
+
+describe("AiChatWorkspaceSidebar persistent-shell nav (chat-first shell §7.4)", () => {
+  it("does not render a Back to app action", () => {
+    const wrapper = mountSidebar();
+    expect(wrapper.find('[data-testid="workspace-back-to-app"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).not.toContain("Back to app");
+  });
+
+  it("marks the active global route with aria-current=page", () => {
+    // Inactive first: no item is marked.
+    const wrapper = mountSidebar();
+    expect(
+      wrapper
+        .get('[data-testid="workspace-insights"]')
+        .attributes("aria-current")
+    ).toBeUndefined();
+
+    // The mock route is a plain object (not reactive), so assert across a
+    // fresh mount with the route already on the Insights page.
+    route.path = "/insights";
+    const onInsights = mountSidebar();
+    expect(
+      onInsights
+        .get('[data-testid="workspace-insights"]')
+        .attributes("aria-current")
+    ).toBe("page");
+    expect(
+      onInsights.get('[data-testid="workspace-insights"]').classes()
+    ).toContain("active");
+    // Other global items stay unmarked.
+    expect(
+      onInsights
+        .get('[data-testid="workspace-plugins"]')
+        .attributes("aria-current")
+    ).toBeUndefined();
+  });
+});
+
+describe("AiChatWorkspaceSidebar current-route vs selection semantics (FR-SHELL-008)", () => {
+  function conversation(conversationId: string): WorkspaceConversationSummary {
+    return {
+      conversationId,
+      workspaceKey: null,
+      title: `Chat ${conversationId}`,
+      preview: "Preview",
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
+    };
+  }
+
+  /** Mounted sidebar with a grouped + an unassigned conversation, u1 selected. */
+  async function mountWithSelection() {
+    const store = useChatWorkspaceStore();
+    store.workspaces = [
+      {
+        workspaceKey: "ws_a",
+        displayName: "project",
+        canonicalRootPath: "/tmp/project",
+        approvalState: "approved",
+        conversations: [conversation("g1")],
+      },
+    ];
+    store.unassigned = [conversation("u1"), conversation("u2")];
+    store.setSelected("u1");
+    const wrapper = mountSidebar();
+    // The unassigned folder defaults to collapsed — expand it.
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("exposes aria-current on the selected row while chat is the center route", async () => {
+    const wrapper = await mountWithSelection();
+    const selected = wrapper.get('[data-testid="workspace-conversation-u1"]');
+    expect(selected.attributes("aria-selected")).toBe("true");
+    expect(selected.attributes("aria-current")).toBe("true");
+    expect(
+      wrapper
+        .get('[data-testid="workspace-conversation-u2"]')
+        .attributes("aria-current")
+    ).toBeUndefined();
+    // The grouped selected conversation only applies when selected — g1 is
+    // not selected here (u1 is), so it carries neither state.
+    const grouped = wrapper.get('[data-testid="workspace-conversation-g1"]');
+    expect(grouped.attributes("aria-selected")).toBe("false");
+    expect(grouped.attributes("aria-current")).toBeUndefined();
+  });
+
+  it("removes aria-current from the retained selection on an inner route (grouped + unassigned)", async () => {
+    // The mock route is a plain object (not reactive), so the inner route is
+    // set BEFORE the first mount — same as the nav-active test above.
+    route.path = "/insights";
+    route.name = "Insights";
+    const store = useChatWorkspaceStore();
+    store.workspaces = [
+      {
+        workspaceKey: "ws_a",
+        displayName: "project",
+        canonicalRootPath: "/tmp/project",
+        approvalState: "approved",
+        conversations: [conversation("g1")],
+      },
+    ];
+    store.unassigned = [conversation("u1"), conversation("u2")];
+    store.setSelected("u1");
+    const onInner = mountSidebar();
+    await onInner.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+
+    // Selection is retained but is NOT the current center surface: an inner
+    // route and a conversation are never simultaneously "current".
+    const selected = onInner.get('[data-testid="workspace-conversation-u1"]');
+    expect(selected.attributes("aria-selected")).toBe("true"); // retained
+    expect(selected.attributes("aria-current")).toBeUndefined(); // not current
+    expect(
+      onInner
+        .get('[data-testid="workspace-conversation-g1"]')
+        .attributes("aria-current")
+    ).toBeUndefined();
+
+    // Selecting a GROUPED conversation while the inner route stays open:
+    // still selected-retained without aria-current.
+    store.setSelected("g1");
+    await flushPromises();
+    const grouped = onInner.get('[data-testid="workspace-conversation-g1"]');
+    expect(grouped.attributes("aria-selected")).toBe("true");
+    expect(grouped.attributes("aria-current")).toBeUndefined();
+
+    // Returning to the chat route (fresh mount, same store) restores
+    // aria-current on the retained selection.
+    route.path = "/aiworkspace";
+    route.name = "AI_Chat_Workspace";
+    const onChat = mountSidebar();
+    await flushPromises();
+    expect(
+      onChat
+        .get('[data-testid="workspace-conversation-g1"]')
+        .attributes("aria-current")
+    ).toBe("true");
+    expect(
+      onChat
+        .get('[data-testid="workspace-conversation-g1"]')
+        .attributes("aria-selected")
+    ).toBe("true");
   });
 });

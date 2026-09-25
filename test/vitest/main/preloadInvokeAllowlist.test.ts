@@ -65,7 +65,7 @@ describe("preload invoke allowlist", () => {
   it("allows USER_INFO_UPDATED on the receive allowlist (FR-7 broadcast)", () => {
     // USER_INFO_UPDATED is a main->renderer push channel, allowlisted in the
     // `receive` method body (and removeAllListeners), not `invoke`.
-    const marker = "receive: (channel, func) =>";
+    const marker = "receive: (channel: string, func:";
     const idx = PRELOAD_SRC.indexOf(marker);
     expect(idx).toBeGreaterThan(-1);
     const receiveSrc = PRELOAD_SRC.slice(idx, PRELOAD_SRC.indexOf("invoke:"));

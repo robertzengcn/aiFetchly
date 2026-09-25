@@ -24,14 +24,326 @@
 
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
-import {
-  composerTextarea,
-  createConversationWithStreamedTurn,
-  seedGeneratedImagesOnLastTurn,
-  startNewConversation,
-  switchToConversationByMarker,
-  type HistoryMessageView,
-} from "../support/generatedImageSeed";
+import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
+import type { LaunchedApp } from "../fixtures/electronApp";
+import type { E2ETestRoot } from "../fixtures/types";
+import type { Locator } from "@playwright/test";
+import * as fs from "fs";
+import * as path from "path";
+
+/** Must match the seeded USEREMAIL in src/main-process/e2e/E2EStateSeeder.ts. */
+const E2E_USER_EMAIL = "e2e@aifetchly.test";
+
+/** URL-encoded form used inside protocol URLs (encodeURIComponent of the
+ * normalized email), matching buildGeneratedImageProtocolUrl exactly. */
+const E2E_USER_EMAIL_URL_PART = "e2e%40aifetchly.test";
+
+const GENERATED_IMAGE_PROTOCOL_HOST = "aifetchly-generated-image://local/";
+
+/** Directory name under userData — matches AI_CHAT_GENERATED_IMAGE_DIR. */
+const GENERATED_IMAGE_DIR = "ai-chat-generated-images";
+
+/** SQLite file created by SqliteDb under USERSDBPATH (the database dir). */
+const DB_FILE_NAME = "scraper.db";
+
+/** Minimal valid 1x1 transparent PNG (well-known constant bytes). */
+const ONE_PX_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+interface GeneratedImageMetadataEntry {
+  readonly type: "image";
+  readonly delivery: "local_file";
+  readonly url: string;
+  readonly local_path: string;
+  readonly file_name: string;
+  readonly mime_type: "image/png";
+  readonly download_required: false;
+  readonly width: number;
+  readonly height: number;
+}
+
+interface SeedSqlPayload {
+  readonly dbPath: string;
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly metadataJson: string;
+}
+
+interface SeedSqlResult {
+  readonly changes: number;
+}
+
+interface HistoryMessageView {
+  readonly id: string;
+  readonly role: string;
+  readonly messageType?: string;
+  readonly content?: string;
+  readonly metadata?: {
+    readonly source?: string;
+    readonly generatedImageReferences?: readonly unknown[];
+  } | null;
+}
+
+interface SeededGeneratedImageTurn {
+  readonly conversationId: string;
+  readonly assistantMessageId: string;
+  readonly updatedRows: number;
+}
+
+/** The composer's real <textarea> (first one — Vuetify adds a hidden
+ * measurement textarea). Mirrors aiChat.test.ts. */
+function composerTextarea(app: LaunchedApp): Locator {
+  return app.mainWindow
+    .getByTestId("ai-chat-composer")
+    .locator("textarea")
+    .first();
+}
+
+/** Open the AI chat dock and wait for the composer to be actionable. */
+async function openChat(app: LaunchedApp): Promise<void> {
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
+  await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Read conversation id + last persisted chat-v2 assistant message id through
+ * the REAL history IPC (same bridge usage as persistence.test.ts).
+ */
+async function readLatestAssistantTurn(
+  app: LaunchedApp,
+  marker: string
+): Promise<{ conversationId: string; assistantMessageId: string }> {
+  const result = await app.mainWindow.evaluate(async (titleMarker: string) => {
+    const api = (
+      window as unknown as {
+        api: {
+          invoke: (
+            channel: string,
+            data?: unknown
+          ) => Promise<{ status: boolean; data: unknown } | undefined>;
+        };
+      }
+    ).api;
+    const convResp = await api.invoke(
+      "ai-chat-v2:conversations",
+      JSON.stringify({})
+    );
+    const convs = (convResp?.data ?? []) as Array<{
+      conversationId: string;
+      title: string;
+    }>;
+    // The v2 conversation list derives `title` from the NEWEST message row,
+    // so once the streamed turn completes the title is the assistant reply
+    // and no longer contains this test's marker. Resolve the conversation by
+    // its persisted USER row containing the marker instead — deterministic,
+    // independent of either title system, and cheap on the isolated
+    // per-test database (a handful of conversations at most).
+    let target: { conversationId: string } | null = null;
+    let messages: HistoryMessageView[] = [];
+    for (const conv of convs) {
+      const histResp = await api.invoke(
+        "ai-chat-v2:history",
+        JSON.stringify({ conversationId: conv.conversationId })
+      );
+      const histData = (histResp?.data ?? {}) as {
+        messages?: HistoryMessageView[];
+      };
+      const rows = histData.messages ?? [];
+      const isTargetConversation = rows.some(
+        (m) =>
+          m.role === "user" &&
+          typeof m.content === "string" &&
+          m.content.includes(titleMarker)
+      );
+      if (isTargetConversation) {
+        target = conv;
+        messages = rows;
+        break;
+      }
+    }
+    if (!target) {
+      return null;
+    }
+    const assistants = messages.filter(
+      (m) =>
+        m.role === "assistant" &&
+        m.messageType === "message" &&
+        m.metadata?.source === "chat-v2"
+    );
+    const last = assistants[assistants.length - 1];
+    if (!last) {
+      return null;
+    }
+    return {
+      conversationId: target.conversationId,
+      assistantMessageId: last.id,
+    };
+  }, marker);
+  if (!result) {
+    throw new Error(
+      "No persisted chat-v2 assistant message found after streamed turn"
+    );
+  }
+  return result;
+}
+
+/**
+ * Deterministically turn the latest streamed assistant message into a
+ * generated-image message:
+ *   1. write two real PNG files under the redirected userData root using the
+ *      exact layout the production storage service produces;
+ *   2. rewrite the row's metadata.generatedImages with protocol URLs pointing
+ *      at those files (better-sqlite3 runs in the Electron main process so
+ *      the native module matches Electron's ABI).
+ * Returns the seeded turn identity + the number of updated rows.
+ */
+async function seedGeneratedImagesOnLastTurn(
+  app: LaunchedApp,
+  testRoot: E2ETestRoot,
+  marker: string
+): Promise<SeededGeneratedImageTurn> {
+  const { conversationId, assistantMessageId } = await readLatestAssistantTurn(
+    app,
+    marker
+  );
+
+  const messageDir = path.join(
+    testRoot.userDataPath,
+    GENERATED_IMAGE_DIR,
+    E2E_USER_EMAIL,
+    conversationId,
+    assistantMessageId
+  );
+  fs.mkdirSync(messageDir, { recursive: true });
+
+  const pngBytes = Buffer.from(ONE_PX_PNG_BASE64, "base64");
+  const entries: GeneratedImageMetadataEntry[] = [];
+  for (let index = 1; index <= 2; index += 1) {
+    const fileName = index === 1 ? "lion.png" : "savanna.png";
+    const filePath = path.join(messageDir, `image-${index}.png`);
+    fs.writeFileSync(filePath, pngBytes);
+    const protocolUrl =
+      `${GENERATED_IMAGE_PROTOCOL_HOST}${E2E_USER_EMAIL_URL_PART}/` +
+      `${encodeURIComponent(conversationId)}/` +
+      `${encodeURIComponent(assistantMessageId)}/` +
+      `${encodeURIComponent(`image-${index}.png`)}`;
+    entries.push({
+      type: "image",
+      delivery: "local_file",
+      url: protocolUrl,
+      local_path: filePath,
+      file_name: fileName,
+      mime_type: "image/png",
+      download_required: false,
+      width: 1,
+      height: 1,
+    });
+  }
+
+  const metadataJson = JSON.stringify({
+    source: "chat-v2",
+    finishReason: "stop",
+    generatedImages: entries,
+  });
+
+  // Playwright evaluates the callback below in a realm WITHOUT the CommonJS
+  // `require` global and WITHOUT a dynamic-import callback, so the native
+  // better-sqlite3 binding cannot be loaded from the spec at all. Instead
+  // call the narrow seeding bridge the E2E main bootstrap installs on
+  // globalThis (src/main-process/e2e/E2ESqlSeedService.ts) — it runs in the
+  // real main process with the correct Electron ABI.
+  const payload: SeedSqlPayload = {
+    dbPath: path.join(testRoot.databasePath, DB_FILE_NAME),
+    messageId: assistantMessageId,
+    conversationId,
+    metadataJson,
+  };
+
+  const result: SeedSqlResult = await app.electronApp.evaluate(
+    ({ app: electronApp }, sqlPayload: SeedSqlPayload) => {
+      void electronApp;
+      const bridge = (
+        globalThis as unknown as {
+          __aifetchlyE2eSeed?: {
+            updateMessageMetadata: (p: {
+              dbPath: string;
+              messageId: string;
+              conversationId: string;
+              metadataJson: string;
+            }) => { changes: number };
+          };
+        }
+      ).__aifetchlyE2eSeed;
+      if (!bridge) {
+        throw new Error(
+          "E2E seed bridge missing — is the E2E main entry stale? Re-run yarn build:e2e."
+        );
+      }
+      return bridge.updateMessageMetadata(sqlPayload);
+    },
+    payload
+  );
+
+  if (result.changes !== 1) {
+    throw new Error(
+      `Expected to update exactly 1 message row, updated ${result.changes}`
+    );
+  }
+
+  return {
+    conversationId,
+    assistantMessageId,
+    updatedRows: result.changes,
+  };
+}
+
+/** Select the conversation whose title contains `marker` in the persistent
+ * shell sidebar, which reloads history through the real selection IPC. */
+async function switchToConversationByMarker(
+  app: LaunchedApp,
+  marker: string
+): Promise<void> {
+  const tree = app.mainWindow.getByTestId("workspace-tree");
+  const row = tree
+    .locator('[data-testid^="workspace-conversation-"]')
+    .filter({ hasText: marker })
+    .first();
+  // Workspace-less conversations live in the "Other chats" folder, which
+  // defaults collapsed — expand it when the row is hidden.
+  if (!(await row.isVisible())) {
+    await tree.locator('[data-nav-row="unassigned"]').click();
+  }
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.click();
+  await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
+}
+
+/** Create a fresh (workspace-less) conversation view. */
+async function startNewConversation(app: LaunchedApp): Promise<void> {
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
+  await expect(
+    app.mainWindow.getByTestId("ai-chat-generated-ref-tray")
+  ).toHaveCount(0);
+}
+
+/** Run one deterministic text turn so a real conversation exists. */
+async function createConversationWithStreamedTurn(
+  app: LaunchedApp,
+  marker: string
+): Promise<void> {
+  await openChat(app);
+  await composerTextarea(app).fill(marker);
+  await app.mainWindow.getByTestId("ai-chat-send").click();
+  await expect(
+    app.mainWindow.getByTestId("workspace-transcript")
+  ).toContainText(STREAM_TEXT_FINAL, { timeout: 30_000 });
+  // The accepted-send rule (FR-COMP-011) clears the draft when the run is
+  // accepted, so an EMPTY composer correctly disables Send afterwards. The
+  // turn-complete signal is the stop control disappearing instead.
+  await expect(app.mainWindow.getByTestId("ai-chat-stop")).toBeHidden({
+    timeout: 30_000,
+  });
+}
 
 test.describe("Workspace-less generated-image editing (Electron integration)", () => {
   test.afterEach(({ app, aiApp }) => {
@@ -57,7 +369,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
 
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
+    const root = aiApp.mainWindow.getByTestId("chat-center-surface");
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
 
@@ -132,7 +444,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     await switchToConversationByMarker(aiApp, marker);
 
     const imageBlocks = aiApp.mainWindow
-      .getByTestId("ai-chat-root")
+      .getByTestId("chat-center-surface")
       .locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
 
@@ -162,7 +474,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
 
     // …no workspace_required card/text ever appears — this flow must stay
     // workspace-less end to end.
-    const root = aiApp.mainWindow.getByTestId("ai-chat-root");
+    const root = aiApp.mainWindow.getByTestId("chat-center-surface");
     await expect(root.locator(".workspace-required-card")).toHaveCount(0);
     await expect(root).not.toContainText(
       "An approved workspace is required first."
@@ -215,6 +527,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     expect(persistedRefs.length).toBeGreaterThanOrEqual(1);
     expect(persistedRefs[persistedRefs.length - 1]).toEqual(1);
   });
+
 
   // The full generate→edit round-trip (live fake-server image output,
   // provider-request image-part assertions, forged references, and the

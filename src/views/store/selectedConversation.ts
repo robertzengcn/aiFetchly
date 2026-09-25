@@ -23,7 +23,14 @@ import {
   subscribeDetailEvents,
   unsubscribeDetail,
 } from "@/views/api/aiChatWorkspace";
+import { windowInvoke } from "@/views/utils/apirequest";
+import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
+import { markPermissionPromptExecuting } from "@/views/components/aiChatV2/toolExecutionStateUtil";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import {
+  emitShellDiagnostic,
+  hashConversationId,
+} from "@/views/utils/shellDiagnostics";
 
 /** Default mounted ordinary message rows (design §12.2: bounded window). */
 export const MAX_MOUNTED_MESSAGES = 200;
@@ -44,6 +51,25 @@ export interface SendOptions {
     contentBase64: string;
     kind: "document" | "image";
   }[];
+  /**
+   * Generated images attached as edit references (message + tile index).
+   * The engine resolves them against persisted history and forwards the
+   * image bytes to the model as `image_url` parts.
+   */
+  readonly generatedImageReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
+}
+
+/**
+ * Localized permission-card strings passed in by the surface that owns
+ * `useI18n` — the store stays i18n-free (technical-design §14.2).
+ */
+export interface PermissionActionTexts {
+  readonly deniedText: string;
+  readonly resumeFailedText: string;
+  readonly noToolIdText: string;
 }
 
 /**
@@ -161,12 +187,24 @@ export const useSelectedConversationStore = defineStore(
         return;
       }
 
+      const startedAt = Date.now();
       ensureDetailSubscription();
       try {
         const snapshot = await selectConversation(conversationId, generation);
         // Apply only if this handshake is still the latest selection.
-        if (appliedGeneration !== generation) return;
-        if (snapshot.acceptedGeneration === -1) return;
+        if (
+          appliedGeneration !== generation ||
+          snapshot.acceptedGeneration === -1
+        ) {
+          emitShellDiagnostic({
+            type: "chat.selection_loaded",
+            conversationHash: hashConversationId(conversationId),
+            generation,
+            latencyMs: Date.now() - startedAt,
+            outcome: "superseded",
+          });
+          return;
+        }
         presenter.seedHistory([...snapshot.messages]);
         nextBeforeCursor = snapshot.nextBefore;
         hasOlder.value = snapshot.hasOlder;
@@ -174,11 +212,25 @@ export const useSelectedConversationStore = defineStore(
         activeRunId.value = snapshot.activeRunId;
         selectedTitle.value = snapshot.title;
         syncFromPresenter();
+        emitShellDiagnostic({
+          type: "chat.selection_loaded",
+          conversationHash: hashConversationId(conversationId),
+          generation,
+          latencyMs: Date.now() - startedAt,
+          outcome: "ok",
+        });
         await markReadAfterLoad(conversationId);
       } catch (err) {
         if (appliedGeneration === generation) {
           loadError.value =
             err instanceof Error ? err.message : "Failed to load conversation";
+          emitShellDiagnostic({
+            type: "chat.selection_loaded",
+            conversationHash: hashConversationId(conversationId),
+            generation,
+            latencyMs: Date.now() - startedAt,
+            outcome: "error",
+          });
         }
       } finally {
         if (appliedGeneration === generation) {
@@ -232,17 +284,24 @@ export const useSelectedConversationStore = defineStore(
       hasOlder.value = true;
     }
 
-    /** Send a message through the coordinator with send-button retry safety. */
+    /**
+     * Send a message through the coordinator with send-button retry safety.
+     * Returns whether THIS send was accepted (a run started or the durable
+     * queue took the row) — the composer keys its draft clear on the result,
+     * never on shared run state (a stale activeRunId from the previous run
+     * must not clear a rejected send's draft).
+     */
     async function sendMessage(
       text: string,
       options?: SendOptions
-    ): Promise<void> {
+    ): Promise<boolean> {
       const conversationId = workspaceStore.selectedConversationId;
-      if (!conversationId || text.trim().length === 0) return;
+      if (!conversationId || text.trim().length === 0) return false;
 
       // Optimistic user message; history reload replaces it durably.
+      const optimisticId = `local-user-${Date.now()}`;
       presenter.appendLocalUserMessage({
-        id: `local-user-${Date.now()}`,
+        id: optimisticId,
         conversationId,
         role: "user",
         content: text,
@@ -262,15 +321,28 @@ export const useSelectedConversationStore = defineStore(
           toolApprovalMode: options?.toolApprovalMode,
           showReasoning: options?.showReasoning,
           uploadedFiles: options?.attachments,
+          generatedImageReferences: options?.generatedImageReferences,
         });
         activeRunId.value = response.runId;
         runtimeStatus.value = response.status;
         streamStatus.value =
           response.status === "running" ? "streaming" : "idle";
+        // A busy-conversation send was accepted into the durable pending
+        // queue (main-process delegation): the pending bubble replaces the
+        // optimistic row, and the queue drains FIFO at the turn terminal.
+        if (
+          response.status === "queued" &&
+          response.runId.startsWith("pending-")
+        ) {
+          presenter.removeMessage(optimisticId);
+          syncFromPresenter();
+        }
+        return true;
       } catch (err) {
         errorMessage.value =
           err instanceof Error ? err.message : "Failed to start the run";
         streamStatus.value = "error";
+        return false;
       }
     }
 
@@ -283,6 +355,146 @@ export const useSelectedConversationStore = defineStore(
       } catch {
         // Terminal events still arrive via the detail subscription.
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // Tool permission actions (design §15.5)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Append the durable user row a queue-drained turn just delivered
+     * (message-queue §7): the delegated send's optimistic row was swapped for
+     * the pending bubble, and the bubble is removed at delivery — without
+     * this append the live transcript would lose the user's message until a
+     * re-selection reloads history. The persisted id makes the later history
+     * reload dedupe seamlessly.
+     */
+    function appendDeliveredUserRow(input: {
+      readonly id: string;
+      readonly content: string;
+      readonly timestamp: string;
+    }): void {
+      const current = workspaceStore.selectedConversationId;
+      if (!current) return;
+      if (messages.value.some((m) => m.id === input.id)) return; // idempotent
+      presenter.appendLocalUserMessage({
+        id: input.id,
+        conversationId: current,
+        role: "user",
+        content: input.content,
+        timestamp: input.timestamp,
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2" },
+      });
+      syncFromPresenter();
+    }
+
+    /** One in-flight resume per tool id — double clicks are no-ops. */
+    const permissionResumeInFlightToolIds = new Set<string>();
+
+    /** Resolve the tool id for a permission message: direct metadata first,
+     * then the nearest preceding TOOL_CALL with the same tool name (mirrors
+     * the legacy dock's resolution for histories without toolCallId rows). */
+    function resolveToolIdForPermission(
+      message: ChatV2MessageView
+    ): string | undefined {
+      const direct = message.metadata?.toolCallId;
+      if (typeof direct === "string" && direct.length > 0) {
+        return direct;
+      }
+      const toolName = message.metadata?.toolName;
+      if (!toolName) {
+        return undefined;
+      }
+      const idx = messages.value.findIndex((m) => m.id === message.id);
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const candidate = messages.value[i];
+        if (
+          candidate.messageType === MessageType.TOOL_CALL &&
+          candidate.metadata?.toolName === toolName &&
+          candidate.metadata?.toolCallId
+        ) {
+          return candidate.metadata.toolCallId;
+        }
+      }
+      return undefined;
+    }
+
+    /**
+     * Grant a parked tool permission: mark the prompt executing locally,
+     * resume the main-process turn, and surface failures on the row (the
+     * resumed tool_result event replaces the row on success).
+     */
+    async function grantToolPermission(
+      message: ChatV2MessageView,
+      texts: PermissionActionTexts
+    ): Promise<void> {
+      const toolId = resolveToolIdForPermission(message);
+      if (!toolId) {
+        errorMessage.value = texts.noToolIdText;
+        return;
+      }
+      if (permissionResumeInFlightToolIds.has(toolId)) return;
+      permissionResumeInFlightToolIds.add(toolId);
+      // Executing rewrite goes through the presenter so the next presenter
+      // mutation cannot clobber it (single source of truth for the window).
+      presenter.rewriteMessage(message.id, (m) => {
+        const [next] = markPermissionPromptExecuting([m], message.id);
+        return next;
+      });
+      try {
+        const raw = await windowInvoke(
+          AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+          {
+            toolId,
+            conversationId:
+              message.conversationId || workspaceStore.selectedConversationId,
+          }
+        );
+        const res = raw as { ok: boolean; error?: string } | null;
+        if (!res?.ok) {
+          const errMsg = res?.error || texts.resumeFailedText;
+          presenter.rewriteMessage(message.id, (m) => ({
+            ...m,
+            content: errMsg,
+            metadata: {
+              ...m.metadata,
+              source: "chat-v2",
+              toolResult: { error: errMsg, success: false },
+              success: false,
+              error: errMsg,
+            },
+          }));
+          errorMessage.value = errMsg;
+        }
+      } catch (error) {
+        errorMessage.value =
+          error instanceof Error ? error.message : String(error);
+      } finally {
+        permissionResumeInFlightToolIds.delete(toolId);
+      }
+    }
+
+    /**
+     * Deny a parked tool permission: rewrite the row to a denied receipt
+     * locally, then stop the parked run so the durable state settles to
+     * cancelled through the normal terminal path.
+     */
+    function denyToolPermission(
+      message: ChatV2MessageView,
+      texts: PermissionActionTexts
+    ): void {
+      presenter.rewriteMessage(message.id, (m) => ({
+        ...m,
+        content: texts.deniedText,
+        metadata: {
+          ...m.metadata,
+          source: "chat-v2",
+          toolResult: undefined,
+          success: false,
+        },
+      }));
+      void stopActiveRun();
     }
 
     function teardown(): void {
@@ -329,7 +541,10 @@ export const useSelectedConversationStore = defineStore(
       loadSelection,
       loadOlder,
       sendMessage,
+      appendDeliveredUserRow,
       stopActiveRun,
+      grantToolPermission,
+      denyToolPermission,
       applyDetailEvent,
       markReadAfterLoad,
       teardown,

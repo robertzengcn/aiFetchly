@@ -24,19 +24,13 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  // The chat workspace is the default landing route; the dock toggle only
-  // exists when the app landed elsewhere. Handle both.
-  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  try {
-    await toggle.waitFor({ state: "visible", timeout: 5_000 });
-    await toggle.click();
-  } catch {
-    /* already on the chat workspace */
-  }
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
-test("conversation persists across a controlled restart (T-12)", async ({}, testInfo) => {
+test("conversation persists across a controlled restart (T-12)", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -65,10 +59,9 @@ test("conversation persists across a controlled restart (T-12)", async ({}, test
       await composer(app1).fill(marker);
       await app1.mainWindow.getByTestId("ai-chat-send").click();
       // Wait for the streamed response to complete -> the turn + message persist.
-      await expect(app1.mainWindow.getByTestId("ai-chat-root")).toContainText(
-        "Hello world!",
-        { timeout: 30_000 }
-      );
+      await expect(
+        app1.mainWindow.getByTestId("workspace-transcript")
+      ).toContainText("Hello world!", { timeout: 30_000 });
       await expect(app1.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
         timeout: 30_000,
       });

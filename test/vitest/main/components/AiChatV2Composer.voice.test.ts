@@ -52,6 +52,8 @@ const i18n = createI18n({
           stop_speaking: "Stop speaking",
           empty_transcript: "No speech was detected.",
           transcription_failed: "Voice transcription failed.",
+          permission_denied: "Microphone permission denied.",
+          permission_retry_hint: "Allow microphone access, then try again.",
         },
       },
     },
@@ -116,6 +118,12 @@ function mountComposer(props: Record<string, unknown> = {}) {
 describe("AiChatV2Composer voice controls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The mic visibility gate reads navigator.mediaDevices (build support);
+    // happy-dom ships none, so provide a Chromium-like capability.
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: () => Promise.resolve() },
+      configurable: true,
+    });
     startMock.mockResolvedValue(undefined);
     stopMock.mockResolvedValue({
       blob: new Blob(["x"], { type: "audio/webm" }),
@@ -130,9 +138,11 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.find(".v2-composer__voice-button").exists()).toBe(true);
   });
 
-  it("hides the mic button when voice input is disabled", () => {
+  it("keeps the mic button visible as a setup affordance when voice input is disabled", () => {
+    // FR-COMP-009: a supported build never hides the capability — the
+    // policy-disabled mic stays visible with a settings label.
     const wrapper = mountComposer({ voiceEnabled: false });
-    expect(wrapper.find(".v2-composer__voice-button").exists()).toBe(false);
+    expect(wrapper.find(".v2-composer__voice-button").exists()).toBe(true);
   });
 
   it("disables the mic button while streaming", () => {
@@ -172,6 +182,25 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
+  it("shows a bounded transcription failure without raw exception text (PRD §14.5)", async () => {
+    const wrapper = mountComposer({ voiceEnabled: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    transcribeVoiceMock.mockRejectedValue(
+      new Error(
+        "ENOENT: /home/robertzeng/.config/voice/secret-api-key.pem worker crashed"
+      )
+    );
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Voice transcription failed.");
+    // The raw exception — paths, keys, usernames — never reaches the DOM.
+    expect(wrapper.text()).not.toContain("ENOENT");
+    expect(wrapper.text()).not.toContain("robertzeng");
+    expect(wrapper.text()).not.toContain("secret-api-key");
+  });
+
   it("auto-send emits send with the transcript and fromVoice flag", async () => {
     const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
     await wrapper.find(".v2-composer__voice-button").trigger("click");
@@ -208,10 +237,9 @@ describe("AiChatV2Composer voice controls", () => {
 
   it("preserves an older typed draft after a voice send is accepted", async () => {
     const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
-    wrapper.findComponent(TextareaStub).vm.$emit(
-      "update:modelValue",
-      "older typed draft"
-    );
+    wrapper
+      .findComponent(TextareaStub)
+      .vm.$emit("update:modelValue", "older typed draft");
     await wrapper.vm.$nextTick();
 
     await wrapper.find(".v2-composer__voice-button").trigger("click");
@@ -240,16 +268,20 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
-  it("shows the transcription failure detail returned by the main process", async () => {
-    transcribeVoiceMock.mockRejectedValue(new Error("STT model is not loaded."));
+  it("shows a bounded transcription failure even when the worker returns detail", async () => {
+    // PRD §14.5: worker detail (paths, provider responses) is never echoed —
+    // only the bounded public message renders.
+    transcribeVoiceMock.mockRejectedValue(
+      new Error("STT model missing: /models/sherpa.bin (code 0x8bad)")
+    );
     const wrapper = mountComposer({ voiceEnabled: true });
     await wrapper.find(".v2-composer__voice-button").trigger("click");
     await flushPromises();
     await wrapper.find(".v2-composer__voice-button").trigger("click");
     await flushPromises();
-    expect(wrapper.find(".v2-composer__notice").text()).toContain(
-      "Voice transcription failed. STT model is not loaded."
-    );
+    expect(wrapper.text()).toContain("Voice transcription failed.");
+    expect(wrapper.text()).not.toContain("/models/sherpa.bin");
+    expect(wrapper.text()).not.toContain("0x8bad");
   });
 
   it("keeps the transcript in the draft when chat is unavailable on auto-send", async () => {
@@ -286,6 +318,30 @@ describe("AiChatV2Composer voice controls", () => {
     });
     expect(wrapper.find(".v2-composer__notice").text()).toContain(
       "Speech playback failed. NotAllowedError"
+    );
+  });
+});
+
+// Appended: permission-denied retry guidance (FR-VOICE-003 / PRD §14.2).
+describe("AiChatV2Composer voice permission guidance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: () => Promise.resolve() },
+      configurable: true,
+    });
+    startMock.mockRejectedValue(
+      new DOMException("Permission denied", "NotAllowedError")
+    );
+  });
+
+  it("permission denial shows explicit retry guidance", async () => {
+    const wrapper = mountComposer({ voiceEnabled: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Microphone permission denied.");
+    expect(wrapper.text()).toContain(
+      "Allow microphone access, then try again."
     );
   });
 });

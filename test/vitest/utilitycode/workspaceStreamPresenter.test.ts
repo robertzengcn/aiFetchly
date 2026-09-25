@@ -130,7 +130,11 @@ describe("workspaceStreamPresenter", () => {
     // Wrong conversation.
     expect(
       presenter.applyEvent(
-        event("v2-OTHER", "run-1", { eventType: "token", messageId: "a1", contentDelta: "x" })
+        event("v2-OTHER", "run-1", {
+          eventType: "token",
+          messageId: "a1",
+          contentDelta: "x",
+        })
       )
     ).toBe(false);
     // Duplicate sequence (same run, sequence counter shared in test helper —
@@ -225,6 +229,36 @@ describe("workspaceStreamPresenter", () => {
     expect(call?.metadata?.toolProgress?.phase).toBe("running");
     expect(call?.metadata?.toolProgress?.progress).toBe(0.5);
     expect(result?.metadata?.toolCallId).toBe("tc-1");
+  });
+
+  it("a steering-skipped tool result surfaces its reason as the summary", () => {
+    const presenter = createWorkspaceStreamPresenter({
+      scheduleFlush: () => () => undefined,
+    });
+    presenter.applyEvent(
+      event("v2-c", "run-1", { eventType: "start", messageId: "a1" })
+    );
+    presenter.applyEvent(
+      event("v2-c", "run-1", {
+        eventType: "tool_result",
+        messageId: "a1",
+        toolCallId: "tc-skip",
+        toolName: "glob_files",
+        toolResult: {
+          success: false,
+          skipped: true,
+          reason: "superseded_by_user_steering",
+        },
+      })
+    );
+
+    const result = presenter
+      .getState()
+      .messages.find((m) => m.id === "tool-result-tc-skip");
+    expect(result?.metadata?.toolResultSummary).toBe(
+      "superseded_by_user_steering"
+    );
+    expect(result?.metadata?.toolResultStatus).toBe("error");
   });
 
   it("seeds history, prepends older pages, and trims the window", () => {

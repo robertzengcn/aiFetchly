@@ -21,6 +21,13 @@ export interface LaunchOptions {
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
   /**
+   * E2E-only (FR-WIN-007/009): launch with the deterministic initial window
+   * MAXIMIZED, mirroring a user whose saved choice was maximized. Normal
+   * bounds stay the deterministic 1280x800 so restoring down works.
+   */
+  readonly initialMaximized?: boolean;
+
+  /**
    * Loopback base URL of the FakePluginHub server. When set, the launch env
    * carries VITE_PLUGIN_HUB_URL so the main-process community catalog and
    * install pipeline target the deterministic hub fixture (UPD-GAP-05).
@@ -62,6 +69,7 @@ export interface LaunchedApp {
 function buildSanitizedEnv(
   testRoot: E2ETestRoot,
   fakeAiBaseUrl: string | undefined,
+  initialMaximized: boolean | undefined,
   hubBaseUrl: string | undefined
 ): Record<string, string> {
   // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
@@ -142,6 +150,10 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
+  // E2E-only deterministic maximized startup (FR-WIN-007/009).
+  if (initialMaximized) {
+    allowed.AIFETCHLY_E2E_INITIAL_MAXIMIZED = "1";
+  }
   const allowedOrigins = [RENDERER_ORIGIN];
   if (fakeAiBaseUrl) {
     allowed[E2E_ENV.AI_BASE_URL] = fakeAiBaseUrl;
@@ -194,6 +206,7 @@ export async function launchAiFetchly(
   const env = buildSanitizedEnv(
     options.testRoot,
     options.fakeAiBaseUrl,
+    options.initialMaximized,
     options.hubBaseUrl
   );
   // Explicit opt-in extras (post-sanitization): the host env never leaks in.
@@ -273,10 +286,15 @@ export async function launchAiFetchly(
   });
 
   try {
-    // Wait for the page to navigate to the Vite renderer origin. Use a regex so
-    // the bare root URL (http://127.0.0.1:5173/) matches — a `**` glob would
-    // require a non-empty path and never resolve.
-    await mainWindow.waitForURL(/127\.0\.0\.1:5173(\/|$)/, { timeout: 60_000 });
+    // Wait for the page to navigate to the Vite renderer origin AND for the
+    // router's initial navigation to settle (a non-empty hash). Resolving on
+    // the bare root URL races the "/" -> "#/aiworkspace" initial redirect:
+    // a spec's goto("#/plugins/...") that fires mid-redirect gets its hash
+    // OVERWRITTEN when the pending redirect lands, silently stranding the
+    // test on the chat center.
+    await mainWindow.waitForURL(new RegExp(
+      `${RENDERER_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/#/`
+    ), { timeout: 60_000 });
     // Preload bridge must be present (implies the page loaded + contextBridge ran).
     await mainWindow.waitForFunction(
       () => Boolean((window as unknown as { api?: unknown }).api),

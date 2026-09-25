@@ -20,16 +20,10 @@ function composer(app: AppLike): import("@playwright/test").Locator {
     .first();
 }
 
+/** Open the chat center surface (chat-first shell): New chat creates +
+ * selects a conversation, mounting the composer the legacy dock opened. */
 async function openChat(app: AppLike): Promise<void> {
-  // The chat workspace is the default landing route; the dock toggle only
-  // exists when the app landed elsewhere. Handle both.
-  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  try {
-    await toggle.waitFor({ state: "visible", timeout: 5_000 });
-    await toggle.click();
-  } catch {
-    /* already on the chat workspace */
-  }
+  await app.mainWindow.getByTestId("workspace-new-chat").click();
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -64,7 +58,7 @@ test.describe("AI chat lifecycle + failure recovery", () => {
     await sendUnique(aiApp, "e2e-cancel");
 
     // Wait for the first chunk to render, then Stop must be available.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(aiApp.mainWindow.getByTestId("workspace-transcript")).toContainText(
       "Streaming",
       { timeout: 30_000 }
     );
@@ -74,7 +68,7 @@ test.describe("AI chat lifecycle + failure recovery", () => {
 
     // The cancel aborts the stream consumer, so the delayed suffix never renders.
     await expect(
-      aiApp.mainWindow.getByTestId("ai-chat-root")
+      aiApp.mainWindow.getByTestId("workspace-transcript")
     ).not.toContainText("-should-be-cancelled", { timeout: 6_000 });
     // The composer returns to an actionable state (send button shown again).
     await actionableAgain(aiApp);
@@ -119,11 +113,11 @@ test.describe("AI chat lifecycle + failure recovery", () => {
       // A subsequent message with a healthy scenario succeeds end-to-end.
       await fakeAi.setScenario("stream-text");
       const second = await sendUnique(aiApp, "e2e-retry");
-      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(aiApp.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Hello world!",
         { timeout: 30_000 }
       );
-      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(aiApp.mainWindow.getByTestId("workspace-transcript")).toContainText(
         second,
         { timeout: 15_000 }
       );

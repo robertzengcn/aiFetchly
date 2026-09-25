@@ -93,7 +93,7 @@ export function redactSecretsInText(text: string): string {
     return text;
   }
   // Pass 1: secret-shaped key=value / key: value pairs → key=[redacted].
-  let out = text.replace(
+  const out = text.replace(
     INLINE_KEY_VALUE_SECRET,
     (_match, key: string, separator: string) =>
       `${key}${separator}${REDACTED_MARKER}`
@@ -106,7 +106,7 @@ export function redactSecretsInText(text: string): string {
       continue;
     }
     // Strip sentence punctuation for the shape check, keep the marker swap.
-    const bare = token.replace(/^[("'\[]+|[)"'\],.;:!?]+$/g, "");
+    const bare = token.replace(/^[("']+|[)"'\],.;:!?]+$/g, "");
     if (bare.length >= 16 && isLikelySecretValue(bare)) {
       tokens[i] = token.replace(bare, REDACTED_MARKER);
     }

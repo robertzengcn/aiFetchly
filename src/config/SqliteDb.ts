@@ -56,6 +56,10 @@ import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
 import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
+import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
+import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
+import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
@@ -71,15 +75,6 @@ import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
-import { AIWorkspaceMemoryPortableStateEntity } from "@/entity/AIWorkspaceMemoryPortableState.entity";
-import { AIWorkspaceMemoryScopeEntity } from "@/entity/AIWorkspaceMemoryScope.entity";
-import { AIWorkspaceMemoryScopePathEntity } from "@/entity/AIWorkspaceMemoryScopePath.entity";
-import { AIWorkspaceMemorySyncAuditEntity } from "@/entity/AIWorkspaceMemorySyncAudit.entity";
-import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
-import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
-import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
-import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
-import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
@@ -101,6 +96,12 @@ import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProf
 import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
+import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+
 import { OutboundEmailIntentEntity } from "@/entity/OutboundEmailIntent.entity";
 import { OutboundEmailDraftBatchEntity } from "@/entity/OutboundEmailDraftBatch.entity";
 import { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
@@ -562,6 +563,7 @@ export class SqliteDb {
           EmailAutoReplyRuleEntity,
           EmailReplyAuditLogEntity,
           EmailAutoReplyAuditLogEntity,
+
           EmailReplyDraftRevisionEntity,
           EmailReplyApprovalEntity,
           EmailReplySendAttemptEntity,

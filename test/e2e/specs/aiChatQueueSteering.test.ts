@@ -19,7 +19,6 @@
 
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
-import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
 
 /** The pure (no-permission) read-only file tool used for steering scenarios. */
 const PURE_TOOL = "glob_files";
@@ -49,6 +48,48 @@ async function openChat(app: {
     /* already on the chat workspace */
   }
   await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
+  // Under the chat-first shell the composer renders on the empty state too,
+  // but sends need a selected conversation — start one (the legacy dock
+  // created a conversation implicitly on first send).
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  try {
+    await newChat.waitFor({ state: "visible", timeout: 5_000 });
+    await newChat.click();
+    await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
+  } catch {
+    /* legacy dock: no shell strip button */
+  }
+}
+
+/**
+ * The chat content root: the chat-first shell renders the transcript as
+ * `workspace-transcript`; the legacy dock uses `ai-chat-root`. Scope text
+ * containment to whichever is present.
+ */
+function chatRoot(app: {
+  readonly mainWindow: import("@playwright/test").Page;
+}): import("@playwright/test").Locator {
+  return app.mainWindow
+    .locator(
+      '[data-testid="workspace-transcript"], [data-testid="ai-chat-root"]'
+    )
+    .first();
+}
+
+/**
+ * Switch the composer's tool-approval selector (dev's hardened policy gates
+ * glob_files behind a Skill Permission Request in ask_for_approval mode,
+ * which parks the turn before steering can consume the tools).
+ */
+async function selectToolApproval(
+  app: { readonly mainWindow: import("@playwright/test").Page },
+  optionTitle: string
+): Promise<void> {
+  await app.mainWindow
+    .locator(".v2-tool-approval-selector")
+    .locator(".v-field")
+    .click();
+  await app.mainWindow.getByRole("option", { name: optionTitle }).click();
 }
 
 async function send(
@@ -57,6 +98,19 @@ async function send(
 ): Promise<void> {
   await textarea(app).fill(message);
   await app.mainWindow.getByTestId("ai-chat-send").click();
+}
+
+/**
+ * Sidebar conversation rows. Scoped under the tree and matched by the
+ * `v2-…` id shape — the center surface's `workspace-conversation-header`
+ * testid would otherwise shadow a bare prefix match.
+ */
+function conversationRows(app: {
+  readonly mainWindow: import("@playwright/test").Page;
+}): import("@playwright/test").Locator {
+  return app.mainWindow
+    .getByTestId("workspace-tree")
+    .locator('[data-testid^="workspace-conversation-v2-"]');
 }
 
 async function requestCount(fakeAi: {
@@ -85,12 +139,26 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     const pending = aiApp.mainWindow.getByTestId("ai-chat-pending-message");
     await expect(pending).toBeVisible({ timeout: 15_000 });
     await expect(pending).toContainText("Queued");
-    await expect.poll(() => requestCount(fakeAi), { timeout: 5_000 }).toBe(1);
+    // A's provider request opens (cold-start dispatch can take seconds);
+    // equality still proves B has not dispatched its own turn.
+    await expect.poll(() => requestCount(fakeAi), { timeout: 30_000 }).toBe(1);
 
     // A completes -> B dispatches automatically (FIFO drain).
     await expect.poll(() => requestCount(fakeAi), { timeout: 45_000 }).toBe(2);
     // The pending bubble is gone once B is delivered.
     await expect(pending).toHaveCount(0, { timeout: 30_000 });
+    // BOTH responses stream into the shell transcript — B's turn is
+    // queue-dispatched, so this guards the detail-event bridge (a broken
+    // envelope conversationId silently drops every queue-turn event).
+    await expect
+      .poll(
+        async () =>
+          (
+            await chatRoot(aiApp).innerText()
+          ).split("Streaming-should-be-cancelled").length - 1,
+        { timeout: 45_000 }
+      )
+      .toBeGreaterThanOrEqual(2);
   });
 
   test("2. steering mid-stream skips superseded tools with synthetic results (§21.6-2)", async ({
@@ -98,28 +166,57 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     fakeAi,
   }) => {
     await openChat(aiApp);
-    // Two pure tool calls; 3s delay before the first delta leaves a window
-    // to commit steering while the response is still streaming.
+    // glob_files is permission-gated in ask_for_approval mode (the turn
+    // parks on a Skill Permission Request before steering can consume the
+    // tools) — run the steering scenario with auto-approval instead.
+    await selectToolApproval(aiApp, "Approve for me");
+    // Two pure tool calls; the pre-delta delay leaves a window to commit
+    // steering while the response is still streaming. The two-phase claim
+    // (reserve → DB claim → commit) must land inside the window, and the
+    // coordinator path writes concurrently with it — keep generous margin.
     await fakeAi.setToolCalls(
       [
         { name: PURE_TOOL, arguments: '{"pattern":"*.txt"}' },
         { name: PURE_TOOL, arguments: '{"pattern":"*.md"}' },
       ],
-      3_000
+      8_000
     );
 
     await send(aiApp, "list both file sets");
-    // Wait until the turn is running (request opened), then queue + steer.
-    await expect.poll(() => requestCount(fakeAi), { timeout: 30_000 }).toBe(1);
+    // Wait until the turn is live mid-stream, then queue + steer. (The
+    // request log records on COMPLETION — polling it would wait past the
+    // stream and miss the steering window entirely.)
+    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+      timeout: 30_000,
+    });
     await send(aiApp, "actually skip the tools");
     await aiApp.mainWindow.getByTestId("ai-chat-pending-steer").click();
 
     // after_model consumes the steering batch: no tool executes, and every
-    // skipped call renders a synthetic superseded result.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      "superseded_by_user_steering",
-      { timeout: 30_000 }
-    );
+    // skipped call renders a synthetic superseded result. The shell's
+    // execution groups auto-collapse on completion (FR-048) and the group
+    // REMOUNTS when its counter testid changes (resetting the user's expand
+    // override) — expand self-healingly, then assert the row summaries.
+    const group = aiApp.mainWindow.getByTestId("workspace-execution-group-2-2");
+    await expect(group).toBeVisible({ timeout: 30_000 });
+    await expect
+      .poll(
+        async () => {
+          if ((await group.locator(".execution-rows").count()) === 0) {
+            await group
+              .locator(".group-summary")
+              .click({ timeout: 2_000 })
+              .catch(() => undefined);
+            return false;
+          }
+          return true;
+        },
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    await expect(chatRoot(aiApp)).toContainText("superseded_by_user_steering", {
+      timeout: 10_000,
+    });
 
     // The continuation request carries the two tool results (protocol
     // validity) — exactly one follow-up after the steered round.
@@ -134,7 +231,11 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     await openChat(aiApp);
 
     await send(aiApp, "slow turn A");
-    await expect.poll(() => requestCount(fakeAi), { timeout: 30_000 }).toBe(1);
+    // Steer while A is mid-stream (the request log records on completion —
+    // polling it would miss the steering window).
+    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+      timeout: 30_000,
+    });
     await send(aiApp, "redirect A");
     await aiApp.mainWindow.getByTestId("ai-chat-pending-steer").click();
     // The bubble transitions to the steering state (applied later at the
@@ -185,11 +286,14 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     aiApp,
     fakeAi,
   }) => {
-    await fakeAi.setScenario("http-500");
+    // A definite 5xx fails fast with no transport retries, so the delayed
+    // variant holds the request 4s — a deterministic busy window to queue
+    // B behind the failing turn.
+    await fakeAi.setScenario("http-500-delayed");
     await openChat(aiApp);
 
     await send(aiApp, "failing turn");
-    // Queue B while the (retrying) failure plays out.
+    // Queue B while the failure plays out.
     await send(aiApp, "should stay paused");
     await expect(
       aiApp.mainWindow.getByTestId("ai-chat-pending-message")
@@ -197,9 +301,8 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     // No second TURN starts for B (the queue is held).
     await aiApp.mainWindow.waitForTimeout(2_000);
     const requests = await fakeAi.getRequests();
-    // Only A's attempts (with transport retries) exist — B never dispatched
-    // as its own turn: every recorded request precedes B's enqueue window.
-    expect(requests.length).toBeGreaterThanOrEqual(1);
+    // Only A's attempt exists — B never dispatched as its own turn.
+    expect(requests.length).toBe(1);
     await expect(
       aiApp.mainWindow.getByTestId("ai-chat-pending-message")
     ).toBeVisible();
@@ -216,16 +319,33 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     await send(aiApp, "background slow turn");
     await expect.poll(() => requestCount(fakeAi), { timeout: 30_000 }).toBe(1);
 
-    // Conversation 2: independent queue + dispatch.
-    await aiApp.mainWindow.getByTestId("new-conversation").click();
+    // Conversation 2: independent queue + dispatch. The chat-first shell
+    // starts a new conversation from the sidebar strip (the legacy dock used
+    // a header new-conversation button — handle both).
+    const newConversation = aiApp.mainWindow.getByTestId("new-conversation");
+    if (await newConversation.isVisible().catch(() => false)) {
+      await newConversation.click();
+    } else {
+      await aiApp.mainWindow.getByTestId("workspace-new-chat").click();
+    }
     await expect(textarea(aiApp)).toBeVisible({ timeout: 15_000 });
     await send(aiApp, "independent fast turn");
     await expect.poll(() => requestCount(fakeAi), { timeout: 45_000 }).toBe(2);
-    // Conversation 1 keeps streaming; both responses eventually render.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      STREAM_TEXT_FINAL,
-      { timeout: 60_000 }
-    );
+    // Conversation 2's own response renders in its transcript (the
+    // stream-delayed scenario's final text). Conversation 1 kept streaming
+    // independently; its final content renders once re-selected — under the
+    // shell's selected-conversation routing, detail events follow selection.
+    const delayedFinal = "Streaming-should-be-cancelled";
+    await expect(chatRoot(aiApp)).toContainText(delayedFinal, {
+      timeout: 60_000,
+    });
+    const firstConversation = conversationRows(aiApp).last(); // sidebar sorts newest-first: the oldest row is conversation 1
+    if (await firstConversation.isVisible().catch(() => false)) {
+      await firstConversation.click();
+      await expect(chatRoot(aiApp)).toContainText(delayedFinal, {
+        timeout: 60_000,
+      });
+    }
   });
 
   test("7. relaunch with queued rows recovers without auto-dispatch (§21.6-7)", async ({
@@ -266,6 +386,22 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
       } catch {
         /* already on the chat workspace */
       }
+      // The shell lands unselected: pick the paused conversation from the
+      // sidebar so its durable pending rows render (the legacy dock
+      // auto-selected the most recent conversation). A fresh boot may render
+      // the sidebar tree group collapsed — expand it, then select the row.
+      const relaunchedConversation = conversationRows(relaunched).first();
+      if (!(await relaunchedConversation.isVisible().catch(() => false))) {
+        await relaunched.mainWindow
+          .getByRole("treeitem", { name: /Other chats/ })
+          .click()
+          .catch(() => undefined);
+      }
+      await relaunchedConversation.waitFor({
+        state: "visible",
+        timeout: 15_000,
+      });
+      await relaunchedConversation.click();
       await expect(
         relaunched.mainWindow.getByTestId("ai-chat-pending-message")
       ).toContainText("Queue paused", { timeout: 30_000 });
@@ -292,7 +428,12 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     await openChat(aiApp);
 
     await send(aiApp, "slow turn with attachment follow-up");
-    await expect.poll(() => requestCount(fakeAi), { timeout: 30_000 }).toBe(1);
+    // Queue the attachment while A is still mid-stream (the request log
+    // records on completion — polling it would let A finish first and B
+    // would dispatch instead of queue).
+    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+      timeout: 30_000,
+    });
 
     // Attach a small document and queue it behind the running turn.
     await aiApp.mainWindow

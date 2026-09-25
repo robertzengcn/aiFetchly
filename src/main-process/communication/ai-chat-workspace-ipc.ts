@@ -41,6 +41,7 @@ import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import {
   getQueryEngine,
+  getQueueService,
   canUseChat,
   parseMetadata,
   serializeHistoryTimestamp,
@@ -86,6 +87,83 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
       scheduler,
       turnCoordinator: AIChatConversationTurnCoordinator.getInstance(),
       canUseChat,
+      // Cross-path terminal notification (shell / message-queue unification):
+      // a coordinator-run terminal re-drains or holds durable rows queued
+      // behind it. Failures must never break the coordinator path itself.
+      onRunTerminal: (conversationId, status) => {
+        if (
+          status !== "completed" &&
+          status !== "cancelled" &&
+          status !== "failed"
+        ) {
+          return;
+        }
+        void getQueueService()
+          .notifyExternalTurnTerminal(conversationId, status)
+          .catch((err: unknown) => {
+            console.warn(
+              "[ai-chat-workspace] queue terminal notification failed:",
+              err
+            );
+          });
+      },
+      // Busy-conversation send delegation (message-queue §9.2): the send
+      // becomes a durable pending row; the coordinator rejection is kept
+      // only when the queue declines. forceQueue: the coordinator owns the
+      // live turn — its terminal notification drains or holds the row, so
+      // the queue must never auto-dispatch it mid-turn (e.g. while the
+      // engine reports idle between transport retries).
+      busySubmit: async (request) => {
+        try {
+          const receipt = await getQueueService().submit({
+            forceQueue: true,
+            clientRequestId: request.clientRequestId,
+            request: {
+              conversationId: request.conversationId,
+              message: request.message,
+              model: request.model,
+              mode: request.mode,
+              toolApprovalMode: request.toolApprovalMode,
+              showReasoning: request.showReasoning,
+              // Parity with the coordinator path: a delegated send must not
+              // silently drop execution settings the schema accepts.
+              temperature: request.temperature,
+              maxTokens: request.maxTokens,
+              systemPrompt: request.systemPrompt,
+              ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+              uploadedFiles: request.uploadedFiles
+                ? [...request.uploadedFiles]
+                : undefined,
+              generatedImageReferences: request.generatedImageReferences
+                ? [...request.generatedImageReferences]
+                : undefined,
+            },
+          });
+          if (!receipt.pendingMessage) return null;
+          // The live turn can terminate WHILE the row was being persisted
+          // (submit awaits several DB ops): its terminal notification found
+          // zero rows and returned, and forceQueue suppresses the drain —
+          // the row would sit queued forever. Re-check and reconcile.
+          if (
+            getQueryEngine().getConversationRuntimeStatus(
+              request.conversationId
+            ) === "idle"
+          ) {
+            void getQueueService()
+              .notifyExternalTurnTerminal(request.conversationId, "completed")
+              .catch(() => undefined);
+          }
+          return {
+            pendingRunId: `pending-${receipt.pendingMessage.pendingMessageId}`,
+          };
+        } catch (err) {
+          console.warn(
+            "[ai-chat-workspace] busy-send queue delegation failed:",
+            err
+          );
+          return null;
+        }
+      },
     });
   }
   return coordinatorInstance;
