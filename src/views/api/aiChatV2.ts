@@ -43,6 +43,7 @@ import {
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_DENY_TOOL_PERMISSION,
   AI_CHAT_V2_READ_PASTE_CACHE,
   AI_CHAT_V2_AUTO_COMPACTED,
   AI_CHAT_V2_HISTORY_SEARCH,
@@ -526,6 +527,43 @@ export async function setChatV2ToolApprovalMode(
     mode,
   });
   return (resp as ChatToolApprovalMode) ?? "ask_for_approval";
+}
+
+// ---------------------------------------------------------------------------
+// Tool Permission Grant / Deny
+// ---------------------------------------------------------------------------
+
+/**
+ * Response from denying a paused tool permission. When `handled` is `true`, a
+ * scheduled-loop engine owned the paused turn and synthesized a denied
+ * tool_result (the run continues without the tool). When `handled` is `false`,
+ * no scheduled engine owned the permission and the renderer must fall back to
+ * `stopChatV2Stream` (interactive deny).
+ */
+export interface DenyToolPermissionResult {
+  ok: boolean;
+  handled: boolean;
+  error?: string;
+}
+
+/**
+ * Deny a paused tool permission. Routes through the main-process
+ * `ScheduledLoopEngineRegistry`: when a scheduled engine owns the paused turn
+ * it synthesizes a denied tool_result and continues the run; otherwise the
+ * caller falls back to `stopChatV2Stream`. `windowInvoke` throws on a denied
+ * `canUseChat` gate, so callers should wrap in try/catch.
+ */
+export async function denyChatV2ToolPermission(
+  toolId: string,
+  conversationId?: string
+): Promise<DenyToolPermissionResult> {
+  const resp = await windowInvoke(AI_CHAT_V2_DENY_TOOL_PERMISSION, {
+    toolId,
+    conversationId,
+  });
+  return (
+    (resp as DenyToolPermissionResult | null) ?? { ok: true, handled: false }
+  );
 }
 
 // ---------------------------------------------------------------------------
