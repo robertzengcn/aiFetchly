@@ -7,6 +7,7 @@ import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
+import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
@@ -108,8 +109,10 @@ export class AIChatQueryEngineFactory {
   /**
    * Task-scoped tool executor for scheduled (unattended) turns — the execution
    * backstop behind the catalog filter. Revalidates the tool against the task
-   * policy and returns a structured failed tool result when blocked so the
-   * model can continue. Never opens an interactive permission prompt (FR-16).
+   * policy and either runs it with auto-approval, pauses the run for an
+   * interactive permission prompt (gated high-impact/automation tools not in
+   * the allowlist), or returns a structured failed result for permanently
+   * blocked tools so the model can continue (FR-16).
    */
   private async executeScheduledTool(
     name: string,
@@ -117,23 +120,63 @@ export class AIChatQueryEngineFactory {
     context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
     policy: AiMessageTaskToolPolicy
   ): Promise<ToolExecutionResult> {
-    if (!this.isToolAllowed(name, policy)) {
-      const skill = SkillRegistry.getSkill(name) ?? null;
-      const reason = canAutoApproveScheduledTool({
-        skill,
-        taskPolicy: policy,
-        toolName: name,
-      }).reason;
+    const skill = SkillRegistry.getSkill(name) ?? null;
+    const decision = canAutoApproveScheduledTool({
+      skill,
+      taskPolicy: policy,
+      toolName: name,
+    });
+
+    // Gated high-impact/automation tool not in the allowlist → pause for the
+    // user. Synthesize the same needsPermissionPrompt result shape that
+    // SkillExecutor produces so the loop's isPermissionPromptResult detection
+    // fires and the turn parks in pendingPermissions. Never fail closed for a
+    // tool the user could grant.
+    if (!decision.allowed && decision.requiresInteractivePermission) {
+      return this.permissionPromptResult(name, context, skill, args);
+    }
+
+    if (!decision.allowed) {
       return this.blockedToolResult(
         name,
         context,
-        reason ?? `Tool "${name}" is blocked by the scheduled task policy.`
+        decision.reason ??
+          `Tool "${name}" is blocked by the scheduled task policy.`
       );
     }
     return SkillExecutor.execute(name, args, {
       ...context,
       skipPermissionCheck: true,
     });
+  }
+
+  /**
+   * Synthesize a permission-prompt {@link ToolExecutionResult} for a gated
+   * scheduled tool call, mirroring SkillExecutor's permission-prompt result
+   * shape so the loop pauses the turn and the existing permission-card UI
+   * renders. The skill's buildPermissionPreview (if any) attaches a
+   * metadata-only preview; items are display-only and re-validated by the
+   * skill after approval.
+   */
+  private permissionPromptResult(
+    name: string,
+    context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
+    skill: SkillDefinition | null,
+    args: Record<string, unknown>
+  ): ToolExecutionResult {
+    const preview = skill?.buildPermissionPreview?.(args);
+    return {
+      tool_call_id: context.toolCallId ?? name,
+      tool_name: name,
+      success: false,
+      result: {
+        error: "Permission required",
+        needsPermissionPrompt: true,
+        permissionCategory: skill?.permissionCategory,
+        ...(preview ? { permissionPreview: preview } : {}),
+      },
+      execution_time_ms: 0,
+    };
   }
 
   /** Build a structured failed tool result for a blocked scheduled tool call. */
