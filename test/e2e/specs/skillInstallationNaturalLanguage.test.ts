@@ -133,14 +133,51 @@ async function approveInstall(
   });
 }
 
+/** Deterministic ffmpeg/ffprobe stubs so the terminal contract is READY on
+ *  any runner (audit qualification: loose multi-state assertions tightened). */
+function makeStubBin(root: string): string {
+  const stubBin = path.join(root, "stub-bin");
+  fs.mkdirSync(stubBin, { recursive: true });
+  const writeStub = (name: string, line: string): void => {
+    const sh = path.join(stubBin, name);
+    fs.writeFileSync(sh, `#!/bin/sh\necho "${line}"\nexit 0\n`);
+    fs.chmodSync(sh, 0o755);
+    fs.writeFileSync(
+      path.join(stubBin, `${name}.cmd`),
+      `@echo off\necho ${line}\r\nexit /b 0\r\n`
+    );
+  };
+  writeStub("ffmpeg", "ffmpeg version e2e-stub");
+  writeStub("ffprobe", "ffprobe version e2e-stub");
+  return stubBin;
+}
+
 test.describe("Model-driven natural-language installation (final-audit 1)", () => {
-  test("the video-use acceptance prompt routes through skill_install_prepare and ends ready-and-waiting", async ({
-    aiApp,
-    fakeAi,
-  }) => {
+  // eslint-disable-next-line no-empty-pattern
+  test("the video-use acceptance prompt routes through skill_install_prepare and ends ready-and-waiting", async ({}, testInfo) => {
     test.setTimeout(240_000);
-    const app = aiApp;
-    const fixture = makeFixtureSkill(app.testRoot.rootPath);
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    const app = await (async () => {
+      writeStateManifest(root, {
+        authState: "authenticated" as const,
+        aiState: "local-enabled" as const,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+      });
+      const { launchAiFetchly } = await import("../fixtures/electronApp");
+      return launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        // Satisfied dependency probes -> the §18.4 sequence runs straight
+        // to ready (this fixture declares no credentials and no commands).
+        extraEnv: { PATH: makeStubBin(root.rootPath) },
+      });
+    })();
+    const fixture = makeFixtureSkill(root.rootPath);
 
     // Open the chat dock and wait for the composer.
     // Chat-first boot race: with an approved workspace the app opens the
@@ -229,14 +266,10 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
       status0.planRevision ?? ""
     );
     expect(approved).not.toBeNull();
-    // ready OR installing_dependencies (ffmpeg absent/present on runner)
-    // OR awaiting_secret (install.md mentions a KEY). All are terminal
-    // for this assertion; the flow ends ready when deps are satisfied.
-    expect([
-      "ready",
-      "installing_dependencies",
-      "awaiting_secret",
-    ]).toContain(approved?.state);
+    // Deterministic terminal contract (audit qualification): with the
+    // dependency probes satisfied, no declared credentials, and no command
+    // templates, the §18.4 sequence ends EXACTLY at ready.
+    expect(approved?.state).toBe("ready");
 
     // FR-18 / §27.2 #14: no invocation, no footage work. The turn already
     // ended with the readiness text; a follow-up question gets a TEXT-ONLY
@@ -257,6 +290,9 @@ test.describe("Model-driven natural-language installation (final-audit 1)", () =
     await assertCleanTeardown(app, {
       expectedExternalOrigins: ["https://github.com"],
     });
+    await closeApp(app);
+    await fakeAi.stop();
+    root.remove();
   });
 });
 

@@ -633,10 +633,11 @@ test("approved command execution is renderer-driven and template-bound (FR-16)",
   expect(template).toBeDefined();
   expect(template?.args.join(" ")).toContain("--version");
 
-  // Approve the plan (token-bound, renderer gesture) — no credentials on
-  // this fixture, so the session runs through to ready or a dependency hold.
+  // Approve the plan (token-bound, renderer gesture). The fixture proposes
+  // a command template, so §18.4 (audit finding 4) holds the session at
+  // awaiting_commands until the user runs it from the card.
   const approved = await approve(app, held);
-  expect(["ready", "installing_dependencies"]).toContain(approved?.state);
+  expect(approved?.state).toBe("awaiting_commands");
 
   // Run the approved template through the renderer channel: the caller
   // supplies ONLY the template id — never command text.
@@ -649,6 +650,14 @@ test("approved command execution is renderer-driven and template-bound (FR-16)",
   expect(run?.ok).toBe(true);
   expect(run?.exitCode).toBe(0);
   expect(run?.stdoutPreview).toMatch(/v\d+\.\d+/);
+  // Completing the LAST pending command advances the session to ready
+  // (audit finding 4 checkpoint).
+  const afterRun = await invoke<InstallSnapshot>(
+    app,
+    "skill-install:status",
+    { sessionId: held.sessionId }
+  );
+  expect(afterRun?.state).toBe("ready");
 
   // Text substitution is impossible: an id that is not a persisted
   // template is refused outright, and the channel schema has no field
@@ -874,13 +883,14 @@ test("approve runs the typed installer; failure stays recoverable and retryable 
         );
         expect(retried?.state).toBe("installing_dependencies");
 
-        // The activated skill still exists (rollback did NOT fire — the
-        // hold is recoverable, FR-17).
+        // §18.4 (audit finding 6 fix): the hold now PRECEDES activation,
+        // so no skill directory exists while the session is recoverably
+        // held — nothing to roll back if the user cancels.
         expect(
           fs.existsSync(
             path.join(root.rootPath, ".aifetchly", "skills", "video-use-typed")
           )
-        ).toBe(true);
+        ).toBe(false);
 
         await assertCleanTeardown(app, { expectedExternalOrigins: [] });
       } finally {
