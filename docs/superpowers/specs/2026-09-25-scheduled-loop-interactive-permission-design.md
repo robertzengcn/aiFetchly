@@ -131,14 +131,14 @@ The scheduled engine instance is constructed per-run by the factory, so `pending
 - Else → fall through to the interactive singleton (current behavior).
 
 **New IPC — `AI_CHAT_V2_DENY_TOOL_PERMISSION` (new channel in `channellist.ts`):**
-- Look up the scheduled engine via the registry; call `engine.denyToolPermission(...)`; clear the backstop timer; return `{ ok: true }`.
-- If no scheduled engine has a pending permission for that conversation, fall back to `stopChatV2Stream` (interactive deny, current behavior).
+- Look up the scheduled engine via the registry. If one is registered AND has a pending permission for that conversation → call `engine.denyToolPermission(...)`, clear the backstop timer, return `{ ok: true, handled: true }`.
+- Else return `{ ok: true, handled: false }` so the renderer knows to fall back to the interactive deny path (`stopChatV2Stream`). The renderer cannot query the main-process registry directly, so the `handled` flag is the contract.
 
 ### 5.6 Renderer — `AiChatV2.vue`
 
 1. **Conversation-updated handler:** handle `scheduled_turn_permission_requested` reason → reload history for that conversation (the card renders from the persisted `needsPermissionPrompt` tool_result) + fire an in-app notification via the existing preload notification bridge.
 2. **Permission card grant** → existing `AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION` invoke (now routed to the scheduled engine by the IPC change). No component logic change.
-3. **Permission card deny** → new `AI_CHAT_V2_DENY_TOOL_PERMISSION` invoke. `handleSkillPermissionDeny` gains a branch: if the message's `conversationId` has a registered scheduled engine (or a metadata flag marking it scheduled), call deny-IPC; else fall back to `stopChatV2Stream` (current behavior).
+3. **Permission card deny** → call the new `AI_CHAT_V2_DENY_TOOL_PERMISSION` IPC. Response contract: `{ ok: boolean, handled: boolean }`. If `handled === true` (a scheduled engine picked it up), the card is resolved by the resumed run's terminal event. If `handled === false` (no scheduled engine owned it), fall back to `stopChatV2Stream` (interactive deny, current behavior). The renderer cannot query the main-process registry directly, so `handled` is the routing signal.
 
 ### 5.7 Type changes — `aiChatScheduledLoopTypes.ts`
 
@@ -202,7 +202,7 @@ User denies:
 | `src/entityTypes/aiChatScheduledLoopTypes.ts` | extend `reason` union |
 | `src/main-process/communication/ai-chat-v2-ipc.ts` | resume routing + deny handler |
 | `src/preload.ts` | expose deny channel |
-| `src/views/api/aiChatV2.ts` (or api layer) | deny invoke helper |
+| `src/views/api/aiChatV2.ts` | `denyToolPermission` invoke helper (mirrors existing `windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION)` pattern at line 3509 of `AiChatV2.vue`) |
 | `src/views/components/aiChatV2/AiChatV2.vue` | handle `scheduled_turn_permission_requested` + deny branch |
 | tests (§8) | TDD per file |
 
