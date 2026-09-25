@@ -291,17 +291,19 @@ describe("ScheduledAiToolPolicy interactive permission outcome", () => {
   });
 
   it("permanently-blocked tool does NOT request interactive permission", () => {
-    const decision = canAutoApproveScheduledTool({
-      skill: skill("shell_execute"),
-      taskPolicy: policy({
-        allowedTools: ["shell_execute"],
-        autoApproveTools: true,
-      }),
-      toolName: "shell_execute",
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.requiresInteractivePermission).toBeFalsy();
-    expect(decision.riskLevel).toBe("blocked");
+    for (const name of ["shell_execute", "mark_email_processed"]) {
+      const decision = canAutoApproveScheduledTool({
+        skill: skill(name),
+        taskPolicy: policy({ allowedTools: [name], autoApproveTools: true }),
+        toolName: name,
+      });
+      expect(decision.allowed, `${name} should be blocked`).toBe(false);
+      expect(
+        decision.requiresInteractivePermission,
+        `${name} must not request interactive permission`
+      ).toBeFalsy();
+      expect(decision.riskLevel, `${name} riskLevel`).toBe("blocked");
+    }
   });
 
   it("allowlisted high-impact tool auto-approves (no interactive permission)", () => {
