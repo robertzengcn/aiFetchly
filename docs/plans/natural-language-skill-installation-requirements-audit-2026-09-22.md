@@ -347,3 +347,38 @@ durable constraints, dependency metadata, and review/management UI. Add regressi
 tests for the reproduced cases, reconcile recovery semantics, then rerun the
 Electron acceptance suite and required Windows/macOS jobs at the resulting
 commit. No implementation fixes were made as part of this audit.
+
+---
+
+## Remediation record (2026-09-25)
+
+All 12 findings implemented and regression-tested on
+`worktree-natural-language-skill-installation` (d1152e75 → 5e98aeb9).
+
+| # | Fix (commits) |
+|---|---|
+| 1 | Full request identity (ref/subdirectory/mode) persisted AT CREATION (migration 0003 + entity columns); `requestIdentityMatches` gates idempotent reuse AND the transactional claim; ready-reuse compares revision/mode only when pinned (84d46218) |
+| 2 | Plan source carries the INSPECTION root; activation/plugin/executable routing join the selected candidate's `rootRelativePath`; submitted `selectedSkillIds` persist into the plan (0b460735) |
+| 3 | update() carries the existing installationId; the activation upsert UPDATES the row in place when the new revision matches no identity; same-name rows are superseded (exactly one ready row); `replacing-existing-skill` plan warning (12817157) |
+| 4 | New `awaiting_commands` checkpoint: plans with commands hold before ready; runApprovedCommand marks completion and continues the sequence; full-arg templates + declared env names + medium risk; runner re-hashes the source before spawn (`SOURCE_CHANGED_AFTER_APPROVAL`) (299c993a) |
+| 5 | submit-secret validates plan membership; resume gates on ALL required credentials configured (module + IPC); planner regex finds every UPPER_SNAKE credential; resumeAfterSecret routes plugin/executable correctly; §18.4 ordering — deps before credentials before activation (2bf15006) |
+| 6 | The dependency hold now PRECEDES activation (nothing to roll back by construction); cancel rolls back installing_dependencies sessions; failed verification rollback surfaces `rollback_required`/`ROLLBACK_FAILED` (2bf15006) |
+| 7 | Budget refuses whenever ANY essential section cannot fit (not just empty selections); SkillExecutionContext.remainingContextTokens threaded through use_skill (e45db759) |
+| 8 | ChatCredentialGuard at AIChatQueryEngine.submitMessage — pasted keys rejected BEFORE persistence/provider with typed `CHAT_CREDENTIAL_REJECTED`; engine-level test proves nothing persists (e45db759) |
+| 9 | Flag-tolerant shell regex (`git -c … clone`, `git --depth 1 clone`, uv); acquisition/setup blocked under explicit routing regardless of target string; manual-action approval records its EXACT target and the policy honors only that target (e45db759) |
+| 10 | Acquirer prefers the fetcher's trusted `resolvedCommitSha` + acquisition method (`github-archive`/`github-release-asset` in the union); rev-parse/tree-hash only for sources without provenance (42c7dea2) |
+| 11 | Constraints persist in the plan; planner surfaces `constraint-dependency-unplanned` + `user-terminal-instruction` warnings; retry resumes the full ref/subdir/mode checkpoint (24c0d247) |
+| 12 | python3→python mapping fixed; probe EVIDENCE recorded on plan items; SafePlanView gains permissions/activationTarget/dep-evidence; manager gains linked target + subdirectory + hash; card/manager render localized depStatus/modeLabel/status in all six locales (be881659) |
+
+Gates at 5e98aeb9: full main suite 500 files / 4,524 tests green;
+components 35 files / 202 tests green; targeted planner/policy/lifecycle/
+runner suites green. Remaining qualification items from the audit (recovery
+PRD-vs-design document reconciliation, E2E assertion tightening for the
+natural-language spec, platform matrix re-run) are the follow-up work.
+
+Incident note: during pre-existence verification a second `git stash pop`
+popped a FOREIGN stash (worktree-ai-chat-message-queue) into this tree.
+Detected immediately via conflict markers; tracked files hard-reset to
+HEAD, foreign untracked files removed, the foreign stash entry remains
+retained in the stash list (nothing lost). Lesson recorded: never blind-pop
+in a multi-worktree repo — always `git stash list` before pop.
