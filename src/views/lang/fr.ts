@@ -2728,6 +2728,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_requested_scheduled:
+      "Une tâche planifiée demande l'autorisation d'utiliser un outil. Examinez et approuvez ou refusez.",
     auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
     quota_exhausted:
       "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",

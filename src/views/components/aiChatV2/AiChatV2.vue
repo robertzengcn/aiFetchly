@@ -538,6 +538,15 @@
       }}
     </v-snackbar>
 
+    <v-snackbar
+      v-model="scheduledPermissionNotice"
+      :timeout="-1"
+      location="bottom"
+      data-testid="scheduled-permission-notice"
+    >
+      {{ scheduledPermissionNoticeText }}
+    </v-snackbar>
+
     <v-dialog
       v-model="voiceRuntimeInstallDialog"
       max-width="520"
@@ -805,6 +814,7 @@ import {
   cancelCompaction,
   subscribeCompactionProgress,
   unsubscribeCompactionProgress,
+  denyChatV2ToolPermission,
 } from "@/views/api/aiChatV2";
 import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
@@ -1049,6 +1059,10 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+// Persistent (timeout=-1) notice shown when a scheduled run pauses for
+// interactive tool permission — action-required, so it stays until dismissed.
+const scheduledPermissionNotice = ref(false);
+const scheduledPermissionNoticeText = ref("");
 // Recoverable-history + incremental-compaction state (technical-design §13).
 const showHistoryDrawer = ref(false);
 /**
@@ -1802,12 +1816,28 @@ function handleConversationUpdated(
   event: ChatV2ConversationUpdatedEvent
 ): void {
   void loadConversations();
+  if (event.reason === "scheduled_turn_permission_requested") {
+    // Surface an action-required notice so the user knows a scheduled run is
+    // paused waiting for approval. Persistent (timeout=-1) until dismissed.
+    const baseText =
+      t("aiChatV2.permission_requested_scheduled") ||
+      "A scheduled task is asking for permission to use a tool.";
+    scheduledPermissionNoticeText.value = event.toolName
+      ? `${baseText} (${event.toolName})`
+      : baseText;
+    scheduledPermissionNotice.value = true;
+  }
   if (event.conversationId === activeConversationId.value) {
     // The persisted row replaces any optimistic live bubble.
     if (liveScheduledAssistant.value) {
       liveScheduledAssistant.value = null;
     }
-    if (isStreaming.value) {
+    // A permission-requested pause is user-action-required: the persisted
+    // permission card must render immediately even mid-stream, so bypass the
+    // scheduledRefreshPending deferral for this reason.
+    const isPermissionRequested =
+      event.reason === "scheduled_turn_permission_requested";
+    if (isStreaming.value && !isPermissionRequested) {
       scheduledRefreshPending.value = true;
     } else {
       void loadHistory(event.conversationId);
@@ -3546,7 +3576,9 @@ const handlePinnedPermissionGrant = (): void => {
   void handleSkillPermissionGrant(message);
 };
 
-const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
+const handleSkillPermissionDeny = async (
+  message: ChatV2MessageView
+): Promise<void> => {
   const idx = messages.value.findIndex((m) => m.id === message.id);
   const deniedMessage =
     t("aiChatV2.permission_denied") ||
@@ -3563,10 +3595,25 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       },
     };
   }
-  // Stop only the conversation that owns the denied tool — background
-  // conversations are unaffected. Detach its listener and resolve its pending
-  // stream promise so its onSend await unblocks.
   const targetConversationId = message.conversationId || undefined;
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (toolId) {
+    try {
+      const result = await denyChatV2ToolPermission(
+        toolId,
+        targetConversationId
+      );
+      if (result.handled) {
+        // Scheduled engine owned the paused turn — it synthesized a denied
+        // tool_result and the run continues. Do NOT stop the stream; the
+        // terminal event resolves the card.
+        return;
+      }
+    } catch {
+      // IPC denied (e.g. AI gate) — fall through to interactive stop below.
+    }
+  }
+  // Interactive path (no scheduled engine, or IPC failed): stop the stream.
   stopChatV2Stream(targetConversationId);
   if (message.conversationId) {
     detachChatV2ConversationStreamListeners(message.conversationId, true);
@@ -3579,7 +3626,7 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 const handlePinnedPermissionDeny = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  handleSkillPermissionDeny(message);
+  void handleSkillPermissionDeny(message);
 };
 
 // ---------------------------------------------------------------------------
@@ -5380,6 +5427,12 @@ onBeforeUnmount(() => {
   // consumer when no other consumers reference the workspace.
   void releaseActiveWorkspaceWatch();
 });
+
+// Expose internal handlers for component tests. The permission card and
+// conversation list have deep rendering dependencies (many stubbed
+// subcomponents); driving them through the template proved brittle, so tests
+// assert contracts at this level instead.
+defineExpose({ handleSkillPermissionDeny, onSelectConversation });
 </script>
 
 <style scoped>
