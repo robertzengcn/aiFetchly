@@ -26,6 +26,10 @@ export class AiMessageTaskEntity extends AuditableEntity {
   @Column("varchar", { length: 255, nullable: true })
   conversation_id: string;
 
+  /** Absolute directory the scheduled run may use as its approved workspace. */
+  @Column("varchar", { length: 1024, nullable: true })
+  workspace_path: string | null;
+
   @Column("text", { default: "[]" })
   allowed_tools_json: string;
 

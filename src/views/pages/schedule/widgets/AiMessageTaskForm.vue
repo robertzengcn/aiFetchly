@@ -47,6 +47,25 @@
       </v-col>
     </v-row>
 
+    <!-- Workspace path -->
+    <v-row>
+      <v-col cols="12">
+        <v-text-field
+          v-model="formState.workspacePath"
+          :label="t('schedule.ai_message_task_workspace_path') || 'Workspace Path'"
+          :placeholder="t('schedule.ai_message_task_workspace_path_hint') || 'Folder the scheduled AI message can use'"
+          :hint="t('schedule.ai_message_task_workspace_path_hint') || 'Absolute folder the scheduled run uses as its workspace'"
+          persistent-hint
+          density="compact"
+          variant="outlined"
+          append-inner-icon="mdi-folder-open"
+          :loading="pickingFolder"
+          @click:append-inner="handlePickWorkspace"
+          @update:model-value="emitChange"
+        />
+      </v-col>
+    </v-row>
+
     <!-- Allowed Tools -->
     <v-row>
       <v-col cols="12">
@@ -176,6 +195,7 @@ import { AI_MESSAGE_TASK_DEFAULTS } from "@/entityTypes/aiMessageTaskTypes";
 import type { SchedulableAiToolSummary } from "@/entityTypes/aiMessageTaskTypes";
 import type { OpenAIModel } from "@/api/aiChatApi";
 import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
+import { pickFolder } from "@/views/api/workspace";
 
 const { t } = useI18n();
 
@@ -189,6 +209,7 @@ export interface AiMessageTaskFormState {
   maxToolCalls: number;
   maxRuntimeMs: number;
   maxContinueCalls: number;
+  workspacePath: string;
 }
 
 interface Props {
@@ -202,6 +223,7 @@ interface Props {
     max_tool_calls?: number;
     max_runtime_ms?: number;
     max_continue_calls?: number;
+    workspace_path?: string | null;
   };
   isEdit?: boolean;
 }
@@ -235,6 +257,7 @@ const formState = reactive<AiMessageTaskFormState>({
   maxToolCalls: props.initialTaskData?.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls,
   maxRuntimeMs: props.initialTaskData?.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs,
   maxContinueCalls: props.initialTaskData?.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls,
+  workspacePath: props.initialTaskData?.workspace_path ?? "",
 });
 
 // Watch for initialTaskData changes (async load after component mount)
@@ -249,6 +272,7 @@ watch(() => props.initialTaskData, (newData) => {
     formState.maxToolCalls = newData.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls
     formState.maxRuntimeMs = newData.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs
     formState.maxContinueCalls = newData.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls
+    formState.workspacePath = newData.workspace_path ?? ""
     emitChange()
   }
 })
@@ -256,6 +280,22 @@ watch(() => props.initialTaskData, (newData) => {
 // Tools catalog
 const schedulableTools = ref<SchedulableAiToolSummary[]>([]);
 const toolsLoading = ref(false);
+const pickingFolder = ref(false);
+
+async function handlePickWorkspace(): Promise<void> {
+  pickingFolder.value = true;
+  try {
+    const folder = await pickFolder();
+    if (folder) {
+      formState.workspacePath = folder;
+      emitChange();
+    }
+  } catch (error: unknown) {
+    console.error("Failed to pick workspace folder:", error);
+  } finally {
+    pickingFolder.value = false;
+  }
+}
 
 // Models catalog
 const availableModels = ref<OpenAIModel[]>([]);

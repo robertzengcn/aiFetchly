@@ -1905,6 +1905,9 @@ export default {
     ai_message_task_model: "AI模型",
     ai_message_task_model_hint:
       "“自动”使用服务器默认模型，可选择指定模型覆盖。",
+    ai_message_task_workspace_path: "工作区路径",
+    ai_message_task_workspace_path_hint:
+      "定时 AI 消息作为工作区使用的绝对文件夹路径",
     ai_message_task_allowed_tools: "允许的工具",
     ai_message_task_allowed_tools_hint:
       "选择AI在无人值守运行期间可以使用的内置工具",

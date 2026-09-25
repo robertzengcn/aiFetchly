@@ -1811,6 +1811,9 @@ export default {
     ai_message_task_model: "Modèle IA",
     ai_message_task_model_hint:
       "'Auto' utilise le modèle par défaut du serveur. Choisissez un modèle spécifique pour remplacer.",
+    ai_message_task_workspace_path: "Chemin de l'espace de travail",
+    ai_message_task_workspace_path_hint:
+      "Dossier absolu utilisé comme espace de travail par le message IA planifié",
     ai_message_task_allowed_tools: "Outils autorisés",
     ai_message_task_allowed_tools_hint:
       "Sélectionnez les outils intégrés que l'IA peut utiliser",

@@ -50,6 +50,7 @@ export interface SafeAiMessageTaskPayload {
   last_run_time: string | null;
   last_result_summary: string | null;
   last_error_message: string | null;
+  workspace_path: string | null;
 }
 
 /** Compact list-row payload returned by list_ai_message_tasks. */
@@ -87,6 +88,7 @@ export const createAiMessageTaskSchema = z.object({
     .max(3600000)
     .default(300000),
   max_continue_calls: z.coerce.number().int().min(0).max(50).default(10),
+  workspace_path: z.string().trim().min(1).max(1024).optional(),
 });
 
 export const listAiMessageTasksSchema = z.object({
@@ -94,5 +96,7 @@ export const listAiMessageTasksSchema = z.object({
   size: z.coerce.number().int().min(1).max(100).default(20),
 });
 
-export type CreateAiMessageTaskInput = z.infer<typeof createAiMessageTaskSchema>;
+export type CreateAiMessageTaskInput = z.infer<
+  typeof createAiMessageTaskSchema
+>;
 export type ListAiMessageTasksInput = z.infer<typeof listAiMessageTasksSchema>;

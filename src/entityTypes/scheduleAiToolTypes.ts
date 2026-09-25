@@ -129,6 +129,7 @@ export const createScheduleSchema = z.object({
   parent_schedule_id: scheduleIdSchema.optional(),
   dependency_condition: dependencyConditionEnumSchema.optional(),
   delay_minutes: z.number().int().min(0).max(1440).default(0),
+  workspace_path: z.string().trim().min(1).max(1024).optional(),
 });
 
 export const updateScheduleSchema = z.object({
@@ -144,6 +145,7 @@ export const updateScheduleSchema = z.object({
   parent_schedule_id: scheduleIdSchema.nullable().optional(),
   dependency_condition: dependencyConditionEnumSchema.optional(),
   delay_minutes: z.number().int().min(0).max(1440).optional(),
+  workspace_path: z.string().trim().min(1).max(1024).nullable().optional(),
 });
 
 export const deleteScheduleSchema = z.object({

@@ -87,7 +87,7 @@ export function getScheduleToolsForLLM(): LLMTool[] {
       function: {
         name: "schedule_create",
         description:
-          'Create a new scheduled task with cron expression. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task — call list_ai_message_tasks to find one, or create_ai_message_task to create a new one first, then pass the returned task_id here.',
+          'Create a new scheduled task with cron expression. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task — call list_ai_message_tasks to find one, or create_ai_message_task to create a new one first, then pass the returned task_id here. For ai_message tasks, optional workspace_path is an absolute folder the scheduled run may use as its approved workspace.',
         parameters: zodToJsonSchema(createScheduleInputSchema()),
       },
     },
@@ -96,7 +96,7 @@ export function getScheduleToolsForLLM(): LLMTool[] {
       function: {
         name: "schedule_update",
         description:
-          'Update an existing scheduled task. If task_type is provided it must be "ai_message" (the only allowed value).',
+          'Update an existing scheduled task. If task_type is provided it must be "ai_message" (the only allowed value). For ai_message tasks, optional workspace_path sets (or null clears) the absolute folder the scheduled run uses as its approved workspace.',
         parameters: zodToJsonSchema(updateScheduleInputSchema()),
       },
     },

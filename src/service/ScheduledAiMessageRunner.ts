@@ -30,6 +30,7 @@ import {
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -125,6 +126,10 @@ export class ScheduledAiMessageRunner {
     }
 
     const conversationId = await this.ensureV2Conversation(task);
+    const workspaceError = await this.bindTaskWorkspace(task, conversationId);
+    if (workspaceError) {
+      return this.failFast(taskId, scheduleId, workspaceError);
+    }
 
     // 3. Parse policy and limits
     const policy = this.parseTaskPolicy(task);
@@ -558,6 +563,33 @@ export class ScheduledAiMessageRunner {
     });
     task.conversation_id = conversationId;
     return conversationId;
+  }
+
+  /**
+   * Approve the task's stored folder as the conversation workspace so file
+   * tools in the scheduled run stay inside that directory.
+   */
+  private async bindTaskWorkspace(
+    task: AiMessageTaskEntity,
+    conversationId: string
+  ): Promise<string | null> {
+    const stored = task.workspace_path?.trim();
+    if (!stored) {
+      return null;
+    }
+    try {
+      const canonical = await bindApprovedWorkspace(conversationId, stored);
+      if (canonical !== stored) {
+        await this.taskModule.updateTask({
+          id: task.id,
+          workspacePath: canonical,
+        });
+        task.workspace_path = canonical;
+      }
+      return null;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : "Invalid workspace path";
+    }
   }
 
   /**

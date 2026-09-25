@@ -7,6 +7,10 @@ import {
   type CreateAiMessageTaskRequest,
   type UpdateAiMessageTaskRequest,
 } from "@/entityTypes/aiMessageTaskTypes";
+import {
+  bindApprovedWorkspace,
+  clearApprovedWorkspace,
+} from "@/service/AiMessageTaskWorkspace";
 
 export class AiMessageTaskModule extends BaseModule {
   private model: AiMessageTaskModel;
@@ -33,6 +37,11 @@ export class AiMessageTaskModule extends BaseModule {
       request.conversationId
     );
 
+    const workspacePath = await this.resolveWorkspacePath(
+      conversationId,
+      request.workspacePath
+    );
+
     const entity: Partial<AiMessageTaskEntity> = {
       name: request.name.trim(),
       description: request.description?.trim() ?? undefined,
@@ -51,6 +60,7 @@ export class AiMessageTaskModule extends BaseModule {
         request.maxContinueCalls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls,
       status: "active",
       source_type: "schedule_ui",
+      workspace_path: workspacePath,
     };
 
     return this.model.create(entity);
@@ -86,8 +96,50 @@ export class AiMessageTaskModule extends BaseModule {
     if (request.maxContinueCalls !== undefined)
       updates.max_continue_calls = request.maxContinueCalls;
     if (request.status !== undefined) updates.status = request.status;
+    if (request.workspacePath !== undefined) {
+      const conversationId = this.ensureConversationId(
+        updates.conversation_id ?? existing.conversation_id
+      );
+      updates.conversation_id = conversationId;
+      updates.workspace_path = await this.resolveWorkspacePath(
+        conversationId,
+        request.workspacePath
+      );
+    }
 
     await this.model.update(request.id, updates);
+  }
+
+  private ensureConversationId(existing: string | null | undefined): string {
+    if (existing && existing.startsWith("v2-")) {
+      return existing;
+    }
+    return new AIChatV2Module().createConversationIfNeeded(
+      existing ?? undefined
+    );
+  }
+
+  /**
+   * Persist and approve a workspace directory for the task conversation.
+   * `undefined` leaves the path unchanged (caller should not call).
+   * `null` or blank clears it.
+   */
+  private async resolveWorkspacePath(
+    conversationId: string,
+    workspacePath: string | null | undefined
+  ): Promise<string | null> {
+    if (workspacePath === undefined || workspacePath === null) {
+      if (workspacePath === null) {
+        await clearApprovedWorkspace(conversationId);
+      }
+      return null;
+    }
+    const trimmed = workspacePath.trim();
+    if (!trimmed) {
+      await clearApprovedWorkspace(conversationId);
+      return null;
+    }
+    return bindApprovedWorkspace(conversationId, trimmed);
   }
 
   async getTask(id: number): Promise<AiMessageTaskEntity | null> {

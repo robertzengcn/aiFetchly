@@ -250,6 +250,7 @@ interface Props {
     max_tool_calls?: number;
     max_runtime_ms?: number;
     max_continue_calls?: number;
+    workspace_path?: string | null;
   }
 }
 
@@ -499,6 +500,7 @@ const handleSubmit = async () => {
           maxToolCalls: aiMessageFormState.value.maxToolCalls,
           maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
           maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+          workspacePath: aiMessageFormState.value.workspacePath.trim() || null,
         })
       } else {
         // Create new AI task and link to schedule
@@ -512,6 +514,7 @@ const handleSubmit = async () => {
           maxToolCalls: aiMessageFormState.value.maxToolCalls,
           maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
           maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+          workspacePath: aiMessageFormState.value.workspacePath.trim() || undefined,
         })
         submitData.task_id = taskId
       }

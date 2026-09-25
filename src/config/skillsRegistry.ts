@@ -2896,6 +2896,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description: "Delay in minutes (0-1440)",
           default: 0,
         },
+        workspace_path: {
+          type: "string",
+          description:
+            "Absolute folder the scheduled AI message may use as its approved workspace. Only valid when task_type is ai_message.",
+        },
       },
       required: ["name", "task_type", "task_id", "cron_expression"],
     },
@@ -2914,7 +2919,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "update_schedule",
     description:
-      'Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
+      'Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). For ai_message tasks, workspace_path sets (or null clears) the absolute folder the scheduled run uses as its approved workspace. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
     parameters: {
       type: "object",
       properties: {
@@ -2965,6 +2970,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         delay_minutes: {
           type: "number",
           description: "New delay in minutes (0-1440)",
+        },
+        workspace_path: {
+          type: ["string", "null"],
+          description:
+            "Absolute folder for an ai_message schedule, or null to clear it. The path must exist and be a directory.",
         },
       },
       required: ["schedule_id"],
@@ -3171,6 +3181,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           type: "number",
           description: "Max continue/round trips per run (0-50)",
           default: 10,
+        },
+        workspace_path: {
+          type: "string",
+          description:
+            "Optional absolute folder this task uses as its approved workspace when a schedule runs it.",
         },
       },
       required: ["name", "message"],

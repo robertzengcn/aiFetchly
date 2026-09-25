@@ -58,4 +58,19 @@ describe("AiMessageTaskModule.createTask", () => {
     const task = await mod.getTask(taskId);
     expect(task?.conversation_id).toBe("v2-existing-conv");
   });
+
+  it("stores a canonical workspace directory and approves it for the task conversation", async () => {
+    const mod = new AiMessageTaskModule();
+    await SqliteDb.ensureInitialized();
+    const folder = path.join(tmpDir, "scheduled-workspace");
+    fs.mkdirSync(folder, { recursive: true });
+    const taskId = await mod.createTask({
+      name: "Workspace recap",
+      message: "Summarize the folder",
+      workspacePath: folder,
+    });
+    const task = await mod.getTask(taskId);
+    expect(task?.workspace_path).toBe(await fs.promises.realpath(folder));
+    expect(task?.conversation_id?.startsWith("v2-")).toBe(true);
+  });
 });

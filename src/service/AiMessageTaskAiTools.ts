@@ -73,6 +73,7 @@ export function toSafeAiMessageTaskPayload(
     last_run_time: toIso(task.last_run_time),
     last_result_summary: task.last_result_summary ?? null,
     last_error_message: task.last_error_message ?? null,
+    workspace_path: task.workspace_path ?? null,
   };
 }
 
@@ -140,6 +141,7 @@ export async function createAiMessageTaskForAi(
       maxToolCalls: input.max_tool_calls,
       maxRuntimeMs: input.max_runtime_ms,
       maxContinueCalls: input.max_continue_calls,
+      workspacePath: input.workspace_path,
     });
   } catch (error) {
     const message =

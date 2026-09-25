@@ -75,6 +75,8 @@ export interface CreateAiMessageTaskRequest {
   readonly maxToolCalls?: number;
   readonly maxRuntimeMs?: number;
   readonly maxContinueCalls?: number;
+  /** Absolute folder the scheduled AI message may read and write. */
+  readonly workspacePath?: string | null;
 }
 
 /** Update-task request payload from the frontend. */
@@ -92,6 +94,8 @@ export interface UpdateAiMessageTaskRequest {
   readonly maxRuntimeMs?: number;
   readonly maxContinueCalls?: number;
   readonly status?: AiMessageTaskStatus;
+  /** Absolute folder, or null to clear the scheduled workspace. */
+  readonly workspacePath?: string | null;
 }
 
 /** Summary of a schedulable built-in tool for the UI catalog. */

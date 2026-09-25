@@ -499,6 +499,34 @@ describe("ScheduleAiTools", () => {
       if (result.success) {
         expect(result.data.schedule.name).to.equal("Test Schedule");
         expect(result.data.schedule.id).to.equal(1);
+        expect(result.data.workspace_path).to.equal(undefined);
+      }
+    });
+
+    it("should set workspace_path on the linked AI message task", async () => {
+      stubCreateDependencies();
+      const getTaskStub = AiMessageTaskModule.prototype
+        .getTask as sinon.SinonStub;
+      getTaskStub.resolves({
+        workspace_path: "/tmp/scheduled-workspace",
+      } as unknown as AiMessageTaskEntity);
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await createScheduleForAi({
+        ...validInput,
+        workspace_path: "/tmp/scheduled-workspace",
+      });
+
+      expect(updateStub.calledOnce).to.be.true;
+      expect(updateStub.firstCall.args[0]).to.deep.include({
+        id: 10,
+        workspacePath: "/tmp/scheduled-workspace",
+      });
+      expect(result.success).to.be.true;
+      if (result.success) {
+        expect(result.data.workspace_path).to.equal("/tmp/scheduled-workspace");
       }
     });
 
@@ -676,6 +704,25 @@ describe("ScheduleAiTools", () => {
   // =========================================================================
 
   describe("updateScheduleForAi", () => {
+    it("should reject workspace_path when the schedule is not an AI message task", async () => {
+      const existing = mockSchedule({ task_type: TaskType.SEARCH });
+      sinon
+        .stub(ScheduleTaskModule.prototype, "getScheduleById")
+        .resolves(existing);
+      stubScheduleManager();
+
+      const result = await updateScheduleForAi({
+        schedule_id: 1,
+        workspace_path: "/tmp/scheduled-workspace",
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(ScheduleToolErrorCode.VALIDATION_FAILED);
+        expect(result.error).to.contain("ai_message");
+      }
+    });
+
     it("should return SCHEDULE_NOT_FOUND for missing schedule", async () => {
       sinon
         .stub(ScheduleTaskModule.prototype, "getScheduleById")
