@@ -3078,6 +3078,8 @@ export default {
     installFailed: "インストールに失敗しました",
   },
   skillInstall: {
+    depStatus: { satisfied: "充足", missing: "不足", incompatible: "非互換", unknown: "不明" },
+    modeLabel: { "managed-copy": "管理コピー", "symbolic-link": "リンク（開発）", junction: "リンク（開発）" },
     planCommands: "実行されるコマンド",
     highRiskHint:
       "高リスクのコマンドは確認用に表示されるだけで自動実行されません。ご自身で実行してください。",
@@ -3151,6 +3153,8 @@ export default {
       cancelled: "キャンセル済み",
       disabled: "無効",
       rollback_required: "ロールバック中",
+      superseded: "置き換え済み",
+      awaiting_commands: "セットアップコマンド待ち",
     },
   },
   skillSlash: {

@@ -39,7 +39,7 @@
       >
         <div class="d-flex ga-1 flex-wrap align-center">
           <v-chip size="x-small" label variant="tonal">
-            {{ safePlan.mode }}
+            {{ t(`skillInstall.modeLabel.${safePlan.mode}`) || safePlan.mode }}
           </v-chip>
           <span class="text-caption text-medium-emphasis">
             {{ safePlan.source }} @ {{ safePlan.revision }}
@@ -68,7 +68,8 @@
             class="mr-2"
             :class="dep.status === 'satisfied' ? 'text-success' : 'text-warning'"
           >
-            {{ dep.name }}: {{ dep.status }}
+            {{ dep.name }}:
+            {{ t(`skillInstall.depStatus.${dep.status}`) || dep.status }}
           </span>
         </div>
         <div

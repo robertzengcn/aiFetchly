@@ -3110,6 +3110,8 @@ export default {
     installFailed: "Install failed",
   },
   skillInstall: {
+    depStatus: { satisfied: "Satisfied", missing: "Missing", incompatible: "Incompatible", unknown: "Unknown" },
+    modeLabel: { "managed-copy": "Managed copy", "symbolic-link": "Linked (development)", junction: "Linked (development)" },
     planCommands: "Commands that will run",
     highRiskHint:
       "High-risk commands are shown for review but never run automatically — you must run them yourself.",
@@ -3185,6 +3187,8 @@ export default {
       cancelled: "Cancelled",
       disabled: "Disabled",
       rollback_required: "Rolling back",
+      superseded: "Superseded",
+      awaiting_commands: "Setup commands pending",
     },
   },
   skillSlash: {

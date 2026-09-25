@@ -1907,6 +1907,12 @@ export class SkillInstallationModule extends BaseModule {
       readonly enabled: boolean;
       readonly updatedAt: string;
       readonly credentialNames: readonly string[];
+      /** Audit finding 12 (PRD §22.2–§22.4): manager surface gains the
+       *  linked canonical target, the source subdirectory, and the
+       *  recorded content hash (last-verification baseline). */
+      readonly linkedTargetPath?: string;
+      readonly sourceSubdirectory?: string;
+      readonly contentHash?: string;
     }[]
   > {
     const { installations } = await this.getModels();
@@ -1925,6 +1931,18 @@ export class SkillInstallationModule extends BaseModule {
       } catch {
         /* credential store unavailable — names stay empty */
       }
+      let linkedTargetPath: string | undefined;
+      let contentHash: string | undefined;
+      try {
+        const metadata = JSON.parse(row.metadataJson ?? "{}") as {
+          linkedTargetPath?: string;
+          activationContentHash?: string;
+        };
+        linkedTargetPath = metadata.linkedTargetPath;
+        contentHash = metadata.activationContentHash;
+      } catch {
+        /* unreadable metadata — optional fields stay absent */
+      }
       views.push({
         installationId: row.installationId,
         name: row.name,
@@ -1936,6 +1954,11 @@ export class SkillInstallationModule extends BaseModule {
         enabled: row.enabled,
         updatedAt: (row.updatedAt ?? new Date()).toISOString(),
         credentialNames,
+        ...(linkedTargetPath ? { linkedTargetPath } : {}),
+        ...(row.sourceSubdirectory
+          ? { sourceSubdirectory: row.sourceSubdirectory }
+          : {}),
+        ...(contentHash ? { contentHash } : {}),
       });
     }
     return views;
@@ -2759,6 +2782,9 @@ export class SkillInstallationModule extends BaseModule {
         ...(d.requiresElevation !== undefined
           ? { requiresElevation: d.requiresElevation }
           : {}),
+        ...(d.detectionEvidence !== undefined
+          ? { evidence: d.detectionEvidence }
+          : {}),
       })),
       credentials: plan.credentials.map((c) => c.environmentVariable),
       mode: plan.activation.mode,
@@ -2773,6 +2799,10 @@ export class SkillInstallationModule extends BaseModule {
         environmentNames: c.environmentNames,
       })),
       warnings: plan.warnings.map((w) => `[${w.code}] ${w.message}`),
+      // Audit finding 12 (§22.2): the review card shows the requested
+      // permissions and where the activation lands.
+      permissions: plan.permissions.map((p) => ({ kind: p.kind })),
+      activationTarget: plan.activation.targetDirectory,
     };
   }
 

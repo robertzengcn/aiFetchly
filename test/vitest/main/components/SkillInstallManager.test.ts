@@ -101,7 +101,7 @@ describe("SkillInstallManager", () => {
     expect(listSkillInstallations).toHaveBeenCalled();
     expect(wrapper.text()).toContain("video-use");
     expect(wrapper.text()).toContain("https://github.com/browser-use/video-use");
-    expect(wrapper.text()).toContain("managed-copy");
+    expect(wrapper.text()).toContain("Managed copy");
     // Credential NAMES render; values never exist here.
     expect(wrapper.text()).toContain("ELEVENLABS_API_KEY");
     expect(wrapper.find('[data-testid="skill-install-manager-empty"]').exists()).toBe(false);

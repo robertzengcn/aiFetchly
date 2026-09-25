@@ -182,8 +182,11 @@ export function detectDependencyProposals(
     const raw = match[1].toLowerCase();
     if (raw === "ffprobe") {
       wanted.add("ffmpeg"); // ffprobe ships with ffmpeg
-    } else if (raw === "python" || raw === "npm") {
-      wanted.add(raw === "python" ? "python" : "node");
+    } else if (raw === "python" || raw === "python3" || raw === "npm") {
+      // The catalog/fallback keys BOTH variants as 'python' (audit finding
+      // 12: a bare `python3 --version` instruction produced NO dependency
+      // because 'python3' matched no table entry).
+      wanted.add(raw === "npm" ? "node" : "python");
     } else {
       wanted.add(raw);
     }
@@ -269,6 +272,9 @@ export async function detectAll(
       return {
         ...item,
         currentStatus: outcome.passed ? "satisfied" : "missing",
+        // Audit finding 12: keep the probe evidence (version output /
+        // diagnostic codes) instead of collapsing to the status word.
+        detectionEvidence: outcome.evidence,
       };
     })
   );

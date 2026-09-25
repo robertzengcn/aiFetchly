@@ -2987,6 +2987,8 @@ export default {
     installFailed: "安装失败",
   },
   skillInstall: {
+    depStatus: { satisfied: "已满足", missing: "缺失", incompatible: "不兼容", unknown: "未知" },
+    modeLabel: { "managed-copy": "托管副本", "symbolic-link": "链接（开发）", junction: "链接（开发）" },
     planCommands: "将执行的命令",
     highRiskHint: "高危命令仅作展示，不会自动执行——需要你手动运行。",
     planCredentials: "需要凭据",
@@ -3056,6 +3058,8 @@ export default {
       cancelled: "已取消",
       disabled: "已禁用",
       rollback_required: "正在回滚",
+      superseded: "已被取代",
+      awaiting_commands: "等待执行安装命令",
     },
   },
   skillSlash: {

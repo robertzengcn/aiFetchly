@@ -121,6 +121,11 @@ export interface DependencyPlanItem {
   readonly requiresElevation: boolean;
   readonly approvalRisk: "low" | "medium" | "high";
   readonly probes: readonly VerificationProbe[];
+  /** Redacted probe evidence from the LAST detection run — version line,
+   *  diagnostic codes (design §14.1). Recorded so the review card and
+   *  readiness report show WHAT was detected, not just satisfied/missing
+   *  (audit finding 12 / NFR-08). */
+  readonly detectionEvidence?: string;
 }
 
 export interface CredentialRequirement {
@@ -215,6 +220,9 @@ export interface SafePlanView {
     readonly installMethod?: string;
     /** Whether the typed installer may need OS elevation (winget/apt/brew). */
     readonly requiresElevation?: boolean;
+    /** Redacted probe evidence (version output / diagnostic codes) from the
+     *  last detection run (audit finding 12). */
+    readonly evidence?: string;
   }[];
   readonly credentials: readonly string[];
   readonly mode: string;
@@ -231,6 +239,11 @@ export interface SafePlanView {
     readonly environmentNames: readonly string[];
   }[];
   readonly warnings: readonly string[];
+  /** Requested permissions with human-readable detail (§22.2 / finding 12):
+   *  what the package asks for (package-manager, network, helper-exec). */
+  readonly permissions?: readonly { readonly kind: string }[];
+  /** Where the activation lands (e.g. "<global prompt skills>"). */
+  readonly activationTarget?: string;
 }
 
 export interface InstallSnapshot {

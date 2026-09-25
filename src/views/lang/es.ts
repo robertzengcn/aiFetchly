@@ -3141,6 +3141,8 @@ export default {
     installFailed: "Error al instalar",
   },
   skillInstall: {
+    depStatus: { satisfied: "Satisfecho", missing: "Falta", incompatible: "Incompatible", unknown: "Desconocido" },
+    modeLabel: { "managed-copy": "Copia administrada", "symbolic-link": "Enlazado (desarrollo)", junction: "Enlazado (desarrollo)" },
     planCommands: "Comandos que se ejecutarán",
     highRiskHint:
       "Los comandos de alto riesgo se muestran para revisión pero nunca se ejecutan automáticamente: debes ejecutarlos tú mismo.",
@@ -3215,6 +3217,8 @@ export default {
       cancelled: "Cancelada",
       disabled: "Desactivada",
       rollback_required: "Revirtiendo",
+      superseded: "Reemplazada",
+      awaiting_commands: "Comandos de instalación pendientes",
     },
   },
   skillSlash: {

@@ -43,7 +43,9 @@
               :color="statusColor(item)"
               data-testid="skill-install-manager-status"
             >
-              {{ item.status }}
+              {{
+                t(`skillInstall.state.${item.status}`) || item.status
+              }}
             </v-chip>
             <v-chip size="x-small" class="ml-1" variant="tonal">
               {{ item.kind }}
@@ -57,7 +59,11 @@
                 @ {{ item.sourceRevision }}
               </div>
               <div>
-                {{ t("skillInstall.manager.mode") }}: {{ item.activationMode }}
+                {{ t("skillInstall.manager.mode") }}:
+                {{
+                  t(`skillInstall.modeLabel.${item.activationMode}`) ||
+                  item.activationMode
+                }}
               </div>
               <div data-testid="skillInstall.manager-credentials">
                 {{ t("skillInstall.manager.credentials") }}:

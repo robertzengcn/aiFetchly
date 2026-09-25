@@ -245,15 +245,16 @@ describe("SkillInstallCard", () => {
     expect(skillRows[0].text()).toContain("video-use");
     expect(skillRows[0].text()).toContain("prompt");
     const deps = wrapper.find('[data-testid="skill-install-plan-deps"]');
-    expect(deps.text()).toContain("ffmpeg: satisfied");
-    expect(deps.text()).toContain("ffprobe: missing");
+    // Localized dependency statuses (audit finding 12).
+    expect(deps.text()).toContain("ffmpeg: Satisfied");
+    expect(deps.text()).toContain("ffprobe: Missing");
     const creds = wrapper.find('[data-testid="skill-install-plan-creds"]');
     expect(creds.text()).toContain("ELEVENLABS_API_KEY");
     // Source + revision + mode chip present.
     const plan = wrapper.find('[data-testid="skill-install-plan"]');
     expect(plan.text()).toContain("https://github.com/a/video-use");
     expect(plan.text()).toContain("abc123def456");
-    expect(plan.text()).toContain("managed-copy");
+    expect(plan.text()).toContain("Managed copy");
   });
 
   it("shows the commands that will execute on the approval card (review D1)", () => {

@@ -3138,6 +3138,8 @@ export default {
     installFailed: "Installation fehlgeschlagen",
   },
   skillInstall: {
+    depStatus: { satisfied: "Erfüllt", missing: "Fehlt", incompatible: "Inkompatibel", unknown: "Unbekannt" },
+    modeLabel: { "managed-copy": "Verwaltete Kopie", "symbolic-link": "Verknüpft (Entwicklung)", junction: "Verknüpft (Entwicklung)" },
     planCommands: "Befehle, die ausgeführt werden",
     highRiskHint:
       "Risikoreiche Befehle werden zur Prüfung angezeigt, aber nie automatisch ausgeführt — Sie müssen sie selbst ausführen.",
@@ -3215,6 +3217,8 @@ export default {
       cancelled: "Abgebrochen",
       disabled: "Deaktiviert",
       rollback_required: "Wird zurückgesetzt",
+      superseded: "Ersetzt",
+      awaiting_commands: "Setup-Befehle ausstehend",
     },
   },
   skillSlash: {

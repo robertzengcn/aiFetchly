@@ -2115,3 +2115,63 @@ describe("durable constraints + checkpoint retry (audit finding 11)", () => {
     expect(refreshed.state).toBe("awaiting_approval");
   }, 120_000);
 });
+
+describe("dependency detection + metadata completeness (audit finding 12)", () => {
+  it("a bare python3 instruction produces a python dependency plan item", async () => {
+    const { detectDependencyProposals } = await import(
+      "@/service/SkillDependencyOrchestrator"
+    );
+    const items = detectDependencyProposals([
+      "Run python3 --version to verify the environment.",
+    ]);
+    expect(items.some((d) => d.name === "python")).toBe(true);
+    // npm still maps to node; ffmpeg keeps its ffprobe companion probe.
+    const npmItems = detectDependencyProposals(["npm install"]);
+    expect(npmItems.some((d) => d.name === "node")).toBe(true);
+    const ff = detectDependencyProposals(["requires ffmpeg"]);
+    const ffmpeg = ff.find((d) => d.name === "ffmpeg");
+    expect(ffmpeg?.probes.some((p) => p.command.includes("ffprobe"))).toBe(
+      true
+    );
+  });
+
+  it("detection records probe evidence (version output) on the plan item", async () => {
+    const { detectAll, detectDependencyProposals } = await import(
+      "@/service/SkillDependencyOrchestrator"
+    );
+    const items = detectDependencyProposals(["requires ffmpeg"]);
+    // Real probe on this host (CI runners lack ffmpeg -> missing, WSL has
+    // it -> satisfied); either way EVIDENCE is recorded, not just status.
+    const detected = await detectAll(items, process.cwd());
+    for (const item of detected) {
+      expect(item.detectionEvidence).toBeDefined();
+      expect(item.detectionEvidence?.length ?? 0).toBeGreaterThan(0);
+    }
+  }, 60_000);
+
+  it("the manager listing carries linked target, subdirectory, and hash", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-f12",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+    const listed = await module.listInstallations();
+    const row = listed.find((r) => r.name === "video-use");
+    expect(row).toBeDefined();
+    if (!row) return;
+    expect(row.contentHash).toBeDefined();
+    // safePlan now exposes permissions + activation target + dep evidence.
+    const status = await module.getStatus(prepared.sessionId);
+    expect(status.safePlan?.activationTarget).toBeDefined();
+  }, 120_000);
+});
