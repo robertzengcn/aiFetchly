@@ -31,6 +31,9 @@ import {
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
+import { SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS } from "@/config/aiChatScheduledLoopConfig";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
+import { showNotification } from "@/modules/lib/function";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -270,6 +273,15 @@ export class ScheduledAiMessageRunner {
     this.runRegistry.register(runId, abortController);
     let lease: ConversationTurnLease | null = null;
 
+    const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
+    let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearPermissionBackstop = (): void => {
+      if (permissionBackstopHandle) {
+        clearTimeout(permissionBackstopHandle);
+        permissionBackstopHandle = null;
+      }
+    };
+
     let outcome: ScheduledTurnOutcome;
     try {
       try {
@@ -308,8 +320,67 @@ export class ScheduledAiMessageRunner {
       const engine = new AIChatQueryEngineFactory().createScheduled(
         this.parseTaskPolicy(task)
       );
+      engineRegistry.register({
+        conversationId,
+        engine,
+        runId,
+        scheduleId,
+        clearPermissionBackstop,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
       const sink = new ScheduledLoopEventSink((event) => {
+        // Gated tool paused for permission: suspend the runtime timeout,
+        // notify, broadcast, publish pending metadata, and start the
+        // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
+        // forwarding so the pause is observed even when the engine emits a
+        // tool_result mid-stream.
+        if (
+          event.type === "tool_result" &&
+          event.toolResult?.needsPermissionPrompt === true
+        ) {
+          clearTimeout(timeoutHandle);
+          engineRegistry.setPendingPermission(conversationId, {
+            toolId: event.toolCallId,
+          });
+          try {
+            showNotification(
+              "AiFetchly — permission required",
+              `A scheduled run wants to use ${event.toolName}. Click to review.`
+            );
+          } catch {
+            /* notification must never fail the run */
+          }
+          try {
+            this.broadcaster.emit({
+              conversationId,
+              reason: "scheduled_turn_permission_requested",
+              scheduleId,
+              runId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              occurredAt: new Date().toISOString(),
+            });
+          } catch {
+            /* broadcast failure is non-fatal */
+          }
+          permissionBackstopHandle = setTimeout(() => {
+            void engine
+              .denyToolPermission({
+                toolId: event.toolCallId,
+                conversationId,
+              })
+              .then(() => {
+                engineRegistry.clearPendingPermission(conversationId);
+              })
+              .catch((err: unknown) => {
+                console.error(
+                  "[scheduled-loop] backstop auto-deny failed:",
+                  err
+                );
+              });
+          }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
+          return;
+        }
         // Forward token/done/error chunks for live streaming to a renderer
         // viewing this conversation (technical-design §13.2). Strict routing
         // is enforced renderer-side; forwarding failures are non-fatal.
@@ -357,7 +428,9 @@ export class ScheduledAiMessageRunner {
       };
     } finally {
       clearTimeout(timeoutHandle);
+      clearPermissionBackstop();
       this.runRegistry.unregister(runId);
+      engineRegistry.unregister(conversationId);
       if (lease) lease.release();
     }
 
@@ -614,6 +687,14 @@ export class ScheduledAiMessageRunner {
     }, limits.maxRuntimeMs);
     this.runRegistry.register(runId, abortController);
     let lease: ConversationTurnLease | null = null;
+    const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
+    let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearPermissionBackstop = (): void => {
+      if (permissionBackstopHandle) {
+        clearTimeout(permissionBackstopHandle);
+        permissionBackstopHandle = null;
+      }
+    };
     let outcome: ScheduledTurnOutcome = {
       kind: "failed",
       errorMessage: "NO_TERMINAL_EVENT",
@@ -643,8 +724,67 @@ export class ScheduledAiMessageRunner {
       }
 
       const engine = new AIChatQueryEngineFactory().createScheduled(policy);
+      engineRegistry.register({
+        conversationId,
+        engine,
+        runId,
+        scheduleId: scheduleKey,
+        clearPermissionBackstop,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
       const sink = new ScheduledLoopEventSink((event) => {
+        // Gated tool paused for permission: suspend the runtime timeout,
+        // notify, broadcast, publish pending metadata, and start the
+        // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
+        // forwarding so the pause is observed even when the engine emits a
+        // tool_result mid-stream.
+        if (
+          event.type === "tool_result" &&
+          event.toolResult?.needsPermissionPrompt === true
+        ) {
+          clearTimeout(timeoutHandle);
+          engineRegistry.setPendingPermission(conversationId, {
+            toolId: event.toolCallId,
+          });
+          try {
+            showNotification(
+              "AiFetchly — permission required",
+              `A scheduled run wants to use ${event.toolName}. Click to review.`
+            );
+          } catch {
+            /* notification must never fail the run */
+          }
+          try {
+            this.broadcaster.emit({
+              conversationId,
+              reason: "scheduled_turn_permission_requested",
+              scheduleId: scheduleKey,
+              runId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              occurredAt: new Date().toISOString(),
+            });
+          } catch {
+            /* broadcast failure is non-fatal */
+          }
+          permissionBackstopHandle = setTimeout(() => {
+            void engine
+              .denyToolPermission({
+                toolId: event.toolCallId,
+                conversationId,
+              })
+              .then(() => {
+                engineRegistry.clearPendingPermission(conversationId);
+              })
+              .catch((err: unknown) => {
+                console.error(
+                  "[scheduled-loop] backstop auto-deny failed:",
+                  err
+                );
+              });
+          }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
+          return;
+        }
         if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
@@ -713,7 +853,9 @@ export class ScheduledAiMessageRunner {
       throw error;
     } finally {
       clearTimeout(timeoutHandle);
+      clearPermissionBackstop();
       this.runRegistry.unregister(runId);
+      engineRegistry.unregister(conversationId);
       if (lease) lease.release();
     }
 
