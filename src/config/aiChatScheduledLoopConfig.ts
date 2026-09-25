@@ -50,6 +50,14 @@ export const SCHEDULED_LOOP_DEFAULT_OVERLAP_POLICY = "coalesce" as const;
 export const SCHEDULED_LOOP_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
+ * Backstop for a scheduled-loop permission pause. If the user does not grant
+ * or deny a paused gated tool within this window, the run auto-denies the tool
+ * and continues so the conversation lock is not held indefinitely. (Per the
+ * approved design: send a notification and wait, with a 1-hour backstop.)
+ */
+export const SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS = 60 * 60 * 1000; // 1 hour
+
+/**
  * Checked integer multiply. Returns null when the result is not a safe integer
  * (prevents silent overflow when converting durations to milliseconds).
  */
