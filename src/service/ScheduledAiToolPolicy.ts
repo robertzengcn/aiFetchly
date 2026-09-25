@@ -383,7 +383,8 @@ export function canAutoApproveScheduledTool(params: {
         : "automation";
       return {
         allowed: false,
-        reason: `Tool "${toolName}" is a ${tier} tool and must be explicitly added to the task's allowed tools list.`,
+        requiresInteractivePermission: true,
+        reason: `Tool "${toolName}" is a ${tier} tool requiring permission. Pausing the scheduled run to ask the user.`,
         riskLevel: "high",
       };
     }

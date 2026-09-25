@@ -144,7 +144,8 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
       toolName: "proxy_check",
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toMatch(/allowed tools list/);
+    expect(decision.reason).toMatch(/automation/);
+    expect(decision.requiresInteractivePermission).toBe(true);
   });
 
   it("high-impact tools are denied without explicit allowlist but allowed with it", () => {
@@ -156,6 +157,7 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     });
     expect(denied.allowed).toBe(false);
     expect(denied.reason).toMatch(/high-impact/);
+    expect(denied.requiresInteractivePermission).toBe(true);
     // With explicit selection + autoApprove → allowed unattended.
     const allowed = canAutoApproveScheduledTool({
       skill: skill("send_email_reply"),
@@ -263,6 +265,53 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toMatch(/Imported skills are not enabled/);
+  });
+});
+
+describe("ScheduledAiToolPolicy interactive permission outcome", () => {
+  it("high-impact tool not in allowedTools requests interactive permission", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+    expect(decision.riskLevel).toBe("high");
+  });
+
+  it("automation tool not in allowedTools requests interactive permission", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("proxy_check"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "proxy_check",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+  });
+
+  it("permanently-blocked tool does NOT request interactive permission", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("shell_execute"),
+      taskPolicy: policy({
+        allowedTools: ["shell_execute"],
+        autoApproveTools: true,
+      }),
+      toolName: "shell_execute",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+    expect(decision.riskLevel).toBe("blocked");
+  });
+
+  it("allowlisted high-impact tool auto-approves (no interactive permission)", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("send_email_reply"),
+      taskPolicy: policy({ allowedTools: ["send_email_reply"] }),
+      toolName: "send_email_reply",
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
   });
 });
 

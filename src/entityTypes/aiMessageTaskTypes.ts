@@ -116,6 +116,11 @@ export interface ScheduledToolDecision {
   readonly allowed: boolean;
   readonly reason?: string;
   readonly riskLevel: "low" | "medium" | "high" | "blocked";
+  /** True when the tool is a gated high-impact/automation tool not in the
+   * task's allowedTools. The scheduled executor should synthesize a
+   * needsPermissionPrompt result and pause for the user instead of failing
+   * closed. Absent/undefined for permanently-blocked and auto-approved tools. */
+  readonly requiresInteractivePermission?: boolean;
 }
 
 /** Metadata for a blocked tool call stored in the run log. */
