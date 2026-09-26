@@ -4,7 +4,10 @@ import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
-import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import type {
+  AIChatQueryEventSink,
+  AIChatSegmentOutcome,
+} from "@/service/AIChatQueryEvents";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
@@ -25,7 +28,8 @@ import type {
 
 /** Structural engine view the coordinator depends on (DI-friendly). */
 export interface CoordinatorEngine {
-  submitMessage(input: AIChatQuerySubmitInput): Promise<void>;
+  /** Outcome-returning entry (generator-streaming PRD FR-022, Stage A1). */
+  runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome>;
   stopActiveTurn(conversationId?: string): void;
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
 }
@@ -75,6 +79,12 @@ interface LiveRunState {
    * settleDetachedTerminal instead of the held terminalChunk slot.
    */
   dispatchSettled: boolean;
+  /**
+   * Diagnostic captured when the engine segment ended WITHOUT a classified
+   * outcome (FR-022 / AC-17): the run is finalized failed with
+   * errorCode "unclassified_segment_exit" instead of defaulting to completed.
+   */
+  unclassifiedExitSummary: string | null;
 }
 
 const CLIENT_REQUEST_CACHE_MAX = 200;
@@ -178,6 +188,7 @@ export class AIChatCoordinator {
       cancelRequested: false,
       terminalChunk: null,
       dispatchSettled: false,
+      unclassifiedExitSummary: null,
     });
     this.runIndex.set(run.runId, request.conversationId);
     this.startRequests.set(run.runId, {
@@ -377,62 +388,88 @@ export class AIChatCoordinator {
       void this.broadcastRunSummary(conversationId, "run_started");
 
       const adapter = new AIChatRunEventAdapter(runId, conversationId);
-      await this.deps.engine.submitMessage({
-        request: this.buildEngineRequest(live),
-        eventSink: this.createRunSink(live, adapter),
-      });
-
-      const terminal = live.terminalChunk;
-      if (!terminal) {
-        // The engine parks a permission/question turn AFTER its last sink
-        // event (the park is engine state, not a chunk), so the in-flight
-        // sampler can miss it. Sampling once more after submitMessage
-        // resolves is race-free: the park happens inside submitMessage's
-        // awaited loop handler.
-        const parked = mapEngineStatus(
-          this.deps.engine.getConversationRuntimeStatus(conversationId)
-        );
-        if (parked === "awaiting_permission" || parked === "awaiting_user") {
-          live.status = parked;
-          live.dispatchSettled = true;
-          try {
-            await this.deps.runModule.transition(runId, parked);
-          } catch (err) {
-            console.warn(
-              "[ai-chat-workspace] pause transition failed for run",
-              runId,
-              err
-            );
-          }
-          void this.broadcastRunSummary(
+      let outcome: AIChatSegmentOutcome;
+      try {
+        outcome = await this.deps.engine.runTurn({
+          request: this.buildEngineRequest(live),
+          eventSink: this.createRunSink(live, adapter),
+        });
+      } catch (err) {
+        // FR-022 / AC-17: a segment that ends without a classified outcome
+        // (engine threw) is recorded as failed with a diagnostic — never
+        // completed. The renderer still learns via a synthesized error event.
+        const message = err instanceof Error ? err.message : String(err);
+        outcome = {
+          type: "failed",
+          conversationId,
+          assistantMessageId: "",
+        };
+        if (!live.terminalChunk) {
+          live.terminalChunk = {
+            eventType: "error",
             conversationId,
-            parked === "awaiting_permission"
-              ? "permission_required"
-              : "user_input_required"
-          );
-          // Keep the live entry: the parked turn's eventual terminal
-          // (permission-grant resume or deny-stop cancel) routes through
-          // settleDetachedTerminal. The finally block below still releases
-          // the lease and scheduler capacity — the run is parked, not
-          // executing.
-          return;
+            errorMessage: message,
+          };
         }
+        live.unclassifiedExitSummary = message.slice(0, 500);
       }
-      let finalStatus: ChatRunStatus = live.cancelRequested
-        ? "cancelled"
-        : "completed";
-      let errorSummary: string | null = null;
-      if (terminal) {
-        const hint = AIChatRunEventAdapter.statusHintFor(terminal.eventType);
-        if (hint) finalStatus = hint;
-        if (terminal.eventType === "error" && terminal.errorMessage) {
-          errorSummary = terminal.errorMessage.slice(0, 500);
+
+      // Paused outcomes park the run (FR-009): waiting state comes from the
+      // explicit segment outcome, not from a sampled engine status and not
+      // from the absence of a terminal event.
+      if (
+        outcome.type === "paused_for_permission" ||
+        outcome.type === "paused_for_plan_question"
+      ) {
+        const parked: ChatRunStatus =
+          outcome.type === "paused_for_permission"
+            ? "awaiting_permission"
+            : "awaiting_user";
+        live.status = parked;
+        live.dispatchSettled = true;
+        try {
+          await this.deps.runModule.transition(runId, parked);
+        } catch (err) {
+          console.warn(
+            "[ai-chat-workspace] pause transition failed for run",
+            runId,
+            err
+          );
         }
+        void this.broadcastRunSummary(
+          conversationId,
+          parked === "awaiting_permission"
+            ? "permission_required"
+            : "user_input_required"
+        );
+        // Keep the live entry: the parked turn's eventual terminal
+        // (permission-grant resume or deny-stop cancel) routes through
+        // settleDetachedTerminal. The finally block below still releases
+        // the lease and scheduler capacity — the run is parked, not
+        // executing.
+        return;
+      }
+
+      const finalStatus = this.statusForOutcome(outcome);
+      const terminal = live.terminalChunk;
+      let errorSummary: string | null = null;
+      let errorCode: string | undefined;
+      if (outcome.type === "failed" && live.unclassifiedExitSummary) {
+        errorSummary = live.unclassifiedExitSummary;
+        errorCode = "unclassified_segment_exit";
+      } else if (outcome.type === "conversation_busy") {
+        errorSummary = "Conversation became busy before this run dispatched.";
+      } else if (
+        terminal?.eventType === "error" &&
+        terminal.errorMessage
+      ) {
+        errorSummary = terminal.errorMessage.slice(0, 500);
       }
       // Persist terminal state BEFORE routing the terminal detail event or
       // the summary hint (design §5.3 persistence-precedes-terminal-hints).
       await this.deps.runModule.transition(runId, finalStatus, {
         errorSummary,
+        ...(errorCode ? { errorCode } : {}),
       });
       if (
         (finalStatus === "completed" || finalStatus === "cancelled") &&
@@ -468,6 +505,29 @@ export class AIChatCoordinator {
       lease.release();
       this.deps.scheduler.complete(runId);
       this.pump();
+    }
+  }
+
+  /**
+   * Derive the durable run status from the explicit segment outcome only
+   * (generator-streaming PRD FR-022). Completion is never inferred from the
+   * absence of a terminal event; an unexpected busy outcome (admission race)
+   * fails the run honestly rather than reporting success.
+   */
+  private statusForOutcome(outcome: AIChatSegmentOutcome): ChatRunStatus {
+    switch (outcome.type) {
+      case "completed":
+      case "cancelled":
+      case "failed":
+        return outcome.type;
+      case "paused_for_permission":
+        return "awaiting_permission";
+      case "paused_for_plan_question":
+        return "awaiting_user";
+      case "conversation_busy":
+        // The coordinator admitted this run; an engine-side busy outcome
+        // means the admission raced another owner's turn — never success.
+        return "failed";
     }
   }
 

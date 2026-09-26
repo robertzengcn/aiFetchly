@@ -72,6 +72,7 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
   AIChatPlanLoopContext,
+  AIChatSegmentOutcome,
   AIChatTurnTerminalEvent,
   AnswerPlanQuestionRequest,
   PendingPermissionTurn,
@@ -755,8 +756,12 @@ export class AIChatQueryEngine {
    * Full conversation lifecycle for one user message:
    * resolve plan, create conversation, save user message, build transcript,
    * assemble tools, run the loop, and handle the result.
+   *
+   * Stage A (generator-streaming PRD FR-022): the outcome-returning engine
+   * entry point. Owners consume the explicit segment outcome instead of
+   * inferring completion from the absence of a terminal event.
    */
-  async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
+  async runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
     const { eventSink, request, scheduledContext } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
@@ -914,7 +919,11 @@ export class AIChatQueryEngine {
               GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES[resolution.errorCode],
             errorCode: resolution.errorCode,
           });
-          return;
+          return {
+            type: "failed",
+            conversationId,
+            assistantMessageId: "",
+          };
         }
         const generatedParts: OpenAIImageUrlContentPart[] =
           resolution.result.artifacts.map((artifact) => ({
@@ -1143,13 +1152,17 @@ export class AIChatQueryEngine {
         conversationId: request.conversationId ?? "",
         errorMessage: userSafeError(err),
       });
-      return;
+      return {
+        type: "failed",
+        conversationId: request.conversationId ?? "",
+        assistantMessageId: "",
+      };
     }
 
     // ------------------------------------------------------------------
     // 3-9. Run the turn (shared execution path; design §12.2)
     // ------------------------------------------------------------------
-    const terminal = await this.runPersistedTurn({
+    return await this.runPersistedTurn({
       conversationId,
       assistantMessageId,
       messages,
@@ -1161,13 +1174,22 @@ export class AIChatQueryEngine {
       sourceUserMessageId,
       intentDecisionId,
     });
-    if (terminal.type === "conversation_busy") {
+  }
+
+  /**
+   * @deprecated Outcome-swallowing wrapper for callers not yet migrated to
+   * `runTurn` (generator-streaming PRD FR-013: legacy V2 send handler,
+   * scheduled runner). Kept until those callers adopt the owner contract.
+   */
+  async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
+    const outcome = await this.runTurn(input);
+    if (outcome.type === "conversation_busy") {
       // The legacy direct path cannot queue; surface a clear error instead of
       // silently dropping the message. The queue service avoids this by
       // checking engine status before dispatch.
-      eventSink.emit({
+      input.eventSink.emit({
         type: "error",
-        conversationId,
+        conversationId: outcome.conversationId,
         errorMessage:
           "This conversation is still working on the previous message. Please wait for it to finish or stop it.",
       });

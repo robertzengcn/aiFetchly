@@ -563,6 +563,14 @@ export type AIChatTurnTerminalEvent =
       readonly conversationId: string;
     };
 
+/**
+ * Stage A §3.1 (generator-streaming PRD FR-022): the explicit outcome of one
+ * execution segment, consumed by its owner. This names the existing terminal
+ * classification rather than adding a second union — completion is never
+ * inferred from the absence of a terminal event.
+ */
+export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {
   toolId: string;

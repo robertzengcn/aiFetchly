@@ -3,7 +3,10 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { SqliteDb } from "@/config/SqliteDb";
-import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import type {
+  AIChatQueryEventSink,
+  AIChatSegmentOutcome,
+} from "@/service/AIChatQueryEvents";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
 import type { ChatRunStatus } from "@/entityTypes/aiChatWorkspaceTypes";
@@ -51,10 +54,11 @@ beforeEach(() => {
   AIChatConversationTurnCoordinator.getInstance().resetForTesting();
 });
 
-/** Deferred the test resolves to finish a fake engine turn. */
+/** Deferred the test resolves (or rejects) to finish a fake engine turn. */
 interface TurnHandle {
   input: AIChatQuerySubmitInput;
-  resolve(): void;
+  resolve(outcome?: AIChatSegmentOutcome): void;
+  reject(error: unknown): void;
 }
 
 function makeFakeEngine(): {
@@ -73,9 +77,20 @@ function makeFakeEngine(): {
       engineStatus.set(conversationId, status);
     },
     engine: {
-      submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-        return new Promise<void>((resolve) => {
-          turns.push({ input, resolve });
+      runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
+        return new Promise<AIChatSegmentOutcome>((resolve, reject) => {
+          turns.push({
+            input,
+            resolve: (outcome) =>
+              resolve(
+                outcome ?? {
+                  type: "completed",
+                  conversationId: input.request.conversationId ?? "",
+                  assistantMessageId: "",
+                }
+              ),
+            reject,
+          });
         });
       },
       stopActiveTurn(conversationId?: string): void {
@@ -429,7 +444,13 @@ describe("AIChatCoordinator", () => {
       messageId: "assistant-1",
       fullContent: "partial",
     });
-    turn.resolve();
+    // Outcome is authoritative (Stage A1): the engine classifies the aborted
+    // segment as cancelled — the coordinator no longer infers it from chunks.
+    turn.resolve({
+      type: "cancelled",
+      conversationId: "v2-test-20",
+      assistantMessageId: "assistant-1",
+    });
     await waitFor(async () => {
       const row = await runModel.getByRunId(accepted.response.runId);
       return row?.status === "cancelled";
@@ -507,6 +528,88 @@ describe("AIChatCoordinator", () => {
       const row = await runModel.getByRunId(accepted.response.runId);
       return row?.status === "completed";
     });
+  });
+
+  it("derives waiting status from the paused segment outcome — never completed (FR-009/022)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(4);
+    win.register(router);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(31));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    // Only a token chunk — no terminal chunk, no sampled pause state.
+    emit(fake.turns[0].input.eventSink, {
+      type: "token",
+      conversationId: "v2-test-31",
+      messageId: "assistant-1",
+      contentDelta: "work",
+      model: "m",
+    });
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-31",
+      assistantMessageId: "assistant-1",
+    });
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+    expect(
+      win.summaries.some((s) => s.reason === "permission_required")
+    ).toBe(true);
+    expect(coordinator.getLiveRuntime("v2-test-31")?.runtimeStatus).toBe(
+      "awaiting_permission"
+    );
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.status).not.toBe("completed");
+  });
+
+  it("records an unclassified exit as failed with a diagnostic — never completed (AC-17)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(5);
+    win.register(router);
+    router.select(5, "v2-test-32", 1);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(32));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    // The engine promise rejects — no terminal chunk, no classified outcome.
+    fake.turns[0].reject(new Error("engine vanished"));
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    const failedRow = await runModel.getByRunId(accepted.response.runId);
+    expect(failedRow?.errorCode).toBe("unclassified_segment_exit");
+    expect(failedRow?.errorSummary).toContain("engine vanished");
+    // The renderer still learned about the failure via a synthesized error
+    // detail event (never silence an unclassified exit).
+    expect(win.details.some((d) => d.eventType === "error")).toBe(true);
+  });
+
+  it("treats an unexpected conversation_busy outcome as failed, not success", async () => {
+    const { coordinator, fake, runModel } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(35));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+
+    fake.turns[0].resolve({
+      type: "conversation_busy",
+      conversationId: "v2-test-35",
+    });
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    const row = await runModel.getByRunId(accepted.response.runId);
+    expect(row?.errorSummary).toContain("busy");
   });
 });
 

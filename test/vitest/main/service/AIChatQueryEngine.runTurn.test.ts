@@ -16,6 +16,7 @@ import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
@@ -27,6 +28,7 @@ const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(() => ({
     getConversationMessages: mockGetConversationMessages,
+    saveUserMessage: mockSaveUserMessage,
     saveAssistantMessage: mockSaveAssistantMessage,
     saveToolCallMessage: mockSaveToolCallMessage,
     saveToolResultMessage: mockSaveToolResultMessage,
@@ -230,5 +232,67 @@ describe("AIChatQueryEngine segment outcomes (P0 baseline)", () => {
       finishReason: "stop",
     });
     await expect(first).resolves.toMatchObject({ type: "completed" });
+  });
+});
+
+describe("AIChatQueryEngine.runTurn (Stage A1 — PRD FR-022)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockCreateConversationIfNeeded.mockImplementation((id: string) => id);
+  });
+
+  it("runTurn returns the terminal outcome that submitMessage used to swallow", async () => {
+    const engine = createEngineWithFakeLoop(async (input) => ({
+      type: "completed",
+      conversationId: input.conversationId,
+      assistantMessageId: input.assistantMessageId,
+      fullContent: "hi",
+      finishReason: "stop",
+    }));
+
+    const outcome = await engine.runTurn({
+      request: { message: "hello", conversationId: "v2-A" },
+      eventSink: makeEventCollector().sink,
+    });
+
+    expect(outcome).toEqual({
+      type: "completed",
+      conversationId: "v2-A",
+      assistantMessageId: expect.any(String),
+    });
+  });
+
+  it("submitMessage stays a void wrapper and surfaces busy as an error event", async () => {
+    let releaseFirst!: (value: AIChatQueryLoopResult) => void;
+    const firstRun = new Promise<AIChatQueryLoopResult>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const engine = createEngineWithFakeLoop(() => firstRun);
+
+    const first = engine.submitMessage({
+      request: { message: "first", conversationId: "v2-A" },
+      eventSink: makeEventCollector().sink,
+    });
+    await vi.waitFor(() =>
+      expect(engine.getConversationRuntimeStatus("v2-A")).toBe("running")
+    );
+
+    const secondSink = makeEventCollector();
+    await engine.submitMessage({
+      request: { message: "second", conversationId: "v2-A" },
+      eventSink: secondSink.sink,
+    });
+    const busyError = secondSink.events.find((e) => e.type === "error");
+    expect(busyError).toBeTruthy();
+
+    releaseFirst({
+      type: "completed",
+      conversationId: "v2-A",
+      assistantMessageId: "assistant-first",
+      fullContent: "",
+      finishReason: "stop",
+    });
+    await first;
   });
 });
