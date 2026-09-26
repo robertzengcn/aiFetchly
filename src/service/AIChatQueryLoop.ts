@@ -99,6 +99,7 @@ import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
+  ToolCatalogRuntimeContext,
   ToolCatalogSearchArgs,
   ToolCatalogSearchResult,
   ToolCatalogStateSnapshot,
@@ -1022,6 +1023,48 @@ export class AIChatQueryLoop {
           "Tool catalog search failed. The system will continue with currently exposed tools.",
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+  }
+
+  /**
+   * Build a tool catalog on-demand from the live tool set. Used when the model
+   * calls `tool_catalog_search` in standard/auto mode (no pre-built catalog),
+   * which happens on scheduled runs whose small filtered tool profile rarely
+   * crosses the 10% deferred threshold. The system prompt advertises the
+   * discovery tool unconditionally, so the call must be servicable regardless
+   * of catalog mode — otherwise the call falls through to the skill executor
+   * and fails with "Unknown tool" (the discovery tool is synthetic, not a
+   * registered skill).
+   *
+   * Mirrors {@link AIChatQueryEngine.buildToolCatalogForTurn}'s context shape
+   * (minus model/contextWindow, which are optional and unused by the search
+   * service's ranking path). On build failure, returns an empty catalog so the
+   * caller emits a no-match payload rather than crashing the turn.
+   */
+  private buildCatalogOnDemand(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly currentUserMessage: string;
+  }): ToolCatalog {
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      isPlanMode: input.isPlanMode,
+      autoPlanEnabled: input.autoPlanEnabled,
+      currentUserMessage: input.currentUserMessage,
+      uploadedFileTypes: [],
+    };
+    try {
+      return this.catalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch {
+      return this.catalogService.buildFromOpenAITools({
+        tools: [],
+        context,
+      });
     }
   }
 
@@ -2050,15 +2093,32 @@ export class AIChatQueryLoop {
             await eventSink.flush?.();
           };
 
-          // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
-          if (
-            catalogActive &&
-            catalog &&
-            call.name === TOOL_CATALOG_SEARCH_TOOL_NAME
-          ) {
+          // Tool-catalog discovery: intercept the discovery tool locally so it
+          // never reaches the skill executor (it is a synthetic tool, not a
+          // registered skill — `SkillExecutor.execute` would return "Unknown
+          // tool" for it). Two modes share this path:
+          //   - Deferred mode (FR-3, FR-9): the catalog was pre-built for the
+          //     turn and the discovery tool was injected into the exposed set.
+          //   - Standard/auto mode with a small tool set (e.g. scheduled runs
+          //     whose filtered profile rarely crosses the 10% deferred
+          //     threshold): the system prompt still advertises the discovery
+          //     tool, so the model may call it even though no catalog was
+          //     built. Build one on-demand from the live tool set so the search
+          //     service has entries to rank. Without this, scheduled runs that
+          //     call `tool_catalog_search` fail with "Unknown tool".
+          if (call.name === TOOL_CATALOG_SEARCH_TOOL_NAME) {
+            const effectiveCatalog =
+              catalog ??
+              this.buildCatalogOnDemand({
+                tools: currentTools,
+                conversationId: input.conversationId,
+                isPlanMode: Boolean(planContext),
+                autoPlanEnabled: Boolean(input.autoPlan),
+                currentUserMessage: input.request.message,
+              });
             const searchPayload = this.runCatalogSearch({
               args: (call.arguments ?? {}) as ToolCatalogSearchArgs,
-              catalog,
+              catalog: effectiveCatalog,
               discoveredToolNames,
               conversationId: input.conversationId,
               isPlanMode: Boolean(planContext),
