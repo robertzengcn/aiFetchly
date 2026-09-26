@@ -4,9 +4,9 @@
 
 | Field | Value |
 | --- | --- |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Proposed; revised after feasibility review and product decisions. No implementation is claimed |
-| Date | 2026-09-23 |
+| Date | 2026-09-26 |
 | Product | AiFetchly Computer Use |
 | Proposed plugin repository | `aifetchly-computer-use` — independent repository, not created by this document |
 | Host repository | `aiFetchly` |
@@ -35,11 +35,17 @@
 | Latency targets | A short provisional table | **Provisional planning targets with measurement methods**, clearly labelled to be replaced by measured SLOs (§8) |
 | Runtime and model delivery | Open decision: local runtime catalog or Hub | **Decided: the ONNX Runtime binding and the GUI-Actor model are delivered by the existing downloadable local AI runtime system (`LocalAiRuntimeModule`)**, extended with a v2 catalog and a resumable model package format. The Hub delivers plugin code, the Windows-MCP environment, and the Mac helper (§6.1) |
 
+### Revision 1.3 summary
+
+- Define a stable grounding-model adapter contract, independent of the planner provider and desktop backend. GUI-Actor-2B remains the default; additional models require qualification (§5.1.1).
+- Users can select an installed, compatible grounding model between sessions. Model-specific preprocessing, output interpretation, and calibration remain versioned; remote grounding is deferred.
+- Specify how a pinned Ghost OS fork would be built and delivered from the plugin repository as a managed macOS helper, with its internal vision fallback and workflow execution disabled (§5.3, §6.7). The Phase 0 comparison with an in-house Swift helper remains open.
+
 ## 1. Product summary
 
 Provide an installable first-party plugin that lets AiFetchly operate native desktop applications on the user's computer. Users describe a task in chat, see what the agent is doing, and can pause, stop, or take over at any time.
 
-The agent observes the target application through its accessibility tree first. When accessibility cannot identify a control, a local grounding model (GUI-Actor-2B running on ONNX Runtime) finds the control in a screenshot. AiFetchly retains planning, permission decisions, session ownership, process supervision, and task history.
+The agent observes the target application through its accessibility tree first. When accessibility cannot identify a control, the selected local grounding model (GUI-Actor-2B on ONNX Runtime by default) finds the control in a screenshot through a stable model adapter. Changing the grounding model does not change the planner, desktop backend, or public tool contract. AiFetchly retains planning, permission decisions, session ownership, process supervision, and task history.
 
 By default, screenshots never leave the device: the remote planner sees structured UI text and grounding results only. Users who want higher task success on visually complex apps can turn on **visual planner mode**. In that mode, screenshots of the target window go to the configured image-capable planner model, with explicit consent and a visible indicator.
 
@@ -53,9 +59,9 @@ Users must not need to install Python, uv, pip, Git, compilers, GPU toolkits, or
 
 | ID | Decision or requirement | Rationale / qualification |
 | --- | --- | --- |
-| D-01 | Adapter, contract, model-export, fixture, and evaluation code lives in an independent repository | Independent testing and upstream updates. Authority-bearing session logic lives in the host (D-18) |
+| D-01 | Desktop adapter source/packaging, contracts, model exports, fixtures, and evaluation code live in an independent repository | Host grounding-adapter implementations and authority-bearing session logic ship with AiFetchly. Repositories share schemas and fixtures, not executable host code (D-18, D-26) |
 | D-02 | One plugin listing with target-specific installation resources | Windows users download no macOS resources and vice versa |
-| D-03 | Local visual grounding uses GUI-Actor-2B | Strongest published small grounder with a commercially usable licence chain (see §5.1) |
+| D-03 | Local visual grounding defaults to GUI-Actor-2B behind a replaceable model adapter | Additional models require export parity, licence-chain review, hardware qualification, and native benchmarks (§5.1) |
 | D-04 | Windows: Windows-MCP for accessibility and input. macOS: backend chosen by spike. Both use the shared grounder | Windows-MCP is mature and actively maintained; the Mac candidate is young, so the choice is evidence-based |
 | D-05 | Use accessibility first when it identifies the target reliably; use vision otherwise | Avoid inference cost for standard controls while covering custom and icon-only controls |
 | D-06 | Keep planning separate from grounding and execution | The grounder answers "where is this control"; the planner decides the steps |
@@ -69,7 +75,7 @@ Users must not need to install Python, uv, pip, Git, compilers, GPU toolkits, or
 | D-14 | Model and runtime resources are independently versioned and cached | Code updates must not redownload unchanged model bytes |
 | D-15 | Local grounding does not make the whole agent offline | The planner and structured UI text may involve remote services in every mode |
 | D-16 | Screenshots reach the remote planner only in opt-in visual planner mode | Privacy by default, higher success available by choice |
-| D-17 | One inference runtime (ONNX Runtime) on every supported OS | One model export, one preprocessing implementation, one test suite; broad GPU coverage on Windows |
+| D-17 | One inference runtime (ONNX Runtime) on every supported OS | Each qualified model has its own export and preprocessing, shared across OSes, with a common adapter contract and test suite |
 | D-18 | The host owns sessions, target store, transforms, grants, lease, and stop. No intermediate Python gateway | The host is the only real enforcement point; a gateway duplicates state and adds a process hop |
 | D-19 | The host MCP client is rebuilt on the official SDK with persistent sessions, as an independent first deliverable | Required for correct protocol handling and model warm reuse; benefits every MCP plugin |
 | D-20 | The first release is a thin vertical slice anchored to named workflows | Evidence before breadth; avoids building two platforms and distribution changes at once |
@@ -78,6 +84,9 @@ Users must not need to install Python, uv, pip, Git, compilers, GPU toolkits, or
 | D-23 | Stop hotkey, control strip, own-window rejection, and elevated-window rejection are release requirements for every phase that dispatches input | Users need a way to stop that does not depend on AiFetchly's window; the agent must not approve its own prompts or attempt privilege boundaries it cannot cross reliably |
 | D-24 | The ONNX Runtime binding and GUI-Actor model are delivered through the existing downloadable local AI runtime system (`LocalAiRuntimeModule`), not through Hub managed resources | Reuses the verified catalog, consent, checksum, safe extraction, side-by-side versions, atomic activation, rollback, worker leases, health checks, and Settings UI. Keeps multi-GB model bytes independent of plugin code and Hub changes |
 | D-25 | Adding computer-use runtime entries never changes what older app versions download | New entries live in a v2 catalog; the existing v1 catalog keeps publishing only the embedding and voice runtimes |
+| D-26 | Planner provider, grounding-model adapter, and desktop adapter are independent interfaces | Model adapters return candidate locations only; the host validates transforms, creates target handles, and authorizes actions |
+| D-27 | Select only installed, compatible, qualified grounding models between sessions | No mid-session model change, silent substitution, or arbitrary downloaded executable adapter; new architectures may require an app release |
+| D-28 | If selected by the spike, Ghost OS ships as a pinned, patched, signed native helper over private stdio MCP | Disable its vision sidecar and implicit vision fallback, recipes, and learning; use AiFetchly's shared grounding path and per-action supervision |
 
 The earlier browser-first/Midscene proposal remains useful for browser-only workflows. Browser automation in AiFetchly continues to use the managed browser; Computer Use targets work the browser cannot do. End-to-end computer-use models (UI-TARS, Claude computer use) are benchmark baselines in Phase 0, not dependencies.
 
@@ -140,6 +149,7 @@ A workflow qualifies for a phase only when it succeeds on the recorded benchmark
 - Select the application to operate and ask AiFetchly to prepare a draft, stopping before publication unless the final action is authorized.
 - Turn on local vision and have AiFetchly download the grounding components once, with a clear size and the option to pause, resume, repair, or remove them later.
 - Locate a custom or icon-only control through local vision.
+- Choose among installed, qualified local grounding models before starting a session, with clear compatibility and resource requirements.
 - Choose whether screenshots may be sent to the planner, and see which mode is active.
 - Stop the agent instantly with a hotkey, even when AiFetchly's window is hidden.
 - Take over for login, verification, or an ambiguous step, then resume with a fresh observation.
@@ -172,7 +182,8 @@ A workflow qualifies for a phase only when it succeeds on the recorded benchmark
 - Concurrent agents controlling the same desktop.
 - Autonomous login, CAPTCHA handling, or OS permission bypass.
 - Visual enumeration of every element on screen.
-- Sending screenshots to a remote service unless the user enabled visual planner mode.
+- Sending screenshots remotely except to the configured planner in opt-in visual planner mode; a remote grounding provider is deferred and needs a separate routing and consent decision.
+- Loading arbitrary model architectures or executable adapters from plugin packages, or changing models during a session.
 - Installing PyTorch, CUDA toolkits, MLX, or compilers on customer machines.
 - Shipping GUI-Actor-3B or any model whose licence chain does not permit commercial use.
 - Supporting arbitrary third-party plugins through the privileged control path.
@@ -193,6 +204,18 @@ Published scores come from the model authors and are not AiFetchly measurements.
 
 GUI-Actor ranks candidate regions by attention; it has no built-in "target absent" answer. Absence handling therefore needs calibrated thresholds, accessibility cross-checks, or the visual planner (CU-VISION-11).
 
+#### 5.1.1 Replaceable grounding models
+
+The grounding-model adapter answers "where is this described control in this image?" The planner provider decides the steps, and the desktop adapter observes the OS and executes authorized input. Neither changing the planner nor choosing Ghost OS changes the selected grounder.
+
+All grounders implement one versioned contract for capabilities, load, ground, cancel, and unload. Requests bind the image, target description, crop, observation, and session generation. Results provide candidate points/regions, explicit coordinate spaces and preprocessing transforms, model identity, timing, and typed failures. The host owns conversion to desktop units and target handles. Grounders cannot execute input or authorize actions.
+
+Each model adapter owns its preprocessing and output interpretation. Qualification includes absent and ambiguous targets; raw scores are model-specific, not comparable probabilities. Attention heatmaps are optional diagnostics rather than a capability every model must implement.
+
+Phase 2 delivers the contract and GUI-Actor implementation. A second production model is not required for that release; contract tests use a second test adapter to verify interchangeability. Additional production models must meet the same licence, export-parity, accuracy, latency, memory, and cancellation gates. Initial adapters use ONNX Runtime only. New architectures need host implementation and may require an app update; swapping a weights path is insufficient.
+
+Settings selects only an installed and healthy configuration supported by the app and machine. Selection is locked for an active session. To change it, end the session, select the model, then start a new session with a fresh observation. Missing or incompatible models produce an actionable failure; there is no silent fallback to another model or a remote endpoint. Visual planner consent never authorizes a separate remote grounding provider.
+
 ### 5.2 Platform matrix
 
 | Target | Scope | Required evidence |
@@ -205,6 +228,14 @@ GUI-Actor ranks candidate regions by attention; it has no built-in "target absen
 | Multiple monitors / mixed scaling | Later gate | Per-display mapping and focus tests, including negative origins |
 
 Exact OS builds, GPU and driver ranges, minimum RAM, quantization, and versions are published from measurements. Model file size is not peak runtime memory.
+
+### 5.3 Ghost OS integration in the plugin repository
+
+Ghost OS remains a candidate for the Phase 3 macOS desktop backend, compared with an in-house Swift helper in Phase 0. The inspected upstream exposes a Swift binary through `ghost mcp` over stdio; source builds require Swift 6.2+ and macOS 14+. Its tools include accessibility observation, screenshots, and input. These are upstream capabilities, not AiFetchly qualification results. See the [upstream developer guide](https://github.com/ghostwright/ghost-os/blob/main/CLAUDE.md).
+
+If selected, `aifetchly-computer-use` owns the exact source/dependency pins, fork or reproducible patch set, tool allowlist, build scripts, fixtures, and licence notices. macOS CI builds, signs, and notarizes the helper. The Hub delivers it as a target-specific native component; AiFetchly launches the verified executable privately with `mcp`. Users do not run Homebrew, compile Swift, or run the upstream setup wizard. Model weights and ONNX Runtime still come from `LocalAiRuntimeModule`.
+
+The fork must disable internal vision calls as well as the explicit vision tools: upstream action tools can fall back to its own model. It must also disable recipes and learning so each action stays under host supervision. Capture metadata must preserve the mapping from resized image pixels to desktop points. These requirements follow from the [upstream tool and coordinate behavior](https://github.com/ghostwright/ghost-os/blob/main/GHOST-MCP.md); implementation details and the proposed repository layout are in technical design §3.1 and §6.2.
 
 ## 6. Functional requirements
 
@@ -258,7 +289,7 @@ Selecting a window is a scope promise, not an OS sandbox. Global input can affec
 | ID | Requirement | Acceptance |
 | --- | --- | --- |
 | CU-VISION-01 | Separate planning, observation, grounding, execution, and verification | Each stage has traceable inputs and results |
-| CU-VISION-02 | Prefer a reliable accessibility target; use the local GUI-Actor grounder for unresolved visual targets | Both paths return the same target-handle contract |
+| CU-VISION-02 | Prefer a reliable accessibility target; use the selected local grounder for unresolved visual targets | GUI-Actor-2B is the default; both paths return the same target-handle contract |
 | CU-VISION-03 | Screenshots stay on the device in the default mode | No screenshot in remote planner messages, logs, or persisted tool JSON unless visual planner mode is on |
 | CU-VISION-04 | Record exact preprocessing and coordinate spaces | Resize, crop, padding, display origin, and executor units accompany each observation |
 | CU-VISION-05 | Reject stale or invalid targets | A moved window, changed display, expired observation, or malformed coordinate never produces a guessed click |
@@ -267,7 +298,12 @@ Selecting a window is a scope promise, not an OS sandbox. Global input can affec
 | CU-VISION-08 | Support high-resolution crops for small controls | Crop coordinates map back through the same tested transform |
 | CU-VISION-09 | Bound local inference and resource use | Cancellation stays available; memory failures are actionable; no endless retry |
 | CU-VISION-10 | The grounder runs on ONNX Runtime with the best available execution provider and a CPU fallback | The provider in use is recorded per observation; no silent provider change mid-session |
-| CU-VISION-11 | Detect ambiguity and likely absence from grounder output | Close competing regions return `target_ambiguous`; below-threshold activation returns `target_not_found`; thresholds are calibrated on absent-target fixtures |
+| CU-VISION-11 | Detect ambiguity and likely absence using model-specific calibration | Unresolved competing candidates return `target_ambiguous`; likely absence returns `target_not_found`; GUI-Actor activation thresholds and each alternative model's policy are calibrated on held-out absence and ambiguity fixtures |
+| CU-VISION-12 | Support interchangeable grounding-model adapters | Versioned capabilities, lifecycle, request/result, coordinate, and failure schemas; GUI-Actor and a test adapter pass the same host contract suite without changing desktop adapters |
+| CU-VISION-13 | Select a qualified local model independently of planner and OS backend | Only installed, healthy, app/hardware-compatible configurations are selectable; their download and memory requirements are visible before installation |
+| CU-VISION-14 | Keep model selection stable during a session | Selection changes are refused while a session exists; ending it invalidates old targets and results; a new session records the selected model and starts with a fresh observation |
+| CU-VISION-15 | Preserve model-specific evidence | Traces record adapter, model, preprocessing, output/calibration policy, runtime/provider, and transforms; scores are not presented as comparable accuracy and unsupported heatmaps are omitted |
+| CU-VISION-16 | Keep grounding local with no silent model substitution | An unavailable selected model fails explicitly; neither visual planner consent nor backend fallback sends an image to a remote grounder |
 
 The grounder answers "where is the described control?" It is not assumed to discover next steps or verify arbitrary success. In local-only mode, when structured observations cannot explain the screen, the agent hands off or suggests visual planner mode.
 
@@ -311,7 +347,7 @@ Local subprocesses are not security sandboxes. A trusted backend with OS input p
 | CU-DEBUG-01 | Locate-only mode | Shows a prediction overlay without sending input |
 | CU-DEBUG-02 | Step-through mode | Pauses before each action; stale state forces re-observation |
 | CU-DEBUG-03 | Offline replay | Reruns stored grounding and mapping with no control backend loaded |
-| CU-DEBUG-04 | Visual step viewer | Shows original capture, exact model input, attention heatmap and candidate regions, mapped point, and after-state |
+| CU-DEBUG-04 | Visual step viewer | Shows original capture, exact model input, candidate points/regions, mapped point, and after-state; attention heatmap only when supplied by the adapter |
 | CU-DEBUG-05 | Versioned diagnostic bundles | Record backend, model, ONNX Runtime version, execution provider, configuration, and transform metadata |
 | CU-DEBUG-06 | Confirmed failures become fixtures | Expected clickable region or target-absent label supports regression tests |
 | CU-DEBUG-07 | Compare configurations on identical evidence | Report changed predictions, region hits, time, memory, and failure type |
@@ -319,15 +355,25 @@ Local subprocesses are not security sandboxes. A trusted backend with OS input p
 
 Debugging must distinguish grounding error, transform error, native input error, wrong focus, stale state, and failed verification. Grounder activation scores are relative, not calibrated probabilities, and must not be shown as accuracy.
 
+### 6.7 Managed macOS backend
+
+| ID | Requirement | Acceptance |
+| --- | --- | --- |
+| CU-MAC-01 | Deliver the selected backend as a managed native helper | If Ghost OS wins the spike, plugin CI builds from pinned source and dependencies, retains notices, signs/notarizes, and publishes a verified Hub native component; no customer developer tools or upstream setup wizard |
+| CU-MAC-02 | Keep raw backend tools private | The host filters both tool discovery and invocation; only supervised observation and authorized atomic input operations are reachable |
+| CU-MAC-03 | Route every visual lookup through the selected host grounder | In the Ghost fork, explicit vision tools and implicit action fallback cannot start or contact a vision sidecar; recipes and learning tools are disabled |
+| CU-MAC-04 | Preserve capture geometry and target scope | Resized capture dimensions, window origin/bounds, and desktop units are explicit; Retina mapping, focus changes, and own-window rejection pass native tests |
+| CU-MAC-05 | Qualify permissions and cancellation in the distributed app | Accessibility/Screen Recording attribution, denial/revocation, CJK input, stop during long input or blocked MCP calls, process cleanup, and signed updates pass on packaged macOS builds |
+
 ## 7. User experience
 
 ### Installation
 
-Plugin details show the supported target, download and storage totals, reusable resources, hardware qualification, and required OS permissions. Installing the plugin from the Hub installs code and the Windows-MCP environment only.
+Plugin details show the supported target, download and storage totals, reusable resources, hardware qualification, and required OS permissions. Installing the plugin from the Hub installs code and the matching desktop backend: the Windows-MCP environment on Windows or the native helper on macOS in Phase 3.
 
 Local vision is installed separately, when the user turns it on:
 
-- One consent dialog lists the ONNX Runtime component and the GUI-Actor model with their download and disk sizes.
+- One consent dialog lists the ONNX Runtime component and the selected model (GUI-Actor by default) with their download and disk sizes.
 - Progress uses user-facing phases: downloading, verifying, preparing, checking setup.
 - The download can be cancelled and resumes after a network drop or app restart.
 - Both components then appear under **Settings → Local AI components** in a "Computer Use" group, next to the embedding and voice runtimes, with update, repair, and remove.
@@ -339,6 +385,7 @@ Developer details stay in an expandable diagnostics area.
 A Computer Use settings panel offers:
 
 - local vision on/off, with its component status;
+- a local grounding-model selector showing installed, healthy, compatible models; locked during active or paused sessions, with installation offered separately for qualified missing models;
 - visual planner mode on/off, with consent text;
 - the stop hotkey (shows the current shortcut; a new one is validated when chosen);
 - debug capture on/off, with retention.
@@ -381,6 +428,9 @@ A local debug viewer and export action show evidence without raw internal paths 
 - An app version without Computer Use still installs the embedding and voice runtimes from the v1 catalog after the v2 catalog is published.
 - An interrupted model download resumes; a tampered model file blocks activation; no runtime or model version changes during an active session.
 - Windows and Mac adapters conform to the same schemas and error meanings.
+- GUI-Actor and a second test adapter pass the same grounding contract suite; incompatible models, unsupported capabilities, malformed output, and stale results fail before input. No second production model is implied.
+- Model switching is allowed only between sessions; replay records the chosen adapter/model/calibration identity, and no unavailable model silently selects another model or remote provider.
+- The packaged Mac helper passes CU-MAC-01–05; if Ghost OS is selected, neither an AX lookup failure nor an action failure invokes its vision sidecar or recipe engine.
 - Code-only updates do not redownload identical models.
 - UI changes include component tests (`yarn test:components`); critical multi-step flows have Playwright E2E coverage.
 
@@ -417,8 +467,8 @@ Safety invariants are hard gates regardless of average accuracy. Single-action a
 | --- | --- | --- |
 | 0 — Foundations and spikes | MCP client rebuilt on the official SDK with persistent sessions (ships independently); shared schemas; W-1 Excel fixture workbooks and benchmark tasks; GUI-Actor-2B ONNX export and parity spike with execution-provider latency, file sizes, and default configuration; `onnxruntime-node` execution-provider check; macOS backend spike; end-to-end model baseline; measurement harness for the provisional targets | SDK client merged with tests; parity report; latency and memory on reference hardware; Mac backend decision record; W-1 benchmark set reviewed |
 | 1 — Windows MVP, accessibility-first | Windows-MCP in a managed environment; host supervisor, lease, grants; Stop, stop hotkey, control strip, own-window and elevated-window rejection; one display; opt-in visual planner; W-1 up to its stop point | Native action, stop, and safety-control tests; W-1 accessibility benchmark; limited beta |
-| 2 — Local vision on Windows | Local AI runtime catalog v2 and model package format; ONNX Runtime component (win32-x64) and GUI-Actor-2B model delivered through `LocalAiRuntimeModule`; grounding worker (DirectML and CPU); crops; locate-only, offline replay, trace viewer | Parity and native grounding benchmark; W-1 grounder-only arm and visual-only Excel targets; v1-catalog compatibility test; interrupted-download and update tests |
-| 3 — macOS | Chosen Mac backend; ONNX Runtime component for darwin-arm64 (CoreML/CPU) from the same catalog; permission setup; Hub target-conditional resolution for the Mac helper | Same contract suite; native Mac workflow evidence |
+| 2 — Local vision on Windows | Local AI runtime catalog v2 and model package format; ONNX Runtime component (win32-x64) and GUI-Actor-2B model delivered through `LocalAiRuntimeModule`; model adapter contract and registry, between-session selection; grounding worker (DirectML and CPU); crops; locate-only, offline replay, trace viewer | Parity and native grounding benchmark; adapter interchangeability with a test implementation; W-1 grounder-only arm and visual-only Excel targets; v1-catalog compatibility test; interrupted-download and update tests |
+| 3 — macOS | Chosen Mac backend and managed packaging (§5.3, §6.7); ONNX Runtime component for darwin-arm64 (CoreML/CPU) from the same catalog; permission setup; Hub target-conditional resolution for the Mac helper | Same contract suite; CU-MAC-01–05; native Mac workflow evidence |
 | 4 — Hardening and GA | Update/repair, clean-machine matrix, published support matrix and SLOs | GA checklist complete |
 | 5 — Expansion | Multi-display, Windows ML vendor execution providers, larger grounder tier or verifier, offline bundles | Independent qualification per item |
 
@@ -435,6 +485,8 @@ Autonomous actions never ship before cancellation, authorization, and coordinate
 | CoreML offloads only part of the model | Measure per operator; CPU fallback; static-shape buckets if they help |
 | Base-model licence restricts commercial use | Licence-chain check in release tooling; 2B default; 3B blocked |
 | Ghost OS maintenance risk | Spike against an in-house helper; pin and own any fork |
+| A replacement model has different preprocessing or misleading scores | Model-specific adapter and calibration, versioned compatibility metadata, common contract tests, and independent native qualification |
+| Ghost OS bypasses the selected grounder through implicit fallback | Patch internal vision paths as well as tool registration; test action/lookup failures with sidecar launch and access forbidden |
 | Local-only mode cannot understand visual-only screens | Handoff, and offer visual planner mode |
 | Visual planner mode leaks sensitive content | Opt-in consent, target-window crop, suppression during sensitive states, transient images |
 | Wrong click due to unit mismatch | Explicit transforms and native calibration tests |
@@ -457,6 +509,8 @@ Autonomous actions never ship before cancellation, authorization, and coordinate
 
 Resolved in version 1.2: the target workflow (W-1 Excel lead list) and the delivery mechanism for the runtime binding and model (`LocalAiRuntimeModule`).
 
+Resolved in version 1.3: a host-owned grounding adapter contract, model selection between sessions, and the conditional Ghost OS integration approach. The Mac backend winner and any additional production grounder remain subject to qualification.
+
 1. First-OS confirmation from usage data (the documents assume Windows).
 2. macOS backend: pinned Ghost OS fork vs. in-house Swift helper (Phase 0 spike).
 3. Windows-MCP delivery: managed uv environment vs. prebuilt embeddable-Python bundle.
@@ -470,13 +524,14 @@ Resolved in version 1.2: the target workflow (W-1 Excel lead list) and the deliv
 
 ## 12. Sources and related documents
 
-External sources were inspected on 2026-09-23. They describe upstream capabilities, not measured AiFetchly performance. Pin exact revisions when implementing.
+External sources were inspected on 2026-09-23; the Ghost OS repository, developer guide, and tool guide were rechecked on 2026-09-26 for revision 1.3. They describe upstream capabilities, not measured AiFetchly performance. Pin exact revisions when implementing.
 
 - [GUI-Actor repository](https://github.com/microsoft/GUI-Actor), [GUI-Actor-2B model card](https://huggingface.co/microsoft/GUI-Actor-2B-Qwen2-VL), [GUI-Actor-3B model card](https://huggingface.co/microsoft/GUI-Actor-3B-Qwen2.5-VL), [GUI-Actor-Verifier-2B](https://huggingface.co/microsoft/GUI-Actor-Verifier-2B).
 - [Qwen2-VL-2B-Instruct (Apache-2.0)](https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct), [Qwen2.5-VL-3B-Instruct licence (Qwen Research)](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct/blob/main/LICENSE).
 - [ScreenSpot-Pro benchmark](https://github.com/likaixin2000/ScreenSpot-Pro-GUI-Grounding).
 - [ONNX Runtime DirectML execution provider](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html), [Windows ML execution providers](https://learn.microsoft.com/en-us/windows/ai/new-windows-ml/supported-execution-providers).
 - [Windows-MCP](https://github.com/CursorTouch/Windows-MCP), [Ghost OS](https://github.com/ghostwright/ghost-os).
+- [Ghost OS developer guide](https://github.com/ghostwright/ghost-os/blob/main/CLAUDE.md), [Ghost OS tool behavior and coordinate mapping](https://github.com/ghostwright/ghost-os/blob/main/GHOST-MCP.md).
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle).
 - [uv installation](https://docs.astral.sh/uv/getting-started/installation/).
 - [Electron `globalShortcut`](https://www.electronjs.org/docs/latest/api/global-shortcut), [`BrowserWindow.setContentProtection`](https://www.electronjs.org/docs/latest/api/browser-window#winsetcontentprotectionenable), [`SetWindowDisplayAffinity`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
