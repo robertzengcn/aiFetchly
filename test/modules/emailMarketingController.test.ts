@@ -288,7 +288,63 @@ describe("EmailMarketingController", () => {
       expect(serialized).to.not.contain('"password"');
       expect(serialized).to.not.contain('"receivePassword"');
     });
+
+    it("escapes comma/quote-bearing port, receiveProtocol, and create_time fields (Finding 9)", async () => {
+      // Finding 9: port, receiveProtocol, ssl, and create_time were emitted
+      // raw (no escapeCsvField), so a value containing a comma or quote could
+      // inject an extra CSV column. Every field now goes through the same
+      // escaper; verify the dangerous values are quoted and inner quotes
+      // doubled, and that no extra column appears.
+      const service = makeService(6, "Injection Service");
+      // port is a string column in the entity; a malicious/odd value.
+      service.port = '25,"evil"';
+      service.receiveProtocol = "IMAP,SSL" as unknown as typeof service.receiveProtocol;
+      // ssl is numeric; keep a sane value but ensure it still routes through
+      // the escaper without breaking.
+      service.ssl = 1;
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([service]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      // port and receiveProtocol are quoted; inner quotes doubled.
+      expect(csv).to.contain('"25,""evil"""');
+      expect(csv).to.contain('"IMAP,SSL"');
+      // The bare dangerous values must NOT appear unquoted (they would
+      // inject a column). The quoted, escaped forms are the only occurrences.
+      expect(csv).to.not.contain('25,"evil"');
+      // The data row must still split into exactly 19 fields (the header
+      // count) - no injected column. Count field separators outside quotes.
+      const lines = csv.trim().split("\n");
+      expect(lines).to.have.lengthOf(2);
+      expect(countCsvFields(lines[1])).to.equal(19);
+    });
   });
+
+  /**
+   * Count RFC-4180 fields in a CSV row (commas inside quoted fields do not
+   * count as separators; doubled quote inside a quoted field is literal).
+   */
+  function countCsvFields(row: string): number {
+    let fields = 1;
+    let inQuotes = false;
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (ch === '"') {
+        if (inQuotes && row[i + 1] === '"') {
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        fields += 1;
+      }
+    }
+    return fields;
+  }
 
   describe("importEmailServices", () => {
     // Build a stubbed module with sensible defaults; individual tests override

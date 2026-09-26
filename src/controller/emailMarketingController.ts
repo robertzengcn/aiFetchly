@@ -452,27 +452,25 @@ export class EmailMarketingController {
       "create_time",
     ];
     const csvRows = rows.map((row) => [
-      row.id.toString(),
+      this.escapeCsvField(row.id),
       this.escapeCsvField(row.name),
       this.escapeCsvField(row.smtpUsername),
       this.escapeCsvField(row.from),
-      row.replyTo === null ? "" : this.escapeCsvField(row.replyTo),
+      this.escapeCsvField(row.replyTo),
       this.escapeCsvField(row.host),
-      row.port,
-      row.ssl.toString(),
-      row.receiveProtocol,
-      row.imapHost === null ? "" : this.escapeCsvField(row.imapHost),
-      row.imapPort === null ? "" : this.escapeCsvField(row.imapPort),
-      row.imapSsl.toString(),
-      row.pop3Host === null ? "" : this.escapeCsvField(row.pop3Host),
-      row.pop3Port === null ? "" : this.escapeCsvField(row.pop3Port),
-      row.pop3Ssl.toString(),
-      row.receiveUsername === null
-        ? ""
-        : this.escapeCsvField(row.receiveUsername),
+      this.escapeCsvField(row.port),
+      this.escapeCsvField(row.ssl),
+      this.escapeCsvField(row.receiveProtocol),
+      this.escapeCsvField(row.imapHost),
+      this.escapeCsvField(row.imapPort),
+      this.escapeCsvField(row.imapSsl),
+      this.escapeCsvField(row.pop3Host),
+      this.escapeCsvField(row.pop3Port),
+      this.escapeCsvField(row.pop3Ssl),
+      this.escapeCsvField(row.receiveUsername),
       this.escapeCsvField(row.receiveFolder),
-      row.receiveEnabled.toString(),
-      row.create_time,
+      this.escapeCsvField(row.receiveEnabled),
+      this.escapeCsvField(row.create_time),
     ]);
     const csv = [headers.join(","), ...csvRows.map((r) => r.join(","))].join(
       "\n"
@@ -480,12 +478,20 @@ export class EmailMarketingController {
     return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
   }
 
-  /** Quote/escape a CSV field when it contains `,`, `"`, or newline. */
-  private escapeCsvField(value: string): string {
-    if (/[",\n\r]/.test(value)) {
-      return `"${value.replace(/"/g, '""')}"`;
+  /**
+   * Quote/escape a CSV field when it contains `,`, `"`, or newline.
+   * Accepts string | number | null | undefined so every CSV column —
+   * including numeric ports/flags, enum protocols, and nullable hosts —
+   * goes through the same escaping path (Finding 9). Null/undefined become
+   * empty string; numbers are stringified.
+   */
+  private escapeCsvField(value: string | number | null | undefined): string {
+    if (value === null || value === undefined) return "";
+    const text = typeof value === "number" ? String(value) : value;
+    if (/[",\n\r]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
     }
-    return value;
+    return text;
   }
 
   // Import email services from raw file content. format: "csv" | "json".
