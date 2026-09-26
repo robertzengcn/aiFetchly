@@ -113,8 +113,9 @@ test("install → approve → ready with managed-copy activation + discovery", a
   expect(prepared?.nextAction).toBe("review-plan");
   expect(prepared?.planRevision).toBeTruthy();
 
-  // 2. approve with the returned revision → activation + readiness (or the
-  //    dependency hold when ffmpeg is absent — the skill is still activated).
+  // 2. approve with the returned revision → activation + readiness. This
+  //    fixture declares no install.md, so there are no dependency items
+  //    and the §18.4 sequence ends exactly at ready on any runner.
   const approved = await invoke<InstallSnapshot>(app, "skill-install:approve", {
     sessionId: prepared?.sessionId,
     planRevision: prepared?.planRevision,
@@ -122,7 +123,7 @@ test("install → approve → ready with managed-copy activation + discovery", a
     approvalToken: await approvalToken(app, prepared?.sessionId),
   });
   expect(approved).not.toBeNull();
-  expect(["ready", "installing_dependencies"]).toContain(approved?.state);
+  expect(approved?.state).toBe("ready");
 
   // 3. The managed copy lives under the isolated config home, with the
   //    ownership metadata and helper files preserved.
@@ -147,7 +148,7 @@ test("install → approve → ready with managed-copy activation + discovery", a
     sessionId: prepared?.sessionId,
   });
   expect(status?.sessionId).toBe(prepared?.sessionId);
-  expect(["ready", "installing_dependencies"]).toContain(status?.state);
+  expect(status?.state).toBe("ready");
 
   // 5. Repeated prepare for the same source REPORTS the ready installation
   //    (PRD §10.2) — never a second acquisition or checkout.
@@ -177,18 +178,13 @@ test("explicit /skill invocation loads the installed skill", async ({
     conversationId,
     source: fixture,
   });
-  let snapshot = await invoke<InstallSnapshot>(app, "skill-install:approve", {
+  const snapshot = await invoke<InstallSnapshot>(app, "skill-install:approve", {
     sessionId: prepared?.sessionId,
     planRevision: prepared?.planRevision,
     approve: true,
     approvalToken: await approvalToken(app, prepared?.sessionId),
   });
-  if (snapshot?.state === "awaiting_secret") {
-    snapshot = await invoke<InstallSnapshot>(app, "skill-install:status", {
-      sessionId: prepared?.sessionId,
-    });
-  }
-  expect(["ready", "installing_dependencies"]).toContain(snapshot?.state);
+  expect(snapshot?.state).toBe("ready");
 
   // Explicit invocation through the SAME resolver as use_skill. Returns only
   // the short acknowledgement — never the instruction body.

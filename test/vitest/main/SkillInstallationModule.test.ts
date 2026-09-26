@@ -127,6 +127,25 @@ vi.mock("@/modules/token", () => ({
 }));
 
 describe("SkillInstallationModule — video-use acceptance sequence", () => {
+  beforeEach(async () => {
+    // Dependency probes SATISFIED on every runner: this describe asserts
+    // the run-to-ready path (CI has no ffmpeg; dev machines do).
+    const mod = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    mod.__setForceDependencySatisfied(true);
+  });
+  afterEach(async () => {
+    const mod = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    mod.__setForceDependencySatisfied(false);
+  });
+
   it("prepare → plan review → approve → ready with registry discovery", async () => {
     const module = new SkillInstallationModule();
 
@@ -166,10 +185,8 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
       expect(approved.nextAction).toBe("provide-secret-securely");
       approved = await module.resumeAfterSecret(prepared.sessionId);
     }
-    // ffmpeg present on this runner → ready; missing → hold at
-    // installing_dependencies. Either way the skill is activated and
-    // discovered by the runtime catalog.
-    expect(["ready", "installing_dependencies"]).toContain(approved.state);
+    // Probes forced satisfied → the §18.4 sequence ends EXACTLY at ready.
+    expect(approved.state).toBe("ready");
     expect(approved.installationId).not.toBeNull();
 
     const catalog = getDefaultPromptSkillCatalog();
@@ -182,9 +199,7 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     // 5. status is correlated by session id.
     const status = await module.getStatus(prepared.sessionId);
     expect(status.sessionId).toBe(prepared.sessionId);
-    expect(["ready", "installing_dependencies", "awaiting_secret"]).toContain(
-      status.state
-    );
+    expect(status.state).toBe("ready");
   }, 120_000);
 
   it("repeated prepare after approval REPORTS the ready installation (§10.2)", async () => {
@@ -1728,11 +1743,12 @@ describe("credential completeness + dependency ordering (audit findings 5/6)", (
   });
 
   it("a failed verification rollback surfaces rollback_required with the recovery detail (finding 6)", async () => {
-    // This scenario needs deps satisfied so the flow reaches activation.
+    // This scenario needs deps satisfied so the flow reaches activation
+    // (real mode is "missing" on CI runners).
     const orch = (await import(
       "@/service/SkillDependencyOrchestrator"
-    )) as unknown as { __setForceDependencyMissing: (v: boolean) => void };
-    orch.__setForceDependencyMissing(false);
+    )) as unknown as { __setForceDependencySatisfied: (v: boolean) => void };
+    orch.__setForceDependencySatisfied(true);
     const { SkillActivationService } = await import(
       "@/service/SkillActivationService"
     );
