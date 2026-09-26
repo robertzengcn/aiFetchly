@@ -7,10 +7,12 @@ import { ZodError, ZodIssue } from "zod";
 
 import {
   createAiMessageTaskForAi,
+  getAiMessageTaskForAi,
   listAiMessageTasksForAi,
   toSafeAiMessageTaskPayload,
   toSafeAiMessageTaskSummary,
   toolFailure,
+  updateAiMessageTaskForAi,
   validationFailure,
 } from "@/service/AiMessageTaskAiTools";
 import {
@@ -52,6 +54,22 @@ function mockTask(
     updatedAt: new Date("2026-06-01T00:00:00.000Z"),
     ...overrides,
   } as unknown as AiMessageTaskEntity;
+}
+
+function stubTaskReads(
+  first: AiMessageTaskEntity | null,
+  second?: AiMessageTaskEntity | null
+): sinon.SinonStub {
+  let reads = 0;
+  return sinon
+    .stub(AiMessageTaskModule.prototype, "getTask")
+    .callsFake(async () => {
+      reads += 1;
+      if (reads === 1) {
+        return first;
+      }
+      return second === undefined ? first : second;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +127,6 @@ describe("AiMessageTaskAiTools", () => {
       }
     });
   });
-
 
   // =========================================================================
   // Payload mapper tests
@@ -188,6 +205,7 @@ describe("AiMessageTaskAiTools", () => {
       expect(summary).to.not.have.property("max_tool_calls");
       expect(summary.allowed_tools).to.deep.equal(["list_ai_message_tasks"]);
     });
+  });
 
   // =========================================================================
   // createAiMessageTaskForAi
@@ -342,7 +360,6 @@ describe("AiMessageTaskAiTools", () => {
     });
   });
 
-
   // =========================================================================
   // listAiMessageTasksForAi
   // =========================================================================
@@ -428,6 +445,344 @@ describe("AiMessageTaskAiTools", () => {
   });
 
   // =========================================================================
+  // getAiMessageTaskForAi / updateAiMessageTaskForAi
+  // =========================================================================
+
+  describe("getAiMessageTaskForAi", () => {
+    it("should return the full message, including text past the list preview", async () => {
+      const message = `${"lead ".repeat(80)}STOP_SENTENCE unique`;
+      sinon
+        .stub(AiMessageTaskModule.prototype, "getTask")
+        .resolves(mockTask({ id: 2, message }));
+
+      const result = await getAiMessageTaskForAi({ task_id: 2 });
+
+      expect(result.success).to.be.true;
+      if (result.success) {
+        expect(result.data.task.id).to.equal(2);
+        expect(result.data.task.message).to.equal(message);
+        expect(result.data.task.message.length).to.be.greaterThan(300);
+      }
+    });
+
+    it("should return TASK_NOT_FOUND when the task does not exist", async () => {
+      sinon.stub(AiMessageTaskModule.prototype, "getTask").resolves(null);
+
+      const result = await getAiMessageTaskForAi({ task_id: 2 });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(AiMessageTaskToolErrorCode.TASK_NOT_FOUND);
+      }
+    });
+
+    it("should return VALIDATION_FAILED when task_id is missing", async () => {
+      const getStub = sinon.stub(AiMessageTaskModule.prototype, "getTask");
+      const result = await getAiMessageTaskForAi({});
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.VALIDATION_FAILED
+        );
+      }
+      expect(getStub.called).to.be.false;
+    });
+  });
+
+  describe("updateAiMessageTaskForAi", () => {
+    const oldRule =
+      "in-unattended lead DISCOVERY via scraping is NOT allowed — only leads already present in workspace files are usable. If the available leads run out before 100, log that clearly in the summary and stop";
+    const newRule =
+      "If there are not enough leads in the file, try to use all available tools to find new leads";
+
+    it("should replace one exact sentence and leave the rest of the message intact", async () => {
+      const original = `Send 100 emails.\n${oldRule}\nThen write a summary.`;
+      const expected = `Send 100 emails.\n${newRule}\nThen write a summary.`;
+      const existing = mockTask({ id: 2, message: original });
+      const updated = mockTask({ id: 2, message: expected });
+      stubTaskReads(existing, updated);
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: oldRule,
+        message_replace: newRule,
+      });
+
+      expect(result.success).to.be.true;
+      if (result.success) {
+        expect(result.data.task.message).to.equal(expected);
+        expect(result.warning).to.be.undefined;
+      }
+      expect(updateStub.calledOnce).to.be.true;
+      const arg = updateStub.firstCall.args[0];
+      expect(arg).to.deep.equal({ id: 2, message: expected });
+    });
+
+    it("should reject a fragment that is not in the full message", async () => {
+      stubTaskReads(mockTask({ id: 2, message: "Send 100 emails." }));
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: oldRule,
+        message_replace: newRule,
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.MESSAGE_FRAGMENT_NOT_FOUND
+        );
+        expect(result.error).to.contain("get_ai_message_task");
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should reject a fragment that appears more than once unless replace_all is set", async () => {
+      stubTaskReads(mockTask({ id: 2, message: "keep keep keep" }));
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+
+      const rejected = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: "keep",
+        message_replace: "drop",
+      });
+      expect(rejected.success).to.be.false;
+      if (!rejected.success) {
+        expect(rejected.code).to.equal(
+          AiMessageTaskToolErrorCode.MESSAGE_FRAGMENT_NOT_UNIQUE
+        );
+      }
+      expect(updateStub.called).to.be.false;
+
+      sinon.restore();
+      const existing = mockTask({ id: 2, message: "keep keep keep" });
+      stubTaskReads(existing, mockTask({ id: 2, message: "drop drop drop" }));
+      const replaceAllStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const replaced = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: "keep",
+        message_replace: "drop",
+        replace_all: true,
+      });
+      expect(replaced.success).to.be.true;
+      expect(replaceAllStub.firstCall.args[0].message).to.equal(
+        "drop drop drop"
+      );
+    });
+
+    it("should reject a replacement that would erase the message", async () => {
+      stubTaskReads(mockTask({ id: 2, message: "only this" }));
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: "only this",
+        message_replace: "   ",
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.VALIDATION_FAILED
+        );
+        expect(result.error).to.contain("empty");
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should still edit a prompt that is already longer than the create limit", async () => {
+      const original = `${"x".repeat(12_000)}TOKEN`;
+      const expected = `${"x".repeat(12_000)}OK`;
+      stubTaskReads(
+        mockTask({ id: 2, message: original }),
+        mockTask({ id: 2, message: expected })
+      );
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: "TOKEN",
+        message_replace: "OK",
+      });
+
+      expect(result.success).to.be.true;
+      expect(updateStub.firstCall.args[0].message).to.equal(expected);
+    });
+
+    it("should reject a replacement that grows past the message limit", async () => {
+      const original = `${"x".repeat(9990)}TOKEN`;
+      stubTaskReads(mockTask({ id: 2, message: original }));
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message_find: "TOKEN",
+        message_replace: "Y".repeat(30),
+      });
+
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.VALIDATION_FAILED
+        );
+        expect(result.error).to.contain("exceeds");
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should replace the whole message when message is provided", async () => {
+      stubTaskReads(
+        mockTask({ id: 2, message: "old prompt" }),
+        mockTask({ id: 2, message: "brand new prompt" })
+      );
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message: "brand new prompt",
+      });
+
+      expect(result.success).to.be.true;
+      expect(updateStub.firstCall.args[0]).to.deep.equal({
+        id: 2,
+        message: "brand new prompt",
+      });
+    });
+
+    it("should reject message together with message_find", async () => {
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        message: "whole",
+        message_find: "whole",
+        message_replace: "other",
+      });
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.VALIDATION_FAILED
+        );
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should reject an update that changes no fields", async () => {
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+      const result = await updateAiMessageTaskForAi({ task_id: 2 });
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.error).to.contain("At least one field");
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should return TASK_NOT_FOUND without writing when the task is missing", async () => {
+      stubTaskReads(null);
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+      const result = await updateAiMessageTaskForAi({
+        task_id: 99,
+        message: "new",
+      });
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(AiMessageTaskToolErrorCode.TASK_NOT_FOUND);
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should return INVALID_TOOL_LIST for tools that cannot run unattended", async () => {
+      const updateStub = sinon.stub(
+        AiMessageTaskModule.prototype,
+        "updateTask"
+      );
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        allowed_tools: ["scrape_urls_from_search_engine"],
+        auto_approve_tools: true,
+      });
+      expect(result.success).to.be.false;
+      if (!result.success) {
+        expect(result.code).to.equal(
+          AiMessageTaskToolErrorCode.INVALID_TOOL_LIST
+        );
+        expect(result.error).to.contain("scrape_urls_from_search_engine");
+      }
+      expect(updateStub.called).to.be.false;
+    });
+
+    it("should warn when allowed tools are saved without auto approval", async () => {
+      const existing = mockTask({
+        id: 2,
+        auto_approve_tools: false,
+        allowed_tools_json: "[]",
+      });
+      stubTaskReads(existing, existing);
+      sinon.stub(AiMessageTaskModule.prototype, "updateTask").resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        allowed_tools: ["file_write"],
+      });
+
+      expect(result.success).to.be.true;
+      if (result.success) {
+        expect(result.warning).to.contain("auto_approve_tools is false");
+      }
+    });
+
+    it("should pass a cleared workspace path through to the module", async () => {
+      const existing = mockTask({ id: 2 });
+      stubTaskReads(existing, mockTask({ id: 2, workspace_path: null }));
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        workspace_path: null,
+      });
+
+      expect(result.success).to.be.true;
+      expect(updateStub.firstCall.args[0]).to.deep.equal({
+        id: 2,
+        workspacePath: null,
+      });
+    });
+  });
+
+  // =========================================================================
   // Scheduled-loop policy integration for the new tools
   // =========================================================================
 
@@ -436,8 +791,16 @@ describe("AiMessageTaskAiTools", () => {
       expect(isSchedulableBuiltInTool("list_ai_message_tasks")).to.be.true;
     });
 
+    it("get_ai_message_task should be schedulable (read-only allowlist)", () => {
+      expect(isSchedulableBuiltInTool("get_ai_message_task")).to.be.true;
+    });
+
     it("create_ai_message_task should stay fail-closed for scheduled loops", () => {
       expect(isSchedulableBuiltInTool("create_ai_message_task")).to.be.false;
+    });
+
+    it("update_ai_message_task should stay fail-closed for scheduled loops", () => {
+      expect(isSchedulableBuiltInTool("update_ai_message_task")).to.be.false;
     });
 
     it("validateScheduledLoopAllowedTools should accept list_ai_message_tasks", () => {
@@ -462,5 +825,3 @@ describe("AiMessageTaskAiTools", () => {
     });
   });
 });
-
-  });

@@ -66,7 +66,9 @@ import {
 } from "@/service/ScheduleAiTools";
 import {
   createAiMessageTaskForAi,
+  getAiMessageTaskForAi,
   listAiMessageTasksForAi,
+  updateAiMessageTaskForAi,
 } from "@/service/AiMessageTaskAiTools";
 import {
   listProxiesForAi,
@@ -2919,7 +2921,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "update_schedule",
     description:
-      'Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). For ai_message tasks, workspace_path sets (or null clears) the absolute folder the scheduled run uses as its approved workspace. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
+      'Update schedule metadata only (name, cron, description, active state, task reference, workspace). To change the instruction text or allowed tools the schedule runs, call get_ai_message_task then update_ai_message_task — this tool cannot edit that message. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). For ai_message tasks, workspace_path sets (or null clears) the absolute folder the scheduled run uses as its approved workspace. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
     parameters: {
       type: "object",
       properties: {
@@ -3098,7 +3100,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_ai_message_tasks",
     description:
-      "List existing AI message tasks (the reusable prompt definitions that schedules run). Returns id, name, message preview, model, tool policy, status, and last-run info. Use this to find the task_id that create_schedule requires, before creating a new task with create_ai_message_task.",
+      "List existing AI message tasks (the reusable prompt definitions that schedules run). Returns id, name, a truncated message preview, model, tool policy, status, and last-run info. Call get_ai_message_task for the full message, then update_ai_message_task to change it. Use this to find the task_id that create_schedule requires.",
     parameters: {
       type: "object",
       properties: {
@@ -3130,7 +3132,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_ai_message_task",
     description:
-      'Create a new AI message task — a reusable natural-language prompt with an optional tool policy that schedules execute. Returns the new task_id. Workflow: call this first (or reuse an existing task via list_ai_message_tasks), then call create_schedule with task_type "ai_message" and the returned task_id. Set auto_approve_tools=true together with allowed_tools when the scheduled run must use tools unattended. This action requires user confirmation.',
+      'Create a new AI message task — a reusable natural-language prompt with an optional tool policy that schedules execute. Returns the new task_id. Workflow: call this first (or reuse an existing task via list_ai_message_tasks), then call create_schedule with task_type "ai_message" and the returned task_id. To edit an existing task message, use update_ai_message_task instead of creating a duplicate. Set auto_approve_tools=true together with allowed_tools when the scheduled run must use tools unattended. This action requires user confirmation.',
     parameters: {
       type: "object",
       properties: {
@@ -3196,6 +3198,128 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await createAiMessageTaskForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_ai_message_task",
+    description:
+      "Read one AI message task by id, including the full message body a schedule runs. list_ai_message_tasks only returns a truncated preview. Call this before update_ai_message_task when changing that instruction text.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "AI message task ID",
+        },
+      },
+      required: ["task_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getAiMessageTaskForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "update_ai_message_task",
+    description:
+      "Edit the instruction text, allowed tools, or settings of the AI message task a schedule runs. Every schedule using this task_id gets the new message. update_schedule cannot change this message. Use message_find and message_replace (an exact substring from get_ai_message_task) for a surgical edit, or pass message to replace the whole prompt. Set auto_approve_tools true together with allowed_tools when the unattended run must use those tools. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "AI message task ID to update",
+        },
+        name: {
+          type: "string",
+          description: "New task name (1-255 chars)",
+        },
+        message: {
+          type: "string",
+          description:
+            "Replace the entire prompt. Do not combine with message_find/message_replace.",
+        },
+        message_find: {
+          type: "string",
+          description:
+            "Exact substring of the current message to replace. Copy it from get_ai_message_task. Must be used with message_replace.",
+        },
+        message_replace: {
+          type: "string",
+          description:
+            "Replacement text for message_find. An empty string deletes the matched text.",
+        },
+        replace_all: {
+          type: "boolean",
+          description:
+            "Replace every occurrence of message_find. When false (default) and the text appears more than once, the update is rejected.",
+          default: false,
+        },
+        description: {
+          type: "string",
+          description: "New task description",
+        },
+        system_prompt: {
+          type: "string",
+          description: "New system prompt",
+        },
+        model: {
+          type: "string",
+          description: "New model name",
+        },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Replacement allowlist of schedulable built-in tools the task may use unattended. Read-only tools never need listing. Tools that are not schedulable (including most scraping tools) are rejected.",
+        },
+        auto_approve_tools: {
+          type: "boolean",
+          description:
+            "Allow the task to call approved tools without a human in the loop.",
+        },
+        max_tool_calls: {
+          type: "number",
+          description: "Max tool calls per run (1-50)",
+        },
+        max_runtime_ms: {
+          type: "number",
+          description: "Max runtime per run in milliseconds (1000-3600000)",
+        },
+        max_continue_calls: {
+          type: "number",
+          description: "Max continue/round trips per run (0-50)",
+        },
+        workspace_path: {
+          type: ["string", "null"],
+          description:
+            "Absolute folder this task uses as its approved workspace, or null to clear it.",
+        },
+        status: {
+          type: "string",
+          enum: ["active", "inactive"],
+          description: "Task status",
+        },
+      },
+      required: ["task_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await updateAiMessageTaskForAi(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

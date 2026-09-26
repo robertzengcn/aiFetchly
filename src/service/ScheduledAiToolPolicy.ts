@@ -64,6 +64,7 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_schedule_details",
   "list_schedule_executions",
   "list_ai_message_tasks",
+  "get_ai_message_task",
   // General read-only
   "open_app_page",
   "knowledge_library_search",
