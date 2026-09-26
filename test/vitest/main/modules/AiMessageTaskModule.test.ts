@@ -74,3 +74,32 @@ describe("AiMessageTaskModule.createTask", () => {
     expect(task?.conversation_id?.startsWith("v2-")).toBe(true);
   });
 });
+
+describe("AiMessageTaskModule.updateTask", () => {
+  it("persists a removed allowed tool when the workspace path is unchanged", async () => {
+    const mod = new AiMessageTaskModule();
+    await SqliteDb.ensureInitialized();
+    const folder = path.join(tmpDir, "tool-update-workspace");
+    fs.mkdirSync(folder, { recursive: true });
+    const taskId = await mod.createTask({
+      name: "Outreach",
+      message: "Send the batch",
+      allowedTools: ["file_read", "file_write"],
+      workspacePath: folder,
+    });
+    const created = await mod.getTask(taskId);
+    const canonical = created?.workspace_path ?? "";
+
+    await mod.updateTask({
+      id: taskId,
+      allowedTools: ["file_read"],
+      workspacePath: canonical,
+    });
+
+    const updated = await mod.getTask(taskId);
+    expect(JSON.parse(updated?.allowed_tools_json ?? "[]")).toEqual([
+      "file_read",
+    ]);
+    expect(updated?.workspace_path).toBe(canonical);
+  });
+});

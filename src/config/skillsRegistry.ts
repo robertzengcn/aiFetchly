@@ -3074,7 +3074,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "run_schedule_now",
     description:
-      "Execute an active schedule immediately instead of waiting for the next cron trigger. Uses the existing execution logging and task execution pipeline. The schedule must be active. This action requires user confirmation.",
+      "Start an active schedule immediately instead of waiting for the next cron trigger. Returns after the run is queued; the task keeps running in the background and is recorded in the execution log. The schedule must be active. This action requires user confirmation.",
     parameters: {
       type: "object",
       properties: {

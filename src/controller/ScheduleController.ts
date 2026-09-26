@@ -1,10 +1,5 @@
-import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
-import { ScheduleExecutionLogModel } from "@/model/ScheduleExecutionLog.model";
-import { ScheduleDependencyModel } from "@/model/ScheduleDependency.model";
 import { ScheduleManager } from "@/modules/ScheduleManager";
-import { TaskExecutorService } from "@/modules/TaskExecutorService";
 import {ScheduleTaskModule} from "@/modules/ScheduleTaskModule";
-import { ScheduleTaskModuleInterface } from "@/modules/interface/ScheduleTaskModuleInterface";
 
 import { 
     ScheduleCreateRequest, 
@@ -14,29 +9,27 @@ import {
     ExecutionHistoryResponse, 
     DependencyCreateRequest, 
     DependencyGraphResponse, 
-    DependencyValidationResponse,
-    SchedulerStatus,
     SchedulerStatusResponse
 } from "@/entityTypes/schedule-type";
 import { SortBy } from "@/entityTypes/commonType";
-import { ScheduleTaskEntity, TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
-import { ExecutionStatus } from "@/entity/ScheduleExecutionLog.entity";
+import { ScheduleTaskEntity, TaskType, TriggerType } from "@/entity/ScheduleTask.entity";
+import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
+import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
 //import { USERDBPATH } from "@/config/usersetting";
 import { ScheduleDependencyModule } from "@/modules/ScheduleDependencyModule";
-import { DependencyValidationResult, ScheduleDependencyInterface } from "@/modules/interface/ScheduleDependencyInterface";
+import { DependencyValidationResult } from "@/modules/interface/ScheduleDependencyInterface";
 import { ScheduleExecutionLogModule } from "@/modules/ScheduleExecutionLogModule";
+import type { ExecutionStatistics } from "@/modules/interface/ScheduleExecutionLogInterface";
 export class ScheduleController {
     private scheduleTaskModule: ScheduleTaskModule;
     private scheduleExecutionLogModule: ScheduleExecutionLogModule;
     private scheduleDependencyModule: ScheduleDependencyModule;
     private scheduleManager: ScheduleManager;
-    private taskExecutorService: TaskExecutorService;
     constructor() {
         this.scheduleTaskModule = new ScheduleTaskModule();
         this.scheduleExecutionLogModule = new ScheduleExecutionLogModule();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
         this.scheduleManager = ScheduleManager.getInstance();
-        this.taskExecutorService = new TaskExecutorService();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
     }
 
@@ -202,7 +195,7 @@ export class ScheduleController {
      */
     public async runScheduleNow(id: number): Promise<void> {
         try {
-            await this.scheduleManager.executeSchedule(id);
+            await this.scheduleManager.executeSchedule(id, { detach: true });
         } catch (error) {
             console.error(`Failed to run schedule ${id}:`, error);
             throw error;
@@ -362,8 +355,18 @@ export class ScheduleController {
             const dependencyChain = await this.scheduleDependencyModule.getDependencyChain(scheduleId);
             
             // Build nodes and edges
-            const nodes: any[] = [];
-            const edges: any[] = [];
+            const nodes: Array<{
+                id: number;
+                name: string;
+                type: string;
+                status: ScheduleTaskEntity["status"];
+            }> = [];
+            const edges: Array<{
+                from: number;
+                to: number;
+                condition: string;
+                delay: number;
+            }> = [];
             const visited = new Set<number>();
 
             // Add the target schedule
@@ -498,7 +501,7 @@ export class ScheduleController {
      * @param limit Maximum number of executions to return
      * @returns Array of recent execution log entities
      */
-    public async getRecentExecutions(limit: number): Promise<any[]> {
+    public async getRecentExecutions(limit: number): Promise<ReturnType<ScheduleController['mapExecutionToResponse']>[]> {
         try {
             const executions = await this.scheduleExecutionLogModule.getRecentExecutions(limit);
             return executions.map(exec => this.mapExecutionToResponse(exec));
@@ -513,7 +516,7 @@ export class ScheduleController {
      * @param scheduleId The schedule ID
      * @returns Execution statistics
      */
-    public async getExecutionStatistics(scheduleId: number): Promise<any> {
+    public async getExecutionStatistics(scheduleId: number): Promise<ExecutionStatistics> {
         try {
             return await this.scheduleExecutionLogModule.getExecutionStatistics(scheduleId);
         } catch (error) {
@@ -544,7 +547,7 @@ export class ScheduleController {
      * @param schedule The schedule entity
      * @returns Mapped schedule object
      */
-    private mapScheduleToResponse(schedule: ScheduleTaskEntity): any {
+    private mapScheduleToResponse(schedule: ScheduleTaskEntity): Record<string, unknown> {
         return {
             id: schedule.id,
             name: schedule.name,
@@ -573,7 +576,7 @@ export class ScheduleController {
      * @param execution The execution log entity
      * @returns Mapped execution object
      */
-    private mapExecutionToResponse(execution: any): any {
+    private mapExecutionToResponse(execution: ScheduleExecutionLogEntity): Record<string, unknown> {
         return {
             id: execution.id,
             schedule_id: execution.schedule_id,
@@ -594,7 +597,7 @@ export class ScheduleController {
      * @param dependency The dependency entity
      * @returns Mapped dependency object
      */
-    private mapDependencyToResponse(dependency: any): any {
+    private mapDependencyToResponse(dependency: ScheduleDependencyEntity): Record<string, unknown> {
         return {
             id: dependency.id,
             parent_schedule_id: dependency.parent_schedule_id,

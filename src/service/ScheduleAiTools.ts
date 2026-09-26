@@ -931,9 +931,9 @@ export async function runScheduleNowForAi(args: unknown): Promise<
     );
   }
 
-  // 4. Execute immediately via ScheduleManager
+  // 4. Queue the run and return. The task keeps going in the background.
   try {
-    await getScheduleManager().executeSchedule(schedule_id);
+    await getScheduleManager().executeSchedule(schedule_id, { detach: true });
   } catch (error: unknown) {
     const message =
       error instanceof Error ? error.message : "Failed to execute schedule";
