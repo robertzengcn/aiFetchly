@@ -1258,6 +1258,18 @@ export class AIChatQueryLoop {
     let textToolCallMarkerRetryCount = 0;
     let executedToolRound = false;
     let emptyStopContinuations = 0;
+    // Per-runOnce nudge budget for goal text-stops (Finding 8). This counter
+    // is scoped to a single runOnce() invocation — it is NOT persisted across
+    // the separate run() calls that a permission resume, plan resume, or
+    // outer goal-turn driver triggers. The 3-nudge limit (MAX_GOAL_TEXT_STOP_
+    // CONTINUATIONS) therefore re-applies fresh on each resume. This is a
+    // deliberate trade-off: a productive tool round resets it (see the
+    // executedToolRound branch below), so a long goal doing real work is not
+    // unfairly capped by text-stops that preceded the progress. The cross-
+    // resume accumulation is bounded by the tool-round cap (maxToolRounds,
+    // default 30) and the round-cap continuation budget (maxRoundCapContinu-
+    // ations, default 200): a stalled goal still exhausts those and
+    // terminates. See docs/prd for the full reasoning.
     let goalTextStopContinuations = 0;
     let roundCapContinuations = 0;
     const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
@@ -1952,6 +1964,10 @@ export class AIChatQueryLoop {
             executedToolRound &&
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length > 0;
+          // The nudge budget is per-runOnce; a separate run() (permission/
+          // plan resume, or the outer goal-turn driver) gets a fresh budget
+          // (see the declaration above). This is intentional and bounded by
+          // the tool-round + round-cap limits.
           if (
             goalTextStop &&
             goalTextStopContinuations < MAX_GOAL_TEXT_STOP_CONTINUATIONS &&
