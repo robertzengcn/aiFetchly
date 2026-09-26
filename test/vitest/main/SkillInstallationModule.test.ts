@@ -1597,6 +1597,27 @@ vi.mock("@/modules/SkillCredentialModule", () => ({
   },
 }));
 
+
+/** Force dependency probes SATISFIED for describes asserting the
+ *  run-to-ready path (CI runners have no ffmpeg; dev machines do). */
+function forceProbesSatisfied(): {
+  beforeEach: () => Promise<void>;
+  afterEach: () => Promise<void>;
+} {
+  const load = async () =>
+    (await import("@/service/SkillDependencyOrchestrator")) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+  return {
+    beforeEach: async () => {
+      (await load()).__setForceDependencySatisfied(true);
+    },
+    afterEach: async () => {
+      (await load()).__setForceDependencySatisfied(false);
+    },
+  };
+}
+
 describe("credential completeness + dependency ordering (audit findings 5/6)", () => {
   beforeEach(async () => {
     credState.unconfigured.clear();
@@ -1786,6 +1807,10 @@ describe("credential completeness + dependency ordering (audit findings 5/6)", (
 });
 
 describe("request-identity session isolation (audit finding 1)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   it("a different ref/mode request gets its OWN session, never a foreign active one", async () => {
     const module = new SkillInstallationModule();
     // Conversation A: managed-copy, no pinned ref.
@@ -1853,6 +1878,10 @@ describe("request-identity session isolation (audit finding 1)", () => {
 });
 
 describe("update identity + same-name replacement (audit finding 3)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   it("an update after content change keeps ONE enabled row and the identity", async () => {
     const module = new SkillInstallationModule();
     const first = await module.prepare({
@@ -1956,6 +1985,10 @@ describe("update identity + same-name replacement (audit finding 3)", () => {
 });
 
 describe("nested candidate activation + selection persistence (audit finding 2)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   /** Source whose only SKILL.md lives in nested/. */
   function makeNestedFixture(root: string): string {
     const dir = path.join(root, "fixtures", "nested-src");
@@ -2040,6 +2073,10 @@ describe("nested candidate activation + selection persistence (audit finding 2)"
 });
 
 describe("required-command completion checkpoint (audit finding 4)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   it("a required uv sync holds at awaiting_commands and completes to ready", async () => {
     const dir = path.join(tmpDir, "fixtures", "cmd-required");
     fs.mkdirSync(dir, { recursive: true });
@@ -2084,6 +2121,10 @@ describe("required-command completion checkpoint (audit finding 4)", () => {
 });
 
 describe("durable constraints + checkpoint retry (audit finding 11)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   it("constraints persist in the plan and surface as reviewable warnings", async () => {
     const module = new SkillInstallationModule();
     const prepared = await module.prepare({
@@ -2145,6 +2186,10 @@ describe("durable constraints + checkpoint retry (audit finding 11)", () => {
 });
 
 describe("dependency detection + metadata completeness (audit finding 12)", () => {
+  const probes = forceProbesSatisfied();
+  beforeEach(() => probes.beforeEach());
+  afterEach(() => probes.afterEach());
+
   it("a bare python3 instruction produces a python dependency plan item", async () => {
     const { detectDependencyProposals } = await import(
       "@/service/SkillDependencyOrchestrator"
@@ -2164,6 +2209,14 @@ describe("dependency detection + metadata completeness (audit finding 12)", () =
   });
 
   it("detection records probe evidence (version output) on the plan item", async () => {
+    // This test exercises the REAL orchestrator — restore real probing
+    // (the describe-level satisfied override returns no evidence).
+    const orch = (await import(
+      "@/service/SkillDependencyOrchestrator"
+    )) as unknown as {
+      __setForceDependencySatisfied: (v: boolean) => void;
+    };
+    orch.__setForceDependencySatisfied(false);
     const { detectAll, detectDependencyProposals } = await import(
       "@/service/SkillDependencyOrchestrator"
     );
