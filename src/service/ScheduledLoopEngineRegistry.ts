@@ -1,4 +1,5 @@
 import type { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import { log } from "@/modules/Logger";
 
 /**
  * Pending-permission metadata the engine publishes when it parks a turn.
@@ -45,8 +46,25 @@ export class ScheduledLoopEngineRegistry {
     return ScheduledLoopEngineRegistry.instance;
   }
 
-  /** Register a scheduled engine for an active occurrence. */
+  /**
+   * Register a scheduled engine for an active occurrence. Idempotent on the
+   * common path (no prior entry). Defense-in-depth against overlap: the
+   * {@link ScheduledAiMessageRunner} conversation lease should already prevent a
+   * second occurrence for the same conversation from reaching here, but if a
+   * prior entry is still present (lease bypassed, or a future caller that does
+   * not acquire the lease), clear its backstop and pending metadata so the
+   * orphaned 1h timer cannot fire on an unreachable engine, then overwrite.
+   * Coalesces to the newest occurrence (technical-design overlap policy).
+   */
   register(entry: ScheduledEngineEntry & { conversationId: string }): void {
+    const prior = this.engines.get(entry.conversationId);
+    if (prior) {
+      log.warn(
+        `ScheduledLoopEngineRegistry: overwrite of existing entry for conversation ${entry.conversationId} (prior runId=${prior.runId}, new runId=${entry.runId}). Clearing the prior backstop to avoid an orphaned timer.`
+      );
+      prior.clearPermissionBackstop?.();
+      this.pending.delete(entry.conversationId);
+    }
     this.engines.set(entry.conversationId, entry);
   }
 
@@ -62,7 +80,10 @@ export class ScheduledLoopEngineRegistry {
   }
 
   /** Publish that a scheduled engine has a paused permission-gated tool. */
-  setPendingPermission(conversationId: string, meta: ScheduledPendingPermission): void {
+  setPendingPermission(
+    conversationId: string,
+    meta: ScheduledPendingPermission
+  ): void {
     this.pending.set(conversationId, meta);
   }
 
