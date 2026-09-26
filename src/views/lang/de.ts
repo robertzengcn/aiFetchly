@@ -3534,6 +3534,10 @@ export default {
       filesChanged: "Dateien geändert — siehe Aktivität",
       permissionNeeded: "Berechtigungsentscheidung erforderlich",
       structuredResult: "Strukturiertes Ergebnis — Details in Aktivität",
+      toolPersistFailure: {
+        toolCallNotSaved: "Tool nicht ausgeführt: Speichern fehlgeschlagen.",
+        toolResultNotSaved: "Tool wurde ausgeführt, aber das Ergebnis konnte nicht gespeichert werden.",
+      },
     },
     plan: {
       version: "Version",

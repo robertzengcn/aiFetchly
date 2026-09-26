@@ -3523,6 +3523,10 @@ export default {
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
       structuredResult: "Résultat structuré — détails dans Activité",
+      toolPersistFailure: {
+        toolCallNotSaved: "Outil non exécuté : échec de l'enregistrement.",
+        toolResultNotSaved: "L'outil s'est exécuté, mais son résultat n'a pas pu être enregistré.",
+      },
     },
     plan: {
       version: "Version",

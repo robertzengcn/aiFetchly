@@ -3495,6 +3495,10 @@ export default {
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
       structuredResult: "Structured result — see details in Activity",
+      toolPersistFailure: {
+        toolCallNotSaved: "Tool not run: it could not be saved.",
+        toolResultNotSaved: "Tool ran but its result could not be saved.",
+      },
     },
     plan: {
       version: "Version",

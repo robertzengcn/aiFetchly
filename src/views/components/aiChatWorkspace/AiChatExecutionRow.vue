@@ -12,8 +12,15 @@
       <span class="row-label">{{ actionLabel }}</span>
       <!-- Raw tool name: secondary monospace metadata for experts. -->
       <span v-if="rawNameShown" class="row-tool-name">{{ execution.toolName }}</span>
+      <!-- Stage A §3.3 (FR-006): required-persistence failure — the localized
+           reason replaces the tool summary; the tool is never re-run. -->
+      <span
+        v-if="persistFailureLabel"
+        class="row-persist-failure"
+        :data-testid="'workspace-execution-persist-failure'"
+      >{{ persistFailureLabel }}</span>
       <SemanticToolResult
-        v-if="terminal"
+        v-else-if="terminal"
         :output-kind="execution.outputKind"
         :summary="execution.summary"
         :is-error="execution.isError"
@@ -81,6 +88,23 @@ const actionLabel = computed(() => {
 const rawNameShown = computed(
   () => Boolean(props.execution.toolName) && !props.execution.isLegacyUnpaired
 );
+
+/** Stage A §3.3 (FR-006): localized required-persistence failure reason. */
+const persistFailureLabel = computed(() => {
+  if (props.execution.persistFailure === "tool_call_persist_failed") {
+    return (
+      t("workspaceChat.execution.toolPersistFailure.toolCallNotSaved") ||
+      "Tool not run: it could not be saved."
+    );
+  }
+  if (props.execution.persistFailure === "tool_result_persist_failed") {
+    return (
+      t("workspaceChat.execution.toolPersistFailure.toolResultNotSaved") ||
+      "Tool ran but its result could not be saved."
+    );
+  }
+  return "";
+});
 
 const progressLabel = computed(() => {
   if (typeof props.execution.progress === "number") {
@@ -182,7 +206,13 @@ const rowVisual = computed<ConversationStatusVisual>(() => {
 }
 
 .status-failed .row-label,
-.status-failed .row-tool-name {
+.status-failed .row-tool-name,
+.status-failed .row-persist-failure {
   color: rgb(var(--v-theme-error));
+}
+
+.row-persist-failure {
+  font-size: 11px;
+  line-height: 1.35;
 }
 </style>

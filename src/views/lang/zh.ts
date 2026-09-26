@@ -3360,6 +3360,10 @@ export default {
       filesChanged: "文件已更改 — 见“活动”",
       permissionNeeded: "需要权限决定",
       structuredResult: "结构化结果 — 详情见“活动”",
+      toolPersistFailure: {
+        toolCallNotSaved: "工具未运行：保存失败。",
+        toolResultNotSaved: "工具已运行，但结果保存失败。",
+      },
     },
     plan: {
       version: "版本",

@@ -130,6 +130,16 @@ export interface ChatV2MessageMetadata {
   toolResultStatus?: "success" | "error";
   toolResultSummary?: string;
   /**
+   * Stage A §3.3 (generator-streaming PRD FR-006): set by the renderer
+   * presenter when a REQUIRED tool persistence write failed — the tool card
+   * shows "not run: could not be saved" (call failed) or "result not saved"
+   * (the tool ran but its result could not be stored). The tool is never
+   * re-run. Presentation-only.
+   */
+  toolPersistFailure?:
+    | "tool_call_persist_failed"
+    | "tool_result_persist_failed";
+  /**
    * Presentation-only marker set by the renderer presenter when a permission
    * prompt was approved and the real tool result replaced it (design §15.5):
    * keeps the owning execution group expanded so the just-approved output is
