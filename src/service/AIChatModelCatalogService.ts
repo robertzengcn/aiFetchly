@@ -18,7 +18,7 @@ export interface AIChatModelCatalogEntry {
 
 /**
  * Process-lifetime catalog of AI server models. Falls back to a
- * default context window (128k) when the server doesn't report one
+ * default context window (256k) when the server doesn't report one
  * or when the lookup fails. Never throws.
  */
 export class AIChatModelCatalogService {
@@ -95,7 +95,7 @@ export class AIChatModelCatalogService {
 
   /**
    * Look up the context window for a model. Falls back to the default
-   * context window (128k) when unknown. Never throws.
+   * context window (256k) when unknown. Never throws.
    */
   async getContextWindow(model?: string): Promise<number> {
     await this.ensureLoaded();
@@ -131,7 +131,7 @@ export class AIChatModelCatalogService {
    * first so provider rows are available.
    *
    * Unknown / not-yet-loaded models use this catalog's fallback context
-   * window (128k by default) — the same value as `getContextWindow()` —
+   * window (256k by default) — the same value as `getContextWindow()` —
    * not the 8,192-token unknown-model provisional. An unloaded catalog
    * is not evidence the model is small; treating it as 8k falsely
    * rejected first `/goal` Plan Mode turns whose tool+system payload
