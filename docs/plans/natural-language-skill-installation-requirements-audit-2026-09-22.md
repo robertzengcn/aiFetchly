@@ -372,9 +372,34 @@ All 12 findings implemented and regression-tested on
 
 Gates at 5e98aeb9: full main suite 500 files / 4,524 tests green;
 components 35 files / 202 tests green; targeted planner/policy/lifecycle/
-runner suites green. Remaining qualification items from the audit (recovery
-PRD-vs-design document reconciliation, E2E assertion tightening for the
-natural-language spec, platform matrix re-run) are the follow-up work.
+runner suites green.
+
+### Qualification items closed (2026-09-26, head c064952c)
+
+- **Recovery semantics reconciled** (commit 76e9c7c0): PRD §14.6 and design
+  §10.10/§21.3 now state the UNIFIED semantics and the implementation
+  matches — a hash-changed skill reattaches from its LAST VERIFIED snapshot
+  WITH the structured SKILL_HASH_CHANGED diagnostic (never silent, changed
+  files never rewrite past context); uninstalled/disabled deactivate with
+  diagnostics. The 4-way reconcile test asserts the changed skill
+  reattaches on repeated reconciliations.
+- **E2E assertions tightened** (commits a39549c7, d9de0fe1, e01b37e0,
+  c064952c): every terminal-state assertion that accepted
+  awaiting-secret/dependency holds now asserts EXACTLY ready under
+  deterministic PATH-stubbed probes — the natural-language main + hydration
+  tests, the original install spec, matrix FR-16 (asserts the
+  awaiting_commands checkpoint and completion→ready), and the module-test
+  finding describes (shared forceProbesSatisfied helper; verified against
+  failing ffmpeg/ffprobe stubs on PATH, the CI-equivalent environment).
+  Full Electron E2E: 37/37 green.
+- **Platform matrix re-run at the remediation head** (runs 36218744187/
+  36218744207 at e01b37e0; 36232738050/36232738100 at c064952c):
+  `Lint and unit tests` ✅, `Electron E2E (Playwright)` ✅, `test`
+  (testmain + tsc gate) ✅, `managed-copy-macos` ✅, `windows-shell-matrix`
+  ✅, `packaged-smoke-github (windows-2022)` ✅, `packaged-smoke-github
+  (macos-latest)` ✅. The ubuntu packaged-smoke legs remain blocked ONLY by
+  the documented GitHub runner-eviction infra issue (7th/8th consecutive
+  shutdown-signal occurrences) — the failing-loud tracker stands.
 
 Incident note: during pre-existence verification a second `git stash pop`
 popped a FOREIGN stash (worktree-ai-chat-message-queue) into this tree.
