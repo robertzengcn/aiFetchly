@@ -962,7 +962,7 @@ export class AIChatQueryLoop {
   /**
    * Build a ModelLimitResolver backed by the live AIChatModelCatalogService.
    * Call `ensureLoaded()` before the first preflight so provider rows are
-   * present. Unknown / unloaded models use the catalog's 128k fallback
+   * present. Unknown / unloaded models use the catalog's 256k fallback
    * (same as `getContextWindow()`), not the 8,192-token provisional —
    * an unloaded catalog is not evidence the selected model is small.
    */
@@ -1288,9 +1288,14 @@ export class AIChatQueryLoop {
     // so the budget preflight and the provider dispatch always agree on the
     // same limits. Starts as the requested model; fallback updates it.
     let effectiveModel = input.request.model;
-    // One compact-and-rebuild per turn. Later rounds still preflight, but
-    // they must not loop compaction if the summary itself stays oversized.
-    let relievedBudgetPressure = false;
+    // Budget-pressure relief guard. Compaction may re-trigger on later tool
+    // rounds of the SAME turn (a scheduled-loop turn can run dozens of rounds
+    // and the live transcript keeps growing after the first relief), but is
+    // bounded by maxBudgetReliefAttemptsPerTurn so a summarize that won't
+    // shrink cannot loop forever. `reliefThisRound` is reset every round;
+    // `reliefAttemptsThisTurn` is the cumulative cap across the whole turn.
+    let reliefAttemptsThisTurn = 0;
+    let reliefThisRound = false;
 
     try {
       // Load provider context/output limits before the first preflight.
@@ -1358,6 +1363,12 @@ export class AIChatQueryLoop {
           }
           break;
         }
+
+        // Reset the per-round relief gate. A long scheduled-loop turn runs
+        // many rounds in one runOnce; compaction may need to re-trigger as
+        // later tool results push pressure back up (see reliefAttemptsThisTurn
+        // cap above for the cumulative bound).
+        reliefThisRound = false;
 
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
@@ -1453,10 +1464,13 @@ export class AIChatQueryLoop {
           const underPressure = !budget.ok || budget.needsCompaction;
           if (
             underPressure &&
-            !relievedBudgetPressure &&
+            !reliefThisRound &&
+            reliefAttemptsThisTurn <
+              AI_CHAT_RECOVERABLE_DEFAULTS.maxBudgetReliefAttemptsPerTurn &&
             input.relieveBudgetPressure
           ) {
-            relievedBudgetPressure = true;
+            reliefThisRound = true;
+            reliefAttemptsThisTurn += 1;
             try {
               const rebuilt = await input.relieveBudgetPressure();
               if (rebuilt && rebuilt.length > 0) {
