@@ -58,6 +58,22 @@ export const SCHEDULED_LOOP_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 export const SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS = 60 * 60 * 1000; // 1 hour
 
 /**
+ * Bounded timeout for the resumed turn AFTER a permission grant/deny (or the
+ * 1h backstop auto-deny) re-enters the query loop. The runtime timeout
+ * (`SCHEDULED_LOOP_RUN_TIMEOUT_MS`) is cleared at the pause and is NOT re-armed
+ * on the resumed turn; the provider's own timeout only guards header arrival
+ * (a mid-stream stall after headers never resolves). Without this bound, a
+ * silent provider stall hangs the runner indefinitely, holding the DB run row
+ * and conversation turn lease. The runner arms this in its sink callback the
+ * moment it sees the resume signal (a `tool_result` with
+ * `replacesPermissionPromptForToolId`, emitted by both grant and deny BEFORE
+ * the resumed `loop.run` starts); when it fires it force-resolves the sink via
+ * `failOutstanding` and stops the engine. It bounds only the resumed turn; the
+ * park window stays bounded by the 1h permission backstop.
+ */
+export const SCHEDULED_LOOP_RESUME_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
  * Checked integer multiply. Returns null when the result is not a safe integer
  * (prevents silent overflow when converting durations to milliseconds).
  */

@@ -1,5 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS } from "@/config/aiChatScheduledLoopConfig";
+import {
+  SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS,
+  SCHEDULED_LOOP_RESUME_TIMEOUT_MS,
+} from "@/config/aiChatScheduledLoopConfig";
 
 // --- Controllable stubs (hoisted so vi.mock factories can reference them) ---
 const aiEnabled = vi.hoisted(() => ({ value: "true" }));
@@ -49,11 +52,13 @@ const terminalEvent = vi.hoisted(() => ({
 const mockCreateConversationIfNeeded = vi.hoisted(() =>
   vi.fn((id?: string) => (id && id.startsWith("v2-") ? id : "v2-minted"))
 );
+const mockStopActiveTurn = vi.hoisted(() => vi.fn());
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
   resumeToolAfterPermission: typeof mockResume;
   denyToolPermission: typeof mockDeny;
+  stopActiveTurn: typeof mockStopActiveTurn;
 }
 
 type MockConstructor<T> = new (...args: never[]) => T;
@@ -124,6 +129,7 @@ vi.mock("@/service/AIChatQueryEngineFactory", () => ({
         submitMessage: mockSubmit,
         resumeToolAfterPermission: mockResume,
         denyToolPermission: mockDeny,
+        stopActiveTurn: mockStopActiveTurn,
       };
     }
   },
@@ -270,10 +276,29 @@ beforeEach(() => {
     emitTerminal(capturedSink);
     return { ok: true };
   });
+  mockStopActiveTurn.mockReset();
+  // Production stopActiveTurn aborts the turn and emits `cancelled`. The
+  // resume-timeout path calls sink.failOutstanding FIRST (which resolves the
+  // parked promise), so stopActiveTurn's own emit is an idempotent no-op on
+  // the sink. The mock records the call; it does not need to emit.
+  mockStopActiveTurn.mockImplementation(() => {});
 });
 
 function emitTerminal(sink: { emit: (e: unknown) => void } | null): void {
   if (!sink || !terminalEvent.value) return;
+  // Mirror production: the resumed turn emits a `tool_result` carrying
+  // `replacesPermissionPromptForToolId` (the resume signal the runner uses to
+  // re-arm the bounded resume timeout) BEFORE the terminal event lands.
+  sink.emit({
+    type: "tool_result",
+    conversationId: "v2-conv",
+    messageId: "scheduled-assistant-2-1",
+    toolCallId: "t1",
+    toolName: "file_write",
+    fullContent: "resumed",
+    toolResult: { success: true, executionTimeMs: 0 },
+    replacesPermissionPromptForToolId: "t1",
+  });
   if (terminalEvent.value.type === "complete") {
     sink.emit({
       type: "complete",
@@ -439,5 +464,70 @@ describe("ScheduledAiMessageRunner permission pause", () => {
     // The runner finalized: engine unregistered, run completed.
     expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
     expect(result.status).toBe("completed");
+  });
+
+  it("resume timeout force-fails the run when the resumed loop never emits a terminal event (F1/F2)", async () => {
+    // Adversarial scenario: after the permission pause the user grants, the
+    // resumed `void loop.run` emits the resume signal (tool_result with
+    // replacesPermissionPromptForToolId) but the provider then stalls
+    // mid-stream (headers arrived, body hung). No complete/error/cancelled
+    // event is ever emitted, so `sink.waitForTerminalOutcome()` would hang
+    // forever — holding the run row + conversation lease. The bounded resume
+    // timeout (armed on the resume signal) must fire, call failOutstanding
+    // (resolves the sink with a failed outcome) + stopActiveTurn, finalizing
+    // the run as failed.
+    sinkOutcome.value = "pause";
+    // Grant emits ONLY the resume signal — no terminal event — simulating the
+    // resumed loop that started but stalled. deny is wired symmetrically but
+    // must never fire (the resume timeout is much shorter than the 1h backstop).
+    mockResume.mockImplementation(async () => {
+      capturedSink?.emit({
+        type: "tool_result",
+        conversationId: "v2-conv",
+        messageId: "scheduled-assistant-2-1",
+        toolCallId: "t1",
+        toolName: "file_write",
+        fullContent: "ok",
+        toolResult: { success: true, executionTimeMs: 0 },
+        replacesPermissionPromptForToolId: "t1",
+      });
+      return { ok: true };
+    });
+    mockDeny.mockImplementation(async () => ({ ok: true }));
+
+    const runner = new ScheduledAiMessageRunner();
+    const resultPromise = runner.runChatScheduledLoop({
+      taskId: 1,
+      scheduleId: 2,
+      runId: 42,
+      occurrence: 1,
+      catchUp: false,
+      scheduledFor: new Date(),
+    });
+    await vi.waitFor(
+      () =>
+        expect(mockSetPending).toHaveBeenCalledWith("v2-conv", {
+          toolId: "t1",
+        }),
+      { timeout: 1000 }
+    );
+    expect(mockUnregisterEngine).not.toHaveBeenCalled();
+
+    // Grant to enter the resumed loop (which emits the resume signal, arming
+    // the bounded resume timeout, then stalls — no terminal event).
+    await mockResume({ toolId: "t1", conversationId: "v2-conv" });
+
+    // The runner is parked on `await waitForTerminalOutcome()`. Advance past
+    // the resume timeout; the timer fires failOutstanding + stopActiveTurn,
+    // resolving the run.
+    await vi.advanceTimersByTimeAsync(SCHEDULED_LOOP_RESUME_TIMEOUT_MS + 1);
+    const result = await resultPromise;
+
+    // Resume timeout fired: stopActiveTurn was called and the run finalized.
+    expect(mockStopActiveTurn).toHaveBeenCalledWith("v2-conv");
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(result.status).toBe("failed");
+    // The 1h backstop never fired (resume timeout is shorter).
+    expect(mockDeny).not.toHaveBeenCalled();
   });
 });

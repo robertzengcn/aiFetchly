@@ -25,13 +25,14 @@ import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversatio
 import {
   SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
   SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES,
+  SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS,
+  SCHEDULED_LOOP_RESUME_TIMEOUT_MS,
   SCHEDULED_LOOP_RUN_TIMEOUT_MS,
   nextFutureOccurrence,
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
-import { SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS } from "@/config/aiChatScheduledLoopConfig";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import { showNotification } from "@/modules/lib/function";
 
@@ -281,6 +282,24 @@ export class ScheduledAiMessageRunner {
         permissionBackstopHandle = null;
       }
     };
+    // Bounded resume await (adversarial F1/F2): armed in the sink callback the
+    // moment the turn RESUMES (a `tool_result` with `replacesPermissionPromptForToolId`
+    // — emitted by both grant and deny BEFORE the resumed `loop.run` starts). The
+    // runtime `timeoutHandle` was cleared at the pause and is NOT re-armed on the
+    // resumed turn; the provider's own timeout only guards header arrival, so a
+    // silent mid-stream stall (headers arrived, body hung) never resolves
+    // `sink.waitForTerminalOutcome()` — the runner hangs indefinitely holding the
+    // run row + conversation lease. This cap force-resolves the sink via
+    // `failOutstanding` and stops the engine so the run finalizes. It bounds only
+    // the resumed turn (phase 2); the park window (phase 1) stays bounded by the
+    // 1h permission backstop. Cleared in `finally` on every exit path.
+    let resumeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearResumeTimeout = (): void => {
+      if (resumeTimeoutHandle) {
+        clearTimeout(resumeTimeoutHandle);
+        resumeTimeoutHandle = null;
+      }
+    };
 
     let outcome: ScheduledTurnOutcome;
     try {
@@ -389,6 +408,36 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
           return;
         }
+        // Resume signal (adversarial F1/F2): the resumed turn has re-entered
+        // the loop after a grant/deny. Both grant and deny emit a `tool_result`
+        // carrying `replacesPermissionPromptForToolId` BEFORE restarting
+        // `loop.run`. At the pause we cleared the runtime timeout and it is
+        // NOT re-armed on the resumed turn — re-arm it here so a silent
+        // provider mid-stream stall (which never resolves
+        // `waitForTerminalOutcome`) is bounded: the timer force-resolves the
+        // sink via `failOutstanding` and stops the engine. The 1h backstop is
+        // irrelevant now (the user already responded), so it stays untouched;
+        // its own `clearPermissionBackstop` runs in `finally`.
+        if (
+          event.type === "tool_result" &&
+          event.replacesPermissionPromptForToolId
+        ) {
+          clearResumeTimeout();
+          resumeTimeoutHandle = setTimeout(() => {
+            sink.failOutstanding(
+              `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
+            );
+            try {
+              engine.stopActiveTurn(conversationId);
+            } catch (err) {
+              console.error(
+                "[scheduled-loop] stopActiveTurn after resume timeout failed:",
+                err
+              );
+            }
+          }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
+          return;
+        }
         // Forward token/done/error chunks for live streaming to a renderer
         // viewing this conversation (technical-design §13.2). Strict routing
         // is enforced renderer-side; forwarding failures are non-fatal.
@@ -442,6 +491,7 @@ export class ScheduledAiMessageRunner {
     } finally {
       clearTimeout(timeoutHandle);
       clearPermissionBackstop();
+      clearResumeTimeout();
       this.runRegistry.unregister(runId);
       engineRegistry.unregister(conversationId);
       if (lease) lease.release();
@@ -712,6 +762,15 @@ export class ScheduledAiMessageRunner {
         permissionBackstopHandle = null;
       }
     };
+    // Bounded resume await (adversarial F1/F2) — see runOnce for the full
+    // rationale. Armed on the resume signal, cleared in `finally`.
+    let resumeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearResumeTimeout = (): void => {
+      if (resumeTimeoutHandle) {
+        clearTimeout(resumeTimeoutHandle);
+        resumeTimeoutHandle = null;
+      }
+    };
     let outcome: ScheduledTurnOutcome = {
       kind: "failed",
       errorMessage: "NO_TERMINAL_EVENT",
@@ -812,6 +871,29 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
           return;
         }
+        // Resume signal (adversarial F1/F2) — see runOnce for the full
+        // rationale. Re-arm the runtime cap on the resumed turn so a silent
+        // provider mid-stream stall is bounded instead of hanging the runner.
+        if (
+          event.type === "tool_result" &&
+          event.replacesPermissionPromptForToolId
+        ) {
+          clearResumeTimeout();
+          resumeTimeoutHandle = setTimeout(() => {
+            sink.failOutstanding(
+              `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
+            );
+            try {
+              engine.stopActiveTurn(conversationId);
+            } catch (err) {
+              console.error(
+                "[scheduled-loop] stopActiveTurn after resume timeout failed:",
+                err
+              );
+            }
+          }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
+          return;
+        }
         if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
@@ -886,6 +968,7 @@ export class ScheduledAiMessageRunner {
     } finally {
       clearTimeout(timeoutHandle);
       clearPermissionBackstop();
+      clearResumeTimeout();
       this.runRegistry.unregister(runId);
       engineRegistry.unregister(conversationId);
       if (lease) lease.release();
