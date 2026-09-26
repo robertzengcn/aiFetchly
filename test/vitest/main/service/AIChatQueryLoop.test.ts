@@ -249,6 +249,35 @@ describe("AIChatQueryLoop", () => {
       expect(calls?.[0].arguments).toEqual({ pattern: "*" });
     });
 
+    // Finding 6: the dedup is keyed on the RAW segment string, not the
+    // parsed object. Two calls that resolve to the same arguments but
+    // differ by whitespace are separate provider-issued calls and must be
+    // preserved — only exact byte-identical replays (the delta-replay
+    // artifact) are collapsed. If the model actually intended two
+    // identical calls, the agentic loop continues after salvage and the
+    // model can re-issue the second one once it sees the first result.
+    it("preserves whitespace-distinct variants of the same object (Finding 6)", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"} {"pattern": "*"}')
+      );
+      // Both segments parse to { pattern: "*" } but differ as raw strings
+      // (space after the colon), so both are kept as separate calls.
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ pattern: "*" });
+    });
+
+    it("collapses a mix of identical replays and distinct calls", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall(
+          '{"pattern":"*"}{"pattern":"*"}{"query":"x"}{"query":"x"}'
+        )
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ query: "x" });
+    });
+
     it("allows whitespace between concatenated segments", () => {
       const calls = splitConcatenatedToolCallArguments(
         malformedCall('{"a":1}  \n {"b":2}')

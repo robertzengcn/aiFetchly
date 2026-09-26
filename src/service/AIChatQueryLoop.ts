@@ -607,10 +607,23 @@ export function parseTextToolCalls(
  * MAX_MALFORMED_ARGUMENT_RETRIES rounds until the turn failed with
  * "Arguments were not valid JSON". When the raw arguments decompose cleanly
  * into 2+ complete JSON objects (whitespace-only between them), split them
- * into individual tool calls and execute each one. Identical duplicate
- * segments (common when deltas are merged) are collapsed into a single
- * call. Returns null when the raw arguments are not cleanly splittable so
- * the normal malformed-argument retry path stays in place.
+ * into individual tool calls and execute each one.
+ *
+ * Identical-duplicate contract (Finding 6): segments whose raw JSON text is
+ * byte-identical are collapsed into a single call. This targets the
+ * delta-replay artifact, where a provider re-emits a complete chunk and the
+ * accumulated arguments end up containing the same object twice — e.g.
+ * `{"pattern":"*"}{"pattern":"*"}`. Collapsing is deliberate, not accidental:
+ * if the model genuinely intended two separate identical calls, the agentic
+ * loop continues after the salvaged calls execute (the caller sets
+ * willContinue = parsedCalls.length > 0), the model observes the first
+ * call's result, and it can re-issue the second call on the next round.
+ * Dedup is by raw-string identity (not parsed-object equality) so that
+ * whitespace-only variants of the same arguments are preserved as distinct
+ * calls — only exact replays are collapsed.
+ *
+ * Returns null when the raw arguments are not cleanly splittable so the
+ * normal malformed-argument retry path stays in place.
  */
 export function splitConcatenatedToolCallArguments(
   call: ParsedToolCallResult
@@ -657,6 +670,10 @@ export function splitConcatenatedToolCallArguments(
     segments.push(raw.slice(start, cursor));
   }
   if (segments.length < 2) return null;
+  // Collapse byte-identical segments (delta-replay artifact) — see the
+  // identical-duplicate contract in the function doc-comment. Distinct
+  // calls that merely resolve to the same parsed object are preserved;
+  // only exact raw-string replays are dropped.
   const seen = new Set<string>();
   const parsedSegments: Record<string, unknown>[] = [];
   for (const segment of segments) {
