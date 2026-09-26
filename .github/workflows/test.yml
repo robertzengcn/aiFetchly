@@ -169,7 +169,7 @@ jobs:
       # ubuntu-latest (7 GB) evictions mid-prune: leave the kernel
       # headroom to keep the runner agent alive — an in-process OOM
       # surfaces a diagnosable error instead of an opaque shutdown.
-      NODE_OPTIONS: --max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}
+      NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
       PKG_SMOKE_GITHUB: "1"
@@ -258,6 +258,13 @@ jobs:
 
       - name: Build package (unpacked)
         timeout-minutes: 40
+        # Ubuntu (7 GB) evictions mid-prune: the runner context is only
+        # available here — cap the heap on Linux so the kernel keeps
+        # headroom for the runner agent through the galactus prune spike.
+        env:
+          NODE_OPTIONS: --max-old-space-size=${{
+            runner.os == 'Linux' && '3072' || '4096'
+          }}
         run: yarn package:ci
 
       - name: Verify packaged workers and renderer HTML layout
