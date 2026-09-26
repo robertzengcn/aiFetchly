@@ -166,7 +166,10 @@ jobs:
     env:
       FORGE_DISABLE_ASAR: "1"
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      NODE_OPTIONS: --max-old-space-size=4096
+      # ubuntu-latest (7 GB) evictions mid-prune: leave the kernel
+      # headroom to keep the runner agent alive — an in-process OOM
+      # surfaces a diagnosable error instead of an opaque shutdown.
+      NODE_OPTIONS: --max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
       PKG_SMOKE_GITHUB: "1"

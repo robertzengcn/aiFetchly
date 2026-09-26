@@ -123,7 +123,9 @@ jobs:
       # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
       # and stays safely under RAM. Pair with the swap setup step below so
       # transient allocation spikes during galactus prune don't get us killed.
-      NODE_OPTIONS: --max-old-space-size=4096
+      # Leave kernel headroom on the 7 GB ubuntu runner (evictions
+      # mid-prune; mac/win green with the same pipeline).
+      NODE_OPTIONS: --max-old-space-size=3072
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
 
