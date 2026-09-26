@@ -52,6 +52,7 @@ import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -479,10 +480,17 @@ export class AIChatQueryEngine {
       return;
     }
     if (this.compactAgent) {
+      // Pass the model's real context window as the prompt-token sentinel
+      // rather than Number.MAX_SAFE_INTEGER. The threshold in
+      // enqueueAutoCompact is 0.8 * contextWindow, so the window itself is
+      // always >= threshold and reliably trips compaction — and the value
+      // stored in lastPromptTokens stays a realistic finite count instead
+      // of poisoning the next turn's session-memory gate with 9e15.
+      const promptTokens = await this.resolveCompactionSentinel(model);
       await this.compactAgent.enqueueAutoCompact({
         conversationId,
         reason: "budget-pressure",
-        promptTokens: Number.MAX_SAFE_INTEGER,
+        promptTokens,
         model,
       });
     }
@@ -515,19 +523,26 @@ export class AIChatQueryEngine {
         );
       } else if (this.compactAgent) {
         const compactAgent = this.compactAgent;
-        Promise.resolve(
-          compactAgent.enqueueAutoCompact({
-            conversationId,
-            reason: "reactive-overflow",
-            promptTokens: Number.MAX_SAFE_INTEGER,
-            model,
-          })
-        ).catch((err: unknown) =>
-          console.error(
-            "[ai-chat-compact] reactive-overflow auto-compact failed:",
-            err
+        // Resolve the model's real context window as the prompt-token
+        // sentinel (see compactBeforeDispatch): it reliably exceeds the
+        // 0.8 * contextWindow threshold without storing 9e15 in
+        // lastPromptTokens. The async resolution happens inside the
+        // fire-and-forget chain so this method stays synchronous.
+        void this.resolveCompactionSentinel(model)
+          .then((promptTokens) =>
+            compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "reactive-overflow",
+              promptTokens,
+              model,
+            })
           )
-        );
+          .catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compact] reactive-overflow auto-compact failed:",
+              err
+            )
+          );
       }
     } catch (err) {
       console.error(
@@ -535,6 +550,35 @@ export class AIChatQueryEngine {
         err
       );
     }
+  }
+
+  /**
+   * Resolve a prompt-token sentinel for the reactive compaction fallback
+   * path (no coordinator). Returns the model's real context window — a
+   * finite, realistic value that provably meets/exceeds the compact
+   * agent's 0.8 * contextWindow threshold, so it reliably trips an
+   * auto-compact while keeping lastPromptTokens sane. Falls back to a
+   * conservative large window when the catalog lookup is unavailable
+   * (tests skip the live catalog fetch). Never throws.
+   */
+  private async resolveCompactionSentinel(model?: string): Promise<number> {
+    try {
+      const contextWindow = await this.modelCatalogService.getContextWindow(
+        model
+      );
+      if (contextWindow > 0) {
+        return contextWindow;
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] sentinel context-window lookup failed:",
+        err
+      );
+    }
+    // The catalog is unloaded/unavailable (e.g. VITEST skips the fetch).
+    // Use the recovery default (128k) — still finite and above the 8,192
+    // unknown-model threshold the compact agent falls back to.
+    return AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens;
   }
 
   /** Return main-process truth for a conversation's current turn. */
