@@ -1280,9 +1280,6 @@ export class AIChatQueryLoop {
               maxAttempts: maxRoundCapContinuations,
               message: "Continuing after tool-round cap",
             });
-            console.log(
-              `[ai-chat-v2] auto-continue after ${maxToolRounds}-round cap; cycle ${roundCapContinuations}/${maxRoundCapContinuations}`
-            );
             // for-loop increment runs after continue, so -1 → 0 next cycle.
             round = -1;
             continue;
