@@ -666,11 +666,15 @@ export class ScheduledAiMessageRunner {
     try {
       const canonical = await bindApprovedWorkspace(conversationId, stored);
       if (canonical !== stored) {
+        // Persist the canonicalized path durably; do NOT mutate the passed-in
+        // task entity. Nothing downstream in the run reads workspace_path
+        // (file tools resolve the bound workspace via the workspace service,
+        // not via this entity field), so an in-memory mutation would be dead
+        // state that violates immutability without serving a consumer.
         await this.taskModule.updateTask({
           id: task.id,
           workspacePath: canonical,
         });
-        task.workspace_path = canonical;
       }
       return null;
     } catch (error: unknown) {
