@@ -67,6 +67,7 @@ import {
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -425,7 +426,11 @@ export class AIChatQueryEngine {
   private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
-    Promise<unknown>[]
+    Array<{
+      readonly kind: "tool_call" | "tool_result";
+      readonly toolCallId: string;
+      readonly promise: Promise<unknown>;
+    }>
   >();
   /** Tracks which conversations have already fired SessionStart. */
   private readonly startedConversations = new Set<string>();
@@ -2327,7 +2332,16 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(result.error),
           // Stable image-edit codes let the renderer localize provider edit
           // failures distinctly from invalid references and transient issues.
-          errorCode: imageEditErrorCode(result.error) ?? undefined,
+          // Required-persistence failures (Stage A §3.3) carry their own
+          // code + toolCallId so the tool card shows the precise failure.
+          ...(result.error instanceof AIChatRequiredPersistenceError
+            ? {
+                errorCode: result.error.persistenceCode,
+                toolCallId: result.error.toolCallId,
+              }
+            : {
+                errorCode: imageEditErrorCode(result.error) ?? undefined,
+              }),
         });
         // Emergency auto-compact: when the turn failed because the context
         // window was exceeded, immediately run a full compact so the next
@@ -2462,7 +2476,15 @@ export class AIChatQueryEngine {
     if (this.pendingEventSaves.has(eventSink)) {
       return eventSink;
     }
-    const saves: Promise<unknown>[] = [];
+    // Stage A §3.3 (FR-006/007): required tool-call/tool-result saves are
+    // STRICT — flush() rejects with AIChatRequiredPersistenceError so the
+    // loop's persist-before-execute barrier blocks dependent work. The emit
+    // path still forwards first so the UI stays responsive.
+    const saves: Array<{
+      readonly kind: "tool_call" | "tool_result";
+      readonly toolCallId: string;
+      readonly promise: Promise<unknown>;
+    }> = [];
     // Track the latest server-reported usage so it can be attributed to
     // intermediate tool_call messages. Without this, every tool_call row
     // is persisted with null tokensUsed/model, losing per-round cost data.
@@ -2477,39 +2499,35 @@ export class AIChatQueryEngine {
           };
         }
         if (event.type === "tool_call") {
-          saves.push(
-            module
-              .saveToolCallMessage({
-                conversationId: event.conversationId,
-                assistantMessageId: event.messageId,
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                toolArguments: event.toolArguments,
-                model: latestUsage?.model,
-                tokensUsed: latestUsage?.totalTokens,
-              })
-              .catch((err: unknown) => {
-                log.error("[ai-chat-v2] save tool call failed:", err);
-              })
-          );
+          saves.push({
+            kind: "tool_call",
+            toolCallId: event.toolCallId,
+            promise: module.saveToolCallMessage({
+              conversationId: event.conversationId,
+              assistantMessageId: event.messageId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              toolArguments: event.toolArguments,
+              model: latestUsage?.model,
+              tokensUsed: latestUsage?.totalTokens,
+            }),
+          });
         }
         if (event.type === "tool_result") {
-          saves.push(
-            module
-              .saveToolResultMessage({
-                conversationId: event.conversationId,
-                assistantMessageId: event.messageId,
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                content: event.fullContent,
-                toolResult: event.toolResult,
-                replacesPermissionPromptForToolId:
-                  event.replacesPermissionPromptForToolId,
-              })
-              .catch((err: unknown) => {
-                log.error("[ai-chat-v2] save tool result failed:", err);
-              })
-          );
+          saves.push({
+            kind: "tool_result",
+            toolCallId: event.toolCallId,
+            promise: module.saveToolResultMessage({
+              conversationId: event.conversationId,
+              assistantMessageId: event.messageId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              content: event.fullContent,
+              toolResult: event.toolResult,
+              replacesPermissionPromptForToolId:
+                event.replacesPermissionPromptForToolId,
+            }),
+          });
         }
       },
       flush: async () => {
@@ -2521,13 +2539,36 @@ export class AIChatQueryEngine {
   }
 
   private async flushPendingEventSaves(
-    saves: Promise<unknown>[]
+    saves: Array<{
+      readonly kind: "tool_call" | "tool_result";
+      readonly toolCallId: string;
+      readonly promise: Promise<unknown>;
+    }>
   ): Promise<void> {
     if (saves.length === 0) {
       return;
     }
-    await Promise.allSettled(saves);
-    saves.length = 0;
+    const batch = saves.splice(0, saves.length);
+    const settled = await Promise.allSettled(
+      batch.map((save) => save.promise)
+    );
+    const failedIndex = settled.findIndex((r) => r.status === "rejected");
+    if (failedIndex >= 0) {
+      const failed = settled[failedIndex];
+      const reason =
+        failed.status === "rejected" ? failed.reason : undefined;
+      log.error(
+        `[ai-chat-v2] required ${batch[failedIndex].kind} save failed:`,
+        reason
+      );
+      throw new AIChatRequiredPersistenceError(
+        batch[failedIndex].kind === "tool_call"
+          ? "tool_call_persist_failed"
+          : "tool_result_persist_failed",
+        batch[failedIndex].toolCallId,
+        reason
+      );
+    }
   }
 
   private async flushEventSaves(
@@ -2596,6 +2637,16 @@ export class AIChatQueryEngine {
       conversationId,
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
+      // Stage A §3.3 (FR-006): classify required-persistence failures so the
+      // renderer can mark the affected tool card instead of showing success.
+      ...(err instanceof AIChatRequiredPersistenceError
+        ? {
+            errorCode: err.persistenceCode,
+            toolCallId: err.toolCallId,
+          }
+        : {
+            errorCode: imageEditErrorCode(err) ?? undefined,
+          }),
     });
     this.clearConversationTurnState(conversationId, assistantMessageId);
     this.clearStagedConfirmedBatchRefs(conversationId);

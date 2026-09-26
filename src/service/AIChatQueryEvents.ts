@@ -188,6 +188,10 @@ export interface AIChatQueryErrorEvent {
   /** Renderer-safe machine code (e.g. GeneratedImageReferenceErrorCode) for
    * localized handling; omitted for unclassified errors. */
   errorCode?: string;
+  /** Stage A §3.3 (FR-006): the affected tool call when the failure is a
+   * required-persistence failure, so the tool card can show "not run /
+   * result not saved" precisely. */
+  toolCallId?: string;
 }
 
 export interface AIChatQueryUsageUpdateEvent {
@@ -570,6 +574,27 @@ export type AIChatTurnTerminalEvent =
  * inferred from the absence of a terminal event.
  */
 export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
+/**
+ * Stage A §3.3 (generator-streaming PRD FR-006/007): a REQUIRED tool
+ * persistence write failed. Thrown by the persisting sink's flush barrier so
+ * the loop stops before executing dependent work; excluded from transient
+ * provider retry and never reduced to an ordinary provider error.
+ */
+export class AIChatRequiredPersistenceError extends Error {
+  constructor(
+    readonly persistenceCode:
+      | "tool_call_persist_failed"
+      | "tool_result_persist_failed",
+    readonly toolCallId: string,
+    readonly cause?: unknown
+  ) {
+    super(
+      `Required persistence failed (${persistenceCode}) for tool call ${toolCallId}`
+    );
+    this.name = "AIChatRequiredPersistenceError";
+  }
+}
 
 /** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {

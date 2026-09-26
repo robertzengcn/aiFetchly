@@ -21,6 +21,7 @@ import type {
   AskUserQuestionPayload,
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
+import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -885,6 +886,10 @@ export class AIChatQueryLoop {
         input.isActiveTurn() &&
         !tracker.delivered &&
         !tracker.steeringObserved &&
+        // Stage A §3.3 (FR-006/011): a required-persistence failure must
+        // never be retried as a transient provider error — dependent
+        // execution is blocked and the segment fails.
+        !(result.error instanceof AIChatRequiredPersistenceError) &&
         isContentLevelTransientError(result.error);
 
       if (!canRetry) {
