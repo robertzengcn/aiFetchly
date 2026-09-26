@@ -160,7 +160,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-2022, macos-latest]
+        # ubuntu-22.04 pinned (not -latest): 9 consecutive eviction
+        # shutdown-signals ~2 min into the vite builds on the -latest
+        # pool; the pinned image runs a different runner pool (mirrors
+        # the windows-2022 pin).
+        os: [ubuntu-22.04, windows-2022, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:

@@ -104,7 +104,9 @@ jobs:
   package-smoke:
     name: Package smoke test
     needs: lint-and-test
-    runs-on: ubuntu-latest
+    # ubuntu-22.04 pinned: evictions on the -latest pool (see the
+    # packaged-smoke-github matrix note in test.yml).
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
