@@ -73,6 +73,99 @@ function isStringArray(
   return Array.isArray(value);
 }
 
+/** Extra extension Windows Explorer hides, so `name.csv` is really `name.csv.txt`. */
+const HIDDEN_DISPLAY_EXTENSIONS: ReadonlySet<string> = new Set(["txt"]);
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function normalizeFileName(name: string): string {
+  return name.normalize("NFC").trim();
+}
+
+/**
+ * Pick the on-disk name for a requested basename.
+ *
+ * Explorer and some case-sensitive folders disagree with the string the model
+ * sends: trailing spaces are hidden, case can differ, and Notepad saves
+ * `leads.csv` as `leads.csv.txt` while the folder still shows `leads.csv`.
+ * A match is returned only when it is unique.
+ */
+export function matchExistingFileName(
+  requestedBase: string,
+  names: readonly string[]
+): string | undefined {
+  const requested = normalizeFileName(requestedBase);
+  const exact = names.find((name) => name === requestedBase);
+  if (exact) return exact;
+
+  const trimmed = names.filter((name) => normalizeFileName(name) === requested);
+  if (trimmed.length === 1) return trimmed[0];
+
+  const lower = requested.toLowerCase();
+  const caseMatches = names.filter(
+    (name) => normalizeFileName(name).toLowerCase() === lower
+  );
+  if (caseMatches.length === 1) return caseMatches[0];
+  if (caseMatches.length > 1) return undefined;
+
+  const hidden = names.filter((name) => {
+    const normalized = normalizeFileName(name);
+    const dot = normalized.lastIndexOf(".");
+    if (dot <= 0) return false;
+    const ext = normalized.slice(dot + 1).toLowerCase();
+    if (!HIDDEN_DISPLAY_EXTENSIONS.has(ext)) return false;
+    return normalized.slice(0, dot).toLowerCase() === lower;
+  });
+  if (hidden.length === 1) return hidden[0];
+  return undefined;
+}
+
+function suggestFileNames(
+  requestedBase: string,
+  names: readonly string[]
+): string[] {
+  const needle = normalizeFileName(requestedBase).toLowerCase();
+  const stem = needle.replace(/\.[^.]+$/, "");
+  if (!stem) return [];
+  const scored = names
+    .filter((name) => !name.startsWith("."))
+    .map((name) => {
+      const lower = normalizeFileName(name).toLowerCase();
+      const otherStem = lower.replace(/\.[^.]+$/, "");
+      let score = 0;
+      if (lower.includes(stem) || stem.includes(otherStem)) score += 5;
+      let index = 0;
+      while (
+        index < needle.length &&
+        index < lower.length &&
+        needle[index] === lower[index]
+      ) {
+        index++;
+      }
+      score += index;
+      return { name, score };
+    })
+    .filter((item) => item.score >= 4)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return scored.slice(0, 8).map((item) => item.name);
+}
+
+type PathKind = "file" | "directory" | "missing" | "denied";
+
+function classifyPath(filePath: string): PathKind {
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isDirectory() ? "directory" : "file";
+  } catch (error: unknown) {
+    if (!isNodeError(error)) throw error;
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return "missing";
+    if (error.code === "EACCES" || error.code === "EPERM") return "denied";
+    throw error;
+  }
+}
+
 export class FileToolService {
   private readonly guard: FilePathGuard;
   /** Active workspace when in strict mode, else undefined. */
@@ -147,6 +240,92 @@ export class FileToolService {
     }
   }
 
+  /**
+   * Resolve a validated path to a real file. `existsSync` misses names that
+   * Explorer still shows: a trailing space, different case, or a hidden
+   * `.txt` suffix (`leads.csv` stored as `leads.csv.txt`).
+   */
+  private locateReadableFile(
+    resolvedPath: string,
+    requestedPath: string
+  ): { ok: true; filePath: string } | { ok: false; error: string } {
+    const direct = classifyPath(resolvedPath);
+    if (direct === "file") return { ok: true, filePath: resolvedPath };
+    if (direct === "directory") {
+      return { ok: false, error: `Path is a directory: ${requestedPath}` };
+    }
+    if (direct === "denied") {
+      return {
+        ok: false,
+        error: `Permission denied reading file: ${requestedPath}`,
+      };
+    }
+
+    const parent = path.dirname(resolvedPath);
+    const parentKind = classifyPath(parent);
+    if (parentKind === "denied") {
+      return {
+        ok: false,
+        error: `Permission denied reading folder: ${parent}`,
+      };
+    }
+    if (parentKind !== "directory") {
+      return {
+        ok: false,
+        error: `File not found: ${requestedPath}. Folder not found: ${parent}`,
+      };
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(parent, { withFileTypes: true });
+    } catch (error: unknown) {
+      if (
+        isNodeError(error) &&
+        (error.code === "EACCES" || error.code === "EPERM")
+      ) {
+        return {
+          ok: false,
+          error: `Permission denied reading folder: ${parent}`,
+        };
+      }
+      return { ok: false, error: `File not found: ${requestedPath}` };
+    }
+
+    const fileNames = entries
+      .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+      .map((entry) => entry.name);
+    const match = matchExistingFileName(path.basename(resolvedPath), fileNames);
+    if (match) {
+      const joined = path.join(parent, match);
+      const check = this.guard.validate(joined);
+      if (!check.safe) {
+        return {
+          ok: false,
+          error: check.error ?? `File not found: ${requestedPath}`,
+        };
+      }
+      const kind = classifyPath(check.resolvedPath);
+      if (kind === "file") return { ok: true, filePath: check.resolvedPath };
+      if (kind === "denied") {
+        return {
+          ok: false,
+          error: `Permission denied reading file: ${requestedPath}`,
+        };
+      }
+    }
+
+    const suggestions = suggestFileNames(
+      path.basename(resolvedPath),
+      fileNames
+    );
+    const hint =
+      suggestions.length > 0
+        ? ` Files in this folder: ${suggestions.join(", ")}`
+        : "";
+    return { ok: false, error: `File not found: ${requestedPath}${hint}` };
+  }
+
   // ---------------------------------------------------------------------------
   // file_read
   // ---------------------------------------------------------------------------
@@ -164,16 +343,19 @@ export class FileToolService {
       };
     }
 
-    const filePath = validation.resolvedPath;
-
-    if (!fs.existsSync(filePath)) {
+    const located = this.locateReadableFile(
+      validation.resolvedPath,
+      params.path
+    );
+    if (!located.ok) {
       return {
         success: false,
-        error: `File not found: ${params.path}`,
+        error: located.error,
         truncated: false,
         path: params.path,
       };
     }
+    const filePath = located.filePath;
 
     // Binary detection
     const stat = fs.statSync(filePath);
@@ -355,16 +537,19 @@ export class FileToolService {
       };
     }
 
-    const filePath = validation.resolvedPath;
-
-    if (!fs.existsSync(filePath)) {
+    const located = this.locateReadableFile(
+      validation.resolvedPath,
+      params.path
+    );
+    if (!located.ok) {
       return {
         success: false,
-        error: `File not found: ${params.path}`,
+        error: located.error,
         path: params.path,
         replacements: 0,
       };
     }
+    const filePath = located.filePath;
 
     const content = fs.readFileSync(filePath, "utf-8");
     const replaceAll = params.replace_all ?? false;
