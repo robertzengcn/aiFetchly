@@ -165,7 +165,7 @@ function mountChat() {
           props: ["modelValue", "timeout", "location"],
           emits: ["update:modelValue"],
           template:
-            "<div v-if=\"modelValue\" :data-testid=\"$attrs['data-testid'] || 'v-snackbar'\"><slot /></div>",
+            '<div v-if="modelValue" :data-testid="$attrs[\'data-testid\'] || \'v-snackbar\'" :data-timeout="timeout"><slot /></div>',
         },
         VSpacer: true,
         VTextField: true,
@@ -208,10 +208,14 @@ describe("AiChatV2 scheduled permission-requested", () => {
 
     // History must reload so the persisted permission card renders.
     expect(getChatV2HistoryMock).toHaveBeenCalledWith("conv-active");
-    // The persistent permission-requested snackbar becomes visible.
-    expect(
-      wrapper.find('[data-testid="scheduled-permission-notice"]').exists()
-    ).toBe(true);
+    // The permission-requested snackbar becomes visible.
+    const notice = wrapper.find('[data-testid="scheduled-permission-notice"]');
+    expect(notice.exists()).toBe(true);
+    // The snackbar must auto-dismiss (finite timeout), not persist forever —
+    // the actionable permission card is rendered in the history below, so the
+    // snackbar is a transient attention-grabber. A timeout of -1 (persistent)
+    // is the regression this test guards against.
+    expect(notice.attributes("data-timeout")).not.toBe("-1");
   });
 
   it("deny calls denyChatV2ToolPermission and skips stop when handled", async () => {

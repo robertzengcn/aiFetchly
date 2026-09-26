@@ -540,7 +540,7 @@
 
     <v-snackbar
       v-model="scheduledPermissionNotice"
-      :timeout="-1"
+      timeout="5000"
       location="bottom"
       data-testid="scheduled-permission-notice"
     >
@@ -1818,7 +1818,9 @@ function handleConversationUpdated(
   void loadConversations();
   if (event.reason === "scheduled_turn_permission_requested") {
     // Surface an action-required notice so the user knows a scheduled run is
-    // paused waiting for approval. Persistent (timeout=-1) until dismissed.
+    // paused waiting for approval. Auto-dismisses after 5s — the actionable
+    // permission card is also persisted in the rendered history below, so the
+    // snackbar is a transient attention-grabber, not the only entry point.
     const baseText =
       t("aiChatV2.permission_requested_scheduled") ||
       "A scheduled task is asking for permission to use a tool.";
