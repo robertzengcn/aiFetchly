@@ -357,7 +357,12 @@ test("under the deferred catalog the installer flow stays always-loaded and race
       const app = await launchAiFetchly({
         testRoot: root,
         fakeAiBaseUrl: fakeAi.providerBaseUrl,
-        extraEnv: { AI_TOOL_SEARCH: "on" },
+        // Stub ffmpeg probes (CI has none) so the §18.4 sequence completes
+        // to ready and the single-installation-row proof holds.
+        extraEnv: {
+          AI_TOOL_SEARCH: "on",
+          PATH: makeStubBin(root.rootPath),
+        },
       });
       try {
         // With a workspace set, the app boots into the chat-first workspace
@@ -403,9 +408,7 @@ test("under the deferred catalog the installer flow stays always-loaded and race
           preparedStatus.sessionId,
           preparedStatus.planRevision ?? ""
         );
-        expect(
-          ["ready", "installing_dependencies", "awaiting_secret"]
-        ).toContain(approvedInstall?.state);
+        expect(approvedInstall?.state).toBe("ready");
         const listed = await invoke<{ installationId: string; name: string }[]>(
           app,
           "skill-install:list",
