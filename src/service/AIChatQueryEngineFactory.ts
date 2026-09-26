@@ -7,6 +7,7 @@ import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
+import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
@@ -14,6 +15,7 @@ import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinat
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 
 /**
  * Builds production {@link AIChatQueryEngine} instances for non-interactive
@@ -39,18 +41,33 @@ export class AIChatQueryEngineFactory {
    * Optional interactive services (compact agent, auto-dream) are omitted — the
    * engine runs fine without them; all deps are optional.
    */
-  createScheduled(policy: AiMessageTaskToolPolicy): AIChatQueryEngine {
+  createScheduled(
+    policy: AiMessageTaskToolPolicy,
+    conversationId?: string
+  ): AIChatQueryEngine {
+    // Resolve the conversation's approval mode ONCE so the catalog filter and
+    // the execution backstop agree, and to avoid a Token read per tool call.
+    // null when the conversation has no mode set or conversationId is absent —
+    // preserves the pre-existing per-task gating for legacy callers/tests.
+    const approvalMode: ChatToolApprovalMode | null = conversationId
+      ? new AIChatToolApprovalModule().getMode(conversationId)
+      : null;
     // §11 coordinator with a provider-backed summarize callback. The engine's
     // post-turn hook calls requestCompactionForTurn (§12 incremental path);
     // when AI is disabled or the provider call fails, the coordinator cancels
     // the run and the engine keeps the legacy behavior.
     const coordinator = new AIChatCompactionCoordinator({
-      summarize: async (systemPrompt: string, userPrompt: string, model?: string): Promise<string> =>
+      summarize: async (
+        systemPrompt: string,
+        userPrompt: string,
+        model?: string
+      ): Promise<string> =>
         dispatchSectionSummarize({
           systemPrompt,
           userPrompt,
           model,
-          completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+          completeChat: (request) =>
+            new AiChatApi().openAIChatCompletion(request),
         }),
     });
     // §12 assembler with the compaction reader + archive access: reads the
@@ -61,22 +78,25 @@ export class AIChatQueryEngineFactory {
       compactionReader: new AIChatCompactionModule(),
       archiveModule: new AIChatArchiveModule(),
     });
-    return new AIChatQueryEngine(this.createQueryLoop(policy), {
-      toolFilter: (name) => this.isToolAllowed(name, policy),
+    return new AIChatQueryEngine(this.createQueryLoop(policy, approvalMode), {
+      toolFilter: (name) => this.isToolAllowed(name, policy, approvalMode),
       compactionCoordinator: coordinator,
       contextAssembler: assembler,
     });
   }
 
   /** Build the production query loop with task-scoped tool enforcement. */
-  private createQueryLoop(policy: AiMessageTaskToolPolicy): AIChatQueryLoop {
+  private createQueryLoop(
+    policy: AiMessageTaskToolPolicy,
+    approvalMode: ChatToolApprovalMode | null
+  ): AIChatQueryLoop {
     const deps: AIChatQueryLoopDeps = {
       streamChatCompletion: (request, onChunk, options) => {
         const api = new AiChatApi();
         return api.openAIChatCompletionStream(request, onChunk, options);
       },
       executeTool: (name, args, context) =>
-        this.executeScheduledTool(name, args, context, policy),
+        this.executeScheduledTool(name, args, context, policy, approvalMode),
       getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
       resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
         const svc = new AIChatModelFallbackService();
@@ -96,13 +116,15 @@ export class AIChatQueryEngineFactory {
    */
   private isToolAllowed(
     name: string,
-    policy: AiMessageTaskToolPolicy
+    policy: AiMessageTaskToolPolicy,
+    approvalMode: ChatToolApprovalMode | null
   ): boolean {
     const skill = SkillRegistry.getSkill(name) ?? null;
     return canAutoApproveScheduledTool({
       skill,
       taskPolicy: policy,
       toolName: name,
+      approvalMode,
     }).allowed;
   }
 
@@ -118,13 +140,15 @@ export class AIChatQueryEngineFactory {
     name: string,
     args: Record<string, unknown>,
     context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
-    policy: AiMessageTaskToolPolicy
+    policy: AiMessageTaskToolPolicy,
+    approvalMode: ChatToolApprovalMode | null
   ): Promise<ToolExecutionResult> {
     const skill = SkillRegistry.getSkill(name) ?? null;
     const decision = canAutoApproveScheduledTool({
       skill,
       taskPolicy: policy,
       toolName: name,
+      approvalMode,
     });
 
     // Gated high-impact/automation tool not in the allowlist → pause for the

@@ -317,6 +317,183 @@ describe("ScheduledAiToolPolicy interactive permission outcome", () => {
   });
 });
 
+describe("ScheduledAiToolPolicy full_access approval mode", () => {
+  // full_access mirrors the interactive "auto-approve all registered tools"
+  // contract: every REGISTERED tool (built-in, imported skill, MCP, run_subagent)
+  // runs without per-task toggles or allowlist membership, and gated
+  // high-impact/automation tools no longer pause for permission. The
+  // SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS set is enforced FIRST so shell_execute
+  // and mark_email_processed stay unreachable. Unregistered/hallucinated tool
+  // names still fail closed. approve_for_me is NOT a fast path here.
+
+  it("full_access auto-approves a high-impact tool absent from the allowlist", () => {
+    // file_write is high-impact and NOT in allowedTools — under normal gating
+    // this would pause for interactive permission. full_access auto-runs it.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+  });
+
+  it("full_access auto-approves an automation tool absent from the allowlist", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("proxy_check"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "proxy_check",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+  });
+
+  it("full_access still blocks the permanently-blocked set (shell, mark-processed)", () => {
+    for (const name of ["shell_execute", "mark_email_processed"]) {
+      const decision = canAutoApproveScheduledTool({
+        skill: skill(name),
+        taskPolicy: policy({ allowedTools: [name], autoApproveTools: true }),
+        toolName: name,
+        approvalMode: "full_access",
+      });
+      expect(decision.allowed, `${name} must stay blocked`).toBe(false);
+      expect(decision.riskLevel, `${name} riskLevel`).toBe("blocked");
+      expect(
+        decision.requiresInteractivePermission,
+        `${name} must not request interactive permission`
+      ).toBeFalsy();
+    }
+  });
+
+  it("full_access auto-approves run_subagent even when allowSubagents is false", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("run_subagent"),
+      taskPolicy: policy({ allowSubagents: false }),
+      toolName: "run_subagent",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("full_access auto-approves MCP tools even when allowMcp is false", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: null,
+      taskPolicy: policy({ allowMcp: false }),
+      toolName: "mcp_github_search",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("full_access auto-approves imported skills even when allowSkills is false", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("list_email_inboxes", { source: "user" }),
+      taskPolicy: policy({ allowSkills: false }),
+      toolName: "list_email_inboxes",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("full_access auto-approves the synthetic tool_catalog_search discovery tool", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: null,
+      taskPolicy: policy({ allowMcp: false, allowSkills: false }),
+      toolName: "tool_catalog_search",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("full_access fails closed for an unregistered/hallucinated tool name", () => {
+    // No matching skill, not a recognized synthetic tool, not MCP, not
+    // run_subagent → fail closed rather than auto-running something unknown.
+    const decision = canAutoApproveScheduledTool({
+      skill: null,
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "totally_made_up_tool",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.riskLevel).toBe("blocked");
+    expect(decision.reason).toMatch(/not available/);
+  });
+
+  it("full_access marks built-in tools low-risk and extended tools medium-risk", () => {
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("file_write"),
+        taskPolicy: policy({ allowedTools: [] }),
+        toolName: "file_write",
+        approvalMode: "full_access",
+      }).riskLevel
+    ).toBe("low");
+
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("list_email_inboxes", { source: "user" }),
+        taskPolicy: policy({ allowSkills: false }),
+        toolName: "list_email_inboxes",
+        approvalMode: "full_access",
+      }).riskLevel
+    ).toBe("medium");
+  });
+
+  it("ask_for_approval still pauses for a gated high-impact tool not in the allowlist", () => {
+    // full_access is the ONLY auto-approve fast path. ask_for_approval keeps
+    // the pre-existing per-task gating: a high-impact tool not in the allowlist
+    // still parks the run for an interactive permission card.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+      approvalMode: "ask_for_approval",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+    expect(decision.riskLevel).toBe("high");
+  });
+
+  it("null approval mode preserves pre-existing per-task gating (no fast path)", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+      approvalMode: null,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+  });
+
+  it("approve_for_me is NOT an auto-approve fast path (falls through to gating)", () => {
+    // approve_for_me only relaxes the interactive shell gate in the interactive
+    // path; the scheduled loop already blocks shell_execute via the
+    // always-blocked set, so approve_for_me must NOT auto-approve a gated tool.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+      approvalMode: "approve_for_me",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+  });
+
+  it("full_access does not bypass the autoApproveTools-off reason for read-only tools... but still allows them", () => {
+    // Sanity: full_access short-circuits BEFORE the autoApproveTools check, so
+    // a built-in read-only tool auto-runs even with autoApproveTools off.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("list_email_services"),
+      taskPolicy: policy({ autoApproveTools: false, allowedTools: [] }),
+      toolName: "list_email_services",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+});
+
 describe("ScheduledAiToolPolicy validateScheduledLoopAllowedTools", () => {
   it("accepts a list of curated read-only tools", () => {
     const result = validateScheduledLoopAllowedTools([

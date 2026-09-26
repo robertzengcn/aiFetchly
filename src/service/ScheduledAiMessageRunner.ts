@@ -318,7 +318,8 @@ export class ScheduledAiMessageRunner {
       // the renderer cannot forge, and makes the user/assistant rows idempotent
       // across crash-retries (technical-design §14).
       const engine = new AIChatQueryEngineFactory().createScheduled(
-        this.parseTaskPolicy(task)
+        this.parseTaskPolicy(task),
+        conversationId
       );
       engineRegistry.register({
         conversationId,
@@ -728,7 +729,10 @@ export class ScheduledAiMessageRunner {
         };
       }
 
-      const engine = new AIChatQueryEngineFactory().createScheduled(policy);
+      const engine = new AIChatQueryEngineFactory().createScheduled(
+        policy,
+        conversationId
+      );
       engineRegistry.register({
         conversationId,
         engine,

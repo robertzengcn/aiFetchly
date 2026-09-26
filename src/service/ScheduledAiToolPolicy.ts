@@ -4,6 +4,7 @@ import type {
   ScheduledToolDecision,
   AiMessageTaskToolPolicy,
 } from "@/entityTypes/aiMessageTaskTypes";
+import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 
 /**
@@ -291,18 +292,60 @@ export function isScheduledMcpToolName(toolName: string): boolean {
  * Defense-in-depth — the catalog filter should already hide disallowed tools,
  * but this backstop blocks any model-hallucinated tool call and returns a
  * structured reason the model can read.
+ *
+ * `approvalMode` (resolved from the conversation's ChatToolApprovalMode) opens
+ * an auto-approve fast path: when `full_access`, every REGISTERED tool —
+ * built-in, imported skill, MCP, and run_subagent — is auto-approved without
+ * per-task toggles or allowlist membership, matching the interactive
+ * `full_access` contract ("auto-approve all registered tools after hard safety
+ * checks"). The {@link SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS} set is that hard
+ * safety floor and is enforced FIRST, so `shell_execute` and
+ * `mark_email_processed` are never reachable by full_access. Tools that are
+ * not registered skills (e.g. hallucinated names) still fail closed. A null
+ * `approvalMode` preserves the pre-existing per-task gating behavior.
  */
 export function canAutoApproveScheduledTool(params: {
   readonly skill: SkillDefinition | null;
   readonly taskPolicy: AiMessageTaskToolPolicy;
   readonly toolName: string;
+  readonly approvalMode?: ChatToolApprovalMode | null;
 }): ScheduledToolDecision {
-  const { skill, taskPolicy, toolName } = params;
+  const { skill, taskPolicy, toolName, approvalMode } = params;
 
+  // Hard safety floor — enforced before any auto-approve fast path so
+  // full_access can never reach permanently-blocked tools.
   if (SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)) {
     return {
       allowed: false,
       reason: `Tool "${toolName}" is permanently blocked for unattended scheduled tasks.`,
+      riskLevel: "blocked",
+    };
+  }
+
+  // Full access: auto-approve every REGISTERED tool. Unregistered/hallucinated
+  // tool names (skill === null and not a recognized synthetic tool) still fail
+  // closed below. `approve_for_me` is NOT an auto-approve fast path here — it
+  // only relaxes the interactive shell gate, which the scheduled loop already
+  // blocks via the always-blocked set, so it falls through to normal gating.
+  if (approvalMode === "full_access") {
+    // run_subagent / MCP / imported skills are registered tools and run under
+    // full_access regardless of the per-task allow* flags. tool_catalog_search
+    // is a synthetic discovery tool — auto-allow it so search works.
+    if (
+      toolName === "run_subagent" ||
+      isScheduledMcpToolName(toolName) ||
+      toolName === TOOL_CATALOG_SEARCH_TOOL_NAME ||
+      skill
+    ) {
+      return {
+        allowed: true,
+        riskLevel: skill?.source === "built-in" ? "low" : "medium",
+      };
+    }
+    // Not registered and not a recognized synthetic tool → fail closed.
+    return {
+      allowed: false,
+      reason: `Tool "${toolName}" is not available.`,
       riskLevel: "blocked",
     };
   }
@@ -373,6 +416,9 @@ export function canAutoApproveScheduledTool(params: {
   }
 
   // High-impact and automation tools require explicit per-tool selection.
+  // When not in the allowlist, pause for interactive permission instead of
+  // failing closed — the user can grant the tool at runtime (the run parks,
+  // a permission card renders, and a 1h backstop auto-deny guards the pause).
   const requiresExplicitAllowlist =
     isHighImpactSchedulableTool(toolName) ||
     isScheduledAutomationTool(toolName);
