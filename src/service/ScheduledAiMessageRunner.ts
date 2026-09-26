@@ -422,10 +422,15 @@ export class ScheduledAiMessageRunner {
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
       });
-      outcome = sink.getOutcome() ?? {
-        kind: "failed",
-        errorMessage: "NO_TERMINAL_EVENT",
-      };
+      // `submitMessage` resolves on a permission pause (the engine parks the
+      // turn in `pendingPermissions` and returns without emitting a terminal
+      // event). When that happens, stay alive — engine registered, runtime
+      // timeout cleared, 1h backstop armed — and wait for the resumed loop
+      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
+      // Without this wait, the `finally` below would unregister the engine
+      // and clear the backstop before the user can respond, orphaning every
+      // permission card (the headline feature would be non-functional).
+      outcome = sink.getOutcome() ?? (await sink.waitForTerminalOutcome());
     } finally {
       clearTimeout(timeoutHandle);
       clearPermissionBackstop();
@@ -824,10 +829,15 @@ export class ScheduledAiMessageRunner {
           assistantMessageId,
         },
       });
-      outcome = sink.getOutcome() ?? {
-        kind: "failed",
-        errorMessage: "NO_TERMINAL_EVENT",
-      };
+      // `submitMessage` resolves on a permission pause (the engine parks the
+      // turn in `pendingPermissions` and returns without emitting a terminal
+      // event). When that happens, stay alive — engine registered, runtime
+      // timeout cleared, 1h backstop armed — and wait for the resumed loop
+      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
+      // Without this wait, the `finally` below would unregister the engine
+      // and clear the backstop before the user can respond, orphaning every
+      // permission card (the headline feature would be non-functional).
+      outcome = sink.getOutcome() ?? (await sink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;

@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
+import { SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS } from "@/config/aiChatScheduledLoopConfig";
 
 // --- Controllable stubs (hoisted so vi.mock factories can reference them) ---
 const aiEnabled = vi.hoisted(() => ({ value: "true" }));
@@ -25,9 +26,26 @@ const mockRegisterEngine = vi.hoisted(() => vi.fn());
 const mockUnregisterEngine = vi.hoisted(() => vi.fn());
 const mockSetPending = vi.hoisted(() => vi.fn());
 const mockClearPending = vi.hoisted(() => vi.fn());
-const mockResume = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const mockDeny = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const mockResume = vi.hoisted(() =>
+  vi.fn(async (input: { toolId: string; conversationId: string }) => {
+    void input;
+    return { ok: true };
+  })
+);
+const mockDeny = vi.hoisted(() =>
+  vi.fn(async (input: { toolId: string; conversationId: string }) => {
+    void input;
+    return { ok: true };
+  })
+);
 const mockSubmit = vi.hoisted(() => vi.fn());
+/** Drives the sink from the test; set by each test before the run starts. */
+const terminalEvent = vi.hoisted(() => ({
+  value: null as
+    | null
+    | { type: "complete"; content?: string }
+    | { type: "error"; message?: string },
+}));
 const mockCreateConversationIfNeeded = vi.hoisted(() =>
   vi.fn((id?: string) => (id && id.startsWith("v2-") ? id : "v2-minted"))
 );
@@ -58,7 +76,9 @@ vi.mock("@/modules/token", () => ({
 }));
 vi.mock("@/service/aiProvider/AIProviderResolver", () => ({
   AIProviderResolver: class {
-    resolveForChat(): { kind: "hosted"; canUse: true } | { canUse: false; reason: string; message: string } {
+    resolveForChat():
+      | { kind: "hosted"; canUse: true }
+      | { canUse: false; reason: string; message: string } {
       return chatCanUse.value
         ? { kind: "hosted" as const, canUse: true as const }
         : {
@@ -209,12 +229,16 @@ function driveSink(sink: { emit: (e: unknown) => void }): void {
   }
 }
 
+/** Captured so a test can simulate the resumed loop emitting a terminal event. */
+let capturedSink: { emit: (e: unknown) => void } | null = null;
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   aiEnabled.value = "true";
   chatCanUse.value = true;
   sinkOutcome.value = null;
+  terminalEvent.value = null;
   mockParseAllowedTools.mockReturnValue([]);
   mockGetTask.mockResolvedValue(TASK);
   mockGetScheduleById.mockResolvedValue(SCHEDULE);
@@ -231,14 +255,46 @@ beforeEach(() => {
   });
   mockSubmit.mockImplementation(
     async (input: { eventSink: { emit: (e: unknown) => void } }) => {
+      capturedSink = input.eventSink;
       driveSink(input.eventSink);
     }
   );
+  // Mirrors production: grant/deny launches a resumed `void loop.run` that
+  // emits the terminal outcome to the SAME sink. The runner is awaiting
+  // `sink.waitForTerminalOutcome()`, so emitting here unblocks it.
+  mockResume.mockImplementation(async () => {
+    emitTerminal(capturedSink);
+    return { ok: true };
+  });
+  mockDeny.mockImplementation(async () => {
+    emitTerminal(capturedSink);
+    return { ok: true };
+  });
 });
 
+function emitTerminal(sink: { emit: (e: unknown) => void } | null): void {
+  if (!sink || !terminalEvent.value) return;
+  if (terminalEvent.value.type === "complete") {
+    sink.emit({
+      type: "complete",
+      conversationId: "v2-conv",
+      messageId: "scheduled-assistant-2-1",
+      fullContent: terminalEvent.value.content ?? "resumed ok",
+    });
+  } else if (terminalEvent.value.type === "error") {
+    sink.emit({
+      type: "error",
+      conversationId: "v2-conv",
+      messageId: "scheduled-assistant-2-1",
+      errorMessage: terminalEvent.value.message ?? "resumed failed",
+    });
+  }
+}
+
 describe("ScheduledAiMessageRunner permission pause", () => {
-  it("on gated tool pause: suspends timeout, notifies, broadcasts, starts backstop, registers engine", async () => {
+  it("on gated tool pause: stays registered + armed until grant resumes the loop", async () => {
     sinkOutcome.value = "pause";
+    terminalEvent.value = { type: "complete", content: "resumed ok" };
     const runner = new ScheduledAiMessageRunner();
     const resultPromise = runner.runChatScheduledLoop({
       taskId: 1,
@@ -248,18 +304,77 @@ describe("ScheduledAiMessageRunner permission pause", () => {
       catchUp: false,
       scheduledFor: new Date(),
     });
-    // The mock submitMessage resolves synchronously after emitting the
-    // tool_result; await the returned promise to let the runner finalize.
-    await vi.waitFor(() => resultPromise, { timeout: 1000 });
 
+    // Wait until the pause branch has run: submitMessage resolved, the
+    // sink emitted the needsPermissionPrompt tool_result, and the runner
+    // parked on `await sink.waitForTerminalOutcome()`. `setPendingPermission`
+    // is the last pause side-effect, so once it fires the runner is parked.
+    await vi.waitFor(
+      () =>
+        expect(mockSetPending).toHaveBeenCalledWith("v2-conv", {
+          toolId: "t1",
+        }),
+      { timeout: 1000 }
+    );
+
+    // Pause side-effects fired.
     expect(mockRegisterEngine).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: "v2-conv", runId: 42 })
     );
-    expect(mockSetPending).toHaveBeenCalledWith("v2-conv", { toolId: "t1" });
     expect(mockShowNotification).toHaveBeenCalled();
     const evt = mockBroadcastEmit.mock.calls.find(
       (c) => c[0]?.reason === "scheduled_turn_permission_requested"
     );
     expect(evt).toBeTruthy();
+
+    // Critical contract: the engine is STILL registered while paused — the
+    // runner did NOT run its finally/unregister. The runtime timeout was
+    // cleared (suspended) and the 1h backstop is armed, not cleared.
+    expect(mockUnregisterEngine).not.toHaveBeenCalled();
+
+    // Simulate the user granting via IPC. Production IPC resolves the
+    // engine through `registry.getByConversation(...)` then calls
+    // `engine.resumeToolAfterPermission(...)`; the resumed `void loop.run`
+    // emits the terminal outcome to the SAME sink. The mock captures that
+    // sink and replays the terminal event here, unblocking the runner.
+    await mockResume({ toolId: "t1", conversationId: "v2-conv" });
+    const result = await resultPromise;
+
+    // Now the runner finalized: engine unregistered, run completed.
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(result.status).toBe("completed");
+  });
+
+  it("1h backstop auto-deny resolves the run when the user never responds", async () => {
+    sinkOutcome.value = "pause";
+    terminalEvent.value = { type: "error", message: "auto-denied" };
+    const runner = new ScheduledAiMessageRunner();
+    const resultPromise = runner.runChatScheduledLoop({
+      taskId: 1,
+      scheduleId: 2,
+      runId: 42,
+      occurrence: 1,
+      catchUp: false,
+      scheduledFor: new Date(),
+    });
+    await vi.waitFor(
+      () =>
+        expect(mockSetPending).toHaveBeenCalledWith("v2-conv", {
+          toolId: "t1",
+        }),
+      { timeout: 1000 }
+    );
+    expect(mockUnregisterEngine).not.toHaveBeenCalled();
+
+    // Advance past the 1h backstop. The backstop calls denyToolPermission,
+    // whose resumed loop emits the terminal error to the sink.
+    await vi.advanceTimersByTimeAsync(
+      SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS + 1
+    );
+    const result = await resultPromise;
+
+    expect(mockDeny).toHaveBeenCalled();
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(result.status).toBe("failed");
   });
 });
