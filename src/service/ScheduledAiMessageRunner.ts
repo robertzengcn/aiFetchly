@@ -370,8 +370,15 @@ export class ScheduledAiMessageRunner {
                 toolId: event.toolCallId,
                 conversationId,
               })
-              .then(() => {
-                engineRegistry.clearPendingPermission(conversationId);
+              .then((result) => {
+                // Only clear pending metadata when this backstop actually matched
+                // and denied the tool. If a newer tool replaced the pending
+                // entry (ok:false → "no active permission-gated tool call" or
+                // toolId mismatch), clearing would orphan the new permission
+                // card. The IPC grant/deny path owns the clear in that case.
+                if (result.ok) {
+                  engineRegistry.clearPendingPermission(conversationId);
+                }
               })
               .catch((err: unknown) => {
                 console.error(
@@ -782,8 +789,15 @@ export class ScheduledAiMessageRunner {
                 toolId: event.toolCallId,
                 conversationId,
               })
-              .then(() => {
-                engineRegistry.clearPendingPermission(conversationId);
+              .then((result) => {
+                // Only clear pending metadata when this backstop actually matched
+                // and denied the tool. If a newer tool replaced the pending
+                // entry (ok:false → "no active permission-gated tool call" or
+                // toolId mismatch), clearing would orphan the new permission
+                // card. The IPC grant/deny path owns the clear in that case.
+                if (result.ok) {
+                  engineRegistry.clearPendingPermission(conversationId);
+                }
               })
               .catch((err: unknown) => {
                 console.error(

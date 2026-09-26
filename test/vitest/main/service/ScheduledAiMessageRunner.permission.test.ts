@@ -377,4 +377,67 @@ describe("ScheduledAiMessageRunner permission pause", () => {
     expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
     expect(result.status).toBe("failed");
   });
+
+  it("backstop does not clear a newer tool's pending metadata when deny returns ok:false (residual race)", async () => {
+    // Scenario the adversarial review flagged: tool A pauses + arms backstop A.
+    // The user denies A (IPC clears pending + backstop A's handle). The resumed
+    // loop then pauses on tool B (pending = {toolId:B}, backstop B armed). If
+    // backstop A's timer had already elapsed before the user denied, its fired
+    // callback runs denyToolPermission({toolId:A}) → finds pending={toolId:B}
+    // → matchedByToolId false → returns {ok:false}. The backstop's .then() must
+    // NOT clearPendingPermission, or it orphans tool B's permission card.
+    sinkOutcome.value = "pause";
+    const runner = new ScheduledAiMessageRunner();
+    const resultPromise = runner.runChatScheduledLoop({
+      taskId: 1,
+      scheduleId: 2,
+      runId: 42,
+      occurrence: 1,
+      catchUp: false,
+      scheduledFor: new Date(),
+    });
+    await vi.waitFor(
+      () =>
+        expect(mockSetPending).toHaveBeenCalledWith("v2-conv", {
+          toolId: "t1",
+        }),
+      { timeout: 1000 }
+    );
+    expect(mockUnregisterEngine).not.toHaveBeenCalled();
+
+    // Simulate the stale backstop firing: deny returns ok:false because a
+    // newer tool replaced the pending entry. The terminal event is NOT emitted
+    // (the deny didn't match), so the runner stays parked.
+    mockDeny.mockImplementation(async () => ({ ok: false, error: "stale" }));
+    await vi.advanceTimersByTimeAsync(
+      SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS + 1
+    );
+    // Yield so the backstop's async .then chain settles.
+    await Promise.resolve();
+
+    expect(mockDeny).toHaveBeenCalledWith({
+      toolId: "t1",
+      conversationId: "v2-conv",
+    });
+    // CRITICAL: the backstop issued an ok:false deny, so it must NOT clear the
+    // (newer tool's) pending metadata. The runner is still parked.
+    expect(mockClearPending).not.toHaveBeenCalled();
+    expect(mockUnregisterEngine).not.toHaveBeenCalled();
+
+    // Now the newer tool's actual deny resolves the run. (Production IPC would
+    // call clearPendingPermission here; the runner's backstop only clears on
+    // its own ok:true deny. We assert the runner finalizes after the terminal
+    // event.)
+    mockDeny.mockImplementation(async () => {
+      emitTerminal(capturedSink);
+      return { ok: true };
+    });
+    terminalEvent.value = { type: "complete", content: "b resumed" };
+    await mockDeny({ toolId: "t2", conversationId: "v2-conv" });
+    const result = await resultPromise;
+
+    // The runner finalized: engine unregistered, run completed.
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(result.status).toBe("completed");
+  });
 });
