@@ -2144,6 +2144,13 @@ export class AIChatQueryLoop {
                       announcedDeferredNames
                     )
                   : undefined,
+                // Stage A §3.2/§3.6: the owner's lifecycle listener and
+                // terminal-notification ownership survive the pause so the
+                // resumed segment notifies the same owner (FR-021/023).
+                ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+                ...(input.ownerNotifiesTerminal !== undefined
+                  ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+                  : {}),
               },
             };
           }
@@ -2590,6 +2597,12 @@ export class AIChatQueryLoop {
         questionId: questionView.questionId,
         planId: input.planContext.planState.planId,
         eventSink: eventSink,
+        // Stage A §3.2/§3.6: owner listener + notification ownership survive
+        // the pause (FR-021/023).
+        ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+        ...(input.ownerNotifiesTerminal !== undefined
+          ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+          : {}),
       },
     };
   }

@@ -7,6 +7,7 @@ import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type {
   AIChatQueryEventSink,
   AIChatSegmentOutcome,
+  AIChatTurnLifecycleListener,
 } from "@/service/AIChatQueryEvents";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
@@ -393,6 +394,8 @@ export class AIChatCoordinator {
         outcome = await this.deps.engine.runTurn({
           request: this.buildEngineRequest(live),
           eventSink: this.createRunSink(live, adapter),
+          lifecycle: this.createLifecycleListener(live),
+          ownerNotifiesTerminal: true,
         });
       } catch (err) {
         // FR-022 / AC-17: a segment that ends without a classified outcome
@@ -416,7 +419,9 @@ export class AIChatCoordinator {
 
       // Paused outcomes park the run (FR-009): waiting state comes from the
       // explicit segment outcome, not from a sampled engine status and not
-      // from the absence of a terminal event.
+      // from the absence of a terminal event. The lifecycle listener's
+      // onAwaiting (FR-021) usually transitioned already — this branch is
+      // the safety net for engines that park without a listener.
       if (
         outcome.type === "paused_for_permission" ||
         outcome.type === "paused_for_plan_question"
@@ -425,23 +430,30 @@ export class AIChatCoordinator {
           outcome.type === "paused_for_permission"
             ? "awaiting_permission"
             : "awaiting_user";
+        // The lifecycle listener may have transitioned already (FR-021);
+        // defeat TS's assignment-based narrowing — the listener runs async
+        // relative to this branch.
+        const alreadyParked =
+          (live.status as ChatRunStatus) === parked;
         live.status = parked;
         live.dispatchSettled = true;
-        try {
-          await this.deps.runModule.transition(runId, parked);
-        } catch (err) {
-          console.warn(
-            "[ai-chat-workspace] pause transition failed for run",
-            runId,
-            err
+        if (!alreadyParked) {
+          try {
+            await this.deps.runModule.transition(runId, parked);
+          } catch (err) {
+            console.warn(
+              "[ai-chat-workspace] pause transition failed for run",
+              runId,
+              err
+            );
+          }
+          void this.broadcastRunSummary(
+            conversationId,
+            parked === "awaiting_permission"
+              ? "permission_required"
+              : "user_input_required"
           );
         }
-        void this.broadcastRunSummary(
-          conversationId,
-          parked === "awaiting_permission"
-            ? "permission_required"
-            : "user_input_required"
-        );
         // Keep the live entry: the parked turn's eventual terminal
         // (permission-grant resume or deny-stop cancel) routes through
         // settleDetachedTerminal. The finally block below still releases
@@ -533,9 +545,10 @@ export class AIChatCoordinator {
 
   /**
    * Run-owned sink: maps engine events to chunks, wraps them with run
-   * identity, routes detail events, and samples engine runtime status on
-   * non-token chunks to observe permission/question pauses (which the engine
-   * exposes as state, not sink events).
+   * identity, routes detail events, and holds terminal chunks until the
+   * durable terminal transition commits. Waiting/resume transitions arrive
+   * through the lifecycle listener (Stage A §3.2, FR-021) — not by sampling
+   * engine status on chunks.
    */
   private createRunSink(
     live: LiveRunState,
@@ -555,7 +568,6 @@ export class AIChatCoordinator {
         return;
       }
       this.deps.router.sendDetailEvent(adapter.wrap(chunk));
-      this.sampleEngineStatus(live);
     };
     return createChatV2StreamSink({
       sendChunk: handleChunk,
@@ -611,29 +623,55 @@ export class AIChatCoordinator {
     }
   }
 
-  /** Detect awaiting/resume transitions the engine exposes as state. */
-  private sampleEngineStatus(live: LiveRunState): void {
-    const mapped = mapEngineStatus(
-      this.deps.engine.getConversationRuntimeStatus(live.conversationId)
-    );
-    if (!mapped || mapped === live.status) return;
-    live.status = mapped;
-    const reason: ConversationSummaryEvent["reason"] =
-      mapped === "awaiting_permission"
-        ? "permission_required"
-        : mapped === "awaiting_user"
-        ? "user_input_required"
-        : "run_started";
-    // FR-023/037: serialize the durable transition BEFORE broadcasting
-    // the summary hint — persistence must precede terminal hints.
-    void this.deps.runModule
-      .transition(live.runId, mapped)
-      .then(() => {
-        void this.broadcastRunSummary(live.conversationId, reason);
-      })
-      .catch((err) =>
-        console.warn("[ai-chat-workspace] waiting transition failed:", err)
-      );
+  /**
+   * Stage A §3.2 (FR-021): explicit lifecycle notifications replace sampled
+   * engine status. The engine calls onAwaiting exactly once when it parks
+   * the turn and onResumed exactly once when a claimed resume starts
+   * executing. Synchronous, non-throwing: persist the durable run
+   * transition FIRST, then broadcast the summary hint (FR-023).
+   */
+  private createLifecycleListener(
+    live: LiveRunState
+  ): AIChatTurnLifecycleListener {
+    const transitionThenBroadcast = (
+      status: ChatRunStatus,
+      reason: ConversationSummaryEvent["reason"]
+    ): void => {
+      void this.deps.runModule
+        .transition(live.runId, status)
+        .then(() => {
+          void this.broadcastRunSummary(live.conversationId, reason);
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            "[ai-chat-workspace] lifecycle transition failed for run",
+            live.runId,
+            err
+          );
+        });
+    };
+    return {
+      onAwaiting: (event) => {
+        const parked: ChatRunStatus =
+          event.kind === "permission"
+            ? "awaiting_permission"
+            : "awaiting_user";
+        if (live.status === parked) return;
+        live.status = parked;
+        transitionThenBroadcast(
+          parked,
+          event.kind === "permission"
+            ? "permission_required"
+            : "user_input_required"
+        );
+      },
+      onResumed: (event) => {
+        void event;
+        if (live.status === "running") return;
+        live.status = "running";
+        transitionThenBroadcast("running", "run_started");
+      },
+    };
   }
 
   private buildEngineRequest(live: LiveRunState): ChatV2StreamRequest {
@@ -777,17 +815,4 @@ function isTerminalChunk(chunk: ChatV2StreamChunk): boolean {
     chunk.eventType === "error" ||
     chunk.eventType === "cancelled"
   );
-}
-
-function mapEngineStatus(status: ChatV2RuntimeStatus): ChatRunStatus | null {
-  switch (status) {
-    case "running":
-      return "running";
-    case "awaiting_permission":
-      return "awaiting_permission";
-    case "awaiting_user":
-      return "awaiting_user";
-    default:
-      return null;
-  }
 }

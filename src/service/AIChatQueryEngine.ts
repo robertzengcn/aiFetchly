@@ -74,6 +74,7 @@ import type {
   AIChatQueryLoopResult,
   AIChatPlanLoopContext,
   AIChatSegmentOutcome,
+  AIChatTurnLifecycleListener,
   AIChatTurnTerminalEvent,
   AnswerPlanQuestionRequest,
   PendingPermissionTurn,
@@ -314,6 +315,19 @@ export interface AIChatQuerySubmitInput {
    * object (technical-design §14.1).
    */
   scheduledContext?: AIChatScheduledTurnContext;
+  /**
+   * Stage A §3.2 (FR-021): owner-supplied lifecycle listener. The engine
+   * calls onAwaiting exactly once when it parks this turn and onResumed when
+   * a claimed resume starts executing. Synchronous, non-throwing; the owner
+   * serializes its own persistence-then-broadcast work.
+   */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /**
+   * Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal; the engine's own onTurnTerminal callback is skipped so the
+   * queue is notified exactly once per run.
+   */
+  ownerNotifiesTerminal?: boolean;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -396,6 +410,8 @@ interface ActiveTurnState {
   eventSink: AIChatQueryEventSink;
   /** Steering mailbox for this turn; absent when steering is unavailable. */
   control?: AIChatTurnControl;
+  /** Stage A §3.2 (FR-021): owner listener notified when the turn parks. */
+  lifecycle?: AIChatTurnLifecycleListener;
 }
 
 export class AIChatQueryEngine {
@@ -1178,6 +1194,10 @@ export class AIChatQueryEngine {
       textApprovedPlanState,
       sourceUserMessageId,
       intentDecisionId,
+      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+      ...(input.ownerNotifiesTerminal !== undefined
+        ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+        : {}),
     });
   }
 
@@ -1441,6 +1461,8 @@ export class AIChatQueryEngine {
     readonly scheduledContext?: AIChatScheduledTurnContext;
     readonly sourceUserMessageId?: string;
     readonly intentDecisionId?: number | null;
+    readonly lifecycle?: AIChatTurnLifecycleListener;
+    readonly ownerNotifiesTerminal?: boolean;
   }): Promise<AIChatTurnTerminalEvent> {
     const {
       conversationId,
@@ -1453,6 +1475,8 @@ export class AIChatQueryEngine {
       textApprovedPlanState,
       sourceUserMessageId,
       intentDecisionId,
+      lifecycle,
+      ownerNotifiesTerminal,
     } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
@@ -1564,6 +1588,7 @@ export class AIChatQueryEngine {
       assistantMessageId,
       eventSink,
       ...(control ? { control } : {}),
+      ...(lifecycle ? { lifecycle } : {}),
     });
 
     // ------------------------------------------------------------------
@@ -1650,11 +1675,17 @@ export class AIChatQueryEngine {
       ...(control ? { steeringControl: control } : {}),
       sourceUserMessageId,
       intentDecisionId,
+      ...(lifecycle ? { lifecycle } : {}),
+      ...(ownerNotifiesTerminal !== undefined
+        ? { ownerNotifiesTerminal }
+        : {}),
     };
 
     try {
       const result = await this.loop.run(loopInput);
-      await this.handleLoopResult(result, module, streamEventSink);
+      await this.handleLoopResult(result, module, streamEventSink, {
+        ownerNotifiesTerminal: ownerNotifiesTerminal === true,
+      });
       if (result.type === "paused_for_permission") {
         return {
           type: "paused_for_permission",
@@ -1823,6 +1854,14 @@ export class AIChatQueryEngine {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
       eventSink: matchedByToolId.eventSink,
+      ...(matchedByToolId.lifecycle
+        ? { lifecycle: matchedByToolId.lifecycle }
+        : {}),
+    });
+    // Stage A §3.2 (FR-021): the claimed resume starts executing now.
+    this.notifyResumed(matchedByToolId.lifecycle, {
+      conversationId: matchedByToolId.conversationId,
+      assistantMessageId: matchedByToolId.assistantMessageId,
     });
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(
@@ -1968,7 +2007,10 @@ export class AIChatQueryEngine {
       void this.loop
         .run(loopInput)
         .then(async (result) => {
-          await this.handleLoopResult(result, module, eventSink);
+          await this.handleLoopResult(result, module, eventSink, {
+            ownerNotifiesTerminal:
+              matchedByToolId.ownerNotifiesTerminal === true,
+          });
         })
         .catch((err) => {
           log.error("[ai-chat-v2] resume loop failed:", err);
@@ -2032,6 +2074,12 @@ export class AIChatQueryEngine {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
       eventSink: pending.eventSink,
+      ...(pending.lifecycle ? { lifecycle: pending.lifecycle } : {}),
+    });
+    // Stage A §3.2 (FR-021): the claimed resume starts executing now.
+    this.notifyResumed(pending.lifecycle, {
+      conversationId: pending.conversationId,
+      assistantMessageId: pending.assistantMessageId,
     });
 
     const answerContent = serializeToolResultContent({
@@ -2124,7 +2172,9 @@ export class AIChatQueryEngine {
     void this.loop
       .run({ ...loopInput, eventSink })
       .then(async (result) => {
-        await this.handleLoopResult(result, module, eventSink);
+        await this.handleLoopResult(result, module, eventSink, {
+          ownerNotifiesTerminal: pending.ownerNotifiesTerminal === true,
+        });
       })
       .catch((err) => {
         log.error("[ai-chat-v2] answer-question loop failed:", err);
@@ -2153,7 +2203,8 @@ export class AIChatQueryEngine {
   private async handleLoopResult(
     result: AIChatQueryLoopResult,
     module: AIChatV2Module,
-    eventSink: AIChatQueryEventSink
+    eventSink: AIChatQueryEventSink,
+    options?: { readonly ownerNotifiesTerminal?: boolean }
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
     // Persist deferred-catalog discovered state on terminal results so it
@@ -2167,11 +2218,14 @@ export class AIChatQueryEngine {
     }
     // True-terminal notification (see deps.onTurnTerminal): resumed-turn
     // continuations are fire-and-forget, so this is the only place their
-    // owner learns the conversation freed up.
+    // owner learns the conversation freed up. Stage A §3.6 (FR-023): runs
+    // dispatched with ownerNotifiesTerminal (the coordinator) skip this —
+    // the owner notifies the queue exactly once per run itself.
     if (
-      result.type === "completed" ||
-      result.type === "cancelled" ||
-      result.type === "failed"
+      (result.type === "completed" ||
+        result.type === "cancelled" ||
+        result.type === "failed") &&
+      options?.ownerNotifiesTerminal !== true
     ) {
       this.onTurnTerminalCb?.(result.conversationId, result.type);
     }
@@ -2392,6 +2446,15 @@ export class AIChatQueryEngine {
         log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
+        // Stage A §3.2 (FR-021): explicit waiting notification — synchronous,
+        // non-throwing, exactly once per park. The owner persists the run
+        // transition before broadcasting its summary.
+        this.notifyAwaiting(result.pending.lifecycle, {
+          kind: "permission",
+          conversationId: result.pending.conversationId,
+          assistantMessageId: result.pending.assistantMessageId,
+          toolCallId: result.pending.toolCallId,
+        });
         break;
       }
       case "paused_for_plan_question": {
@@ -2407,6 +2470,12 @@ export class AIChatQueryEngine {
         log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
+        this.notifyAwaiting(result.pending.lifecycle, {
+          kind: "user_input",
+          conversationId: result.pending.conversationId,
+          assistantMessageId: result.pending.assistantMessageId,
+          questionId: result.pending.questionId,
+        });
         break;
       }
     }
@@ -2617,6 +2686,32 @@ export class AIChatQueryEngine {
         err
       );
       return input.images;
+    }
+  }
+
+  /** Stage A §3.2 (FR-021): fire a lifecycle notification, never throwing. */
+  private notifyAwaiting(
+    listener: AIChatTurnLifecycleListener | undefined,
+    event: Parameters<AIChatTurnLifecycleListener["onAwaiting"]>[0]
+  ): void {
+    if (!listener) return;
+    try {
+      listener.onAwaiting(event);
+    } catch (err) {
+      log.error("[ai-chat-v2] lifecycle onAwaiting listener failed:", err);
+    }
+  }
+
+  /** Stage A §3.2 (FR-021): fire a resume notification, never throwing. */
+  private notifyResumed(
+    listener: AIChatTurnLifecycleListener | undefined,
+    event: Parameters<AIChatTurnLifecycleListener["onResumed"]>[0]
+  ): void {
+    if (!listener) return;
+    try {
+      listener.onResumed(event);
+    } catch (err) {
+      log.error("[ai-chat-v2] lifecycle onResumed listener failed:", err);
     }
   }
 

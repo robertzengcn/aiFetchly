@@ -457,8 +457,8 @@ describe("AIChatCoordinator", () => {
     });
   });
 
-  it("observes engine permission pauses and broadcasts attention", async () => {
-    const { coordinator, router, fake } = buildCoordinator();
+  it("observes engine permission pauses via the lifecycle listener and broadcasts attention (FR-021)", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
     const win = fakeWindow(2);
     win.register(router);
     await SqliteDb.ensureInitialized();
@@ -466,16 +466,15 @@ describe("AIChatCoordinator", () => {
     await waitFor(() => fake.turns.length === 1);
     if (!accepted.ok) return;
     const turn = fake.turns[0];
+    expect(turn.input.lifecycle).toBeDefined();
+    expect(turn.input.ownerNotifiesTerminal).toBe(true);
 
-    // Engine pauses for permission BEFORE the tool result lands.
-    fake.setStatus("v2-test-30", "awaiting_permission");
-    emit(turn.input.eventSink, {
-      type: "tool_call",
+    // The engine parks the turn — explicit notification, not sampled state.
+    turn.input.lifecycle?.onAwaiting({
+      kind: "permission",
       conversationId: "v2-test-30",
-      messageId: "assistant-1",
+      assistantMessageId: "assistant-1",
       toolCallId: "tc-1",
-      toolName: "read_file",
-      toolArguments: { path: "/tmp/x" },
     });
     await waitFor(() =>
       win.summaries.some((s) => s.reason === "permission_required")
@@ -486,9 +485,24 @@ describe("AIChatCoordinator", () => {
     expect(coordinator.getLiveRuntime("v2-test-30")?.runtimeStatus).toBe(
       "awaiting_permission"
     );
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "awaiting_permission";
+    });
+
+    // A second onAwaiting for the same park is idempotent (exactly once).
+    turn.input.lifecycle?.onAwaiting({
+      kind: "permission",
+      conversationId: "v2-test-30",
+      assistantMessageId: "assistant-1",
+      toolCallId: "tc-1",
+    });
 
     // Resume and finish.
-    fake.setStatus("v2-test-30", "idle");
+    turn.input.lifecycle?.onResumed({
+      conversationId: "v2-test-30",
+      assistantMessageId: "assistant-1",
+    });
     emit(turn.input.eventSink, {
       type: "complete",
       conversationId: "v2-test-30",

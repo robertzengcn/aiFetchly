@@ -6,6 +6,7 @@
 // test owner"). Stage A Task A1 extends this file with runTurn() coverage.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import type { AIChatQueryEngineDeps } from "@/service/AIChatQueryEngine";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type {
   AIChatQueryEvent,
@@ -13,6 +14,8 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { SkillExecutor } from "@/service/SkillExecutor";
+import type { AIChatTurnLifecycleListener } from "@/service/AIChatQueryEvents";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
@@ -80,9 +83,11 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
   return { ...actual, AiChatApi: vi.fn().mockImplementation(() => ({})) };
 });
 
+const mockNotifyShow = vi.fn().mockResolvedValue(false);
+
 vi.mock("@/service/DesktopNotifyService", () => ({
   DesktopNotifyService: {
-    getInstance: () => ({ show: vi.fn().mockResolvedValue(false) }),
+    getInstance: () => ({ show: mockNotifyShow }),
   },
 }));
 
@@ -294,5 +299,261 @@ describe("AIChatQueryEngine.runTurn (Stage A1 — PRD FR-022)", () => {
       finishReason: "stop",
     });
     await first;
+  });
+});
+
+describe("AIChatQueryEngine lifecycle notifications + side-effect gating (Stage A2, FR-021/023)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockCreateConversationIfNeeded.mockImplementation((id: string) => id);
+  });
+
+  function makeListener(): AIChatTurnLifecycleListener & {
+    awaiting: Array<Parameters<AIChatTurnLifecycleListener["onAwaiting"]>[0]>;
+    resumed: Array<Parameters<AIChatTurnLifecycleListener["onResumed"]>[0]>;
+  } {
+    const awaiting: Array<
+      Parameters<AIChatTurnLifecycleListener["onAwaiting"]>[0]
+    > = [];
+    const resumed: Array<
+      Parameters<AIChatTurnLifecycleListener["onResumed"]>[0]
+    > = [];
+    return {
+      awaiting,
+      resumed,
+      onAwaiting: (event) => {
+        awaiting.push(event);
+      },
+      onResumed: (event) => {
+        resumed.push(event);
+      },
+    };
+  }
+
+  it("onAwaiting fires exactly once for a permission park, carrying stable identity (FR-021)", async () => {
+    const listener = makeListener();
+    const engine = createEngineWithFakeLoop((input) =>
+      Promise.resolve({
+        type: "paused_for_permission",
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-p-1",
+          toolName: "send_email",
+          toolArguments: {},
+          eventSink: { emit: () => undefined },
+          lifecycle: listener,
+        },
+      })
+    );
+
+    const outcome = await engine.runTurn({
+      request: { message: "send it", conversationId: "v2-A" },
+      eventSink: makeEventCollector().sink,
+      lifecycle: listener,
+    });
+
+    expect(outcome.type).toBe("paused_for_permission");
+    expect(listener.awaiting).toHaveLength(1);
+    expect(listener.awaiting[0]).toMatchObject({
+      kind: "permission",
+      conversationId: "v2-A",
+      toolCallId: "tool-p-1",
+    });
+    expect(listener.resumed).toHaveLength(0);
+  });
+
+  it("onAwaiting fires exactly once for a plan-question park with questionId (FR-021)", async () => {
+    const listener = makeListener();
+    const engine = createEngineWithFakeLoop((input) =>
+      Promise.resolve({
+        type: "paused_for_plan_question",
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-q-1",
+          questionId: "question-9",
+          planId: "plan-1",
+          eventSink: { emit: () => undefined },
+          lifecycle: listener,
+        },
+      })
+    );
+
+    const outcome = await engine.runTurn({
+      request: { message: "plan it", conversationId: "v2-B", mode: "plan" },
+      eventSink: makeEventCollector().sink,
+      lifecycle: listener,
+    });
+
+    expect(outcome.type).toBe("paused_for_plan_question");
+    expect(listener.awaiting).toHaveLength(1);
+    expect(listener.awaiting[0]).toMatchObject({
+      kind: "user_input",
+      conversationId: "v2-B",
+      questionId: "question-9",
+    });
+  });
+
+  it("onResumed fires once when a permission resume starts executing (FR-021)", async () => {
+    const listener = makeListener();
+    const engine = createEngineWithFakeLoop((input) =>
+      Promise.resolve({
+        type: "paused_for_permission",
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-p-1",
+          toolName: "send_email",
+          toolArguments: {},
+          eventSink: { emit: () => undefined },
+          lifecycle: listener,
+        },
+      })
+    );
+
+    // Park a turn whose pending carries the owner listener.
+    const parked = await engine.runTurn({
+      request: { message: "needs approval", conversationId: "v2-C" },
+      eventSink: makeEventCollector().sink,
+      lifecycle: listener,
+    });
+    expect(parked.type).toBe("paused_for_permission");
+
+    vi.mocked(SkillExecutor.execute).mockResolvedValue({
+      tool_call_id: "tool-p-1",
+      tool_name: "send_email",
+      success: true,
+      result: { success: true },
+      execution_time_ms: 1,
+    });
+
+    const resume = await engine.resumeToolAfterPermission({
+      toolId: "tool-p-1",
+      conversationId: "v2-C",
+    });
+    expect(resume.ok).toBe(true);
+    expect(listener.resumed).toHaveLength(1);
+    expect(listener.resumed[0]).toMatchObject({
+      conversationId: "v2-C",
+    });
+    // Give the fire-and-forget continuation a tick to settle.
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it("post-terminal side effects fire once on completed and never on a pause (FR-023/AC-18)", async () => {
+    const enqueueAutoCompact = vi.fn().mockResolvedValue(true);
+    const evaluateDream = vi.fn().mockResolvedValue(undefined);
+    const evaluateWorkspaceDream = vi.fn().mockResolvedValue(undefined);
+    const onTurnTerminal = vi.fn();
+    const buildEngine = (
+      fakeRun: (input: AIChatQueryLoopInput) => Promise<AIChatQueryLoopResult>
+    ): AIChatQueryEngine =>
+      new AIChatQueryEngine({ run: fakeRun } as unknown as AIChatQueryLoop, {
+        compactAgent: { enqueueAutoCompact },
+        autoDreamService: { evaluateAfterChatTurn: evaluateDream },
+        workspaceAutoDreamService: {
+          evaluateAfterChatTurn: evaluateWorkspaceDream,
+        },
+        onTurnTerminal,
+      } as unknown as AIChatQueryEngineDeps);
+
+    // Completed: every post-terminal side effect fires exactly once.
+    const completedEngine = buildEngine(async (input) => ({
+      type: "completed",
+      conversationId: input.conversationId,
+      assistantMessageId: input.assistantMessageId,
+      fullContent: "done",
+      finishReason: "stop",
+    }));
+    const completedOutcome = await completedEngine.runTurn({
+      request: { message: "hi", conversationId: "v2-se-1" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(completedOutcome.type).toBe("completed");
+    await vi.waitFor(() => expect(mockNotifyShow).toHaveBeenCalledTimes(1));
+    expect(enqueueAutoCompact).toHaveBeenCalledTimes(1);
+    expect(evaluateDream).toHaveBeenCalledTimes(1);
+    expect(evaluateWorkspaceDream).toHaveBeenCalledTimes(1);
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    expect(onTurnTerminal).toHaveBeenCalledWith("v2-se-1", "completed");
+
+    // Paused: NONE of the post-terminal side effects fire, and the engine's
+    // terminal callback does not fire (a pause is not a terminal).
+    enqueueAutoCompact.mockClear();
+    evaluateDream.mockClear();
+    evaluateWorkspaceDream.mockClear();
+    mockNotifyShow.mockClear();
+    onTurnTerminal.mockClear();
+    const pausedEngine = buildEngine((input) =>
+      Promise.resolve({
+        type: "paused_for_permission",
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-se-1",
+          toolName: "send_email",
+          toolArguments: {},
+          eventSink: { emit: () => undefined },
+        },
+      })
+    );
+    const pausedOutcome = await pausedEngine.runTurn({
+      request: { message: "needs approval", conversationId: "v2-se-2" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(pausedOutcome.type).toBe("paused_for_permission");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(enqueueAutoCompact).not.toHaveBeenCalled();
+    expect(evaluateDream).not.toHaveBeenCalled();
+    expect(evaluateWorkspaceDream).not.toHaveBeenCalled();
+    expect(mockNotifyShow).not.toHaveBeenCalled();
+    expect(onTurnTerminal).not.toHaveBeenCalled();
+  });
+
+  it("ownerNotifiesTerminal suppresses the engine's onTurnTerminal callback (FR-023)", async () => {
+    const onTurnTerminal = vi.fn();
+    const engine = new AIChatQueryEngine(
+      {
+        run: async (input: AIChatQueryLoopInput) =>
+          ({
+            type: "completed",
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            fullContent: "x",
+            finishReason: "stop",
+          }) as AIChatQueryLoopResult,
+      } as unknown as AIChatQueryLoop,
+      { onTurnTerminal }
+    );
+
+    await engine.runTurn({
+      request: { message: "hi", conversationId: "v2-se-3" },
+      eventSink: makeEventCollector().sink,
+      ownerNotifiesTerminal: true,
+    });
+
+    expect(onTurnTerminal).not.toHaveBeenCalled();
   });
 });

@@ -378,6 +378,12 @@ export interface PendingPermissionTurn {
    * the user grants permission (AC-8). Present only when deferred mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -399,6 +405,12 @@ export interface PendingPlanQuestionTurn {
    * mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
 }
 
 /** Plan context carried through the loop. */
@@ -542,6 +554,15 @@ export interface AIChatQueryLoopInput {
    * or the resolver failed. Supplied by the main process, not tool arguments.
    */
   intentDecisionId?: number | null;
+  /**
+   * Stage A §3.2 (FR-021): owner-supplied lifecycle listener. The engine (not
+   * the loop) calls onAwaiting when it parks a turn; the loop copies this
+   * reference into the pending structures so the resume path can call
+   * onResumed. Synchronous, non-throwing.
+   */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): see PendingPermissionTurn.ownerNotifiesTerminal. */
+  ownerNotifiesTerminal?: boolean;
 }
 
 /**
@@ -574,6 +595,28 @@ export type AIChatTurnTerminalEvent =
  * inferred from the absence of a terminal event.
  */
 export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
+/**
+ * Stage A §3.2 (generator-streaming PRD FR-021): explicit internal
+ * waiting/resume notifications. The engine calls `onAwaiting` exactly once
+ * when it parks a turn and `onResumed` exactly once when a claimed resume
+ * starts executing — replacing sampled engine status. Listener methods are
+ * synchronous and non-throwing; the owner serializes its own async work
+ * (persist the run transition first, then broadcast the summary).
+ */
+export interface AIChatTurnLifecycleListener {
+  onAwaiting(event: {
+    readonly kind: "permission" | "user_input";
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+    readonly toolCallId?: string;
+    readonly questionId?: string;
+  }): void;
+  onResumed(event: {
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+  }): void;
+}
 
 /**
  * Stage A §3.3 (generator-streaming PRD FR-006/007): a REQUIRED tool
