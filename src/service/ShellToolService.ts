@@ -15,6 +15,7 @@
 
 import { spawn } from "child_process";
 import { FilePathGuard } from "@/service/FilePathGuard";
+import { log } from "@/modules/Logger";
 import { getDefaultWorkspaceRoots } from "@/config/fileToolConfig";
 import {
   SHELL_MAX_TIMEOUT_MS,
@@ -136,9 +137,18 @@ export async function executeShellCommand(
  * When the conversation has an approved workspace, the shell is confined to
  * that workspace root (strict workspace mode, mirroring FileToolService), so
  * paths like `E:\ai_test\canada_trade` that live outside the user's home
- * directory are still accepted. When no workspace is approved — or the
- * lookup fails (e.g. DB unavailable in tests) — fall back to the legacy
- * default roots (home + userData) so non-chat callers keep working.
+ * directory are still accepted. When no workspace is approved (resolver
+ * returns null), fall back to the legacy default roots (home + userData) so
+ * non-chat callers keep working.
+ *
+ * Fail-closed contract (Finding 7): a thrown lookup (e.g. DB unavailable)
+ * must NOT silently widen the jail to default roots — that would let a
+ * chat conversation whose workspace is approved run anywhere under $HOME
+ * the moment the lookup errors. Distinguish the two failure modes:
+ *   - resolver returns null → no workspace approved → safe default roots
+ *   - resolver throws        → lookup genuinely failed → fail closed with
+ *                              an empty root set (all paths rejected) and
+ *                              log the error so operators see it.
  */
 async function resolveWorkspaceRoots(
   conversationId: string
@@ -150,8 +160,20 @@ async function resolveWorkspaceRoots(
       if (workspace && workspace.rootPath) {
         return [workspace.rootPath];
       }
-    } catch {
-      // Workspace lookup failed — fall back to default roots below.
+      // No approved workspace for this conversation — fall back to default
+      // roots so non-chat callers (empty conversationId handled below too)
+      // keep working.
+      return getDefaultWorkspaceRoots();
+    } catch (err) {
+      // Lookup failed mid-flight. Widening to default roots here would
+      // jail-break a conversation that should be confined to its approved
+      // workspace. Fail closed instead and surface the error.
+      log.error(
+        `[shell-tool] workspace lookup threw for conversation ${conversationId}; ` +
+          `failing closed (no roots allowed). ` +
+          `Cause: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return [];
     }
   }
   return getDefaultWorkspaceRoots();
@@ -167,7 +189,23 @@ interface CwdResult {
   readonly error?: string;
 }
 
-function resolveCwd(cwd: string | undefined, roots: readonly string[]): CwdResult {
+function resolveCwd(
+  cwd: string | undefined,
+  roots: readonly string[]
+): CwdResult {
+  // Fail-closed: when no roots are available (e.g. workspace lookup threw
+  // and the jail cannot be established), reject before consulting the guard.
+  // The guard's own "no roots ⇒ allow all" behavior would otherwise turn a
+  // broken lookup into a silent jail-break.
+  if (roots.length === 0) {
+    return {
+      valid: false,
+      path: cwd ?? "",
+      error:
+        "No allowed workspace roots available (workspace lookup failed); refusing to execute",
+    };
+  }
+
   const guard = new FilePathGuard(roots, []);
 
   if (!cwd) {

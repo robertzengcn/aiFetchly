@@ -21,7 +21,9 @@ import { executeShellCommand } from "@/service/ShellToolService";
 // ---------------------------------------------------------------------------
 
 const resolveWorkspaceMock = vi.hoisted(() =>
-  vi.fn<(id: string) => Promise<{ workspaceId: number; rootPath: string } | null>>()
+  vi.fn<
+    (id: string) => Promise<{ workspaceId: number; rootPath: string } | null>
+  >()
 );
 
 vi.mock("@/service/WorkspaceResolver", () => ({
@@ -282,7 +284,12 @@ describe("ShellToolService — conversation workspace roots", () => {
     expect(result.exit_code).toBe(0);
   });
 
-  it("falls back to default roots when workspace lookup throws", async () => {
+  // Finding 7: a thrown workspace lookup must NOT widen the jail to the
+  // default roots. A conversation whose workspace is approved should stay
+  // confined to it; silently falling back to home+userData on a DB error
+  // would let the shell run anywhere under $HOME. Fail closed instead —
+  // every path-bearing command is rejected until the lookup recovers.
+  it("fails closed (no roots allowed) when workspace lookup throws (Finding 7)", async () => {
     resolveWorkspaceMock.mockRejectedValue(new Error("db unavailable"));
 
     const result = await executeShellCommand(
@@ -290,8 +297,10 @@ describe("ShellToolService — conversation workspace roots", () => {
       CONVERSATION_ID
     );
 
-    expect(result.success).toBe(true);
-    expect(result.exit_code).toBe(0);
+    expect(result.success).toBe(false);
+    // Fail-closed: no roots means no cwd is acceptable.
+    expect(result.error).toContain("No allowed workspace roots available");
+    expect(result.exit_code).toBeNull();
   });
 });
 
@@ -363,9 +372,7 @@ describe("ShellToolService — reported-scenario regressions", () => {
 
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
-    expect(fs.realpathSync(result.stdout.trim())).toBe(
-      fs.realpathSync(subDir)
-    );
+    expect(fs.realpathSync(result.stdout.trim())).toBe(fs.realpathSync(subDir));
     expect(result.validatedCwd).toBe(fs.realpathSync(subDir));
   });
 
