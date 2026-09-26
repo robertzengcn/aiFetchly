@@ -31,7 +31,8 @@ export interface AIChatRecoveryDefaults {
   /** Persistent profile hard cap (6h). */
   readonly persistentHardCapMs: number;
   /** Default context window when server doesn't report one. */
-  readonly defaultContextWindowTokens: number /** Default output-token escalation cap. */;
+  readonly defaultContextWindowTokens: number;
+  /** Default output-token escalation cap. */
   readonly maxOutputTokensCap: number;
 }
 
