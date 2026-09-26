@@ -262,9 +262,7 @@ jobs:
         # available here — cap the heap on Linux so the kernel keeps
         # headroom for the runner agent through the galactus prune spike.
         env:
-          NODE_OPTIONS: --max-old-space-size=${{
-            runner.os == 'Linux' && '3072' || '4096'
-          }}
+          NODE_OPTIONS: "--max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}"
         run: yarn package:ci
 
       - name: Verify packaged workers and renderer HTML layout
