@@ -1882,11 +1882,20 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             },
           };
         }
+        // Unreachable with the current schema (.parse only throws ZodError),
+        // but if a future .transform throws a non-Zod error, do NOT surface
+        // its raw message to the model — it could leak internal path/DB
+        // details. Log server-side, return a generic sanitized message.
+        console.error(
+          "draft_outbound_email_batch: non-Zod parse error for conversation",
+          context.conversationId,
+          error
+        );
         return {
           success: false,
           result: {
             success: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: "Invalid email marketing tool input",
           },
         };
       }
