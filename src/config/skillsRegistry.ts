@@ -31,6 +31,11 @@ import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerServi
 import { executeShellCommand } from "@/service/ShellToolService";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
 import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
+import { ZodError } from "zod";
+import {
+  bulkEmailTaskInputSchema,
+  EmailMarketingDirectEmailInput,
+} from "@/entityTypes/emailMarketingAiTypes";
 import {
   getEmailServiceConfig,
   getEmailSearchTaskEmails,
@@ -1848,6 +1853,44 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     execute: async (args, context) => {
+      // Validate untrusted AI arguments at the boundary with the same Zod
+      // schema used by previewBulkEmailSendTask / startBulkEmailSendTask.
+      // The model occasionally emits `emails` (or other array fields) as a
+      // non-array value; reading it via an `as` cast without parsing lets
+      // `(input.emails ?? []).map` crash with ".map is not a function" before
+      // any business logic runs. Parsing produces typed, array-shaped data and
+      // surfaces a clear validation_errors payload instead of a TypeError.
+      let input: {
+        email_search_task_id?: number;
+        emails?: EmailMarketingDirectEmailInput[];
+        template_ids?: number[];
+        email_subject?: string;
+        email_html_content?: string;
+        service_ids: number[];
+        not_duplicate: boolean;
+      };
+      try {
+        input = bulkEmailTaskInputSchema.parse(args);
+      } catch (error) {
+        if (error instanceof ZodError) {
+          return {
+            success: false,
+            result: {
+              success: false,
+              error: "Invalid email marketing tool input",
+              validation_errors: error.issues.map((issue) => issue.message),
+            },
+          };
+        }
+        return {
+          success: false,
+          result: {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+
       // Resolve the DB path from the Token service, matching the outbound
       // IPC layer (outboundEmailDelivery-ipc.ts). Passing no dbpath would
       // make OutboundEmailDraftModel fall back to the os.tmpdir() test
@@ -1861,18 +1904,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         "@/service/EmailMarketingAiTools"
       );
       const resolved = await resolveBulkRecipients({
-        email_search_task_id: (args as { email_search_task_id?: number })
-          .email_search_task_id,
-        emails: (args as { emails?: unknown[] }).emails as never[] | undefined,
-        not_duplicate:
-          (args as { not_duplicate?: boolean }).not_duplicate ?? true,
+        email_search_task_id: input.email_search_task_id,
+        emails: input.emails,
+        not_duplicate: input.not_duplicate,
       });
       // Sender is resolved from the selected SMTP service inside generateBatch
       // (AD-005/AD-006). Coerce service_ids so a single id or numeric strings
       // still bind a real From address instead of storing an empty sender.
-      const serviceIds = normalizeEmailServiceIds(
-        (args as { service_ids?: unknown }).service_ids
-      );
+      const serviceIds = normalizeEmailServiceIds(input.service_ids);
       const result = await service.generateBatch({
         conversationId: context.conversationId,
         sourceUserMessageId: context.sourceUserMessageId ?? "",
@@ -1881,15 +1920,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         recipients: resolved.recipients,
         serviceIds,
         senderAddress: "",
-        subject: (args as { email_subject?: string }).email_subject ?? "",
+        subject: input.email_subject ?? "",
         // The model supplies an HTML body; store it as `bodyHtml` and derive a
         // plain-text fallback so markup never leaks into the text body at send
         // time (and multipart mail carries both parts, not escaped tags).
-        bodyHtml:
-          (args as { email_html_content?: string }).email_html_content ?? null,
-        bodyText: htmlToPlainText(
-          (args as { email_html_content?: string }).email_html_content ?? ""
-        ),
+        bodyHtml: input.email_html_content ?? null,
+        bodyText: htmlToPlainText(input.email_html_content ?? ""),
       });
       return {
         success: result.success,
