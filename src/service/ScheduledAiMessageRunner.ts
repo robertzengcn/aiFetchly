@@ -336,7 +336,7 @@ export class ScheduledAiMessageRunner {
       // scheduled context supplies stable message IDs + trusted metadata that
       // the renderer cannot forge, and makes the user/assistant rows idempotent
       // across crash-retries (technical-design §14).
-      const engine = new AIChatQueryEngineFactory().createScheduled(
+      const engine = await new AIChatQueryEngineFactory().createScheduled(
         this.parseTaskPolicy(task),
         conversationId
       );
@@ -799,7 +799,7 @@ export class ScheduledAiMessageRunner {
         };
       }
 
-      const engine = new AIChatQueryEngineFactory().createScheduled(
+      const engine = await new AIChatQueryEngineFactory().createScheduled(
         policy,
         conversationId
       );
