@@ -312,7 +312,7 @@ means code exists but this audit cannot establish the required platform result.
 | NFR-09 | Present | Initial model catalog contains bounded metadata, not unused instruction bodies. |
 | NFR-10 | Present | Prompt loading/assembly is inert; helper execution is a separate tool. |
 | NFR-11 | Partial | Policy is app-owned and repository metadata cannot self-grant permissions; generic fallback enforcement is incomplete, finding 9. |
-| NFR-12 | Partial | Provider-neutral versioned prompt and policy exist. Full specified routing/performance counters, alerts, and release metrics were not established by this audit; enforcement gap remains. |
+| NFR-12 | Partial→Present (metrics) | Provider-neutral versioned prompt and policy exist. Counter coverage completed 2026-09-27 (0d084e7b): installer-policy counters (routing_explicit / fallback_blocked / manual_approval_honored) at the enforcement points + rate-limited turn-boundary aggregate emission. Release alerts remain a rollout-phase concern. |
 
 ## Technical-design and acceptance qualifications
 
