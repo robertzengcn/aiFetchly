@@ -52,4 +52,15 @@ Per PRD §5, before each stage's release: measure with identical scripted provid
 
 ## 5. Stage B status
 
-Stage B (async-generator delivery) is **not yet implemented** on this branch; see the implementation plan (`docs/superpowers/plans/2026-09-26-generator-streaming.md`, Tasks B1-B3) for the provider-iterator conversion, single-generator loop, progress multiplexer, and the `AI_CHAT_STREAM_IMPLEMENTATION` flag. Per PRD §1, Stage B may be deferred without losing Stage A's guarantees; Stage A shipped on the existing sink transport behind no flag.
+**B2 infrastructure delivered** (`src/service/aiChat/`): `consumeGenerator`
+(result-preserving consumer, design §6), `LatestValueSlot` +
+`runToolWithProgress` (progress multiplexer, design §12) — 14 tests in
+`test/vitest/main/service/aiChatGeneratorInfrastructure.test.ts`.
+
+**Remaining (deferred):** B1 provider `streamEvents` iterator + callback
+facade (hosted retry conversion, `aiChatApi.ts:2259+`), B2-full
+`AIChatQueryLoop.iterate()` conversion with `run()` draining facade, and B3
+`AI_CHAT_STREAM_IMPLEMENTATION` flag + owner consumer switch. See the
+implementation plan (`docs/superpowers/plans/2026-09-26-generator-streaming.md`,
+Tasks B1-B3). Per PRD §1, Stage B may be deferred without losing Stage A's
+guarantees; Stage A shipped on the existing sink transport behind no flag.
