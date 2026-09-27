@@ -2,6 +2,7 @@ import { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type {
@@ -9,6 +10,7 @@ import type {
   AIChatSegmentOutcome,
   AIChatTurnLifecycleListener,
 } from "@/service/AIChatQueryEvents";
+import type { AIChatQueueTurnDispatch } from "@/service/AIChatTurnQueueService";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
@@ -31,6 +33,20 @@ import type {
 export interface CoordinatorEngine {
   /** Outcome-returning entry (generator-streaming PRD FR-022, Stage A1). */
   runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome>;
+  /** Queue-drained turns execute through the same owner (Stage A §3.4). */
+  submitPersistedUserMessage(input: {
+    readonly eventSink: AIChatQueryEventSink;
+    readonly request: ChatV2StreamRequest;
+    readonly savedUser: {
+      readonly messageId: string;
+      readonly conversationId: string;
+    };
+    readonly modelContent: string;
+    readonly contentParts?: unknown;
+    readonly assistantMessageId?: string;
+    readonly lifecycle?: AIChatTurnLifecycleListener;
+    readonly ownerNotifiesTerminal?: boolean;
+  }): Promise<AIChatSegmentOutcome>;
   stopActiveTurn(conversationId?: string): void;
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
 }
@@ -86,6 +102,25 @@ interface LiveRunState {
    * errorCode "unclassified_segment_exit" instead of defaulting to completed.
    */
   unclassifiedExitSummary: string | null;
+  /**
+   * Stage A §3.5 (FR-005): the run's event adapter lives in run context (not
+   * a per-dispatch local), so resumed segments continue the SAME monotonic
+   * sequence instead of restarting at 1.
+   */
+  adapter: AIChatRunEventAdapter;
+  /**
+   * Stage A §3.4 (FR-004): queue-drained turn input. Present only when this
+   * run executes a durable pending row via dispatchQueuedTurn.
+   */
+  queueDispatch?: AIChatQueueTurnDispatch;
+  /**
+   * Stage A §3.4: resolves dispatchQueuedTurn's returned promise exactly once
+   * when the segment settles (terminal or parked outcome).
+   */
+  completion?: {
+    resolved: boolean;
+    resolve(outcome: AIChatSegmentOutcome): void;
+  };
 }
 
 const CLIENT_REQUEST_CACHE_MAX = 200;
@@ -190,6 +225,7 @@ export class AIChatCoordinator {
       terminalChunk: null,
       dispatchSettled: false,
       unclassifiedExitSummary: null,
+      adapter: new AIChatRunEventAdapter(run.runId, request.conversationId),
     });
     this.runIndex.set(run.runId, request.conversationId);
     this.startRequests.set(run.runId, {
@@ -237,9 +273,81 @@ export class AIChatCoordinator {
   }
 
   // -------------------------------------------------------------------------
-  // Cancel
+  // Queue-drained turns (Stage A §3.4)
   // -------------------------------------------------------------------------
 
+  /**
+   * Execute one drained pending row as a coordinator-owned run (FR-004/005):
+   * the drained turn gets a durable run identity, the same scheduler, lease,
+   * run context/adapter, and finalization path as a direct send. The queue
+   * keeps FIFO/steering/hold policy only and receives the segment outcome
+   * through the returned promise — no synthetic run IDs ever reach the
+   * workspace detail stream.
+   */
+  async dispatchQueuedTurn(
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatSegmentOutcome> {
+    // A live run or engine turn already owns the conversation (drain raced a
+    // direct send): report busy so the queue re-claims the row.
+    const engineBusy =
+      this.deps.engine.getConversationRuntimeStatus(input.conversationId) !==
+      "idle";
+    if (this.liveRuns.has(input.conversationId) || engineBusy) {
+      return {
+        type: "conversation_busy",
+        conversationId: input.conversationId,
+      };
+    }
+
+    const context = await this.resolveConversationContext(
+      input.conversationId
+    );
+    const run = await this.deps.runModule.createRun({
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    const completion: NonNullable<LiveRunState["completion"]> = {
+      resolved: false,
+      resolve: () => undefined,
+    };
+    const settled = new Promise<AIChatSegmentOutcome>((resolve) => {
+      completion.resolve = (outcome) => {
+        if (completion.resolved) return;
+        completion.resolved = true;
+        resolve(outcome);
+      };
+    });
+    this.liveRuns.set(input.conversationId, {
+      runId: run.runId,
+      conversationId: input.conversationId,
+      status: "queued",
+      workspaceKey: context.workspaceKey,
+      cancelRequested: false,
+      terminalChunk: null,
+      dispatchSettled: false,
+      unclassifiedExitSummary: null,
+      adapter: new AIChatRunEventAdapter(run.runId, input.conversationId),
+      queueDispatch: input,
+      completion,
+    });
+    this.runIndex.set(run.runId, input.conversationId);
+    this.liveUnread.set(input.conversationId, context.unread);
+
+    this.deps.scheduler.submit({
+      runId: run.runId,
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    void this.broadcastRunSummary(input.conversationId, "run_queued");
+    this.pump();
+    return settled;
+  }
+
+  // -------------------------------------------------------------------------
+  // Cancel
+  // -------------------------------------------------------------------------
   /**
    * Cancel one queued or active run. Idempotent: cancelling a terminal run
    * is a no-op. Queued cancellation removes the entry without starting work;
@@ -276,6 +384,13 @@ export class AIChatCoordinator {
       this.deps.scheduler.cancelQueued(live.runId);
       await this.deps.runModule.transition(live.runId, "cancelled");
       this.finalizeAfterTerminal(conversationId, "cancelled");
+      // A cancelled queue-drained turn never dispatched: settle its outcome
+      // so the queue stops waiting and holds its rows (FR-023).
+      live.completion?.resolve({
+        type: "cancelled",
+        conversationId,
+        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+      });
       return { cancelled: true };
     }
 
@@ -383,20 +498,39 @@ export class AIChatCoordinator {
       return;
     }
 
+    // Visible to try AND catch (Stage A §3.4 queue-turn completion).
+    const completion = live.completion;
     try {
       await this.deps.runModule.transition(runId, "running");
       live.status = "running";
       void this.broadcastRunSummary(conversationId, "run_started");
 
-      const adapter = new AIChatRunEventAdapter(runId, conversationId);
+      // Stage A §3.5 (FR-005): the adapter lives in run context so resumed
+      // segments continue the same monotonic sequence.
+      const adapter = live.adapter;
       let outcome: AIChatSegmentOutcome;
       try {
-        outcome = await this.deps.engine.runTurn({
-          request: this.buildEngineRequest(live),
-          eventSink: this.createRunSink(live, adapter),
-          lifecycle: this.createLifecycleListener(live),
-          ownerNotifiesTerminal: true,
-        });
+        const lifecycle = this.createLifecycleListener(live);
+        const eventSink = this.createRunSink(live, adapter);
+        outcome = live.queueDispatch
+          ? await this.deps.engine.submitPersistedUserMessage({
+              eventSink,
+              request: live.queueDispatch.request,
+              savedUser: live.queueDispatch.savedUser,
+              modelContent: live.queueDispatch.modelContent,
+              ...(live.queueDispatch.contentParts !== undefined
+                ? { contentParts: live.queueDispatch.contentParts }
+                : {}),
+              assistantMessageId: live.queueDispatch.assistantMessageId,
+              lifecycle,
+              ownerNotifiesTerminal: true,
+            })
+          : await this.deps.engine.runTurn({
+              request: this.buildEngineRequest(live),
+              eventSink,
+              lifecycle,
+              ownerNotifiesTerminal: true,
+            });
       } catch (err) {
         // FR-022 / AC-17: a segment that ends without a classified outcome
         // (engine threw) is recorded as failed with a diagnostic — never
@@ -458,7 +592,9 @@ export class AIChatCoordinator {
         // (permission-grant resume or deny-stop cancel) routes through
         // settleDetachedTerminal. The finally block below still releases
         // the lease and scheduler capacity — the run is parked, not
-        // executing.
+        // executing. The queue learns the paused outcome now so it holds
+        // its remaining rows (FR-009).
+        completion?.resolve(outcome);
         return;
       }
 
@@ -498,6 +634,8 @@ export class AIChatCoordinator {
         this.deps.router.sendDetailEvent(adapter.wrap(terminal));
       }
       this.finalizeAfterTerminal(conversationId, finalStatus);
+      // The queue re-drains/holds only after durable finalization (FR-023).
+      completion?.resolve(outcome);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       try {
@@ -513,6 +651,11 @@ export class AIChatCoordinator {
         );
       }
       this.finalizeAfterTerminal(conversationId, "failed");
+      completion?.resolve({
+        type: "failed",
+        conversationId,
+        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+      });
     } finally {
       lease.release();
       this.deps.scheduler.complete(runId);
@@ -554,7 +697,20 @@ export class AIChatCoordinator {
     live: LiveRunState,
     adapter: AIChatRunEventAdapter
   ): AIChatQueryEventSink {
+    // Stage A §3.4: queue-drained turns keep their legacy V2-broadcaster
+    // emissions (other surfaces still subscribe there) — forwarded from the
+    // run sink alongside the workspace detail stream.
+    const legacyBroadcaster = live.queueDispatch
+      ? AIChatV2EventBroadcaster.getInstance()
+      : null;
     const handleChunk = (chunk: ChatV2StreamChunk): void => {
+      if (legacyBroadcaster) {
+        if (isTerminalChunk(chunk)) {
+          legacyBroadcaster.emitStreamComplete(chunk);
+        } else {
+          legacyBroadcaster.emitStreamChunk(chunk);
+        }
+      }
       if (isTerminalChunk(chunk)) {
         if (live.dispatchSettled) {
           // Parked-turn terminal: dispatch already returned (the run paused

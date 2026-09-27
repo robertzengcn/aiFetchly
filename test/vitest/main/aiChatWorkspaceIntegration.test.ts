@@ -73,6 +73,20 @@ function makeFakeEngine(): {
           });
         });
       },
+      submitPersistedUserMessage(input: {
+        readonly eventSink: unknown;
+        readonly request: unknown;
+        readonly savedUser: { readonly messageId: string; readonly conversationId: string };
+        readonly modelContent: string;
+        readonly contentParts?: unknown;
+        readonly assistantMessageId?: string;
+      }): Promise<AIChatSegmentOutcome> {
+        return Promise.resolve({
+          type: "failed",
+          conversationId: input.savedUser.conversationId,
+          assistantMessageId: input.assistantMessageId ?? "",
+        });
+      },
       stopActiveTurn(conversationId?: string): void {
         if (conversationId) engineStatus.delete(conversationId);
       },

@@ -6,7 +6,6 @@ import type {
   ChatV2StreamRequest,
 } from "@/entityTypes/aiChatV2Types";
 import type {
-  AIChatQueryEventSink,
   AIChatTurnTerminalEvent,
 } from "@/service/AIChatQueryEvents";
 import type {
@@ -27,20 +26,35 @@ import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
  * Module; this service owns in-memory serialization only.
  */
 
+/**
+ * Stage A §3.4 (generator-streaming PRD FR-004/005): one drained row's turn,
+ * handed to the execution owner. The queue keeps FIFO/steering/hold policy;
+ * the owner creates the durable run, holds the lease + scheduler capacity,
+ * and returns the segment outcome.
+ */
+export interface AIChatQueueTurnDispatch {
+  readonly conversationId: string;
+  readonly pendingMessageId: string;
+  readonly request: ChatV2StreamRequest;
+  readonly savedUser: {
+    readonly messageId: string;
+    readonly conversationId: string;
+  };
+  readonly modelContent: string;
+  readonly contentParts?: unknown;
+  readonly assistantMessageId: string;
+}
+
+/** Execution-owner seam for drained rows (the workspace coordinator). */
+export interface AIChatQueueTurnDispatcher {
+  dispatchQueuedTurn(
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatTurnTerminalEvent>;
+}
+
 /** Structural slice of AIChatQueryEngine the queue service needs. */
 export interface AIChatTurnQueueEngine {
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
-  submitPersistedUserMessage(input: {
-    readonly eventSink: AIChatQueryEventSink;
-    readonly request: ChatV2StreamRequest;
-    readonly savedUser: {
-      readonly messageId: string;
-      readonly conversationId: string;
-    };
-    readonly modelContent: string;
-    readonly contentParts?: unknown;
-    readonly assistantMessageId?: string;
-  }): Promise<AIChatTurnTerminalEvent>;
   reserveSteering(
     conversationId: string,
     pendingMessageId: string
@@ -62,21 +76,18 @@ export interface AIChatPendingEventSink {
   emit(event: AIChatPendingMessageEvent): void;
 }
 
-/** Conversation turn lease (structural slice of the coordinator lease). */
-export interface AIChatQueueLease {
-  release(): void;
-}
-
 export interface AIChatTurnQueueServiceDeps {
   readonly engine: AIChatTurnQueueEngine;
   readonly pendingModule: AIChatPendingMessageModule;
   readonly eventSink: AIChatPendingEventSink;
-  /** Builds the renderer-facing stream sink for queue-dispatched turns. */
-  readonly streamSinkFactory: () => AIChatQueryEventSink;
-  /** Interactive lease acquisition (scheduled-vs-queue mutual exclusion). */
-  readonly tryAcquireLease: (input: {
-    readonly conversationId: string;
-  }) => AIChatQueueLease | null;
+  /**
+   * Stage A §3.4 (FR-004/005): drained rows execute through the run owner,
+   * which gives the turn a durable run identity, one scheduler, and the
+   * conversation lease — replacing the broadcast sink + queue-owned lease.
+   */
+  readonly dispatchQueuedTurn: (
+    input: AIChatQueueTurnDispatch
+  ) => Promise<AIChatTurnTerminalEvent>;
   readonly isAiEnabled: () => boolean;
   readonly isQueueEnabled: () => boolean;
   readonly isSteeringEnabled: () => boolean;
@@ -551,15 +562,9 @@ export class AIChatTurnQueueService {
       ? new Date(row.createdAt).getTime()
       : NaN;
 
-    const lease = this.deps.tryAcquireLease({ conversationId });
-    if (!lease) {
-      await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
-      log.info(
-        `[ai-chat-queue] lease busy — released claim conv=${conversationId}`
-      );
-      return;
-    }
-
+    // Stage A §3.4: the coordinator (execution owner) acquires the
+    // conversation lease and scheduler capacity when it dispatches — the
+    // queue no longer holds its own lease.
     try {
       let savedUser;
       try {
@@ -615,8 +620,9 @@ export class AIChatTurnQueueService {
       let terminal: AIChatTurnTerminalEvent;
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
-        terminal = await this.deps.engine.submitPersistedUserMessage({
-          eventSink: this.deps.streamSinkFactory(),
+        terminal = await this.deps.dispatchQueuedTurn({
+          conversationId,
+          pendingMessageId: row.pendingMessageId,
           request: turnInputs.request,
           savedUser,
           modelContent: row.modelContent,
@@ -662,7 +668,8 @@ export class AIChatTurnQueueService {
       // cancelled | failed | paused_for_permission | paused_for_plan_question
       await this.holdQueue(conversationId, terminal.type);
     } finally {
-      lease.release();
+      // No queue-owned lease anymore (Stage A §3.4): the coordinator holds
+      // the conversation lease for the drained turn. Nothing to release.
     }
   }
 

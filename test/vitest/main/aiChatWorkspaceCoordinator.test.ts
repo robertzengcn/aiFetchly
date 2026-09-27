@@ -93,6 +93,33 @@ function makeFakeEngine(): {
           });
         });
       },
+      submitPersistedUserMessage(input: {
+        readonly eventSink: unknown;
+        readonly request: unknown;
+        readonly savedUser: { readonly messageId: string; readonly conversationId: string };
+        readonly modelContent: string;
+        readonly contentParts?: unknown;
+        readonly assistantMessageId?: string;
+      }): Promise<AIChatSegmentOutcome> {
+        return new Promise<AIChatSegmentOutcome>((resolve) => {
+          turns.push({
+            input: input as unknown as AIChatQuerySubmitInput,
+            resolve: (outcome) =>
+              resolve(
+                outcome ?? {
+                  type: "completed",
+                  conversationId: input.savedUser.conversationId,
+                  assistantMessageId: input.assistantMessageId ?? "",
+                }
+              ),
+            reject: () => resolve({
+              type: "failed",
+              conversationId: input.savedUser.conversationId,
+              assistantMessageId: input.assistantMessageId ?? "",
+            }),
+          });
+        });
+      },
       stopActiveTurn(conversationId?: string): void {
         stopCalls.push(conversationId ?? "(all)");
       },
@@ -732,5 +759,94 @@ describe("AIChatRunEventAdapter", () => {
     expect(Adapter.statusHintFor("error")).toBe("failed");
     expect(Adapter.statusHintFor("cancelled")).toBe("cancelled");
     expect(Adapter.statusHintFor("token")).toBeNull();
+  });
+
+  it("dispatchQueuedTurn gives a drained row a durable run, real run id, and one owner (FR-004/005, AC-16)", async () => {
+    const terminals: Array<{ conversationId: string; status: ChatRunStatus }> =
+      [];
+    const { coordinator, router, fake, runModel } = buildCoordinator((c, st) => {
+      terminals.push({ conversationId: c, status: st });
+    });
+    const win = fakeWindow(6);
+    win.register(router);
+    router.select(6, "v2-queued-1", 1);
+    await SqliteDb.ensureInitialized();
+
+    const dispatched = coordinator.dispatchQueuedTurn({
+      conversationId: "v2-queued-1",
+      pendingMessageId: "p-1",
+      request: { message: "queued hello", conversationId: "v2-queued-1" },
+      savedUser: { messageId: "user-pending-9", conversationId: "v2-queued-1" },
+      modelContent: "queued hello",
+      assistantMessageId: "assistant-pending-p-1",
+    });
+    await waitFor(() => fake.turns.length === 1);
+    const turn = fake.turns[0];
+
+    const liveRunId = coordinator.getLiveRuntime("v2-queued-1")?.activeRunId;
+    expect(liveRunId).toBeTruthy();
+    expect(liveRunId?.startsWith("pending-queue-")).toBe(false);
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(liveRunId ?? "");
+      return row?.status === "running";
+    });
+
+    emit(turn.input.eventSink, {
+      type: "start",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+    });
+    emit(turn.input.eventSink, {
+      type: "token",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+      contentDelta: "q",
+      model: "m",
+    });
+    await waitFor(() => win.details.length >= 2);
+    for (const detail of win.details) {
+      expect(detail.runId).toBe(liveRunId);
+      expect(String(detail.runId).startsWith("pending-queue-")).toBe(false);
+    }
+    expect(win.details[0].sequence).toBeLessThan(win.details[1].sequence);
+
+    emit(turn.input.eventSink, {
+      type: "complete",
+      conversationId: "v2-queued-1",
+      messageId: "assistant-pending-p-1",
+      fullContent: "queued done",
+      finishReason: "stop",
+    });
+    turn.resolve({
+      type: "completed",
+      conversationId: "v2-queued-1",
+      assistantMessageId: "assistant-pending-p-1",
+    });
+
+    const outcome = await dispatched;
+    expect(outcome.type).toBe("completed");
+    const row = await runModel.getByRunId(liveRunId ?? "");
+    expect(row?.status).toBe("completed");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toEqual({
+      conversationId: "v2-queued-1",
+      status: "completed",
+    });
+  });
+
+  it("dispatchQueuedTurn reports busy when the conversation is already owned", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    fake.setStatus("v2-queued-2", "running");
+    const outcome = await coordinator.dispatchQueuedTurn({
+      conversationId: "v2-queued-2",
+      pendingMessageId: "p-2",
+      request: { message: "x", conversationId: "v2-queued-2" },
+      savedUser: { messageId: "u", conversationId: "v2-queued-2" },
+      modelContent: "x",
+      assistantMessageId: "a",
+    });
+    expect(outcome.type).toBe("conversation_busy");
+    expect(fake.turns).toHaveLength(0);
   });
 });

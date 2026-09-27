@@ -23,7 +23,7 @@ import {
   AIChatTurnQueueError,
   createSteeringPromoter,
   type AIChatTurnQueueEngine,
-  type AIChatQueueLease,
+  type AIChatQueueTurnDispatch,
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import {
@@ -74,26 +74,6 @@ function makeEngineStub() {
   const engine: AIChatTurnQueueEngine = {
     getConversationRuntimeStatus: (id: string) =>
       (statuses.get(id) as never) ?? "idle",
-    submitPersistedUserMessage: vi.fn(
-      async (
-        input: Parameters<
-          AIChatTurnQueueEngine["submitPersistedUserMessage"]
-        >[0]
-      ) => {
-        submitted.push({
-          conversationId: input.savedUser.conversationId,
-          modelContent: input.modelContent,
-        });
-        if (nextSubmit) {
-          return await nextSubmit.promise;
-        }
-        return {
-          type: "completed",
-          conversationId: input.savedUser.conversationId,
-          assistantMessageId: "a1",
-        } as AIChatTurnTerminalEvent;
-      }
-    ),
     reserveSteering: vi.fn(() => reserveResult as never),
     cancelSteeringReservation: vi.fn(),
     commitSteering: vi.fn(() => commitResult),
@@ -122,27 +102,39 @@ function makeService(
   Object.assign(stub, engineOverrides ?? {});
   const module = new AIChatPendingMessageModule(fakePrep());
   const events: AIChatPendingMessageEvent[] = [];
-  let leaseEnabled = true;
+  // Stage A §3.4: drained rows dispatch through the execution owner seam.
+  // The dispatcher shares the engine stub's submitted/nextSubmit handles so
+  // existing drain tests keep driving turn outcomes through setNextSubmit.
+  let nextSubmit: Deferred<AIChatTurnTerminalEvent> | null = null;
+  const dispatchQueuedTurn = async (
+    input: AIChatQueueTurnDispatch
+  ): Promise<AIChatTurnTerminalEvent> => {
+    stub.submitted.push({
+      conversationId: input.savedUser.conversationId,
+      modelContent: input.modelContent,
+    });
+    if (nextSubmit) {
+      return await nextSubmit.promise;
+    }
+    return {
+      type: "completed",
+      conversationId: input.savedUser.conversationId,
+      assistantMessageId: input.assistantMessageId,
+    } as AIChatTurnTerminalEvent;
+  };
+  stub.setNextSubmit = (d: Deferred<AIChatTurnTerminalEvent> | null) => {
+    nextSubmit = d;
+  };
   const service = new AIChatTurnQueueService({
     engine: stub.engine,
     pendingModule: module,
     eventSink: { emit: (e) => events.push(e) },
-    streamSinkFactory: () => ({ emit: () => undefined }),
-    tryAcquireLease: ((): AIChatQueueLease | null =>
-      leaseEnabled ? { release: () => undefined } : null) as never,
+    dispatchQueuedTurn,
     isAiEnabled: () => true,
     isQueueEnabled: () => true,
     isSteeringEnabled: () => true,
   });
-  return {
-    service,
-    module,
-    events,
-    stub,
-    setLeaseEnabled(value: boolean) {
-      leaseEnabled = value;
-    },
-  };
+  return { service, module, events, stub };
 }
 
 beforeEach(async () => {
@@ -387,15 +379,37 @@ describe("AIChatTurnQueueService submit + drain", () => {
     expect(stub.submitted[0].modelContent).toBe("B");
   });
 
-  it("lease busy releases the claim back to queued without dispatching", async () => {
-    const { service, stub, setLeaseEnabled } = makeService();
-    setLeaseEnabled(false);
-    await service.submit({
+  it("execution-owner busy (race) releases the claim back to queued without dispatching", async () => {
+    const { service, module, stub } = makeService();
+    const statuses = stub.statuses;
+    void statuses;
+    void module;
+    // Simulate the admission race: the owner reports conversation_busy for
+    // the drained row (another turn claimed the conversation first).
+    const originalSubmit = service.submit.bind(service);
+    void originalSubmit;
+    const { AIChatTurnQueueService: Svc } = await import(
+      "@/service/AIChatTurnQueueService"
+    );
+    const busyService = new Svc({
+      engine: stub.engine,
+      pendingModule: new AIChatPendingMessageModule(fakePrep()),
+      eventSink: { emit: () => undefined },
+      dispatchQueuedTurn: () =>
+        Promise.resolve({
+          type: "conversation_busy",
+          conversationId: "v2-lease",
+        } as AIChatTurnTerminalEvent),
+      isAiEnabled: () => true,
+      isQueueEnabled: () => true,
+      isSteeringEnabled: () => true,
+    });
+    await busyService.submit({
       clientRequestId: "cr-lease",
       request: { message: "A", conversationId: "v2-lease" },
     });
     await vi.waitFor(async () => {
-      const views = await service.list("v2-lease");
+      const views = await busyService.list("v2-lease");
       return views[0]?.status === "queued";
     });
     expect(stub.submitted.length).toBe(0);
@@ -690,8 +704,12 @@ describe("AIChatTurnQueueService gating", () => {
       engine: makeEngineStub().engine,
       pendingModule: module,
       eventSink: { emit: () => undefined },
-      streamSinkFactory: () => ({ emit: () => undefined }),
-      tryAcquireLease: () => null,
+      dispatchQueuedTurn: () =>
+        Promise.resolve({
+          type: "completed",
+          conversationId: "v2-off",
+          assistantMessageId: "a1",
+        } as AIChatTurnTerminalEvent),
       isAiEnabled: () => true,
       isQueueEnabled: () => false,
       isSteeringEnabled: () => true,

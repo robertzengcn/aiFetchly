@@ -6,7 +6,6 @@ import {
 } from "@/service/AIChatTurnQueueService";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
-import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import {
   AI_CHAT_MESSAGE_QUEUE_ENABLED,
   AI_CHAT_MESSAGE_STEERING_ENABLED,
@@ -63,8 +62,7 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
-import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import { getQueueTurnDispatcher } from "@/service/aiChatWorkspaceRuntime";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -356,36 +354,15 @@ function isSteeringFeatureEnabled(): boolean {
  * sequence stays monotonic within one turn; the synthetic runId is stable
  * for the turn (the presenter binds runs by opening "start" events).
  */
-let pendingTurnSinkCounter = 0;
-function createBroadcastEventSink(): AIChatQueryEventSink {
-  const broadcaster = AIChatV2EventBroadcaster.getInstance();
-  pendingTurnSinkCounter += 1;
-  const adapter = new AIChatRunEventAdapter(
-    `pending-queue-${pendingTurnSinkCounter}`,
-    "" // per-chunk: the envelope id is overridden below (chunks carry it)
-  );
-  const routeDetail = (chunk: ChatV2StreamChunk): void => {
-    if (!chunk.conversationId) return;
-    // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
-    // the chunk's real conversation here — the router only delivers events
-    // whose conversation matches the window's selection.
-    sharedWorkspaceEventRouter.sendDetailEvent({
-      ...adapter.wrap(chunk),
-      conversationId: chunk.conversationId,
-    });
-  };
-  return createChatV2StreamSink({
-    sendChunk: (chunk) => {
-      broadcaster.emitStreamChunk(chunk);
-      routeDetail(chunk);
-    },
-    sendComplete: (chunk) => {
-      broadcaster.emitStreamComplete(chunk);
-      routeDetail(chunk);
-    },
-  });
-}
-
+/**
+ * Stage A §3.4 (generator-streaming PRD FR-004/005): queue-drained turns no
+ * longer stream through a broadcast sink with synthetic `pending-queue-N`
+ * run IDs — the coordinator executes them as durable runs (run identity,
+ * scheduler, lease, monotonic sequence, waiting/terminal accuracy identical
+ * to a direct send). The coordinator is registered in the shared runtime
+ * holder by the workspace IPC layer; this file cannot import that module
+ * without a static cycle.
+ */
 export function getQueueService(): AIChatTurnQueueService {
   if (!queueService) {
     const pendingModule = new AIChatPendingMessageModule();
@@ -396,13 +373,20 @@ export function getQueueService(): AIChatTurnQueueService {
         emit: (event) =>
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
       },
-      streamSinkFactory: () => createBroadcastEventSink(),
-      tryAcquireLease: ({ conversationId }) =>
-        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
-          conversationId,
-          owner: "interactive",
-          ownerId: "pending-queue",
-        }),
+      dispatchQueuedTurn: (input) => {
+        const dispatcher = getQueueTurnDispatcher();
+        if (!dispatcher) {
+          log.error(
+            "[ai-chat-queue] no execution owner registered — failing drained turn honestly"
+          );
+          return Promise.resolve({
+            type: "failed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+          });
+        }
+        return dispatcher.dispatchQueuedTurn(input);
+      },
       isAiEnabled: () => canUseChat().ok,
       isQueueEnabled: isQueueFeatureEnabled,
       isSteeringEnabled: isSteeringFeatureEnabled,

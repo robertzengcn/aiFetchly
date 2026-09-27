@@ -32,7 +32,10 @@ import {
   workspaceActivityRequestSchema,
 } from "@/schemas/ipc/aiChatWorkspace";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
-import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import {
+  setQueueTurnDispatcher,
+  sharedWorkspaceEventRouter,
+} from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
@@ -164,6 +167,14 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
           return null;
         }
       },
+    });
+    // Stage A §3.4 (FR-004/005): register this coordinator as the execution
+    // owner for queue-drained turns. The queue service (wired in
+    // ai-chat-v2-ipc.ts) reads the holder at drain time to avoid a static
+    // import cycle between the two IPC modules.
+    setQueueTurnDispatcher({
+      dispatchQueuedTurn: (input) =>
+        coordinatorInstance!.dispatchQueuedTurn(input),
     });
   }
   return coordinatorInstance;
