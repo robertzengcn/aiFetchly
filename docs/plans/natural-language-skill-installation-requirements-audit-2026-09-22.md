@@ -290,7 +290,7 @@ means code exists but this audit cannot establish the required platform result.
 | FR-18 | Partial | Installation path avoids daily-use invocation; terminal user constraints are not persisted, finding 11. |
 | FR-19 | Partial | All lifecycle operations exist; update identity, cancellation, rollback gaps, findings 3/6/11. |
 | FR-20 | Partial | Structured events/codes and retry cap exist; retry loses parameters and rollback failure state differs, findings 6/11. |
-| FR-21 | Present | Universal use_skill and bounded metadata-only catalog. Presenter omits runtime IDs from displayed lines, so ambiguous-name resolution still needs a follow-up. |
+| FR-21 | Present | Universal use_skill and bounded metadata-only catalog. Presenter runtime-ID omission fixed 2026-09-27 (77dffa3c): every catalog line carries its prompt:user runtime id. |
 | FR-22 | Present | Short acknowledgement plus hidden attachment integrated with query loop; invocation/tool tests pass. |
 | FR-23 | Partial | Durable snapshots and compaction integration exist. Design says preserve snapshot for changed/missing linked sources; reconciliation deactivates them. See document discrepancy below. |
 | FR-24 | Partial | Section/resource mechanisms exist; mandatory section and aggregate/model-budget gaps, finding 7. |
