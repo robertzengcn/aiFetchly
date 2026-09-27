@@ -9,7 +9,28 @@ export const emailMarketingPaginationSchema = z.object({
   search: z.string().trim().min(1).optional(),
 });
 
-export const emailMarketingIdSchema = z.coerce.number().int().positive();
+/**
+ * A positive integer ID for email-marketing entities (services, templates,
+ * search tasks). Accepts a real number or a decimal-numeric string like
+ * "123" — the latter is what an LLM tool-call argument arrives as — but
+ * REJECTS hex ("0x10"), scientific notation ("1e3"), booleans, and empty
+ * strings, all of which `z.coerce.number()` silently mis-parses into a
+ * valid-looking but wrong integer (e.g. "0x10" → 16, "1e3" → 1000, true → 1).
+ *
+ * Without this guard, a model-supplied `template_ids: ["0x10"]` would bind
+ * template ID 16 — a different template than intended — with no validation
+ * error, since `template_ids` has no downstream re-normalizer. The preprocess
+ * matches the established `semanticNumber` idiom (src/utils/semanticNumber.ts):
+ * only decimal-numeric strings are coerced; everything else is passed through
+ * unchanged so the inner `.int().positive()` surfaces a clear type error.
+ */
+export const emailMarketingIdSchema = z.preprocess((value: unknown) => {
+  if (typeof value === "string" && /^[0-9]+$/.test(value.trim())) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return value;
+}, z.number().int().positive());
 
 export const emailMarketingEmailItemSchema = z.object({
   address: z.string().trim().email(),
