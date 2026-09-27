@@ -160,8 +160,20 @@ function classifyPath(filePath: string): PathKind {
     return stat.isDirectory() ? "directory" : "file";
   } catch (error: unknown) {
     if (!isNodeError(error)) throw error;
-    if (error.code === "ENOENT" || error.code === "ENOTDIR") return "missing";
     if (error.code === "EACCES" || error.code === "EPERM") return "denied";
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+      // statSync follows symlinks/reparse points. On Windows a cloud-sync
+      // placeholder (OneDrive/Dropbox) or other non-symlink reparse point
+      // whose target is unavailable makes statSync throw ENOENT even though
+      // the directory entry exists and is readable. lstatSync inspects the
+      // entry itself and succeeds, so the file is still readable.
+      try {
+        const lstat = fs.lstatSync(filePath);
+        return lstat.isDirectory() ? "directory" : "file";
+      } catch {
+        return "missing";
+      }
+    }
     throw error;
   }
 }
@@ -289,11 +301,24 @@ export class FileToolService {
           error: `Permission denied reading folder: ${parent}`,
         };
       }
-      return { ok: false, error: `File not found: ${requestedPath}` };
+      // Surface the OS error code instead of masking it as a bare "not found",
+      // so EIO/EBUSY/ENOTDIR etc. are diagnosable.
+      return {
+        ok: false,
+        error: `File not found: ${requestedPath} (folder read error: ${
+          isNodeError(error) ? error.code : "unknown"
+        })`,
+      };
     }
 
+    // Include every non-directory entry. On Windows, files carrying a
+    // non-symlink reparse point (OneDrive/Dropbox placeholders, backup
+    // markers) report Dirent.isFile() === false AND isSymbolicLink() ===
+    // false, so the previous `isFile() || isSymbolicLink()` filter dropped
+    // them entirely and produced a false "File not found". Each candidate is
+    // still re-validated by the guard and classifyPath below before use.
     const fileNames = entries
-      .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+      .filter((entry) => !entry.isDirectory())
       .map((entry) => entry.name);
     const match = matchExistingFileName(path.basename(resolvedPath), fileNames);
     if (match) {
