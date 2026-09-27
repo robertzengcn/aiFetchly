@@ -87,6 +87,22 @@ function makeFakeEngine(): {
           assistantMessageId: input.assistantMessageId ?? "",
         });
       },
+      claimPendingPermission(): never {
+        throw new Error("not used in this test");
+      },
+      claimPendingQuestion(): never {
+        throw new Error("not used in this test");
+      },
+      cancelClaimed(): boolean {
+        return false;
+      },
+      resumeClaimed(): Promise<AIChatSegmentOutcome> {
+        return Promise.resolve({
+          type: "failed",
+          conversationId: "",
+          assistantMessageId: "",
+        });
+      },
       stopActiveTurn(conversationId?: string): void {
         if (conversationId) engineStatus.delete(conversationId);
       },
