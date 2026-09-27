@@ -20,7 +20,13 @@ export type ToolCatalogCounterKey =
   | "mcp_schema_pruned_count"
   /** FR-28 transparent deferred-load hydration replays (design §8.7). */
   | "hydration_replays"
-  | "hydration_replay_exhausted";
+  | "hydration_replay_exhausted"
+  /** NFR-12 installer-policy routing (PRD §14 release metrics): explicit
+   *  install-intent decisions seen, generic-tool fallbacks BLOCKED by the
+   *  policy, and manual-action bounded approvals honored. */
+  | "install_routing_explicit"
+  | "install_fallback_blocked"
+  | "install_manual_approval_honored";
 
 const ALL_KEYS: readonly ToolCatalogCounterKey[] = [
   "search_calls",
@@ -31,6 +37,9 @@ const ALL_KEYS: readonly ToolCatalogCounterKey[] = [
   "mcp_schema_pruned_count",
   "hydration_replays",
   "hydration_replay_exhausted",
+  "install_routing_explicit",
+  "install_fallback_blocked",
+  "install_manual_approval_honored",
 ];
 
 export type ToolCatalogCounterSnapshot = Record<
@@ -59,6 +68,21 @@ class ToolCatalogCountersImpl {
 
   reset(): void {
     this.counts.clear();
+  }
+
+  /**
+   * Turn-completion hook (NFR-12 release metrics): aggregate emission so
+   * release builds produce observable routing/performance totals without a
+   * diagnostics attachment. Rate-limited to once per 50 turns to keep log
+   * volume bounded.
+   */
+  private turnsSinceEmit = 0;
+  onTurnCompleted(): void {
+    this.turnsSinceEmit += 1;
+    if (this.turnsSinceEmit >= 50) {
+      this.turnsSinceEmit = 0;
+      this.logSnapshot();
+    }
   }
 
   /** Emit one structured log line with the current totals, then keep counting. */

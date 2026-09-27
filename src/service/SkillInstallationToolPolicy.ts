@@ -16,6 +16,7 @@
  */
 
 import type { SkillRoutingDecision } from "@/service/SkillInstallIntentGuard";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 
 export const INSTALLER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "skill_install_prepare",
@@ -78,6 +79,8 @@ export function evaluateSkillInstallationToolPolicy(
   const target = (input.installTarget ?? routing.source ?? "").toLowerCase();
 
   if (input.manualActionApproved !== undefined) {
+    // NFR-12: bounded approvals honored (release metrics, PRD §14).
+    toolCatalogCounters.increment("install_manual_approval_honored");
     // Bounded fallback (audit finding 9): the approval applies to THIS
     // explicit-install routing decision's target, not to every future
     // call. When the caller records the approved target, a different

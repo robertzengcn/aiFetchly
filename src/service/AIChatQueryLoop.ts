@@ -1968,7 +1968,11 @@ export class AIChatQueryLoop {
                   }
                 : undefined,
             });
+            // NFR-12 release metrics (PRD §14): observe the routing
+            // decision + outcome at the enforcement point.
+            toolCatalogCounters.increment("install_routing_explicit");
             if (!verdict.allowed) {
+              toolCatalogCounters.increment("install_fallback_blocked");
               await emitToolCall(call.arguments ?? {});
               const blockedInstallContent = serializeToolResultContent({
                 success: false,
@@ -2220,6 +2224,8 @@ export class AIChatQueryLoop {
           totalTokens: estimated.totalTokens,
         });
       }
+      // NFR-12: aggregate counter emission on the turn boundary.
+      toolCatalogCounters.onTurnCompleted();
       return {
         type: "completed",
         conversationId: input.conversationId,
