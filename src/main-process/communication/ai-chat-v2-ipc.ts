@@ -62,7 +62,10 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import { getQueueTurnDispatcher } from "@/service/aiChatWorkspaceRuntime";
+import {
+  getQueueTurnDispatcher,
+  getRunOwnerResumeRouter,
+} from "@/service/aiChatWorkspaceRuntime";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_MODELS,
@@ -1041,6 +1044,20 @@ async function handleResumeToolAfterPermission(
     return denied("toolId is required");
   }
 
+  // Stage A §3.5 (FR-024): permission resume re-enters through the run's
+  // owner (claim → queued → scheduler capacity → lease → observed outcome)
+  // when the workspace coordinator owns the conversation. Non-coordinator
+  // turns (legacy V2 send, scheduled) keep the engine-internal path.
+  if (
+    typeof parsed.conversationId === "string" &&
+    getRunOwnerResumeRouter()?.ownsConversation(parsed.conversationId) === true
+  ) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId: parsed.conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
@@ -1351,6 +1368,18 @@ async function handleAnswerQuestion(
     return denied("answers must be an array");
   }
 
+  // Stage A §3.5 (FR-024): plan answers re-enter through the run's owner.
+  if (getRunOwnerResumeRouter()?.ownsConversation(parsed.conversationId) === true) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId: parsed.conversationId,
+      action: {
+        kind: "answer",
+        questionId: parsed.questionId,
+        answers: parsed.answers,
+      },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,

@@ -404,6 +404,24 @@ export interface AIChatQueryEngineDeps {
  * and stop. The engine delegates the inner model/tool round loop to
  * AIChatQueryLoop and handles the result.
  */
+/**
+ * Stage A §3.5 (generator-streaming PRD FR-010/024): result of claiming a
+ * pending permission/plan-question action. `already_claimed` is an idempotent
+ * duplicate (the first claim proceeds); `not_found` is stale/mismatched.
+ */
+export type AIChatPendingClaim =
+  | {
+      readonly status: "claimed";
+      readonly kind: "permission" | "question";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+      readonly toolCallId?: string;
+      readonly questionId?: string;
+      readonly pending: PendingPermissionTurn | PendingPlanQuestionTurn;
+    }
+  | { readonly status: "already_claimed" }
+  | { readonly status: "not_found" };
+
 interface ActiveTurnState {
   abortController: AbortController;
   assistantMessageId: string;
@@ -425,6 +443,18 @@ export class AIChatQueryEngine {
   private activeTurns = new Map<string, ActiveTurnState>();
   private pendingPermissions = new Map<string, PendingPermissionTurn>();
   private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
+  /**
+   * Stage A §3.5 (FR-010/024): pending actions claimed by their run owner.
+   * A claim atomically moves the pending entry out of the parked maps; only
+   * one resume claims a given action. Duplicate/stale claims are rejected.
+   */
+  private claimedPending = new Map<
+    string,
+    {
+      kind: "permission" | "question";
+      pending: PendingPermissionTurn | PendingPlanQuestionTurn;
+    }
+  >();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly modelCatalog: AIChatModelCatalogService;
@@ -1771,6 +1801,9 @@ export class AIChatQueryEngine {
     for (const id of [...this.pendingPlanQuestions.keys()]) {
       this.stopConversation(id);
     }
+    for (const id of [...this.claimedPending.keys()]) {
+      this.clearClaimedPending(id);
+    }
   }
 
   /**
@@ -1811,62 +1844,161 @@ export class AIChatQueryEngine {
     }
   }
 
+  /** Stage A §3.5: stop-all also invalidates claimed (undispatched) resumes. */
+  private clearClaimedPending(conversationId: string): void {
+    const claimed = this.claimedPending.get(conversationId);
+    if (!claimed) return;
+    this.claimedPending.delete(conversationId);
+    claimed.pending.abortController.abort();
+  }
+
   // -------------------------------------------------------------------------
   // Resume methods
   // -------------------------------------------------------------------------
 
   /**
-   * Resume a paused tool after the user grants permission.
-   * Re-executes the tool with skipPermissionCheck, then re-enters the loop.
+   * Stage A §3.5 (generator-streaming PRD FR-010/024): idempotent claim of a
+   * pending permission. Only one resume claims a given action; duplicates and
+   * stale tool ids never re-execute the tool.
    */
-  async resumeToolAfterPermission(
-    request: ResumeToolAfterPermissionRequest
-  ): Promise<ResumeTurnResult> {
-    const convId = request.conversationId;
-    // When the renderer provides conversationId, key by it directly; otherwise
-    // fall back to the single-entry assumption (only meaningful when exactly
-    // one permission is pending).
-    const lookupKey = convId ?? undefined;
-    const pending = lookupKey
-      ? this.pendingPermissions.get(lookupKey)
-      : this.firstEntry(this.pendingPermissions);
-    const matchedByToolId =
-      pending && pending.toolCallId === request.toolId ? pending : undefined;
-    if (!matchedByToolId) {
-      return {
-        ok: false,
-        error: "No active permission-gated tool call to continue.",
-      };
-    }
-    if (
-      request.conversationId &&
-      request.conversationId !== matchedByToolId.conversationId
-    ) {
-      return {
-        ok: false,
-        error: "Conversation mismatch for pending tool call.",
-      };
-    }
+  claimPendingPermission(
+    conversationId: string,
+    toolId: string
+  ): AIChatPendingClaim {
+    return this.claimPending(
+      conversationId,
+      "permission",
+      this.pendingPermissions,
+      (pending) => pending.toolCallId === toolId
+    );
+  }
 
+  /**
+   * Stage A §3.5: idempotent claim of a pending plan question. The answer is
+   * persisted by the caller BEFORE claiming (existing semantics).
+   */
+  claimPendingQuestion(
+    conversationId: string,
+    questionId: string
+  ): AIChatPendingClaim {
+    return this.claimPending(
+      conversationId,
+      "question",
+      this.pendingPlanQuestions,
+      (pending) => pending.questionId === questionId
+    );
+  }
+
+  /**
+   * Cancel a claimed-but-not-yet-resumed pending action (Stop while the
+   * resume waits for scheduler capacity): the approved tool never starts and
+   * the turn is finalized cancelled by its owner (FR-024).
+   */
+  cancelClaimed(conversationId: string): boolean {
+    const claimed = this.claimedPending.get(conversationId);
+    if (!claimed) return false;
+    this.claimedPending.delete(conversationId);
+    claimed.pending.abortController.abort();
+    claimed.pending.eventSink.emit({
+      type: "cancelled",
+      conversationId: claimed.pending.conversationId,
+      messageId: claimed.pending.assistantMessageId,
+      fullContent: "",
+    });
+    return true;
+  }
+
+  private claimPending<P extends PendingPermissionTurn | PendingPlanQuestionTurn>(
+    conversationId: string,
+    kind: "permission" | "question",
+    map: Map<string, P>,
+    matches: (pending: P) => boolean
+  ): AIChatPendingClaim {
+    const existingClaim = this.claimedPending.get(conversationId);
+    if (existingClaim) {
+      // Same action claimed again → idempotent duplicate. A DIFFERENT id
+      // while another claim holds the conversation is stale, not a dup.
+      return matches(existingClaim.pending as P)
+        ? { status: "already_claimed" }
+        : { status: "not_found" };
+    }
+    const pending = map.get(conversationId);
+    if (!pending || !matches(pending)) {
+      return { status: "not_found" };
+    }
+    map.delete(conversationId);
+    this.claimedPending.set(conversationId, { kind, pending });
+    const base = {
+      status: "claimed" as const,
+      kind,
+      conversationId,
+      assistantMessageId: pending.assistantMessageId,
+      pending,
+    };
+    return kind === "permission"
+      ? {
+          ...base,
+          toolCallId: (pending as PendingPermissionTurn).toolCallId,
+        }
+      : {
+          ...base,
+          questionId: (pending as PendingPlanQuestionTurn).questionId,
+        };
+  }
+
+  /**
+   * Stage A §3.5: execute a claimed resume and RETURN its segment outcome —
+   * the continuation is owner-observed, never a fire-and-forget promise.
+   * `options.eventSink` lets the run owner redirect events to its live run
+   * sink (sequence continuity); `options.lifecycle` receives onResumed.
+   */
+  async resumeClaimed(
+    claim: Extract<AIChatPendingClaim, { status: "claimed" }>,
+    options?: {
+      readonly eventSink?: AIChatQueryEventSink;
+      readonly lifecycle?: AIChatTurnLifecycleListener;
+    }
+  ): Promise<AIChatSegmentOutcome> {
+    if (claim.kind === "permission") {
+      return this.resumeClaimedPermission(
+        claim.pending as PendingPermissionTurn,
+        options
+      );
+    }
+    return this.resumeClaimedQuestion(
+      claim.pending as PendingPlanQuestionTurn,
+      options
+    );
+  }
+
+  /** Permission continuation (extracted from the legacy resume path). */
+  private async resumeClaimedPermission(
+    matchedByToolId: PendingPermissionTurn,
+    options?: {
+      readonly eventSink?: AIChatQueryEventSink;
+      readonly lifecycle?: AIChatTurnLifecycleListener;
+    }
+  ): Promise<AIChatSegmentOutcome> {
     const conversationId = matchedByToolId.conversationId;
-    this.pendingPermissions.delete(conversationId);
+    const lifecycle = options?.lifecycle ?? matchedByToolId.lifecycle;
+    // The claim is consumed by this execution: duplicates during the
+    // continuation are rejected (never re-executed).
+    this.claimedPending.delete(conversationId);
     this.activeTurns.set(conversationId, {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
-      eventSink: matchedByToolId.eventSink,
-      ...(matchedByToolId.lifecycle
-        ? { lifecycle: matchedByToolId.lifecycle }
-        : {}),
+      eventSink: options?.eventSink ?? matchedByToolId.eventSink,
+      ...(lifecycle ? { lifecycle } : {}),
     });
     // Stage A §3.2 (FR-021): the claimed resume starts executing now.
-    this.notifyResumed(matchedByToolId.lifecycle, {
+    this.notifyResumed(lifecycle, {
       conversationId: matchedByToolId.conversationId,
       assistantMessageId: matchedByToolId.assistantMessageId,
     });
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(
       module,
-      matchedByToolId.eventSink
+      options?.eventSink ?? matchedByToolId.eventSink
     );
 
     try {
@@ -1917,14 +2049,14 @@ export class AIChatQueryEngine {
 
       if (isPermissionPromptResult(toolResult)) {
         await this.flushEventSaves(eventSink);
-        // Permission still required — move back to the pending map. The
-        // activeTurns entry we just created must be removed so the disjoint
-        // invariant holds.
+        // Permission still required — park again; the fresh prompt was
+        // emitted above so the surface re-renders the decision card.
         this.activeTurns.delete(conversationId);
         this.pendingPermissions.set(conversationId, matchedByToolId);
         return {
-          ok: false,
-          error: "Permission is still required for this tool.",
+          type: "paused_for_permission",
+          conversationId,
+          assistantMessageId: matchedByToolId.assistantMessageId,
         };
       }
 
@@ -2002,110 +2134,107 @@ export class AIChatQueryEngine {
         // outbound gate incorrectly falls back to `draft_required`.
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
+        ...(lifecycle ? { lifecycle } : {}),
+        ...(matchedByToolId.ownerNotifiesTerminal !== undefined
+          ? { ownerNotifiesTerminal: matchedByToolId.ownerNotifiesTerminal }
+          : {}),
       };
 
-      void this.loop
-        .run(loopInput)
-        .then(async (result) => {
-          await this.handleLoopResult(result, module, eventSink, {
-            ownerNotifiesTerminal:
-              matchedByToolId.ownerNotifiesTerminal === true,
-          });
-        })
-        .catch((err) => {
-          log.error("[ai-chat-v2] resume loop failed:", err);
-          void redirectToLoginOnAuthExpired(err);
-          matchedByToolId.eventSink.emit({
-            type: "error",
-            conversationId: matchedByToolId.conversationId,
-            messageId: matchedByToolId.assistantMessageId,
-            errorMessage: userSafeError(err),
-          });
-          this.clearConversationTurnState(matchedByToolId.conversationId);
-          this.clearStagedConfirmedBatchRefs(matchedByToolId.conversationId);
-        });
-
-      return { ok: true };
-    } catch (err) {
-      this.clearActiveTurnState(conversationId);
-      return { ok: false, error: userSafeError(err) };
-    }
-  }
-
-  /** Helper: return the first value from a Map, or undefined. */
-  private firstEntry<V>(map: Map<string, V>): V | undefined {
-    for (const v of map.values()) return v;
-    return undefined;
-  }
-
-  /**
-   * Answer a plan-mode question and resume the paused turn.
-   */
-  async answerPlanQuestion(
-    request: AnswerPlanQuestionRequest
-  ): Promise<ResumeTurnResult> {
-    const planModule = new AIChatPlanModule();
-
-    let answered: {
-      question: import("@/entityTypes/aiChatPlanTypes").AIChatPlanQuestionView;
-      planState: AIChatPlanStateView;
-    };
-    try {
-      answered = await planModule.answerQuestion({
-        conversationId: request.conversationId,
-        questionId: request.questionId,
-        answers: request.answers,
+      // Stage A §3.5: the continuation is AWAITED and its outcome returned to
+      // the owner — no unobserved fire-and-forget promise remains.
+      const result = await this.loop.run(loopInput);
+      await this.handleLoopResult(result, module, eventSink, {
+        ownerNotifiesTerminal: matchedByToolId.ownerNotifiesTerminal === true,
       });
+      if (result.type === "paused_for_permission") {
+        return {
+          type: "paused_for_permission",
+          conversationId,
+          assistantMessageId: matchedByToolId.assistantMessageId,
+        };
+      }
+      if (result.type === "paused_for_plan_question") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId,
+          assistantMessageId: matchedByToolId.assistantMessageId,
+        };
+      }
+      return {
+        type: result.type,
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+      };
     } catch (err) {
-      return { ok: false, error: userSafeError(err) };
+      this.handleFailure(
+        err,
+        conversationId,
+        matchedByToolId.assistantMessageId,
+        options?.eventSink ?? matchedByToolId.eventSink
+      );
+      return {
+        type: "failed",
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+      };
     }
+  }
 
-    const pending = this.pendingPlanQuestions.get(request.conversationId);
-    if (
-      !pending ||
-      pending.questionId !== request.questionId ||
-      pending.conversationId !== request.conversationId
-    ) {
-      return { ok: true };
+  /** Plan-question continuation (extracted from the legacy answer path). */
+  private async resumeClaimedQuestion(
+    pending: PendingPlanQuestionTurn,
+    options?: {
+      readonly eventSink?: AIChatQueryEventSink;
+      readonly lifecycle?: AIChatTurnLifecycleListener;
     }
-
-    this.pendingPlanQuestions.delete(request.conversationId);
-    this.activeTurns.set(request.conversationId, {
+  ): Promise<AIChatSegmentOutcome> {
+    const conversationId = pending.conversationId;
+    const lifecycle = options?.lifecycle ?? pending.lifecycle;
+    this.claimedPending.delete(conversationId);
+    this.activeTurns.set(conversationId, {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
-      eventSink: pending.eventSink,
-      ...(pending.lifecycle ? { lifecycle: pending.lifecycle } : {}),
+      eventSink: options?.eventSink ?? pending.eventSink,
+      ...(lifecycle ? { lifecycle } : {}),
     });
-    // Stage A §3.2 (FR-021): the claimed resume starts executing now.
-    this.notifyResumed(pending.lifecycle, {
+    this.notifyResumed(lifecycle, {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
     });
 
+    // The CALLER persisted the answer before claiming; the ack message was
+    // built from it. Re-serialize the standard answered ack here from the
+    // persisted question state.
     const answerContent = serializeToolResultContent({
       success: true,
       status: "answered",
-      questionId: answered.question.questionId,
-      answers: request.answers,
+      questionId: pending.questionId,
     });
+    void answerContent;
 
     const toolMsgIndex = pending.conversationMessages.findIndex(
       (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
     );
+    const answerAck = serializeToolResultContent({
+      success: true,
+      status: "answered",
+      questionId: pending.questionId,
+    });
     if (toolMsgIndex >= 0) {
       pending.conversationMessages[toolMsgIndex] = {
         role: "tool",
         tool_call_id: pending.toolCallId,
-        content: answerContent,
+        content: answerAck,
       };
     } else {
       pending.conversationMessages.push({
         role: "tool",
         tool_call_id: pending.toolCallId,
-        content: answerContent,
+        content: answerAck,
       });
     }
 
+    const planModule = new AIChatPlanModule();
     const planState = await planModule.getPlanStateByPlanId(pending.planId);
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const allOpenAITools = [
@@ -2135,9 +2264,7 @@ export class AIChatQueryEngine {
       isPlanMode: Boolean(planContext),
       autoPlanEnabled: false,
       userMessage: pending.request.message,
-      recentUserMessages: collectRecentUserMessages(
-        pending.conversationMessages
-      ),
+      recentUserMessages: collectRecentUserMessages(pending.conversationMessages),
       model: pending.request.model,
       hasRecentGeneratedImages: messagesHaveGeneratedImages(
         pending.conversationMessages
@@ -2151,45 +2278,174 @@ export class AIChatQueryEngine {
       request: pending.request,
       openAITools: allOpenAITools,
       abortController: pending.abortController,
-      eventSink: pending.eventSink,
+      eventSink: options?.eventSink ?? pending.eventSink,
       skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
       isActiveTurn: () => {
         const entry = this.activeTurns.get(pending.conversationId);
-        return (
-          !!entry && entry.assistantMessageId === pending.assistantMessageId
-        );
+        return !!entry && entry.assistantMessageId === pending.assistantMessageId;
       },
       toolCatalog: resumePlanCatalogContext.toolCatalog,
       toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
       toolCatalogState: pending.toolCatalogState,
+      ...(lifecycle ? { lifecycle } : {}),
+      ...(pending.ownerNotifiesTerminal !== undefined
+        ? { ownerNotifiesTerminal: pending.ownerNotifiesTerminal }
+        : {}),
     };
 
     const module = new AIChatV2Module();
-    const eventSink = this.createPersistingEventSink(module, pending.eventSink);
+    const eventSink = this.createPersistingEventSink(
+      module,
+      options?.eventSink ?? pending.eventSink
+    );
 
-    void this.loop
-      .run({ ...loopInput, eventSink })
-      .then(async (result) => {
-        await this.handleLoopResult(result, module, eventSink, {
-          ownerNotifiesTerminal: pending.ownerNotifiesTerminal === true,
-        });
-      })
-      .catch((err) => {
-        log.error("[ai-chat-v2] answer-question loop failed:", err);
-        void redirectToLoginOnAuthExpired(err);
-        pending.eventSink.emit({
-          type: "error",
-          conversationId: pending.conversationId,
-          messageId: pending.assistantMessageId,
-          errorMessage: userSafeError(err),
-        });
-        this.clearConversationTurnState(pending.conversationId);
-        this.clearStagedConfirmedBatchRefs(pending.conversationId);
+    try {
+      const result = await this.loop.run({ ...loopInput, eventSink });
+      await this.handleLoopResult(result, module, eventSink, {
+        ownerNotifiesTerminal: pending.ownerNotifiesTerminal === true,
       });
+      if (result.type === "paused_for_permission") {
+        return {
+          type: "paused_for_permission",
+          conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        };
+      }
+      if (result.type === "paused_for_plan_question") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        };
+      }
+      return {
+        type: result.type,
+        conversationId,
+        assistantMessageId: pending.assistantMessageId,
+      };
+    } catch (err) {
+      this.handleFailure(
+        err,
+        conversationId,
+        pending.assistantMessageId,
+        options?.eventSink ?? pending.eventSink
+      );
+      return {
+        type: "failed",
+        conversationId,
+        assistantMessageId: pending.assistantMessageId,
+      };
+    }
+  }
 
+  /**
+   * @deprecated Legacy fire-and-forget resume for callers not yet migrated to
+   * the owner contract (FR-013): claims the pending action and runs the
+   * continuation detached through the ORIGINAL pending sink, preserving the
+   * pre-Stage-A IPC response shape.
+   */
+  async resumeToolAfterPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const lookupKey = request.conversationId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    if (!pending) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== pending.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
+    const claim = this.claimPendingPermission(
+      pending.conversationId,
+      request.toolId
+    );
+    if (claim.status === "already_claimed") {
+      return { ok: true };
+    }
+    if (claim.status === "not_found") {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    const pendingSink = pending.eventSink;
+    void this.resumeClaimed(claim).catch((err: unknown) => {
+      log.error("[ai-chat-v2] resume loop failed:", err);
+      void redirectToLoginOnAuthExpired(err);
+      pendingSink.emit({
+        type: "error",
+        conversationId: pending.conversationId,
+        messageId: pending.assistantMessageId,
+        errorMessage: userSafeError(err),
+      });
+      this.clearConversationTurnState(pending.conversationId);
+      this.clearStagedConfirmedBatchRefs(pending.conversationId);
+    });
     return { ok: true };
+  }
+
+  /**
+   * @deprecated Legacy fire-and-forget plan-question resume (FR-013): the
+   * answer is persisted first (existing semantics), then the continuation
+   * runs detached through the original pending sink.
+   */
+  async answerPlanQuestion(
+    request: AnswerPlanQuestionRequest
+  ): Promise<ResumeTurnResult> {
+    const planModule = new AIChatPlanModule();
+    try {
+      await planModule.answerQuestion({
+        conversationId: request.conversationId,
+        questionId: request.questionId,
+        answers: request.answers,
+      });
+    } catch (err) {
+      return { ok: false, error: userSafeError(err) };
+    }
+
+    const claim = this.claimPendingQuestion(
+      request.conversationId,
+      request.questionId
+    );
+    if (claim.status === "not_found") {
+      return { ok: true };
+    }
+    if (claim.status === "already_claimed") {
+      return { ok: true };
+    }
+    const pendingSink = claim.pending.eventSink;
+    void this.resumeClaimed(claim).catch((err: unknown) => {
+      log.error("[ai-chat-v2] answer-question loop failed:", err);
+      void redirectToLoginOnAuthExpired(err);
+      pendingSink.emit({
+        type: "error",
+        conversationId: claim.pending.conversationId,
+        messageId: claim.pending.assistantMessageId,
+        errorMessage: userSafeError(err),
+      });
+      this.clearConversationTurnState(claim.pending.conversationId);
+      this.clearStagedConfirmedBatchRefs(claim.pending.conversationId);
+    });
+    return { ok: true };
+  }
+
+  /** Helper: return the first value from a Map, or undefined. */
+  private firstEntry<V>(map: Map<string, V>): V | undefined {
+    for (const v of map.values()) return v;
+    return undefined;
   }
 
   // -------------------------------------------------------------------------

@@ -557,3 +557,135 @@ describe("AIChatQueryEngine lifecycle notifications + side-effect gating (Stage 
     expect(onTurnTerminal).not.toHaveBeenCalled();
   });
 });
+
+
+describe("AIChatQueryEngine claim/resumeClaimed (Stage A3b, FR-010/024)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockCreateConversationIfNeeded.mockImplementation((id: string) => id);
+  });
+
+  async function parkPermission(
+    engine: AIChatQueryEngine,
+    listener?: AIChatTurnLifecycleListener
+  ): Promise<void> {
+    const outcome = await engine.runTurn({
+      request: { message: "needs approval", conversationId: "v2-R" },
+      eventSink: makeEventCollector().sink,
+      ...(listener ? { lifecycle: listener } : {}),
+    });
+    expect(outcome.type).toBe("paused_for_permission");
+  }
+
+  function parkedLoop(listener?: AIChatTurnLifecycleListener) {
+    return (input: AIChatQueryLoopInput) => {
+      // Continuation rounds (startRound > 0 — the resumed segment) complete.
+      if (input.startRound > 0) {
+        return Promise.resolve({
+          type: "completed" as const,
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          fullContent: "resumed done",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult);
+      }
+      return Promise.resolve({
+        type: "paused_for_permission" as const,
+        pending: {
+          conversationId: input.conversationId,
+          assistantMessageId: input.assistantMessageId,
+          conversationMessages: [],
+          abortController: new AbortController(),
+          request: input.request,
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "tool-r-1",
+          toolName: "send_email",
+          toolArguments: {},
+          eventSink: { emit: () => undefined },
+          ...(listener ? { lifecycle: listener } : {}),
+        },
+      });
+    };
+  }
+
+  it("claims are idempotent: duplicate and stale claims never re-execute", async () => {
+    const engine = createEngineWithFakeLoop(parkedLoop());
+    await parkPermission(engine);
+
+    const first = engine.claimPendingPermission("v2-R", "tool-r-1");
+    expect(first.status).toBe("claimed");
+    const duplicate = engine.claimPendingPermission("v2-R", "tool-r-1");
+    expect(duplicate.status).toBe("already_claimed");
+    const stale = engine.claimPendingPermission("v2-R", "tool-other");
+    expect(stale.status).toBe("not_found");
+
+    expect(engine.cancelClaimed("v2-R")).toBe(true);
+    expect(engine.cancelClaimed("v2-R")).toBe(false);
+  });
+
+  it("resumeClaimed returns the continuation outcome and fires onResumed once", async () => {
+    const listener = makeLifecycleListener();
+    const engine = createEngineWithFakeLoop(parkedLoop(listener));
+    await parkPermission(engine, listener);
+
+    const claim = engine.claimPendingPermission("v2-R", "tool-r-1");
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    vi.mocked(SkillExecutor.execute).mockResolvedValue({
+      tool_call_id: "tool-r-1",
+      tool_name: "send_email",
+      success: true,
+      result: { success: true },
+      execution_time_ms: 1,
+    });
+
+    const outcome = await engine.resumeClaimed(claim, {
+      lifecycle: listener,
+    });
+    expect(outcome).toMatchObject({ type: "completed", conversationId: "v2-R" });
+    expect(listener.resumed).toHaveLength(1);
+    expect(SkillExecutor.execute).toHaveBeenCalledTimes(1);
+    expect(engine.getConversationRuntimeStatus("v2-R")).toBe("idle");
+  });
+
+  it("resumeClaimed parks again when the tool still requires permission", async () => {
+    const engine = createEngineWithFakeLoop(parkedLoop());
+    await parkPermission(engine);
+    const claim = engine.claimPendingPermission("v2-R", "tool-r-1");
+    if (claim.status !== "claimed") throw new Error("claim failed");
+
+    vi.mocked(SkillExecutor.execute).mockResolvedValue({
+      tool_call_id: "tool-r-1",
+      tool_name: "send_email",
+      success: false,
+      result: { success: false, needsPermissionPrompt: true },
+      execution_time_ms: 1,
+    } as unknown as Awaited<ReturnType<typeof SkillExecutor.execute>>);
+
+    const outcome = await engine.resumeClaimed(claim);
+    expect(outcome.type).toBe("paused_for_permission");
+    expect(engine.getConversationRuntimeStatus("v2-R")).toBe(
+      "awaiting_permission"
+    );
+  });
+});
+
+function makeLifecycleListener(): AIChatTurnLifecycleListener & {
+  awaiting: unknown[];
+  resumed: Array<{ conversationId: string }>;
+} {
+  const awaiting: unknown[] = [];
+  const resumed: Array<{ conversationId: string }> = [];
+  return {
+    awaiting,
+    resumed,
+    onAwaiting: (event) => {
+      awaiting.push(event);
+    },
+    onResumed: (event) => {
+      resumed.push(event);
+    },
+  };
+}

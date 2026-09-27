@@ -34,6 +34,7 @@ import {
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import {
   setQueueTurnDispatcher,
+  setRunOwnerResumeRouter,
   sharedWorkspaceEventRouter,
 } from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
@@ -175,6 +176,12 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
     setQueueTurnDispatcher({
       dispatchQueuedTurn: (input) =>
         coordinatorInstance!.dispatchQueuedTurn(input),
+    });
+    // Stage A §3.5 (FR-024): resume routing for coordinator-owned runs.
+    setRunOwnerResumeRouter({
+      ownsConversation: (conversationId) =>
+        coordinatorInstance!.ownsConversation(conversationId),
+      resumeRun: (input) => coordinatorInstance!.resumeRun(input),
     });
   }
   return coordinatorInstance;

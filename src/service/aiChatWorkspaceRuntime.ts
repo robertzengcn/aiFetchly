@@ -51,3 +51,35 @@ export function setQueueTurnDispatcher(dispatcher: QueueTurnDispatcherHolder): v
 export function getQueueTurnDispatcher(): QueueTurnDispatcherHolder | null {
   return queueTurnDispatcher;
 }
+
+/**
+ * Stage A §3.5 (FR-024): lazy run-owner accessor for resume routing. The
+ * workspace IPC layer registers its coordinator here; ai-chat-v2-ipc.ts
+ * reads it in the permission-resume / plan-answer handlers without a static
+ * import cycle. Unregistered accessors fall back to the engine-internal
+ * (legacy) resume path.
+ */
+export interface RunOwnerResumeRouter {
+  ownsConversation(conversationId: string): boolean;
+  resumeRun(input: {
+    readonly conversationId: string;
+    readonly runId?: string;
+    readonly action:
+      | { readonly kind: "permission"; readonly toolId: string }
+      | {
+          readonly kind: "answer";
+          readonly questionId: string;
+          readonly answers: import("@/entityTypes/aiChatPlanTypes").AskUserQuestionAnswer[];
+        };
+  }): Promise<{ ok: boolean; error?: string }>;
+}
+
+let runOwnerResumeRouter: RunOwnerResumeRouter | null = null;
+
+export function setRunOwnerResumeRouter(router: RunOwnerResumeRouter): void {
+  runOwnerResumeRouter = router;
+}
+
+export function getRunOwnerResumeRouter(): RunOwnerResumeRouter | null {
+  return runOwnerResumeRouter;
+}

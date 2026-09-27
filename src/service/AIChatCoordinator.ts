@@ -4,7 +4,12 @@ import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
-import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
+import type {
+  AIChatPendingClaim,
+  AIChatQuerySubmitInput,
+} from "@/service/AIChatQueryEngine";
+import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import type {
   AIChatQueryEventSink,
   AIChatSegmentOutcome,
@@ -47,6 +52,23 @@ export interface CoordinatorEngine {
     readonly lifecycle?: AIChatTurnLifecycleListener;
     readonly ownerNotifiesTerminal?: boolean;
   }): Promise<AIChatSegmentOutcome>;
+  /** Stage A §3.5 (FR-010/024): owner-driven resume seam. */
+  claimPendingPermission(
+    conversationId: string,
+    toolId: string
+  ): AIChatPendingClaim;
+  claimPendingQuestion(
+    conversationId: string,
+    questionId: string
+  ): AIChatPendingClaim;
+  cancelClaimed(conversationId: string): boolean;
+  resumeClaimed(
+    claim: Extract<AIChatPendingClaim, { status: "claimed" }>,
+    options?: {
+      readonly eventSink?: AIChatQueryEventSink;
+      readonly lifecycle?: AIChatTurnLifecycleListener;
+    }
+  ): Promise<AIChatSegmentOutcome>;
   stopActiveTurn(conversationId?: string): void;
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus;
 }
@@ -121,6 +143,12 @@ interface LiveRunState {
     resolved: boolean;
     resolve(outcome: AIChatSegmentOutcome): void;
   };
+  /**
+   * Stage A §3.5 (FR-024): a claimed permission/plan-question resume waiting
+   * for (or holding) scheduler capacity. Its continuation runs inside
+   * executeDispatch, observed by this owner.
+   */
+  resumeClaim?: Extract<AIChatPendingClaim, { status: "claimed" }>;
 }
 
 const CLIENT_REQUEST_CACHE_MAX = 200;
@@ -346,6 +374,105 @@ export class AIChatCoordinator {
   }
 
   // -------------------------------------------------------------------------
+  // Resume through the run owner (Stage A §3.5)
+  // -------------------------------------------------------------------------
+
+  /** Whether this coordinator owns a live run for the conversation. */
+  ownsConversation(conversationId: string): boolean {
+    return this.liveRuns.has(conversationId);
+  }
+
+  /**
+   * Re-enter a paused run through its owner (FR-010/024): the pending action
+   * is claimed immediately (idempotently), the run shows queued while it
+   * waits for scheduler capacity, the lease is reacquired before any tool or
+   * model work, and the continuation's outcome is observed like any other
+   * segment — including another pause. Stop while queued for capacity cancels
+   * the claim and finalizes cancelled without starting the approved tool.
+   */
+  async resumeRun(input: {
+    readonly conversationId: string;
+    readonly runId?: string;
+    readonly action:
+      | { readonly kind: "permission"; readonly toolId: string }
+      | {
+          readonly kind: "answer";
+          readonly questionId: string;
+          readonly answers: AskUserQuestionAnswer[];
+        };
+  }): Promise<{ ok: boolean; error?: string }> {
+    const live = this.liveRuns.get(input.conversationId);
+    if (!live) {
+      return {
+        ok: false,
+        error: "No live run owns this conversation.",
+      };
+    }
+    if (input.runId && live.runId !== input.runId) {
+      return { ok: false, error: "Run mismatch for the pending action." };
+    }
+
+    // Persist the plan answer BEFORE claiming (existing semantics): a failed
+    // answer write leaves the pending action intact for a retry.
+    if (input.action.kind === "answer") {
+      try {
+        await new AIChatPlanModule().answerQuestion({
+          conversationId: input.conversationId,
+          questionId: input.action.questionId,
+          answers: input.action.answers,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    const claim =
+      input.action.kind === "permission"
+        ? this.deps.engine.claimPendingPermission(
+            input.conversationId,
+            input.action.toolId
+          )
+        : this.deps.engine.claimPendingQuestion(
+            input.conversationId,
+            input.action.questionId
+          );
+    if (claim.status === "already_claimed") {
+      return { ok: true }; // idempotent duplicate approval
+    }
+    if (claim.status === "not_found") {
+      return {
+        ok: false,
+        error: "No pending action for this run (stale or already consumed).",
+      };
+    }
+
+    live.status = "queued";
+    live.resumeClaim = claim;
+    live.cancelRequested = false;
+    try {
+      await this.deps.runModule.transition(live.runId, "queued");
+    } catch (err) {
+      console.warn(
+        "[ai-chat-workspace] resume queued transition failed for run",
+        live.runId,
+        err
+      );
+    }
+    this.deps.scheduler.submit({
+      runId: live.runId,
+      conversationId: input.conversationId,
+      owner: "interactive",
+      resourceClass: "general",
+    });
+    void this.broadcastRunSummary(input.conversationId, "run_queued");
+    this.pump();
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
   // Cancel
   // -------------------------------------------------------------------------
   /**
@@ -382,8 +509,19 @@ export class AIChatCoordinator {
 
     if (this.deps.scheduler.isQueued(live.runId)) {
       this.deps.scheduler.cancelQueued(live.runId);
+      // A claimed resume waiting for capacity is cancelled with its slot:
+      // the approved tool never starts (FR-024).
+      this.deps.engine.cancelClaimed(conversationId);
+      live.resumeClaim = undefined;
       await this.deps.runModule.transition(live.runId, "cancelled");
       this.finalizeAfterTerminal(conversationId, "cancelled");
+      this.deps.router.sendDetailEvent(
+        live.adapter.wrap({
+          eventType: "cancelled",
+          conversationId,
+          fullContent: "",
+        })
+      );
       // A cancelled queue-drained turn never dispatched: settle its outcome
       // so the queue stops waiting and holds its rows (FR-023).
       live.completion?.resolve({
@@ -401,11 +539,11 @@ export class AIChatCoordinator {
     }
 
     // Parked (paused) run: dispatch already returned, so the scheduler no
-    // longer tracks it. Ask the engine for the truth — it reports
-    // awaiting_permission/awaiting_user while a turn is parked on a
-    // permission card or plan question. stopActiveTurn emits `cancelled`
-    // through the parked sink, which settleDetachedTerminal settles durably
-    // (this is the deny-a-permission-prompt path).
+    // longer tracks it. The engine reports awaiting_permission/awaiting_user
+    // while a turn is parked on a permission card or plan question. This is
+    // the deny-a-permission-prompt / skip-a-question path: the owner
+    // finalizes cancelled directly (Stage A §3.5) — a claimed-but-undispatched
+    // resume is cancelled without ever starting the approved tool.
     const engineStatus =
       this.deps.engine.getConversationRuntimeStatus(conversationId);
     if (
@@ -413,19 +551,31 @@ export class AIChatCoordinator {
       engineStatus === "awaiting_user"
     ) {
       live.cancelRequested = true;
+      this.deps.engine.cancelClaimed(conversationId);
+      live.resumeClaim = undefined;
       this.deps.engine.stopActiveTurn(conversationId);
-      return { cancelled: true };
-    }
-
-    // Detached RUNNING turn (review fix): a permission grant / question
-    // answer resumed the engine turn AFTER executeDispatch returned, so the
-    // scheduler entry is already released — the isActive check above misses
-    // it and the resumed tool/model would be uncancellable. Route it through
-    // the same detached path; the engine's `cancelled` terminal settles via
-    // settleDetachedTerminal.
-    if (engineStatus === "running" && live.dispatchSettled) {
-      live.cancelRequested = true;
-      this.deps.engine.stopActiveTurn(conversationId);
+      try {
+        await this.deps.runModule.transition(live.runId, "cancelled");
+      } catch (err) {
+        console.warn(
+          "[ai-chat-workspace] parked-cancel transition failed for run",
+          live.runId,
+          err
+        );
+      }
+      this.finalizeAfterTerminal(conversationId, "cancelled");
+      this.deps.router.sendDetailEvent(
+        live.adapter.wrap({
+          eventType: "cancelled",
+          conversationId,
+          fullContent: "",
+        })
+      );
+      live.completion?.resolve({
+        type: "cancelled",
+        conversationId,
+        assistantMessageId: live.queueDispatch?.assistantMessageId ?? "",
+      });
       return { cancelled: true };
     }
 
@@ -500,6 +650,11 @@ export class AIChatCoordinator {
 
     // Visible to try AND catch (Stage A §3.4 queue-turn completion).
     const completion = live.completion;
+    // Reset per-segment state: a resumed segment reuses this live entry, so
+    // the previous park's settled/diagnostic flags must not leak into it.
+    live.dispatchSettled = false;
+    live.terminalChunk = null;
+    live.unclassifiedExitSummary = null;
     try {
       await this.deps.runModule.transition(runId, "running");
       live.status = "running";
@@ -508,29 +663,41 @@ export class AIChatCoordinator {
       // Stage A §3.5 (FR-005): the adapter lives in run context so resumed
       // segments continue the same monotonic sequence.
       const adapter = live.adapter;
+      const resumeClaim = live.resumeClaim;
+      live.resumeClaim = undefined;
       let outcome: AIChatSegmentOutcome;
       try {
         const lifecycle = this.createLifecycleListener(live);
         const eventSink = this.createRunSink(live, adapter);
-        outcome = live.queueDispatch
-          ? await this.deps.engine.submitPersistedUserMessage({
-              eventSink,
-              request: live.queueDispatch.request,
-              savedUser: live.queueDispatch.savedUser,
-              modelContent: live.queueDispatch.modelContent,
-              ...(live.queueDispatch.contentParts !== undefined
-                ? { contentParts: live.queueDispatch.contentParts }
-                : {}),
-              assistantMessageId: live.queueDispatch.assistantMessageId,
-              lifecycle,
-              ownerNotifiesTerminal: true,
-            })
-          : await this.deps.engine.runTurn({
-              request: this.buildEngineRequest(live),
-              eventSink,
-              lifecycle,
-              ownerNotifiesTerminal: true,
-            });
+        if (resumeClaim) {
+          // Stage A §3.5 (FR-024): the claimed continuation runs inside the
+          // dispatch — lease and capacity are already held at this point —
+          // and its outcome is observed, never fire-and-forget.
+          outcome = await this.deps.engine.resumeClaimed(resumeClaim, {
+            eventSink,
+            lifecycle,
+          });
+        } else if (live.queueDispatch) {
+          outcome = await this.deps.engine.submitPersistedUserMessage({
+            eventSink,
+            request: live.queueDispatch.request,
+            savedUser: live.queueDispatch.savedUser,
+            modelContent: live.queueDispatch.modelContent,
+            ...(live.queueDispatch.contentParts !== undefined
+              ? { contentParts: live.queueDispatch.contentParts }
+              : {}),
+            assistantMessageId: live.queueDispatch.assistantMessageId,
+            lifecycle,
+            ownerNotifiesTerminal: true,
+          });
+        } else {
+          outcome = await this.deps.engine.runTurn({
+            request: this.buildEngineRequest(live),
+            eventSink,
+            lifecycle,
+            ownerNotifiesTerminal: true,
+          });
+        }
       } catch (err) {
         // FR-022 / AC-17: a segment that ends without a classified outcome
         // (engine threw) is recorded as failed with a diagnostic — never
@@ -712,12 +879,15 @@ export class AIChatCoordinator {
         }
       }
       if (isTerminalChunk(chunk)) {
+        // Stage A §3.5: every resume continuation runs INSIDE a dispatch, so
+        // a terminal arriving while no dispatch is live is a late straggler
+        // (e.g. the engine's deny-stop emit racing an owner-finalized
+        // cancellation). Drop it with a diagnostic — never apply it.
         if (live.dispatchSettled) {
-          // Parked-turn terminal: dispatch already returned (the run paused
-          // on a permission card / plan question), so settle it detached —
-          // this is the permission-grant resume completing, or the deny-stop
-          // cancel.
-          void this.settleDetachedTerminal(live, adapter, chunk);
+          console.warn(
+            "[ai-chat-workspace] dropping terminal chunk outside a live dispatch",
+            { conversationId: live.conversationId, runId: live.runId }
+          );
           return;
         }
         live.terminalChunk = chunk; // routed after the durable transition
@@ -729,54 +899,6 @@ export class AIChatCoordinator {
       sendChunk: handleChunk,
       sendComplete: handleChunk,
     });
-  }
-
-  /**
-   * Settle a terminal chunk that arrived after executeDispatch returned —
-   * the paused-turn follow-up (resume completion or deny-stop cancel).
-   * Mirrors executeDispatch's terminal handling: durable transition first,
-   * then the terminal detail event, then finalize/broadcast.
-   */
-  private async settleDetachedTerminal(
-    live: LiveRunState,
-    adapter: AIChatRunEventAdapter,
-    chunk: ChatV2StreamChunk
-  ): Promise<void> {
-    // Guard against stragglers after the run already finalized (the live
-    // entry is removed there, so identity comparison detects it).
-    if (this.liveRuns.get(live.conversationId) !== live) return;
-    try {
-      const hint = AIChatRunEventAdapter.statusHintFor(chunk.eventType);
-      const finalStatus: ChatRunStatus =
-        hint ?? (live.cancelRequested ? "cancelled" : "completed");
-      const errorSummary =
-        chunk.eventType === "error" && chunk.errorMessage
-          ? chunk.errorMessage.slice(0, 500)
-          : null;
-      await this.deps.runModule.transition(live.runId, finalStatus, {
-        errorSummary,
-      });
-      if (
-        (finalStatus === "completed" || finalStatus === "cancelled") &&
-        chunk.fullContent
-      ) {
-        await this.deps.conversationModule.recordMessagePersisted({
-          conversationId: live.conversationId,
-          isResult: finalStatus === "completed",
-          previewText: chunk.fullContent,
-          timestamp: new Date(),
-        });
-      }
-      this.deps.router.sendDetailEvent(adapter.wrap(chunk));
-      this.finalizeAfterTerminal(live.conversationId, finalStatus);
-    } catch (err) {
-      console.error(
-        "[ai-chat-workspace] detached terminal settle failed for run",
-        live.runId,
-        err
-      );
-      this.finalizeAfterTerminal(live.conversationId, "failed");
-    }
   }
 
   /**
