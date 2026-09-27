@@ -233,7 +233,6 @@ export class EmailMarketingController {
       size,
       search
     );
-    const count = await this.emailServiceModule.countEmailServices();
     const listdata2: EmailServiceListdata[] = listdata.records.map((item) => {
       return {
         id: item.id,
@@ -246,7 +245,7 @@ export class EmailMarketingController {
     });
     return {
       records: listdata2,
-      num: count,
+      num: listdata.num,
     };
   }
   //get email service detail

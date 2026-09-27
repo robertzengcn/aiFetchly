@@ -168,8 +168,6 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     }
     FakeAPI.fetch(fetchitem).then(
         ({ data, total }) => {
-            console.log(data)
-            // console.log(total)
             //loop data
             if (!data) {
                 data = []
@@ -179,6 +177,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
             loading.value = false
         }).catch(function (error) {
             console.error(error);
+            loading.value = false
         })
 }
 // },
