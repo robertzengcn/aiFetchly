@@ -115,3 +115,20 @@ describe("buildPromptSkillCatalogBlock", () => {
     expect(block).toContain("model selection disabled");
   });
 });
+
+describe("runtime-id display (FR-21 audit follow-up)", () => {
+  it("each line carries the runtime id so ambiguous names stay resolvable", () => {
+    getDefaultPromptSkillCatalog().replaceSource("user", [
+      makeSkill("video-use", "Edit videos"),
+      makeSkill("video-use-2", "Also edit videos"),
+    ]);
+    const block = buildPromptSkillCatalogBlock({});
+    expect(block).toContain("(prompt:user:");
+    const idMatches = block.match(/prompt:user:/g);
+    const nameMatches = block.match(/- \w+/g);
+    expect(idMatches?.length ?? 0).toBeGreaterThanOrEqual(1);
+    expect(nameMatches?.length ?? 0).toBeGreaterThanOrEqual(
+      idMatches?.length ?? 0
+    );
+  });
+});

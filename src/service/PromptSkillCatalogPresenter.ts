@@ -74,7 +74,11 @@ function renderLine(
       ? ""
       : " (explicit user invocation only)"
     : " (model selection disabled)";
-  return `- ${skill.name} — ${description} [${skill.sourceLabel}${visibility}]`;
+  // FR-21 follow-up (audit): the header promises "by name or runtime id"
+  // but the line never showed the id — ambiguous-name resolution was
+  // impossible. Include it; the deterministic shortening path keeps the
+  // budget cap intact.
+  return `- ${skill.name} (${skill.runtimeId}) — ${description} [${skill.sourceLabel}${visibility}]`;
 }
 
 function estimate(text: string): number {
