@@ -273,10 +273,15 @@ export function describeBuiltInToolForSchedule(
     permissionCategory: skill.permissionCategory,
     source: "built-in",
     requiresConfirmation: skill.requiresConfirmation,
+    // Not pre-selectable: uncategorized built-ins have no reviewed risk tier, so
+    // they cannot be pre-approved into allowedTools. At runtime they do NOT fail
+    // closed — canAutoApproveScheduledTool pauses the run for an interactive
+    // permission card (with a 1h auto-deny backstop) so the user can review the
+    // unfamiliar tool. See the uncategorized fallback in canAutoApproveScheduledTool.
     schedulable: false,
     autoApproveAllowed: false,
     blockedReason:
-      "Only explicitly reviewed read-only, high-impact, or automation tools may run unattended in scheduled loops.",
+      "Not pre-curated for unattended auto-approval. If called during a scheduled run, it pauses for your permission (with a 1h auto-deny backstop) rather than auto-executing.",
     riskLevel: "blocked",
   };
 }

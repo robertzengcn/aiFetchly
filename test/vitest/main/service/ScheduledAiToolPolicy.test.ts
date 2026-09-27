@@ -103,7 +103,7 @@ describe("ScheduledAiToolPolicy describeBuiltInToolForSchedule", () => {
       skill("some_automation_tool", { permissionCategory: "automation" })
     );
     expect(summary.schedulable).toBe(false);
-    expect(summary.blockedReason).toMatch(/read-only/);
+    expect(summary.blockedReason).toMatch(/pauses for your permission/);
   });
 });
 
@@ -378,6 +378,9 @@ describe("ScheduledAiToolPolicy uncategorized built-in fallback", () => {
   it("uncategorized built-in with allowlist still pauses (not auto-approved)", () => {
     // Unlike high-impact tools, uncategorized tools have no allowlist path to
     // auto-approve; they always pause so the user reviews an unfamiliar tool.
+    // NOTE: this allowedTools state is unreachable via the validated creation UI
+    // (validateScheduledLoopAllowedTools rejects uncategorized names), so this
+    // test documents the policy invariant, not a production-reachable state.
     const decision = canAutoApproveScheduledTool({
       skill: skill("create_schedule"),
       taskPolicy: policy({ allowedTools: ["create_schedule"] }),
