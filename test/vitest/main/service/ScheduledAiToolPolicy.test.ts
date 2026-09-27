@@ -5,6 +5,8 @@ import {
   canAutoApproveScheduledTool,
   describeBuiltInToolForSchedule,
   hasScheduledLoopEmailInboxIntent,
+  isHighImpactSchedulableTool,
+  isSchedulableBuiltInTool,
   isScheduledReadOnlyTool,
   suggestScheduledLoopAutomationTools,
   validateScheduledLoopAllowedTools,
@@ -314,6 +316,89 @@ describe("ScheduledAiToolPolicy interactive permission outcome", () => {
     });
     expect(decision.allowed).toBe(true);
     expect(decision.requiresInteractivePermission).toBeFalsy();
+  });
+});
+
+describe("ScheduledAiToolPolicy draft_outbound_email_batch tier", () => {
+  it("draft_outbound_email_batch is a high-impact schedulable tool", () => {
+    expect(isHighImpactSchedulableTool("draft_outbound_email_batch")).toBe(
+      true
+    );
+    expect(isSchedulableBuiltInTool("draft_outbound_email_batch")).toBe(true);
+  });
+
+  it("draft_outbound_email_batch not in allowedTools pauses for permission", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("draft_outbound_email_batch"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "draft_outbound_email_batch",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+    expect(decision.riskLevel).toBe("high");
+  });
+
+  it("draft_outbound_email_batch in allowedTools auto-approves unattended", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("draft_outbound_email_batch"),
+      taskPolicy: policy({ allowedTools: ["draft_outbound_email_batch"] }),
+      toolName: "draft_outbound_email_batch",
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+  });
+
+  it("catalog advertises draft_outbound_email_batch as schedulable high-impact", () => {
+    const summary = describeBuiltInToolForSchedule(
+      skill("draft_outbound_email_batch")
+    );
+    expect(summary.schedulable).toBe(true);
+    expect(summary.riskLevel).toBe("high");
+  });
+});
+
+describe("ScheduledAiToolPolicy uncategorized built-in fallback", () => {
+  // A registered built-in tool that is NOT in any curated tier (read-only,
+  // high-impact, or automation) and not permanently blocked should pause the
+  // run for an interactive permission card instead of failing closed. The
+  // user can grant it at runtime via the permission card + 1h auto-deny
+  // backstop. Hallucinated/unregistered tool names still fail closed.
+  it("uncategorized registered built-in pauses for permission (no hard error)", () => {
+    // create_schedule is a real registered built-in not in any curated tier.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("create_schedule"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "create_schedule",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+    expect(decision.reason).toMatch(/Pausing the scheduled run/);
+  });
+
+  it("uncategorized built-in with allowlist still pauses (not auto-approved)", () => {
+    // Unlike high-impact tools, uncategorized tools have no allowlist path to
+    // auto-approve; they always pause so the user reviews an unfamiliar tool.
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("create_schedule"),
+      taskPolicy: policy({ allowedTools: ["create_schedule"] }),
+      toolName: "create_schedule",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBe(true);
+  });
+
+  it("hallucinated/unregistered tool name still fails closed", () => {
+    // No matching skill (skill === null) → "not available", NOT a pause.
+    // This is the defense against model-hallucinated tool names.
+    const decision = canAutoApproveScheduledTool({
+      skill: null,
+      taskPolicy: policy({ allowedTools: ["totally_made_up_tool"] }),
+      toolName: "totally_made_up_tool",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+    expect(decision.reason).toMatch(/not available/);
+    expect(decision.riskLevel).toBe("blocked");
   });
 });
 

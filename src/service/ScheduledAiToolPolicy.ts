@@ -11,8 +11,10 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
  * Security policy for tools exposed to unattended (scheduled-loop) AI turns.
  *
  * Unattended execution cannot show an interactive permission prompt, so the
- * allowlist must FAIL CLOSED. A tool is schedulable only when it appears in one
- * of the three tiers below AND is not in the permanent deny set.
+ * allowlist FAILS CLOSED for permanently-blocked and hallucinated/unregistered
+ * tool names. A registered built-in tool that is not in any curated tier PAUSES
+ * the run for an interactive permission card (with a 1h auto-deny backstop)
+ * instead of failing closed — the user can grant it at runtime.
  *
  * Three tiers of schedulable tools:
  *  - **Read-only**: AUTO-APPROVE whenever `autoApproveTools` is on. No per-tool
@@ -25,6 +27,10 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
  *    `autoApproveTools` AND membership in the task's `allowedTools`.
  *  - **Automation**: same runtime gating as high-impact; tier exists for risk
  *    labeling (network checks / side effects).
+ *
+ * A registered built-in not in any tier (e.g. a future tool not yet curated)
+ * is treated like a high-impact tool without allowlist membership: it pauses
+ * for interactive permission rather than killing the run.
  *
  * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
@@ -90,6 +96,7 @@ export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
   "send_email_reply",
   "start_email_send_task",
   "create_email_reply_draft",
+  "draft_outbound_email_batch",
   "get_email_message",
 ]);
 
@@ -438,9 +445,15 @@ export function canAutoApproveScheduledTool(params: {
     return { allowed: true, riskLevel: "low" };
   }
 
+  // Registered built-in tool that is not in any curated tier. Pause for an
+  // interactive permission card instead of failing closed — the user can grant
+  // the tool at runtime (the run parks, a permission card renders, and a 1h
+  // backstop auto-deny guards the pause). Hallucinated/unregistered tool names
+  // were already rejected above (skill === null returns "not available").
   return {
     allowed: false,
-    reason: `Tool "${toolName}" is not an approved tool for unattended scheduled execution.`,
+    requiresInteractivePermission: true,
+    reason: `Tool "${toolName}" is not pre-approved for unattended scheduled execution. Pausing the scheduled run to ask the user.`,
     riskLevel: "high",
   };
 }
