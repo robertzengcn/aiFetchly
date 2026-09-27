@@ -7,6 +7,8 @@ import type {
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type {
   ChatProviderClient,
+  ChatProviderIterationOptions,
+  ChatProviderStreamEvent,
   OpenAIChatCompletionStreamOptions,
 } from "./ChatProviderClient";
 import {
@@ -195,11 +197,17 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     return (await res.json()) as OpenAIChatCompletionResponse;
   }
 
-  async stream(
+  /**
+   * Stage B §5.1 (FR-001): native provider iteration for OpenAI-compatible
+   * endpoints. Chunks stream through the shared parser generator; the local
+   * path performs no transport retry, so every event is a chunk. Cancelling
+   * iteration aborts/cancels the underlying request via the parser's
+   * finally-cleanup.
+   */
+  async *streamEvents(
     request: OpenAIChatCompletionRequest,
-    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
-    options?: OpenAIChatCompletionStreamOptions
-  ): Promise<void> {
+    options?: ChatProviderIterationOptions
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const payload = buildStreamingPayload({
       ...request,
       model: request.model ?? this.config.defaultModel,
@@ -225,6 +233,26 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         model: payload.model,
       });
     }
-    await this.streamParser.consume(res, onChunk, options?.signal);
+    for await (const chunk of this.streamParser.parseBodyStream(
+      res,
+      options?.signal
+    )) {
+      yield { type: "chunk", chunk };
+    }
+  }
+
+  /** @deprecated Callback facade — consumes streamEvents() (one impl). */
+  async stream(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: OpenAIChatCompletionStreamOptions
+  ): Promise<void> {
+    for await (const event of this.streamEvents(request, {
+      signal: options?.signal,
+    })) {
+      if (event.type === "chunk") {
+        onChunk(event.chunk);
+      }
+    }
   }
 }

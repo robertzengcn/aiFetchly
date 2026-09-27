@@ -23,12 +23,32 @@ export class OpenAIStreamParser {
   /**
    * Consume a fetch `Response` body as an OpenAI SSE stream.
    * Resolves when the stream ends (or `[DONE]`); rejects on abort.
+   * Stage B §7 (FR-001): the callback consumer delegates to the native
+   * `parseBodyStream` generator — there is one parser implementation.
    */
   async consume(
     response: Response,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
     signal?: AbortSignal
   ): Promise<void> {
+    for await (const chunk of this.parseBodyStream(response, signal)) {
+      onChunk(chunk);
+    }
+  }
+
+  /**
+   * Stage B §7 (generator-streaming PRD FR-001): native incremental
+   * iteration of an OpenAI SSE body. Yields parsed chunks with fragmented
+   * content, tool-call arguments, reasoning fields, final usage-only frames,
+   * and supported finish reasons preserved; `[DONE]` terminates the stream
+   * (no later buffered payload becomes output). Early consumer close
+   * (`.return()`), abort, or failure cancels the owned body and releases the
+   * reader lock in `finally`.
+   */
+  async *parseBodyStream(
+    response: Response,
+    signal?: AbortSignal
+  ): AsyncGenerator<OpenAIChatCompletionChunk, void, void> {
     if (!response.body) {
       throw new Error("Provider response body is null.");
     }
@@ -40,6 +60,7 @@ export class OpenAIStreamParser {
     const decoder = new TextDecoder();
     let buffer = "";
     let readBytes = 0;
+    let completedNaturally = false;
 
     try {
       let streamActive = true;
@@ -109,10 +130,11 @@ export class OpenAIStreamParser {
           }
           const chunk = this.toChunk(parsed);
           if (chunk) {
-            onChunk(chunk);
+            yield chunk;
           }
         }
       }
+      completedNaturally = true;
 
       // Flush any trailing data line left in the buffer.
       const trailing = buffer.trim();
@@ -123,7 +145,7 @@ export class OpenAIStreamParser {
             const parsed: unknown = JSON.parse(payload);
             const chunk = this.toChunk(parsed);
             if (chunk) {
-              onChunk(chunk);
+              yield chunk;
             }
           } catch {
             // ignore trailing parse error
@@ -131,6 +153,15 @@ export class OpenAIStreamParser {
         }
       }
     } finally {
+      if (!completedNaturally) {
+        // Early close / abort / failure: cancel the owned body so the
+        // request is not left streaming unobserved (design §7).
+        try {
+          await reader.cancel().catch(() => undefined);
+        } catch {
+          // releaseLock below still runs.
+        }
+      }
       reader.releaseLock();
     }
   }
