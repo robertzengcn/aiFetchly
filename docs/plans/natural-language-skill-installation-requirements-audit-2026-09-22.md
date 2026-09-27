@@ -401,15 +401,15 @@ runner suites green.
   the documented GitHub runner-eviction infra issue — conclusively
   GitHub-side after three mitigation attempts: (a) heap headroom 3072,
   (b) swap + disk-cleanup (earlier), (c) pool pin ubuntu-latest →
-  ubuntu-22.04 (commit 1d0a70b5). Final evidence: 10 eviction
-  shutdown-signals ~2 minutes into the vite-build phase across BOTH pools,
-  while one pinned run survived the full 49-minute packaging and failed in
-  its end phase (logs expired before capture) — and macOS/Windows are
-  green on every single run of the identical pipeline, with the same
-  packaging completing repeatedly on local Linux. The failing-loud
-  ubuntu tracker stands until GitHub capacity normalizes; the third-OS DoD
-  proof is carried by the local Linux packaged run plus the green
-  Windows/macOS CI legs.
+  ubuntu-22.04 (commit 1d0a70b5). Final evidence: 12 eviction
+  shutdown-signals ~2 minutes into the vite-build phase across BOTH pools
+  (heads 1d0a70b5/f9e7c695 included), while one pinned run survived the
+  full 49-minute packaging and failed in its end phase (logs expired
+  before capture) — and macOS/Windows are green on every single run of
+  the identical pipeline, with the same packaging completing repeatedly on
+  local Linux. The failing-loud ubuntu tracker stands until GitHub
+  capacity normalizes; the third-OS DoD proof is carried by the local
+  Linux packaged run plus the green Windows/macOS CI legs.
 
 Incident note: during pre-existence verification a second `git stash pop`
 popped a FOREIGN stash (worktree-ai-chat-message-queue) into this tree.
