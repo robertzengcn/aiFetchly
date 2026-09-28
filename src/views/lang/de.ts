@@ -2017,6 +2017,9 @@ export default {
     ai_message_task_model: "KI-Modell",
     ai_message_task_model_hint:
       "'Auto' verwendet das Standardmodell des Servers. Wähle ein spezifisches Modell zum Überschreiben.",
+    ai_message_task_workspace_path: "Arbeitsbereichspfad",
+    ai_message_task_workspace_path_hint:
+      "Absoluter Ordner, den die geplante KI-Nachricht als Arbeitsbereich verwendet",
     ai_message_task_allowed_tools: "Erlaubte Werkzeuge",
     ai_message_task_allowed_tools_hint:
       "Wählen Sie integrierte Werkzeuge, die die KI bei unbeaufsichtigten Ausführungen verwenden darf",
@@ -2750,6 +2753,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    permission_requested_scheduled:
+      "Eine geplante Aufgabe fragt nach der Berechtigung, ein Tool zu verwenden. Überprüfen und genehmigen oder ablehnen.",
     auth_expired:
       "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
     quota_exhausted:

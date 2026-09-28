@@ -1921,6 +1921,9 @@ export default {
     ai_message_task_model: "AI模型",
     ai_message_task_model_hint:
       "“自动”使用服务器默认模型，可选择指定模型覆盖。",
+    ai_message_task_workspace_path: "工作区路径",
+    ai_message_task_workspace_path_hint:
+      "定时 AI 消息作为工作区使用的绝对文件夹路径",
     ai_message_task_allowed_tools: "允许的工具",
     ai_message_task_allowed_tools_hint:
       "选择AI在无人值守运行期间可以使用的内置工具",
@@ -2601,6 +2604,8 @@ export default {
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
+    permission_requested_scheduled:
+      "计划任务正在请求使用工具的权限。请审核并批准或拒绝。",
     auth_expired: "您的登录已过期，请重新登录。",
     quota_exhausted:
       "您的订阅计划中包含的 AI 代币已用尽。请充值以继续使用 AI 功能。",

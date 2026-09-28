@@ -53,6 +53,13 @@ describe("SkillRegistry", () => {
     test("should return true for search_maps_businesses", () => {
       expect(SkillRegistry.isRegistered("search_maps_businesses")).toBe(true);
     });
+
+    test("should return true for AI message task tools", () => {
+      expect(SkillRegistry.isRegistered("list_ai_message_tasks")).toBe(true);
+      expect(SkillRegistry.isRegistered("get_ai_message_task")).toBe(true);
+      expect(SkillRegistry.isRegistered("create_ai_message_task")).toBe(true);
+      expect(SkillRegistry.isRegistered("update_ai_message_task")).toBe(true);
+    });
   });
 
   describe("getSkill", () => {
@@ -88,6 +95,57 @@ describe("SkillRegistry", () => {
       expect(skill!.tier).toBe("main");
       expect(skill!.source).toBe("built-in");
     });
+
+    test("AI message task list is a confirmation-free pure lookup", () => {
+      const skill = SkillRegistry.getSkill("list_ai_message_tasks");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("automation");
+      expect(skill!.requiresConfirmation).toBe(false);
+      expect(skill!.tier).toBe("main");
+      expect(skill!.source).toBe("built-in");
+    });
+
+    test("AI message task get returns the full message without confirmation", () => {
+      const skill = SkillRegistry.getSkill("get_ai_message_task");
+      expect(skill).not.toBeNull();
+      expect(skill!.requiresConfirmation).toBe(false);
+      expect(skill!.description).toContain("full message");
+      expect(skill!.parameters).toMatchObject({
+        required: ["task_id"],
+      });
+    });
+
+    test("AI message task create requires confirmation", () => {
+      const skill = SkillRegistry.getSkill("create_ai_message_task");
+      expect(skill).not.toBeNull();
+      expect(skill!.permissionCategory).toBe("automation");
+      expect(skill!.requiresConfirmation).toBe(true);
+      expect(skill!.tier).toBe("main");
+      expect(skill!.source).toBe("built-in");
+    });
+
+    test("AI message task update requires confirmation and can edit the message", () => {
+      const skill = SkillRegistry.getSkill("update_ai_message_task");
+      expect(skill).not.toBeNull();
+      expect(skill!.requiresConfirmation).toBe(true);
+      expect(skill!.description).toContain("message_find");
+      const params = skill!.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      expect(params.required).toEqual(["task_id"]);
+      expect(params.properties).toHaveProperty("message");
+      expect(params.properties).toHaveProperty("message_find");
+      expect(params.properties).toHaveProperty("message_replace");
+      expect(params.properties).toHaveProperty("allowed_tools");
+    });
+
+    test("update_schedule directs message edits to the AI message task tools", () => {
+      const skill = SkillRegistry.getSkill("update_schedule");
+      expect(skill).not.toBeNull();
+      expect(skill!.description).toContain("get_ai_message_task");
+      expect(skill!.description).toContain("update_ai_message_task");
+    });
   });
 
   describe("getAllToolFunctions", () => {
@@ -109,6 +167,10 @@ describe("SkillRegistry", () => {
       expect(names).toContain("extract_contact_info");
       expect(names).toContain("search_maps_businesses");
       expect(names).toContain("conversation_tool_history");
+      expect(names).toContain("list_ai_message_tasks");
+      expect(names).toContain("get_ai_message_task");
+      expect(names).toContain("create_ai_message_task");
+      expect(names).toContain("update_ai_message_task");
     });
 
     test("should return ToolFunction with correct shape", async () => {
@@ -123,6 +185,23 @@ describe("SkillRegistry", () => {
       expect(searchTool!.description).toBeDefined();
       expect(searchTool!.parameters).toBeDefined();
       expect(typeof searchTool!.description).toBe("string");
+    });
+
+    test("schedule tools only allow the ai_message task type", async () => {
+      // AI-created schedules are restricted to ai_message tasks. The registry
+      // schema is what the model actually sees, so it must not advertise the
+      // legacy task types (search, buck_email, ...).
+      const tools = await SkillRegistry.getAllToolFunctions();
+
+      for (const toolName of ["create_schedule", "update_schedule"]) {
+        const tool = tools.find((t) => t.name === toolName);
+        expect(tool, `${toolName} should be registered`).toBeDefined();
+
+        const params = tool!.parameters as {
+          properties?: { task_type?: { enum?: string[] } };
+        };
+        expect(params.properties?.task_type?.enum).toEqual(["ai_message"]);
+      }
     });
   });
 

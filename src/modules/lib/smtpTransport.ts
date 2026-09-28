@@ -72,7 +72,13 @@ export function buildSmtpTransportOptions(
         smtpUsername: param.smtpUsername,
         from: param.from,
       }).smtpUsername,
-      pass: param.password,
+      // Pasted client-authorization codes (163/126/QQ, Gmail app passwords)
+      // often carry a trailing newline/space from copy-paste. The AUTH
+      // password is the only send-path value that was never normalized
+      // (username/from/replyTo all trim in the identity resolver), so one
+      // invisible byte caused 535 while the same code worked in other mail
+      // apps. Trim ends only — inner content is preserved byte-for-byte.
+      pass: param.password.trim(),
     },
   };
 }

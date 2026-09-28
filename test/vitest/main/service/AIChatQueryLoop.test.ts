@@ -249,6 +249,35 @@ describe("AIChatQueryLoop", () => {
       expect(calls?.[0].arguments).toEqual({ pattern: "*" });
     });
 
+    // Finding 6: the dedup is keyed on the RAW segment string, not the
+    // parsed object. Two calls that resolve to the same arguments but
+    // differ by whitespace are separate provider-issued calls and must be
+    // preserved — only exact byte-identical replays (the delta-replay
+    // artifact) are collapsed. If the model actually intended two
+    // identical calls, the agentic loop continues after salvage and the
+    // model can re-issue the second one once it sees the first result.
+    it("preserves whitespace-distinct variants of the same object (Finding 6)", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"} {"pattern": "*"}')
+      );
+      // Both segments parse to { pattern: "*" } but differ as raw strings
+      // (space after the colon), so both are kept as separate calls.
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ pattern: "*" });
+    });
+
+    it("collapses a mix of identical replays and distinct calls", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall(
+          '{"pattern":"*"}{"pattern":"*"}{"query":"x"}{"query":"x"}'
+        )
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ query: "x" });
+    });
+
     it("allows whitespace between concatenated segments", () => {
       const calls = splitConcatenatedToolCallArguments(
         malformedCall('{"a":1}  \n {"b":2}')
@@ -264,9 +293,7 @@ describe("AIChatQueryLoop", () => {
 
     it("returns null when any segment is not valid JSON", () => {
       expect(
-        splitConcatenatedToolCallArguments(
-          malformedCall('{"a":1}{invalid}')
-        )
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}{invalid}'))
       ).toBeNull();
     });
 
@@ -506,7 +533,9 @@ describe("AIChatQueryLoop", () => {
         conversationId: "v2-test",
         assistantMessageId: "a-1",
         messages: [],
-        request: { message: "Plan approved. Please begin executing the plan now." },
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
         openAITools: [tool("search")],
         abortController: new AbortController(),
         eventSink: { emit: vi.fn() },
@@ -535,10 +564,7 @@ describe("AIChatQueryLoop", () => {
             );
             return;
           }
-          if (
-            callCount <=
-            1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1
-          ) {
+          if (callCount <= 1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1) {
             onChunk(makeChunk("", "stop"));
             return;
           }
@@ -562,7 +588,9 @@ describe("AIChatQueryLoop", () => {
         conversationId: "v2-test",
         assistantMessageId: "a-1",
         messages: [],
-        request: { message: "Plan approved. Please begin executing the plan now." },
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
         openAITools: [tool("search")],
         abortController: new AbortController(),
         eventSink: {
@@ -638,9 +666,7 @@ describe("AIChatQueryLoop", () => {
       });
       expect(result.type).toBe("completed");
       if (result.type === "completed") {
-        expect(result.fullContent).toBe(
-          "Scraped 40 of 200 rows. Continuing."
-        );
+        expect(result.fullContent).toBe("Scraped 40 of 200 rows. Continuing.");
         expect(result.fullContent).not.toContain("/loop");
       }
       expect(fakeStream).toHaveBeenCalledTimes(3);
@@ -894,7 +920,6 @@ describe("AIChatQueryLoop", () => {
       ]);
     });
 
-
     it("retries when provider emits a tool-call marker as plain text", async () => {
       const events: Array<{ type: string; message?: string }> = [];
       let callCount = 0;
@@ -1000,15 +1025,21 @@ describe("AIChatQueryLoop", () => {
           onChunk(makeChunk("Done", "stop"));
         }
       );
-      const fakeExecute = vi.fn().mockImplementation(
-        async (toolName: string, args: Record<string, unknown>) => ({
-          tool_call_id: `text-call-${String(args.query)}`,
-          tool_name: toolName,
-          success: true,
-          result: { selected: args.query },
-          execution_time_ms: 1,
-        })
-      );
+      const fakeExecute = vi
+        .fn()
+        .mockImplementation(
+          async (toolName: string, args: Record<string, unknown>) => ({
+            tool_call_id: `text-call-${String(args.query)}`,
+            tool_name: toolName,
+            success: true,
+            result: { selected: args.query },
+            execution_time_ms: 1,
+          })
+        );
+      const toolResultEvents: Array<{
+        toolName?: string;
+        toolResult?: Record<string, unknown>;
+      }> = [];
       const loop = new AIChatQueryLoop({
         streamChatCompletion: fakeStream,
         executeTool: fakeExecute,
@@ -1025,7 +1056,16 @@ describe("AIChatQueryLoop", () => {
         },
         openAITools: [tool("tool_catalog_search")],
         abortController: new AbortController(),
-        eventSink: { emit: vi.fn() },
+        eventSink: {
+          emit: (event) => {
+            if (event.type === "tool_result") {
+              toolResultEvents.push({
+                toolName: event.toolName,
+                toolResult: event.toolResult,
+              });
+            }
+          },
+        },
         startRound: 0,
         isActiveTurn: () => true,
       });
@@ -1035,18 +1075,22 @@ describe("AIChatQueryLoop", () => {
         expect(result.fullContent).toBe("Done");
       }
       expect(fakeStream).toHaveBeenCalledTimes(2);
-      expect(fakeExecute).toHaveBeenNthCalledWith(
-        1,
-        "tool_catalog_search",
-        { query: "filesystem" },
-        expect.objectContaining({ toolCallId: expect.any(String) })
-      );
-      expect(fakeExecute).toHaveBeenNthCalledWith(
-        2,
-        "tool_catalog_search",
-        { query: "image" },
-        expect.objectContaining({ toolCallId: expect.any(String) })
-      );
+      // tool_catalog_search is a synthetic discovery tool intercepted locally
+      // by the loop (standard mode builds the catalog on-demand). It must NOT
+      // reach executeTool — under the real SkillExecutor it would return
+      // "Unknown tool". Both textual calls are intercepted in one round.
+      expect(fakeExecute).not.toHaveBeenCalled();
+      expect(toolResultEvents).toHaveLength(2);
+      expect(toolResultEvents[0]?.toolName).toBe("tool_catalog_search");
+      expect(toolResultEvents[1]?.toolName).toBe("tool_catalog_search");
+      // The parser normalizes `category` → `query` before the interception
+      // runs, so each search result reflects the query term.
+      expect(toolResultEvents[0]?.toolResult).toMatchObject({
+        query: "filesystem",
+      });
+      expect(toolResultEvents[1]?.toolResult).toMatchObject({
+        query: "image",
+      });
     });
 
     it("sends forced shell_execute tool_choice for first-round file deletion", async () => {

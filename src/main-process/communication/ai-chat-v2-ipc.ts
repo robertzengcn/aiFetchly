@@ -38,12 +38,14 @@ import {
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
 } from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+  AI_CHAT_V2_DENY_TOOL_PERMISSION,
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_HISTORY,
@@ -1044,7 +1046,7 @@ function handleStop(data?: unknown): void {
 // Resume handler: tool after permission
 // -------------------------------------------------------------------------
 
-async function handleResumeToolAfterPermission(
+export async function handleResumeToolAfterPermission(
   data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
   const chatAccess = await canUseChat();
@@ -1070,15 +1072,92 @@ async function handleResumeToolAfterPermission(
     return denied("toolId is required");
   }
 
+  const conversationId =
+    typeof parsed.conversationId === "string"
+      ? parsed.conversationId
+      : undefined;
+
+  // Scheduled-loop permission routing (Task 7): when a scheduled engine owns
+  // the paused turn for this conversation + toolId, route the grant directly
+  // to it instead of the interactive singleton engine. The scheduled engine
+  // parked the turn and is the only one that can resume it.
+  if (conversationId) {
+    const registry = ScheduledLoopEngineRegistry.getInstance();
+    const entry = registry.getByConversation(conversationId);
+    if (entry && registry.hasPendingPermission(conversationId, parsed.toolId)) {
+      const result = await entry.engine.resumeToolAfterPermission({
+        toolId: parsed.toolId,
+        conversationId,
+      });
+      entry.clearPermissionBackstop?.();
+      registry.clearPendingPermission(conversationId);
+      return ok(result);
+    }
+  }
+
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
-    conversationId:
-      typeof parsed.conversationId === "string"
-        ? parsed.conversationId
-        : undefined,
+    conversationId,
   });
   return ok(result);
+}
+
+/**
+ * Deny a paused tool permission (Task 7). When a scheduled-loop engine owns
+ * the paused turn, route the deny to it so it synthesizes a denied tool_result
+ * and continues the run. When no scheduled engine owns the permission, return
+ * `handled: false` so the renderer falls back to `stopChatV2Stream` (the
+ * interactive engine is stopped rather than resumed with a deny).
+ */
+export async function handleDenyToolPermission(
+  data: unknown
+): Promise<CommonMessage<{ ok: boolean; handled: boolean; error?: string }>> {
+  const chatAccess = await canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+
+  let parsed: { toolId?: unknown; conversationId?: unknown };
+  try {
+    parsed =
+      typeof data === "string"
+        ? ((data ? JSON.parse(data) : {}) as {
+            toolId?: unknown;
+            conversationId?: unknown;
+          })
+        : data && typeof data === "object"
+        ? (data as { toolId?: unknown; conversationId?: unknown })
+        : {};
+  } catch {
+    return denied("Invalid deny payload");
+  }
+  if (!parsed.toolId || typeof parsed.toolId !== "string") {
+    return denied("toolId is required");
+  }
+
+  const conversationId =
+    typeof parsed.conversationId === "string"
+      ? parsed.conversationId
+      : undefined;
+
+  if (conversationId) {
+    const registry = ScheduledLoopEngineRegistry.getInstance();
+    const entry = registry.getByConversation(conversationId);
+    if (entry && registry.hasPendingPermission(conversationId, parsed.toolId)) {
+      const result = await entry.engine.denyToolPermission({
+        toolId: parsed.toolId,
+        conversationId,
+      });
+      entry.clearPermissionBackstop?.();
+      registry.clearPendingPermission(conversationId);
+      return ok({ ok: result.ok, handled: true, error: result.error });
+    }
+  }
+
+  // No scheduled engine owns this permission — renderer falls back to
+  // stopChatV2Stream (interactive deny).
+  return ok({ ok: true, handled: false });
 }
 
 // -------------------------------------------------------------------------
@@ -1882,6 +1961,9 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
     async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_DENY_TOOL_PERMISSION, async (_e, data: unknown) =>
+    handleDenyToolPermission(data ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>

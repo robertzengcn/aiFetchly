@@ -1827,6 +1827,9 @@ export default {
     ai_message_task_model: "Modèle IA",
     ai_message_task_model_hint:
       "'Auto' utilise le modèle par défaut du serveur. Choisissez un modèle spécifique pour remplacer.",
+    ai_message_task_workspace_path: "Chemin de l'espace de travail",
+    ai_message_task_workspace_path_hint:
+      "Dossier absolu utilisé comme espace de travail par le message IA planifié",
     ai_message_task_allowed_tools: "Outils autorisés",
     ai_message_task_allowed_tools_hint:
       "Sélectionnez les outils intégrés que l'IA peut utiliser",
@@ -2741,6 +2744,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_requested_scheduled:
+      "Une tâche planifiée demande l'autorisation d'utiliser un outil. Examinez et approuvez ou refusez.",
     auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
     quota_exhausted:
       "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",

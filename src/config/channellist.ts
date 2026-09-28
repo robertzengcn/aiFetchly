@@ -337,6 +337,9 @@ export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
 /** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
 export const AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION =
   "ai-chat-v2:resume-tool-after-permission";
+/** Deny a V2 scheduled-loop tool call paused for permission (deny-and-continue). */
+export const AI_CHAT_V2_DENY_TOOL_PERMISSION =
+  "ai-chat-v2:deny-tool-permission";
 // Plan Mode channels
 export const AI_CHAT_V2_PLAN_STATE = "ai-chat-v2:plan-state";
 export const AI_CHAT_V2_ANSWER_QUESTION = "ai-chat-v2:answer-question";
@@ -392,8 +395,7 @@ export const AI_CHAT_V2_HISTORY_BROWSE = "ai-chat-v2:history-browse";
 export const AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS =
   "ai-chat-v2:history-resolve-selections";
 /** Renderer->Main: read whether the recoverable-history UI stage is enabled (design §18, stage 3). */
-export const AI_CHAT_V2_HISTORY_UI_ENABLED =
-  "ai-chat-v2:history-ui-enabled";
+export const AI_CHAT_V2_HISTORY_UI_ENABLED = "ai-chat-v2:history-ui-enabled";
 /** Renderer->Main: read the active compaction run status (§13.1). */
 export const AI_CHAT_V2_COMPACTION_STATUS = "ai-chat-v2:compaction-status";
 /** Renderer->Main: cancel the active compaction run (§13.1). */

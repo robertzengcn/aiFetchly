@@ -2032,6 +2032,9 @@ export default {
     ai_message_task_model: "AI Model",
     ai_message_task_model_hint:
       "'Auto' uses the server's default model. Choose a specific model to override.",
+    ai_message_task_workspace_path: "Workspace Path",
+    ai_message_task_workspace_path_hint:
+      "Absolute folder the scheduled AI message uses as its workspace",
     ai_message_task_allowed_tools: "Allowed Tools",
     ai_message_task_allowed_tools_hint:
       "Select built-in tools the AI can use during unattended runs",
@@ -2742,6 +2745,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    permission_requested_scheduled:
+      "A scheduled task is asking for permission to use a tool. Review and approve or deny it.",
     auth_expired: "Your session has expired. Please sign in again.",
     quota_exhausted:
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",

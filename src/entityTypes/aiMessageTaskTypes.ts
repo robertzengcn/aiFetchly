@@ -75,6 +75,8 @@ export interface CreateAiMessageTaskRequest {
   readonly maxToolCalls?: number;
   readonly maxRuntimeMs?: number;
   readonly maxContinueCalls?: number;
+  /** Absolute folder the scheduled AI message may read and write. */
+  readonly workspacePath?: string | null;
 }
 
 /** Update-task request payload from the frontend. */
@@ -92,6 +94,8 @@ export interface UpdateAiMessageTaskRequest {
   readonly maxRuntimeMs?: number;
   readonly maxContinueCalls?: number;
   readonly status?: AiMessageTaskStatus;
+  /** Absolute folder, or null to clear the scheduled workspace. */
+  readonly workspacePath?: string | null;
 }
 
 /** Summary of a schedulable built-in tool for the UI catalog. */
@@ -112,6 +116,11 @@ export interface ScheduledToolDecision {
   readonly allowed: boolean;
   readonly reason?: string;
   readonly riskLevel: "low" | "medium" | "high" | "blocked";
+  /** True when the tool is a gated high-impact/automation tool not in the
+   * task's allowedTools. The scheduled executor should synthesize a
+   * needsPermissionPrompt result and pause for the user instead of failing
+   * closed. Absent/undefined for permanently-blocked and auto-approved tools. */
+  readonly requiresInteractivePermission?: boolean;
 }
 
 /** Metadata for a blocked tool call stored in the run log. */

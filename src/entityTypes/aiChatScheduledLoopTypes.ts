@@ -155,11 +155,17 @@ export interface ChatV2ConversationUpdatedEvent {
   readonly reason:
     | "scheduled_turn_completed"
     | "scheduled_turn_failed"
-    | "scheduled_loop_state_changed";
+    | "scheduled_loop_state_changed"
+    | "scheduled_turn_permission_requested";
   readonly scheduleId: number;
   readonly runId?: number;
   readonly userMessageId?: string;
   readonly assistantMessageId?: string;
+  /** Present only when reason is "scheduled_turn_permission_requested":
+   * identifies the gated tool call that paused the run, so the renderer can
+   * surface which tool is awaiting approval. */
+  readonly toolCallId?: string;
+  readonly toolName?: string;
   readonly occurredAt: string;
 }
 

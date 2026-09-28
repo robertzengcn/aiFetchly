@@ -64,7 +64,9 @@ export const AI_CHAT_RECOVERY_DEFAULTS: AIChatRecoveryDefaults = {
   overloadFallbackThreshold: 3,
   persistentHeartbeatMs: 30_000,
   persistentHardCapMs: 6 * 60 * 60_000,
-  defaultContextWindowTokens: 128_000,
+  // Models without a server-reported context window default to 256k so
+  // long scheduled-loop turns are not rejected on a too-small guess.
+  defaultContextWindowTokens: 256_000,
   maxOutputTokensCap: 65_536,
 };
 

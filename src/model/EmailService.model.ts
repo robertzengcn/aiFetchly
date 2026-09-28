@@ -105,7 +105,13 @@ export class EmailServiceModel extends BaseDb {
     return entities;
   }
 
-  async countEmailServices(): Promise<number> {
+  async countEmailServices(search?: string): Promise<number> {
+    if (search) {
+      return await this.repository
+        .createQueryBuilder("service")
+        .where("service.name LIKE :search", { search: `%${search}%` })
+        .getCount();
+    }
     return await this.repository.count();
   }
 

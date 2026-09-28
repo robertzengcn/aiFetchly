@@ -52,6 +52,7 @@ import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -464,6 +465,38 @@ export class AIChatQueryEngine {
   }
 
   /**
+   * Shrink the active context before a dispatch that is already at or over
+   * the budget. Awaited so the same turn can rebuild and retry preflight.
+   */
+  private async compactBeforeDispatch(
+    conversationId: string,
+    model?: string
+  ): Promise<void> {
+    if (this.compactionCoordinator) {
+      await this.compactionCoordinator.requestCompactionForTurn(
+        conversationId,
+        { trigger: "reactive-overflow", model }
+      );
+      return;
+    }
+    if (this.compactAgent) {
+      // Pass the model's real context window as the prompt-token sentinel
+      // rather than Number.MAX_SAFE_INTEGER. The threshold in
+      // enqueueAutoCompact is 0.8 * contextWindow, so the window itself is
+      // always >= threshold and reliably trips compaction — and the value
+      // stored in lastPromptTokens stays a realistic finite count instead
+      // of poisoning the next turn's session-memory gate with 9e15.
+      const promptTokens = await this.resolveCompactionSentinel(model);
+      await this.compactAgent.enqueueAutoCompact({
+        conversationId,
+        reason: "budget-pressure",
+        promptTokens,
+        model,
+      });
+    }
+  }
+
+  /**
    * Reactive overflow compaction (AC-23, FR-07): after a budget-rejected turn,
    * shrink the active context through the same bounded coordinator every
    * other trigger uses. Without a coordinator, fall back to the compact
@@ -490,19 +523,26 @@ export class AIChatQueryEngine {
         );
       } else if (this.compactAgent) {
         const compactAgent = this.compactAgent;
-        Promise.resolve(
-          compactAgent.enqueueAutoCompact({
-            conversationId,
-            reason: "reactive-overflow",
-            promptTokens: Number.MAX_SAFE_INTEGER,
-            model,
-          })
-        ).catch((err: unknown) =>
-          console.error(
-            "[ai-chat-compact] reactive-overflow auto-compact failed:",
-            err
+        // Resolve the model's real context window as the prompt-token
+        // sentinel (see compactBeforeDispatch): it reliably exceeds the
+        // 0.8 * contextWindow threshold without storing 9e15 in
+        // lastPromptTokens. The async resolution happens inside the
+        // fire-and-forget chain so this method stays synchronous.
+        void this.resolveCompactionSentinel(model)
+          .then((promptTokens) =>
+            compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "reactive-overflow",
+              promptTokens,
+              model,
+            })
           )
-        );
+          .catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compact] reactive-overflow auto-compact failed:",
+              err
+            )
+          );
       }
     } catch (err) {
       console.error(
@@ -510,6 +550,35 @@ export class AIChatQueryEngine {
         err
       );
     }
+  }
+
+  /**
+   * Resolve a prompt-token sentinel for the reactive compaction fallback
+   * path (no coordinator). Returns the model's real context window — a
+   * finite, realistic value that provably meets/exceeds the compact
+   * agent's 0.8 * contextWindow threshold, so it reliably trips an
+   * auto-compact while keeping lastPromptTokens sane. Falls back to a
+   * conservative large window when the catalog lookup is unavailable
+   * (tests skip the live catalog fetch). Never throws.
+   */
+  private async resolveCompactionSentinel(model?: string): Promise<number> {
+    try {
+      const contextWindow = await this.modelCatalogService.getContextWindow(
+        model
+      );
+      if (contextWindow > 0) {
+        return contextWindow;
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] sentinel context-window lookup failed:",
+        err
+      );
+    }
+    // The catalog is unloaded/unavailable (e.g. VITEST skips the fetch).
+    // Use the recovery default (128k) — still finite and above the 8,192
+    // unknown-model threshold the compact agent falls back to.
+    return AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -801,6 +870,7 @@ export class AIChatQueryEngine {
     let assistantMessageId: string;
     let turnId: string;
     let messages: OpenAIChatMessage[];
+    let reassembleMessages: (() => Promise<OpenAIChatMessage[]>) | null = null;
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
     let sourceUserMessageId: string | undefined;
@@ -1105,6 +1175,21 @@ export class AIChatQueryEngine {
         ? scheduledContext.assistantMessageId
         : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       messages = [...assembled.messages];
+      const assembleInput = {
+        conversationId,
+        currentUserMessage: userMessageForModel,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: (isPlanMode ? "plan" : "chat") as "plan" | "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts,
+      };
+      reassembleMessages = async () => {
+        const again = await this.contextAssembler.assemble(assembleInput);
+        return [...again.messages];
+      };
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
@@ -1309,6 +1394,10 @@ export class AIChatQueryEngine {
         conversationId,
         isPlanMode
       ),
+      relieveBudgetPressure: async () => {
+        await this.compactBeforeDispatch(conversationId, request.model);
+        return reassembleMessages ? reassembleMessages() : null;
+      },
     };
 
     try {
@@ -1619,6 +1708,157 @@ export class AIChatQueryEngine {
             errorMessage: userSafeError(err),
           });
           this.clearConversationTurnState(matchedByToolId.conversationId);
+        });
+
+      return { ok: true };
+    } catch (err) {
+      this.clearActiveTurnState(conversationId);
+      return { ok: false, error: userSafeError(err) };
+    }
+  }
+
+  /**
+   * Deny a paused tool after the user declines permission (scheduled-loop
+   * deny-and-continue path). Unlike the interactive path (which stops the
+   * whole conversation on deny), this synthesizes a denied tool_result,
+   * pushes it to the conversation, and re-enters the loop from nextRound so
+   * the scheduled run can proceed WITHOUT the tool. The model receives a
+   * "permission denied" tool result and may continue with an alternate plan.
+   *
+   * Structural twin of {@link resumeToolAfterPermission} with three
+   * differences: (1) synthesizes a denied ToolExecutionResult instead of
+   * calling SkillExecutor.execute; (2) skips the isPermissionPromptResult
+   * re-check (a deny is terminal, the tool won't re-prompt); (3) skips the
+   * image-artifact handoff (a denied tool produces no artifacts).
+   */
+  async denyToolPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const convId = request.conversationId;
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== matchedByToolId.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
+
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
+      eventSink: matchedByToolId.eventSink,
+    });
+    const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(
+      module,
+      matchedByToolId.eventSink
+    );
+
+    try {
+      // Synthesize the denied tool result — do NOT re-execute the tool. The
+      // renderer's deny path (AiChatV2.vue handleSkillPermissionDeny) already
+      // expects a denied-message content, so we match that shape here.
+      const deniedPayload = {
+        success: false,
+        executionTimeMs: 0,
+        error: "Permission denied. The tool will not be executed.",
+      };
+      const toolContent = JSON.stringify(deniedPayload);
+      eventSink.emit({
+        type: "tool_result",
+        conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
+        fullContent: toolContent,
+        toolResult: deniedPayload,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+      });
+
+      matchedByToolId.conversationMessages.push({
+        role: "tool",
+        tool_call_id: matchedByToolId.toolCallId,
+        content: toolContent,
+      });
+
+      // Rebuild the deferred catalog (mirrors resumeToolAfterPermission).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: matchedByToolId.openAITools,
+        conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
+        autoPlanEnabled: false,
+        userMessage: matchedByToolId.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          matchedByToolId.conversationMessages
+        ),
+        model: matchedByToolId.request.model,
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
+      });
+
+      const loopInput: AIChatQueryLoopInput = {
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
+        eventSink,
+        skillRegistry: SkillRegistry,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: matchedByToolId.toolCatalogState,
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
+      };
+
+      void this.loop
+        .run(loopInput)
+        .then(async (result) => {
+          await this.handleLoopResult(result, module, eventSink);
+        })
+        .catch((err) => {
+          console.error("[ai-chat-v2] deny-resume loop failed:", err);
+          void redirectToLoginOnAuthExpired(err);
+          matchedByToolId.eventSink.emit({
+            type: "error",
+            conversationId,
+            messageId: matchedByToolId.assistantMessageId,
+            errorMessage: userSafeError(err),
+          });
+          this.clearConversationTurnState(conversationId);
         });
 
       return { ok: true };

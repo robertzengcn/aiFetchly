@@ -99,7 +99,7 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
 
   it("forwards the model and preflighted output cap through scheduled compaction", async () => {
     const { AIChatQueryEngineFactory } = await import("@/service/AIChatQueryEngineFactory");
-    const engine = new AIChatQueryEngineFactory().createScheduled({
+    const engine = await new AIChatQueryEngineFactory().createScheduled({
       allowedTools: [], autoApproveTools: false, allowSkills: false,
       allowMcp: false, allowSubagents: false, maxToolCalls: 1,
       maxRuntimeMs: 1_000, maxContinueCalls: 1,
@@ -144,7 +144,7 @@ describe("AIChat engine budget wiring (§8.5 mandatory preflight)", () => {
       "@/service/AIChatQueryEngineFactory"
     );
     const factory = new AIChatQueryEngineFactory();
-    const engine = factory.createScheduled({
+    const engine = await factory.createScheduled({
       allowedTools: [],
       autoApproveTools: false,
       allowSkills: false,

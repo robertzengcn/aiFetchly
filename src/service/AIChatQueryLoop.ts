@@ -99,6 +99,7 @@ import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
+  ToolCatalogRuntimeContext,
   ToolCatalogSearchArgs,
   ToolCatalogSearchResult,
   ToolCatalogStateSnapshot,
@@ -434,6 +435,77 @@ function estimateTokenUsage(
   };
 }
 
+const OLDER_TOOL_STUB_CHARS = 400;
+const LATEST_TOOL_RESULT_MAX_CHARS = 12_000;
+
+/**
+ * Drop older tool-call arguments and tool results down to stubs, and cap the
+ * newest tool result. Archive compaction keeps the in-progress turn, so a
+ * long tool loop (search, extract, send email) grows past the window inside
+ * one turn and must be shrunk in memory before the next model call.
+ */
+export function shrinkLiveTurnToolPayloads(
+  messages: OpenAIChatMessage[]
+): boolean {
+  let lastToolish = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const hasCalls =
+      Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    if (message.role === "tool" || hasCalls) lastToolish = i;
+  }
+  if (lastToolish < 0) return false;
+  let changed = false;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const hasCalls =
+      Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    if (message.role !== "tool" && !hasCalls) continue;
+    const cap =
+      i === lastToolish ? LATEST_TOOL_RESULT_MAX_CHARS : OLDER_TOOL_STUB_CHARS;
+    const stubbed = stubToolMessage(message, cap, i === lastToolish);
+    if (stubbed !== message) {
+      messages[i] = stubbed;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function stubToolMessage(
+  message: OpenAIChatMessage,
+  maxChars: number,
+  keepArguments: boolean
+): OpenAIChatMessage {
+  let next = message;
+  if (
+    typeof message.content === "string" &&
+    message.content.length > maxChars
+  ) {
+    next = {
+      ...next,
+      content:
+        message.content.slice(0, maxChars) +
+        "\n[omitted to fit the context window]",
+    };
+  }
+  if (!keepArguments && Array.isArray(message.tool_calls)) {
+    const calls = message.tool_calls.map((call) => {
+      const args = call.function.arguments;
+      if (args.length <= OLDER_TOOL_STUB_CHARS) return call;
+      return {
+        ...call,
+        function: { ...call.function, arguments: "{}" },
+      };
+    });
+    const changed = calls.some(
+      (call, index) => call !== message.tool_calls?.[index]
+    );
+    if (changed) next = { ...next, tool_calls: calls };
+  }
+  return next;
+}
+
 export function shouldForceSubmitPlanForApproval(message: string): boolean {
   const normalized = message.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return false;
@@ -535,10 +607,23 @@ export function parseTextToolCalls(
  * MAX_MALFORMED_ARGUMENT_RETRIES rounds until the turn failed with
  * "Arguments were not valid JSON". When the raw arguments decompose cleanly
  * into 2+ complete JSON objects (whitespace-only between them), split them
- * into individual tool calls and execute each one. Identical duplicate
- * segments (common when deltas are merged) are collapsed into a single
- * call. Returns null when the raw arguments are not cleanly splittable so
- * the normal malformed-argument retry path stays in place.
+ * into individual tool calls and execute each one.
+ *
+ * Identical-duplicate contract (Finding 6): segments whose raw JSON text is
+ * byte-identical are collapsed into a single call. This targets the
+ * delta-replay artifact, where a provider re-emits a complete chunk and the
+ * accumulated arguments end up containing the same object twice — e.g.
+ * `{"pattern":"*"}{"pattern":"*"}`. Collapsing is deliberate, not accidental:
+ * if the model genuinely intended two separate identical calls, the agentic
+ * loop continues after the salvaged calls execute (the caller sets
+ * willContinue = parsedCalls.length > 0), the model observes the first
+ * call's result, and it can re-issue the second call on the next round.
+ * Dedup is by raw-string identity (not parsed-object equality) so that
+ * whitespace-only variants of the same arguments are preserved as distinct
+ * calls — only exact replays are collapsed.
+ *
+ * Returns null when the raw arguments are not cleanly splittable so the
+ * normal malformed-argument retry path stays in place.
  */
 export function splitConcatenatedToolCallArguments(
   call: ParsedToolCallResult
@@ -585,6 +670,10 @@ export function splitConcatenatedToolCallArguments(
     segments.push(raw.slice(start, cursor));
   }
   if (segments.length < 2) return null;
+  // Collapse byte-identical segments (delta-replay artifact) — see the
+  // identical-duplicate contract in the function doc-comment. Distinct
+  // calls that merely resolve to the same parsed object are preserved;
+  // only exact raw-string replays are dropped.
   const seen = new Set<string>();
   const parsedSegments: Record<string, unknown>[] = [];
   for (const segment of segments) {
@@ -873,12 +962,30 @@ export class AIChatQueryLoop {
   /**
    * Build a ModelLimitResolver backed by the live AIChatModelCatalogService.
    * Call `ensureLoaded()` before the first preflight so provider rows are
-   * present. Unknown / unloaded models use the catalog's 128k fallback
+   * present. Unknown / unloaded models use the catalog's 256k fallback
    * (same as `getContextWindow()`), not the 8,192-token provisional —
    * an unloaded catalog is not evidence the selected model is small.
    */
   getDefaultModelLimitResolver(): ModelLimitResolver {
     return (model?: string) => this.modelCatalogService.resolveLimits(model);
+  }
+
+  /** Push the preflight input estimate to the context badge. */
+  private emitBudgetUsage(
+    input: AIChatQueryLoopInput,
+    model: string | undefined,
+    estimatedInputTokens: number
+  ): void {
+    if (estimatedInputTokens <= 0) return;
+    input.eventSink.emit({
+      type: "usage_update",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      model,
+      promptTokens: estimatedInputTokens,
+      completionTokens: 0,
+      totalTokens: estimatedInputTokens,
+    });
   }
 
   /**
@@ -933,6 +1040,48 @@ export class AIChatQueryLoop {
           "Tool catalog search failed. The system will continue with currently exposed tools.",
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+  }
+
+  /**
+   * Build a tool catalog on-demand from the live tool set. Used when the model
+   * calls `tool_catalog_search` in standard/auto mode (no pre-built catalog),
+   * which happens on scheduled runs whose small filtered tool profile rarely
+   * crosses the 10% deferred threshold. The system prompt advertises the
+   * discovery tool unconditionally, so the call must be servicable regardless
+   * of catalog mode — otherwise the call falls through to the skill executor
+   * and fails with "Unknown tool" (the discovery tool is synthetic, not a
+   * registered skill).
+   *
+   * Mirrors {@link AIChatQueryEngine.buildToolCatalogForTurn}'s context shape
+   * (minus model/contextWindow, which are optional and unused by the search
+   * service's ranking path). On build failure, returns an empty catalog so the
+   * caller emits a no-match payload rather than crashing the turn.
+   */
+  private buildCatalogOnDemand(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly currentUserMessage: string;
+  }): ToolCatalog {
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      isPlanMode: input.isPlanMode,
+      autoPlanEnabled: input.autoPlanEnabled,
+      currentUserMessage: input.currentUserMessage,
+      uploadedFileTypes: [],
+    };
+    try {
+      return this.catalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch {
+      return this.catalogService.buildFromOpenAITools({
+        tools: [],
+        context,
+      });
     }
   }
 
@@ -1109,6 +1258,18 @@ export class AIChatQueryLoop {
     let textToolCallMarkerRetryCount = 0;
     let executedToolRound = false;
     let emptyStopContinuations = 0;
+    // Per-runOnce nudge budget for goal text-stops (Finding 8). This counter
+    // is scoped to a single runOnce() invocation — it is NOT persisted across
+    // the separate run() calls that a permission resume, plan resume, or
+    // outer goal-turn driver triggers. The 3-nudge limit (MAX_GOAL_TEXT_STOP_
+    // CONTINUATIONS) therefore re-applies fresh on each resume. This is a
+    // deliberate trade-off: a productive tool round resets it (see the
+    // executedToolRound branch below), so a long goal doing real work is not
+    // unfairly capped by text-stops that preceded the progress. The cross-
+    // resume accumulation is bounded by the tool-round cap (maxToolRounds,
+    // default 30) and the round-cap continuation budget (maxRoundCapContinu-
+    // ations, default 200): a stalled goal still exhausts those and
+    // terminates. See docs/prd for the full reasoning.
     let goalTextStopContinuations = 0;
     let roundCapContinuations = 0;
     const maxToolRounds = input.maxToolRounds ?? CHAT_V2_MAX_TOOL_ROUNDS;
@@ -1127,6 +1288,14 @@ export class AIChatQueryLoop {
     // so the budget preflight and the provider dispatch always agree on the
     // same limits. Starts as the requested model; fallback updates it.
     let effectiveModel = input.request.model;
+    // Budget-pressure relief guard. Compaction may re-trigger on later tool
+    // rounds of the SAME turn (a scheduled-loop turn can run dozens of rounds
+    // and the live transcript keeps growing after the first relief), but is
+    // bounded by maxBudgetReliefAttemptsPerTurn so a summarize that won't
+    // shrink cannot loop forever. `reliefThisRound` is reset every round;
+    // `reliefAttemptsThisTurn` is the cumulative cap across the whole turn.
+    let reliefAttemptsThisTurn = 0;
+    let reliefThisRound = false;
 
     try {
       // Load provider context/output limits before the first preflight.
@@ -1188,15 +1357,18 @@ export class AIChatQueryLoop {
               maxAttempts: maxRoundCapContinuations,
               message: "Continuing after tool-round cap",
             });
-            console.log(
-              `[ai-chat-v2] auto-continue after ${maxToolRounds}-round cap; cycle ${roundCapContinuations}/${maxRoundCapContinuations}`
-            );
             // for-loop increment runs after continue, so -1 → 0 next cycle.
             round = -1;
             continue;
           }
           break;
         }
+
+        // Reset the per-round relief gate. A long scheduled-loop turn runs
+        // many rounds in one runOnce; compaction may need to re-trigger as
+        // later tool results push pressure back up (see reliefAttemptsThisTurn
+        // cap above for the cumulative bound).
+        reliefThisRound = false;
 
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
@@ -1273,13 +1445,73 @@ export class AIChatQueryLoop {
             limits.outputLimit,
             maxFitOutput
           );
-          const budget = this.budgetService.preflight({
+          let budget = this.budgetService.preflight({
             messages,
             tools: hasExposedTools ? exposedTools : [],
             model: effectiveModel,
             outputReserve,
             modelLimitResolver: resolver,
           });
+          // The header badge only moves on usage_update. A rejected preflight
+          // never reaches the provider, so report the budget estimate first
+          // or the meter stays at 0% while the request is already over the
+          // window.
+          this.emitBudgetUsage(
+            input,
+            effectiveModel,
+            budget.estimatedInputTokens
+          );
+          const underPressure = !budget.ok || budget.needsCompaction;
+          if (
+            underPressure &&
+            !reliefThisRound &&
+            reliefAttemptsThisTurn <
+              AI_CHAT_RECOVERABLE_DEFAULTS.maxBudgetReliefAttemptsPerTurn &&
+            input.relieveBudgetPressure
+          ) {
+            reliefThisRound = true;
+            reliefAttemptsThisTurn += 1;
+            try {
+              const rebuilt = await input.relieveBudgetPressure();
+              if (rebuilt && rebuilt.length > 0) {
+                messages.splice(0, messages.length, ...rebuilt);
+                budget = this.budgetService.preflight({
+                  messages,
+                  tools: hasExposedTools ? exposedTools : [],
+                  model: effectiveModel,
+                  outputReserve,
+                  modelLimitResolver: resolver,
+                });
+                this.emitBudgetUsage(
+                  input,
+                  effectiveModel,
+                  budget.estimatedInputTokens
+                );
+              }
+            } catch (compactErr) {
+              console.error(
+                "[ai-chat-v2] budget-pressure compact failed:",
+                compactErr
+              );
+            }
+          }
+          // The live turn's tool payloads are retained by compaction. When
+          // they are what pushed the request over the window, stub the older
+          // ones in this message list and retry preflight once.
+          if (!budget.ok && shrinkLiveTurnToolPayloads(messages)) {
+            budget = this.budgetService.preflight({
+              messages,
+              tools: hasExposedTools ? exposedTools : [],
+              model: effectiveModel,
+              outputReserve,
+              modelLimitResolver: resolver,
+            });
+            this.emitBudgetUsage(
+              input,
+              effectiveModel,
+              budget.estimatedInputTokens
+            );
+          }
           if (!budget.ok) {
             throw new RecoverableHistoryError(
               budget.errorCode ?? "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
@@ -1311,8 +1543,8 @@ export class AIChatQueryLoop {
             reasoning: input.request.reasoning
               ? input.request.reasoning
               : input.request.showReasoning
-                ? { enabled: true, summary: "auto" }
-                : undefined,
+              ? { enabled: true, summary: "auto" }
+              : undefined,
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
@@ -1746,6 +1978,10 @@ export class AIChatQueryLoop {
             executedToolRound &&
             lastFailedTool === null &&
             accumulator.state.fullContent.trim().length > 0;
+          // The nudge budget is per-runOnce; a separate run() (permission/
+          // plan resume, or the outer goal-turn driver) gets a fresh budget
+          // (see the declaration above). This is intentional and bounded by
+          // the tool-round + round-cap limits.
           if (
             goalTextStop &&
             goalTextStopContinuations < MAX_GOAL_TEXT_STOP_CONTINUATIONS &&
@@ -1904,15 +2140,32 @@ export class AIChatQueryLoop {
             await eventSink.flush?.();
           };
 
-          // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
-          if (
-            catalogActive &&
-            catalog &&
-            call.name === TOOL_CATALOG_SEARCH_TOOL_NAME
-          ) {
+          // Tool-catalog discovery: intercept the discovery tool locally so it
+          // never reaches the skill executor (it is a synthetic tool, not a
+          // registered skill — `SkillExecutor.execute` would return "Unknown
+          // tool" for it). Two modes share this path:
+          //   - Deferred mode (FR-3, FR-9): the catalog was pre-built for the
+          //     turn and the discovery tool was injected into the exposed set.
+          //   - Standard/auto mode with a small tool set (e.g. scheduled runs
+          //     whose filtered profile rarely crosses the 10% deferred
+          //     threshold): the system prompt still advertises the discovery
+          //     tool, so the model may call it even though no catalog was
+          //     built. Build one on-demand from the live tool set so the search
+          //     service has entries to rank. Without this, scheduled runs that
+          //     call `tool_catalog_search` fail with "Unknown tool".
+          if (call.name === TOOL_CATALOG_SEARCH_TOOL_NAME) {
+            const effectiveCatalog =
+              catalog ??
+              this.buildCatalogOnDemand({
+                tools: currentTools,
+                conversationId: input.conversationId,
+                isPlanMode: Boolean(planContext),
+                autoPlanEnabled: Boolean(input.autoPlan),
+                currentUserMessage: input.request.message,
+              });
             const searchPayload = this.runCatalogSearch({
               args: (call.arguments ?? {}) as ToolCatalogSearchArgs,
-              catalog,
+              catalog: effectiveCatalog,
               discoveredToolNames,
               conversationId: input.conversationId,
               isPlanMode: Boolean(planContext),

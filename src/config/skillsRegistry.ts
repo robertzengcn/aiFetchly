@@ -11,8 +11,15 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
-import type { SkillDefinition, SkillExecutionResult, SkillManifest } from "@/entityTypes/skillTypes";
-import { isArchiveReadsEnabled, isHistoryToolsEnabled } from "@/config/featureFlags";
+import type {
+  SkillDefinition,
+  SkillExecutionResult,
+  SkillManifest,
+} from "@/entityTypes/skillTypes";
+import {
+  isArchiveReadsEnabled,
+  isHistoryToolsEnabled,
+} from "@/config/featureFlags";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -24,6 +31,11 @@ import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerServi
 import { executeShellCommand } from "@/service/ShellToolService";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
 import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
+import { ZodError } from "zod";
+import {
+  bulkEmailTaskInputSchema,
+  EmailMarketingDirectEmailInput,
+} from "@/entityTypes/emailMarketingAiTypes";
 import {
   getEmailServiceConfig,
   getEmailSearchTaskEmails,
@@ -57,6 +69,12 @@ import {
   resumeScheduleForAi,
   runScheduleNowForAi,
 } from "@/service/ScheduleAiTools";
+import {
+  createAiMessageTaskForAi,
+  getAiMessageTaskForAi,
+  listAiMessageTasksForAi,
+  updateAiMessageTaskForAi,
+} from "@/service/AiMessageTaskAiTools";
 import {
   listProxiesForAi,
   getProxyForAi,
@@ -1174,13 +1192,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         before: {
           type: "string",
-          description:
-            "Only matches before this ISO datetime (exclusive).",
+          description: "Only matches before this ISO datetime (exclusive).",
         },
         after: {
           type: "string",
-          description:
-            "Only matches after this ISO datetime (exclusive).",
+          description: "Only matches after this ISO datetime (exclusive).",
         },
         types: {
           type: "array",
@@ -1837,6 +1853,53 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     execute: async (args, context) => {
+      // Validate untrusted AI arguments at the boundary with the same Zod
+      // schema used by previewBulkEmailSendTask / startBulkEmailSendTask.
+      // The model occasionally emits `emails` (or other array fields) as a
+      // non-array value; reading it via an `as` cast without parsing lets
+      // `(input.emails ?? []).map` crash with ".map is not a function" before
+      // any business logic runs. Parsing produces typed, array-shaped data and
+      // surfaces a clear validation_errors payload instead of a TypeError.
+      let input: {
+        email_search_task_id?: number;
+        emails?: EmailMarketingDirectEmailInput[];
+        template_ids?: number[];
+        email_subject?: string;
+        email_html_content?: string;
+        service_ids: number[];
+        not_duplicate: boolean;
+      };
+      try {
+        input = bulkEmailTaskInputSchema.parse(args);
+      } catch (error) {
+        if (error instanceof ZodError) {
+          return {
+            success: false,
+            result: {
+              success: false,
+              error: "Invalid email marketing tool input",
+              validation_errors: error.issues.map((issue) => issue.message),
+            },
+          };
+        }
+        // Unreachable with the current schema (.parse only throws ZodError),
+        // but if a future .transform throws a non-Zod error, do NOT surface
+        // its raw message to the model — it could leak internal path/DB
+        // details. Log server-side, return a generic sanitized message.
+        console.error(
+          "draft_outbound_email_batch: non-Zod parse error for conversation",
+          context.conversationId,
+          error
+        );
+        return {
+          success: false,
+          result: {
+            success: false,
+            error: "Invalid email marketing tool input",
+          },
+        };
+      }
+
       // Resolve the DB path from the Token service, matching the outbound
       // IPC layer (outboundEmailDelivery-ipc.ts). Passing no dbpath would
       // make OutboundEmailDraftModel fall back to the os.tmpdir() test
@@ -1850,18 +1913,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         "@/service/EmailMarketingAiTools"
       );
       const resolved = await resolveBulkRecipients({
-        email_search_task_id: (args as { email_search_task_id?: number })
-          .email_search_task_id,
-        emails: (args as { emails?: unknown[] }).emails as never[] | undefined,
-        not_duplicate:
-          (args as { not_duplicate?: boolean }).not_duplicate ?? true,
+        email_search_task_id: input.email_search_task_id,
+        emails: input.emails,
+        not_duplicate: input.not_duplicate,
       });
       // Sender is resolved from the selected SMTP service inside generateBatch
       // (AD-005/AD-006). Coerce service_ids so a single id or numeric strings
       // still bind a real From address instead of storing an empty sender.
-      const serviceIds = normalizeEmailServiceIds(
-        (args as { service_ids?: unknown }).service_ids
-      );
+      const serviceIds = normalizeEmailServiceIds(input.service_ids);
       const result = await service.generateBatch({
         conversationId: context.conversationId,
         sourceUserMessageId: context.sourceUserMessageId ?? "",
@@ -1870,15 +1929,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         recipients: resolved.recipients,
         serviceIds,
         senderAddress: "",
-        subject: (args as { email_subject?: string }).email_subject ?? "",
+        subject: input.email_subject ?? "",
         // The model supplies an HTML body; store it as `bodyHtml` and derive a
         // plain-text fallback so markup never leaks into the text body at send
         // time (and multipart mail carries both parts, not escaped tags).
-        bodyHtml:
-          (args as { email_html_content?: string }).email_html_content ?? null,
-        bodyText: htmlToPlainText(
-          (args as { email_html_content?: string }).email_html_content ?? ""
-        ),
+        bodyHtml: input.email_html_content ?? null,
+        bodyText: htmlToPlainText(input.email_html_content ?? ""),
       });
       return {
         success: result.success,
@@ -2881,7 +2937,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_schedule",
     description:
-      "Create a new automation schedule for an existing task. The schedule defaults to inactive (is_active: false) for safety. Supported task types: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.",
+      'Create a new automation schedule for an existing AI message task. task_type must be "ai_message" (the only allowed value) and task_id must reference an existing AI message task — call list_ai_message_tasks to find one, or create_ai_message_task to create a new one first, then pass the returned task_id here. The schedule defaults to inactive (is_active: false) for safety. Requires a valid cron expression. This action requires user confirmation because it can trigger future automation.',
     parameters: {
       type: "object",
       properties: {
@@ -2895,19 +2951,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         task_type: {
           type: "string",
-          enum: [
-            "search",
-            "email_extract",
-            "buck_email",
-            "yellow_pages",
-            "google_maps",
-            "yandex_maps",
-          ],
-          description: "Type of task this schedule manages",
+          enum: ["ai_message"],
+          description:
+            'Type of task this schedule manages. Only "ai_message" is allowed — AI-created schedules cannot manage other task types.',
         },
         task_id: {
           type: "number",
-          description: "ID of the existing task",
+          description: "ID of the existing AI message task",
         },
         cron_expression: {
           type: "string",
@@ -2940,6 +2990,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description: "Delay in minutes (0-1440)",
           default: 0,
         },
+        workspace_path: {
+          type: "string",
+          description:
+            "Absolute folder the scheduled AI message may use as its approved workspace. Only valid when task_type is ai_message.",
+        },
       },
       required: ["name", "task_type", "task_id", "cron_expression"],
     },
@@ -2958,7 +3013,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "update_schedule",
     description:
-      "Update an existing schedule. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.",
+      'Update schedule metadata only (name, cron, description, active state, task reference, workspace). To change the instruction text or allowed tools the schedule runs, call get_ai_message_task then update_ai_message_task — this tool cannot edit that message. Only provided fields are changed. If task_type or task_id changes, the new task reference is validated and task_type must be "ai_message" (the only allowed value). For ai_message tasks, workspace_path sets (or null clears) the absolute folder the scheduled run uses as its approved workspace. If cron or activation state changes, the runtime scheduler is synchronized. This action requires user confirmation.',
     parameters: {
       type: "object",
       properties: {
@@ -2976,15 +3031,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         task_type: {
           type: "string",
-          enum: [
-            "search",
-            "email_extract",
-            "buck_email",
-            "yellow_pages",
-            "google_maps",
-            "yandex_maps",
-          ],
-          description: "New task type",
+          enum: ["ai_message"],
+          description:
+            'New task type. Only "ai_message" is allowed — the schedule cannot be reassigned to another task type.',
         },
         task_id: {
           type: "number",
@@ -3015,6 +3064,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         delay_minutes: {
           type: "number",
           description: "New delay in minutes (0-1440)",
+        },
+        workspace_path: {
+          type: ["string", "null"],
+          description:
+            "Absolute folder for an ai_message schedule, or null to clear it. The path must exist and be a directory.",
         },
       },
       required: ["schedule_id"],
@@ -3112,7 +3166,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "run_schedule_now",
     description:
-      "Execute an active schedule immediately instead of waiting for the next cron trigger. Uses the existing execution logging and task execution pipeline. The schedule must be active. This action requires user confirmation.",
+      "Start an active schedule immediately instead of waiting for the next cron trigger. Returns after the run is queued; the task keeps running in the background and is recorded in the execution log. The schedule must be active. This action requires user confirmation.",
     parameters: {
       type: "object",
       properties: {
@@ -3129,6 +3183,235 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await runScheduleNowForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "list_ai_message_tasks",
+    description:
+      "List existing AI message tasks (the reusable prompt definitions that schedules run). Returns id, name, a truncated message preview, model, tool policy, status, and last-run info. Call get_ai_message_task for the full message, then update_ai_message_task to change it. Use this to find the task_id that create_schedule requires.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Page number (0-based)",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size (1-100)",
+          default: 20,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listAiMessageTasksForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_ai_message_task",
+    description:
+      'Create a new AI message task — a reusable natural-language prompt with an optional tool policy that schedules execute. Returns the new task_id. Workflow: call this first (or reuse an existing task via list_ai_message_tasks), then call create_schedule with task_type "ai_message" and the returned task_id. To edit an existing task message, use update_ai_message_task instead of creating a duplicate. Set auto_approve_tools=true together with allowed_tools when the scheduled run must use tools unattended. This action requires user confirmation.',
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Short task name (1-255 chars)",
+        },
+        message: {
+          type: "string",
+          description:
+            "The natural-language prompt the AI executes on every scheduled run. Write it as a complete, self-contained instruction.",
+        },
+        description: {
+          type: "string",
+          description: "Optional longer description of what this task does",
+        },
+        system_prompt: {
+          type: "string",
+          description: "Optional system prompt override",
+        },
+        model: {
+          type: "string",
+          description: "Optional model name (default: app-configured model)",
+        },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional explicit allowlist of schedulable built-in tools (e.g. file_write, start_email_send_task) the task may use unattended. Read-only tools (file_read, list_*, get_*) never need listing. Only useful when auto_approve_tools is true.",
+        },
+        auto_approve_tools: {
+          type: "boolean",
+          description:
+            "Allow the task to call approved tools without a human in the loop. Required for scheduled runs to use any tool unattended.",
+          default: false,
+        },
+        max_tool_calls: {
+          type: "number",
+          description: "Max tool calls per run (1-50)",
+          default: 10,
+        },
+        max_runtime_ms: {
+          type: "number",
+          description: "Max runtime per run in milliseconds (1000-3600000)",
+          default: 300000,
+        },
+        max_continue_calls: {
+          type: "number",
+          description: "Max continue/round trips per run (0-50)",
+          default: 10,
+        },
+        workspace_path: {
+          type: "string",
+          description:
+            "Optional absolute folder this task uses as its approved workspace when a schedule runs it.",
+        },
+      },
+      required: ["name", "message"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createAiMessageTaskForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_ai_message_task",
+    description:
+      "Read one AI message task by id, including the full message body a schedule runs. list_ai_message_tasks only returns a truncated preview. Call this before update_ai_message_task when changing that instruction text.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "AI message task ID",
+        },
+      },
+      required: ["task_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getAiMessageTaskForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "update_ai_message_task",
+    description:
+      "Edit the instruction text, allowed tools, or settings of the AI message task a schedule runs. Every schedule using this task_id gets the new message. update_schedule cannot change this message. Use message_find and message_replace (an exact substring from get_ai_message_task) for a surgical edit, or pass message to replace the whole prompt. Set auto_approve_tools true together with allowed_tools when the unattended run must use those tools. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: {
+          type: "number",
+          description: "AI message task ID to update",
+        },
+        name: {
+          type: "string",
+          description: "New task name (1-255 chars)",
+        },
+        message: {
+          type: "string",
+          description:
+            "Replace the entire prompt. Do not combine with message_find/message_replace.",
+        },
+        message_find: {
+          type: "string",
+          description:
+            "Exact substring of the current message to replace. Copy it from get_ai_message_task. Must be used with message_replace.",
+        },
+        message_replace: {
+          type: "string",
+          description:
+            "Replacement text for message_find. An empty string deletes the matched text.",
+        },
+        replace_all: {
+          type: "boolean",
+          description:
+            "Replace every occurrence of message_find. When false (default) and the text appears more than once, the update is rejected.",
+          default: false,
+        },
+        description: {
+          type: "string",
+          description: "New task description",
+        },
+        system_prompt: {
+          type: "string",
+          description: "New system prompt",
+        },
+        model: {
+          type: "string",
+          description: "New model name",
+        },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Replacement allowlist of schedulable built-in tools the task may use unattended. Read-only tools never need listing. Tools that are not schedulable (including most scraping tools) are rejected.",
+        },
+        auto_approve_tools: {
+          type: "boolean",
+          description:
+            "Allow the task to call approved tools without a human in the loop.",
+        },
+        max_tool_calls: {
+          type: "number",
+          description: "Max tool calls per run (1-50)",
+        },
+        max_runtime_ms: {
+          type: "number",
+          description: "Max runtime per run in milliseconds (1000-3600000)",
+        },
+        max_continue_calls: {
+          type: "number",
+          description: "Max continue/round trips per run (0-50)",
+        },
+        workspace_path: {
+          type: ["string", "null"],
+          description:
+            "Absolute folder this task uses as its approved workspace, or null to clear it.",
+        },
+        status: {
+          type: "string",
+          enum: ["active", "inactive"],
+          description: "Task status",
+        },
+      },
+      required: ["task_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await updateAiMessageTaskForAi(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

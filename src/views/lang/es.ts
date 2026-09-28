@@ -2026,6 +2026,9 @@ export default {
     ai_message_task_model: "Modelo IA",
     ai_message_task_model_hint:
       "'Automático' usa el modelo predeterminado del servidor. Elige un modelo específico para anularlo.",
+    ai_message_task_workspace_path: "Ruta del espacio de trabajo",
+    ai_message_task_workspace_path_hint:
+      "Carpeta absoluta que el mensaje de IA programado usa como espacio de trabajo",
     ai_message_task_allowed_tools: "Herramientas Permitidas",
     ai_message_task_allowed_tools_hint:
       "Selecciona herramientas integradas que la IA puede usar durante ejecuciones desatendidas",
@@ -2760,6 +2763,8 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    permission_requested_scheduled:
+      "Una tarea programada solicita permiso para usar una herramienta. Revísala y aprueba o deniega.",
     auth_expired: "Tu sesión ha caducado. Inicia sesión de nuevo.",
     quota_exhausted:
       "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",

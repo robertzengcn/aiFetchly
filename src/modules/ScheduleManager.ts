@@ -36,6 +36,7 @@ export class ScheduleManager {
     private taskExecutorModule: TaskExecutorService;
     private schedulerStatusModel: SchedulerStatusModel;
     private dbpath: string;
+    private runningScheduleIds = new Set<number>();
 
     private constructor() {
         const tokenService = new Token();
@@ -190,10 +191,24 @@ export class ScheduleManager {
     }
 
     /**
-     * Execute a schedule immediately
-     * @param scheduleId The schedule ID to execute
+     * Execute a schedule.
+     * Cron and dependency chains wait until the task finishes.
+     * Manual Run Now passes detach so the caller returns after the
+     * run is accepted and the task continues in the background.
      */
-    async executeSchedule(scheduleId: number): Promise<void> {
+    async executeSchedule(
+        scheduleId: number,
+        options?: { detach?: boolean }
+    ): Promise<void> {
+        if (this.runningScheduleIds.has(scheduleId)) {
+            console.log(
+                `Schedule ${scheduleId} is already running, skipping overlapping execution`
+            );
+            return;
+        }
+
+        this.runningScheduleIds.add(scheduleId);
+        let handedOff = false;
         try {
             const schedule = await this.scheduleTaskModule.getScheduleById(scheduleId);
             if (!schedule) {
@@ -207,7 +222,6 @@ export class ScheduleManager {
 
             console.log(`Executing schedule ${scheduleId} (${schedule.name})`);
 
-            // Log execution start
             const executionId = await this.scheduleExecutionLogModule.logExecution(
                 scheduleId,
                 ExecutionStatus.RUNNING,
@@ -217,61 +231,73 @@ export class ScheduleManager {
                 LogTriggerType.CRON
             );
 
-            const startTime = Date.now();
+            const run = (): Promise<void> =>
+                this.completeScheduleExecution(schedule, executionId);
 
-            try {
-                // Execute the task
-                await this.taskExecutorModule.executeScheduledTask(schedule);
-
-                // Calculate duration
-                const duration = Date.now() - startTime;
-
-                // Update execution log with success
-                await this.scheduleExecutionLogModule.updateExecutionStatus(
-                    executionId,
-                    ExecutionStatus.SUCCESS,
-                    'Task executed successfully',
-                    duration
-                );
-
-                // Update schedule statistics
-                await this.scheduleTaskModule.incrementExecutionCount(scheduleId, true);
-                await this.scheduleTaskModule.updateLastRunTime(scheduleId, new Date());
-
-                // Calculate and update next run time
-                const nextRunTime = this.calculateNextRunTime(schedule.cron_expression);
-                await this.scheduleTaskModule.updateNextRunTime(scheduleId, nextRunTime);
-
-                console.log(`Schedule ${scheduleId} executed successfully in ${duration}ms`);
-
-                // Handle dependent jobs
-                await this.executeDependentJobs(executionId, ExecutionStatus.SUCCESS);
-
-            } catch (error) {
-                const duration = Date.now() - startTime;
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-                // Update execution log with failure
-                await this.scheduleExecutionLogModule.updateExecutionStatus(
-                    executionId,
-                    ExecutionStatus.FAILED,
-                    errorMessage,
-                    duration
-                );
-
-                // Update schedule statistics
-                await this.scheduleTaskModule.incrementExecutionCount(scheduleId, false);
-                await this.scheduleTaskModule.updateLastErrorMessage(scheduleId, errorMessage);
-
-                console.error(`Schedule ${scheduleId} execution failed:`, error);
-
-                // Handle dependent jobs for failure
-                await this.executeDependentJobs(executionId, ExecutionStatus.FAILED);
+            if (options?.detach) {
+                handedOff = true;
+                setImmediate(() => {
+                    void run()
+                        .catch((error: unknown) => {
+                            console.error(
+                                `Detached schedule ${scheduleId} failed:`,
+                                error
+                            );
+                        })
+                        .finally(() => {
+                            this.runningScheduleIds.delete(scheduleId);
+                        });
+                });
+                return;
             }
 
+            await run();
         } catch (error) {
             console.error(`Failed to execute schedule ${scheduleId}:`, error);
             throw error;
+        } finally {
+            if (!handedOff) {
+                this.runningScheduleIds.delete(scheduleId);
+            }
+        }
+    }
+
+    private async completeScheduleExecution(
+        schedule: ScheduleTaskEntity,
+        executionId: number
+    ): Promise<void> {
+        const scheduleId = schedule.id;
+        const startTime = Date.now();
+
+        try {
+            await this.taskExecutorModule.executeScheduledTask(schedule);
+
+            const duration = Date.now() - startTime;
+            await this.scheduleExecutionLogModule.updateExecutionStatus(
+                executionId,
+                ExecutionStatus.SUCCESS,
+                'Task executed successfully',
+                duration
+            );
+            await this.scheduleTaskModule.incrementExecutionCount(scheduleId, true);
+            await this.scheduleTaskModule.updateLastRunTime(scheduleId, new Date());
+            const nextRunTime = this.calculateNextRunTime(schedule.cron_expression);
+            await this.scheduleTaskModule.updateNextRunTime(scheduleId, nextRunTime);
+            console.log(`Schedule ${scheduleId} executed successfully in ${duration}ms`);
+            await this.executeDependentJobs(executionId, ExecutionStatus.SUCCESS);
+        } catch (error: unknown) {
+            const duration = Date.now() - startTime;
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            await this.scheduleExecutionLogModule.updateExecutionStatus(
+                executionId,
+                ExecutionStatus.FAILED,
+                errorMessage,
+                duration
+            );
+            await this.scheduleTaskModule.incrementExecutionCount(scheduleId, false);
+            await this.scheduleTaskModule.updateLastErrorMessage(scheduleId, errorMessage);
+            console.error(`Schedule ${scheduleId} execution failed:`, error);
+            await this.executeDependentJobs(executionId, ExecutionStatus.FAILED);
         }
     }
 

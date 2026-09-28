@@ -1982,6 +1982,9 @@ export default {
     ai_message_task_model: "AIモデル",
     ai_message_task_model_hint:
       "「自動」はサーバーのデフォルトモデルを使用します。特定のモデルを選択で上書きできます。",
+    ai_message_task_workspace_path: "ワークスペースのパス",
+    ai_message_task_workspace_path_hint:
+      "スケジュールされた AI メッセージがワークスペースとして使う絶対フォルダ",
     ai_message_task_allowed_tools: "許可されたツール",
     ai_message_task_allowed_tools_hint:
       "無人実行中にAIが使用できる組み込みツールを選択",
@@ -2694,6 +2697,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    permission_requested_scheduled:
+      "スケジュールされたタスクがツールの使用許可を要求しています。確認して承認または拒否してください。",
     auth_expired:
       "セッションの有効期限が切れました。もう一度サインインしてください。",
     quota_exhausted:

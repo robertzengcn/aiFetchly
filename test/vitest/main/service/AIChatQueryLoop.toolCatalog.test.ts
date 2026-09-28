@@ -381,4 +381,99 @@ describe("AIChatQueryLoop tool catalog integration", () => {
       );
     }
   });
+
+  it("servces tool_catalog_search in standard mode by building the catalog on-demand (scheduled-run path)", async () => {
+    // Scheduled runs use auto catalog mode, which stays standard for a small
+    // filtered tool set (rarely crosses the 10% deferred threshold). The
+    // system prompt advertises tool_catalog_search unconditionally, so the
+    // model may call it even though no catalog was pre-built. The loop must
+    // intercept it (build a catalog on-demand) and return ranked matches —
+    // NOT fall through to executeTool, which returns "Unknown tool" because
+    // tool_catalog_search is a synthetic tool, not a registered skill.
+    const events: Array<{ type: string; toolName?: string }> = [];
+    const toolResults: Array<Record<string, unknown>> = [];
+    let call = 0;
+    const fakeStream = vi.fn(
+      async (
+        _req: { tools?: OpenAITool[] },
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ): Promise<void> => {
+        call += 1;
+        if (call === 1) {
+          onChunk(
+            makeToolCallChunk(
+              "search-call",
+              "tool_catalog_search",
+              JSON.stringify({ select: ["mcp_1_secret"] })
+            )
+          );
+        } else {
+          onChunk(makeChunk("done", "stop"));
+        }
+      }
+    );
+    const executeTool = vi.fn(
+      async (name: string): Promise<ToolExecutionResult> => {
+        // If the loop fails to intercept, executeTool receives
+        // "tool_catalog_search" and (under the real SkillExecutor) returns
+        // "Unknown tool". Assert it is never called with the synthetic name.
+        return {
+          tool_call_id: "x",
+          tool_name: name,
+          success: true,
+          execution_time_ms: 0,
+          result: {},
+        };
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool,
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+
+    // Standard mode: NO pre-built catalog, mode "standard". This is exactly
+    // what a scheduled run with auto mode + a small tool profile produces.
+    const { input } = buildInput();
+    const result = await loop.run({
+      ...input,
+      toolCatalog: undefined,
+      toolCatalogModeDecision: {
+        mode: "standard",
+        configuredMode: "auto",
+        reason: "auto: deferred payload below 10% threshold",
+        estimatedDeferredTokens: 0,
+      },
+      eventSink: {
+        emit: (event) => {
+          if (event.type === "tool_call" || event.type === "tool_result") {
+            events.push({ type: event.type, toolName: event.toolName });
+            if (event.type === "tool_result") {
+              toolResults.push(event.toolResult);
+            }
+          }
+        },
+      },
+    });
+
+    expect(result.type).toBe("completed");
+    // The discovery call was intercepted locally: a tool_result event was
+    // emitted for it (the interception block emits only tool_result, never a
+    // tool_call event — same as the deferred-mode path).
+    expect(
+      events.some(
+        (e) => e.type === "tool_result" && e.toolName === "tool_catalog_search"
+      )
+    ).toBe(true);
+    // The on-demand-built catalog ranked the requested tool.
+    expect(toolResults[0]).toMatchObject({
+      success: true,
+      selectedToolNames: ["mcp_1_secret"],
+    });
+    // CRITICAL: the synthetic discovery tool never reached executeTool. Under
+    // the real SkillExecutor it would have returned "Unknown tool".
+    expect(
+      executeTool.mock.calls.some(([name]) => name === "tool_catalog_search")
+    ).toBe(false);
+  });
 });

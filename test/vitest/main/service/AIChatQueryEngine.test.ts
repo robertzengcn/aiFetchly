@@ -12,6 +12,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 
@@ -1210,5 +1211,65 @@ describe("AIChatQueryEngine compact integration", () => {
     });
 
     expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("AIChatQueryEngine reactive compaction sentinel", () => {
+  // Finding 4: the fallback compaction path (no coordinator) must not pass
+  // Number.MAX_SAFE_INTEGER as promptTokens. That sentinel poisons
+  // lastPromptTokens with 9e15, skewing the next turn's session-memory gate.
+  // The engine now resolves the model's real context window as a finite
+  // sentinel that still meets the 0.8 * contextWindow threshold.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockGetActiveGoal.mockResolvedValue(null);
+    HookRegistry.unregisterSource("plugin:test-hooks");
+  });
+
+  it("passes a finite prompt-token sentinel (not MAX_SAFE_INTEGER) on reactive overflow", async () => {
+    const enqueueAutoCompact = vi.fn().mockResolvedValue(true);
+    const fakeAgent = {
+      enqueueAutoCompact,
+    } as unknown as AIChatCompactAgentService;
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "failed" as const,
+      conversationId: "v2-reactive",
+      assistantMessageId: "assistant-reactive",
+      error: new RecoverableHistoryError(
+        "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+        "context too large"
+      ),
+      partialContent: "",
+      model: "gpt-4o-mini",
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, {
+      compactAgent: fakeAgent,
+    });
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: { message: "hi" },
+      eventSink: sink,
+    });
+
+    // requestReactiveCompaction is fire-and-forget: the sentinel resolves
+    // (model catalog lookup) then enqueues. Wait for the async chain to flush.
+    await vi.waitFor(
+      () => expect(enqueueAutoCompact).toHaveBeenCalledTimes(1),
+      { timeout: 3000 }
+    );
+    const input = enqueueAutoCompact.mock
+      .calls[0][0] as SessionMemoryUpdateInput;
+    // The sentinel must be a finite positive number, never the 9e15 poison.
+    expect(input.promptTokens).not.toBe(Number.MAX_SAFE_INTEGER);
+    expect(typeof input.promptTokens).toBe("number");
+    expect(Number.isFinite(input.promptTokens)).toBe(true);
+    expect(input.promptTokens).toBeGreaterThan(0);
+    // It must still clear the threshold gate (>= the resolved context window,
+    // which is >= 0.8 * window). The recovery default (128k) is the floor.
+    expect(input.promptTokens).toBeGreaterThanOrEqual(128_000);
   });
 });

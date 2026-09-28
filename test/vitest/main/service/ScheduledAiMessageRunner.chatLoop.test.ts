@@ -54,7 +54,9 @@ vi.mock("@/modules/token", () => ({
 }));
 vi.mock("@/service/aiProvider/AIProviderResolver", () => ({
   AIProviderResolver: class {
-    resolveForChat(): { kind: "hosted"; canUse: true } | { canUse: false; reason: string; message: string } {
+    resolveForChat():
+      | { kind: "hosted"; canUse: true }
+      | { canUse: false; reason: string; message: string } {
       return chatCanUse.value
         ? { kind: "hosted" as const, canUse: true as const }
         : {
@@ -126,6 +128,10 @@ vi.mock("@/service/ScheduledLoopRunRegistry", () => ({
     }),
   },
 }));
+const mockBindApprovedWorkspace = vi.hoisted(() => vi.fn());
+vi.mock("@/service/AiMessageTaskWorkspace", () => ({
+  bindApprovedWorkspace: mockBindApprovedWorkspace,
+}));
 
 import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
 
@@ -141,6 +147,7 @@ const TASK = {
   max_runtime_ms: 300_000,
   max_continue_calls: 10,
   status: "active",
+  workspace_path: null as string | null,
 };
 const SCHEDULE = {
   id: 2,
@@ -208,6 +215,10 @@ beforeEach(() => {
       driveSink(input.eventSink);
     }
   );
+  // Default: no workspace_path on TASK → bindTaskWorkspace returns early.
+  // Tests that exercise the canonicalization path override both the stored
+  // path and this mock's return value.
+  mockBindApprovedWorkspace.mockResolvedValue("/tmp/ws");
 });
 
 const call = (overrides: Partial<{ occurrence: number; runId: number }> = {}) =>
@@ -396,5 +407,36 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
         reason: "scheduled_turn_completed",
       })
     );
+  });
+
+  it("persists the canonical workspace path via updateTask without mutating the task entity (Finding 5)", async () => {
+    // The runner must not mutate the passed-in task entity. The canonical
+    // path is durably persisted through updateTask; file tools resolve the
+    // bound workspace via the workspace service, not this entity field.
+    const storedPath = "/Users/tester/projects/legacy";
+    // Symlink resolution yields a different canonical string, triggering the
+    // persist path (bindTaskWorkspace only calls updateTask when canonical !== stored).
+    const canonicalPath = "/private/tester/projects/legacy";
+    const taskWithWorkspace = {
+      ...SCHEDULE_UI_TASK,
+      workspace_path: storedPath,
+    };
+    // Return the SAME object each call so we can assert its post-run state.
+    mockGetTask.mockResolvedValue(taskWithWorkspace);
+    mockBindApprovedWorkspace.mockResolvedValue(canonicalPath);
+    engineOutcome.value = { type: "complete", content: "done" };
+
+    await new ScheduledAiMessageRunner().run(1, 2);
+
+    // updateTask persisted the canonical path.
+    expect(mockUpdateTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 1,
+        workspacePath: canonicalPath,
+      })
+    );
+    // The task entity passed into bindTaskWorkspace was NOT mutated — its
+    // workspace_path still holds the original stored value.
+    expect(taskWithWorkspace.workspace_path).toBe(storedPath);
   });
 });
