@@ -1281,7 +1281,7 @@ async function confirmUpload() {
     // Keep the typed author/tags/description so the user can correct and retry
     // — do not call cancelUpload() here.
     if (error instanceof FileUploadMetadataError) {
-      uploadError.value = resolveUploadErrorMessage(error, (key, params) => t(key, params));
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => (params ? t(key, params) : t(key)));
     } else {
       uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
     }
@@ -1426,6 +1426,7 @@ async function doUpload(files: File[]) {
           uploadProgress.value.set(file.name, progress);
         },
         (result: FileUploadComplete) => {
+          void result;
           uploadProgress.value.delete(file.name);
         });
         filePath = uploadResult.tempFilePath;
@@ -1461,7 +1462,7 @@ async function doUpload(files: File[]) {
     // Keep the typed author/tags/description so the user can correct and retry
     // — do not call cancelUpload() here.
     if (error instanceof FileUploadMetadataError) {
-      uploadError.value = resolveUploadErrorMessage(error, (key, params) => t(key, params));
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => (params ? t(key, params) : t(key)));
     } else {
       uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
     }

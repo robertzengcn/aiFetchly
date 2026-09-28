@@ -242,6 +242,18 @@ export interface AIChatQuerySubmitInput {
    * object (technical-design §14.1).
    */
   scheduledContext?: AIChatScheduledTurnContext;
+  /**
+   * Main-process-only trusted signal: true only for unattended scheduled-loop
+   * turns where the user pre-allowlisted `start_email_send_task` via the typed
+   * confirmation at loop creation (policy.autoApproveTools AND
+   * policy.allowedTools includes the send tool). When true, the outbound-email
+   * gate honors `skip_review=true` even for blocking reasonCodes (e.g. a dedup
+   * negation the pure resolver misreads as do-not-send), because that typed
+   * pre-allowlist IS the trusted authorization AD-003 requires and there is no
+   * human present to click Review. Never set for interactive chat — the
+   * renderer cannot forge `scheduledContext`, so this flag is unreachable there.
+   */
+  outboundSendPreAuthorized?: boolean;
 }
 
 export interface AIChatQueryEngineDeps {
