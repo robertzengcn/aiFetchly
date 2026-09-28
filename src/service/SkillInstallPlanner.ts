@@ -287,13 +287,13 @@ export function collectCommandTemplatesWithEnv(
       );
     const privileged = /\bsudo\b/i.test(command);
 
-    // Simple prefix-based parse; anything unparsable keeps the whole line as
-    // the executable so the user reviews exactly what would run. Plain
-    // arguments are kept WHOLE (audit finding 4: the old filter dropped
-    // $-free but quoted/globbed args from the typed template, so the card
-    // showed fewer arguments than would execute); substituted args stay on
-    // the unparsable path with the full line as the executable.
-    const parts = command.split(/\s+/);
+    // Quoting-aware parse (audit R1): a shell word scanner keeps quoted
+    // segments intact — `node -e "console.log(1)"` yields the argument
+    // console.log(1) WITHOUT the surrounding quotes (the runner spawns with
+    // shell disabled, so literal quotes would evaluate a string). Any
+    // substitution ( $ ` * ) still marks the command unparsable, keeping
+    // the whole-line executable fallback for review.
+    const parts = shellSplit(command);
     const plainArgs = (privileged ? parts.slice(2) : parts.slice(1)).filter(
       isPlainArg
     );
@@ -340,4 +340,47 @@ function isPlainArg(arg: string): boolean {
   // Keep only plain arguments for the typed template; substitutions surface
   // in riskLevel instead of being silently executed.
   return !arg.includes("$") && !arg.includes("`") && !arg.includes("*");
+}
+
+/**
+ * Split a shell command line into words honoring single/double quotes
+ * (audit R1). Returns null when the line contains an unterminated quote —
+ * callers fall back to the whitespace split so the whole line surfaces for
+ * review.
+ */
+export function shellSplit(line: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let started = false;
+  const push = (): void => {
+    if (started) words.push(current);
+    current = "";
+    started = false;
+  };
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote !== null) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      push();
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quote !== null) return [];
+  push();
+  return words.length > 0 ? words : [line.trim()].filter(Boolean);
 }

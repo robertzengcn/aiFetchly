@@ -72,6 +72,11 @@ const BLOCKED_ENV_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export class SkillApprovedCommandRunner {
+  /** acquiredRoot -> tree hash after the LAST approved command that ran
+   *  against it (R1: multi-command setup writes are expected, so a later
+   *  command verifies against the tree its predecessor left — per TREE,
+   *  not per command id, since the plan's commands share one root). */
+  private readonly treeBaselines = new Map<string, string>();
   constructor(
     private readonly credentials: SkillCredentialService = new SkillCredentialService()
   ) {}
@@ -190,19 +195,41 @@ export class SkillApprovedCommandRunner {
       injected.push(name);
     }
 
-    // Audit finding 4: the approved command is bound to the EXACT staged
-    // source the plan was built from — re-hash it before spawn and refuse
-    // when the tree changed after approval (the approval covered different
-    // bytes than would execute).
+    // Audit finding 4 + R1: the approved command is bound to the staged
+    // source — but multi-command setup WRITES to the tree by design. The
+    // FIRST approved command verifies against the plan's approved hash;
+    // every subsequent command verifies against the tree state left by the
+    // PREVIOUS approved command (recorded after each successful run), so
+    // sanctioned writes never trip the gate while external tampering
+    // between runs still does. Hashing UNAVAILABILITY is a hard refusal
+    // (the earlier silent proceed let an unhashable root skip the gate).
     let sourceUnchanged = true;
+    let hashVerified = false;
     try {
       const { hashTree } = await import(
         "@/childprocess/skill-installation/stagePackage"
       );
-      sourceUnchanged = hashTree(plan.source.acquiredRoot) === plan.source.contentHash;
+      const baseline =
+        this.treeBaselines.get(plan.source.acquiredRoot) ??
+        plan.source.contentHash;
+      sourceUnchanged = hashTree(plan.source.acquiredRoot) === baseline;
+      hashVerified = true;
     } catch {
-      // Hashing unavailable — proceed; the typed-args allowlist and
-      // environment injection guards above still apply.
+      hashVerified = false;
+    }
+    if (!hashVerified) {
+      return {
+        ok: false,
+        commandId,
+        exitCode: null,
+        stdoutPreview: "",
+        stderrPreview: "",
+        timedOut: false,
+        injectedEnvNames: [],
+        errorCode: "SOURCE_CHANGED_AFTER_APPROVAL",
+        message:
+          "The staged source could not be verified before running this command; retry the installation.",
+      };
     }
     if (!sourceUnchanged) {
       return {
@@ -227,6 +254,19 @@ export class SkillApprovedCommandRunner {
       timeoutMs: 120_000,
       outputLimitBytes: 256 * 1024,
     });
+
+    // R1: a successful run re-baselines the tree for the NEXT approved
+    // command in this runner instance (its own writes are sanctioned).
+    if (result.exitCode === 0) {
+      try {
+        const { hashTree } = await import(
+          "@/childprocess/skill-installation/stagePackage"
+        );
+        this.treeBaselines.set(plan.source.acquiredRoot, hashTree(plan.source.acquiredRoot));
+      } catch {
+        /* next command re-checks and refuses on an unhashable root */
+      }
+    }
 
     // Preview redaction (review finding): a command that echoes its
     // environment would otherwise place the injected credential VALUE into

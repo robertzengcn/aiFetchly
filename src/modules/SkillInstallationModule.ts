@@ -604,75 +604,14 @@ export class SkillInstallationModule extends BaseModule {
       );
     }
 
-    // §18.4 ordering: missing dependencies are prepared BEFORE credentials
-    // are collected (the ElevenLabs sequence — deps first, then keys).
-    // The hold precedes activation, so cancelling it needs no rollback of
-    // a live skill (finding 6).
-    if (plan.dependencies.some((d) => d.currentStatus === "missing")) {
-      await this.transition(
-        sessions,
-        events,
-        input.sessionId,
-        "installing_dependencies"
-      );
-      const held = await sessions.findBySessionId(input.sessionId);
-      return this.snapshotFromEntity(held ?? session, plan);
-    }
-
-    // A required credential pauses the flow BEFORE activation (§19.3) — the
-    // value itself arrives only through the secure renderer channel.
-    if (plan.credentials.length > 0) {
-      await this.transition(
-        sessions,
-        events,
-        input.sessionId,
-        "awaiting_secret"
-      );
-      const awaiting = await sessions.findBySessionId(input.sessionId);
-      return this.snapshotFromEntity(awaiting ?? session, plan);
-    }
-
-    // §18.4 / FR-06 (audit finding 4): REQUIRED SETUP cannot be skipped —
-    // when the plan carries approved command templates, hold at
-    // awaiting_commands until every one has been executed by the user from
-    // the card. The runner refuses templates not yet run; completion
-    // advances to activation. Commands are review-only (high-risk ones are
-    // never auto-executed) — this is a completion CHECKPOINT, not execution.
-    const pendingCommands = this.pendingCommandsFor(session, plan);
-    if (pendingCommands.length > 0) {
-      await this.transition(
-        sessions,
-        events,
-        input.sessionId,
-        "awaiting_commands"
-      );
-      const awaiting = await sessions.findBySessionId(input.sessionId);
-      return this.snapshotFromEntity(awaiting ?? session, plan);
-    }
-
-    // TODO 3 / FR-07: plugin and executable packages route to the EXISTING
-    // installation services — the typed installer owns acquisition and
-    // approval, never a parallel plugin/executable runtime.
-    if (selected[0].kind === "plugin") {
-      return this.routeToPluginService(
-        input.sessionId,
-        plan,
-        events,
-        sessions,
-        selected[0]
-      );
-    }
-    if (selected[0].kind === "executable") {
-      return this.routeToExecutableService(
-        input.sessionId,
-        plan,
-        events,
-        sessions,
-        selected[0]
-      );
-    }
-
-    return this.runActivation(input.sessionId, plan, selected[0], session);
+    // The ONE §18.4 continuation (audit R1): deps -> credentials ->
+    // commands -> kind routing/activation. Every hold is enforced on every
+    // path; the per-path duplicates are gone. approve() uses the
+    // "declared" credential pause — a fresh approval always shows the
+    // secure-input step for every declared credential (§19.3 / C3).
+    return this.continueInstallation(input.sessionId, plan, session, {
+      credentialPause: "declared",
+    });
   }
 
   /**
@@ -996,61 +935,10 @@ export class SkillInstallationModule extends BaseModule {
         "installing_dependencies",
         `dependency ${dependency.name} installed and verified`
       );
-      // Continue the §18.4 sequence instead of jumping to ready: with
-      // dependencies satisfied the flow still owes the credential pause
-      // (if any remain unconfigured) and activation + verification.
-      if (updatedPlan.credentials.length > 0) {
-        const stillMissing = await this.unconfiguredCredentials(
-          session,
-          updatedPlan
-        );
-        if (stillMissing.length > 0) {
-          await this.transition(
-            sessions,
-            events,
-            input.sessionId,
-            "awaiting_secret"
-          );
-          const awaiting = await sessions.findBySessionId(input.sessionId);
-          return this.snapshotFromEntity(awaiting ?? session, updatedPlan);
-        }
-      }
-      const selected =
-        updatedPlan.discoveredSkills.find(
-          (c) => c.candidateId === updatedPlan.selectedSkillIds[0]
-        ) ?? updatedPlan.discoveredSkills[0];
-      if (!selected) {
-        return this.errorSnapshot(
-          "installing_dependencies",
-          "SKILL_AMBIGUOUS",
-          "Select which discovered skill(s) to activate.",
-          input.sessionId
-        );
-      }
-      if (selected.kind === "plugin") {
-        return this.routeToPluginService(
-          input.sessionId,
-          updatedPlan,
-          events,
-          sessions,
-          selected
-        );
-      }
-      if (selected.kind === "executable") {
-        return this.routeToExecutableService(
-          input.sessionId,
-          updatedPlan,
-          events,
-          sessions,
-          selected
-        );
-      }
-      return this.runActivation(
-        input.sessionId,
-        updatedPlan,
-        selected,
-        session
-      );
+      // Dependencies satisfied -> the unified §18.4 continuation
+      // (credentials -> commands -> routing/activation; audit R1: the
+      // command checkpoint can no longer be skipped here either).
+      return this.continueInstallation(input.sessionId, updatedPlan, session);
     }
 
     await this.appendEvent(
@@ -1200,27 +1088,9 @@ export class SkillInstallationModule extends BaseModule {
       const awaiting = await sessions.findBySessionId(sessionId);
       return this.snapshotFromEntity(awaiting ?? session, plan);
     }
-    const selected =
-      plan.discoveredSkills.find(
-        (s) => s.candidateId === plan.selectedSkillIds[0]
-      ) ?? plan.discoveredSkills[0];
-    if (!selected) {
-      return this.errorSnapshot(
-        "awaiting_secret",
-        "SKILL_AMBIGUOUS",
-        "Select which discovered skill(s) to activate.",
-        sessionId
-      );
-    }
-    // FR-27 routing parity: plugin/executable plans resume through their
-    // dedicated services, never the prompt activation path (finding 5).
-    if (selected.kind === "plugin") {
-      return this.routeToPluginService(sessionId, plan, events, sessions, selected);
-    }
-    if (selected.kind === "executable") {
-      return this.routeToExecutableService(sessionId, plan, events, sessions, selected);
-    }
-    return this.runActivation(sessionId, plan, selected, session);
+    // Credentials complete -> the unified §18.4 continuation (commands
+    // can no longer be skipped here; audit R1).
+    return this.continueInstallation(sessionId, plan, session);
   }
 
   /**
@@ -1314,28 +1184,10 @@ export class SkillInstallationModule extends BaseModule {
         JSON.stringify(updatedPlan)
       );
       if (this.pendingCommandsFor(session, updatedPlan).length === 0) {
-        // All commands complete: continue the §18.4 sequence (routing +
-        // activation) so the session reaches ready in the same gesture.
-        const refreshed = await sessions.findBySessionId(sessionId);
-        const selected2 =
-          updatedPlan.discoveredSkills.find(
-            (c) => c.candidateId === updatedPlan.selectedSkillIds[0]
-          ) ?? updatedPlan.discoveredSkills[0];
-        if (selected2 && selected2.kind !== "plugin" && selected2.kind !== "executable") {
-          await this.runActivation(
-            sessionId,
-            updatedPlan,
-            selected2,
-            refreshed ?? session
-          );
-        } else if (selected2) {
-          await this.transition(
-            sessions,
-            events,
-            sessionId,
-            "activating"
-          );
-        }
+        // All commands complete -> the unified §18.4 continuation, which
+        // invokes the kind-appropriate import service for executable/plugin
+        // plans instead of only transitioning to activating (audit R1).
+        await this.continueInstallation(sessionId, updatedPlan, session);
       }
     }
     await this.appendEvent(
@@ -1353,6 +1205,82 @@ export class SkillInstallationModule extends BaseModule {
         (result.errorCode ? ` code=${result.errorCode}` : "")
     );
     return { ok: true, result };
+  }
+
+  /**
+   * The ONE §18.4 continuation (audit R1): given an APPROVED session's
+   * current plan, advance through every remaining hold in order —
+   * missing dependencies -> awaiting_secret -> awaiting_commands -> the
+   * kind-appropriate activation/import -> verify -> ready. approve(),
+   * resumeAfterSecret(), approveDependency completion, and runApprovedCommand
+   * completion all route through here so no path can skip a hold.
+   */
+  private async continueInstallation(
+    sessionId: string,
+    plan: SkillInstallPlan,
+    session: SkillInstallationSessionEntity,
+    opts: { readonly credentialPause?: "declared" | "unconfigured" } = {}
+  ): Promise<InstallSnapshot> {
+    const credentialPause = opts.credentialPause ?? "unconfigured";
+    const { sessions, events } = await this.getModels();
+    const fresh = async (): Promise<SkillInstallationSessionEntity> =>
+      (await sessions.findBySessionId(sessionId)) ?? session;
+
+    // 1. Missing dependencies hold FIRST (the ElevenLabs sequence).
+    if (plan.dependencies.some((d) => d.currentStatus === "missing")) {
+      await this.transition(sessions, events, sessionId, "installing_dependencies");
+      return this.snapshotFromEntity(await fresh(), plan);
+    }
+
+    // 2. Credential pause. "declared" (approve's fresh review) pauses for
+    // EVERY declared credential — the user has not seen the secure-input
+    // step for THIS approval. "unconfigured" (the continuation paths)
+    // pauses only for values still missing, so an already-stored value
+    // never dead-ends a resume.
+    if (plan.credentials.length > 0) {
+      const shouldPause =
+        credentialPause === "declared"
+          ? true
+          : (await this.unconfiguredCredentials(session, plan)).length > 0;
+      if (shouldPause) {
+        await this.transition(sessions, events, sessionId, "awaiting_secret");
+        return this.snapshotFromEntity(await fresh(), plan);
+      }
+    }
+
+    // 3. Pending required commands.
+    if (this.pendingCommandsFor(session, plan).length > 0) {
+      await this.transition(sessions, events, sessionId, "awaiting_commands");
+      return this.snapshotFromEntity(await fresh(), plan);
+    }
+
+    // 4. Kind routing (FR-07) — multi-skill selection (audit R2) iterates
+    // every SELECTED candidate; single-skill keeps the historical path.
+    const selected = plan.discoveredSkills.filter((c) =>
+      plan.selectedSkillIds.includes(c.candidateId)
+    );
+    const chosen =
+      selected.length > 0 ? selected : [plan.discoveredSkills[0]].filter(Boolean);
+    if (chosen.length === 0) {
+      return this.errorSnapshot(
+        (await fresh()).state as SkillInstallationState,
+        "SKILL_AMBIGUOUS",
+        "Select which discovered skill(s) to activate.",
+        sessionId
+      );
+    }
+    let last: InstallSnapshot | null = null;
+    for (const candidate of chosen) {
+      if (candidate.kind === "plugin") {
+        last = await this.routeToPluginService(sessionId, plan, events, sessions, candidate);
+      } else if (candidate.kind === "executable") {
+        last = await this.routeToExecutableService(sessionId, plan, events, sessions, candidate);
+      } else {
+        last = await this.runActivation(sessionId, plan, candidate, await fresh());
+      }
+      if (last && last.state === "failed") return last;
+    }
+    return last as InstallSnapshot;
   }
 
   /** Plan commands not yet executed (audit finding 4 checkpoint). */

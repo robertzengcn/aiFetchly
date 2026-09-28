@@ -497,6 +497,10 @@ const commandSectionVisible = computed(() =>
   [
     "awaiting_secret",
     "installing_dependencies",
+    // §18.4 checkpoint (audit R1): the command controls MUST be visible
+    // exactly where the backend holds the session for the user to run
+    // them — awaiting_commands is the primary state.
+    "awaiting_commands",
     "failed",
     "rollback_required",
   ].includes(snapshotView.value?.state ?? "")

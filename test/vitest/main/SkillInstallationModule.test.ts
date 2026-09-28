@@ -2256,3 +2256,43 @@ describe("dependency detection + metadata completeness (audit finding 12)", () =
     expect(status.safePlan?.activationTarget).toBeDefined();
   }, 120_000);
 });
+
+describe("unified §18.4 continuation (audit R1)", () => {
+  /** Fixture requiring BOTH a credential and a command. */
+  function makeSecretPlusCommandFixture(root: string): string {
+    const dir = path.join(root, "fixtures", "secret-plus-cmd");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "SKILL.md"),
+      "---\nname: spc-skill\ndescription: Secret+command fixture\n---\n\n# Usage\n\nRun setup."
+    );
+    fs.writeFileSync(
+      path.join(dir, "install.md"),
+      "# Install\n\nSet FIRST_API_KEY= for access. Run:\n\nnode --version\n"
+    );
+    return dir;
+  }
+
+  it("after the secret completes, the command checkpoint still holds — no skip to ready", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeSecretPlusCommandFixture(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-r1a",
+      source: fixture,
+    });
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    // Declared credential -> awaiting_secret first.
+    expect(approved.state).toBe("awaiting_secret");
+    // Configure the secret; resume must NOT reach ready — the command
+    // checkpoint holds (the audit's reproduced skip).
+    credState.unconfigured.delete("FIRST_API_KEY");
+    const resumed = await module.resumeAfterSecret(prepared.sessionId);
+    expect(resumed.state).toBe("awaiting_commands");
+    expect(resumed.nextAction).toBe("run-commands");
+  }, 120_000);
+});

@@ -292,3 +292,43 @@ describe("SkillApprovedCommandRunner", () => {
     expect(result.exitCode).toBe(3);
   }, 30_000);
 });
+
+describe("runner self-write tolerance + quoting (audit R1)", () => {
+  const runner = new SkillApprovedCommandRunner(credentialStub);
+  it("the SECOND approved command runs after the FIRST wrote to the staging tree", async () => {
+    // Command 1 writes prepared.txt into the staging root; command 2 must
+    // not be refused with SOURCE_CHANGED_AFTER_APPROVAL.
+    const plan = await makePlan([
+      { id: "cmd:write", executable: "node",
+        args: ["-e", "require('fs').writeFileSync('prepared.txt','ok')"],
+        workingDirectory: tmpRoot, environmentNames: [], riskLevel: "low",
+        rationale: "write" },
+      { id: "cmd:read", executable: "node",
+        args: ["-e", "console.log(require('fs').existsSync('prepared.txt'))"],
+        workingDirectory: tmpRoot, environmentNames: [], riskLevel: "low",
+        rationale: "read" },
+    ]);
+    const first = await runner.run(plan, "cmd:write", tmpRoot, null);
+    expect(first.ok).toBe(true);
+    const second = await runner.run(plan, "cmd:read", tmpRoot, null);
+    expect(second.ok).toBe(true);
+    expect(second.stdoutPreview).toContain("true");
+  }, 30_000);
+
+  it("external tampering between commands is still refused", async () => {
+    const plan = await makePlan([
+      { id: "cmd:a", executable: "node", args: ["--version"],
+        workingDirectory: tmpRoot, environmentNames: [], riskLevel: "low",
+        rationale: "a" },
+    ]);
+    const first = await runner.run(plan, "cmd:a", tmpRoot, null);
+    expect(first.ok).toBe(true);
+    // External write AFTER the approved command's baseline.
+    fs.writeFileSync(path.join(tmpRoot, "intruder.txt"), "tamper");
+    const second = await runner.run(plan, "cmd:a", tmpRoot, null);
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.errorCode).toBe("SOURCE_CHANGED_AFTER_APPROVAL");
+    }
+  }, 30_000);
+});
