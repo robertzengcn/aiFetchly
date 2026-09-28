@@ -65,8 +65,9 @@ import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/Outbo
 import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
-const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
-const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
+export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
+/** Outbound-email draft tool name (never send-gated; skipPermissionCheck). */
+export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
