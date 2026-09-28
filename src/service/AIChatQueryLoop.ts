@@ -2659,6 +2659,10 @@ export class AIChatQueryLoop {
                 sourceUserMessageId: input.sourceUserMessageId,
                 intentDecisionId: input.intentDecisionId,
                 outboundAuthorization,
+                // Carry the scheduled-loop pre-authorization signal across the
+                // pause so a resumed send round still honors skip_review=true
+                // for blocking reasonCodes (mirrors the loop input field).
+                outboundSendPreAuthorized: input.outboundSendPreAuthorized,
                 planContext,
                 eventSink: eventSink,
                 turnId: input.turnId,
@@ -3276,6 +3280,19 @@ export class AIChatQueryLoop {
    * When that flag is set and no draft batch exists, the send proceeds
    * immediately with this call's recipients/content (no draft/review step).
    *
+   * Scheduled-loop pre-authorization: when `input.outboundSendPreAuthorized`
+   * is true (the user pre-allowlisted the send tool via the typed confirmation
+   * at loop creation), `skip_review: true` is honored even for the blocking
+   * reasonCodes above. The pure phrase-matching resolver cannot distinguish a
+   * recipient-exclusion negation ("do not send to already-contacted
+   * companies") from a global send-refusal, so a scheduled outreach prompt
+   * that pairs a send goal with a dedup constraint is misread as do-not-send
+   * — which would structurally disable `skip_review` and deadlock an
+   * unattended run with no human present to click Review. The typed
+   * pre-allowlist is the trusted authorization AD-003 requires in that
+   * unattended context, so the gate treats it as an honor-skip-review signal.
+   * Never true for interactive chat (the renderer cannot forge scheduledContext).
+   *
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
    */
@@ -3323,7 +3340,9 @@ export class AIChatQueryLoop {
       const authService = new OutboundEmailAuthorizationService(dbpath);
 
       const honorModelSkipReview =
-        skipReviewArg && canHonorModelDeclaredSkipReview(intentDecision);
+        skipReviewArg &&
+        (canHonorModelDeclaredSkipReview(intentDecision) ||
+          input.outboundSendPreAuthorized === true);
       const honorPhraseSkipReview =
         intentDecision.mode === "send_now" &&
         allowsOutboundDirectSendAuthorization(intentDecision.reasonCode);
