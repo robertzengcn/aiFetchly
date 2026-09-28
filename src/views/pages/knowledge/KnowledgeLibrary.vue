@@ -504,7 +504,11 @@ import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
 import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
 import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, uploadDocument as uploadDocumentAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
-import { buildFileUploadMetadata } from '@/views/pages/knowledge/fileUploadMetadata';
+import {
+  buildFileUploadMetadata,
+  FileUploadMetadataError,
+  resolveUploadErrorMessage,
+} from '@/views/pages/knowledge/fileUploadMetadata';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
@@ -1174,7 +1178,15 @@ async function confirmUpload() {
     // No duplicates - proceed with all files
     await doUpload(uploadFiles.value);
   } catch (error) {
-    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    // Metadata-validation errors (tag too long, too many tags, etc.) carry a
+    // translatable code; resolve them to the active UI language (PRD §9).
+    // Keep the typed author/tags/description so the user can correct and retry
+    // — do not call cancelUpload() here.
+    if (error instanceof FileUploadMetadataError) {
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => t(key, params));
+    } else {
+      uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    }
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;
@@ -1324,7 +1336,15 @@ async function doUpload(files: File[]) {
     
     cancelUpload();
   } catch (error) {
-    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    // Metadata-validation errors (tag too long, too many tags, etc.) carry a
+    // translatable code; resolve them to the active UI language (PRD §9).
+    // Keep the typed author/tags/description so the user can correct and retry
+    // — do not call cancelUpload() here.
+    if (error instanceof FileUploadMetadataError) {
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => t(key, params));
+    } else {
+      uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    }
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;

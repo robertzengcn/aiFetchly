@@ -2,7 +2,11 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import KnowledgeLibrary from "@/views/pages/knowledge/KnowledgeLibrary.vue";
-import { buildFileUploadMetadata } from "@/views/pages/knowledge/fileUploadMetadata";
+import {
+  buildFileUploadMetadata,
+  FileUploadMetadataError,
+  normalizeUploadTags,
+} from "@/views/pages/knowledge/fileUploadMetadata";
 
 const ragApiMocks = vi.hoisted(() => ({
   copyFileToTempMock: vi.fn(),
@@ -56,6 +60,10 @@ const i18n = createI18n({
           "Optional. Applied to every file in this upload.",
         upload_failed: "Upload failed",
         no_files_selected: "No files selected",
+        tag_error_tag_too_long: "Tag #{index} exceeds {max} characters.",
+        tag_error_too_many_tags: "At most {maxCount} tags are allowed.",
+        tag_error_author_too_long: "Author exceeds {max} characters.",
+        tag_error_description_too_long: "Description exceeds {max} characters.",
       },
       common: { cancel: "Cancel" },
     },
@@ -204,14 +212,74 @@ describe("KnowledgeLibrary upload metadata", () => {
         description: "",
         tags: Array.from({ length: 21 }, (_, i) => `t${i}`),
       })
-    ).toThrow();
+    ).toThrow(FileUploadMetadataError);
     expect(() =>
       buildFileUploadMetadata("a.pdf", {
         author: "",
         description: "",
         tags: ["x".repeat(65)],
       })
-    ).toThrow();
+    ).toThrow(FileUploadMetadataError);
+  });
+
+  it("too-many-tags error carries the translatable code and max count", () => {
+    try {
+      normalizeUploadTags(Array.from({ length: 21 }, (_, i) => `t${i}`));
+      throw new Error("expected normalizeUploadTags to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FileUploadMetadataError);
+      const metadataError = error as FileUploadMetadataError;
+      expect(metadataError.code).toBe("too_many_tags");
+      expect(metadataError.params.maxCount).toBe(20);
+    }
+  });
+
+  it("over-long tag error carries the translatable code, index, and max length", () => {
+    try {
+      normalizeUploadTags(["ok", "x".repeat(65)]);
+      throw new Error("expected normalizeUploadTags to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FileUploadMetadataError);
+      const metadataError = error as FileUploadMetadataError;
+      expect(metadataError.code).toBe("tag_too_long");
+      expect(metadataError.params.index).toBe(2);
+      expect(metadataError.params.tag).toBe("x".repeat(65));
+      expect(metadataError.params.max).toBe(64);
+    }
+  });
+
+  it("shows a translated tag-limit message, does not upload, and keeps typed fields", async () => {
+    const wrapper = mountPage();
+    const vm = wrapper.vm as unknown as {
+      showUploadDialog: boolean;
+      uploadFiles: Array<{ name: string; size: number }>;
+      uploadAuthor: string;
+      uploadDescription: string;
+      uploadTags: string[];
+      uploadError: string;
+      confirmUpload: () => Promise<void>;
+    };
+    vm.showUploadDialog = true;
+    vm.uploadFiles = [
+      { name: "report.pdf", size: 10 } as unknown as File,
+    ];
+    vm.uploadAuthor = "Alice";
+    vm.uploadDescription = "desc";
+    // 21 distinct tags exceeds the cap of 20.
+    vm.uploadTags = Array.from({ length: 21 }, (_, i) => `tag${i}`);
+    await vm.confirmUpload();
+    await flushPromises();
+    // Upload must not have started.
+    expect(ragApiMocks.copyFileToTempMock).not.toHaveBeenCalled();
+    expect(ragApiMocks.uploadDocumentMock).not.toHaveBeenCalled();
+    // The active-language message is surfaced (not the raw code).
+    expect(vm.uploadError).toContain("Upload failed");
+    expect(vm.uploadError).toContain("At most 20 tags are allowed.");
+    expect(vm.uploadError).not.toContain("too_many_tags");
+    // Typed fields are preserved so the user can correct and retry.
+    expect(vm.uploadAuthor).toBe("Alice");
+    expect(vm.uploadDescription).toBe("desc");
+    expect(vm.uploadTags).toHaveLength(21);
   });
 
   it("cancel clears the three fields", async () => {

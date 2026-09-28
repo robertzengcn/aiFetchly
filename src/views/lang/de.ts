@@ -240,6 +240,10 @@ export default {
     tags_hint: "Enter drücken zum Hinzufügen",
     author: "Autor",
     upload_metadata_hint: "Optional. Gilt für jede Datei dieses Uploads.",
+    tag_error_tag_too_long: "Tag #{index} überschreitet {max} Zeichen.",
+    tag_error_too_many_tags: "Es sind maximal {maxCount} Tags erlaubt.",
+    tag_error_author_too_long: "Der Autor überschreitet {max} Zeichen.",
+    tag_error_description_too_long: "Die Beschreibung überschreitet {max} Zeichen.",
     loading_content: "Inhalt wird geladen...",
     confirm_delete_document:
       'Sind Sie sicher, dass Sie "{name}" löschen möchten?',

@@ -239,6 +239,10 @@ export default {
     tags_hint: "Presione Enter para agregar etiquetas",
     author: "Autor",
     upload_metadata_hint: "Opcional. Se aplica a todos los archivos de esta subida.",
+    tag_error_tag_too_long: "La etiqueta #{index} supera los {max} caracteres.",
+    tag_error_too_many_tags: "Se permiten como máximo {maxCount} etiquetas.",
+    tag_error_author_too_long: "El autor supera los {max} caracteres.",
+    tag_error_description_too_long: "La descripción supera los {max} caracteres.",
     loading_content: "Cargando contenido...",
     confirm_delete_document: '¿Está seguro de que desea eliminar "{name}"?',
     confirm_bulk_delete:
