@@ -196,6 +196,52 @@ describe("KnowledgeLibrary upload metadata", () => {
     });
   });
 
+  it("passes default metadata to copyFileToTemp when dialog fields are blank", async () => {
+    // PRD §16.1 item 3: submitting the Upload document dialog with author,
+    // tags, and description blank must call copyFileToTemp with author "User",
+    // tags ["uploaded", "knowledge"], and description
+    // "Uploaded document: {filename}".
+    const wrapper = mountPage();
+    const vm = wrapper.vm as unknown as {
+      showUploadDialog: boolean;
+      uploadFiles: Array<{ name: string; size: number }>;
+      uploadAuthor: string;
+      uploadDescription: string;
+      uploadTags: string[];
+      confirmUpload: () => Promise<void>;
+    };
+    vm.showUploadDialog = true;
+    vm.uploadFiles = [
+      { name: "pricing-guide.pdf", size: 10 } as unknown as File,
+    ];
+    vm.uploadAuthor = "";
+    vm.uploadTags = [];
+    vm.uploadDescription = "";
+    ragApiMocks.copyFileToTempMock.mockResolvedValue({
+      tempFilePath: "/tmp/pricing-guide.pdf",
+      document: {
+        id: 7,
+        name: "pricing-guide.pdf",
+        status: "completed",
+      },
+    });
+    await vm.confirmUpload();
+    await flushPromises();
+    expect(ragApiMocks.copyFileToTempMock).toHaveBeenCalledTimes(1);
+    const metadata = ragApiMocks.copyFileToTempMock.mock.calls[0][1] as {
+      title: string;
+      description: string;
+      tags: string[];
+      author: string;
+    };
+    expect(metadata).toEqual({
+      title: "pricing-guide",
+      description: "Uploaded document: pricing-guide.pdf",
+      tags: ["uploaded", "knowledge"],
+      author: "User",
+    });
+  });
+
   it("trims, drops empties, and dedupes tags case-insensitively keeping first spelling", () => {
     const out = buildFileUploadMetadata("a.pdf", {
       author: "Bob",
