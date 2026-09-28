@@ -18,7 +18,7 @@ import {
 } from "@/service/UploadGrantService";
 import * as fs from "fs";
 import * as path from "path";
-import { z } from "zod";
+import { saveTempFileMetadataSchema } from "@/schemas/ipc/rag";
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -84,13 +84,6 @@ async function createRagController(): Promise<RagSearchController> {
   await controller.initialize();
   return controller;
 }
-
-const saveTempFileMetadataSchema = z.object({
-  title: z.string().trim().max(500).optional(),
-  description: z.string().trim().max(2000).optional(),
-  author: z.string().trim().max(255).optional(),
-  tags: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
-});
 
 /**
  * Register RAG IPC handlers.
