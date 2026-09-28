@@ -306,6 +306,67 @@ describe('knowledge metadata retrieval', () => {
     }
   });
 
+  test('Phase 3 filters (language, documentDate range, custom keys) reach the model', async () => {
+    // PRD §10 / technical design §6.3: a search request with language,
+    // documentDate range, and custom-metadata equality filters must pass them
+    // through to findSearchableDocumentIds as bound, allowlist-selected params.
+    retrievalMocks.findSearchableDocumentIdsMock.mockResolvedValue([3]);
+    const searchSpy = vi
+      .spyOn(VectorSearchService.prototype, 'searchCandidates')
+      .mockResolvedValue([
+        makeCandidate({ chunkId: 33, documentId: 3 }),
+      ]);
+    try {
+      const module = new RagSearchModule();
+      const result = await module.searchKnowledgeForTool({
+        query: 'pricing',
+        language: 'en',
+        documentDateRange: { start: '2024-01-01', end: '2024-12-31' },
+        customMetadata: {
+          product: 'Acme',
+          category: 'pricing',
+        },
+        includeNeighborChunks: false,
+      });
+      expect(retrievalMocks.findSearchableDocumentIdsMock).toHaveBeenCalledTimes(1);
+      const filters = retrievalMocks.findSearchableDocumentIdsMock.mock
+        .calls[0][0] as {
+        language?: string;
+        documentDateFrom?: Date;
+        documentDateTo?: Date;
+        customProduct?: string;
+        customCategory?: string;
+      };
+      expect(filters.language).toBe('en');
+      expect(filters.documentDateFrom).toEqual(new Date('2024-01-01'));
+      expect(filters.documentDateTo).toEqual(new Date('2024-12-31'));
+      expect(filters.customProduct).toBe('Acme');
+      expect(filters.customCategory).toBe('pricing');
+      expect(result.results).toHaveLength(1);
+    } finally {
+      searchSpy.mockRestore();
+    }
+  });
+
+  test('documents that leave Phase 3 filters empty search as they do today', async () => {
+    // No Phase 3 filters supplied -> findSearchableDocumentIds must not be
+    // called at all (undefined allowed-set means all documents are in scope).
+    const searchSpy = vi
+      .spyOn(VectorSearchService.prototype, 'searchCandidates')
+      .mockResolvedValue([makeCandidate()]);
+    try {
+      const module = new RagSearchModule();
+      const result = await module.searchKnowledgeForTool({
+        query: 'refund policy',
+        includeNeighborChunks: false,
+      });
+      expect(retrievalMocks.findSearchableDocumentIdsMock).not.toHaveBeenCalled();
+      expect(result.results).toHaveLength(1);
+    } finally {
+      searchSpy.mockRestore();
+    }
+  });
+
   test('embedding input starts with header while stored chunk content stays body-only', () => {
     const headerInput: string = buildEmbeddingInput(
       {

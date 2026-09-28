@@ -219,6 +219,9 @@ export function registerRagIpcHandlers(): void {
             description?: string;
             tags?: string[];
             author?: string;
+            language?: string;
+            documentDate?: string;
+            customMetadata?: unknown;
           };
           const parsedMetadata = saveTempFileMetadataSchema.safeParse(metadataTyped);
           if (!parsedMetadata.success) {
@@ -246,6 +249,9 @@ export function registerRagIpcHandlers(): void {
               `Uploaded document: ${originalFileName}`,
             tags: parsedMetadata.data.tags || ["uploaded", "knowledge"],
             author: parsedMetadata.data.author || "User",
+            language: parsedMetadata.data.language,
+            documentDate: parsedMetadata.data.documentDate,
+            customMetadata: parsedMetadata.data.customMetadata,
           };
 
           (

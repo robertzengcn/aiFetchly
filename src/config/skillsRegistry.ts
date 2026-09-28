@@ -2411,6 +2411,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Use this before answering questions that require knowledge-base context. " +
       "When the user names a person, put that name in `author`; when they name a label, put it in `tags`; " +
       "put the topical words in `query`. " +
+      "You can also narrow by `language`, a `documentDateRange` for the date the document refers to, " +
+      "or by the four custom metadata keys `product`, `customer`, `campaign`, and `category` " +
+      "(exact, case-insensitive equality). " +
       "Returns relevant passages with source citations; each hit includes `author`, `tags`, and `description`.",
     parameters: {
       type: "object",
@@ -2454,6 +2457,31 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           },
           description: "Restrict to documents uploaded within this date range.",
         },
+        language: {
+          type: "string",
+          description:
+            "Restrict search to documents with this language tag (e.g. en, zh-CN). Case-insensitive exact match.",
+        },
+        documentDateRange: {
+          type: "object",
+          properties: {
+            start: { type: "string", description: "Start date (ISO 8601)" },
+            end: { type: "string", description: "End date (ISO 8601)" },
+          },
+          description:
+            "Restrict to documents whose document date falls within this range (the date the document refers to, not the upload date).",
+        },
+        customMetadata: {
+          type: "object",
+          properties: {
+            product: { type: "string", description: "Exact match on the product custom key." },
+            customer: { type: "string", description: "Exact match on the customer custom key." },
+            campaign: { type: "string", description: "Exact match on the campaign custom key." },
+            category: { type: "string", description: "Exact match on the category custom key." },
+          },
+          description:
+            "Equality filters on the four custom metadata keys: product, customer, campaign, category. Each is an exact, case-insensitive match.",
+        },
         includeNeighborChunks: {
           type: "boolean",
           description:
@@ -2480,6 +2508,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         tags: args.tags as string[] | undefined,
         author: args.author as string | undefined,
         dateRange: args.dateRange as { start: string; end: string } | undefined,
+        language: args.language as string | undefined,
+        documentDateRange: args.documentDateRange as
+          | { start: string; end: string }
+          | undefined,
+        customMetadata: args.customMetadata as
+          | {
+              product?: string;
+              customer?: string;
+              campaign?: string;
+              category?: string;
+            }
+          | undefined,
         includeNeighborChunks: args.includeNeighborChunks as
           | boolean
           | undefined,
@@ -2493,7 +2533,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "knowledge_library_list_documents",
     description:
-      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, author, tags, status, size), never file contents or paths. Supports filtering by name/title query, author substring, tags, status, processing status, and file type. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, author, tags, status, size), never file contents or paths. Supports filtering by name/title query, author substring, tags, status, processing status, and file type. Documents may also carry optional `language`, `documentDate`, and the four custom metadata keys `product`, `customer`, `campaign`, and `category`; use knowledge_library_search with those filters to narrow by them. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
     parameters: {
       type: "object",
       properties: {

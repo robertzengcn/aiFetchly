@@ -84,6 +84,19 @@ export interface KnowledgeSearchRequest {
     start: string;
     end: string;
   };
+  // Phase 3 filters (optional; omitted when not supplied).
+  language?: string;
+  documentDateRange?: {
+    start: string;
+    end: string;
+  };
+  /** Equality filters for the fixed custom-metadata allowlist. */
+  customMetadata?: {
+    product?: string;
+    customer?: string;
+    campaign?: string;
+    category?: string;
+  };
   includeNeighborChunks?: boolean;
 }
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import { importKnowledgeWebsiteInputSchema } from "@/entityTypes/knowledgeLibraryAiToolTypes";
+import { knowledgeCustomMetadataSchema } from "@/schemas/knowledge/customMetadata";
 
 /**
  * Returns true when every tag in the list is unique case-insensitively. Used as
@@ -21,6 +22,20 @@ function noCaseInsensitiveDuplicateTags(tags: string[]): boolean {
   }
   return true;
 }
+
+/**
+ * Matches a calendar-date or full ISO 8601 string (e.g. "2024-03-15" or
+ * "2024-03-15T00:00:00Z"). Used to validate `documentDate` on the upload
+ * boundary (technical design §6: validate ISO date). The value is bound as a
+ * parameter downstream — never concatenated into SQL.
+ */
+const isoDateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+export const documentDateSchema = z
+  .string()
+  .trim()
+  .regex(isoDateRegex, "documentDate must be an ISO 8601 date (YYYY-MM-DD)");
+
+export const documentLanguageSchema = z.string().trim().min(1).max(16);
 
 /** SHOW_OPEN_DIALOG: Electron OpenDialogOptions (passthrough) */
 export const ragShowOpenDialogInputSchema = lazySchema(() =>
@@ -65,6 +80,9 @@ export const ragUploadDocumentInputSchema = lazySchema(() =>
             "tags must be unique case-insensitively: duplicate tags are rejected, not silently dropped",
         })
         .optional(),
+      language: documentLanguageSchema.optional(),
+      documentDate: documentDateSchema.optional(),
+      customMetadata: knowledgeCustomMetadataSchema.optional(),
     })
     .passthrough()
 );
@@ -89,6 +107,9 @@ export const saveTempFileMetadataSchema = z.object({
         "tags must be unique case-insensitively: duplicate tags are rejected, not silently dropped",
     })
     .optional(),
+  language: documentLanguageSchema.optional(),
+  documentDate: documentDateSchema.optional(),
+  customMetadata: knowledgeCustomMetadataSchema.optional(),
 });
 
 /** RAG_GET_DOCUMENTS: filters (optional, passthrough) */

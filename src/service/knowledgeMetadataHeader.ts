@@ -1,9 +1,18 @@
+import {
+  KNOWLEDGE_CUSTOM_METADATA_KEYS,
+  type KnowledgeCustomMetadata,
+} from "@/schemas/knowledge/customMetadata";
+
 export interface EmbeddingHeaderSource {
   fileName: string;
   title?: string;
   author?: string;
   tags?: string[];
   description?: string;
+  // Phase 3 metadata. Optional; included only when present.
+  language?: string;
+  documentDate?: string;
+  customMetadata?: KnowledgeCustomMetadata;
 }
 
 function singleLine(value: string): string {
@@ -24,6 +33,17 @@ function isDefaultTags(tags: string[] | undefined): boolean {
     return false;
   }
   return folded.includes("uploaded") && folded.includes("knowledge");
+}
+
+/**
+ * Capitalize the first letter of a custom-metadata key for the header label
+ * ("product" -> "Product"). The allowlist keys are all lowercase ASCII.
+ */
+function labelize(key: string): string {
+  if (key.length === 0) {
+    return key;
+  }
+  return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 export function buildEmbeddingInput(
@@ -51,6 +71,30 @@ export function buildEmbeddingInput(
   const defaultDescription = `Uploaded document: ${source.fileName}`;
   if (description.length > 0 && description !== defaultDescription) {
     lines.push(`Description: ${singleLine(description)}`);
+  }
+  // Phase 3 header lines. Each is collapsed to a single line and omitted when
+  // empty, so a description cannot smuggle extra header lines (technical
+  // design §7: header labels are fixed constants, user text is one line).
+  const language: string = (source.language ?? "").trim();
+  if (language.length > 0) {
+    lines.push(`Language: ${singleLine(language)}`);
+  }
+  const documentDate: string = (source.documentDate ?? "").trim();
+  if (documentDate.length > 0) {
+    lines.push(`Document date: ${singleLine(documentDate)}`);
+  }
+  if (source.customMetadata) {
+    // Iterate the fixed allowlist in its declared order so the header is
+    // deterministic regardless of object key order.
+    for (const key of KNOWLEDGE_CUSTOM_METADATA_KEYS) {
+      const value = source.customMetadata[key];
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+          lines.push(`${labelize(key)}: ${singleLine(trimmed)}`);
+        }
+      }
+    }
   }
   if (lines.length === 0) {
     return chunkContent;

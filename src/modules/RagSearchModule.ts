@@ -52,6 +52,7 @@ import {
   buildEmbeddingInput,
   type EmbeddingHeaderSource,
 } from "@/service/knowledgeMetadataHeader";
+import type { KnowledgeCustomMetadata } from "@/schemas/knowledge/customMetadata";
 import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
@@ -87,6 +88,9 @@ function toEmbeddingHeaderSource(doc: {
   author?: string | null;
   tags?: string | null;
   description?: string | null;
+  language?: string | null;
+  documentDate?: Date | string | null;
+  customMetadata?: string | null;
 }): EmbeddingHeaderSource {
   let tags: string[] | undefined;
   try {
@@ -97,12 +101,36 @@ function toEmbeddingHeaderSource(doc: {
   } catch {
     tags = undefined;
   }
+  // customMetadata is stored as a JSON string; parse it so the header can
+  // include each present key. A failed parse is non-fatal — omit the lines.
+  let customMetadata: KnowledgeCustomMetadata | undefined;
+  if (doc.customMetadata) {
+    try {
+      const parsed: unknown = JSON.parse(doc.customMetadata);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        customMetadata = parsed as KnowledgeCustomMetadata;
+      }
+    } catch {
+      customMetadata = undefined;
+    }
+  }
+  // documentDate may arrive as a Date or ISO string; render as an ISO date
+  // string for the header. A Date is formatted YYYY-MM-DD for readability.
+  let documentDate: string | undefined;
+  if (doc.documentDate instanceof Date && !isNaN(doc.documentDate.getTime())) {
+    documentDate = doc.documentDate.toISOString().slice(0, 10);
+  } else if (typeof doc.documentDate === "string" && doc.documentDate.length > 0) {
+    documentDate = doc.documentDate.slice(0, 10);
+  }
   return {
     fileName: doc.name,
     title: doc.title ?? undefined,
     author: doc.author ?? undefined,
     tags,
     description: doc.description ?? undefined,
+    language: doc.language ?? undefined,
+    documentDate,
+    customMetadata,
   };
 }
 
@@ -1542,13 +1570,39 @@ export class RagSearchModule extends BaseModule {
     const hasIds: boolean = (request.documentIds ?? []).length > 0;
     const hasTypes: boolean = (request.documentTypes ?? []).length > 0;
     const hasDates: boolean = request.dateRange !== undefined;
+    const hasLanguage: boolean = (request.language ?? "").trim().length > 0;
+    const hasDocDateRange: boolean = request.documentDateRange !== undefined;
+    const custom = request.customMetadata ?? {};
+    const hasCustom: boolean =
+      (custom.product ?? "").trim().length > 0 ||
+      (custom.customer ?? "").trim().length > 0 ||
+      (custom.campaign ?? "").trim().length > 0 ||
+      (custom.category ?? "").trim().length > 0;
 
-    if (!hasAuthor && !hasTags && !hasIds && !hasTypes && !hasDates) {
+    if (
+      !hasAuthor &&
+      !hasTags &&
+      !hasIds &&
+      !hasTypes &&
+      !hasDates &&
+      !hasLanguage &&
+      !hasDocDateRange &&
+      !hasCustom
+    ) {
       return undefined;
     }
 
     // If only documentIds are specified, use them directly
-    if (hasIds && !hasTypes && !hasTags && !hasAuthor && !hasDates) {
+    if (
+      hasIds &&
+      !hasTypes &&
+      !hasTags &&
+      !hasAuthor &&
+      !hasDates &&
+      !hasLanguage &&
+      !hasDocDateRange &&
+      !hasCustom
+    ) {
       return request.documentIds;
     }
 
@@ -1560,6 +1614,12 @@ export class RagSearchModule extends BaseModule {
       const uploadedTo: Date | undefined = request.dateRange?.end
         ? new Date(request.dateRange.end)
         : undefined;
+      const documentDateFrom: Date | undefined = request.documentDateRange?.start
+        ? new Date(request.documentDateRange.start)
+        : undefined;
+      const documentDateTo: Date | undefined = request.documentDateRange?.end
+        ? new Date(request.documentDateRange.end)
+        : undefined;
       const ids: number[] = await model.findSearchableDocumentIds({
         documentIds: request.documentIds,
         fileTypes: request.documentTypes,
@@ -1567,6 +1627,13 @@ export class RagSearchModule extends BaseModule {
         tags: request.tags,
         uploadedFrom,
         uploadedTo,
+        language: request.language,
+        documentDateFrom,
+        documentDateTo,
+        customProduct: custom.product,
+        customCustomer: custom.customer,
+        customCampaign: custom.campaign,
+        customCategory: custom.category,
       });
       return ids;
     } catch (error) {

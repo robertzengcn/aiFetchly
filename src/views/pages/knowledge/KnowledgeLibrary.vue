@@ -241,6 +241,64 @@
               rows="2"
               density="compact"
             />
+            <v-text-field
+              v-model="uploadLanguage"
+              :label="t('knowledge.metadata_language') || 'Language'"
+              :hint="t('knowledge.metadata_language_hint') || 'e.g. en, zh-CN'"
+              maxlength="16"
+              density="compact"
+              class="mb-2"
+            />
+            <v-text-field
+              v-model="uploadDocumentDate"
+              :label="t('knowledge.metadata_document_date') || 'Document date'"
+              :hint="t('knowledge.metadata_document_date_hint') || 'YYYY-MM-DD'"
+              maxlength="32"
+              density="compact"
+              class="mb-2"
+            />
+            <div class="d-flex align-center mb-1">
+              <v-btn
+                size="small"
+                variant="text"
+                :prepend-icon="showMoreUploadFields ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                @click="showMoreUploadFields = !showMoreUploadFields"
+              >
+                {{ t('knowledge.metadata_more_fields') || 'More fields' }}
+              </v-btn>
+            </div>
+            <div v-if="showMoreUploadFields" class="mb-2">
+              <div class="text-caption text-grey mb-2">
+                {{ t('knowledge.metadata_more_fields_hint') || 'Optional custom keys applied to every file in this upload.' }}
+              </div>
+              <v-text-field
+                v-model="uploadCustomProduct"
+                :label="t('knowledge.metadata_custom_product') || 'Product'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCustomer"
+                :label="t('knowledge.metadata_custom_customer') || 'Customer'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCampaign"
+                :label="t('knowledge.metadata_custom_campaign') || 'Campaign'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCategory"
+                :label="t('knowledge.metadata_custom_category') || 'Category'"
+                maxlength="200"
+                density="compact"
+              />
+            </div>
           </div>
           
           <v-alert
@@ -580,11 +638,48 @@ const fileInput = ref<HTMLInputElement>();
 const uploadAuthor = ref<string>('');
 const uploadDescription = ref<string>('');
 const uploadTags = ref<string[]>([]);
+// Phase 3 upload metadata (optional). Custom values are limited to the four
+// allowlist keys (product/customer/campaign/category) shown in the More row.
+const uploadLanguage = ref<string>('');
+const uploadDocumentDate = ref<string>('');
+const showMoreUploadFields = ref<boolean>(false);
+const uploadCustomProduct = ref<string>('');
+const uploadCustomCustomer = ref<string>('');
+const uploadCustomCampaign = ref<string>('');
+const uploadCustomCategory = ref<string>('');
 
 function clearUploadMetadata(): void {
   uploadAuthor.value = '';
   uploadDescription.value = '';
   uploadTags.value = [];
+  uploadLanguage.value = '';
+  uploadDocumentDate.value = '';
+  showMoreUploadFields.value = false;
+  uploadCustomProduct.value = '';
+  uploadCustomCustomer.value = '';
+  uploadCustomCampaign.value = '';
+  uploadCustomCategory.value = '';
+}
+
+/**
+ * Build the custom-metadata object for upload from the four More-row fields.
+ * Empty/whitespace values are omitted; an all-empty object yields undefined
+ * so the column stores NULL rather than "{}" (technical design §6.2).
+ */
+function buildUploadCustomMetadata(): Record<string, string> | undefined {
+  const entries: Array<[string, string]> = [];
+  const product = uploadCustomProduct.value.trim();
+  const customer = uploadCustomCustomer.value.trim();
+  const campaign = uploadCustomCampaign.value.trim();
+  const category = uploadCustomCategory.value.trim();
+  if (product.length > 0) entries.push(['product', product]);
+  if (customer.length > 0) entries.push(['customer', customer]);
+  if (campaign.length > 0) entries.push(['campaign', campaign]);
+  if (category.length > 0) entries.push(['category', category]);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
 }
 
 function isNativePathObject(file: File): boolean {
@@ -1222,6 +1317,12 @@ async function doUpload(files: File[]) {
   uploadProgress.value.clear();
 
   try {
+    // Phase 3 metadata: one set of values for every file in this batch.
+    // customMetadata is normalized so an all-empty object yields undefined.
+    const customMetadata = buildUploadCustomMetadata();
+    const language = uploadLanguage.value.trim() || undefined;
+    const documentDate = uploadDocumentDate.value.trim() || undefined;
+
     // Upload each file with progress tracking. One metadata set applies to
     // every file in this batch; the default description still uses each file's name.
     const uploadPromises = files.map(async (file): Promise<UploadedDocument | null> => {
@@ -1245,6 +1346,9 @@ async function doUpload(files: File[]) {
           description: metadata.description,
           tags: metadata.tags,
           author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
         });
         return toUploadedDocumentFromResponse(response, file.name, nativePath);
       }
@@ -1259,6 +1363,9 @@ async function doUpload(files: File[]) {
           description: metadata.description,
           tags: metadata.tags,
           author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
         },
         // Progress callback
         (progress: FileUploadProgress) => {
@@ -1301,6 +1408,9 @@ async function doUpload(files: File[]) {
           description: metadata.description,
           tags: metadata.tags,
           author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
         },
         (progress: FileUploadProgress) => {
           uploadProgress.value.set(file.name, progress);

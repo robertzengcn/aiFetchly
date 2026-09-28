@@ -64,6 +64,17 @@ const i18n = createI18n({
         tag_error_too_many_tags: "At most {maxCount} tags are allowed.",
         tag_error_author_too_long: "Author exceeds {max} characters.",
         tag_error_description_too_long: "Description exceeds {max} characters.",
+        metadata_language: "Language",
+        metadata_language_hint: "e.g. en, zh-CN",
+        metadata_document_date: "Document date",
+        metadata_document_date_hint: "YYYY-MM-DD",
+        metadata_more_fields: "More fields",
+        metadata_more_fields_hint:
+          "Optional custom keys applied to every file in this upload.",
+        metadata_custom_product: "Product",
+        metadata_custom_customer: "Customer",
+        metadata_custom_campaign: "Campaign",
+        metadata_custom_category: "Category",
       },
       common: { cancel: "Cancel" },
     },
@@ -180,6 +191,83 @@ describe("KnowledgeLibrary upload metadata", () => {
       tags: ["pricing", "enterprise"],
       author: "Alice Chen",
     });
+  });
+
+  it("passes language, document date, and custom keys to copyFileToTemp", async () => {
+    // Phase 3: filling the More-fields row plus language/document date must
+    // forward those values to copyFileToTemp's metadata payload.
+    const wrapper = mountPage();
+    const vm = wrapper.vm as unknown as {
+      showUploadDialog: boolean;
+      uploadFiles: Array<{ name: string; size: number }>;
+      uploadLanguage: string;
+      uploadDocumentDate: string;
+      showMoreUploadFields: boolean;
+      uploadCustomProduct: string;
+      uploadCustomCustomer: string;
+      uploadCustomCampaign: string;
+      uploadCustomCategory: string;
+      confirmUpload: () => Promise<void>;
+    };
+    vm.showUploadDialog = true;
+    vm.uploadFiles = [
+      { name: "plan.pdf", size: 10 } as unknown as File,
+    ];
+    vm.uploadLanguage = "en";
+    vm.uploadDocumentDate = "2024-03-15";
+    vm.showMoreUploadFields = true;
+    vm.uploadCustomProduct = "Acme";
+    vm.uploadCustomCustomer = "Globex";
+    vm.uploadCustomCampaign = "Q3 launch";
+    vm.uploadCustomCategory = "pricing";
+    ragApiMocks.copyFileToTempMock.mockResolvedValue({
+      tempFilePath: "/tmp/plan.pdf",
+      document: { id: 9, name: "plan.pdf", status: "completed" },
+    });
+    await vm.confirmUpload();
+    await flushPromises();
+    expect(ragApiMocks.copyFileToTempMock).toHaveBeenCalledTimes(1);
+    const metadata = ragApiMocks.copyFileToTempMock.mock.calls[0][1] as {
+      language?: string;
+      documentDate?: string;
+      customMetadata?: Record<string, string>;
+    };
+    expect(metadata.language).toBe("en");
+    expect(metadata.documentDate).toBe("2024-03-15");
+    expect(metadata.customMetadata).toEqual({
+      product: "Acme",
+      customer: "Globex",
+      campaign: "Q3 launch",
+      category: "pricing",
+    });
+  });
+
+  it("omits customMetadata when all More-fields are blank", async () => {
+    const wrapper = mountPage();
+    const vm = wrapper.vm as unknown as {
+      showUploadDialog: boolean;
+      uploadFiles: Array<{ name: string; size: number }>;
+      showMoreUploadFields: boolean;
+      uploadCustomProduct: string;
+      confirmUpload: () => Promise<void>;
+    };
+    vm.showUploadDialog = true;
+    vm.uploadFiles = [
+      { name: "plan.pdf", size: 10 } as unknown as File,
+    ];
+    vm.showMoreUploadFields = true;
+    vm.uploadCustomProduct = "  ";
+    ragApiMocks.copyFileToTempMock.mockResolvedValue({
+      tempFilePath: "/tmp/plan.pdf",
+      document: { id: 9, name: "plan.pdf", status: "completed" },
+    });
+    await vm.confirmUpload();
+    await flushPromises();
+    const metadata = ragApiMocks.copyFileToTempMock.mock.calls[0][1] as {
+      customMetadata?: Record<string, string>;
+    };
+    // All-blank More fields yield undefined so the column stores NULL.
+    expect(metadata.customMetadata).toBeUndefined();
   });
 
   it("uses defaults when fields are blank", () => {
