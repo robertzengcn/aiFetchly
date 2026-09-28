@@ -858,7 +858,8 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request, scheduledContext } = input;
+    const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
+      input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -1402,6 +1403,7 @@ export class AIChatQueryEngine {
       sourceUserMessageId,
       intentDecisionId,
       turnId,
+      outboundSendPreAuthorized,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         conversationId,
         isPlanMode
@@ -1699,6 +1701,7 @@ export class AIChatQueryEngine {
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
         turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           matchedByToolId.conversationId,
           Boolean(matchedByToolId.planContext)
@@ -1850,6 +1853,7 @@ export class AIChatQueryEngine {
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
         turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           conversationId,
           Boolean(matchedByToolId.planContext)
