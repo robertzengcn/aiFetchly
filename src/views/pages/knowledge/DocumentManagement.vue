@@ -289,6 +289,7 @@ import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI, getDocumentErrorLog } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 import { isDocumentFailure, isDocumentProcessing } from "@/views/pages/knowledge/documentStatus";
+import { displayAuthor, visibleTags } from "@/views/pages/knowledge/documentTableDisplay";
 
 const props = defineProps<{
   /**
@@ -534,11 +535,17 @@ const { t } = useI18n();
         const file = uploadFile.value;
         console.log('Uploading file:', file);
         console.log('Upload data:', uploadData.value);
-        
-        // In Electron, the file object should have a path property
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const filePath = (file as any).path || file.name;
-        
+
+        // In Electron, the native file-input File carries a non-standard
+        // `path` property pointing at the file on disk. Cast through a typed
+        // shape rather than `any` so the property access stays type-checked.
+        const electronFile = file as File & { path?: unknown };
+        const pathFromFs: string =
+          typeof electronFile.path === 'string' && electronFile.path.length > 0
+            ? electronFile.path
+            : '';
+        const filePath = pathFromFs || file.name;
+
         // Call the upload API
         const result = await uploadDocumentAPI({
           filePath: filePath,
@@ -845,29 +852,6 @@ const { t } = useI18n();
 
     const formatDate = (date) => {
       return new Date(date).toLocaleDateString();
-    };
-
-    const displayAuthor = (doc: DocumentInfo): string => {
-      if (!doc.author || doc.author === 'User') {
-        return '';
-      }
-      return doc.author;
-    };
-
-    const visibleTags = (doc: DocumentInfo): string[] => {
-      const tags: string[] = doc.tags ?? [];
-      if (tags.length === 0) {
-        return [];
-      }
-      const folded: string[] = tags.map((t: string) => t.toLowerCase());
-      if (
-        folded.length === 2 &&
-        folded.includes('uploaded') &&
-        folded.includes('knowledge')
-      ) {
-        return [];
-      }
-      return tags;
     };
 
     const translateStatus = (status: string | undefined) => {
