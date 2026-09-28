@@ -338,6 +338,21 @@ export class AgentRuntime {
 
     const loop = new AIChatQueryLoop({
       streamChatCompletion: streamChat,
+      // Stage B §5.1: native provider iteration when the runtime did not
+      // inject a custom callback seam.
+      ...(deps?.streamChatCompletion
+        ? {}
+        : {
+            streamEvents: (req: unknown, options: unknown) =>
+              this.api.openAIChatCompletionStreamEvents(
+                req as Parameters<
+                  AiChatApi["openAIChatCompletionStreamEvents"]
+                >[0],
+                options as Parameters<
+                  AiChatApi["openAIChatCompletionStreamEvents"]
+                >[1]
+              ),
+          }),
       executeTool: policyCheckedExecute,
       getSkillDefinition: getSkill,
     });

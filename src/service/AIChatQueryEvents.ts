@@ -372,7 +372,11 @@ export interface PendingPermissionTurn {
     batchHash: string;
   };
   planContext?: AIChatPlanLoopContext;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user grants permission (AC-8). Present only when deferred mode active.
@@ -398,7 +402,11 @@ export interface PendingPlanQuestionTurn {
   toolCallId: string;
   questionId: string;
   planId: string;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user answers the plan question (AC-8). Present only when deferred
@@ -595,6 +603,26 @@ export type AIChatTurnTerminalEvent =
  * inferred from the absence of a terminal event.
  */
 export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
+/**
+ * Stage B §5.2 (generator-streaming PRD FR-001): the loop's incremental event
+ * stream. The loop already publishes no terminal events (the engine's
+ * finalize path owns them), so this narrowing matches current behavior.
+ */
+export type AIChatLoopEvent = Exclude<
+  AIChatQueryEvent,
+  { type: "complete" | "cancelled" | "error" }
+>;
+
+/** The loop as a single generator implementation (Stage B §5.2). */
+export type AIChatQueryGenerator = AsyncGenerator<
+  AIChatLoopEvent,
+  AIChatQueryLoopResult,
+  void
+>;
+
+/** Loop input without the sink — the generator contract (Stage B §5.2). */
+export type AIChatQueryGeneratorInput = Omit<AIChatQueryLoopInput, "eventSink">;
 
 /**
  * Stage A §3.2 (generator-streaming PRD FR-021): explicit internal

@@ -149,6 +149,15 @@ let compactAgentDbPath: string | null = null;
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
   const deps: AIChatQueryLoopDeps = {
+    // Stage B §5.1: native provider iteration is the loop's preferred seam;
+    // the callback form remains as the compatibility facade.
+    streamEvents: (request, options) => {
+      const api = new AiChatApi();
+      return api.openAIChatCompletionStreamEvents(
+        applyLocalToolPolicy(request),
+        options
+      );
+    },
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
       return api.openAIChatCompletionStream(

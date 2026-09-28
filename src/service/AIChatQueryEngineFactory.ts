@@ -41,6 +41,11 @@ export class AIChatQueryEngineFactory {
   /** Build the production query loop with task-scoped tool enforcement. */
   private createQueryLoop(policy: AiMessageTaskToolPolicy): AIChatQueryLoop {
     const deps: AIChatQueryLoopDeps = {
+      // Stage B §5.1: native provider iteration (callback form = facade).
+      streamEvents: (request, options) => {
+        const api = new AiChatApi();
+        return api.openAIChatCompletionStreamEvents(request, options);
+      },
       streamChatCompletion: (request, onChunk, options) => {
         const api = new AiChatApi();
         return api.openAIChatCompletionStream(request, onChunk, options);

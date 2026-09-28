@@ -22,8 +22,13 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import type { ChatProviderStreamEvent } from "@/service/aiProvider/ChatProviderClient";
+import { runToolWithProgress } from "@/service/aiChat/runToolWithProgress";
 import type {
+  AIChatLoopEvent,
   AIChatQueryEventSink,
+  AIChatQueryGenerator,
+  AIChatQueryGeneratorInput,
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
@@ -605,7 +610,29 @@ function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
 }
 
 /** Dependencies injected into the loop for testability. */
+
+/** Stage B §5.2/§12: the loop's tool-progress event (multiplexer payload). */
+type AIChatToolProgressLoopEvent = Extract<
+  AIChatLoopEvent,
+  { type: "tool_progress" }
+>;
+
+/** Progress sink threaded through tool execution (multiplexer producer). */
+type ToolProgressEmitter = (event: AIChatToolProgressLoopEvent) => void;
+
 export interface AIChatQueryLoopDeps {
+  /**
+   * Stage B §5.1 (FR-001): native provider iteration — preferred when
+   * present (all production wiring sites provide it after B1). Chunk,
+   * retry, and recovery notifications arrive in causal order.
+   */
+  streamEvents?(
+    request: OpenAIChatCompletionRequest,
+    options?: {
+      signal?: AbortSignal;
+      retryProfile?: import("@/service/AIChatRetryPolicy").AIChatRecoveryProfile;
+    }
+  ): AsyncIterable<ChatProviderStreamEvent>;
   streamChatCompletion(
     request: OpenAIChatCompletionRequest,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
@@ -827,17 +854,142 @@ export class AIChatQueryLoop {
    *    advances.
    *  - Honors the abort signal, the turn-active flag, and a bounded count.
    */
+
+  /**
+   * Stage B §5.1: provider events for one streaming request. Prefers the
+   * native deps.streamEvents iterator (all production wiring provides it
+   * after B1); legacy callback deps (tests) are bridged through a live
+   * handoff queue so iterate() has exactly one consumption path.
+   */
+  private async *providerEvents(
+    request: OpenAIChatCompletionRequest,
+    options: {
+      signal: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
+      /** Chunk acceptance evaluated AT ARRIVAL (abort/supersede guards) —
+       * parity with the old onChunk callback's synchronous early-returns. */
+      acceptChunk?: (chunk: OpenAIChatCompletionChunk) => boolean;
+    }
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
+    const native = this.deps.streamEvents;
+    if (native) {
+      for await (const event of native(request, options)) {
+        if (
+          event.type === "chunk" &&
+          options.acceptChunk?.(event.chunk) === false
+        ) {
+          continue;
+        }
+        yield event;
+      }
+      return;
+    }
+    // Legacy callback bridge (deps without streamEvents): every callback
+    // notification is pushed onto ONE live queue in causal order; this
+    // generator drains it as events arrive.
+    const queue: ChatProviderStreamEvent[] = [];
+    let producerDone = false;
+    let failure: { error: unknown } | null = null;
+    const waiters: Array<() => void> = [];
+    const notifyAll = (): void => {
+      const pending = waiters.splice(0, waiters.length);
+      for (const wake of pending) wake();
+    };
+    const waitForMore = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    const producer = this.deps
+      .streamChatCompletion(
+        request,
+        (chunk) => {
+          if (options.acceptChunk?.(chunk) === false) return;
+          queue.push({ type: "chunk", chunk });
+          notifyAll();
+        },
+        {
+          signal: options.signal,
+          onRetry: (info) => {
+            queue.push({ type: "retry", info });
+            notifyAll();
+          },
+          onRecoveryStatus: (info) => {
+            queue.push({ type: "recovery", info });
+            notifyAll();
+          },
+        }
+      )
+      .then(
+        () => {
+          producerDone = true;
+          notifyAll();
+        },
+        (error: unknown) => {
+          failure = { error };
+          notifyAll();
+        }
+      );
+    for (;;) {
+      while (queue.length === 0 && !producerDone && failure === null) {
+        await waitForMore();
+      }
+      if (queue.length > 0) {
+        const event = queue.shift();
+        if (event) {
+          yield event;
+        }
+        continue;
+      }
+      const captured = failure as { error: unknown } | null;
+      if (captured !== null) {
+        throw captured.error;
+      }
+      return;
+    }
+    // producer is always settled before we exit (done or failure).
+    void producer;
+  }
+
+  /**
+   * Stage B §5.2 (generator-streaming PRD FR-001): the callback entry is a
+   * thin FACADE — it drains the single `iterate()` implementation into the
+   * legacy sink, awaiting the sink's flush barrier after each tool_call
+   * yield so persist-before-execute ordering is preserved exactly.
+   */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
+    const { eventSink, ...generatorInput } = input;
+    const generator = this.iterate(generatorInput);
+    for (;;) {
+      const step = await generator.next();
+      if (step.done === true) {
+        return step.value;
+      }
+      const event = step.value;
+      eventSink.emit(event);
+      if (event.type === "tool_call") {
+        await eventSink.flush?.();
+      }
+    }
+  }
+
+  /**
+   * Stage B §5.2: the ONLY loop implementation — yields nonterminal events
+   * and returns the segment result. `run()` drains this into the legacy
+   * sink; the engine's generator-mode consumer drains it with awaited
+   * persistence (design §6/§8).
+   */
+  async *iterate(input: AIChatQueryGeneratorInput): AIChatQueryGenerator {
     const maxAttempts =
       input.transientRetryConfig?.maxAttempts ??
       DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS;
     const baseDelayMs =
       input.transientRetryConfig?.baseDelayMs ??
       DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS;
-    // Snapshot the original transcript up front. runOnce mutates the messages
-    // array it receives (pushing assistant tool-call / tool-result rows as the
-    // round advances), so a retry must start from this pristine copy — not the
-    // (possibly mutated) input.messages reference.
+    // Snapshot the original transcript up front. iterateOnce mutates the
+    // messages array it receives (pushing assistant tool-call / tool-result
+    // rows as the round advances), so a retry must start from this pristine
+    // copy — not the (possibly mutated) input.messages reference.
     const initialMessages = [...input.messages];
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
@@ -850,10 +1002,12 @@ export class AIChatQueryLoop {
     let quotaRetried = false;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      const attemptInput: AIChatQueryLoopInput =
-        attempt === 0 ? input : { ...input, messages: [...initialMessages] };
+      const attemptInput: AIChatQueryGeneratorInput =
+        attempt === 0
+          ? input
+          : { ...input, messages: [...initialMessages] };
 
-      const result = await this.runOnce(attemptInput, tracker);
+      const result = yield* this.iterateOnce(attemptInput, tracker);
 
       if (result.type !== "failed") {
         return result;
@@ -897,27 +1051,26 @@ export class AIChatQueryLoop {
       }
 
       const delayMs = baseDelayMs * 2 ** attempt;
-      input.eventSink.emit({
+      yield {
         type: "retry_connect",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
         retryAttempt: attempt + 1,
         retryMaxAttempts: maxAttempts,
         retryDelayMs: delayMs,
-      });
+      };
       await abortableDelay(delayMs, input.abortController.signal);
     }
 
     // Unreachable: the loop always returns on the final attempt. Returned
     // purely to satisfy the type checker.
-    throw new Error("AIChatQueryLoop.run exited its retry loop unexpectedly");
+    throw new Error("AIChatQueryLoop.iterate exited its retry loop unexpectedly");
   }
 
-  async runOnce(
-    input: AIChatQueryLoopInput,
+  private async *iterateOnce(
+    input: AIChatQueryGeneratorInput,
     tracker: RoundContentTracker
-  ): Promise<AIChatQueryLoopResult> {
-    const { eventSink } = input;
+  ): AIChatQueryGenerator {
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
     // Tracks the most recent server-reported usage across all rounds so the
@@ -1014,7 +1167,7 @@ export class AIChatQueryLoop {
         if (steeringControl?.hasPending()) {
           const batch = await steeringControl.consume("before_model");
           if (batch) {
-            this.applySteeringToTranscript(
+            yield this.applySteeringToTranscript(
               input,
               messages,
               batch,
@@ -1074,7 +1227,10 @@ export class AIChatQueryLoop {
           }`
         );
 
-        await this.deps.streamChatCompletion(
+        // Stage B §5.1: consume the provider as an async iterable — chunks,
+        // retry, and recovery notifications arrive in causal order and are
+        // yielded directly (no callback-into-generator bridge on this path).
+        for await (const providerEvent of this.providerEvents(
           {
             messages,
             model: input.request.model,
@@ -1096,64 +1252,73 @@ export class AIChatQueryLoop {
             // for non-reasoning models until per-model capability detection
             // lands (PRD Phase 5). showReasoning is a renderer display pref.
           },
-          (rawChunk) => {
-            if (input.abortController.signal.aborted) return;
-            if (!input.isActiveTurn()) return;
-            const { contentDelta, reasoningDelta } =
-              accumulator.ingest(rawChunk);
-            if (reasoningDelta) {
-              // Reasoning is visible UI content for this turn; from here on a
-              // later failure must not be retried (it would duplicate it).
-              tracker.delivered = true;
-              eventSink.emit({
-                type: "reasoning_delta",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                reasoningDelta,
-                model: accumulator.state.model,
-              });
-            }
-            if (contentDelta) {
-              // Mark that the UI has now seen streamed content for this turn.
-              // The retry wrapper uses this to avoid re-running a turn whose
-              // output is already visible (which would duplicate it).
-              tracker.delivered = true;
-              eventSink.emit({
-                type: "token",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                contentDelta,
-                model: accumulator.state.model,
-              });
-            }
-          },
           {
+            // Callbacks are unused on the native path (events arrive as
+            // yielded provider events); the legacy bridge builds its own.
             signal: input.abortController.signal,
-            onRetry: (info) => {
-              eventSink.emit({
-                type: "retry_connect",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                retryAttempt: info.attempt,
-                retryMaxAttempts: info.maxAttempts,
-                retryDelayMs: info.delayMs,
-              });
-            },
-            onRecoveryStatus: (info) => {
-              eventSink.emit({
-                type: "recovery_status",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                layer: info.layer,
-                reason: info.reason,
-                attempt: info.attempt,
-                maxAttempts: info.maxAttempts,
-                delayMs: info.delayMs,
-                message: info.message,
-              });
+            acceptChunk: (chunk) => {
+              // Same guards the old onChunk callback applied synchronously.
+              void chunk;
+              return (
+                !input.abortController.signal.aborted && input.isActiveTurn()
+              );
             },
           }
-        );
+        )) {
+          if (providerEvent.type === "recovery") {
+            const info = providerEvent.info;
+            yield {
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: info.layer,
+              reason: info.reason,
+              attempt: info.attempt,
+              maxAttempts: info.maxAttempts,
+              delayMs: info.delayMs,
+              message: info.message,
+            };
+            continue;
+          }
+          if (providerEvent.type === "retry") {
+            yield {
+              type: "retry_connect",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              retryAttempt: providerEvent.info.attempt,
+              retryMaxAttempts: providerEvent.info.maxAttempts,
+              retryDelayMs: providerEvent.info.delayMs,
+            };
+            continue;
+          }
+          const rawChunk = providerEvent.chunk;
+          const { contentDelta, reasoningDelta } = accumulator.ingest(rawChunk);
+          if (reasoningDelta) {
+            // Reasoning is visible UI content for this turn; from here on a
+            // later failure must not be retried (it would duplicate it).
+            tracker.delivered = true;
+            yield {
+              type: "reasoning_delta",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              reasoningDelta,
+              model: accumulator.state.model,
+            };
+          }
+          if (contentDelta) {
+            // Mark that the UI has now seen streamed content for this turn.
+            // The iterate retry wrapper uses this to avoid re-running a turn
+            // whose output is already visible (which would duplicate it).
+            tracker.delivered = true;
+            yield {
+              type: "token",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              contentDelta,
+              model: accumulator.state.model,
+            };
+          }
+        }
 
         finalAccumulator = accumulator;
         // Accumulate every round's delivered text once so steering offsets
@@ -1181,7 +1346,7 @@ export class AIChatQueryLoop {
             }
           : estimateTokenUsage(messages, accumulator.state.fullContent);
         lastReportedUsage = resolvedUsage;
-        eventSink.emit({
+        yield {
           type: "usage_update",
           conversationId: input.conversationId,
           messageId: input.assistantMessageId,
@@ -1189,7 +1354,7 @@ export class AIChatQueryLoop {
           promptTokens: resolvedUsage.promptTokens,
           completionTokens: resolvedUsage.completionTokens,
           totalTokens: resolvedUsage.totalTokens,
-        });
+        };
 
         const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
@@ -1233,14 +1398,14 @@ export class AIChatQueryLoop {
               recoveredContentPrefix:
                 recoveryState.recoveredContentPrefix + partialEsc,
             };
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
               layer: "output_token_recovery",
               reason: "output_limit",
               message: "Escalating output token budget",
-            });
+            };
             continue;
           }
           if (result.action.type === "continue_output") {
@@ -1261,7 +1426,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: result.action.continuationMessage,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1269,7 +1434,7 @@ export class AIChatQueryLoop {
               reason: "output_limit",
               attempt: recoveryState.outputContinuationCount,
               message: "Continuing truncated output",
-            });
+            };
             continue;
           }
           throw new Error(
@@ -1296,14 +1461,14 @@ export class AIChatQueryLoop {
               recoveredContentPrefix:
                 recoveryState.recoveredContentPrefix + partialEsc,
             };
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
               layer: "output_token_recovery",
               reason: "output_limit",
               message: "Escalating output token budget",
-            });
+            };
             continue;
           }
           if (result.action.type === "continue_output") {
@@ -1321,7 +1486,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: result.action.continuationMessage,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1329,7 +1494,7 @@ export class AIChatQueryLoop {
               reason: "output_limit",
               attempt: recoveryState.outputContinuationCount,
               message: "Continuing truncated output",
-            });
+            };
             continue;
           }
           // Else fall through; the round will complete with the partial.
@@ -1376,8 +1541,14 @@ export class AIChatQueryLoop {
                   : accumulator.state.fullContent
               )
             );
-            this.emitSkippedToolResults(input, messages, parsedCalls);
-            this.applySteeringToTranscript(
+            for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+            yield this.applySteeringToTranscript(
               input,
               messages,
               batch,
@@ -1405,7 +1576,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: TEXT_TOOL_CALL_MARKER_RETRY_PROMPT,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1414,7 +1585,7 @@ export class AIChatQueryLoop {
               attempt: textToolCallMarkerRetryCount,
               maxAttempts: MAX_TEXT_TOOL_CALL_MARKER_RETRIES,
               message: "Retrying malformed tool-call marker response",
-            });
+            };
             continue;
           }
 
@@ -1447,7 +1618,7 @@ export class AIChatQueryLoop {
             const batch = await steeringControl.consume("before_complete");
             if (batch) {
               this.assertSteeringRoundBudget(round);
-              this.applySteeringToTranscript(
+              yield this.applySteeringToTranscript(
                 input,
                 messages,
                 batch,
@@ -1486,9 +1657,8 @@ export class AIChatQueryLoop {
             accumulator.state.fullContent.trim().length === 0 &&
             shouldForceSubmitPlanForApproval(input.request.message)
           ) {
-            const submitted = await this.submitImmediatePlanForApproval(
-              input,
-              eventSink
+            const submitted = yield* this.submitImmediatePlanForApproval(
+              input
             );
             if (submitted) {
               planToolsUsed = true;
@@ -1576,7 +1746,7 @@ export class AIChatQueryLoop {
             success: false,
             error: errorDetail,
           });
-          eventSink.emit({
+          yield {
             type: "tool_result",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -1584,7 +1754,7 @@ export class AIChatQueryLoop {
             toolName: call.name,
             fullContent: errorContent,
             toolResult: { success: false, error: errorDetail },
-          });
+          };
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -1603,8 +1773,14 @@ export class AIChatQueryLoop {
             const batch = await steeringControl.consume("before_tool");
             if (batch) {
               this.assertSteeringRoundBudget(round);
-              this.emitSkippedToolResults(input, messages, parsedCalls);
-              this.applySteeringToTranscript(
+              for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+              yield this.applySteeringToTranscript(
                 input,
                 messages,
                 batch,
@@ -1620,19 +1796,20 @@ export class AIChatQueryLoop {
           const callId = call.id;
           const callName = call.name;
 
-          const emitToolCall = async (
+          // Stage B §5.2: pure event builder — the tool_call is yielded at
+          // each call site; the persistence barrier comes from the consumer
+          // (facade flush / engine awaited save) between the yield and the
+          // tool starting on the next generator advance.
+          const buildToolCallEvent = (
             toolArguments: Record<string, unknown>
-          ): Promise<void> => {
-            eventSink.emit({
-              type: "tool_call",
-              conversationId: input.conversationId,
-              messageId: input.assistantMessageId,
-              toolCallId: callId,
-              toolName: callName,
-              toolArguments,
-            });
-            await eventSink.flush?.();
-          };
+          ): AIChatLoopEvent => ({
+            type: "tool_call",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: callId,
+            toolName: callName,
+            toolArguments,
+          });
 
           // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
           if (
@@ -1666,7 +1843,7 @@ export class AIChatQueryLoop {
             const searchContent = serializeToolResultContent(
               searchPayload as unknown as Record<string, unknown>
             );
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1674,7 +1851,7 @@ export class AIChatQueryLoop {
               toolName: call.name,
               fullContent: searchContent,
               toolResult: searchPayload as unknown as Record<string, unknown>,
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -1703,7 +1880,7 @@ export class AIChatQueryLoop {
                 "They are already rendered in chat. If the user requested persistent workspace files, " +
                 "call export_generated_artifacts with the returned artifact URLs and workspace-relative destinations.",
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1714,7 +1891,7 @@ export class AIChatQueryLoop {
                 success: false,
                 error: "use export_generated_artifacts instead",
               },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -1742,7 +1919,7 @@ export class AIChatQueryLoop {
               error:
                 "Do not attach multiple images for independent edits. Call process_artifact_batch once with every exact workspace path and the shared edit instruction. It runs one provider request per input with bounded concurrency.",
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1753,7 +1930,7 @@ export class AIChatQueryLoop {
                 success: false,
                 error: "use process_artifact_batch instead",
               },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -1786,7 +1963,7 @@ export class AIChatQueryLoop {
                     `Use attach_local_images with exactly one workspace image, or process_artifact_batch ` +
                     `for multiple images (discover paths with glob_files first).`,
                 });
-                eventSink.emit({
+                yield {
                   type: "tool_result",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -1797,7 +1974,7 @@ export class AIChatQueryLoop {
                     success: false,
                     error: "use attach_local_images instead",
                   },
-                });
+                };
                 messages.push({
                   role: "tool",
                   tool_call_id: call.id,
@@ -1811,7 +1988,7 @@ export class AIChatQueryLoop {
                 success: false,
                 error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
               });
-              eventSink.emit({
+              yield {
                 type: "tool_result",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -1819,7 +1996,7 @@ export class AIChatQueryLoop {
                 toolName: call.name,
                 fullContent: retryContent,
                 toolResult: { success: false, error: "deferred tool loaded" },
-              });
+              };
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
@@ -1835,12 +2012,11 @@ export class AIChatQueryLoop {
             !planContext &&
             input.autoPlan
           ) {
-            await emitToolCall(call.arguments ?? {});
-            const transition = await this.handleEnterPlanMode(
+            yield buildToolCallEvent(call.arguments ?? {});
+            const transition = yield* this.handleEnterPlanMode(
               input,
               messages,
-              call,
-              eventSink
+              call
             );
             if (transition.status === "transitioned") {
               planContext = {
@@ -1872,7 +2048,7 @@ export class AIChatQueryLoop {
             isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
-            await emitToolCall(call.arguments ?? {});
+            yield buildToolCallEvent(call.arguments ?? {});
             const reason = planContext
               ? "Already in Plan Mode; EnterPlanMode is not available."
               : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
@@ -1880,7 +2056,7 @@ export class AIChatQueryLoop {
               success: false,
               error: reason,
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -1888,7 +2064,7 @@ export class AIChatQueryLoop {
               toolName: call.name,
               fullContent: errContent,
               toolResult: { success: false, error: reason },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -1899,15 +2075,14 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
-            await emitToolCall(call.arguments ?? {});
+            yield buildToolCallEvent(call.arguments ?? {});
             planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
-              const paused = await this.handlePlanToolAskUserQuestion(
+              const paused = yield* this.handlePlanToolAskUserQuestion(
                 input,
                 messages,
                 call,
-                round,
-                eventSink
+                round
               );
               if (paused) {
                 if (
@@ -1924,11 +2099,10 @@ export class AIChatQueryLoop {
               continue;
             }
             if (call.name === "SubmitPlanForApproval") {
-              await this.handlePlanToolSubmitForApproval(
+              yield* this.handlePlanToolSubmitForApproval(
                 input,
                 messages,
-                call,
-                eventSink
+                call
               );
               continue;
             }
@@ -1946,13 +2120,13 @@ export class AIChatQueryLoop {
               },
             });
             if (!policyDecision.allowed) {
-              await emitToolCall(call.arguments ?? {});
+              yield buildToolCallEvent(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({
                 success: false,
                 planApprovalRequired: true,
                 reason: policyDecision.reason ?? "Plan approval required.",
               });
-              eventSink.emit({
+              yield {
                 type: "plan_blocked_tool",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -1961,7 +2135,7 @@ export class AIChatQueryLoop {
                 fullContent: blockedContent,
                 planBlockedToolName: call.name,
                 planBlockedReason: policyDecision.reason ?? undefined,
-              });
+              };
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
@@ -1986,7 +2160,7 @@ export class AIChatQueryLoop {
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const gateDecision = await this.evaluateOutboundEmailGate(input);
             if (!gateDecision.allowed) {
-              await emitToolCall(call.arguments ?? {});
+              yield buildToolCallEvent(call.arguments ?? {});
               // Actionable reason text (§19): tell the model how to unblock so
               // it stops re-drafting. draft_required → draft first;
               // review_required → the user must review; authorization_missing
@@ -2001,7 +2175,7 @@ export class AIChatQueryLoop {
                 code: gateDecision.code,
                 reason: blockedReason,
               });
-              eventSink.emit({
+              yield {
                 type: "tool_result",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -2013,7 +2187,7 @@ export class AIChatQueryLoop {
                   outboundGateBlocked: true,
                   code: gateDecision.code,
                 },
-              });
+              };
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
@@ -2042,11 +2216,32 @@ export class AIChatQueryLoop {
             outboundAuthorization
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
-          await emitToolCall(effectiveArguments);
+          yield buildToolCallEvent(effectiveArguments);
 
-          const toolResult =
-            preparedCall.blockedResult ??
-            (await this.executePreparedToolWithTimeout(input, preparedCall));
+          // Stage B §12 (FR-016): progress produced by callbacks while the
+          // tool runs flows through the latest-per-tool multiplexer —
+          // coalesced, bounded, never failing the tool.
+          let toolResult: ToolExecutionResult;
+          if (preparedCall.blockedResult) {
+            toolResult = preparedCall.blockedResult;
+          } else {
+            const progressStream = runToolWithProgress<
+              ToolExecutionResult,
+              AIChatToolProgressLoopEvent
+            >(
+              (emit) =>
+                this.executePreparedToolWithTimeout(input, preparedCall, emit),
+              input.abortController.signal
+            );
+            for (;;) {
+              const step = await progressStream.next();
+              if (step.done === true) {
+                toolResult = step.value;
+                break;
+              }
+              yield step.value.event;
+            }
+          }
 
           // FR-4: a tool (e.g. run_subagent batch worker) may contribute
           // generated/edited image descriptors on result.outputImages. Fold
@@ -2104,7 +2299,7 @@ export class AIChatQueryLoop {
             } needsPermission=${isPermissionPromptResult(toolResult)}`
           );
 
-          eventSink.emit({
+          yield {
             type: "tool_result",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -2112,7 +2307,7 @@ export class AIChatQueryLoop {
             toolName: call.name,
             fullContent: toolContent,
             toolResult: toolPayload,
-          });
+          };
 
           if (isPermissionPromptResult(toolResult)) {
             return {
@@ -2137,7 +2332,6 @@ export class AIChatQueryLoop {
                 intentDecisionId: input.intentDecisionId,
                 outboundAuthorization,
                 planContext,
-                eventSink: eventSink,
                 toolCatalogState: catalogActive
                   ? snapshotToolCatalogState(
                       discoveredToolNames,
@@ -2191,8 +2385,14 @@ export class AIChatQueryLoop {
             const batch = await steeringControl.consume("after_tool");
             if (batch) {
               this.assertSteeringRoundBudget(round);
-              this.emitSkippedToolResults(input, messages, parsedCalls);
-              this.applySteeringToTranscript(
+              for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+              yield this.applySteeringToTranscript(
                 input,
                 messages,
                 batch,
@@ -2289,7 +2489,7 @@ export class AIChatQueryLoop {
       if (!lastReportedUsage) {
         const estimated = estimateTokenUsage(input.messages, fullContent);
         lastReportedUsage = estimated;
-        eventSink.emit({
+        yield {
           type: "usage_update",
           conversationId: input.conversationId,
           messageId: input.assistantMessageId,
@@ -2297,7 +2497,7 @@ export class AIChatQueryLoop {
           promptTokens: estimated.promptTokens,
           completionTokens: estimated.completionTokens,
           totalTokens: estimated.totalTokens,
-        });
+        };
       }
       return {
         type: "completed",
@@ -2385,7 +2585,7 @@ export class AIChatQueryLoop {
         // persisted recoveryMetadata.
         if (result.action.type === "fallback_model") {
           recoveryState = result.updatedState;
-          eventSink.emit({
+          yield {
             type: "recovery_status",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -2395,7 +2595,7 @@ export class AIChatQueryLoop {
             currentModel: recoveryState.currentModel,
             fallbackModel: result.action.fallbackModel,
             message: "Switching to backup model",
-          });
+          };
         }
       }
       return {
@@ -2441,11 +2641,14 @@ export class AIChatQueryLoop {
    * buildAssistantToolCallMessage (including its `call_${index}` fallback)
    * so every assistant tool_call_id receives exactly one result.
    */
-  private emitSkippedToolResults(
-    input: AIChatQueryLoopInput,
+  /** Stage B §5.2: returns the synthetic skipped-tool events; call sites
+   * yield them (the transcript mutation stays here). */
+  private collectSkippedToolResults(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     parsedCalls: readonly ParsedToolCallResult[]
-  ): void {
+  ): AIChatLoopEvent[] {
+    const events: AIChatLoopEvent[] = [];
     const resulted = new Set<string>();
     for (const message of messages) {
       if (message.role === "tool" && message.tool_call_id) {
@@ -2460,7 +2663,7 @@ export class AIChatQueryLoop {
       const id = call.id ?? `call_${parsedCalls.indexOf(call)}`;
       if (resulted.has(id)) continue;
       if (!call.name && !call.id) continue;
-      input.eventSink.emit({
+      events.push({
         type: "tool_result",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
@@ -2483,6 +2686,7 @@ export class AIChatQueryLoop {
         skippedCount
       );
     }
+    return events;
   }
 
   /**
@@ -2491,27 +2695,29 @@ export class AIChatQueryLoop {
    * direction_updated event carrying ids/offset only, and record the
    * transition for the final assistant row (§11.5).
    */
+  /** Stage B §5.2: returns the direction_updated event for the caller to
+   * yield; the transcript/transition mutation stays here. */
   private applySteeringToTranscript(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     batch: AIChatSteeringBatch,
     contentOffset: number,
     transitions: ChatV2DirectionTransition[]
-  ): void {
+  ): AIChatLoopEvent {
     for (const instruction of batch.instructions) {
       messages.push({
         role: "user",
         content: `${STEERING_MODEL_PREFIX}\n${instruction.modelContent}`,
       });
     }
-    input.eventSink.emit({
+    const directionEvent: AIChatLoopEvent = {
       type: "direction_updated",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       boundary: batch.boundary,
       pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
       contentOffset,
-    });
+    };
     transitions.push({
       contentOffset,
       boundary: batch.boundary,
@@ -2521,19 +2727,19 @@ export class AIChatQueryLoop {
     log.info(
       `[ai-chat-v2] steering applied boundary=${batch.boundary} count=${batch.instructions.length} offset=${contentOffset}`
     );
+    return directionEvent;
   }
 
-  private async handlePlanToolAskUserQuestion(
-    input: AIChatQueryLoopInput,
+  private async *handlePlanToolAskUserQuestion(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
     },
-    round: number,
-    eventSink: AIChatQueryEventSink
-  ): Promise<AIChatQueryLoopResult | null> {
+    round: number
+  ): AsyncGenerator<AIChatLoopEvent, AIChatQueryLoopResult | null, void> {
     if (!input.planContext || !call.id || !call.name) return null;
     const payload = (call.arguments ?? {}) as unknown as AskUserQuestionPayload;
     if (!payload || !Array.isArray(payload.questions)) return null;
@@ -2562,7 +2768,7 @@ export class AIChatQueryLoop {
       return null;
     }
 
-    eventSink.emit({
+    yield {
       type: "ask_user_question",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
@@ -2570,7 +2776,7 @@ export class AIChatQueryLoop {
       toolName: call.name,
       question: questionView,
       planState: input.planContext.planState,
-    });
+    };
 
     const ackContent = serializeToolResultContent({
       success: true,
@@ -2596,7 +2802,9 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         questionId: questionView.questionId,
         planId: input.planContext.planState.planId,
-        eventSink: eventSink,
+        // Stage B §10: pending data carries no sink — the engine keeps the
+        // resume destination in its side map; the owner supplies one on
+        // resumeClaimed.
         // Stage A §3.2/§3.6: owner listener + notification ownership survive
         // the pause (FR-021/023).
         ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
@@ -2623,17 +2831,18 @@ export class AIChatQueryLoop {
    * { type: "failed" } turn result.
    */
   private async executeAsyncTool(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
     },
-    outboundAuthorization?: {
+    outboundAuthorization: {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
+    } | undefined,
+    onProgress?: ToolProgressEmitter
   ): Promise<{ jobId: string }> {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
@@ -2675,7 +2884,7 @@ export class AIChatQueryLoop {
               // does not contact recipients. The send tool remains gated.
               skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
               emitProgress: (event) => {
-                input.eventSink.emit({
+                onProgress?.({
                   type: "tool_progress",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -2715,9 +2924,10 @@ export class AIChatQueryLoop {
    * its existing cancel detection.
    */
   private async pollAsyncJobToCompletion(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: { id: string; name: string },
-    jobId: string
+    jobId: string,
+    onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
@@ -2730,7 +2940,7 @@ export class AIChatQueryLoop {
       partialCount: number | null,
       expectedCount: number | null
     ): void => {
-      input.eventSink.emit({
+      onProgress?.({
         type: "tool_progress",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
@@ -2909,7 +3119,7 @@ export class AIChatQueryLoop {
    * failure yields a blocking code — a send is never authorized on error.
    */
   private async evaluateOutboundEmailGate(
-    input: AIChatQueryLoopInput
+    input: AIChatQueryGeneratorInput
   ): Promise<OutboundEmailToolGateResult> {
     // Without a trusted intent decision for this turn's user message there is
     // no evidence the user asked to send at all — blocked as draft_required.
@@ -2974,7 +3184,7 @@ export class AIChatQueryLoop {
   }
 
   private async prepareToolCall(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
@@ -3027,8 +3237,9 @@ export class AIChatQueryLoop {
   }
 
   private async executePreparedToolWithTimeout(
-    input: AIChatQueryLoopInput,
-    prepared: PreparedToolCall
+    input: AIChatQueryGeneratorInput,
+    prepared: PreparedToolCall,
+    onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const {
       descriptor,
@@ -3055,12 +3266,14 @@ export class AIChatQueryLoop {
       const { jobId } = await this.executeAsyncTool(
         input,
         effectiveCall,
-        outboundAuthorization
+        outboundAuthorization,
+        onProgress
       );
       toolResult = await this.pollAsyncJobToCompletion(
         input,
         effectiveCall,
-        jobId
+        jobId,
+        onProgress
       );
     } else {
       toolResult = await this.executeForegroundToolWithTimeout(
@@ -3069,7 +3282,8 @@ export class AIChatQueryLoop {
         skill,
         timeoutMs,
         startedAt,
-        outboundAuthorization
+        outboundAuthorization,
+        onProgress
       );
     }
 
@@ -3101,7 +3315,7 @@ export class AIChatQueryLoop {
   }
 
   private async executeForegroundToolWithTimeout(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
@@ -3114,8 +3328,9 @@ export class AIChatQueryLoop {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
-  ): Promise<ToolExecutionResult> {
+    },
+    onProgress?: ToolProgressEmitter
+): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
 
@@ -3148,7 +3363,7 @@ export class AIChatQueryLoop {
         currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
-          input.eventSink.emit({
+          onProgress?.({
             type: "tool_progress",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -3237,7 +3452,7 @@ export class AIChatQueryLoop {
   }
 
   private resolveHookToolDescriptor(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: { id: string; name: string }
   ): HookToolDescriptor {
     const skill = input.skillRegistry?.getSkill(call.name);
@@ -3256,7 +3471,7 @@ export class AIChatQueryLoop {
   }
 
   private snapshotPermissionState(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     toolName: string
   ): {
     allowed: boolean;
@@ -3281,7 +3496,7 @@ export class AIChatQueryLoop {
   }
 
   private async runPreToolUseHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>
   ): Promise<AggregatedHookResult> {
@@ -3309,7 +3524,7 @@ export class AIChatQueryLoop {
   }
 
   private async runPostToolUseHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>,
     output: Record<string, unknown>,
@@ -3340,7 +3555,7 @@ export class AIChatQueryLoop {
   }
 
   private async runPostToolUseFailureHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>,
     toolResult: Record<string, unknown>,
@@ -3396,10 +3611,9 @@ export class AIChatQueryLoop {
     };
   }
 
-  private async submitImmediatePlanForApproval(
-    input: AIChatQueryLoopInput,
-    eventSink: AIChatQueryEventSink
-  ): Promise<AIChatPlanStateView | null> {
+  private async *submitImmediatePlanForApproval(
+    input: AIChatQueryGeneratorInput
+  ): AsyncGenerator<AIChatLoopEvent, AIChatPlanStateView | null, void> {
     if (!input.planContext) return null;
     const payload = this.buildImmediatePlanPayload(input);
     try {
@@ -3409,14 +3623,14 @@ export class AIChatQueryLoop {
           planId: input.planContext.planState.planId,
           payload,
         });
-      eventSink.emit({
+      yield {
         type: "plan_submitted",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
         toolCallId: `immediate-plan-${Date.now()}`,
         toolName: "SubmitPlanForApproval",
         planState: updatedPlan,
-      });
+      };
       return updatedPlan;
     } catch (err) {
       log.error("[ai-chat-v2] immediate plan submit failed:", err);
@@ -3425,7 +3639,7 @@ export class AIChatQueryLoop {
   }
 
   private buildImmediatePlanPayload(
-    input: AIChatQueryLoopInput
+    input: AIChatQueryGeneratorInput
   ): SubmitPlanForApprovalPayload {
     const objective =
       input.planContext?.planState.objective?.trim() ||
@@ -3483,16 +3697,15 @@ export class AIChatQueryLoop {
     };
   }
 
-  private async handlePlanToolSubmitForApproval(
-    input: AIChatQueryLoopInput,
+  private async *handlePlanToolSubmitForApproval(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
-    },
-    eventSink: AIChatQueryEventSink
-  ): Promise<void> {
+    }
+  ): AsyncGenerator<AIChatLoopEvent, void, void> {
     if (!input.planContext || !call.id) return;
     const payload = (call.arguments ??
       {}) as unknown as SubmitPlanForApprovalPayload;
@@ -3520,14 +3733,14 @@ export class AIChatQueryLoop {
       return;
     }
 
-    eventSink.emit({
+    yield {
       type: "plan_submitted",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       toolCallId: call.id,
       toolName: call.name ?? "SubmitPlanForApproval",
       planState: updatedPlan,
-    });
+    };
 
     const ackContent = serializeToolResultContent({
       success: true,
@@ -3548,18 +3761,18 @@ export class AIChatQueryLoop {
    * Returns "transitioned" on success or "error" (with an error tool result
    * already pushed to messages) on failure.
    */
-  private async handleEnterPlanMode(
-    input: AIChatQueryLoopInput,
+  private async *handleEnterPlanMode(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
-    },
-    eventSink: AIChatQueryEventSink
-  ): Promise<
-    | { status: "transitioned"; newPlanState: AIChatPlanStateView }
-    | { status: "error" }
+    }
+  ): AsyncGenerator<
+    AIChatLoopEvent,
+    { status: "transitioned"; newPlanState: AIChatPlanStateView } | { status: "error" },
+    void
   > {
     if (!input.autoPlan || !call.id) {
       return { status: "error" };
@@ -3603,14 +3816,14 @@ export class AIChatQueryLoop {
       return { status: "error" };
     }
 
-    eventSink.emit({
+    yield {
       type: "plan_state",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       planState,
       autoEntered: true,
       rationale: args.rationale,
-    });
+    };
 
     // System-role reminder — OpenAI Chat Completions API permits system
     // messages anywhere in the transcript.

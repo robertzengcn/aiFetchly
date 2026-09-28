@@ -455,6 +455,12 @@ export class AIChatQueryEngine {
       pending: PendingPermissionTurn | PendingPlanQuestionTurn;
     }
   >();
+  /**
+   * Stage B §10: pending data no longer carries an event sink. The owner
+   * supplies the destination via resumeClaimed options; this side map keeps
+   * the original sink for legacy (non-owner) resume callers.
+   */
+  private pendingSinks = new Map<string, AIChatQueryEventSink>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly modelCatalog: AIChatModelCatalogService;
@@ -1817,7 +1823,7 @@ export class AIChatQueryEngine {
     if (pendingPermission) {
       this.pendingPermissions.delete(conversationId);
       pendingPermission.abortController.abort();
-      pendingPermission.eventSink.emit({
+      this.pendingSinks.get(conversationId)?.emit({
         type: "cancelled",
         conversationId: pendingPermission.conversationId,
         messageId: pendingPermission.assistantMessageId,
@@ -1828,7 +1834,7 @@ export class AIChatQueryEngine {
     if (pendingPlanQuestion) {
       this.pendingPlanQuestions.delete(conversationId);
       pendingPlanQuestion.abortController.abort();
-      pendingPlanQuestion.eventSink.emit({
+      this.pendingSinks.get(conversationId)?.emit({
         type: "cancelled",
         conversationId: pendingPlanQuestion.conversationId,
         messageId: pendingPlanQuestion.assistantMessageId,
@@ -1899,7 +1905,8 @@ export class AIChatQueryEngine {
     if (!claimed) return false;
     this.claimedPending.delete(conversationId);
     claimed.pending.abortController.abort();
-    claimed.pending.eventSink.emit({
+    const sink = this.takePendingSink(conversationId);
+    sink.emit({
       type: "cancelled",
       conversationId: claimed.pending.conversationId,
       messageId: claimed.pending.assistantMessageId,
@@ -1984,10 +1991,11 @@ export class AIChatQueryEngine {
     // The claim is consumed by this execution: duplicates during the
     // continuation are rejected (never re-executed).
     this.claimedPending.delete(conversationId);
+    const baseSink = options?.eventSink ?? this.takePendingSink(conversationId);
     this.activeTurns.set(conversationId, {
       abortController: matchedByToolId.abortController,
       assistantMessageId: matchedByToolId.assistantMessageId,
-      eventSink: options?.eventSink ?? matchedByToolId.eventSink,
+      eventSink: baseSink,
       ...(lifecycle ? { lifecycle } : {}),
     });
     // Stage A §3.2 (FR-021): the claimed resume starts executing now.
@@ -1996,10 +2004,7 @@ export class AIChatQueryEngine {
       assistantMessageId: matchedByToolId.assistantMessageId,
     });
     const module = new AIChatV2Module();
-    const eventSink = this.createPersistingEventSink(
-      module,
-      options?.eventSink ?? matchedByToolId.eventSink
-    );
+    const eventSink = this.createPersistingEventSink(module, baseSink);
 
     try {
       const toolResult = await SkillExecutor.execute(
@@ -2166,12 +2171,7 @@ export class AIChatQueryEngine {
         assistantMessageId: matchedByToolId.assistantMessageId,
       };
     } catch (err) {
-      this.handleFailure(
-        err,
-        conversationId,
-        matchedByToolId.assistantMessageId,
-        options?.eventSink ?? matchedByToolId.eventSink
-      );
+      this.handleFailure(err, conversationId, matchedByToolId.assistantMessageId, baseSink);
       return {
         type: "failed",
         conversationId,
@@ -2191,10 +2191,11 @@ export class AIChatQueryEngine {
     const conversationId = pending.conversationId;
     const lifecycle = options?.lifecycle ?? pending.lifecycle;
     this.claimedPending.delete(conversationId);
+    const baseSink = options?.eventSink ?? this.takePendingSink(conversationId);
     this.activeTurns.set(conversationId, {
       abortController: pending.abortController,
       assistantMessageId: pending.assistantMessageId,
-      eventSink: options?.eventSink ?? pending.eventSink,
+      eventSink: baseSink,
       ...(lifecycle ? { lifecycle } : {}),
     });
     this.notifyResumed(lifecycle, {
@@ -2278,7 +2279,7 @@ export class AIChatQueryEngine {
       request: pending.request,
       openAITools: allOpenAITools,
       abortController: pending.abortController,
-      eventSink: options?.eventSink ?? pending.eventSink,
+      eventSink: baseSink,
       skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
@@ -2296,10 +2297,7 @@ export class AIChatQueryEngine {
     };
 
     const module = new AIChatV2Module();
-    const eventSink = this.createPersistingEventSink(
-      module,
-      options?.eventSink ?? pending.eventSink
-    );
+    const eventSink = this.createPersistingEventSink(module, baseSink);
 
     try {
       const result = await this.loop.run({ ...loopInput, eventSink });
@@ -2326,12 +2324,7 @@ export class AIChatQueryEngine {
         assistantMessageId: pending.assistantMessageId,
       };
     } catch (err) {
-      this.handleFailure(
-        err,
-        conversationId,
-        pending.assistantMessageId,
-        options?.eventSink ?? pending.eventSink
-      );
+      this.handleFailure(err, conversationId, pending.assistantMessageId, baseSink);
       return {
         type: "failed",
         conversationId,
@@ -2381,7 +2374,9 @@ export class AIChatQueryEngine {
         error: "No active permission-gated tool call to continue.",
       };
     }
-    const pendingSink = pending.eventSink;
+    const pendingSink = this.pendingSinks.get(pending.conversationId) ?? {
+      emit: () => undefined,
+    };
     void this.resumeClaimed(claim).catch((err: unknown) => {
       log.error("[ai-chat-v2] resume loop failed:", err);
       void redirectToLoginOnAuthExpired(err);
@@ -2426,7 +2421,9 @@ export class AIChatQueryEngine {
     if (claim.status === "already_claimed") {
       return { ok: true };
     }
-    const pendingSink = claim.pending.eventSink;
+    const pendingSink = this.pendingSinks.get(claim.pending.conversationId) ?? {
+      emit: () => undefined,
+    };
     void this.resumeClaimed(claim).catch((err: unknown) => {
       log.error("[ai-chat-v2] answer-question loop failed:", err);
       void redirectToLoginOnAuthExpired(err);
@@ -2699,6 +2696,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
+        this.rememberPendingSink(result.pending.conversationId, eventSink);
         log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
@@ -2723,6 +2721,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
+        this.rememberPendingSink(result.pending.conversationId, eventSink);
         log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
@@ -2792,6 +2791,7 @@ export class AIChatQueryEngine {
     this.clearActiveTurnState(conversationId, assistantMessageId);
     this.pendingPermissions.delete(conversationId);
     this.pendingPlanQuestions.delete(conversationId);
+    this.pendingSinks.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -2943,6 +2943,21 @@ export class AIChatQueryEngine {
       );
       return input.images;
     }
+  }
+
+  private rememberPendingSink(
+    conversationId: string,
+    sink: AIChatQueryEventSink | undefined
+  ): void {
+    if (sink) {
+      this.pendingSinks.set(conversationId, sink);
+    }
+  }
+
+  private takePendingSink(conversationId: string): AIChatQueryEventSink {
+    const sink = this.pendingSinks.get(conversationId);
+    this.pendingSinks.delete(conversationId);
+    return sink ?? { emit: () => undefined };
   }
 
   /** Stage A §3.2 (FR-021): fire a lifecycle notification, never throwing. */
