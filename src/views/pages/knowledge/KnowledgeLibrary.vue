@@ -209,8 +209,11 @@
             </v-list>
           </div>
           
-          <!-- Upload metadata: one set of values for every file in this upload -->
-          <div v-if="uploadFiles.length > 0" class="upload-metadata mt-4">
+          <!-- Upload metadata: one set of values for every file in this upload.
+               Rendered whenever the dialog is open so the user can fill author,
+               tags, and description before choosing files (PRD §14.1). The Upload
+               button stays disabled until a file is selected (PRD §14.2). -->
+          <div v-if="showUploadDialog" class="upload-metadata mt-4">
             <div class="text-caption text-grey mb-2">
               {{ t('knowledge.upload_metadata_hint') || 'Optional. Applied to every file in this upload.' }}
             </div>
