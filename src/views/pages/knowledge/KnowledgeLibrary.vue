@@ -824,8 +824,11 @@ function handleLocalRuntimeRequired(): void {
   void ensureLocalEmbeddingRuntime(null);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function handleSearchCompleted(results: { totalResults: number; [key: string]: any }) {
+interface SearchCompletedPayload {
+  totalResults: number;
+}
+
+function handleSearchCompleted(results: SearchCompletedPayload): void {
   showStatus(t('knowledge.found_results', { count: results.totalResults }), 'success');
 }
 
@@ -1334,8 +1337,15 @@ async function doUpload(files: File[]) {
       const rawPath: unknown = (file as unknown as { path?: unknown }).path;
       const nativePath: string | null =
         typeof rawPath === 'string' && rawPath.length > 0 && isNativePathObject(file) ? rawPath : null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let filePath: any = nativePath || (file as any).path || file.webkitRelativePath;
+      // Electron augments File with a non-standard `path` property; cast it
+      // through a typed shape rather than `any`. `webkitRelativePath` is the
+      // standard string fallback for sandboxed browse inputs.
+      const electronFile = file as File & { path?: unknown };
+      const pathFromFs: string =
+        typeof electronFile.path === 'string' && electronFile.path.length > 0
+          ? electronFile.path
+          : '';
+      let filePath: string = nativePath || pathFromFs || file.webkitRelativePath;
 
       if (nativePath) {
         const response: unknown = await uploadDocumentAPI({
