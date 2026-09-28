@@ -322,4 +322,105 @@ describe('knowledge metadata retrieval', () => {
     expect(candidate.content).toBe('refund body text');
     expect(candidate.content.startsWith('Title:')).toBe(false);
   });
+
+  test('embedAndStoreChunks passes header-prefixed text to the embedder and stores body-only content', async () => {
+    // PRD §16.2 item 4 / technical design §8.3 "embed call": the string sent
+    // to the embedding function for a new chunk must start with the metadata
+    // header, and the chunk content persisted via storeEmbedding must stay
+    // body-only (no header leakage). This test fails if embedAndStoreChunks
+    // ever embeds chunk.content alone or stores the header inside chunk content.
+    const module = new RagSearchModule();
+    // The constructor wires a mocked VectorStoreService (see top-of-file mock)
+    // exposing only initialize(). Reach the instance to install a store spy.
+    const vsStore = (
+      module as unknown as {
+        searchService: { vectorStoreService: { storeEmbedding: unknown } };
+      }
+    ).searchService.vectorStoreService;
+    const storeEmbeddingMock = vi.fn().mockResolvedValue(undefined);
+    (
+      vsStore as { storeEmbedding: typeof storeEmbeddingMock }
+    ).storeEmbedding = storeEmbeddingMock;
+
+    // Spy on the batch embed function supplied to embedAndStoreChunks. It
+    // records exactly what the embedder receives.
+    const embedBatchMock = vi.fn().mockImplementation(async (texts: string[]) =>
+      texts.map(() => ({
+        embedding: [0.1, 0.2, 0.3],
+        model: 'text-embedding-3-small',
+        dimensions: 3,
+      }))
+    );
+
+    interface HeaderSource {
+      fileName: string;
+      title?: string;
+      author?: string;
+      tags?: string[];
+      description?: string;
+    }
+    interface StubChunk {
+      id: number;
+      documentId: number;
+      chunkIndex: number;
+      content: string;
+      contentHash: string;
+      pageNumber?: number;
+    }
+    const headerSource: HeaderSource = {
+      fileName: 'pricing.pdf',
+      title: 'Pricing',
+      author: 'Alice Chen',
+      tags: ['pricing', 'enterprise'],
+      description: 'Enterprise pricing rules',
+    };
+
+    const chunk: StubChunk = {
+      id: 101,
+      documentId: 7,
+      chunkIndex: 0,
+      content: 'Enterprise contracts start at 50 seats.',
+      contentHash: 'hash-101',
+      pageNumber: 1,
+    };
+
+    // embedAndStoreChunks is private; cast to invoke it directly so the
+    // assertion isolates the embed/store contract from provider construction.
+    await (
+      module as unknown as {
+        embedAndStoreChunks: (
+          chunks: StubChunk[],
+          embedBatchFn: (texts: string[]) => Promise<unknown[]>,
+          vectorIndexPath: string,
+          headerSource: HeaderSource
+        ) => Promise<void>;
+      }
+    ).embedAndStoreChunks([chunk], embedBatchMock, '/tmp/vec/index', headerSource);
+
+    // The embedder received a header-prefixed string, not the bare chunk body.
+    expect(embedBatchMock).toHaveBeenCalledTimes(1);
+    const embedArg = embedBatchMock.mock.calls[0][0] as string[];
+    expect(embedArg).toHaveLength(1);
+    expect(embedArg[0].startsWith('Title: Pricing')).toBe(true);
+    expect(embedArg[0]).toContain('Author: Alice Chen');
+    expect(embedArg[0]).toContain('Enterprise contracts start at 50 seats.');
+    // The header must precede the body; the body must still be present.
+    const titleIdx = embedArg[0].indexOf('Title: Pricing');
+    const bodyIdx = embedArg[0].indexOf('Enterprise contracts start');
+    expect(bodyIdx).toBeGreaterThan(titleIdx);
+
+    // storeEmbedding received the bare chunk content — no header leakage.
+    expect(storeEmbeddingMock).toHaveBeenCalledTimes(1);
+    const stored = storeEmbeddingMock.mock.calls[0][0] as {
+      chunkId: number;
+      documentId: number;
+      content: string;
+      embedding: number[];
+    };
+    expect(stored.chunkId).toBe(101);
+    expect(stored.documentId).toBe(7);
+    expect(stored.content).toBe('Enterprise contracts start at 50 seats.');
+    expect(stored.content.startsWith('Title:')).toBe(false);
+    expect(stored.embedding).toEqual([0.1, 0.2, 0.3]);
+  });
 });
