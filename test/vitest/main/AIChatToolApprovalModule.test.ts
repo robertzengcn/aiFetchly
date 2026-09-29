@@ -19,9 +19,18 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  *     still returns full_access on the scheduled path (persisted intent wins;
  *     the runner only fires for active schedules so this is a race/deletion
  *     edge case).
- *  4. A transient DB error on the schedule lookup fails safe — returns the
- *     default mode rather than auto-approving on unknown state (the run parks
- *     behind a permission card guarded by the 1h auto-deny backstop).
+ *  4. A transient DB error on the schedule lookup does NOT downgrade a
+ *     persisted `full_access` grant. After the PRD §4.3 override made
+ *     `full_access` durable consent (and ScheduledAiMessageRunner verifies
+ *     the schedule is active upstream at `:253` before `createScheduled`),
+ *     the re-query inside `getModeForScheduledRunner` is vestigial; its
+ *     transient failure carries no consent signal. A transient SQLITE_BUSY
+ *     used to silently strip a scheduled outreach loop of its scraping/contact
+ *     tools mid-run — `full_access` reverted to `ask_for_approval`, the three
+ *     outreach tools (`scrape_urls_from_search_engine`, `extract_contact_info`,
+ *     `read_url_content`) were filtered out before catalog building, and even
+ *     `tool_catalog_search` could not surface them. Honoring persisted intent
+ *     here aligns the DB-error case with the no-active-loop case.
  *  5. approve_for_me passes through unchanged on both paths.
  */
 
@@ -152,10 +161,26 @@ describe("AIChatToolApprovalModule — getModeForScheduledRunner", () => {
     expect(mode).toBe("full_access");
   });
 
-  it("returns DEFAULT_MODE when the schedule lookup throws (fail-safe on unattended DB error)", async () => {
-    // Transient DB error on the schedule lookup. Persisted mode is full_access,
-    // but the existence of the schedule is UNKNOWN — fail safe rather than
-    // auto-approving on unknown state during unattended execution.
+  it("honors persisted full_access when the schedule lookup throws (transient DB error must not strip scheduled-loop tools)", async () => {
+    // Regression: a transient DB error (e.g. SQLITE_BUSY) on the
+    // findChatScheduledLoop re-query used to downgrade a persisted full_access
+    // grant to ask_for_approval on the scheduled path. That downgrade was the
+    // ONLY non-full_access outcome for a persisted-full_access conversation
+    // (the active-loop branch returns full_access; the no-loop branch returns
+    // full_access). With approvalMode no longer full_access, the scheduled
+    // toolFilter (canAutoApproveScheduledTool) removed the three outreach
+    // tools — scrape_urls_from_search_engine / extract_contact_info /
+    // read_url_content (uncategorized built-ins, absent from all three
+    // curated tiers) — BEFORE the deferred catalog was built, so even
+    // tool_catalog_search could not surface them; BuiltInToolCapabilitiesPromptSection
+    // advertises them in the system prompt, so the model searched, found
+    // nothing, and reported the tools "not available in this session".
+    //
+    // Post-§4.3 override, persisted full_access IS the durable unattended
+    // consent signal, and ScheduledAiMessageRunner verifies schedule.is_active
+    // upstream before createScheduled — so the re-query is vestigial and its
+    // transient failure carries no consent signal. Honor persisted intent,
+    // matching the no-active-loop branch.
     tokenStore.set(modeKey("v2-conv-dberr"), "full_access");
     loopStore.set("v2-conv-dberr", "throw");
 
@@ -164,9 +189,9 @@ describe("AIChatToolApprovalModule — getModeForScheduledRunner", () => {
 
     const mode = await module.getModeForScheduledRunner("v2-conv-dberr");
 
-    // Safe fallback: the run parks behind a permission card (1h auto-deny
-    // backstop) instead of escalating on an unknown state.
-    expect(mode).toBe("ask_for_approval");
+    // Persisted full_access survives a transient schedule-lookup DB error —
+    // the outreach loop keeps its lead-discovery tools.
+    expect(mode).toBe("full_access");
   });
 
   it("passes approve_for_me through unchanged", async () => {

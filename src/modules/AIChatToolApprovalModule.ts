@@ -89,11 +89,20 @@ export class AIChatToolApprovalModule {
    * no-loop case is a race/deletion edge case — persisted intent wins).
    *
    * If the schedule lookup ITSELF throws (transient DB error during unattended
-   * execution), the method fails safe and returns the default mode rather than
-   * auto-approving on unknown state — the run parks behind a permission card
-   * guarded by the 1h auto-deny backstop. The schedule-existence check runs
-   * once per scheduled occurrence (an acceptable cost); the interactive hot
-   * path never calls this method.
+   * execution — e.g. SQLITE_BUSY on the re-query), the method honors the
+   * persisted mode via `getMode` rather than downgrading. After the PRD §4.3
+   * override made `full_access` durable consent, the persisted grant IS the
+   * trusted signal; `ScheduledAiMessageRunner` verifies `schedule.is_active`
+   * upstream before reaching `createScheduled`, so the re-query here is
+   * vestigial and its transient failure carries no consent signal. The Token
+   * read above (`:102`) just succeeded, so the DB was readable milliseconds
+   * prior. Downgrading on this transient error used to strip a scheduled
+   * outreach loop of its lead-discovery tools mid-run: the three outreach
+   * tools (`scrape_urls_from_search_engine`, `extract_contact_info`,
+   * `read_url_content`) were filtered out before catalog building and even
+   * `tool_catalog_search` could not surface them. The schedule-existence
+   * check runs once per scheduled occurrence (an acceptable cost); the
+   * interactive hot path never calls this method.
    */
   async getModeForScheduledRunner(
     conversationId: string
@@ -110,10 +119,15 @@ export class AIChatToolApprovalModule {
           (await model.findChatScheduledLoop(conversationId)) != null;
         if (hasActiveLoop) return "full_access";
       } catch {
-        // Transient DB error during unattended execution — fail safe rather
-        // than auto-approving on unknown state. The run parks behind a
-        // permission card (1h auto-deny backstop) instead of escalating.
-        return DEFAULT_MODE;
+        // Transient DB error on the vestigial schedule re-query (e.g.
+        // SQLITE_BUSY). The persisted full_access grant is durable consent
+        // (PRD §4.3 override), the Token read above just succeeded, and
+        // ScheduledAiMessageRunner verifies schedule.is_active upstream
+        // before createScheduled — so this transient failure carries no
+        // consent signal. Honor persisted intent (matching the no-active-loop
+        // branch) instead of downgrading, which used to strip the outreach
+        // loop's scraping/contact tools mid-run.
+        return this.getMode(conversationId);
       }
       // No active loop found — still honor the persisted full_access via the
       // interactive resolution (the runner only fires for active schedules, so
