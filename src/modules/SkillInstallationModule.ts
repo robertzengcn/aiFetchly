@@ -267,13 +267,23 @@ export class SkillInstallationModule extends BaseModule {
       const active = await sessions.findActiveByCanonicalUri(
         descriptor.canonicalUri
       );
-      const matching = active.filter((s) =>
-        SkillInstallationSessionModel.requestIdentityMatches(s, {
-          ref: request.ref,
-          subdirectory: request.subdirectory,
-          mode: request.mode,
-        })
-      );
+      const matching = active
+        .filter((s) =>
+          SkillInstallationSessionModel.requestIdentityMatches(s, {
+            ref: request.ref,
+            subdirectory: request.subdirectory,
+            mode: request.mode,
+          })
+        )
+        // Audit R4: a session belongs to its CREATING conversation
+        // (FR-29) — an identical request from a different conversation
+        // must get its OWN session, never a foreign one whose
+        // conversation-bound operations would then mismatch.
+        .filter(
+          (s) =>
+            s.conversationId ===
+            (request.conversationId ?? s.conversationId)
+        );
       if (matching.length > 0) {
         return this.snapshotFromEntity(matching[0]);
       }
@@ -283,20 +293,56 @@ export class SkillInstallationModule extends BaseModule {
         descriptor.canonicalUri
       );
       if (ready.length > 0) {
-        // Ready reuse requires the full request identity too (audit
-        // finding 1): a pinned ref or linked-mode request must not be
-        // answered with a managed-copy ready row of a different revision.
-        const identityReady = ready.filter(
-          (r) =>
-            // Compare a field ONLY when the request explicitly pins it —
-            // an unpinned request accepts the installed default.
-            (descriptor.requestedRevision
-              ? (r.sourceRevision ?? null) === descriptor.requestedRevision
-              : true) &&
-            (request.mode
-              ? (r.activationMode ?? null) === request.mode
-              : true)
-        );
+        // Ready reuse requires the full request identity (audit findings
+        // 1 + R4): subdirectory must match when the request pins one; the
+        // request-level mode "linked" equals the persisted symbolic-link /
+        // junction forms (different representations of the same choice);
+        // a full-SHA pin compares exactly, while a symbolic ref
+        // (branch/tag) cannot be compared to the stored resolved SHA, so
+        // ref-pinned requests never shortcut — they re-prepare and
+        // re-resolve.
+        const normalizeMode = (
+          m: string | null | undefined
+        ): string | null => {
+          if (!m) return null;
+          return m === "linked" || m === "symbolic-link" || m === "junction"
+            ? "linked"
+            : m;
+        };
+        const requestSubdir =
+          descriptor.subdirectory && descriptor.subdirectory !== "."
+            ? descriptor.subdirectory
+            : null;
+        const requestedSha =
+          descriptor.requestedRevision &&
+          /^[0-9a-f]{40}$/i.test(descriptor.requestedRevision)
+            ? descriptor.requestedRevision.toLowerCase()
+            : null;
+        const identityReady = ready.filter((r) => {
+          // Subdirectory: a pinned request only accepts the same subdir
+          // (the audit's root-vs-nested probe).
+          if (
+            requestSubdir &&
+            (r.sourceSubdirectory ?? "") !== requestSubdir
+          ) {
+            return false;
+          }
+          // Mode: normalized comparison ("linked" == symbolic-link/junction).
+          if (
+            request.mode &&
+            normalizeMode(r.activationMode) !== normalizeMode(request.mode)
+          ) {
+            return false;
+          }
+          // Revision: a full-SHA pin compares exactly; a symbolic ref
+          // NEVER reuses (cannot be verified against the stored SHA
+          // without re-resolution).
+          if (descriptor.requestedRevision && !requestedSha) return false;
+          if (requestedSha && (r.sourceRevision ?? "") !== requestedSha) {
+            return false;
+          }
+          return true;
+        });
         const verified = identityReady.some((r) =>
           new SkillActivationService().verifyActivation(r.activationPath)
         );

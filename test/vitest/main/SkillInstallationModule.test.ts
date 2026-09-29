@@ -626,14 +626,14 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("repeated prepare resumes the active session (no duplicate acquisition)", async () => {
+  it("repeated SAME-CONVERSATION prepare resumes the active session (no duplicate acquisition)", async () => {
     const module = new SkillInstallationModule();
     const first = await module.prepare({
       conversationId: "conv-idem",
       source: fixtureRoot,
     });
     const second = await module.prepare({
-      conversationId: "conv-idem-2",
+      conversationId: "conv-idem",
       source: fixtureRoot,
     });
     expect(second.sessionId).toBe(first.sessionId);
@@ -956,11 +956,14 @@ describe("ordinary-argument and source-URL secret bypasses are closed (FR-16/31,
 });
 
 describe("transactional idempotency, mutation leases, retry limits (FR-02/FR-20/NFR-01)", () => {
-  it("two CONCURRENT prepares for the same source yield ONE active session", async () => {
+  it("two CONCURRENT SAME-CONVERSATION prepares yield ONE active session", async () => {
     const module = new SkillInstallationModule();
+    // Audit R4: sessions are conversation-scoped (FR-29) — the race
+    // guard applies WITHIN a conversation; cross-conversation requests
+    // each own their session.
     const [a, b] = await Promise.all([
       module.prepare({ conversationId: "conv-race-1", source: fixtureRoot }),
-      module.prepare({ conversationId: "conv-race-2", source: fixtureRoot }),
+      module.prepare({ conversationId: "conv-race-1", source: fixtureRoot }),
     ]);
     // The loser resumes the winner's session — never a second checkout.
     expect(a.sessionId).toBe(b.sessionId);
@@ -968,14 +971,14 @@ describe("transactional idempotency, mutation leases, retry limits (FR-02/FR-20/
     // behavior); the settled session is the winner's pipeline result.
     const settled = await module.getStatus(a.sessionId);
     expect(settled.state).toBe("awaiting_approval");
-    // Exactly ONE session row exists for the canonical source — the loser's
-    // pre-built entity was never inserted.
+    // Exactly ONE session row exists for the canonical source IN THIS
+    // conversation — the loser's pre-built entity was never inserted.
     const { SkillInstallationSessionModel } = await import(
       "@/model/SkillInstallation.model"
     );
     const sessions = new SkillInstallationSessionModel(tmpDir);
     const rows = await sessions["repository"].find({
-      where: { canonicalUri: fixtureRoot },
+      where: { canonicalUri: fixtureRoot, conversationId: "conv-race-1" },
     });
     expect(rows).toHaveLength(1);
   }, 120_000);
@@ -2359,5 +2362,88 @@ describe("nextMissingCredential reporting (audit R3)", () => {
 
     credState.unconfigured.delete("SECOND_API_KEY");
     void installationId;
+  }, 120_000);
+});
+
+describe("reuse correlation + ready identity (audit R4)", () => {
+  it("an identical request from a DIFFERENT conversation gets its own session", async () => {
+    const module = new SkillInstallationModule();
+    const first = await module.prepare({
+      conversationId: "conv-r4-a",
+      source: fixtureRoot,
+    });
+    expect(first?.state).toBe("awaiting_approval");
+    const second = await module.prepare({
+      conversationId: "conv-r4-b",
+      source: fixtureRoot,
+    });
+    // B never receives A's session (its status call would mismatch).
+    expect(second?.sessionId).not.toBe(first?.sessionId);
+    // B's status works in B's conversation.
+    const status = await module.getStatus(second.sessionId, "conv-r4-b");
+    expect(status.sessionId).toBe(second.sessionId);
+  });
+
+  it("a different-subdirectory request is not answered by the root ready row", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-r4-root",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+
+    // A nested-only source installed... actually the fixture has a root
+    // SKILL.md; request the ROOT install with a pinned SUBDIRECTORY that
+    // differs from the stored "" — must NOT report ready.
+    const nested = await module.prepare({
+      conversationId: "conv-r4-nested",
+      source: fixtureRoot,
+      subdirectory: "nested",
+    });
+    expect(nested?.state).not.toBe("ready");
+  }, 120_000);
+
+  it("a linked-mode request accepts a symbolic-link ready row (representation match)", async () => {
+    const module = new SkillInstallationModule();
+    // Install the local fixture in linked mode.
+    const prepared = await module.prepare({
+      conversationId: "conv-r4-link",
+      source: fixtureRoot,
+      mode: "linked",
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+
+    // A repeat linked request reports the ready row (request "linked" ==
+    // persisted symbolic-link), while a managed-copy request does NOT.
+    const linkedAgain = await module.prepare({
+      conversationId: "conv-r4-link2",
+      source: fixtureRoot,
+      mode: "linked",
+    });
+    expect(linkedAgain?.state).toBe("ready");
+    const managed = await module.prepare({
+      conversationId: "conv-r4-link3",
+      source: fixtureRoot,
+      mode: "managed-copy",
+    });
+    expect(managed?.state).not.toBe("ready");
   }, 120_000);
 });

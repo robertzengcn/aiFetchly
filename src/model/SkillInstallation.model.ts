@@ -208,6 +208,12 @@ export class SkillInstallationSessionModel extends BaseDb {
           terminal: ["ready", "failed", "cancelled", "rollback_required"],
         })
         .andWhere("s.canonicalUri = :uri", { uri: entity.canonicalUri })
+        // Audit R4: sessions are conversation-scoped (FR-29) — a claim
+        // from a different conversation must not adopt a foreign live
+        // session whose conversation-bound operations would mismatch.
+        .andWhere("s.conversationId = :conv", {
+          conv: entity.conversationId,
+        })
         .getMany();
       const live = active.filter((s) => {
         const expires = s.leaseExpiresAt ? Number(s.leaseExpiresAt) : null;
