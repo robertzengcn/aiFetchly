@@ -53,13 +53,12 @@ export class AIChatQueryEngineFactory {
     // Scheduled loops use getModeForScheduledRunner (not the interactive
     // getMode): BackgroundScheduler can fire a catch-up occurrence at app
     // startup as the FIRST reader of the conversation's mode, before the user
-    // re-opens the chat. The interactive getMode would downgrade a persisted
-    // full_access to ask_for_approval on that first read (PRD §4.3 session
-    // consent), parking every tool behind a permission card the user is not
-    // present to answer. The scheduled-runner variant honors persisted
+    // re-opens the chat. The scheduled-runner variant honors persisted
     // full_access for conversations with an active scheduled loop — the user
-    // configured that loop to run unattended — while still downgrading for
-    // conversations that lost their schedule.
+    // configured that loop to run unattended — and fails safe (returns the
+    // default mode) on a transient DB error rather than auto-approving on
+    // unknown state. PRD §4.3 override (2026-09-29): full_access persists
+    // across restarts, so the interactive getMode no longer downgrades it.
     const approvalMode: ChatToolApprovalMode | null = conversationId
       ? await new AIChatToolApprovalModule().getModeForScheduledRunner(
           conversationId

@@ -97,9 +97,9 @@ Recommended first release:
 - Default new conversations to `ask_for_approval`.
 - Persist mode locally so switching conversations restores the selected mode.
 - Do not apply a conversation's mode to legacy chat or scheduled/background tasks.
-- Do not persist `full_access` across app restarts unless the user explicitly reselects it. On app startup, downgrade any stored `full_access` conversation mode to `ask_for_approval` or `approve_for_me`.
+- `full_access` persists across app restarts. Loading a chat from history restores the persisted mode, including `full_access`.
 
-Rationale: `approve_for_me` is a productivity preference. `full_access` is a high-risk operating state and should be treated like a session consent.
+Rationale: `approve_for_me` is a productivity preference. `full_access` is a high-risk operating state that now persists across restarts by product-owner decision (PRD §4.3 override, 2026-09-29): the prior session-consent model caused load-from-history to show `ask_for_approval` after restart, contradicting the user's durable intent. The enable-time confirmation dialog remains the one-time consent gate; restart-reset is removed.
 
 ## 5. User Experience Requirements
 
@@ -145,7 +145,7 @@ All labels, tooltips, warnings, snackbars, and errors must be added to:
 
 Changing from `ask_for_approval` to `approve_for_me` should be immediate but visible.
 
-Changing to `full_access` should show a one-time confirmation for the current app session:
+Changing to `full_access` should show a one-time confirmation when the user enables `full_access`:
 
 - The dialog must state that registered tools can run without approval prompts in this chat.
 - It must state that dependency installs and hard safety blocks still require intervention.
@@ -306,7 +306,7 @@ Existing tool execution logs can be extended. If no suitable audit record exists
 Required reset behavior:
 
 - New conversation: `ask_for_approval`.
-- App restart: downgrade `full_access` to a safer mode.
+- App restart: `full_access` is restored as persisted (no downgrade).
 - User signs out or AI is disabled: reset active mode state to `ask_for_approval`.
 - Explicit denied permission in `SkillPermissionService`: continue to deny unless `full_access` is selected and product explicitly decides it can override previous denies.
 
@@ -407,7 +407,7 @@ Rules:
 - Unknown tools must never run.
 - All auto-approved executions must be auditable.
 - Full access must be easy to turn off.
-- Full access must not survive silently across app restarts.
+- Full access survives across app restarts as a persisted, explicit user choice. The enable-time confirmation dialog is the consent gate.
 
 ## 9. Testing Requirements
 
@@ -491,7 +491,7 @@ Relevant existing test areas:
 - Should `approve_for_me` include filesystem write/edit tools, or should filesystem mutation require `full_access`?
 - Should mode be persisted per conversation, globally as a user preference, or session-only?
 - Should explicit `denied` skill permissions override `full_access`? Recommendation: yes, denied remains denied.
-- Should full access downgrade to `approve_for_me` or `ask_for_approval` on app restart? Recommendation: downgrade to `ask_for_approval`.
+- Should full access downgrade to `approve_for_me` or `ask_for_approval` on app restart? RESOLVED (2026-09-29): No. `full_access` persists across restarts per product-owner override of the prior session-consent model.
 - Should the selector be hidden when no tools are available, or always shown to teach the user that tool permission mode exists?
 
 ## 12. Success Metrics
