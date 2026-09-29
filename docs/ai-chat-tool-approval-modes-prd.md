@@ -307,7 +307,7 @@ Required reset behavior:
 
 - New conversation: `ask_for_approval`.
 - App restart: `full_access` is restored as persisted (no downgrade).
-- User signs out or AI is disabled: reset active mode state to `ask_for_approval`.
+- User signs out or AI is disabled: `full_access` is a durable per-conversation user choice and persists across sign-out and AI-disable. The mode is keyed by conversation id (a globally-unique UUID), and each user's conversations live in that user's per-user SQLite DB, so a persisted grant is scoped to the conversations it was chosen for and is never inherited by a different user's history. New conversations still default to `ask_for_approval` (FR-010 first rule), so the durable grant only ever applies to the conversation the user explicitly elevated. RESOLVED (2026-09-30): the prior "reset active mode state to `ask_for_approval`" rule is overridden by product-owner decision, consistent with §4.3 line 410 restart persistence — the enable-time confirmation dialog remains the one-time consent gate, and the user can always turn `full_access` off.
 - Explicit denied permission in `SkillPermissionService`: continue to deny unless `full_access` is selected and product explicitly decides it can override previous denies.
 
 Recommendation: explicit `denied` permissions should continue to block in all modes until revoked from settings. The user made a durable deny decision, and a chat selector should not silently reverse it.
