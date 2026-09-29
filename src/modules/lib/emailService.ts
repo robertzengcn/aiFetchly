@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import type { SendMailOptions } from "nodemailer";
 import {
   EmailRequestData,
   EmailServiceEntitydata,
@@ -29,7 +29,7 @@ export class EmailService {
     errorCallback?: (error: SendEmailError) => void,
     successCallback?: () => void
   ): Promise<void> {
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: this.fromAddress,
       ...(this.replyToAddress ? { replyTo: this.replyToAddress } : {}),
       to: param.Receiver,
