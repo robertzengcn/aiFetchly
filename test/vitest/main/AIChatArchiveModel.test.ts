@@ -80,6 +80,16 @@ describe("AIChatArchiveStateModel", () => {
     const after = await model.ensureState("conv-epoch-3");
     // A new epoch must be minted; the tombstoned row must not be reused.
     expect(after.epoch).not.toBe(before.epoch);
+    // deletedAt must be cleared. TypeORM skips undefined on save, so a
+    // rewrite that leaves the column unset stays tombstoned forever and
+    // every later compaction rejects the conversation.
+    expect(after.deletedAt ?? null).toBeNull();
+    expect(after.indexState).toBe("absent");
+    expect(after.sourceRevision).toBe(0);
+    const stored = await model.getState("conv-epoch-3");
+    expect(stored?.deletedAt ?? null).toBeNull();
+    expect(stored?.epoch).toBe(after.epoch);
+    expect(stored?.activeRunId ?? null).toBeNull();
   });
 
   it("marks deletedAt on tombstone", async () => {

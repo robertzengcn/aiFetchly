@@ -47,18 +47,20 @@ export class AIChatV2Module extends BaseModule {
   }
 
   /**
-   * Fire-and-forget archive index coupling after a v2 message is appended
-   * (technical-design §5.1 line 149). The coupler is flag-gated and never
-   * throws, so the save path is unaffected when archive reads are off or the
-   * DB is not ready. Must run AFTER the source row is committed so the
-   * backfill read sees it.
+   * Archive index coupling after a v2 message is appended (technical-design
+   * §5.1 line 149). Awaited so post-turn compaction sees a live archive row
+   * (including a re-archive after clear) before it claims a run. The coupler
+   * is flag-gated and never throws; the index backfill itself stays
+   * fire-and-forget inside coupleAppend. Must run AFTER the source row is
+   * committed so the backfill read sees it.
    */
-  private coupleArchiveAppend(conversationId: string): void {
-    // void: fire-and-forget; errors are logged inside the coupler.
-    void this.archiveCoupler.coupleAppend(conversationId).catch((err) => {
+  private async coupleArchiveAppend(conversationId: string): Promise<void> {
+    try {
+      await this.archiveCoupler.coupleAppend(conversationId);
+    } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[ai-chat-v2] archive append coupling failed: ${msg}`);
-    });
+    }
   }
 
   /** Create (or reuse) a v2 conversation id. */
@@ -90,7 +92,7 @@ export class AIChatV2Module extends BaseModule {
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
-    this.coupleArchiveAppend(params.conversationId);
+    await this.coupleArchiveAppend(params.conversationId);
     return saved;
   }
 
@@ -120,7 +122,7 @@ export class AIChatV2Module extends BaseModule {
       } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
-    this.coupleArchiveAppend(params.conversationId);
+    await this.coupleArchiveAppend(params.conversationId);
     return saved;
   }
 
@@ -150,7 +152,7 @@ export class AIChatV2Module extends BaseModule {
       metadata: meta,
       messageType: MessageType.MESSAGE,
     });
-    this.coupleArchiveAppend(params.conversationId);
+    await this.coupleArchiveAppend(params.conversationId);
     return saved;
   }
 
@@ -183,7 +185,7 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_CALL,
     });
-    this.coupleArchiveAppend(params.conversationId);
+    await this.coupleArchiveAppend(params.conversationId);
     return saved;
   }
 
@@ -232,7 +234,7 @@ export class AIChatV2Module extends BaseModule {
       metadata,
       messageType: MessageType.TOOL_RESULT,
     });
-    this.coupleArchiveAppend(params.conversationId);
+    await this.coupleArchiveAppend(params.conversationId);
     return saved;
   }
 

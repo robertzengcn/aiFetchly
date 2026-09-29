@@ -200,9 +200,16 @@ export class AIChatCompactionCoordinator extends BaseModule {
       input.sourceCapacityTokens ??
       AI_CHAT_RECOVERABLE_DEFAULTS.sectionSourceTargetTokens;
 
-    // 1. Read archive state; reject tombstoned / unknown conversations.
+    // 1. Read archive state; reject tombstoned conversations. A missing row
+    // is not a tombstone — mint one so a live chat that predates archive
+    // state (or whose append coupler has not committed yet) can compact.
+    // Do not call ensureState when deletedAt is set: that would undo a
+    // clear. Re-archive happens on the next message append.
     const stateModel = new AIChatArchiveStateModel(this.dbpath);
-    const state = await stateModel.getState(conversationId);
+    let state = await stateModel.getState(conversationId);
+    if (!state) {
+      state = await stateModel.ensureState(conversationId);
+    }
     if (!state || state.deletedAt) {
       throw new RecoverableHistoryError(
         "COMPACTION_CONTEXT_REJECTED",

@@ -502,6 +502,28 @@ describe("AIChatCompactionCoordinator", () => {
     ).rejects.toThrow();
   });
 
+  it("compacts a conversation again after ensureState clears the tombstone", async () => {
+    await seedMessages("conv-rearchive", [
+      { role: "user", content: "first message", ts: 1_000 },
+      { role: "assistant", content: "reply one", ts: 2_000 },
+      { role: "user", content: "second message", ts: 3_000 },
+      { role: "assistant", content: "reply two", ts: 4_000 },
+    ]);
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    await stateModel.ensureState("conv-rearchive");
+    await stateModel.tombstone("conv-rearchive");
+    await indexConversation("conv-rearchive");
+    const revived = await stateModel.getState("conv-rearchive");
+    expect(revived?.deletedAt ?? null).toBeNull();
+
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-rearchive", {
+      trigger: "auto",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+  });
+
   it("cancels an in-flight run via the abort signal", async () => {
     await seedMessages("conv-4", [
       { role: "user", content: "x".repeat(2_000), ts: 1_000 },
