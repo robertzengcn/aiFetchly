@@ -211,6 +211,11 @@ export interface SafePlanView {
     readonly name: string;
     readonly kind: string;
     readonly description: string;
+    /** Candidate id (e.g. "skills/one") — the selection control's value
+     *  and the approve() selectedSkillIds entry (audit R2). */
+    readonly candidateId?: string;
+    /** Whether this candidate is in the plan's current selection. */
+    readonly selected?: boolean;
   }[];
   readonly dependencies: readonly {
     /** Plan item id (e.g. "dep:ffmpeg") — the approveDependency target. */

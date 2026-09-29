@@ -3125,6 +3125,7 @@ export default {
     installFailed: "Échec de l'installation",
   },
   skillInstall: {
+    chooseSkills: "Plusieurs compétences trouvées — choisissez celles à installer :",
     depStatus: { satisfied: "Satisfait", missing: "Manquant", incompatible: "Incompatible", unknown: "Inconnu" },
     modeLabel: { "managed-copy": "Copie gérée", "symbolic-link": "Lié (développement)", junction: "Lié (développement)" },
     planCommands: "Commandes qui seront exécutées",

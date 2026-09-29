@@ -3110,6 +3110,7 @@ export default {
     installFailed: "Install failed",
   },
   skillInstall: {
+    chooseSkills: "Multiple skills were found — choose which to install:",
     depStatus: { satisfied: "Satisfied", missing: "Missing", incompatible: "Incompatible", unknown: "Unknown" },
     modeLabel: { "managed-copy": "Managed copy", "symbolic-link": "Linked (development)", junction: "Linked (development)" },
     planCommands: "Commands that will run",

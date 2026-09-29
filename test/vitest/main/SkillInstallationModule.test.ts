@@ -2033,7 +2033,7 @@ describe("nested candidate activation + selection persistence (audit finding 2)"
     expect(fs.existsSync(path.join(activationDir, "nested"))).toBe(false);
   }, 120_000);
 
-  it("a submitted multi-selection is persisted into the plan", async () => {
+  it("a submitted multi-selection ACTIVATES every selected skill (audit R2)", async () => {
     const module = new SkillInstallationModule();
     // Two sibling skills.
     const dir = path.join(tmpDir, "fixtures", "multi-src");
@@ -2052,23 +2052,41 @@ describe("nested candidate activation + selection persistence (audit finding 2)"
     expect(prepared?.state).toBe("awaiting_approval");
     const planBefore = await module.getStatus(prepared.sessionId);
     expect((planBefore.safePlan?.skills ?? []).length).toBe(2);
-
-    // The user selects BOTH candidates at approve time.
-    const candidates = (planBefore.safePlan?.skills ?? []).map(
-      (s: { name: string }) => s.name
+    // The safe plan exposes candidate ids + the current selection (R2);
+    // sibling layouts generate "skills/<name>:prompt" ids.
+    const ids = (planBefore.safePlan?.skills ?? []).map(
+      (row: { candidateId?: string }) => row.candidateId
     );
-    expect(candidates).toHaveLength(2);
+    expect(ids).toEqual(
+      expect.arrayContaining([expect.any(String), expect.any(String)])
+    );
+
+    // The user selects BOTH candidates at approve time (the REAL ids the
+    // card's selection control submits).
     const approved = await module.approve({
       sessionId: prepared.sessionId,
       planRevision: prepared.planRevision as string,
       approve: true,
       approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-      selectedSkillIds: ["skills/one", "skills/two"],
+      selectedSkillIds: (ids.filter(Boolean) as string[]),
     });
-    // The selection persisted: a status reload resolves BOTH candidates.
-    const after = await module.getStatus(prepared.sessionId);
-    void approved;
-    expect(after.state).not.toBe("failed");
+    expect(approved.state).toBe("ready");
+
+    expect(approved.installationId).toBeTruthy();
+    // BOTH selected skills are installed and discoverable — not just the
+    // first candidate (the audit's reproduced single-install defect).
+    for (const name of ["multi-one", "multi-two"]) {
+      expect(
+        getDefaultPromptSkillCatalog().resolve(name, {}).definition
+      ).not.toBeNull();
+      const activationDir = path.join(
+        configHome,
+        ".aifetchly",
+        "skills",
+        name
+      );
+      expect(fs.existsSync(path.join(activationDir, "SKILL.md"))).toBe(true);
+    }
   }, 120_000);
 });
 

@@ -1270,13 +1270,33 @@ export class SkillInstallationModule extends BaseModule {
       );
     }
     let last: InstallSnapshot | null = null;
-    for (const candidate of chosen) {
+    for (let i = 0; i < chosen.length; i += 1) {
+      const candidate = chosen[i];
+      // Audit R2: every candidate needs a DISTINCT installation identity —
+      // candidate 0 keeps the session's (credential binding, review C3),
+      // later candidates receive fresh overrides so their rows and catalog
+      // entries cannot overwrite their siblings.
+      const identity =
+        i === 0
+          ? undefined
+          : {
+              installationId: crypto
+                .randomUUID()
+                .replace(/-/g, "")
+                .slice(0, 32),
+            };
       if (candidate.kind === "plugin") {
         last = await this.routeToPluginService(sessionId, plan, events, sessions, candidate);
       } else if (candidate.kind === "executable") {
         last = await this.routeToExecutableService(sessionId, plan, events, sessions, candidate);
       } else {
-        last = await this.runActivation(sessionId, plan, candidate, await fresh());
+        last = await this.runActivation(
+          sessionId,
+          plan,
+          candidate,
+          await fresh(),
+          identity
+        );
       }
       if (last && last.state === "failed") return last;
     }
@@ -2250,7 +2270,8 @@ export class SkillInstallationModule extends BaseModule {
     sessionId: string,
     plan: SkillInstallPlan,
     selected: SkillInstallPlan["discoveredSkills"][number],
-    session: SkillInstallationSessionEntity
+    session: SkillInstallationSessionEntity,
+    identityOverride?: { readonly installationId: string }
   ): Promise<InstallSnapshot> {
     const { sessions, events, installations } = await this.getModels();
     // Refresh the mutation lease before the (potentially slow) activation so
@@ -2322,10 +2343,17 @@ export class SkillInstallationModule extends BaseModule {
 
     // Persist the installation record. The identity came from the session
     // (created at prepare) so credentials stored during awaiting_secret
-    // bind to the SAME installation (review C3).
+    // bind to the SAME installation (review C3). Multi-candidate installs
+    // (audit R2) pass a DISTINCT identity per candidate — sharing the
+    // session's id made each activation overwrite the previous candidate's
+    // row and catalog entry.
     const installationId =
+      identityOverride?.installationId ??
       session.installationId ??
       crypto.randomUUID().replace(/-/g, "").slice(0, 32);
+    // An override identity must NOT sync back onto the session (the
+    // session keeps its own id; the override rows stand alone).
+    const syncSessionIdentity = identityOverride === undefined;
     const entity = new SkillInstallationEntity();
     entity.installationId = installationId;
     entity.name = selected.name;
@@ -2378,12 +2406,14 @@ export class SkillInstallationModule extends BaseModule {
       if (priorRow.installationId !== installationId) {
         getDefaultPromptSkillCatalog().remove(`prompt:user:${installationId}`);
         entity.installationId = priorRow.installationId;
-        await this.setInstallationId(
-          sessions,
-          sessionId,
-          priorRow.installationId
-        );
-        session.installationId = priorRow.installationId;
+        if (syncSessionIdentity) {
+          await this.setInstallationId(
+            sessions,
+            sessionId,
+            priorRow.installationId
+          );
+          session.installationId = priorRow.installationId;
+        }
       }
     } else {
       // Audit finding 3: an UPDATE session carries the EXISTING identity
@@ -2699,6 +2729,8 @@ export class SkillInstallationModule extends BaseModule {
         name: skill.name,
         kind: skill.kind,
         description: skill.description,
+        candidateId: skill.candidateId,
+        selected: plan.selectedSkillIds.includes(skill.candidateId),
       })),
       dependencies: plan.dependencies.map((d) => ({
         id: d.id,

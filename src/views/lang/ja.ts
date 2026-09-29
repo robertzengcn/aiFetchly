@@ -3078,6 +3078,7 @@ export default {
     installFailed: "インストールに失敗しました",
   },
   skillInstall: {
+    chooseSkills: "複数のスキルが見つかりました。インストールするものを選択してください:",
     depStatus: { satisfied: "充足", missing: "不足", incompatible: "非互換", unknown: "不明" },
     modeLabel: { "managed-copy": "管理コピー", "symbolic-link": "リンク（開発）", junction: "リンク（開発）" },
     planCommands: "実行されるコマンド",

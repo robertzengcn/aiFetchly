@@ -46,12 +46,28 @@
           </span>
         </div>
         <div
+          v-if="safePlan.skills.length > 1"
+          class="mt-2 text-caption"
+          data-testid="skill-install-selection"
+        >
+          {{ t("skillInstall.chooseSkills") }}
+        </div>
+        <div
           v-for="skillRow in safePlan.skills"
           :key="skillRow.name"
           class="mt-1"
           data-testid="skill-install-plan-skill"
         >
-          <strong>{{ skillRow.name }}</strong>
+          <v-checkbox
+            v-if="safePlan.skills.length > 1"
+            v-model="selectedCandidateIds"
+            :value="skillRow.candidateId"
+            :label="skillRow.name"
+            density="compact"
+            hide-details
+            data-testid="skill-install-candidate"
+          />
+          <strong v-else>{{ skillRow.name }}</strong>
           <span class="text-caption text-medium-emphasis">
             ({{ skillRow.kind }})
           </span>
@@ -364,7 +380,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
 import {
@@ -515,6 +531,22 @@ const secretVariableName = computed(() => {
   return match?.[0] ?? "API_KEY";
 });
 
+/** Audit R2: the user's candidate selection for multi-skill plans —
+ *  initialized from the plan's persisted selection, submitted with the
+ *  approve gesture so every chosen skill is ACTIVATED (not just
+ *  selected[0]). */
+const selectedCandidateIds = ref<string[]>([]);
+watch(
+  () => snapshotView.value?.safePlan?.skills,
+  (skills) => {
+    selectedCandidateIds.value = (skills ?? [])
+      .filter((row: { selected?: boolean }) => row.selected === true)
+      .map((row: { candidateId?: string }) => row.candidateId ?? "")
+      .filter((id: string) => id !== "");
+  },
+  { immediate: true, deep: true }
+);
+
 async function onApprove(approve: boolean): Promise<void> {
   busy.value = true;
   try {
@@ -532,6 +564,10 @@ async function onApprove(approve: boolean): Promise<void> {
       planRevision: snapshotView.value.planRevision ?? "",
       approve,
       approvalToken,
+      // Multi-skill plans submit the user's selection (audit R2).
+      ...(selectedCandidateIds.value.length > 0
+        ? { selectedSkillIds: [...selectedCandidateIds.value] }
+        : {}),
       ...(props.conversationId
         ? { conversationId: props.conversationId }
         : {}),

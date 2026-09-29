@@ -81,6 +81,27 @@ function mountCard(snapshot: InstallSnapshot) {
           template:
             '<input :label="label" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
+        VCheckbox: {
+          props: ["modelValue", "value", "label"],
+          emits: ["update:modelValue"],
+          methods: {
+            toggle(): void {
+              const current = Array.isArray(this.modelValue)
+                ? [...(this.modelValue as string[])]
+                : [];
+              const v = this.value as string;
+              const i = current.indexOf(v);
+              if (i >= 0) {
+                current.splice(i, 1);
+              } else {
+                current.push(v);
+              }
+              this.$emit("update:modelValue", current);
+            },
+          },
+          template:
+            '<label data-testid="skill-install-candidate"><input type="checkbox" :value="value" :checked="(modelValue ?? []).includes(value)" @change="toggle" />{{ label }}</label>',
+        },
       },
     },
   });
@@ -638,5 +659,46 @@ describe("SkillInstallCard", () => {
     expect(
       ready.find('[data-testid="skill-install-run-commands"]').exists()
     ).toBe(false);
+  });
+});
+
+describe("SkillInstallCard — multi-skill selection (audit R2)", () => {
+  const multiSafePlan = {
+    source: "https://github.com/a/multi",
+    revision: "rev12345678",
+    skills: [
+      { name: "one", kind: "prompt", description: "first", candidateId: "skills/one:prompt", selected: false },
+      { name: "two", kind: "prompt", description: "second", candidateId: "skills/two:prompt", selected: false },
+    ],
+    dependencies: [],
+    credentials: [],
+    mode: "managed-copy",
+    commands: [],
+    warnings: [],
+  } as unknown as NonNullable<InstallSnapshot["safePlan"]>;
+
+  it("renders candidate checkboxes for multi-skill plans and submits the selection", async () => {
+    const wrapper = mountCard(makeSnapshot({ safePlan: multiSafePlan }));
+    const boxes = wrapper.findAll('[data-testid="skill-install-candidate"]');
+    expect(boxes.length).toBe(2);
+    await boxes[0].find("input").setValue(true);
+    await boxes[1].find("input").setValue(true);
+    const approveBtn = wrapper
+      .findAll("button")
+      .find((b) => (b.text() ?? "").toLowerCase().includes("approve"));
+    expect(approveBtn).toBeTruthy();
+    await approveBtn!.trigger("click");
+    await flushPromises();
+    const call = vi.mocked(approveSkillInstall).mock.calls[0]?.[0];
+    expect(call?.selectedSkillIds).toEqual(
+      expect.arrayContaining(["skills/one:prompt", "skills/two:prompt"])
+    );
+  });
+
+  it("single-skill plans keep the plain label (no checkboxes)", () => {
+    const wrapper = mountCard(makeSnapshot({}));
+    expect(
+      wrapper.findAll('[data-testid="skill-install-candidate"]').length
+    ).toBe(0);
   });
 });

@@ -2987,6 +2987,7 @@ export default {
     installFailed: "安装失败",
   },
   skillInstall: {
+    chooseSkills: "发现多个技能——请选择要安装的：",
     depStatus: { satisfied: "已满足", missing: "缺失", incompatible: "不兼容", unknown: "未知" },
     modeLabel: { "managed-copy": "托管副本", "symbolic-link": "链接（开发）", junction: "链接（开发）" },
     planCommands: "将执行的命令",
