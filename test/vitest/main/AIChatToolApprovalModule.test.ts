@@ -64,7 +64,7 @@ vi.mock("@/model/ScheduleTask.model", () => ({
 async function importFreshModule(): Promise<
   typeof import("@/modules/AIChatToolApprovalModule")
 > {
-  // A fresh module graph resets the process-static startupResetApplied /
+  // A fresh module graph resets the process-static downgradedThisProcess /
   // fullAccessExplicitlySet flags, simulating a new app process.
   vi.resetModules();
   return await import("@/modules/AIChatToolApprovalModule");
@@ -186,5 +186,48 @@ describe("AIChatToolApprovalModule — getModeForScheduledRunner (the fix)", () 
 
     const mode = await module.getModeForScheduledRunner("");
     expect(mode).toBe("ask_for_approval");
+  });
+
+  // Regression: the interactive getMode() startup-reset (PRD §4.3) used to
+  // PERSIST the full_access → ask_for_approval downgrade to the Token store on
+  // the first read of a fresh process. When the user opened the conversation in
+  // the chat UI before the scheduler's catch-up fired, handleGetToolApprovalMode
+  // → getMode() overwrote the persisted full_access with ask_for_approval. The
+  // scheduled runner then read the now-downgraded persisted value via
+  // getModeForScheduledRunner and returned ask_for_approval, so unattended
+  // turns (e.g. extract_contact_info, an uncategorized built-in) parked behind
+  // a permission card the user was not present to answer — defeating the
+  // active-loop exemption.
+  //
+  // The fix: the interactive downgrade is tracked IN-MEMORY per conversation,
+  // never persisted, so the persisted full_access grant survives for the
+  // scheduled runner. This test proves the grant survives an interactive
+  // getMode() read that fires BEFORE the scheduled runner.
+  it("honors full_access for an active loop EVEN after interactive getMode fired first (regression)", async () => {
+    // Prior session: user granted full_access and configured a scheduled loop.
+    tokenStore.set(modeKey("v2-conv-poisoned"), "full_access");
+    loopStore.set("v2-conv-poisoned", "active");
+
+    const { AIChatToolApprovalModule } = await importFreshModule();
+    const module = new AIChatToolApprovalModule();
+
+    // The user opens the conversation in the chat UI before the scheduler
+    // fires. handleGetToolApprovalMode → getMode() downgrades full_access to
+    // ask_for_approval FOR THE INTERACTIVE SESSION, but must NOT overwrite the
+    // persisted grant on disk (the poisoning that broke the scheduled runner).
+    const interactiveMode = module.getMode("v2-conv-poisoned");
+    expect(interactiveMode).toBe("ask_for_approval");
+    // The persisted value must STILL be full_access — the downgrade is
+    // in-memory only, so the durable grant survives for the scheduled runner.
+    expect(tokenStore.get(modeKey("v2-conv-poisoned"))).toBe("full_access");
+
+    // The scheduler fires catch-up. getModeForScheduledRunner honors the
+    // SURVIVING persisted full_access because the conversation has an active
+    // scheduled loop — the durable unattended consent the loop represents is
+    // not defeated by the earlier interactive read.
+    const scheduledMode = await module.getModeForScheduledRunner(
+      "v2-conv-poisoned"
+    );
+    expect(scheduledMode).toBe("full_access");
   });
 });

@@ -37,10 +37,19 @@ export class AIChatToolApprovalModule {
   private token: Token;
 
   /**
-   * Tracks whether the startup-reset has already been applied in this
-   * process. When true, full_access reads pass through as-is.
+   * Conversation IDs whose persisted `full_access` has been downgraded to
+   * `ask_for_approval` IN-MEMORY during this process (PRD §4.3 startup-reset).
+   *
+   * The downgrade is deliberately NOT persisted: persisting it would overwrite
+   * the durable `full_access` grant on disk, so when the user opens the chat
+   * conversation before `BackgroundScheduler` fires a catch-up occurrence, the
+   * interactive `getMode` would poison the store and `getModeForScheduledRunner`
+   * would later read the downgraded value and park every unattended tool behind
+   * a permission card the user is not present to answer. Tracking the reset
+   * in-memory (per conversation) keeps the persisted grant intact as the durable
+   * intent for scheduled loops while still downgrading interactive reads.
    */
-  private static startupResetApplied = false;
+  private static downgradedThisProcess: Set<string> = new Set();
 
   /**
    * Set to true whenever setMode("full_access") is called in this
@@ -63,19 +72,21 @@ export class AIChatToolApprovalModule {
       return raw;
     }
     if (raw === "full_access") {
-      // Downgrade full_access on first read after app startup (PRD §4.3),
-      // but ONLY if the user has NOT explicitly re-selected it in this
-      // session. This prevents the reset from firing on tool-execution
-      // reads right after the user set "Full access".
-      if (
-        !AIChatToolApprovalModule.startupResetApplied &&
-        !AIChatToolApprovalModule.fullAccessExplicitlySet
-      ) {
-        AIChatToolApprovalModule.startupResetApplied = true;
-        this.setMode(conversationId, "ask_for_approval");
-        return "ask_for_approval";
+      // If the user explicitly re-selected "Full access" in this session,
+      // honor it as-is — do NOT fire the startup-reset on tool-execution
+      // reads right after the user set it.
+      if (AIChatToolApprovalModule.fullAccessExplicitlySet) {
+        return raw;
       }
-      return raw;
+      // PRD §4.3 startup-reset: downgrade full_access on the first read of a
+      // fresh process. Tracked IN-MEMORY per conversation (see the comment on
+      // `downgradedThisProcess`) so the persisted grant survives for the
+      // scheduled runner. Subsequent reads in this process stay downgraded.
+      if (AIChatToolApprovalModule.downgradedThisProcess.has(conversationId)) {
+        return DEFAULT_MODE;
+      }
+      AIChatToolApprovalModule.downgradedThisProcess.add(conversationId);
+      return DEFAULT_MODE;
     }
     return DEFAULT_MODE;
   }
@@ -84,6 +95,14 @@ export class AIChatToolApprovalModule {
     if (!conversationId) return;
     if (mode === "full_access") {
       AIChatToolApprovalModule.fullAccessExplicitlySet = true;
+      // Re-selecting full_access clears any in-memory startup-reset downgrade
+      // recorded for this conversation so subsequent reads honor full_access.
+      AIChatToolApprovalModule.downgradedThisProcess.delete(conversationId);
+    } else {
+      // Explicitly choosing a non-full_access mode also clears the in-memory
+      // downgrade flag — the persisted value is now authoritative for this
+      // conversation.
+      AIChatToolApprovalModule.downgradedThisProcess.delete(conversationId);
     }
     this.token.setValue(tokenKey(conversationId), mode);
   }
@@ -95,22 +114,25 @@ export class AIChatToolApprovalModule {
    * `full_access` to `ask_for_approval` on the first read of a fresh process,
    * treating full_access as a session consent that must NOT survive a restart
    * silently. That reset is correct for ad-hoc interactive chats: a user who
-   * forgot full_access on should not stay in full_access after a restart.
+   * forgot full_access on should not stay in full_access after a restart. The
+   * downgrade is tracked IN-MEMORY per conversation (never persisted), so the
+   * persisted grant survives as durable intent for scheduled loops.
    *
-   * But `BackgroundScheduler` can fire a scheduled occurrence at app startup
-   * (catch-up) as the FIRST reader of the conversation's mode — before the
-   * user re-opens the chat or re-selects full_access. If that first read
-   * downgrades, the scheduled turn sees `ask_for_approval` and parks every
-   * tool behind a permission card the user is not present to answer. The
-   * scheduled loop the user explicitly configured to run unattended with
-   * full_access silently loses the grant it was created with.
+   * `BackgroundScheduler` can fire a scheduled occurrence at app startup
+   * (catch-up) — possibly AFTER the user has already opened the chat
+   * conversation and the interactive `getMode` recorded its in-memory
+   * downgrade. This method must still honor the persisted `full_access` for
+   * conversations with an ACTIVE scheduled loop, because the loop's existence
+   * is the durable signal that the user configured unattended full_access
+   * turns. Without that exemption, the scheduled turn would see
+   * `ask_for_approval` and park every tool behind a permission card the user
+   * is not present to answer.
    *
-   * This method exempts conversations that have an ACTIVE scheduled loop from
-   * the startup-reset: the user's persisted full_access is honored as the
-   * durable intent for that scheduled conversation, while conversations with
-   * no active schedule keep the interactive downgrade. The schedule-existence
-   * check runs once per scheduled occurrence (an acceptable cost); the
-   * interactive hot path never calls this method.
+   * The exemption is precise: a conversation with NO active schedule falls
+   * through to `getMode` (honoring the in-memory interactive downgrade),
+   * preserving PRD §4.3 for conversations that lost their schedule. The
+   * schedule-existence check runs once per scheduled occurrence (an acceptable
+   * cost); the interactive hot path never calls this method.
    */
   async getModeForScheduledRunner(
     conversationId: string
