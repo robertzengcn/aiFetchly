@@ -952,7 +952,10 @@ export class SkillInstallationModule extends BaseModule {
       `${dependency.name}: ${installOutcome.message}`
     );
     const held = await sessions.findBySessionId(input.sessionId);
-    const heldSnapshot = this.snapshotFromEntity(held ?? session, updatedPlan);
+    const heldSnapshot = await this.snapshotFromEntity(
+      held ?? session,
+      updatedPlan
+    );
     if (!installOutcome.ok) {
       // Surface the typed-installer failure on the card's summary line so
       // the hold is actionable (retry / decline), not a silent status.
@@ -2698,11 +2701,11 @@ export class SkillInstallationModule extends BaseModule {
     );
   }
 
-  private snapshotFromEntity(
+  private async snapshotFromEntity(
     session: SkillInstallationSessionEntity,
     plan?: SkillInstallPlan
-  ): InstallSnapshot {
-    return {
+  ): Promise<InstallSnapshot> {
+    const snapshot: InstallSnapshot = {
       sessionId: session.sessionId,
       installationId: session.installationId ?? null,
       state: session.state as SkillInstallationState,
@@ -2718,6 +2721,16 @@ export class SkillInstallationModule extends BaseModule {
       recoverable: !["failed"].includes(session.state),
       ...(session.failureCode ? { errorCode: session.failureCode } : {}),
     };
+    // Audit R3: surface the credential the secure input should collect
+    // next — the first declared name still unconfigured. The card binds
+    // its label/submit to THIS field instead of scraping the summary.
+    if (plan && plan.credentials.length > 0 && session.installationId) {
+      const missing = await this.unconfiguredCredentials(session, plan);
+      if (missing.length > 0) {
+        snapshot.nextMissingCredential = missing[0];
+      }
+    }
+    return snapshot;
   }
 
   /** Structured, non-secret plan view for the renderer card. */

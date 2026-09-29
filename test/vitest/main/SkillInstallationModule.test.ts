@@ -2314,3 +2314,50 @@ describe("unified §18.4 continuation (audit R1)", () => {
     expect(resumed.nextAction).toBe("run-commands");
   }, 120_000);
 });
+
+describe("nextMissingCredential reporting (audit R3)", () => {
+  /** install.md declaring TWO required credentials (no deps). */
+  function makeTwoSecrets(root: string): string {
+    const dir = path.join(root, "fixtures", "video-use-r3");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "SKILL.md"),
+      "---\nname: video-use-r3\ndescription: Two-secret fixture\n---\n\n# Usage\n\nEdit."
+    );
+    fs.writeFileSync(
+      path.join(dir, "install.md"),
+      "# Install\n\nSet FIRST_API_KEY= and SECOND_API_KEY= for access.\n"
+    );
+    return dir;
+  }
+
+  it("the snapshot names the first UNCONFIGURED credential", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeTwoSecrets(tmpDir);
+    credState.unconfigured.add("FIRST_API_KEY");
+    credState.unconfigured.add("SECOND_API_KEY");
+    const prepared = await module.prepare({
+      conversationId: "conv-r3",
+      source: fixture,
+    });
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    expect(approved.state).toBe("awaiting_secret");
+    expect(approved.nextMissingCredential).toBe("FIRST_API_KEY");
+    const installationId = approved.installationId;
+
+    // After FIRST is stored, the NEXT snapshot names SECOND — the card can
+    // advance instead of re-submitting FIRST.
+    credState.unconfigured.delete("FIRST_API_KEY");
+    const afterFirst = await module.getStatus(prepared.sessionId);
+    expect(afterFirst.state).toBe("awaiting_secret");
+    expect(afterFirst.nextMissingCredential).toBe("SECOND_API_KEY");
+
+    credState.unconfigured.delete("SECOND_API_KEY");
+    void installationId;
+  }, 120_000);
+});

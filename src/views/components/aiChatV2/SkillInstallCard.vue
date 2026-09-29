@@ -525,8 +525,13 @@ const commandSectionVisible = computed(() =>
 /** Per-command-id results from manual runs (previews are redacted). */
 const commandResults = ref<Record<string, ApprovedCommandRunView>>({});
 
-/** The environment variable name from the safe summary, when surfaced. */
+/** The environment variable name the secure input should collect — the
+ *  snapshot's nextMissingCredential (audit R3: multi-key plans advance to
+ *  the REMAINING value instead of re-submitting the first), falling back
+ *  to the legacy summary scrape for snapshots without the field. */
 const secretVariableName = computed(() => {
+  const next = snapshotView.value?.nextMissingCredential;
+  if (next) return next;
   const match = snapshotView.value?.safeSummary?.match(/[A-Z][A-Z0-9_]{4,}/);
   return match?.[0] ?? "API_KEY";
 });

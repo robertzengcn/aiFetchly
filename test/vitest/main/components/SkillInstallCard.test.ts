@@ -76,10 +76,10 @@ function mountCard(snapshot: InstallSnapshot) {
         VProgressLinear: true,
         VSpacer: { template: "<span />" },
         VTextField: {
-          props: ["modelValue", "label"],
+          props: ["modelValue", "label", "type"],
           emits: ["update:modelValue"],
           template:
-            '<input :label="label" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+            '<input :label="label" :type="type ?? \'text\'" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
         VCheckbox: {
           props: ["modelValue", "value", "label"],
@@ -700,5 +700,45 @@ describe("SkillInstallCard — multi-skill selection (audit R2)", () => {
     expect(
       wrapper.findAll('[data-testid="skill-install-candidate"]').length
     ).toBe(0);
+  });
+});
+
+describe("SkillInstallCard — multi-secret advance (audit R3)", () => {
+  it("labels and submits the snapshot's nextMissingCredential", async () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        state: "awaiting_secret",
+        nextAction: "provide-secret-securely",
+        safeSummary: "requires FIRST_API_KEY= and SECOND_API_KEY=",
+        nextMissingCredential: "SECOND_API_KEY",
+      })
+    );
+    const label = wrapper.text();
+    expect(label).toContain("SECOND_API_KEY");
+    // Submit uses the NEXT variable — not the first name in the summary.
+    const input = wrapper.find('input[type="password"]');
+    expect(input.exists()).toBe(true);
+    if (input.exists()) {
+      await input.setValue("sk-second");
+    }
+    const submit = wrapper
+      .findAll("button")
+      .find((b) => (b.text() ?? "").toLowerCase().includes("save"));
+    expect(submit).toBeTruthy();
+    await submit!.trigger("click");
+    await flushPromises();
+    const call = vi.mocked(submitSkillInstallSecret).mock.calls[0]?.[0];
+    expect(call?.environmentVariable).toBe("SECOND_API_KEY");
+  });
+
+  it("falls back to the summary scrape when the field is absent", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        state: "awaiting_secret",
+        nextAction: "provide-secret-securely",
+        safeSummary: "requires LEGACY_API_KEY= please",
+      })
+    );
+    expect(wrapper.text()).toContain("LEGACY_API_KEY");
   });
 });

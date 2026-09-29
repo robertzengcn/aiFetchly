@@ -230,6 +230,10 @@ export interface SafePlanView {
     readonly evidence?: string;
   }[];
   readonly credentials: readonly string[];
+  /** Audit R3: the credential the secure input should collect NEXT — the
+   *  first declared name still unconfigured (equal to credentials[0] when
+   *  none are configured yet; absent when every value is stored). */
+  readonly nextMissingCredential?: string;
   readonly mode: string;
   /** Approved command templates (review D1: informed consent requires the
    *  card to show exactly what will execute). Args + riskLevel + declared
@@ -262,6 +266,9 @@ export interface InstallSnapshot {
   readonly safePlan?: SafePlanView;
   readonly recoverable: boolean;
   readonly errorCode?: string;
+  /** Audit R3: the credential the secure input should collect next (top
+   *  level for easy card binding; undefined when nothing is missing). */
+  nextMissingCredential?: string;
 }
 
 // ---------------------------------------------------------------------------
