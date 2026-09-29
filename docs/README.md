@@ -2,6 +2,8 @@
 
 ## Product Requirements
 
+- [PRD: Recoverable Large Tool Results](./superpowers/specs/2026-09-29-ai-chat-large-tool-results-prd.md)
+- [Technical Design: Recoverable Large Tool Results](./superpowers/specs/2026-09-29-ai-chat-large-tool-results-technical-design.md)
 - [PRD: Separate SMTP Login, From, and Reply-To](./prd/email-service-from-reply-to-prd.md)
 - [Technical Design: Separate SMTP Login, From, and Reply-To](./prd/email-service-from-reply-to-technical-design.md)
 - [PRD: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-prd.md)

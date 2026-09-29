@@ -1,9 +1,15 @@
 # PRD: Recoverable Large Tool Results
 
-**Date:** 2026-09-29  
-**Status:** Proposed design for review; not implemented  
-**Owner:** AiFetchly AI Chat  
-**Technical design:** [Recoverable large tool results](2026-09-29-ai-chat-large-tool-results-technical-design.md)  
+**Date:** 2026-09-29
+
+**Last updated:** 2026-09-30
+
+**Status:** Proposed design for review; not implemented
+
+**Owner:** AiFetchly AI Chat
+
+**Technical design:** [Recoverable large tool results](2026-09-29-ai-chat-large-tool-results-technical-design.md)
+
 **Primary scope:** AI Chat V2, scheduled chat, agent runtime, tool-result storage and retrieval, conversation history, and result display
 
 ## 1. Product decision
@@ -164,7 +170,7 @@ These are proposed initial engineering defaults, not measured provider guarantee
 
 KiB and MiB mean powers of 1,024. The token limits use a common budget service and are not derived by assuming all languages have four characters per token. The retrieval-work allowance is cumulative work, not permission to retain 32,000 tokens simultaneously in context.
 
-Referenced committed output has no automatic age-based expiry in the first release. Conversation deletion, explicit deletion, or quota refusal controls its lifecycle. Do not silently evict referenced evidence to accommodate new writes.
+Referenced committed output has no automatic age-based expiry in the first release. Conversation deletion, explicit deletion, or quota refusal controls its lifecycle. Do not silently evict referenced evidence to accommodate new writes. Reading an existing saved result through the AI UI follows the application's current AI-enable gate; disabling AI does not delete the saved data.
 
 ## 9. Nonfunctional requirements and measurement
 

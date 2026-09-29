@@ -1,8 +1,13 @@
 # Technical Design: Recoverable Large Tool Results
 
-**Date:** 2026-09-29  
-**Status:** Proposed design for review; no feature implementation is claimed  
-**PRD:** [Recoverable large tool results](2026-09-29-ai-chat-large-tool-results-prd.md)  
+**Date:** 2026-09-29
+
+**Last updated:** 2026-09-30
+
+**Status:** Proposed design for review; no feature implementation is claimed
+
+**PRD:** [Recoverable large tool results](2026-09-29-ai-chat-large-tool-results-prd.md)
+
 **Scope:** Local tool-output capture, result preparation, provider budgeting, scoped retrieval, history, and renderer integration
 
 ## 1. Decisions and invariants
@@ -128,11 +133,12 @@ export interface TrustedToolOutputContext {
 export interface StoredToolOutputRef {
   readonly outputId: string;
   readonly revision: number;
+  readonly storageBackend: "file" | "legacy_message";
   readonly format: "text" | "json" | "jsonl" | "binary";
   readonly mediaType: string;
   readonly capturedBytes: number;
   readonly originalBytes?: number;
-  readonly sha256: string;
+  readonly sha256?: string;
   readonly preservation: "complete" | "partial";
   readonly sourceCompleteness: SourceCompleteness;
   readonly incompleteReason?: string;
@@ -169,6 +175,8 @@ export interface ToolResultOutputPolicy {
   readonly delivery: "normal" | "bounded_reader" | "source_reference";
 }
 ```
+
+`sha256` is required by runtime schema validation for a committed file backend. A legacy-message reference can initially rely on its stored source-row identity/revision; do not fabricate a checksum or load a huge row solely to make the first receipt. A bounded background walk may calculate its checksum later without changing source bytes. Public descriptors omit internal backend/path details when the client does not need them.
 
 `control` is not an unchecked copy of the result. Each adapter supplies a validated bounded schema. Examples include `needsPermissionPrompt`, permission category/preview, `executionPending`, `job_id`, `shell_id`, exit code, batch IDs/statuses, retryability, totals, pagination cursors, and partial-result counts. Strings, arrays, and nested fields each have limits, and the whole control object is accounted in the envelope. If essential control data cannot fit, return an explicit bounded preparation error rather than silently omitting a permission or outcome field.
 
@@ -209,15 +217,19 @@ Small results can preserve their existing wire shape. New typed metadata differe
 
 | Record | Required fields / indexes |
 | --- | --- |
-| `ai_tool_outputs` | `outputId` primary key; profile, conversation, epoch, owner agent, turn, execution, tool-call ID, tool name; stream key; revision; state; format/media type; relative storage key; captured/original bytes; SHA-256; source completeness; preservation; bounded failure code; policy version; lease/fence; timestamps |
+| `ai_tool_output_scopes` | Profile/conversation primary scope; current output epoch, deletion fence and timestamps; exists independently of the archive feature flag |
+| `ai_tool_outputs` | `outputId` primary key; profile, conversation, epoch, owner agent, turn, execution, tool-call ID, tool name; stream key; revision; state; backend (`file` or `legacy_message`); format/media type; relative storage key or source-row identity/revision; captured/original bytes; SHA-256; source completeness; preservation; bounded failure code; policy version; lease/fence; publication status and bounded receipt needed for recovery; timestamps |
 | `ai_tool_output_reservations` | Reservation ID, profile/conversation/epoch, execution ID, reserved/used bytes, lease expiry, fence; indexes for profile and conversation accounting |
 | `ai_tool_output_grants` | Output ID, grantee conversation/epoch/agent, grant reason, revocation time; unique owner-approved grant key |
 | `ai_tool_result_projections` | Profile/conversation/epoch, source row ID, source revision/hash, policy version, bounded content/metadata, output references; unique source identity and policy version |
+| `ai_tool_output_retrieval_budgets` | Profile/conversation/epoch/agent/turn unique key; reserved/settled call count and returned tokens; conditional-update version and timestamps |
 | Versioned bootstrap marker | Schema/data-bootstrap version and last bounded legacy backfill position; resume after interruption |
 
 Unique artifact identity is `(profile, conversation, epoch, executionId, streamKey)`. A tool call producing text plus stderr can have multiple bounded descriptors. Cap descriptors per receipt at 8; excess attachments belong to an indexed manifest artifact. Same identity plus same source hash is idempotent. Same identity plus different bytes is a conflict, not permission to overwrite committed evidence.
 
 Capture the result's execution ID before tool execution and carry it through async jobs/resume. A permission placeholder has a different phase and cannot consume the terminal result's artifact key. A deliberate new tool execution gets a new execution ID even if a caller reused a tool-call ID.
+
+The output epoch is owned by `ai_tool_output_scopes`; it need not equal the archive epoch. Clear/delete coordinates invalidation of both under the conversation lifecycle lock, even when either subsystem's rollout flag is off. A trusted resolver obtains the current output epoch before execution and revalidates it at commit/access. Never reconstruct an old scope from an untrusted incoming result after deletion.
 
 ### 5.2 Paths and ownership
 
@@ -523,7 +535,7 @@ Integrate projection lookup before `AIChatContextAssembler`'s live-tail byte all
 
 Backfill is resumable, keyset-paged, and bounded by bytes/time as well as row count. It may temporarily retain both the original database source and a file; charge file quota and report that historical DB storage is not reclaimed in this release. If quota prevents backfill, retain the original source and serve bounded legacy pages through Models; do not make a false file reference. Any new result receipt derived from this fallback names the supported legacy-source reader through the common output abstraction.
 
-To support that fallback, registry records may use a tagged backend `file` or `legacy_message`, with validated source-row identity/revision for the latter. Both readers enforce the same scope/page/budget contract. A source mutation invalidates the derived projection and cursor; it does not overwrite an existing committed file artifact under the same revision.
+To support that fallback, registry records use a tagged backend `file` or `legacy_message`, with validated source-row identity/revision for the latter. Both readers enforce the same scope/page/budget contract. The 64 MiB new-file capture limit does not retroactively truncate already existing database source; no extra file quota is charged until bytes are copied. A source mutation invalidates the derived projection and cursor; it does not overwrite an existing committed file artifact under the same revision.
 
 ### 10.3 Reload and compaction invariants
 
@@ -561,3 +573,213 @@ Copy copies only the currently displayed text unless the UI explicitly labels an
 ### 11.3 Export
 
 Export requires an explicit user action and a native save dialog. Main-process code streams the authorized artifact to the selected destination with bounded buffers; it does not return bytes to the renderer. Show cancellation and I/O errors without exposing internal paths. Check epoch during export and stop on deletion. Export includes the captured representation; for partial output use a truthful filename/manifest or visible warning. It does not reconstruct data the producer or capture layer never preserved.
+
+## 12. Failure taxonomy and recovery rules
+
+Errors use bounded machine codes and translated UI messages. Internal diagnostics may record stage, counts and an execution correlation ID, but not output or arguments. Retrieval responses preserve the output reference when the caller is authorized and the reference remains valid.
+
+| Code | Condition | Required behavior |
+| --- | --- | --- |
+| `OUTPUT_SERIALIZATION_FAILED` | Cycles, unsupported values, invalid encoding, or depth limit | Preserve the operation outcome; bounded diagnostic preview; commit a clearly partial text capture only if usable |
+| `ARTIFACT_LIMIT_REACHED` | Capture exceeds its 64 MiB ceiling | Seal safe captured prefix/records as partial; continue draining producer streams |
+| `OUTPUT_QUOTA_EXCEEDED` | Conversation/profile reservation denied | Keep a bounded preview and actual execution status; do not evict referenced artifacts |
+| `OUTPUT_DISK_FULL` | Free reserve exhausted or write returns a disk-full error | Release unused reservations; retain valid partial capture if safely sealable; otherwise mark unavailable |
+| `OUTPUT_WRITE_FAILED` | Other file-write/rename/sync failure | Do not publish a complete reference; reconcile temp state later |
+| `OUTPUT_PUBLICATION_FAILED` | Registry/terminal receipt could not commit | Stop model continuation if durable outcome publication failed; retain recovery record where possible |
+| `OUTPUT_NOT_AVAILABLE` | ID is missing, deleted, unauthorized, or belongs to another scope | Same public response for unauthorized/missing cases; no content or existence leak |
+| `OUTPUT_CHANGED` | Authorized legacy source changed or cursor revision no longer matches | Reject stale cursor; offer restart against a newly authorized current revision |
+| `OUTPUT_INTEGRITY_FAILED` | Authorized artifact fails identity/checksum validation | Mark unavailable; do not substitute other bytes or re-execute the producer |
+| `OUTPUT_FORMAT_UNSUPPORTED` | Text reader requested for binary content | Return bounded metadata and user-export guidance; do not inline base64 |
+| `INVALID_OUTPUT_CURSOR` | Invalid signature/schema/mode/range | Reject without reading content; valid output ID can be used to restart |
+| `MODEL_BUDGET_UNAVAILABLE` | Even a minimum retrieval response cannot fit | Do not advance a cursor; permit existing bounded context relief, then retry only if space changes |
+| `RETRIEVAL_BUDGET_EXHAUSTED` | Per-turn call/token allowance reached | Report incomplete analysis and retain continuation; no implicit turn reset |
+| `CONTEXT_REQUIRED_CONTENT_TOO_LARGE` | Required request content still exceeds model capacity | Stop before provider dispatch; preserve results for a later turn/model choice |
+| `REQUEST_BODY_TOO_LARGE` | Final serialized request exceeds transport ceiling | Reduce optional projection once if possible; do not strip required images or repeat tools |
+| `RETRIEVAL_UNSUPPORTED_BY_HOST` | Legacy remote lane has no verified reader routing | Return a bounded limited-output result; local viewer may still read saved output |
+
+### 12.1 Cancellation and deletion races
+
+If cancellation arrives before a result is produced, retain existing tool cancellation behavior. If a tool already completed, cancellation stops model continuation, not preservation of a completed side effect. A final bounded receipt may be persisted without emitting a misleading active-chat result after Stop. Follow existing UI cancellation semantics.
+
+Deletion is stronger than cancellation: invalidate the output epoch first and reject all later commits. Writers close handles and release reservations; background cleanup removes files even if a producer finishes afterward. Recreating the same conversation ID uses a new epoch. Reader/export operations revalidate the epoch between pages/chunks and stop promptly.
+
+### 12.2 Recovery sweep
+
+On startup and after abnormal publication failure, process state in bounded keyset batches. Reclaim expired writing leases; inspect staged files/manifests; validate file size/checksum before promoting any recoverable artifact; complete idempotent pending receipt publication only for the still-valid owner epoch. Sweep unregistered files by generated directory identity and grace period. Rate-limit I/O and yield, so a large orphan directory does not block application startup.
+
+Never infer operation success from a payload file alone. Recovery trusts the recorded outcome/identity; otherwise preserve it as unknown and request existing job reconciliation. It does not call the original tool.
+
+## 13. Configuration, rollout, and backward compatibility
+
+### 13.1 Central configuration
+
+Add `src/config/toolResultConfig.ts` for immutable defaults, validated overrides and policy-version identity. Proposed configuration keys are design names, not existing settings:
+
+| Key | Default / behavior |
+| --- | --- |
+| `ai_tool_output_capture_enabled` | Off until storage/read integration is certified; enables new file capture |
+| `ai_tool_output_model_refs_enabled` | Off until read/search routing is ready; V2 flag is independent from legacy capability |
+| `ai_tool_output_ui_enabled` | Controls new viewer rollout; old viewer receives bounded content regardless |
+| `inlineMaxBytes` / `inlineMaxTokens` | 16 KiB / 2,000, further reduced by allocation |
+| `receiptMaxBytes` | 4 KiB including descriptors/control/preview |
+| `previewMaxBytes` / `previewMaxTokens` | 2 KiB / 512, further reduced by envelope allocation |
+| `readMaxBytes` / `readMaxTokens` | 8 KiB / 2,000 including envelope |
+| `resultInputFraction` | 0.25 of usable input, also limited by remaining space |
+| `artifactMaxBytes` | 64 MiB per newly captured artifact/stream |
+| `conversationQuotaBytes` / `profileQuotaBytes` | 1 GiB / 5 GiB including reservations and sidecars |
+| `minimumFreeDiskBytes` | 128 MiB |
+| `captureConcurrency` | 2 per profile |
+| `retrievalMaxCalls` / `retrievalMaxTokensPerTurn` | 32 / 32,000 |
+| `searchMaxScanBytes` / `searchMaxMs` | 8 MiB / 100 ms per call |
+| `uiReadMaxBytes` | 32 KiB serialized response |
+| `orphanGraceHours` | 24, with active-lease protection |
+| `unknownTransportMaxBytes` | 8 MiB; lower provider-configured limits win |
+
+Validate positive finite integers/fractions and reject invalid overrides with a safe fallback. Third-party tool policy may lower limits only. Product/admin tuning of quotas must preserve consistency across layers; record policy version on receipts and metrics. A hard independent emergency event serializer ensures a disabled or misconfigured feature cannot emit an unbounded result.
+
+### 13.2 Additive bootstrap
+
+Register entities in `SqliteDb.ts`. Because current initialization uses schema synchronization and no registered migrations, introduce a versioned idempotent bootstrap for this feature's indexes and data backfill. Do not pretend a new migration file will run automatically. Test against an existing production-shaped SQLite fixture, a fresh database, and an interrupted bootstrap. Avoid full-table reads, destructive column changes, or automatically VACUUMing a large database on startup.
+
+Small old results continue to render. New receipt metadata uses `schemaVersion: 1`; readers reject unsupported newer versions with an intelligible response. Old code may display the bounded receipt text, but an application downgrade to a version without readers does not provide full retrieval. Rollback within the feature-capable build is the supported operational rollback.
+
+### 13.3 Legacy hosted continuation
+
+Before enabling remote model references, run a contract fixture against `/api/ai/ask/continue`: send a receipt plus client-tool definitions, receive a `tool_result_read` call routed to the desktop, return a bounded page, and observe a correct model continuation. Confirm the server does not drop unknown receipt fields, expand saved output, or attempt to read a local path itself.
+
+Treat certification as an explicit configured server capability or a supported versioned capability negotiation. A successful unrelated tool call is not proof. If capability is absent, retain local full output but send a bounded preview with `RETRIEVAL_UNSUPPORTED_BY_HOST` and an explicit model limitation; do not name unavailable reader tools in the model receipt. Server-originated large SSE events still require server/transport limits outside this desktop change.
+
+### 13.4 Rollout gates and rollback
+
+Deploy additive schema/read support first. Enable capture in developer/test environments, then V2 model references and UI for a limited cohort. Inspect measured failures and performance targets before broader enablement. Scheduled/agent consumers must pass the same end-to-end contract before their flag is enabled.
+
+Turning capture off prevents new file writes; it does not unregister readers for existing references, erase artifacts, or reinstate raw result emission. Newly oversized output falls back to a bounded explicit limited-output receipt. Turning model-reference delivery off does not make existing reference history unsafe to display/read. Existing complete-request preflight remains mandatory in every mode.
+
+## 14. Observability and diagnostics
+
+Use an event family such as `tool_output_prepared`, `tool_output_stored`, `tool_output_read`, `tool_output_search`, `tool_output_reduced`, `tool_output_failed`, and `tool_output_reconciled`.
+
+Safe fields: hashed correlation identity, runtime lane, producer category, operation/preservation state, original/captured/receipt/request byte counts, token estimate and provenance, model-limit provenance, preparation/storage/read latency, scan-complete flag, retry count, and failure stage/code. Log neither contents nor filesystem paths nor raw tool arguments, email addresses, authorization data, or full URLs.
+
+Separate counters for provider context rejection, local preflight rejection, HTTP body rejection, serialization failure, quota refusal, disk failure, and renderer-delivery failure. A single generic “large tool error” counter cannot identify the broken boundary. Track captured completeness per producer so a capped producer is not mistakenly reported as lossless.
+
+Performance diagnostics use synthetic fixtures, not production output dumps. Record OS, application/Electron version, hardware/storage, tokenizer profile, warm/cold state, payload format, and trial count. Measure additional serialization/capture memory separately from the producer's already-materialized object.
+
+## 15. Verification strategy and acceptance mapping
+
+Tests described here are required future implementation work; none are claimed to have run as part of writing this document.
+
+### 15.1 Deterministic test matrix
+
+| Test group | Fixture / assertion | PRD acceptance |
+| --- | --- | --- |
+| Preparation boundaries | Just below/at/above byte and token thresholds; empty output; long error; control fields survive | AC-01, AC-02, AC-12, AC-15 |
+| Serialization fidelity | Nested JSON, Unicode, cycles, BigInt, deep structures; reconstructed complete content/hash match | AC-02, AC-05, AC-06 |
+| Streaming and partial capture | 1/10/64 MiB streams, cap exceeded mid-codepoint, write failure, backpressure | AC-06, AC-12, AC-15, AC-24 |
+| Aggregate budgeting | Twenty medium results, many small receipts, 8k/32k/128k contexts, image/schema/argument cost, model fallback | AC-03, AC-08, AC-20, AC-26 |
+| Read/search | Facts near EOF; minified one-line JSON; matches across chunk/call boundaries; no-progress budget; query caps | AC-04, AC-05, AC-06, AC-16, AC-17 |
+| Retrieval work guard | Shared read/search allowance; duplicate calls; parallel reservations; restart/resume persistence | AC-10, AC-18 |
+| Scope isolation | Wrong profile/conversation/epoch/agent, sibling access, explicit parent grant, tampered cursor, symlink escape | AC-11, AC-14 |
+| Durable publication | Fault injection before/after file close/rename/registry/message commit; duplicate events; lease conflict | AC-07, AC-12, AC-13, AC-25 |
+| Lifecycle | Delete during capture/read/export; bulk clear with archive flag off; reused conversation ID | AC-14, AC-27 |
+| Execution adapters | Normal, permission-resume, async final/polling, scheduled, child agent, MCP mixed blocks | AC-09, AC-10, AC-20, AC-25 |
+| History/compaction | Bounded legacy SQL reads and projections; source offsets unchanged; reopen after compact; original large metadata not emitted | AC-07, AC-08, AC-19 |
+| UI and export | Lazy opening, paging, close cancellation, five-page cache, keyboard focus, copy label, streaming save dialog export | AC-22, AC-23 |
+| Legacy protocol | Certified client-tool round trip and explicit unsupported-host fallback | AC-21 |
+| Shell handoff | Foreground prefix and background suffix captured exactly once; stdout/stderr ordering within each stream | AC-24 |
+| Rollback | Capture disabled after artifacts exist; reader remains usable; new results remain bounded | AC-27 |
+
+Additional assertions: successful external actions are invoked exactly once under every induced storage/provider retry; there is no `file_read -> externalize -> file_read` recursion; no original arguments become `{}`; every provider-dispatched tool result has a matching call ID; no full output appears in captured ordinary IPC or debug-log fixtures.
+
+### 15.2 Proposed test files and suites
+
+Add focused Vitest coverage under `test/vitest/main/service/` for preparation, storage, retrieval, budget, publisher, and recovery. Add module/model tests under the repository's corresponding existing test directories for quota/epoch transactions and projections. Extend existing `AIChatQueryLoop.budget.test.ts`, `AIChatQueryEngine` permission tests, `AgentRuntime` tests, MCP tests, shell tests, archive/history tests, and feature-flag tests rather than creating parallel fake execution paths.
+
+Create `test/vitest/main/components/AiChatToolResultViewer.test.ts` and extend the current `AiChatV2Message` component coverage. Add an Electron E2E spec under `test/e2e/specs/` for large-result receipt -> search -> page -> restart -> reopen; include a fake provider/tool fixture so the gate does not depend on paid model calls or external network services.
+
+Required checks for implementation changes:
+
+```text
+yarn testmain
+yarn test:components
+yarn test:e2e
+yarn exec tsc --noEmit
+yarn exec vue-tsc --noEmit
+```
+
+Use the non-watch TypeScript invocations because repository `yarn tsc` and `yarn vue-check` currently enable watch mode. Run relevant module tests through the existing `yarn test` runner when Models/Modules are changed. Record unrelated baseline failures separately; do not claim a suite passed when it did not.
+
+### 15.3 Performance fixture
+
+Build generated text, JSONL, nested JSON, minified JSON, CJK/emoji, and stdout/stderr fixtures at 1/10/64 MiB. Capture peak additional memory, main-process event-loop stalls, storage time, first-page latency, search scan time, and renderer event bytes across at least 20 measured warm trials plus separately reported cold trials. Use checksums and exact-match assertions in the same fixture.
+
+Evaluate PRD NFR-01–09 against the documented host. The 16 MiB memory, 200 ms warm first-page p95, and 50 ms event-loop-stall targets are proposed release targets, not benchmark results. Upstream materialized MCP memory is reported as a separate uncovered boundary until that adapter supports capped streaming/receiving.
+
+## 16. Implementation inventory and sequence
+
+### 16.1 Proposed files
+
+| Area | Proposed additions / existing changes |
+| --- | --- |
+| Configuration and types | Add `src/config/toolResultConfig.ts`, `src/entityTypes/toolResultTypes.ts`, `src/schemas/toolResult.ts`; extend `skillTypes.ts` with trusted result-policy metadata |
+| Persistence | Add scoped output, reservation, grant, retrieval-budget and projection entities/models; add `src/modules/ToolResultModule.ts`; register in `SqliteDb.ts` |
+| Services | Add preparation/storage/preview/budget/retrieval/publisher/recovery services described in §3 |
+| Tool handlers | Add `src/service/agentTools/toolResultReadTool.ts` and `toolResultSearchTool.ts`; update registry/catalog/plan/agent policy |
+| Execution | Update query loop/engine/factory/events, AgentRuntime, legacy processor/persistence, MCP adapters and provider request projection |
+| Capture | Update shell/background registry and eligible resource/file adapters with shared capture handles |
+| History | Update archive Models/Modules, context assembler, section packer and tool-history adapters for bounded source projections |
+| UI/IPC | Add `src/main-process/communication/tool-result-ipc.ts`, contextBridge channels/API helpers and `AiChatToolResultViewer.vue`; update result cards and six language files |
+| Tests | Add focused service/model/component suites and deterministic Electron flow/benchmark fixtures |
+
+Names are proposed public design contracts; private helpers may be consolidated if responsibilities remain clear. There is no need for a new network service, external search engine, or mandatory embedding dependency. Use existing filesystem, crypto, schema-validation and TypeORM facilities; evaluate a local tokenizer dependency during implementation against existing availability and provider support.
+
+### 16.2 Dependency-ordered delivery
+
+1. **Contracts and durable storage:** implement schemas, output scope epochs, registry/reservations, single-pass serializer, publication/reconciliation, and storage fault tests.
+2. **Retrieval and policy:** implement true bounded read/search, scoped cursors/grants, shared accounting, core tool registration and policy tests. Keep model-reference delivery off until this passes.
+3. **V2 publication and budget:** wire normal/resume/async/scheduled/agent paths, replace lossy result fallback, enforce aggregate and final budgets, and certify image/control behavior.
+4. **History and renderer:** add bounded legacy projection reads, compaction integration, lifecycle cleanup, viewer/translations, and end-to-end restart tests. This completes the first V2 release boundary.
+5. **Producer capture and export:** complete foreground/background shell spooling and user export; certify preservation per producer rather than using a global lossless claim.
+6. **Legacy certification and rollout:** verify remote reader routing; otherwise retain the documented bounded fallback. Enable by lane and measure real failure rates.
+
+Each unit includes its tests and a descriptive conventional commit, following repository rules. UI changes and their tests commit together. This is a technical dependency sequence, not an approved execution plan or evidence that any code has shipped.
+
+## 17. Requirement traceability
+
+| PRD requirements | Technical sections |
+| --- | --- |
+| FR-01, FR-02, FR-04, FR-05 | §4 representations, §6 preparation, §7 budgets, §9 publication |
+| FR-03, FR-13, FR-14 | §5 storage/lifecycle, §12 failures and recovery |
+| FR-06, FR-07, FR-18 | §8 retrieval/authorization, §9 adapters, §10 history |
+| FR-08 | §7 allocation and dispatch, §8.5 retrieval accounting |
+| FR-09, FR-10 | §4 projections, §9 publication, §10 persistence, §11 viewer |
+| FR-11 | §11.3 export |
+| FR-12, FR-17 | §10 history and legacy projections |
+| FR-15 | §4.2 transient artifacts, §6.2 previews, §7 multimodal accounting |
+| FR-16 | §6.3 shell streaming |
+| FR-19 | §11 UI/i18n, §15 verification |
+| FR-20 | §14 observability |
+| NFR-01–09 and AC-01–27 | §15 verification matrix and measured release gates |
+
+## 18. Alternatives and remaining validation
+
+| Alternative | Assessment |
+| --- | --- |
+| Increase model context or global output limits | May postpone errors but does not bound transport, renderer, storage duplication, or smaller-model fallback |
+| Truncate every result in place | Simple but loses evidence; cannot reliably support later inspection or side-effect reconciliation |
+| Summarize all large results with an AI request | Adds latency/cost and another size-sensitive request; summaries are not exact source preservation |
+| Keep full result only in ordinary chat rows and use existing history reader | Useful as a legacy fallback; current source reads materialize full rows, and new bulk output would continue to burden message storage/indexing |
+| Save a path and reuse current `file_read` | Current total-file cutoff, whole-file loading, workspace restrictions, and long-line behavior prevent a reliable general solution |
+| File artifact plus small registry and dedicated bounded reader | Selected: preserves data within explicit caps and keeps all ordinary consumers bounded |
+
+Validation inputs that remain external to this document are the user's exact failure signature, representative production payload distribution, legacy-server capability, and measured performance/tokenizer coverage. They affect tuning and rollout certification; they do not leave the core storage/retrieval/error contracts undefined.
+
+Revisit defaults after measurement. Any change to output completeness semantics, source immutability, scope authorization, or no-reexecution behavior requires a design update and new regression coverage, not only a configuration change.
+
+## 19. References
+
+- [Product requirements](2026-09-29-ai-chat-large-tool-results-prd.md)
+- [Recoverable conversation history technical design](../../prd/ai-chat-recoverable-history-incremental-compaction-technical-design.md)
+- [AI tool catalog technical design](../../prd/ai-tool-list-management-technical-design.md)
+- [Tool timeout resilience design](2026-06-25-ai-tool-timeout-resilience-technical-design.md), historical design context; current source is authoritative for implemented behavior.
+- User-provided local reference: `/Users/cengjianze/project/github/claude-code/docs/large-tool-result-handling.md`. Its snapshot describes per-tool persistence, aggregate limits, bounded reads, independent UI collapse, and producer-specific caps. This design adopts those principles without depending on its numeric thresholds, feature flags, or provider-specific protocol.
