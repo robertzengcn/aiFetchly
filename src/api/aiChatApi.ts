@@ -2997,6 +2997,39 @@ export class AiChatApi {
       return null;
     }
 
+    // OpenAI's canonical error envelope is a bare {"error": {message, type,
+    // param, code}} object — the message and code live NESTED inside the
+    // `error` field, not at the top level. When an upstream proxy or the AI
+    // server emits this shape on a 200 SSE stream (e.g. Gemini returns empty
+    // STOP after tool calls), the top-level status/code/msg/message fields are
+    // all absent, so the legacy envelope check below would return null and the
+    // consumer would emit zero chunks ("ignored unrecognized payload"). That
+    // masks the real error as a generic "transient empty response". Detect this
+    // shape explicitly and surface the server's message.
+    const nestedError = payload.error;
+    if (
+      this.isRecord(nestedError) &&
+      !Array.isArray(payload.choices) &&
+      // Only treat a non-empty `error` object as a real error signal — an
+      // empty/nullish `error` field is not the canonical error envelope.
+      (nestedError.message !== undefined ||
+        nestedError.type !== undefined ||
+        nestedError.code !== undefined)
+    ) {
+      const nestedMessage = this.getStringField(nestedError, "message");
+      const nestedCode =
+        this.getStringField(nestedError, "code") ??
+        this.getStringField(nestedError, "type");
+      const codeText = nestedCode ?? "unknown";
+      const safeMessage = this.truncateForLog(
+        nestedMessage ?? "AI server returned an error"
+      );
+      console.error(
+        `[ai-chat-v2] openai-stream server envelope error code=${codeText} msg="${safeMessage}"`
+      );
+      return new Error(`AI server error code=${codeText}: ${safeMessage}`);
+    }
+
     const hasEnvelopeShape =
       "status" in payload ||
       "code" in payload ||
