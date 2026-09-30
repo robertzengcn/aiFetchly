@@ -190,3 +190,37 @@ is broader (scheduled + agent + MCP + legacy resume paths too), the `shrinkLiveT
 removal is not yet done, the retrieval-tool gate is on the wrong flag, the `legacy_message`
 reader and bootstrap marker are absent, and the `tsc` gate is nondeterministic. None of these are
 hidden; all are reproducible from the evidence above.
+
+
+---
+
+# Closure (added after remediation)
+
+Each finding above was re-verified on the worktree and either fixed or
+explicitly accepted. Status:
+
+| ID | Status | Resolution |
+| --- | --- | --- |
+| **P0-1** execution-path wiring | **FIXED** | `ToolResultPipeline` is now called from `AIChatQueryLoop`. Because the loop is constructed by `ai-chat-v2-ipc` (interactive V2), `AIChatQueryEngineFactory` (scheduled) and `AgentRuntime` (child agents), one change covers all three adapters the audit said were unwired — the audit was right that the gap was broader than the plan admitted. An end-to-end test proves an oversized result reaches the renderer as a receipt, is persisted before the event, and is readable back. |
+| **P0-2** `shrinkLiveTurnToolPayloads` | **FIXED** | Deleted (71 lines). The budget-pressure path now uses the aggregate budget. Its regression test was rewritten to pin the real invariants: arguments are never blanked to `{}`, bodies are never silently clipped, and the turn ends in a definitive `completed`/`failed` state. |
+| **P1-3** retrieval-tool gate | **FIXED** | Availability now follows `modelRefs` OR the presence of committed references, not `capture`, so a default install can still read output it already saved. The check is a `LIMIT 1` count and cannot pull a receipt into memory. |
+| **P1-4** `legacy_message` backend | **FIXED** | Implemented. The retrieval service takes a `BoundedSourceReader`; the legacy reader slices with SQL `substr` on a validated source key so a page never materializes the whole row, and both backends share one scope/page/budget contract. Covered by tests for read, search, and cursor rejection. |
+| **P1-5** bootstrap marker | **FIXED** | Added `ai_tool_output_bootstrap` + `ToolResultBootstrapService` (idempotent, resumable, records an opaque position). The project uses `synchronize: true` with an empty migration list, so a migration file would never run; this is the honest mechanism. |
+| **E-1** flaky `tsc` gate | **FIXED** | `globalSetup` and the `tsc-result` / `vue-typecheck` scripts now pass `--incremental false`, so the gate's verdict is deterministic on an unchanged tree. |
+| **E-2** `testmain` DB-lock failures | **CONFIRMED NOT OURS** | Reproduced the audit's evidence: the base branch is stable, and this branch with the new test files excluded matches the base exactly. Root cause is pre-existing shared-fallback-DB contention under parallel workers. Our footprint is reduced to a single schema build per run (shared DB dir, unique conversation per test, `Token` stubbed so `BaseModule` and the Model resolve one path). Not fixed here — it belongs in the shared `SqliteDb`/test-setup layer. |
+| **P2-6** out-of-scope items | **ACCEPTED** | Shell spooling, legacy hosted-continuation certification, the legacy backfill migration, and the NFR benchmark harness remain TD phases 4–5, as originally documented. Not silently skipped. |
+
+## Verification after remediation
+
+- `tsc --noEmit --incremental false`: clean
+- `vue-tsc --noEmit --incremental false`: clean
+- `test/vitest/main`: **531 files passed**, 1 skipped, and **1 failure** —
+  `HookDispatcher.skillRef`, which fails on the base `test` branch too
+  (re-verified by running the full suite there). It is a 5000 ms timeout that
+  passes or fails depending on machine load; it is not caused by this branch and
+  it is not one of the audit's items.
+- `test:components`: **66/66 files passed**
+
+No new failure was introduced by the remediation. An earlier run of the same
+suite happened to pass `HookDispatcher` as well, which is exactly the
+load-sensitivity the audit's E-2 describes for the suite as a whole.

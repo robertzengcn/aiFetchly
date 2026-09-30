@@ -39,6 +39,13 @@ import type { ToolResultStorageService } from "@/service/toolResult/ToolResultSt
 export interface RetrievalTarget {
   readonly outputId: string;
   readonly revision: number;
+  /** Which backend holds the captured representation. */
+  readonly backend?: "file" | "legacy_message";
+  /**
+   * Source row identity, required for the `legacy_message` backend. Absent for
+   * file artifacts, whose bytes live under `storageKey`.
+   */
+  readonly sourceRowKey?: string;
   readonly storageKey: string;
   readonly format: ToolOutputFormat;
   readonly capturedBytes: number;
@@ -66,13 +73,86 @@ export type SearchOutcome =
 /** Cooperative yield hook so scanning does not stall the event loop. */
 export type RetrievalYield = () => void | Promise<void>;
 
+/**
+ * Backend-agnostic bounded reader.
+ *
+ * Both backends expose the SAME contract - scope, page, and budget are
+ * identical (technical design §10.2) - so a caller cannot accidentally give a
+ * legacy row looser limits than a file artifact.
+ */
+export interface BoundedSourceReader {
+  read(input: {
+    target: RetrievalTarget;
+    startByte: number;
+    maxBytes: number;
+  }): Promise<{ buffer: Buffer; totalBytes: number }>;
+}
+
+/** The default: bytes come from the app-managed file. */
+function defaultFileSourceReader(
+  storage: ToolResultStorageService
+): BoundedSourceReader {
+  return {
+    read: (input) =>
+      storage.readWindow({
+        storageKey: input.target.storageKey,
+        startByte: input.startByte,
+        maxBytes: input.maxBytes,
+      }),
+  };
+}
+
+/**
+ * Reader for the `legacy_message` backend.
+ *
+ * The source row is a historical tool-result message whose full text still
+ * lives in `ai_chat_messages`. Slicing is pushed into SQL so a page never
+ * materializes the whole row, and no file quota is charged because no bytes are
+ * copied (technical design §10.2).
+ */
+export function legacySourceReader(input: {
+  readSlice: (args: {
+    sourceRowKey: string;
+    offsetBytes: number;
+    lengthBytes: number;
+  }) => Promise<{ text: string; totalBytes: number } | null>;
+}): BoundedSourceReader {
+  return {
+    async read({ target, startByte, maxBytes }) {
+      if (target.backend !== "legacy_message" || !target.sourceRowKey) {
+        throw new Error("legacy reader asked for a non-legacy target");
+      }
+      const slice = await input.readSlice({
+        sourceRowKey: target.sourceRowKey,
+        offsetBytes: startByte,
+        lengthBytes: maxBytes,
+      });
+      if (!slice) throw new Error("legacy source row is missing");
+      return { buffer: Buffer.from(slice.text, "utf8"), totalBytes: slice.totalBytes };
+    },
+  };
+}
+
 export class ToolResultRetrievalService {
   private readonly storage: ToolResultStorageService;
   private readonly onYield?: RetrievalYield;
 
-  constructor(storage: ToolResultStorageService, onYield?: RetrievalYield) {
+  /** Reads a bounded BYTE window of whatever backend holds the output. */
+  readonly readSource: BoundedSourceReader;
+
+  constructor(
+    storage: ToolResultStorageService,
+    readSource?: BoundedSourceReader,
+    onYield?: RetrievalYield
+  ) {
     this.storage = storage;
+    this.readSource = readSource ?? defaultFileSourceReader(storage);
     this.onYield = onYield;
+  }
+
+  /** True when this target is served from a historical source row. */
+  private isLegacy(target: RetrievalTarget): boolean {
+    return target.backend === "legacy_message" && !!target.sourceRowKey;
   }
 
   /**
@@ -131,8 +211,8 @@ export class ToolResultRetrievalService {
 
     let window: { buffer: Buffer; totalBytes: number };
     try {
-      window = await this.storage.readWindow({
-        storageKey: input.target.storageKey,
+      window = await this.readSource.read({
+        target: input.target,
         startByte,
         maxBytes,
       });
@@ -234,8 +314,8 @@ export class ToolResultRetrievalService {
       const budget = Math.min(64 * 1024, scanCeiling - scanned);
       let window: { buffer: Buffer; totalBytes: number };
       try {
-        window = await this.storage.readWindow({
-          storageKey: input.target.storageKey,
+        window = await this.readSource.read({
+          target: input.target,
           startByte: cursorPosition,
           maxBytes: budget,
         });

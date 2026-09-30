@@ -700,6 +700,20 @@ export class ToolResultModule extends BaseModule {
   }
 
   /**
+   * Bounded slice of a legacy `legacy_message` source row.
+   *
+   * Exposed through the Module so the retrieval service never touches a
+   * repository directly: the Model/Module boundary holds for this backend too.
+   */
+  async readLegacySourceSlice(input: {
+    sourceRowKey: string;
+    offsetBytes: number;
+    lengthBytes: number;
+  }): Promise<{ text: string; totalBytes: number } | null> {
+    return await this.model.readLegacySourceSlice(input);
+  }
+
+  /**
    * Bounded existence check: does this conversation hold ANY committed
    * output?
    *

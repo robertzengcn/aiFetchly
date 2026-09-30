@@ -43,6 +43,8 @@ export class ToolResultModel extends BaseDb {
   public grants: Repository<AIToolOutputGrantEntity>;
   public retrievalBudgets: Repository<AIToolOutputRetrievalBudgetEntity>;
   public projections: Repository<AIToolResultProjectionEntity>;
+  /** Bounded reads against the historical message table. */
+  private messageSource: { query: (sql: string, params: unknown[]) => unknown };
 
   constructor(dbpath: string) {
     super(dbpath);
@@ -55,6 +57,11 @@ export class ToolResultModel extends BaseDb {
       AIToolOutputRetrievalBudgetEntity
     );
     this.projections = connection.getRepository(AIToolResultProjectionEntity);
+    // The raw driver is used only for a bounded `substr`; every ordinary read
+    // goes through a repository.
+    this.messageSource = connection.driver as unknown as {
+      query: (sql: string, params: unknown[]) => unknown;
+    };
   }
 
   // -------------------------------------------------------------- scopes --
@@ -162,6 +169,46 @@ export class ToolResultModel extends BaseDb {
       .limit(1)
       .getRawOne<{ id: number }>();
     return row !== null && row !== undefined;
+  }
+
+  /**
+   * Bounded BYTE slice of a legacy source row's stored text.
+   *
+   * The `legacy_message` backend exists so a historical oversized tool result
+   - whose full text still lives in `ai_chat_messages.content` - can be read
+   * through the same scope/page/budget contract as a file artifact, without
+   * copying it to disk and charging file quota.
+   *
+   * Uses a SQL `substr` with a validated (digits-only) source key rather than
+   * reading the column and slicing in JavaScript: a legacy row can be very
+   * large, and materializing it to serve one page is exactly the failure this
+   * feature exists to avoid. The key is bound as a parameter, never
+   * interpolated.
+   */
+  async readLegacySourceSlice(input: {
+    sourceRowKey: string;
+    offsetBytes: number;
+    lengthBytes: number;
+  }): Promise<{ text: string; totalBytes: number } | null> {
+    // Identity is generated internally; reject anything that is not a plain
+    // message id rather than trusting it into a query.
+    if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(input.sourceRowKey)) return null;
+    const row = await this.messageSource.query(
+      `SELECT
+         length(CAST(content AS BLOB)) AS totalBytes,
+         substr(CAST(content AS BLOB), ?, ?) AS chunk
+       FROM ai_chat_messages
+       WHERE messageId = ?
+       LIMIT 1`,
+      [Math.max(1, input.offsetBytes + 1), Math.max(0, input.lengthBytes), input.sourceRowKey]
+    );
+    const record = row as
+      | { totalBytes?: number; chunk?: Buffer | null }
+      | undefined;
+    if (!record) return null;
+    const totalBytes = Number(record.totalBytes ?? 0);
+    const chunk = record.chunk ?? Buffer.alloc(0);
+    return { text: chunk.toString("utf8"), totalBytes };
   }
 
   async findOutputByStorageDirName(

@@ -7,6 +7,7 @@ import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorage
 import {
   ToolResultRetrievalService,
   decodeUtf8Window,
+  legacySourceReader,
   type RetrievalTarget,
 } from "@/service/toolResult/ToolResultRetrievalService";
 import {
@@ -453,6 +454,89 @@ describe("ToolResultCursorCodec — integrity", () => {
     ).toBe(false);
     // The caller can still restart from the beginning with the output id.
     setToolResultCursorKey(deriveToolResultCursorKey("test-key-for-retrieval"));
+  });
+});
+
+describe("legacy_message backend (P1-4)", () => {
+  /** Stand-in for the bounded SQL slice of a historical message row. */
+  const legacyText = Array.from(
+    { length: 800 },
+    (_, i) => `legacy row ${i} with some padding text`
+  ).join("\n");
+
+  function makeLegacyService(): ToolResultRetrievalService {
+    const source = legacySourceReader({
+      readSlice: async ({ offsetBytes, lengthBytes }) => ({
+        text: Buffer.from(legacyText, "utf8")
+          .subarray(offsetBytes, offsetBytes + lengthBytes)
+          .toString("utf8"),
+        totalBytes: Buffer.byteLength(legacyText, "utf8"),
+      }),
+    });
+    return new ToolResultRetrievalService(storage, source);
+  }
+
+  const legacyTarget: RetrievalTarget = {
+    outputId: "out_0123456789abcdef0123456789abcdef",
+    revision: 1,
+    backend: "legacy_message",
+    sourceRowKey: "tool-result-legacy-1",
+    storageKey: "",
+    format: "text",
+    capturedBytes: Buffer.byteLength(legacyText, "utf8"),
+    sourceCompleteness: "complete",
+  };
+
+  it("reads pages from a legacy source row under the same budget", async () => {
+    const legacy = makeLegacyService();
+    let cursor: string | undefined;
+    let assembled = "";
+    let pages = 0;
+    for (;;) {
+      const outcome = await legacy.read({ target: legacyTarget, cursor });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      // Identical page ceiling to the file backend (TD §10.2).
+      expect(outcome.page.text.length).toBeLessThanOrEqual(
+        TOOL_RESULT_CONFIG.readMaxBytes
+      );
+      assembled += outcome.page.text;
+      pages += 1;
+      if (outcome.page.complete || !outcome.page.nextCursor) break;
+      cursor = outcome.page.nextCursor;
+      expect(pages).toBeLessThan(200);
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(assembled).toBe(legacyText);
+  });
+
+  it("searches a legacy source row and reports scan completeness", async () => {
+    const legacy = makeLegacyService();
+    const outcome = await legacy.search({
+      target: legacyTarget,
+      query: "legacy row 799",
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.matches.length).toBeGreaterThan(0);
+    expect(outcome.page.matches[0].excerpt).toContain("legacy row 799");
+    // A small row is scanned in full, so absence would be conclusive here.
+    expect(outcome.page.scanComplete).toBe(true);
+  });
+
+  it("rejects a stale cursor rather than serving different bytes (OUTPUT_CHANGED)", async () => {
+    const legacy = makeLegacyService();
+    const first = await legacy.read({ target: legacyTarget });
+    expect(first.ok).toBe(true);
+    if (!first.ok || !first.page.nextCursor) return;
+
+    // The same cursor against a DIFFERENT artifact must not be accepted.
+    const other = await legacy.read({
+      target: { ...legacyTarget, outputId: "out_ffffffffffffffffffffffffffffffff" },
+      cursor: first.page.nextCursor,
+    });
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.code).toBe("INVALID_OUTPUT_CURSOR");
   });
 });
 

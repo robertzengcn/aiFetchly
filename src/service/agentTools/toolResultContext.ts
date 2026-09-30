@@ -4,7 +4,11 @@ import * as path from "node:path";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
-import { ToolResultRetrievalService, type RetrievalTarget } from "@/service/toolResult/ToolResultRetrievalService";
+import {
+  ToolResultRetrievalService,
+  legacySourceReader,
+  type RetrievalTarget,
+} from "@/service/toolResult/ToolResultRetrievalService";
 import type { ToolResultErrorCode } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -65,7 +69,14 @@ export function getToolResultContext(
 
   const module = new ToolResultModule();
   const storage = new ToolResultStorageService({ root: resolveStorageRoot() });
-  const retrieval = new ToolResultRetrievalService(storage);
+  // Both backends share one paging/budget contract (technical design §10.2);
+  // only the byte source differs.
+  const retrieval = new ToolResultRetrievalService(
+    storage,
+    legacySourceReader({
+      readSlice: (args) => module.readLegacySourceSlice(args),
+    })
+  );
 
   // The turn id is trusted (it comes from the engine), and it is what scopes
   // the per-turn retrieval allowance.
@@ -82,9 +93,10 @@ export function getToolResultContext(
       });
       if (!decision.ok) return { ok: false, code: decision.code };
       const row = decision.output;
-      if (!row.storageKey) {
-        // A legacy source row has no file of its own yet; the bounded reader
-        // for that backend is not part of this change.
+      const backend = row.storageBackend === "legacy_message" ? "legacy_message" : "file";
+      if (backend === "legacy_message") {
+        if (!row.sourceRowKey) return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
+      } else if (!row.storageKey) {
         return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
       }
       return {
@@ -92,7 +104,9 @@ export function getToolResultContext(
         target: {
           outputId: row.outputId,
           revision: row.revision,
-          storageKey: row.storageKey,
+          backend,
+          sourceRowKey: row.sourceRowKey ?? undefined,
+          storageKey: row.storageKey ?? "",
           format: (row.outputFormat as RetrievalTarget["format"]) ?? "text",
           capturedBytes: row.capturedBytes,
           sourceCompleteness:
