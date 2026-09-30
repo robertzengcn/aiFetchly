@@ -1863,17 +1863,29 @@ watch(isStreaming, (streaming) => {
 /**
  * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
  * routing: only render when the originating conversation is active and no
- * interactive stream is running, so scheduled tokens never merge into an
+ * interactive turn is in flight, so scheduled tokens never merge into an
  * interactive bubble. Renders directly as a normal assistant chat message
  * (same bubble/markdown path as interactive turns) — transient until the
  * terminal conversation-updated event reloads authoritative history.
+ *
+ * Guard is `isStreaming || pinnedPermissionPrompt`, NOT `chatIsRunning`.
+ * `chatIsRunning` is `isStreaming || authoritativeRuntimeStatus === "running"`,
+ * and a scheduled turn sets `authoritativeRuntimeStatus` to "running" itself
+ * (its `submitMessage` registers in the engine's `activeTurns`, which
+ * `getConversationRuntimeStatus` reports as "running"). Guarding on
+ * `chatIsRunning` would make a scheduled turn trip its own guard, dropping
+ * every token and leaving only the typing indicator ("running label"). Only an
+ * interactive stream or an interactive permission card should defer scheduled
+ * rendering — the scheduled turn's own "running" status must not.
  */
 function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (event.conversationId !== activeConversationId.value) return;
-  // Defer when the conversation has any active interactive turn (streaming OR
-  // a pending tool-permission prompt) so scheduled tokens never render beside
-  // an interactive bubble/card.
-  if (chatIsRunning.value) return;
+  // Defer only for a genuinely INTERACTIVE turn in flight (an active stream,
+  // or a pinned interactive permission card) so scheduled tokens never render
+  // beside an interactive bubble/card. Do NOT use `chatIsRunning` here: it
+  // includes `authoritativeRuntimeStatus === "running"`, which the scheduled
+  // turn itself causes and which would suppress its own token stream.
+  if (isStreaming.value || pinnedPermissionPrompt.value) return;
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
     if (!delta) return;
@@ -2653,10 +2665,18 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
+//
+// Only fires for INTERACTIVE streams. A scheduled turn sets
+// `authoritativeRuntimeStatus` to "running" (its submitMessage registers in
+// the engine's activeTurns) but never sets `isStreaming`; its tokens stream
+// into a normal assistant message via handleScheduledStream, which already
+// shows its own "Generating…" stream status. Showing the typing dots here too
+// would render a redundant "running label" below the file list during every
+// scheduled run, so we gate on `isStreaming` (interactive) — not
+// `chatIsRunning`, which includes the scheduled turn's own "running" state.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!chatIsRunning.value) return false;
-  if (!isStreaming.value) return true;
+  if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
   // active text streaming — show dots so the user knows the AI is processing.

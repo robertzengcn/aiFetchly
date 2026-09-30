@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
@@ -92,6 +92,16 @@ const i18n = createI18n({
       },
     },
   },
+});
+
+beforeEach(() => {
+  // Each test mounts a fresh AiChatV2 which re-subscribes; reset call counts
+  // so toHaveBeenCalledTimes(1) assertions stay isolated across cases. Use
+  // mockClear (not mockReset) so the hoisted default implementation is kept
+  // for tests that don't override it.
+  subscribeScheduledStreamMock.mockClear();
+  subscribeConversationUpdatedMock.mockClear();
+  getChatV2HistoryMock.mockClear();
 });
 
 beforeAll(() => {
@@ -204,5 +214,75 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
 
     // The old separate grey running area must be gone.
     expect(wrapper.find(".scheduled-live-bubble").exists()).toBe(false);
+  });
+
+  // Regression: a scheduled turn registers itself in the engine's activeTurns
+  // map (AIChatQueryEngine.submitMessage), so getChatV2History reports
+  // runtimeStatus "running" for the conversation while the scheduled turn is
+  // in flight. The frontend's `chatIsRunning` (isStreaming ||
+  // authoritativeRuntimeStatus === "running") therefore becomes true during a
+  // scheduled run. The previous `if (chatIsRunning.value) return;` guard in
+  // handleScheduledStream bailed on this self-inflicted "running" state,
+  // dropping live tokens and leaving the typing indicator ("running label")
+  // instead of the assistant response. Scheduled tokens must still render.
+  it("renders scheduled tokens as a normal message even when the conversation reports runtimeStatus 'running'", async () => {
+    // Simulate the scheduled turn's own activeTurns entry: history reports the
+    // conversation as "running" (this is what the IPC handler returns via
+    // engine.getConversationRuntimeStatus while the scheduled turn streams).
+    getChatV2HistoryMock.mockResolvedValue({
+      messages: [],
+      runtimeStatus: "running",
+    });
+
+    const wrapper = mountChat();
+    await flushPromises();
+
+    expect(subscribeScheduledStreamMock).toHaveBeenCalledTimes(1);
+    const handler = subscribeScheduledStreamMock.mock.calls[0][0] as (
+      event: ChatV2ScheduledStreamEvent,
+    ) => void;
+
+    const exposed = wrapper.vm as unknown as {
+      onSelectConversation: (conversationId: string) => void;
+    };
+    exposed.onSelectConversation("conv-scheduled-running");
+    await flushPromises();
+
+    // After loadHistory resolves, authoritativeRuntimeStatus must be "running",
+    // which makes chatIsRunning true — the exact condition that used to bail.
+    const token1: ChatV2ScheduledStreamEvent = {
+      conversationId: "conv-scheduled-running",
+      runId: 8,
+      messageId: "scheduled-assistant-running-1",
+      kind: "token",
+      contentDelta: "Scheduled ",
+    };
+    handler(token1);
+    await flushPromises();
+
+    const token2: ChatV2ScheduledStreamEvent = {
+      conversationId: "conv-scheduled-running",
+      runId: 8,
+      messageId: "scheduled-assistant-running-1",
+      kind: "token",
+      contentDelta: "reply",
+    };
+    handler(token2);
+    await flushPromises();
+
+    const chatMessages = wrapper.find('[data-testid="chat-messages"]');
+    expect(chatMessages.exists()).toBe(true);
+    // The scheduled response must appear in the chat, not be suppressed by a
+    // running/typing indicator.
+    expect(chatMessages.text()).toContain("Scheduled reply");
+    // The optimistic message must be marked active so it renders with the
+    // streaming status (not idle), matching an interactive assistant turn.
+    const activeMsg = chatMessages.find(
+      '[data-active="true"]'
+    );
+    expect(activeMsg.exists()).toBe(true);
+    expect(activeMsg.attributes("data-message-id")).toBe(
+      "scheduled-assistant-running-1"
+    );
   });
 });
