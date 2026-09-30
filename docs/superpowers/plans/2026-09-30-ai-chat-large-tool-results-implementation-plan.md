@@ -239,3 +239,67 @@ Key decisions:
 - `policyVersion` is recorded on receipts and included in artifact identity so stale projections
   are invalidated rather than silently reused.
 - Rollout flags read live from `Token`, fail closed on store error, mirroring `featureFlags.ts`.
+
+## 6. Implementation status
+
+Delivered on `feature/large-tool-results`, in the dependency order above.
+
+| Unit | Status | Notes |
+| --- | --- | --- |
+| 1 — contracts, config, schemas | Done | `toolResultTypes.ts`, `toolResultConfig.ts`, `schemas/toolResult.ts`, `schemas/ipc/toolResult.ts` |
+| 2 — registry, epoch fence, quota | Done | 6 entities, `ToolResult.model.ts`, `ToolResultModule.ts` |
+| 3 — serializer + atomic storage | Done | `ToolResultSerializer.ts`, `ToolResultStorageService.ts`, `ToolResultPaths.ts` |
+| 4 — preview service | Done | `ToolResultPreviewService.ts` |
+| 5 — aggregate budget | Done | `ToolResultBudgetService.ts` |
+| 6 — cursors + retrieval | Done | `ToolResultCursorCodec.ts`, `ToolResultRetrievalService.ts` |
+| 7 — preparation + publication | Done | `ToolResultPreparationService.ts`, `ToolResultPublisher.ts` |
+| 8 — recovery | Done | `ToolResultRecoveryService.ts` |
+| 9 — retrieval tools | Done | `toolResultReadTool.ts`, `toolResultSearchTool.ts`, registered in `skillsRegistry.ts` |
+| 10 — execution-path wiring | **Partial — see below** | Contracts and boundary exist and are tested; not yet called from `AIChatQueryLoop` / `AIChatQueryEngine` |
+| 11 — IPC | Done | `tool-result-ipc.ts` + 4 allowlisted channels + `views/api/aiToolResult.ts` |
+| 12 — viewer + i18n | Done | `AiChatToolResultViewer.vue`, result card, `aiChatV2.toolOutput.*` in all six languages |
+| 13 — tests | Done | service / module / config / component suites, i18n parity, preload allowlist guard |
+
+### Why Unit 10 is deliberately partial
+
+Every other execution path still calls `normalizeToolResult` and serializes the
+raw result. Switching the live V2 loop over is a separate, reviewable step
+because it changes what is written into existing conversation history, and it
+must land together with the retrieval tools being enabled — otherwise a
+conversation would start containing references that nothing can yet resolve,
+which is the "references without working retrieval" state the design explicitly
+says is not a complete release.
+
+The rollout flags therefore default OFF. With them off, behavior is unchanged;
+enabling `ai_tool_output_capture_enabled` + `ai_tool_output_model_refs_enabled`
+without the loop wiring is safe because nothing emits a reference yet.
+
+### Bugs the new tests caught
+
+Recorded because each was a real defect that code inspection had missed:
+
+1. File-spooled writes were fire-and-forget, so a large artifact could be
+   renamed into place with writes still pending — publishing a corrupt payload
+   whose byte counter already looked correct.
+2. Search excerpts were sliced with an absolute offset against a
+   window-relative buffer, so every match beyond the first window returned an
+   empty excerpt.
+3. The search continuation cursor was dropped when the match budget filled up,
+   telling the model "no more matches" about a region never examined.
+4. Head/tail previews reused the prefix truncation helper for the tail, so the
+   "tail" was a second copy of the head.
+5. The preparer generated its own output id while the Module mints the id when
+   claiming the writing slot, so every large result silently degraded to
+   `unavailable`.
+6. TypeORM returns `null` for nullable columns but the receipt schema declares
+   those fields as optional, so a valid artifact's descriptor failed validation
+   and the receipt lost its entire output list.
+7. `boundUntrustedValue` read properties directly, invoking producer getters
+   while merely shaping a value for a receipt.
+8. The result card claimed "the tool itself stopped early" when no descriptor
+   existed at all — inventing a fact about the producer.
+
+### Known unrelated baseline failure
+
+`test/vitest/main/service/HookDispatcher.skillRef.test.ts` fails on the base
+branch `test` as well, before any of this work. It is not caused by this change.

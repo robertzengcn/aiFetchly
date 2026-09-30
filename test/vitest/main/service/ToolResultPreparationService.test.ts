@@ -31,6 +31,7 @@ let preparation: ToolResultPreparationService;
 let retrieval: ToolResultRetrievalService;
 let epoch: string;
 let conversationId: string;
+let conversationCounter = 0;
 
 /**
  * NOTE ON ISOLATION: these tests deliberately do NOT reset the process-wide
@@ -41,20 +42,37 @@ let conversationId: string;
  * instead uses its own temp database directory AND a unique conversation id,
  * which isolates the data without touching global state.
  */
+/**
+ * ONE database directory for the whole file, plus a fresh conversation per
+ * test. `SqliteDb` holds a process-wide singleton, so a new path per test
+ * re-runs `synchronize` for the whole entity set; doing that per test
+ * multiplied schema builds across parallel workers and surfaced as
+ * "database is locked" failures in unrelated suites.
+ *
+ * The artifact ROOT does get a fresh directory per test: output files are
+ * plain filesystem state, not shared singleton state, and keeping them apart
+ * makes the "no artifact was written" assertions unambiguous.
+ */
+const SUITE_DB_DIR = path.join(
+  os.tmpdir(),
+  `aifetchly-prep-${Date.now()}-${Math.random().toString(36).slice(2)}`
+);
+
 beforeEach(async () => {
   tmpDir = path.join(
     os.tmpdir(),
-    `aifetchly-prep-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    `aifetchly-prep-artifacts-${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
   root = path.join(tmpDir, "artifacts");
   fs.mkdirSync(root, { recursive: true });
-  toolModule = new ToolResultModule(tmpDir);
+  toolModule = new ToolResultModule(SUITE_DB_DIR);
   await toolModule.ensureConnection();
   storage = new ToolResultStorageService({ root });
   preparation = new ToolResultPreparationService();
   retrieval = new ToolResultRetrievalService(storage);
-  // A fresh conversation per test keeps rows from bleeding between cases.
-  conversationId = `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // A fresh conversation per test keeps scope state from bleeding between cases.
+  conversationCounter += 1;
+  conversationId = `prep-conv-${conversationCounter}`;
   epoch = await toolModule.currentEpoch("prof-1", conversationId);
 });
 

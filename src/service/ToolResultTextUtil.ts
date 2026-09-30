@@ -143,8 +143,12 @@ export function boundUntrustedValue(
       out.__truncated__ = `[+${Object.keys(source).length - count} more keys]`;
       break;
     }
+    // Read through the descriptor, never `source[key]`: a plain property read
+    // would invoke a producer getter. Shaping an untrusted value must not run
+    // arbitrary code, the same rule the serializer follows.
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
     out[boundString(key, 200)] = boundUntrustedValue(
-      source[key],
+      descriptor && "value" in descriptor ? descriptor.value : undefined,
       limits,
       depth + 1
     );

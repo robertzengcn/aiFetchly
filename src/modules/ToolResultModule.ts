@@ -647,4 +647,15 @@ export class ToolResultModule extends BaseModule {
   ): Promise<string> {
     return (await this.ensureScope(profileId, conversationId)).outputEpoch;
   }
+
+  /**
+   * Look up an artifact row by id only, with NO authorization check.
+   *
+   * This exists exclusively for the recovery sweep, which must answer "is this
+   * directory registered?" before deciding whether it is orphaned. It returns
+   * only whether a row exists; it is never used to serve content.
+   */
+  async findRegisteredOutput(outputId: string): Promise<boolean> {
+    return (await this.model.findOutputById(outputId)) !== null;
+  }
 }

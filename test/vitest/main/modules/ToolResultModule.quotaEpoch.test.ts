@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import path from "node:path";
 import os from "node:os";
@@ -14,25 +14,32 @@ import fs from "node:fs";
  */
 
 /**
- * Each RUN gets a unique directory, so this file never resets the
- * process-wide `SqliteDb` singleton. Resetting it here would tear the shared
- * DataSource out from under sibling test files running in parallel workers.
- */
-/**
- * Build a Module bound to a FRESH database directory.
+ * ONE database directory for the whole file.
  *
- * A new directory per test is what gives each case an empty registry without
- * touching the shared `SqliteDb` singleton.
+ * `SqliteDb` keeps a process-wide singleton, so pointing it at a new path makes
+ * the connection re-run `synchronize` across the full entity set. Doing that
+ * once per test multiplied schema builds across parallel workers and produced
+ * "database is locked" failures in unrelated suites. A single directory plus a
+ * fresh conversation id per test gives the same isolation for one schema build,
+ * and it never touches the shared singleton from the outside.
  */
+const SUITE_DIR = path.join(
+  os.tmpdir(),
+  `aifetchly-tor-${Date.now()}-${Math.random().toString(36).slice(2)}`
+);
+fs.mkdirSync(SUITE_DIR, { recursive: true });
+
+let convCounter = 0;
+/** A fresh conversation per call; scope and artifact state are per-conversation. */
+function nextConversationId(): string {
+  convCounter += 1;
+  return `suite-conv-${convCounter}`;
+}
+
 async function makeModule(
   freeSpaceBytes?: () => Promise<number | null>
 ): Promise<ToolResultModule> {
-  const dir = path.join(
-    os.tmpdir(),
-    `aifetchly-tor-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  );
-  fs.mkdirSync(dir, { recursive: true });
-  const module = new ToolResultModule(dir, { freeSpaceBytes });
+  const module = new ToolResultModule(SUITE_DIR, { freeSpaceBytes });
   await module.ensureConnection();
   return module;
 }
@@ -51,8 +58,8 @@ const BASE_CLAIM = {
 describe("ToolResultModule — output epoch fence", () => {
   it("creates a scope with a fresh epoch and reuses it on the next call", async () => {
     const mod = await makeModule();
-    const first = await mod.ensureScope("prof-1", "conv-1");
-    const second = await mod.ensureScope("prof-1", "conv-1");
+    const first = await mod.ensureScope("prof-1", "suite-conv-1");
+    const second = await mod.ensureScope("prof-1", "suite-conv-1");
     expect(first.outputEpoch).toHaveLength(32);
     expect(second.outputEpoch).toBe(first.outputEpoch);
     expect(first.invalidated).toBe(false);
@@ -67,15 +74,15 @@ describe("ToolResultModule — output epoch fence", () => {
 
   it("rotates the epoch on invalidation so a late commit cannot publish (AC-14)", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-3");
     const claim = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-3",
       outputEpoch: scope.outputEpoch,
     });
     expect(claim.kind).toBe("claimed");
 
-    await mod.invalidateScope("prof-1", "conv-1");
+    await mod.invalidateScope("prof-1", "suite-conv-3");
 
     // A commit computed against the pre-deletion epoch is rejected.
     if (claim.kind === "claimed") {
@@ -95,12 +102,12 @@ describe("ToolResultModule — output epoch fence", () => {
 
   it("refuses to claim a new output against a rotated epoch", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
-    await mod.invalidateScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-5");
+    await mod.invalidateScope("prof-1", "suite-conv-5");
     const result = await mod.claimOutput({
       ...BASE_CLAIM,
       executionId: "exec-2",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-5",
       outputEpoch: scope.outputEpoch,
     });
     expect(result.kind).toBe("rejected");
@@ -111,9 +118,9 @@ describe("ToolResultModule — output epoch fence", () => {
 
   it("does not resurrect artifacts when a conversation id is recreated (AC-14)", async () => {
     const mod = await makeModule();
-    const before = await mod.ensureScope("prof-1", "conv-1");
-    await mod.invalidateScope("prof-1", "conv-1");
-    const after = await mod.ensureScope("prof-1", "conv-1");
+    const before = await mod.ensureScope("prof-1", "suite-conv-7");
+    await mod.invalidateScope("prof-1", "suite-conv-7");
+    const after = await mod.ensureScope("prof-1", "suite-conv-7");
     expect(after.outputEpoch).not.toBe(before.outputEpoch);
   });
 });
@@ -121,10 +128,10 @@ describe("ToolResultModule — output epoch fence", () => {
 describe("ToolResultModule — artifact identity and idempotency", () => {
   it("deduplicates a repeated delivery of the same execution (AC-25)", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-9");
     const first = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-9",
       outputEpoch: scope.outputEpoch,
     });
     expect(first.kind).toBe("claimed");
@@ -132,7 +139,7 @@ describe("ToolResultModule — artifact identity and idempotency", () => {
     // Same identity, same expected size -> idempotent reuse, one artifact.
     const second = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-9",
       outputEpoch: scope.outputEpoch,
     });
     expect(second.kind).toBe("existing");
@@ -143,16 +150,16 @@ describe("ToolResultModule — artifact identity and idempotency", () => {
 
   it("reports a conflict rather than overwriting committed evidence (AC-25)", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-11");
     await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-11",
       outputEpoch: scope.outputEpoch,
       expectedBytes: 100,
     });
     const conflicting = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-11",
       outputEpoch: scope.outputEpoch,
       expectedBytes: 999,
     });
@@ -161,16 +168,16 @@ describe("ToolResultModule — artifact identity and idempotency", () => {
 
   it("treats a different stream key as a separate artifact", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-13");
     const main = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-13",
       outputEpoch: scope.outputEpoch,
       streamKey: "main",
     });
     const stderr = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-13",
       outputEpoch: scope.outputEpoch,
       streamKey: "stderr",
     });
@@ -183,16 +190,16 @@ describe("ToolResultModule — artifact identity and idempotency", () => {
 
   it("gives a deliberate re-execution a new artifact", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-15");
     const first = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-15",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
     });
     const rerun = await mod.claimOutput({
       ...BASE_CLAIM,
-      conversationId: "conv-1",
+      conversationId: "suite-conv-15",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-2",
     });
@@ -204,10 +211,10 @@ describe("ToolResultModule — artifact identity and idempotency", () => {
 describe("ToolResultModule — quota admission", () => {
   it("admits a request within quota", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-17");
     const result = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-17",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
       requestedBytes: 1024,
@@ -218,10 +225,10 @@ describe("ToolResultModule — quota admission", () => {
 
   it("reserves at least one increment for an unknown-length stream", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-19");
     const result = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-19",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
       requestedBytes: 1,
@@ -234,10 +241,10 @@ describe("ToolResultModule — quota admission", () => {
 
   it("refuses a request above the per-artifact cap", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-21");
     const result = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-21",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
       requestedBytes: 64 * 1024 * 1024 + 1,
@@ -248,10 +255,10 @@ describe("ToolResultModule — quota admission", () => {
 
   it("refuses when the free-disk reserve is exhausted (AC-12)", async () => {
     const mod = await makeModule(async () => 1024);
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-23");
     const result = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-23",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
       requestedBytes: 1024,
@@ -262,10 +269,10 @@ describe("ToolResultModule — quota admission", () => {
 
   it("charges outstanding reservations so concurrent writers cannot overrun", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-25");
     const first = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-25",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-1",
       requestedBytes: 1024,
@@ -276,7 +283,7 @@ describe("ToolResultModule — quota admission", () => {
     // bytes.
     const second = await mod.admitQuota({
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-25",
       outputEpoch: scope.outputEpoch,
       executionId: "exec-2",
       requestedBytes: 1024,
@@ -312,27 +319,27 @@ describe("ToolResultModule — access authorization", () => {
 
   it("allows the owning conversation", async () => {
     const mod = await makeModule();
-    const outputId = await commitOne(mod, "conv-1");
+    const outputId = await commitOne(mod, "suite-conv-27");
     const decision = await mod.authorizeAccess({
       outputId,
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-27",
     });
     expect(decision.ok).toBe(true);
   });
 
   it("rejects a sibling conversation with the same code as a missing id (AC-11)", async () => {
     const mod = await makeModule();
-    const outputId = await commitOne(mod, "conv-1");
+    const outputId = await commitOne(mod, "suite-conv-29");
     const denied = await mod.authorizeAccess({
       outputId,
       profileId: "prof-1",
-      conversationId: "conv-2",
+      conversationId: "suite-conv-30",
     });
     const missing = await mod.authorizeAccess({
       outputId: "out_00000000000000000000000000000000",
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-29",
     });
     expect(denied.ok).toBe(false);
     expect(missing.ok).toBe(false);
@@ -342,23 +349,23 @@ describe("ToolResultModule — access authorization", () => {
 
   it("rejects a different profile", async () => {
     const mod = await makeModule();
-    const outputId = await commitOne(mod, "conv-1");
+    const outputId = await commitOne(mod, "suite-conv-31");
     const decision = await mod.authorizeAccess({
       outputId,
       profileId: "prof-other",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-31",
     });
     expect(decision.ok).toBe(false);
   });
 
   it("rejects a deleted conversation's artifact (AC-14)", async () => {
     const mod = await makeModule();
-    const outputId = await commitOne(mod, "conv-1");
-    await mod.invalidateScope("prof-1", "conv-1");
+    const outputId = await commitOne(mod, "suite-conv-33");
+    await mod.invalidateScope("prof-1", "suite-conv-33");
     const decision = await mod.authorizeAccess({
       outputId,
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-33",
     });
     expect(decision.ok).toBe(false);
   });
@@ -414,10 +421,10 @@ describe("ToolResultModule — access authorization", () => {
 describe("ToolResultModule — retrieval-work allowance", () => {
   it("allows calls up to the allowance then refuses", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-35");
     const key = {
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-35",
       outputEpoch: scope.outputEpoch,
       agentId: "",
       turnId: "turn-1",
@@ -433,10 +440,10 @@ describe("ToolResultModule — retrieval-work allowance", () => {
 
   it("gives a new turn a fresh allowance (persisted, not in-memory)", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-37");
     const base = {
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-37",
       outputEpoch: scope.outputEpoch,
       agentId: "",
     };
@@ -453,10 +460,10 @@ describe("ToolResultModule — retrieval-work allowance", () => {
 
   it("charges repeated reads as work rather than allowing free repeats", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-39");
     const key = {
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-39",
       outputEpoch: scope.outputEpoch,
       agentId: "",
       turnId: "turn-1",
@@ -471,10 +478,10 @@ describe("ToolResultModule — retrieval-work allowance", () => {
 
   it("tracks remaining returned-token allowance", async () => {
     const mod = await makeModule();
-    const scope = await mod.ensureScope("prof-1", "conv-1");
+    const scope = await mod.ensureScope("prof-1", "suite-conv-41");
     const key = {
       profileId: "prof-1",
-      conversationId: "conv-1",
+      conversationId: "suite-conv-41",
       outputEpoch: scope.outputEpoch,
       agentId: "",
       turnId: "turn-1",
