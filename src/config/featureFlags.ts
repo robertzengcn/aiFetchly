@@ -1,5 +1,6 @@
 import { Token } from "@/modules/token";
 import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
+import { TOOL_RESULT_FLAGS } from "@/config/toolResultConfig";
 
 /**
  * Feature flags evaluated in the Electron MAIN process only (design §15).
@@ -133,4 +134,61 @@ export function enableRecoverableHistoryFlags(): void {
 // Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
   /* no-op: flag is read live and not cached. */
+}
+
+/**
+ * Recoverable large tool results rollout flags (technical design §13.4).
+ *
+ * Three independently gated stages, all DEFAULT OFF and FAIL CLOSED: a broken
+ * Token store must never silently enable capture, model-visible references, or
+ * the new viewer. Read live on each call (a local electron-store file, invoked
+ * per user action, not on a hot path) so support staff can toggle a stage at
+ * runtime without an app restart.
+ *
+ * Rollback semantics are asymmetric on purpose:
+ *   - capture off  -> no NEW file writes; readers for existing committed
+ *                     references stay registered and artifacts are NOT erased.
+ *   - modelRefs off -> no new references are advertised to the model, but
+ *                     existing reference history stays displayable/readable.
+ *   - ui off        -> the old viewer still receives BOUNDED content; the
+ *                     payload is never handed to the renderer in bulk.
+ */
+
+/** Stage 1: additive schema/read support and new file capture. */
+export function isToolOutputCaptureEnabled(): boolean {
+  try {
+    return new Token().getValue(TOOL_RESULT_FLAGS.capture) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 2: emit model-readable output references (requires read/search). */
+export function isToolOutputModelRefsEnabled(): boolean {
+  try {
+    return new Token().getValue(TOOL_RESULT_FLAGS.modelRefs) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Stage 3: the paged result viewer. */
+export function isToolOutputUiEnabled(): boolean {
+  try {
+    return new Token().getValue(TOOL_RESULT_FLAGS.ui) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Operator helper — write all three Token keys to "true" in stage order.
+ * Fail-loud: a Token-store error propagates rather than silently claiming
+ * the stages are enabled.
+ */
+export function enableToolResultFlags(): void {
+  const token = new Token();
+  token.setValue(TOOL_RESULT_FLAGS.capture, "true");
+  token.setValue(TOOL_RESULT_FLAGS.modelRefs, "true");
+  token.setValue(TOOL_RESULT_FLAGS.ui, "true");
 }

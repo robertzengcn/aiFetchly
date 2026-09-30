@@ -164,3 +164,6 @@ playwright-report/
 test-results/
 test-results/playwright/
 debug/*
+
+# Local worktree: node_modules is symlinked to the primary checkout.
+node_modules
