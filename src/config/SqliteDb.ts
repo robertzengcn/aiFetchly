@@ -96,6 +96,7 @@ import { AIToolOutputReservationEntity } from "@/entity/AIToolOutputReservation.
 import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
 import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
 import { AIToolResultProjectionEntity } from "@/entity/AIToolResultProjection.entity";
+import { AIToolOutputBootstrapEntity } from "@/entity/AIToolOutputBootstrap.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
@@ -566,6 +567,7 @@ export class SqliteDb {
           AIToolOutputGrantEntity,
           AIToolOutputRetrievalBudgetEntity,
           AIToolResultProjectionEntity,
+          AIToolOutputBootstrapEntity,
           EmailReceivedMessageEntity,
           EmailReplyDraftEntity,
           EmailReplyIdentityProfileEntity,

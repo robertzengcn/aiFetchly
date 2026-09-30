@@ -700,6 +700,21 @@ export class ToolResultModule extends BaseModule {
   }
 
   /**
+   * Bounded existence check: does this conversation hold ANY committed
+   * output?
+   *
+   * Backs the retrieval-tool availability check, which must keep existing
+   * references readable when capture is turned off. Implemented as a LIMIT 1
+   * count so answering it can never pull a receipt into memory.
+   */
+  async hasAnyCommittedOutput(
+    profileId: string,
+    conversationId: string
+  ): Promise<boolean> {
+    return await this.model.hasCommittedOutput(profileId, conversationId);
+  }
+
+  /**
    * Look up an artifact row by its generated directory segment, with NO
    * authorization check.
    *

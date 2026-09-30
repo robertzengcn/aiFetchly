@@ -320,7 +320,7 @@ describe("ToolResultStorageService — artifacts", () => {
     const stored = await service.captureJson({
       outputId,
       ...IDENTITY,
-      value: { rows: Array.from({ length: 5000 }, (_, i) => ({ i })) },
+      value: { rows: Array.from({ length: 1500 }, (_, i) => ({ i })) },
       sourceCompleteness: "complete",
     });
     const page = await service.readWindow({

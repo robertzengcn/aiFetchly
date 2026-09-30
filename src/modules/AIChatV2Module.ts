@@ -201,11 +201,28 @@ export class AIChatV2Module extends BaseModule {
     turnId?: string;
   }): Promise<AIChatMessageEntity> {
     const toolResult = params.toolResult;
+    // The caller may pass EITHER a legacy full result OR the bounded UI
+    // projection of a saved result (technical design §10.1). Metadata must
+    // never become a second copy of the payload, so a receipt is detected and
+    // stored as descriptors only; the receipt text already lives in `content`.
+    const isSavedResultReceipt =
+      typeof toolResult.toolOutputRefs !== "undefined" ||
+      typeof toolResult.toolOutputPreservation !== "undefined";
+    const metadataToolResult = isSavedResultReceipt
+      ? {
+          operationStatus: toolResult.operationStatus,
+          toolOutputRefs: toolResult.toolOutputRefs,
+          toolOutputPreservation: toolResult.toolOutputPreservation,
+          toolOutputPreview: toolResult.toolOutputPreview,
+          previewComplete: toolResult.previewComplete,
+          storageErrorCode: toolResult.storageErrorCode,
+        }
+      : toolResult;
     const metadata: ChatV2MessageMetadata = {
       source: "chat-v2",
       toolCallId: params.toolCallId,
       toolName: params.toolName,
-      toolResult,
+      toolResult: metadataToolResult,
       toolResultStatus:
         toolResult.success === false
           ? ("error" as const)

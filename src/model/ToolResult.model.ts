@@ -148,6 +148,22 @@ export class ToolResultModel extends BaseDb {
    * that only has the directory name cannot call findOutputById — doing that
    * matches nothing and makes every committed artifact look like an orphan.
    */
+  /** Bounded existence check: any committed output in this conversation. */
+  async hasCommittedOutput(
+    profileId: string,
+    conversationId: string
+  ): Promise<boolean> {
+    const row = await this.outputs
+      .createQueryBuilder("o")
+      .select("o.id")
+      .where("o.profileId = :profileId", { profileId })
+      .andWhere("o.conversationId = :conversationId", { conversationId })
+      .andWhere("o.outputState = :state", { state: "committed" })
+      .limit(1)
+      .getRawOne<{ id: number }>();
+    return row !== null && row !== undefined;
+  }
+
   async findOutputByStorageDirName(
     storageDirName: string
   ): Promise<AIToolOutputEntity | null> {

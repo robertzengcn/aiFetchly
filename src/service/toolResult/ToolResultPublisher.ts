@@ -74,7 +74,13 @@ export class ToolResultPublisher {
    */
   async publish(
     context: TrustedToolOutputContext,
-    receipt: ToolResultReceipt
+    receipt: ToolResultReceipt,
+    /**
+     * Per-call delivery override, used when the caller (the query loop) owns
+     * the event sink for this turn. Falls back to the publisher's own
+     * delivery when omitted.
+     */
+    deliverOverride?: ReceiptDelivery
   ): Promise<PublishOutcome> {
     // Validate before anything is persisted or emitted: an unvalidated receipt
     // must never reach the model or the renderer.
@@ -115,9 +121,10 @@ export class ToolResultPublisher {
       await this.deps.module.markReceiptPublished(output.outputId).catch(() => undefined);
     }
 
-    if (this.deps.deliver) {
+    const deliver = deliverOverride ?? this.deps.deliver;
+    if (deliver) {
       try {
-        await this.deps.deliver(bounded);
+        await deliver(bounded);
       } catch (error: unknown) {
         // Delivery is separate from durability: the receipt is already saved,
         // so this is a UI problem, not a reason to re-run the tool.

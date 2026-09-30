@@ -20,6 +20,7 @@ import {
   isArchiveReadsEnabled,
   isHistoryToolsEnabled,
   isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
 } from "@/config/featureFlags";
 import {
   TOOL_RESULT_READ_TOOL_NAME,
@@ -1340,10 +1341,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     execute: async (args, context): Promise<SkillExecutionResult> => {
-      if (!isToolOutputCaptureEnabled()) {
-        // Capture off means no new references are produced, but existing
-        // committed references stay readable. This guard only reflects the
-        // read support being unavailable, not a permission decision.
+      // Available while reference delivery is on OR this conversation already
+      // holds committed references (technical design §8.1). Gating on the
+      // `capture` flag instead would make a default install return
+      // OUTPUT_NOT_AVAILABLE for artifacts it already saved, which is exactly
+      // what PRD §12 and TD §13.4 forbid.
+      if (!(await isToolResultRetrievalAvailable(context))) {
         return {
           success: false,
           result: { error: "OUTPUT_NOT_AVAILABLE" },
@@ -1398,7 +1401,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     timeoutClass: "fast",
     execute: async (args, context): Promise<SkillExecutionResult> => {
-      if (!isToolOutputCaptureEnabled()) {
+      if (!(await isToolResultRetrievalAvailable(context))) {
         return {
           success: false,
           result: { error: "OUTPUT_NOT_AVAILABLE" },
@@ -4216,6 +4219,33 @@ const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_RESULT_READ_TOOL_NAME,
   TOOL_RESULT_SEARCH_TOOL_NAME,
 ]);
+
+/**
+ * True when the retrieval tools may run for this conversation.
+ *
+ * Two independent reasons, both required by the design:
+ *   1. model-visible reference delivery is enabled, OR
+ *   2. the conversation already holds committed references.
+ *
+ * Condition 2 is what makes rollback safe: disabling capture stops new writes
+ * but must never unregister readers for output that is already on disk.
+ */
+async function isToolResultRetrievalAvailable(
+  context: { conversationId: string }
+): Promise<boolean> {
+  if (isToolOutputModelRefsEnabled()) return true;
+  if (isToolOutputCaptureEnabled()) return true;
+  try {
+    const { ToolResultModule } = await import("@/modules/ToolResultModule");
+    const { hasCommittedOutputs } = await import(
+      "@/service/toolResult/toolResultAvailability"
+    );
+    return await hasCommittedOutputs(new ToolResultModule(), context.conversationId);
+  } catch {
+    // Fail closed: an unreadable registry must not expose retrieval.
+    return false;
+  }
+}
 
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,

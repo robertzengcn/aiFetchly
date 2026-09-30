@@ -253,26 +253,45 @@ Delivered on `feature/large-tool-results`, in the dependency order above.
 | 5 — aggregate budget | Done | `ToolResultBudgetService.ts` |
 | 6 — cursors + retrieval | Done | `ToolResultCursorCodec.ts`, `ToolResultRetrievalService.ts` |
 | 7 — preparation + publication | Done | `ToolResultPreparationService.ts`, `ToolResultPublisher.ts` |
-| 8 — recovery | Done | `ToolResultRecoveryService.ts` |
+| 8 — recovery + bootstrap | Done | `ToolResultRecoveryService.ts`, `ToolResultBootstrapService.ts` + `ai_tool_output_bootstrap` marker |
 | 9 — retrieval tools | Done | `toolResultReadTool.ts`, `toolResultSearchTool.ts`, registered in `skillsRegistry.ts` |
-| 10 — execution-path wiring | **Partial — see below** | Contracts and boundary exist and are tested; not yet called from `AIChatQueryLoop` / `AIChatQueryEngine` |
+| 10 — execution-path wiring | Done | `ToolResultPipeline` called from `AIChatQueryLoop`, which is constructed by all three entry points (V2 IPC, `AIChatQueryEngineFactory` → scheduled, `AgentRuntime` → agent). `AIChatV2Module.saveToolResultMessage` stores bounded descriptors only. |
 | 11 — IPC | Done | `tool-result-ipc.ts` + 4 allowlisted channels + `views/api/aiToolResult.ts` |
 | 12 — viewer + i18n | Done | `AiChatToolResultViewer.vue`, result card, `aiChatV2.toolOutput.*` in all six languages |
 | 13 — tests | Done | service / module / config / component suites, i18n parity, preload allowlist guard |
 
-### Why Unit 10 is deliberately partial
+### Execution-path wiring (was the blocking gap)
 
-Every other execution path still calls `normalizeToolResult` and serializes the
-raw result. Switching the live V2 loop over is a separate, reviewable step
-because it changes what is written into existing conversation history, and it
-must land together with the retrieval tools being enabled — otherwise a
-conversation would start containing references that nothing can yet resolve,
-which is the "references without working retrieval" state the design explicitly
-says is not a complete release.
+The audit correctly found the substrate was never connected. It now is:
 
-The rollout flags therefore default OFF. With them off, behavior is unchanged;
-enabling `ai_tool_output_capture_enabled` + `ai_tool_output_model_refs_enabled`
-without the loop wiring is safe because nothing emits a reference yet.
+- `ToolResultPipeline` is the single entry point every adapter uses, so the
+  ordering constraint (prepare → persist receipt → emit → model) is expressed
+  once rather than six times.
+- `AIChatQueryLoop` calls it at the tool-result site. Because the loop is
+  constructed by `ai-chat-v2-ipc` (interactive V2), `AIChatQueryEngineFactory`
+  (scheduled), and `AgentRuntime` (child agents), one change covers all three
+  adapters the design lists.
+- Persistence defaults to the existing `AIChatV2Module.saveToolResultMessage`
+  write, so each adapter did not have to opt in; a `saveToolResultReceipt` dep
+  remains for tests and future callers.
+- An externalized result REBUILDS the renderer payload from the trusted
+  outcome plus bounded descriptors. The legacy payload spread the producer's
+  whole body, which is exactly the bulk this feature removes.
+- The permission-resume path re-enters the same loop, so a resumed attempt
+  gets a NEW execution identity and its own artifact rather than colliding
+  with the placeholder.
+
+`shrinkLiveTurnToolPayloads` is DELETED. The budget-pressure path now uses the
+aggregate budget, which drops optional previews and otherwise fails truthfully.
+Its regression test was rewritten to pin the invariants that matter: arguments
+are never blanked to `{}` and a result body is never silently clipped.
+
+### Retrieval-tool availability
+
+Availability now follows modelRefs OR the presence of committed references,
+not the capture flag, so a default install can still read output it already
+saved (PRD §12, TD §13.4). The existence check is a `LIMIT 1` count, so
+answering it cannot pull a receipt into memory.
 
 ### Bugs the new tests caught
 
