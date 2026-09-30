@@ -9,6 +9,7 @@ import {
   EmailServiceImportResult,
   SafeEmailServiceExportRow,
   SendEmailError,
+  EmailServiceTagSummary,
 } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
@@ -26,11 +27,13 @@ import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 import { EmailFilterDetailModuleInterface } from "@/modules/interface/EmailFilterDetailModuleInterface";
 import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceTagModule } from "@/modules/emailServiceTagModule";
 import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType";
 import Papa from "papaparse";
 
 type EmailServiceImportField =
   | "name"
+  | "tag"
   | "smtpUsername"
   | "from"
   | "replyTo"
@@ -58,6 +61,7 @@ interface ParsedEmailServiceImportRow {
 /** Source keys accepted for each normalized field (§10.2). */
 const IMPORT_FIELD_ALIASES: Record<EmailServiceImportField, string[]> = {
   name: ["name"],
+  tag: ["tag", "tagname", "tag_name"],
   smtpUsername: ["smtpUsername", "smtpusername", "smtp_username"],
   from: ["from", "from_email"],
   replyTo: ["replyTo", "replyto", "reply_to"],
@@ -83,12 +87,14 @@ export class EmailMarketingController {
   emailFilterTaskRelationModule: EmailFilterTaskRelationModuleInterface;
   emailFilterModule: EmailFilterModuleInterface;
   emailServiceModule: EmailServiceModuleInterface;
+  emailServiceTagModule: EmailServiceTagModule;
   emailFilterDetailModule: EmailFilterDetailModuleInterface;
   constructor() {
     this.emailTemplateModule = new EmailTemplateModule();
     this.emailFilterTaskRelationModule = new EmailFilterTaskRelationModule();
     this.emailFilterModule = new EmailFilterModule();
     this.emailServiceModule = new EmailServiceModule();
+    this.emailServiceTagModule = new EmailServiceTagModule();
     this.emailFilterDetailModule = new EmailFilterDetailModule();
   }
   //list email template
@@ -226,18 +232,23 @@ export class EmailMarketingController {
   public async getEmailServiceList(
     page: number,
     size: number,
-    search?: string
+    search?: string,
+    tagId?: number,
+    untagged?: boolean
   ): Promise<ListData<EmailServiceListdata>> {
     const listdata = await this.emailServiceModule.listEmailServices(
       page,
       size,
-      search
+      search,
+      tagId,
+      untagged
     );
-    const count = await this.emailServiceModule.countEmailServices();
     const listdata2: EmailServiceListdata[] = listdata.records.map((item) => {
       return {
         id: item.id,
         name: item.name,
+        tagId: item.tagId ?? null,
+        tag: item.tag?.name ?? null,
         from: item.from,
         host: item.host,
         receiveProtocol: item.receiveProtocol,
@@ -246,7 +257,7 @@ export class EmailMarketingController {
     });
     return {
       records: listdata2,
-      num: count,
+      num: listdata.num,
     };
   }
   //get email service detail
@@ -259,6 +270,8 @@ export class EmailMarketingController {
     // "unchanged" sentinel: on save, an empty password means keep existing.
     return {
       ...entity,
+      tagId: entity.tagId ?? null,
+      tag: entity.tag?.name ?? null,
       password: "",
       receivePassword: "",
     } as unknown as EmailServiceEntitydata;
@@ -280,6 +293,10 @@ export class EmailMarketingController {
   ): Promise<number> {
     const entity = new EmailServiceEntity();
     entity.name = param.name;
+    entity.tagId =
+      param.tagId === undefined
+        ? null
+        : await this.resolveTagId(param.tagId);
     entity.host = param.host;
     entity.port = param.port;
     entity.from = param.from;
@@ -305,6 +322,9 @@ export class EmailMarketingController {
     const updatePreservingPasswords = async (id: number): Promise<void> => {
       const existing = await this.emailServiceModule.getEmailService(id);
       if (existing) {
+        if (param.tagId === undefined) {
+          entity.tagId = existing.tagId ?? null;
+        }
         if (!entity.password || entity.password.length === 0) {
           entity.password = existing.password;
         }
@@ -345,7 +365,37 @@ export class EmailMarketingController {
     id: number,
     entity: EmailServiceEntity
   ): Promise<void> {
+    entity.tagId = await this.resolveTagId(entity.tagId);
     return await this.emailServiceModule.updateEmailService(id, entity);
+  }
+
+  public async listEmailServiceTags(
+    search?: string
+  ): Promise<EmailServiceTagSummary[]> {
+    return await this.emailServiceTagModule.listTags(search);
+  }
+
+  public async createEmailServiceTag(name: string): Promise<number> {
+    return await this.emailServiceTagModule.createTag(name);
+  }
+
+  public async updateEmailServiceTag(id: number, name: string): Promise<void> {
+    await this.emailServiceTagModule.updateTag(id, name);
+  }
+
+  public async deleteEmailServiceTag(
+    id: number
+  ): Promise<{ affectedServiceCount: number }> {
+    return await this.emailServiceTagModule.deleteTag(id);
+  }
+
+  private async resolveTagId(tagId: number | null | undefined): Promise<number | null> {
+    if (tagId === undefined || tagId === null) return null;
+    const tag = await this.emailServiceTagModule.getTag(tagId);
+    if (!tag) {
+      throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+    }
+    return tag.id;
   }
 
   /**
@@ -402,6 +452,7 @@ export class EmailMarketingController {
       return {
         id: item.id,
         name: item.name,
+        tag: item.tag?.name ?? null,
         smtpUsername: identity.smtpUsername,
         from: item.from,
         replyTo: identity.replyToAddress,
@@ -433,6 +484,7 @@ export class EmailMarketingController {
     const headers = [
       "id",
       "name",
+      "tag",
       "smtpUsername",
       "from",
       "replyTo",
@@ -454,6 +506,7 @@ export class EmailMarketingController {
     const csvRows = rows.map((row) => [
       this.escapeCsvField(row.id),
       this.escapeCsvField(row.name),
+      this.escapeCsvField(row.tag),
       this.escapeCsvField(row.smtpUsername),
       this.escapeCsvField(row.from),
       this.escapeCsvField(row.replyTo),
@@ -500,7 +553,8 @@ export class EmailMarketingController {
   // ignored on write. Returns counts + per-row errors with file row numbers.
   public async importEmailServices(
     content: string,
-    format: "csv" | "json"
+    format: "csv" | "json",
+    options: { createMissingTags?: boolean } = {}
   ): Promise<EmailServiceImportResult> {
     const { rows, rowErrors } = this.parseImportContent(content, format);
 
@@ -536,6 +590,30 @@ export class EmailMarketingController {
       const values = parsedRow.values;
       const present = parsedRow.presentFields;
 
+      let importedTagId: number | null | undefined;
+      let missingTagName: string | undefined;
+      if (present.has("tag")) {
+        if (values.tag && values.tag.trim().length > 0) {
+          try {
+            const tag = await this.emailServiceTagModule.findByName(values.tag);
+            if (!tag && !options.createMissingTags) {
+              throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
+            }
+            importedTagId = tag?.id;
+            missingTagName = tag ? undefined : values.tag;
+          } catch (error: unknown) {
+            skipped++;
+            const code = error instanceof Error && /^EMAIL_SERVICE_TAG_/.test(error.message)
+              ? error.message
+              : "EMAIL_SERVICE_TAG_LOOKUP_FAILED";
+            errors.push(`row ${rowNumber}: ${code}`);
+            continue;
+          }
+        } else {
+          importedTagId = null;
+        }
+      }
+
       // 0/1 flags unparseable → row error (NaN would bind as NULL in
       // better-sqlite3). Absent/blank-skipped fields stay undefined and are
       // never NaN, so only explicitly provided garbage fails the row.
@@ -559,6 +637,9 @@ export class EmailMarketingController {
       const candidate = new EmailServiceEntity();
       if (isUpdate) {
         const ex = existing!;
+        candidate.tagId = present.has("tag")
+          ? importedTagId ?? null
+          : ex.tagId ?? null;
         candidate.name = (values.name ?? ex.name) as string;
         candidate.host = (values.host ?? ex.host) as string;
         candidate.port = (values.port ?? ex.port) as string;
@@ -628,6 +709,7 @@ export class EmailMarketingController {
         // New service: absent SMTP username → From; absent Reply-To → null;
         // password absent/blank → rejected by validation (create mode).
         candidate.name = (values.name ?? "") as string;
+        candidate.tagId = importedTagId ?? null;
         candidate.host = (values.host ?? "") as string;
         candidate.port = (values.port ?? "") as string;
         candidate.from = (values.from ?? "") as string;
@@ -680,6 +762,16 @@ export class EmailMarketingController {
       }
 
       try {
+        if (missingTagName !== undefined) {
+          try {
+            candidate.tagId = await this.emailServiceTagModule.createTag(missingTagName);
+          } catch (error: unknown) {
+            if (!(error instanceof Error) || error.message !== "EMAIL_SERVICE_TAG_DUPLICATE") throw error;
+            const tag = await this.emailServiceTagModule.findByName(missingTagName);
+            if (!tag) throw error;
+            candidate.tagId = tag.id;
+          }
+        }
         if (isUpdate) {
           await this.emailServiceModule.updateEmailService(
             existing!.id!,

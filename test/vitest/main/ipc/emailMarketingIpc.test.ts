@@ -22,6 +22,13 @@ const mockFindEmailServiceByName = vi.hoisted(() => vi.fn());
 const mockValidateEmailServiceForSave = vi.hoisted(() => vi.fn());
 const mockUpdateEmailService = vi.hoisted(() => vi.fn());
 const mockCreateEmailService = vi.hoisted(() => vi.fn());
+const tagMocks = vi.hoisted(() => ({
+  listEmailServiceTags: vi.fn(),
+  createEmailServiceTag: vi.fn(),
+  updateEmailServiceTag: vi.fn(),
+  deleteEmailServiceTag: vi.fn(),
+  getEmailServiceList: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   app: { getPath: vi.fn().mockReturnValue(os.tmpdir()) },
@@ -40,6 +47,7 @@ vi.mock("@/controller/emailMarketingController", () => ({
     validateEmailServiceForSave: mockValidateEmailServiceForSave,
     updateEmailService: mockUpdateEmailService,
     createEmailService: mockCreateEmailService,
+    ...tagMocks,
   };
     }
   },
@@ -60,11 +68,50 @@ import {
   EMAILSERVICEEXPORT,
   EMAILSERVICEIMPORT,
   EMAILSERVICEUPDATE,
+  EMAILSERVICETAGLIST,
+  EMAILSERVICETAGCREATE,
+  EMAILSERVICETAGUPDATE,
+  EMAILSERVICETAGDELETE,
+  EMAILSERVICELIST,
 } from "@/config/channellist";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 
 describe("Email Marketing IPC Handlers", () => {
+  test("registers tag CRUD channels and delegates validated requests", async () => {
+    for (const channel of [EMAILSERVICETAGLIST, EMAILSERVICETAGCREATE, EMAILSERVICETAGUPDATE, EMAILSERVICETAGDELETE]) {
+      expect(mockIpcMain.getRegisteredChannels()).toContain(channel);
+    }
+    tagMocks.createEmailServiceTag.mockResolvedValue(4);
+    const created = await mockIpcMain.callHandler(EMAILSERVICETAGCREATE, {}, JSON.stringify({ name: " Sales " })) as CommonMessage<{ id: number }>;
+    expect(created.data).toEqual({ id: 4 });
+    expect(tagMocks.createEmailServiceTag).toHaveBeenCalledWith("Sales");
+    await mockIpcMain.callHandler(EMAILSERVICETAGUPDATE, {}, JSON.stringify({ id: 4, name: "Marketing" }));
+    expect(tagMocks.updateEmailServiceTag).toHaveBeenCalledWith(4, "Marketing");
+    tagMocks.deleteEmailServiceTag.mockResolvedValue({ affectedServiceCount: 2 });
+    const deleted = await mockIpcMain.callHandler(EMAILSERVICETAGDELETE, {}, JSON.stringify({ id: 4 })) as CommonMessage<{ affectedServiceCount: number }>;
+    expect(deleted.data).toEqual({ affectedServiceCount: 2 });
+  });
+
+  test("rejects unexpected tag fields before controller calls and preserves domain errors", async () => {
+    const invalid = await mockIpcMain.callHandler(EMAILSERVICETAGCREATE, {}, JSON.stringify({ name: "Sales", normalizedName: "injected" })) as CommonMessage<unknown>;
+    expect(invalid.status).toBe(false);
+    expect(tagMocks.createEmailServiceTag).not.toHaveBeenCalled();
+    tagMocks.createEmailServiceTag.mockRejectedValue(new Error("EMAIL_SERVICE_TAG_DUPLICATE"));
+    const duplicate = await mockIpcMain.callHandler(EMAILSERVICETAGCREATE, {}, JSON.stringify({ name: "Sales" })) as CommonMessage<unknown>;
+    expect(duplicate.status).toBe(false);
+    expect(duplicate.msg).toContain("EMAIL_SERVICE_TAG_DUPLICATE");
+  });
+
+  test("forwards tag filters and rejects simultaneous untagged selection", async () => {
+    tagMocks.getEmailServiceList.mockResolvedValue({ records: [], num: 0 });
+    await mockIpcMain.callHandler(EMAILSERVICELIST, {}, JSON.stringify({ page: 0, size: 10, tagId: 4, search: "sales" }));
+    expect(tagMocks.getEmailServiceList).toHaveBeenCalledWith(0, 10, "sales", 4, undefined);
+    const invalid = await mockIpcMain.callHandler(EMAILSERVICELIST, {}, JSON.stringify({ tagId: 4, untagged: true })) as CommonMessage<unknown>;
+    expect(invalid.status).toBe(false);
+    expect(tagMocks.getEmailServiceList).toHaveBeenCalledTimes(1);
+  });
+
   const tmpExportPath = path.join(
     os.tmpdir(),
     "email_services_export_test.csv"

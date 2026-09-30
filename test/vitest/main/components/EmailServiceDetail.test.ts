@@ -9,8 +9,10 @@ const apiMocks = vi.hoisted(() => ({
   createupdateEmailService: vi.fn(),
   sendTestemail: vi.fn(),
   receiveEmailsendevent: vi.fn(),
+  getEmailServiceTags: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@/views/api/emailservice", () => ({
+  getEmailServiceTags: (...args: unknown[]) => apiMocks.getEmailServiceTags(...args),
   getEmailServiceDetail: (...a: unknown[]) =>
     apiMocks.getEmailServiceDetail(...a),
   createupdateEmailService: (...a: unknown[]) =>
@@ -153,7 +155,9 @@ const stubs = {
   VCardText: { template: "<div><slot /></div>" },
   VCardActions: { template: "<div><slot /></div>" },
   VSpacer: true,
-  VSelect: { template: "<select />" },
+  VSelect: { name: "VSelect", props: ["modelValue", "items"], emits: ["update:modelValue"], template: "<select />" },
+  VAutocomplete: { name: "VAutocomplete", props: ["modelValue", "items"], emits: ["update:modelValue"], template: "<select />" },
+  EmailServiceTagDialog: true,
   ErrorDialog: true,
   LoadingDialog: true,
 };
@@ -200,6 +204,27 @@ function findButtonByText(
 }
 
 describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
+  it("loads, changes and clears tag assignments while keeping the password sentinel", async () => {
+    apiMocks.getEmailServiceTags.mockResolvedValue([
+      { id: 4, name: "Sales", normalizedName: "sales", serviceCount: 1 },
+      { id: 5, name: "Support", normalizedName: "support", serviceCount: 0 },
+    ]);
+    apiMocks.getEmailServiceDetail.mockResolvedValue({ ...STORED_SERVICE, tagId: 4, tag: "Sales" });
+    const wrapper = mountDetail(9);
+    await flushPromises();
+    const select = wrapper.findComponent({ name: "VAutocomplete" });
+    expect(select.props("modelValue")).toBe(4);
+    select.vm.$emit("update:modelValue", 5);
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: 5, password: "" }));
+    select.vm.$emit("update:modelValue", null);
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(apiMocks.createupdateEmailService).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: null, password: "" }));
+    wrapper.unmount();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     routerMocks.routeId = "";

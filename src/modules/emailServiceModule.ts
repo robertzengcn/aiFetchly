@@ -20,16 +20,20 @@ import type {
   EmailServiceValidationError,
   EmailServiceValidationCode,
 } from "@/modules/interface/EmailServiceModuleInterface";
+import { EmailServiceTagModule } from "@/modules/emailServiceTagModule";
+import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
 
 export class EmailServiceModule
   extends BaseModule
   implements EmailServiceModuleInterface
 {
   private emailServiceModel: EmailServiceModel;
+  private readonly emailServiceTagModule: EmailServiceTagModule;
 
   constructor() {
     super();
     this.emailServiceModel = new EmailServiceModel(this.dbpath);
+    this.emailServiceTagModule = new EmailServiceTagModule();
   }
 
   async createEmailService(service: EmailServiceEntity): Promise<number> {
@@ -102,6 +106,8 @@ export class EmailServiceModule
     page: number,
     size: number,
     search?: string,
+    tagId?: number,
+    untagged?: boolean,
     sort?: SortBy
   ): Promise<ListData<EmailServiceEntity>> {
     try {
@@ -109,9 +115,15 @@ export class EmailServiceModule
         page,
         size,
         search,
+        tagId,
+        untagged,
         sort
       );
-      const num = await this.emailServiceModel.countEmailServices();
+      const num = await this.emailServiceModel.countEmailServices(
+        tagId,
+        untagged,
+        search
+      );
 
       return {
         records: await this.decryptServiceCredentialsList(records),
@@ -123,9 +135,9 @@ export class EmailServiceModule
     }
   }
 
-  async countEmailServices(): Promise<number> {
+  async countEmailServices(tagId?: number, untagged?: boolean): Promise<number> {
     try {
-      return await this.emailServiceModel.countEmailServices();
+      return await this.emailServiceModel.countEmailServices(tagId, untagged);
     } catch (error) {
       console.error("Error counting email services:", error);
       throw error;
@@ -140,6 +152,34 @@ export class EmailServiceModule
       return await this.decryptServiceCredentials(service);
     } catch (error) {
       console.error("Error finding email service by name:", error);
+      throw error;
+    }
+  }
+
+  async findEmailServiceByTag(
+    tagName: string
+  ): Promise<EmailServiceEntity | undefined> {
+    try {
+      const tag = await this.emailServiceTagModule.findByName(tagName);
+      if (!tag) {
+        incrementEmailServiceMetric("tag_lookup_not_found");
+        return undefined;
+      }
+      const services = await this.emailServiceModel.findAllByTagId(tag.id);
+      if (services.length === 0) {
+        incrementEmailServiceMetric("tag_lookup_not_found");
+        return undefined;
+      }
+      if (services.length > 1) {
+        incrementEmailServiceMetric("tag_lookup_ambiguous");
+        throw new Error(
+          `Email service tag "${tag.name}" is ambiguous; ${services.length} services use it`
+        );
+      }
+      incrementEmailServiceMetric("tag_lookup_success");
+      return await this.decryptServiceCredentials(services[0]);
+    } catch (error) {
+      console.error("Error finding email service by tag:", error);
       throw error;
     }
   }

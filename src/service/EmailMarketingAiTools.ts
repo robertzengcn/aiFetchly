@@ -223,6 +223,7 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
 function sanitizeEmailService(service: {
   id: number;
   name: string;
+  tag?: { name: string } | null;
   from: string;
   host: string;
   port: string;
@@ -232,6 +233,7 @@ function sanitizeEmailService(service: {
   return {
     id: service.id,
     name: service.name,
+    tag: service.tag?.name ?? null,
     address: service.from,
     source: service.host,
     port: String(service.port),
@@ -395,9 +397,16 @@ export async function getEmailServiceConfig(
     const module = new EmailServiceModule();
     await module.ensureConnection();
 
-    const service = await module.getEmailService(input.service_id);
+    const service =
+      input.tag !== undefined
+        ? await module.findEmailServiceByTag(input.tag)
+        : await module.getEmailService(input.service_id!);
     if (!service) {
-      throw new Error(`Email service ${input.service_id} not found`);
+      throw new Error(
+        input.tag !== undefined
+          ? `Email service tag ${input.tag} not found`
+          : `Email service ${input.service_id} not found`
+      );
     }
 
     return {

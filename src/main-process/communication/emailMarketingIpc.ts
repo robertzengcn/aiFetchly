@@ -16,6 +16,10 @@ import {
   EMAILSERVICEDELETE,
   EMAILSERVICEEXPORT,
   EMAILSERVICEIMPORT,
+  EMAILSERVICETAGLIST,
+  EMAILSERVICETAGCREATE,
+  EMAILSERVICETAGUPDATE,
+  EMAILSERVICETAGDELETE,
   EMAILFILTERDELETE,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
@@ -43,11 +47,16 @@ import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   emailMarketingListInputSchema,
+  emailServiceListInputSchema,
   emailMarketingByIdInputSchema,
   emailMarketingUpdateInputSchema,
   emailServiceUpdateInputSchema,
   emailServiceExportInputSchema,
   emailServiceImportInputSchema,
+  emailServiceTagListInputSchema,
+  emailServiceTagCreateInputSchema,
+  emailServiceTagUpdateInputSchema,
+  emailServiceTagDeleteInputSchema,
 } from "@/schemas/ipc/emailMarketing";
 import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 
@@ -241,13 +250,15 @@ export function registerEmailMarketingIpcHandlers() {
 
   registerValidatedHandler(
     EMAILSERVICELIST,
-    emailMarketingListInputSchema,
+    emailServiceListInputSchema,
     async (input) => {
       const emailmarketCon = new EmailMarketingController();
       const res = await emailmarketCon.getEmailServiceList(
         input.page ?? 0,
         input.size ?? 100,
-        input.search
+        input.search,
+        input.tagId,
+        input.untagged
       );
       if (!res) {
         throw new Error("emailmarketing.service_list_error");
@@ -300,6 +311,8 @@ export function registerEmailMarketingIpcHandlers() {
         }
         const entity = new EmailServiceEntity();
         entity.name = qdata.name ?? existing.name;
+        entity.tagId =
+          qdata.tagId !== undefined ? qdata.tagId : existing.tagId ?? null;
         entity.host = qdata.host ?? existing.host;
         // Schema normalizes numeric ports to strings, but coerce defensively:
         // v-number-input emits numbers and validateEmailService calls .trim().
@@ -368,6 +381,7 @@ export function registerEmailMarketingIpcHandlers() {
       // same shape here to reject CR/LF before any row is written.
       const createEntity = new EmailServiceEntity();
       createEntity.name = qdata.name;
+      createEntity.tagId = qdata.tagId ?? null;
       createEntity.host = qdata.host;
       createEntity.port =
         qdata.port !== undefined && qdata.port !== null
@@ -415,6 +429,43 @@ export function registerEmailMarketingIpcHandlers() {
     }
   );
 
+  registerValidatedHandler(
+    EMAILSERVICETAGLIST,
+    emailServiceTagListInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return await controller.listEmailServiceTags(input.search);
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGCREATE,
+    emailServiceTagCreateInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return { id: await controller.createEmailServiceTag(input.name) };
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGUPDATE,
+    emailServiceTagUpdateInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      await controller.updateEmailServiceTag(input.id, input.name);
+      return { id: input.id };
+    }
+  );
+
+  registerValidatedHandler(
+    EMAILSERVICETAGDELETE,
+    emailServiceTagDeleteInputSchema,
+    async (input) => {
+      const controller = new EmailMarketingController();
+      return await controller.deleteEmailServiceTag(input.id);
+    }
+  );
+
   // ── Service export ────────────────────────────────────────────────────
 
   registerValidatedHandler(
@@ -459,7 +510,7 @@ export function registerEmailMarketingIpcHandlers() {
   registerValidatedHandler(
     EMAILSERVICEIMPORT,
     emailServiceImportInputSchema,
-    async () => {
+    async (input) => {
       const dialogService = await getNativeDialogService();
       const dialogResult = await dialogService.showOpenDialog({
         title: "Import Email Services",
@@ -490,7 +541,9 @@ export function registerEmailMarketingIpcHandlers() {
       const controller = new EmailMarketingController();
       let result: EmailServiceImportResult;
       try {
-        result = await controller.importEmailServices(content, format);
+        result = input.createMissingTags === true
+          ? await controller.importEmailServices(content, format, { createMissingTags: true })
+          : await controller.importEmailServices(content, format);
       } catch {
         // Malformed CSV/JSON or wrong structure — nothing was written.
         // Surface ONLY the message key: parse-error text (e.g. V8's

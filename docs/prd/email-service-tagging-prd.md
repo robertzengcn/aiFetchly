@@ -3,7 +3,7 @@
 ## Document Information
 
 - **Version**: 1.0
-- **Status**: Proposed
+- **Status**: Implemented; validation recorded in the technical design
 - **Created**: 2026-09-26
 - **Owner**: AiFetchly Desktop Engineering
 - **Related technical design**: `docs/prd/email-service-tagging-technical-design.md`
@@ -207,7 +207,7 @@ Example:
 
 ### FR-010: AI Ambiguity Handling
 
-The first-release data model makes normalized tags unique, so a tag should resolve to at most one tag record. The tool must still verify the service result and return a safe error if data corruption or a future multi-service tag relationship produces multiple matches.
+Normalized tag names identify one tag record, but several services may share that tag. AI resolution succeeds only when exactly one service is assigned. With zero matches it returns a not-found error; with multiple matches it returns an ambiguity error and requires an explicit service ID.
 
 The AI must never choose the first result silently.
 
@@ -348,7 +348,7 @@ Metrics must not include tag values, email addresses, SMTP hosts, or credentials
 
 ### Phase 1: Data and Service Layer
 
-- Add tag table and nullable `tag_id`.
+- Add tag table and nullable `tagId`.
 - Add Model and Module operations.
 - Add migration and validation tests.
 
@@ -381,4 +381,3 @@ The following decisions should be confirmed before implementation begins:
 5. Should the AI send tool accept `tag` directly, or should only the discovery/configuration tool support tag lookup in the first increment?
 
 Recommended defaults are: one tag, no implicit tag creation during import, allow spaces but normalize case, confirm only when assignments exist, and support tag resolution before sending while retaining ID-based execution.
-

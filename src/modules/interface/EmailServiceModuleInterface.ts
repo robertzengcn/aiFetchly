@@ -71,6 +71,8 @@ export interface EmailServiceModuleInterface {
     page: number,
     size: number,
     search?: string,
+    tagId?: number,
+    untagged?: boolean,
     sort?: SortBy
   ): Promise<ListData<EmailServiceEntity>>;
 
@@ -78,7 +80,7 @@ export interface EmailServiceModuleInterface {
    * Get total number of email services
    * @returns Total count of services
    */
-  countEmailServices(): Promise<number>;
+  countEmailServices(tagId?: number, untagged?: boolean): Promise<number>;
 
   /**
    * Find email service by name
@@ -86,6 +88,9 @@ export interface EmailServiceModuleInterface {
    * @returns The email service entity
    */
   findEmailServiceByName(name: string): Promise<EmailServiceEntity | undefined>;
+
+  /** Find an email service by its user-defined tag. */
+  findEmailServiceByTag(tagName: string): Promise<EmailServiceEntity | undefined>;
 
   /**
    * Find email services by host

@@ -1653,6 +1653,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "list_email_services",
     description:
       "List configured SMTP email sending services (outbound senders) without exposing passwords. " +
+      "Includes user-defined tags. Resolve tags exactly, ignoring case and surrounding spaces; never guess. " +
+      "If a tag is missing or shared by multiple services, ask the user to choose a service. " +
       "Use these service IDs with start_email_send_task. This is NOT the inbox list — " +
       "list_email_inboxes is IMAP receive-only and may be empty even when senders exist.",
     parameters: {
@@ -1689,7 +1691,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "get_email_service_config",
     description:
-      "Get a single email sending service configuration without exposing passwords.",
+      "Get a single email sending service configuration without exposing passwords. " +
+      "Provide exactly one of service_id or the exact user-defined tag. Tags are case-insensitive; do not guess tags. " +
+      "If a tag is missing or ambiguous, ask the user to choose a service ID. Use the resolved ID in start_email_send_task.",
     parameters: {
       type: "object",
       properties: {
@@ -1697,8 +1701,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           type: "number",
           description: "Email service ID to inspect.",
         },
+        tag: {
+          type: "string",
+          description:
+            "Exact user-defined email-service tag. Use list_email_services first when the tag is unknown.",
+        },
       },
-      required: ["service_id"],
     },
     tier: "main",
     requiresConfirmation: false,

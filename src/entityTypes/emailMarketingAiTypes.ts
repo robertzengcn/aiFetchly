@@ -26,9 +26,16 @@ export const getEmailSearchTaskEmailsInputSchema = z.object({
   email_search_task_id: emailMarketingIdSchema,
 });
 
-export const getEmailServiceConfigInputSchema = z.object({
-  service_id: emailMarketingIdSchema,
-});
+export const getEmailServiceConfigInputSchema = z
+  .strictObject({
+    service_id: emailMarketingIdSchema.optional(),
+    tag: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64).optional(),
+  })
+  .refine(
+    (value) =>
+      (value.service_id !== undefined) !== (value.tag !== undefined),
+    { message: "Provide exactly one of service_id or tag" }
+  );
 
 export const bulkEmailContentSchema = z.object({
   subject: z.string().trim().min(1).max(500),
@@ -111,6 +118,7 @@ export interface EmailSearchTaskSummary {
 export interface SanitizedEmailService {
   id: number;
   name: string;
+  tag: string | null;
   address: string;
   source: string;
   port: string;
