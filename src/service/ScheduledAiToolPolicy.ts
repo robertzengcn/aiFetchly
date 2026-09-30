@@ -103,9 +103,26 @@ export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
 /**
  * Automation tools that are schedulable in unattended mode but require explicit
  * allowlisting because they perform network checks or other side effects.
+ *
+ * The outreach / lead-discovery tools (`scrape_urls_from_search_engine`,
+ * `read_url_content`, `extract_contact_info`) live here rather than in the
+ * uncategorized-built-in fallback so that a scheduled outreach loop can
+ * actually use them. They fetch external content — network side effects —
+ * so they require explicit per-tool allowlisting at loop creation (gated by a
+ * typed confirmation), and when called without allowlist membership they
+ * pause for an interactive permission card (1h auto-deny backstop) instead
+ * of being silently dropped from the catalog. Without tier membership the
+ * scheduled `toolFilter` removed them BEFORE the deferred catalog was built,
+ * so even `tool_catalog_search` could not surface them while
+ * `BuiltInToolCapabilitiesPromptSection` advertised them in the system
+ * prompt — the model then reported them "not available in this session".
  */
 export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   "proxy_check",
+  // Outreach / lead discovery — fetch external content (network side effects).
+  "scrape_urls_from_search_engine",
+  "read_url_content",
+  "extract_contact_info",
 ]);
 
 /**
