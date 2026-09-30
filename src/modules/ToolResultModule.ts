@@ -326,12 +326,16 @@ export class ToolResultModule extends BaseModule {
       streamKey: input.streamKey,
     };
     const existing = await this.model.findOutputByIdentity(identity);
-    const expectedBytes = input.expectedBytes ?? 0;
+    const expectedBytes = input.expectedBytes;
     if (existing) {
-      const sameBytes =
-        existing.capturedBytes === expectedBytes ||
-        (input.expectedBytes === undefined && existing.sha256 === undefined);
-      if (sameBytes) {
+      // A CONFLICT requires proof on both sides: we can only conclude the
+      // bytes differ when the caller told us the expected size AND it differs
+      // from what was captured. When the expected size is unknown (a stream
+      // that had not been measured before the claim), reusing the committed
+      // artifact is the safe, idempotent choice - treating "unknown" as
+      // "different" would make every re-delivery of an unmeasured stream look
+      // like a conflict and downgrade a good receipt.
+      if (expectedBytes === undefined || existing.capturedBytes === expectedBytes) {
         return { kind: "existing", output: existing };
       }
       return { kind: "conflict", output: existing };
@@ -342,7 +346,7 @@ export class ToolResultModule extends BaseModule {
       conversationId: input.conversationId,
       outputEpoch: input.outputEpoch,
       executionId: input.executionId,
-      requestedBytes: expectedBytes,
+      requestedBytes: expectedBytes ?? 0,
     });
     if (!admission.ok) {
       return { kind: "rejected", code: admission.code, reason: admission.reason };

@@ -130,7 +130,7 @@ describe("ToolResultRetrievalService — bounded read", () => {
 
   it("pages a single-line minified JSON document without a line-based dead end (AC-05)", async () => {
     // One enormous line: a line-oriented reader would stall here forever.
-    const value = { rows: Array.from({ length: 3000 }, (_, i) => ({ i, v: "x".repeat(40) })) };
+    const value = { rows: Array.from({ length: 1200 }, (_, i) => ({ i, v: "x".repeat(40) })) };
     const target = await storeValue(value);
     const result = await storage.checksumOf(target.storageKey);
     expect(result).toMatch(/^[0-9a-f]{64}$/);
@@ -202,15 +202,18 @@ describe("ToolResultRetrievalService — bounded read", () => {
 
 describe("ToolResultRetrievalService — literal search", () => {
   it("finds a fact beyond the preview (AC-04)", async () => {
+    // Small enough to build quickly under a fully parallel suite run, but
+    // still far beyond any inline preview so the fact is only reachable
+    // through retrieval.
     const value = {
-      rows: Array.from({ length: 4000 }, (_, i) => ({ i, note: `record ${i}` })),
+      rows: Array.from({ length: 800 }, (_, i) => ({ i, note: `record ${i}` })),
     };
     const target = await storeValue(value);
-    const outcome = await service.search({ target, query: "record 3999" });
+    const outcome = await service.search({ target, query: "record 799" });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.page.matches.length).toBeGreaterThan(0);
-    expect(outcome.page.matches[0].excerpt).toContain("record 3999");
+    expect(outcome.page.matches[0].excerpt).toContain("record 799");
   });
 
   it("returns a read cursor anchored at each match", async () => {

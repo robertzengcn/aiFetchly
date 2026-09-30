@@ -1,6 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { ToolResultModule } from "@/modules/ToolResultModule";
-import { SqliteDb } from "@/config/SqliteDb";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -14,32 +13,26 @@ import fs from "node:fs";
  * not by a check-then-write race in application code.
  */
 
-const tmpDir = path.join(os.tmpdir(), "aifetchly-tool-result-module");
-
-function resetSingleton(): void {
-  (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
-  (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
-}
-
-beforeEach(() => {
-  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-  for (const f of fs.readdirSync(tmpDir)) {
-    if (f.startsWith("scraper.db")) {
-      try {
-        fs.unlinkSync(path.join(tmpDir, f));
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  resetSingleton();
-});
-
+/**
+ * Each RUN gets a unique directory, so this file never resets the
+ * process-wide `SqliteDb` singleton. Resetting it here would tear the shared
+ * DataSource out from under sibling test files running in parallel workers.
+ */
+/**
+ * Build a Module bound to a FRESH database directory.
+ *
+ * A new directory per test is what gives each case an empty registry without
+ * touching the shared `SqliteDb` singleton.
+ */
 async function makeModule(
   freeSpaceBytes?: () => Promise<number | null>
 ): Promise<ToolResultModule> {
-  const module = new ToolResultModule(tmpDir, { freeSpaceBytes });
+  const dir = path.join(
+    os.tmpdir(),
+    `aifetchly-tor-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  const module = new ToolResultModule(dir, { freeSpaceBytes });
   await module.ensureConnection();
   return module;
 }
