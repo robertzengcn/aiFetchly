@@ -389,22 +389,9 @@
         </v-card>
       </v-dialog>
 
-      <v-sheet
-        v-if="liveScheduledAssistant"
-        class="px-3 py-2 scheduled-live-bubble"
-        color="grey-lighten-4"
-        elevation="0"
-      >
-        <div class="d-flex align-center text-caption text-medium-emphasis mb-1">
-          <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
-          <span>{{
-            t("aiChatV2.scheduledLoop.statusRunning") || "running"
-          }}</span>
-        </div>
-        <div class="text-body-2 scheduled-live-content">
-          {{ liveScheduledAssistant.content }}
-        </div>
-      </v-sheet>
+      <!-- Scheduled-loop turns stream directly into the normal chat message
+           list (see handleScheduledStream) so they look identical to
+           interactive responses. No separate running-area bubble. -->
 
       <!-- TTS prerequisite notice: shown when the user tries to enable spoken
            responses (the header speaker toggle) before a TTS model is installed.
@@ -1645,6 +1632,12 @@ async function refreshScheduledLoopStatus(): Promise<void> {
 /** Clear scheduled-loop UI state when leaving the current conversation. */
 function resetScheduledLoopViewState(): void {
   activeScheduledLoop.value = null;
+  if (
+    liveScheduledAssistant.value &&
+    activeAssistantMessageId.value === liveScheduledAssistant.value.messageId
+  ) {
+    activeAssistantMessageId.value = null;
+  }
   liveScheduledAssistant.value = null;
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
@@ -1830,8 +1823,16 @@ function handleConversationUpdated(
     scheduledPermissionNotice.value = true;
   }
   if (event.conversationId === activeConversationId.value) {
-    // The persisted row replaces any optimistic live bubble.
+    // The persisted row replaces any optimistic live message. Clear the
+    // streaming marker so the normal chat bubble returns to idle; the
+    // optimistic content stays until loadHistory swaps in the persisted row.
     if (liveScheduledAssistant.value) {
+      if (
+        activeAssistantMessageId.value ===
+        liveScheduledAssistant.value.messageId
+      ) {
+        activeAssistantMessageId.value = null;
+      }
       liveScheduledAssistant.value = null;
     }
     // A permission-requested pause is user-action-required: the persisted
@@ -1863,8 +1864,9 @@ watch(isStreaming, (streaming) => {
  * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
  * routing: only render when the originating conversation is active and no
  * interactive stream is running, so scheduled tokens never merge into an
- * interactive bubble. Transient — the persisted row replaces it on the
- * terminal conversation-updated reload.
+ * interactive bubble. Renders directly as a normal assistant chat message
+ * (same bubble/markdown path as interactive turns) — transient until the
+ * terminal conversation-updated event reloads authoritative history.
  */
 function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (event.conversationId !== activeConversationId.value) return;
@@ -1874,20 +1876,46 @@ function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (chatIsRunning.value) return;
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
-    if (
-      !liveScheduledAssistant.value ||
-      liveScheduledAssistant.value.messageId !== event.messageId
-    ) {
-      liveScheduledAssistant.value = { messageId: event.messageId, content: delta };
-    } else {
+    if (!delta) return;
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: delta,
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
       liveScheduledAssistant.value = {
         messageId: event.messageId,
-        content: liveScheduledAssistant.value.content + delta,
+        content: delta,
+      };
+    } else {
+      const existing = messages.value[existingIdx];
+      const nextContent = existing.content + delta;
+      const next = [...messages.value];
+      next[existingIdx] = { ...existing, content: nextContent };
+      messages.value = next;
+      liveScheduledAssistant.value = {
+        messageId: event.messageId,
+        content: nextContent,
       };
     }
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
   }
-  // "done" / "error": leave the bubble in place; the terminal
-  // conversation-updated event reloads authoritative history and clears it.
+  // "done" / "error": leave the message in place; the terminal
+  // conversation-updated event reloads authoritative history and clears the
+  // streaming marker.
 }
 
 /** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
@@ -2687,9 +2715,10 @@ function onScheduledLoopApprovalCancel(): void {
 /** Set when a scheduled turn completes while an interactive stream is active;
  * the history is reloaded once the active stream terminates (design §18.3). */
 const scheduledRefreshPending = ref(false);
-/** Optimistic live content for a scheduled turn streaming into the active
- * conversation. Transient — cleared on terminal reload; never mutates the
- * persisted message list (technical-design §13.2). */
+/** Tracker for the in-flight scheduled turn rendered as a normal chat
+ * message. Transient — cleared on terminal reload or conversation switch.
+ * The message itself lives in `messages` so it renders through the standard
+ * AiChatV2Messages/AiChatV2Message path (technical-design §13.2). */
 const liveScheduledAssistant = ref<{ messageId: string; content: string } | null>(null);
 const goalStatusDescriptor = computed(() => {
   const status = activeGoal.value?.status;
