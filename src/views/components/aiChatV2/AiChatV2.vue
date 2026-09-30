@@ -209,6 +209,7 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
+        ref="messagesListRef"
         :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
@@ -1077,6 +1078,10 @@ const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map())
  */
 const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+// Template ref on AiChatV2Messages so we can force-scroll to the bottom after
+// history loads (the internal pinnedToBottom flag may be stale from a previous
+// conversation).
+const messagesListRef = ref<{ scrollToBottomForce: () => Promise<void> } | null>(null);
 
 interface MessageListController {
   get(): ChatV2MessageView[];
@@ -3315,6 +3320,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load tool approval mode for this conversation
     void loadToolApprovalMode(conversationId);
+    // Scroll to the latest message after history loads. Use the force variant
+    // because the child component's pinnedToBottom flag may be stale from a
+    // previous conversation where the user scrolled up.
+    await messagesListRef.value?.scrollToBottomForce();
   } catch (err) {
     if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);

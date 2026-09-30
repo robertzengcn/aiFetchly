@@ -135,6 +135,17 @@ const onScroll = (): void => {
   pinnedToBottom = atBottom;
 };
 
+/**
+ * Scroll to the bottom unconditionally (ignores the pinnedToBottom flag).
+ * Used when loading conversation history — the user hasn't scrolled yet, so
+ * we always want to show the latest messages regardless of any prior scroll
+ * position from a previous conversation.
+ */
+const scrollToBottomForce = async (): Promise<void> => {
+  pinnedToBottom = true;
+  await scrollToBottom();
+};
+
 const onGrantPermission = (
   message: ChatV2MessageView,
   payload: { persistent: boolean }
@@ -159,6 +170,8 @@ watch(
   },
   scrollToBottom
 );
+
+defineExpose({ scrollToBottomForce });
 </script>
 
 <style scoped>
