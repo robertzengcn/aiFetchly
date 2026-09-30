@@ -1886,6 +1886,39 @@ function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   // includes `authoritativeRuntimeStatus === "running"`, which the scheduled
   // turn itself causes and which would suppress its own token stream.
   if (isStreaming.value || pinnedPermissionPrompt.value) return;
+  if (event.kind === "start") {
+    // The scheduled turn has begun (before the first token). Create an empty
+    // optimistic assistant message and mark it active-streaming so the bubble
+    // shows the "Generating…" loading indicator immediately — the user must
+    // see the AI received the message before tokens arrive. The message is
+    // filled in by subsequent `token` events.
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: "",
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
+    }
+    liveScheduledAssistant.value = {
+      messageId: event.messageId,
+      content: "",
+    };
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
+    return;
+  }
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
     if (!delta) return;
@@ -1924,10 +1957,19 @@ function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
     if (activeAssistantMessageId.value !== event.messageId) {
       activeAssistantMessageId.value = event.messageId;
     }
+    return;
   }
-  // "done" / "error": leave the message in place; the terminal
-  // conversation-updated event reloads authoritative history and clears the
-  // streaming marker.
+  // "done" / "error": the terminal turn has ended. Clear the streaming marker
+  // so the bubble's "Generating…" loading indicator stops; the persisted row
+  // from the terminal conversation-updated reload is authoritative and will
+  // replace the optimistic content. Leave the message itself in place so the
+  // text doesn't vanish before the reload swaps it in.
+  if (liveScheduledAssistant.value?.messageId === event.messageId) {
+    if (activeAssistantMessageId.value === event.messageId) {
+      activeAssistantMessageId.value = null;
+    }
+    liveScheduledAssistant.value = null;
+  }
 }
 
 /** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
@@ -2922,7 +2964,14 @@ const applyPlanState = (state: AIChatPlanStateView | null): void => {
 };
 
 const streamStatus = computed<Status>(() => {
-  if (chatIsRunning.value) return "streaming";
+  // A scheduled turn streams into an optimistic assistant message (see
+  // handleScheduledStream) without ever setting `isStreaming`. Treat an
+  // in-flight scheduled stream as streaming so its bubble shows the
+  // "Generating…" loading indicator immediately — `chatIsRunning` alone is
+  // insufficient because it depends on `authoritativeRuntimeStatus`, which is
+  // only refreshed by the 1s runtime-status poll and so may still be "idle"
+  // when the `start` event arrives.
+  if (chatIsRunning.value || liveScheduledAssistant.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";

@@ -448,10 +448,21 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
         }
-        // Forward token/done/error chunks for live streaming to a renderer
-        // viewing this conversation (technical-design §13.2). Strict routing
-        // is enforced renderer-side; forwarding failures are non-fatal.
-        if (event.type === "token") {
+        // Forward start/token/done/error chunks for live streaming to a
+        // renderer viewing this conversation (technical-design §13.2). Strict
+        // routing is enforced renderer-side; forwarding failures are non-fatal.
+        // `start` is emitted by the engine when the turn begins (before the
+        // first token) so the renderer can show an immediate "Generating…"
+        // loading indicator instead of waiting for the first token to know
+        // the run is in flight.
+        if (event.type === "start") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "start",
+          });
+        } else if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
@@ -919,7 +930,14 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
         }
-        if (event.type === "token") {
+        if (event.type === "start") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "start",
+          });
+        } else if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,

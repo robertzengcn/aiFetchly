@@ -285,4 +285,70 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
       "scheduled-assistant-running-1"
     );
   });
+
+  // A scheduled turn emits a `start` event before the first token so the
+  // renderer can show an immediate "Generating…" loading indicator on the
+  // optimistic assistant bubble. Without it, the user sees no feedback between
+  // the run starting and the first token arriving — they don't know the AI
+  // received the message.
+  it("shows a loading indicator immediately on a scheduled 'start' event, before any token", async () => {
+    getChatV2HistoryMock.mockResolvedValue({
+      messages: [],
+      runtimeStatus: "running",
+    });
+
+    const wrapper = mountChat();
+    await flushPromises();
+
+    expect(subscribeScheduledStreamMock).toHaveBeenCalledTimes(1);
+    const handler = subscribeScheduledStreamMock.mock.calls[0][0] as (
+      event: ChatV2ScheduledStreamEvent,
+    ) => void;
+
+    const exposed = wrapper.vm as unknown as {
+      onSelectConversation: (conversationId: string) => void;
+    };
+    exposed.onSelectConversation("conv-scheduled-start");
+    await flushPromises();
+
+    // `start` arrives before any token. The renderer must create an empty
+    // optimistic assistant message and mark it active-streaming so the bubble
+    // shows the loading icon immediately.
+    const startEvent: ChatV2ScheduledStreamEvent = {
+      conversationId: "conv-scheduled-start",
+      runId: 9,
+      messageId: "scheduled-assistant-start-1",
+      kind: "start",
+    };
+    handler(startEvent);
+    await flushPromises();
+
+    const chatMessages = wrapper.find('[data-testid="chat-messages"]');
+    expect(chatMessages.exists()).toBe(true);
+
+    // An empty assistant message must exist (the bubble), marked active so
+    // AiChatV2StreamStatus renders the "Generating…" loading indicator.
+    const activeMsg = chatMessages.find(
+      '[data-active="true"]'
+    );
+    expect(activeMsg.exists()).toBe(true);
+    expect(activeMsg.attributes("data-message-id")).toBe(
+      "scheduled-assistant-start-1"
+    );
+
+    // A subsequent token appends to the same bubble (no duplicate message).
+    const token1: ChatV2ScheduledStreamEvent = {
+      conversationId: "conv-scheduled-start",
+      runId: 9,
+      messageId: "scheduled-assistant-start-1",
+      kind: "token",
+      contentDelta: "Hello",
+    };
+    handler(token1);
+    await flushPromises();
+
+    const allMsgs = chatMessages.findAll("[data-message-id]");
+    expect(allMsgs).toHaveLength(1);
+    expect(chatMessages.text()).toContain("Hello");
+  });
 });
