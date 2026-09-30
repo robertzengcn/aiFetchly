@@ -50,17 +50,39 @@ Per PRD §5, before each stage's release: measure with identical scripted provid
 | --- | --- | --- | --- | --- |
 | _(fill at release gate)_ | | | | |
 
-## 5. Stage B status
+## 5. Stage B status — COMPLETE (2026-09-30)
 
-**B2 infrastructure delivered** (`src/service/aiChat/`): `consumeGenerator`
-(result-preserving consumer, design §6), `LatestValueSlot` +
-`runToolWithProgress` (progress multiplexer, design §12) — 14 tests in
-`test/vitest/main/service/aiChatGeneratorInfrastructure.test.ts`.
+**B1 — provider iterator + callback facade:** `ChatProviderStreamEvent`
+(chunk|retry|recovery in causal order) + `streamEvents` on the provider
+contract; the SSE parser exposes native `parseBodyStream` (early close cancels
+the owned body); the local client iterates natively; the hosted retry loop and
+both hosted SSE consumers are generators; `openAIChatCompletionStream`/`stream`
+are draining facades. 6 iterator tests + unchanged aiChatApi (60)/parser/
+client/routing/loop suites.
 
-**Remaining (deferred):** B1 provider `streamEvents` iterator + callback
-facade (hosted retry conversion, `aiChatApi.ts:2259+`), B2-full
-`AIChatQueryLoop.iterate()` conversion with `run()` draining facade, and B3
-`AI_CHAT_STREAM_IMPLEMENTATION` flag + owner consumer switch. See the
-implementation plan (`docs/superpowers/plans/2026-09-26-generator-streaming.md`,
-Tasks B1-B3). Per PRD §1, Stage B may be deferred without losing Stage A's
-guarantees; Stage A shipped on the existing sink transport behind no flag.
+**B2 — single generator loop:** `iterate()` is the only loop implementation
+(33 yield sites; helpers compose via `yield*` or returned events; tool
+execution wrapped with the progress multiplexer; provider consumed as an
+async iterable with arrival-time chunk acceptance preserving the old
+synchronous abort/supersede semantics). `run()` drains it into the legacy
+sink with flush-after-tool_call parity. Pending structures carry no sink
+(engine side map). All three production wiring sites provide the native seam.
+
+**B3 — delivery-mode switch:** `AI_CHAT_STREAM_IMPLEMENTATION=callback|generator`
+(default callback, read once, invalid → callback+warning) through an
+injectable provider; per-run pinning across resume; generator mode drains
+`iterate()` via `consumeGenerator` with the §8 awaited-persistence handler.
+
+**Rollback (Stage B):** flip the env to `callback` (new runs only — running/
+waiting runs keep their captured mode) or release-revert. Never fail over
+mid-run; no shadow execution against live tools.
+
+**Gates at Stage B completion:** main suite 5719 passed (4 DB load-order
+flakes pass in isolation, pre-existing); components 684 passed; tsc +
+vue-tsc 0 errors. Known environmental: ws-importing utilityCode plugin/skill
+tests fail under the worktree's symlinked node_modules (pre-existing, pass on
+the main checkout).
+
+**Remaining follow-ups (non-blocking):** B4 controlled-rollout evidence (perf
+fixture runs recording the §4 table), B5 removal of the callback consumer
+after the rollback window.
