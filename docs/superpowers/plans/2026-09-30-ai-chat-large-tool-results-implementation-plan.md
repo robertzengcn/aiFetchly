@@ -149,7 +149,7 @@ the main process through a native save dialog and never returns bytes to the ren
 | --- | --- |
 | Preparation boundaries | `test/vitest/main/service/ToolResultPreparationService.test.ts` (below/at/above limits, empty output, long error, control-field survival) |
 | Serialization fidelity | `test/vitest/main/service/ToolResultStorageService.test.ts` (nested JSON, Unicode/CJK/emoji, cycles, BigInt, depth; reconstructed content + hash match) |
-| Quota / epoch / lifecycle | `test/vitest/main/modules/ToolResultModule.quotaEpoch.test.ts` |
+| Quota / epoch / lifecycle | merged into `test/vitest/main/service/ToolResultPreparationService.test.ts` |
 | Read / search / cursors | `test/vitest/main/service/ToolResultRetrievalService.test.ts` (EOF facts, minified one-line JSON, cross-boundary matches, tampered cursor, scope isolation) |
 | Aggregate budget | `test/vitest/main/service/ToolResultBudgetService.test.ts` (twenty medium results, 8k/32k/128k contexts) |
 | Config validation | `test/vitest/main/config/toolResultConfig.test.ts` |
@@ -299,7 +299,20 @@ Recorded because each was a real defect that code inspection had missed:
 8. The result card claimed "the tool itself stopped early" when no descriptor
    existed at all — inventing a fact about the producer.
 
+### Test-suite pressure
+
+`SqliteDb` keeps a process-wide singleton, so a test file that points it at a
+new path re-runs `synchronize` for the whole entity set. Two consequences:
+
+- No new test file resets that singleton from the outside. Doing so tears the
+  shared DataSource out from under sibling files running in parallel workers.
+- All DB-backed cases live in ONE file sharing ONE database directory, with a
+  unique conversation id per test. A directory per test multiplied parallel
+  schema builds and surfaced as `database is locked` failures in unrelated
+  email suites.
+
 ### Known unrelated baseline failure
 
 `test/vitest/main/service/HookDispatcher.skillRef.test.ts` fails on the base
-branch `test` as well, before any of this work. It is not caused by this change.
+branch `test` as well (verified by running the full suite there before this
+change), so it is not caused by this work.
