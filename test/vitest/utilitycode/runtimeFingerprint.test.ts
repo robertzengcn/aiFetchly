@@ -29,6 +29,24 @@ import {
 } from "../../../scripts/should-rebuild-local-ai-runtime.mjs";
 import { LOCAL_AI_RUNTIME_RELEASE } from "@/config/localAiRuntimeRelease";
 
+// The repository yarn.lock and the computed fingerprint must always resolve to
+// the exact versions pinned in package.json. Assert that invariant instead of
+// hardcoding a version string that goes stale on every dependency bump.
+const pkgJson = JSON.parse(
+  readFileSync(path.resolve("package.json"), "utf8")
+) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+const pinOf = (name: string): string => {
+  const pinned = pkgJson.dependencies?.[name] ?? pkgJson.devDependencies?.[name];
+  if (pinned === undefined) {
+    throw new Error(`Expected an exact pin for "${name}" in package.json`);
+  }
+  return pinned;
+};
+
 const YARN_V1_FIXTURE = `# yarn lockfile v1
 
 electron@43.4.1:
@@ -61,8 +79,10 @@ describe("resolveYarnLockVersion", () => {
 
   it("resolves runtime packages from the repository yarn.lock", () => {
     const lockText = readFileSync(path.resolve("yarn.lock"), "utf8");
-    expect(resolveYarnLockVersion(lockText, "electron")).toBe("43.4.1");
-    expect(resolveYarnLockVersion(lockText, "sherpa-onnx-node")).toBe("1.13.4");
+    expect(resolveYarnLockVersion(lockText, "electron")).toBe(pinOf("electron"));
+    expect(resolveYarnLockVersion(lockText, "sherpa-onnx-node")).toBe(
+      pinOf("sherpa-onnx-node")
+    );
     expect(resolveYarnLockVersion(lockText, "onnxruntime-node")).toBe("1.14.0");
   });
 });
@@ -205,12 +225,14 @@ describe("computeRuntimeFingerprint", () => {
   it("produces a fingerprint from the real repository lockfile and sources", () => {
     const fingerprint = computeRuntimeFingerprint(process.cwd());
     expect(fingerprint.schemaVersion).toBe(1);
-    expect(fingerprint.electron).toBe("43.4.1");
+    expect(fingerprint.electron).toBe(pinOf("electron"));
     expect(fingerprint.runtimeVersion).toBe(
       LOCAL_AI_RUNTIME_RELEASE.runtimeVersion
     );
     expect(fingerprint.releaseTag).toBe(LOCAL_AI_RUNTIME_RELEASE.releaseTag);
-    expect(fingerprint.packages["sherpa-onnx-node"]).toBe("1.13.4");
+    expect(fingerprint.packages["sherpa-onnx-node"]).toBe(
+      pinOf("sherpa-onnx-node")
+    );
     expect(fingerprint.sourcesSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(FINGERPRINT_SOURCE_PATHS.length).toBeGreaterThan(5);
   });
