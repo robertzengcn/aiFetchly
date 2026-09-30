@@ -727,9 +727,15 @@ describe("AiMessageTaskAiTools", () => {
         AiMessageTaskModule.prototype,
         "updateTask"
       );
+      // shell_execute is permanently blocked for unattended scheduled tasks
+      // (SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS), so it is genuinely non-schedulable
+      // regardless of tier changes. (Previously this test used
+      // scrape_urls_from_search_engine, but that tool was promoted into
+      // SCHEDULED_LOOP_AUTOMATION_TOOLS — see the positive regression test
+      // below — so it is no longer a valid INVALID_TOOL_LIST fixture.)
       const result = await updateAiMessageTaskForAi({
         task_id: 2,
-        allowed_tools: ["scrape_urls_from_search_engine"],
+        allowed_tools: ["shell_execute"],
         auto_approve_tools: true,
       });
       expect(result.success).to.be.false;
@@ -737,9 +743,39 @@ describe("AiMessageTaskAiTools", () => {
         expect(result.code).to.equal(
           AiMessageTaskToolErrorCode.INVALID_TOOL_LIST
         );
-        expect(result.error).to.contain("scrape_urls_from_search_engine");
+        expect(result.error).to.contain("shell_execute");
       }
       expect(updateStub.called).to.be.false;
+    });
+
+    it("should accept outreach tools promoted into the automation tier (regression for scheduled-loop tool disappearance)", async () => {
+      // Commit 6e158434 promoted scrape_urls_from_search_engine /
+      // read_url_content / extract_contact_info into
+      // SCHEDULED_LOOP_AUTOMATION_TOOLS so scheduled outreach loops can
+      // actually use them under non-full_access approval modes. This locks
+      // in that update-path allowed_tools validation ACCEPTS these tools.
+      const existing = mockTask({
+        id: 2,
+        auto_approve_tools: true,
+        allowed_tools_json: "[]",
+      });
+      stubTaskReads(existing, existing);
+      const updateStub = sinon
+        .stub(AiMessageTaskModule.prototype, "updateTask")
+        .resolves();
+
+      const result = await updateAiMessageTaskForAi({
+        task_id: 2,
+        allowed_tools: [
+          "scrape_urls_from_search_engine",
+          "read_url_content",
+          "extract_contact_info",
+        ],
+        auto_approve_tools: true,
+      });
+
+      expect(result.success).to.be.true;
+      expect(updateStub.called).to.be.true;
     });
 
     it("should warn when allowed tools are saved without auto approval", async () => {
