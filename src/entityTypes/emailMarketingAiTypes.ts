@@ -50,6 +50,8 @@ export const getEmailSearchTaskEmailsInputSchema = z.object({
 export const getEmailServiceConfigInputSchema = z
   .strictObject({
     service_id: emailMarketingIdSchema.optional(),
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
     tag: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64).optional(),
   })
   .refine(

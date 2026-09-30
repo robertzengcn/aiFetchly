@@ -123,7 +123,7 @@ export class EmailServiceModel extends BaseDb {
     return entities;
   }
 
-<  async countEmailServices(tagId?: number, untagged?: boolean, search?: string): Promise<number> {
+  async countEmailServices(tagId?: number, untagged?: boolean, search?: string): Promise<number> {
     const queryBuilder = this.repository.createQueryBuilder("service");
     if (search) {
       queryBuilder.andWhere("(service.name LIKE :search OR service.from LIKE :search)", { search: `%${search}%` });

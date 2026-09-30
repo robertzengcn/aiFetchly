@@ -139,7 +139,7 @@ export class EmailServiceModule
     }
   }
 
-<  async countEmailServices(
+  async countEmailServices(
     tagId?: number,
     untagged?: boolean,
     search?: string

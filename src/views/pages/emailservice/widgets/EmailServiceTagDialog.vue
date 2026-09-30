@@ -145,6 +145,8 @@ async function saveTag(): Promise<void> {
     validationMessage.value = t("emailservice.tag_too_long") || "Tag names must be at most 64 characters.";
     return;
   }
+  // Intentional control-character guard for tag names (security validation).
+  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(draftName.value)) {
     validationMessage.value = t("emailservice.tag_invalid_characters") || "Control characters are not allowed.";
     return;

@@ -111,6 +111,8 @@ export const emailServiceTagListInputSchema = lazySchema(() =>
 
 export const emailServiceTagCreateInputSchema = lazySchema(() =>
   z.strictObject({
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
     name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
   })
 );
@@ -118,6 +120,8 @@ export const emailServiceTagCreateInputSchema = lazySchema(() =>
 export const emailServiceTagUpdateInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.number().int().positive(),
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
     name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
   })
 );

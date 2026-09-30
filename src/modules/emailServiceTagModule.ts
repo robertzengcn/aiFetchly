@@ -9,6 +9,8 @@ export function normalizeEmailServiceTag(value: string): string {
 }
 
 export function validateEmailServiceTagName(value: string): string {
+  // Intentional control-character guard for tag names (security validation).
+  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) {
     throw new Error("EMAIL_SERVICE_TAG_INVALID_CHARACTERS");
   }
