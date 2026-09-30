@@ -68,6 +68,12 @@ import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import {
+  EnvAIChatStreamImplementationConfig,
+  type AIChatStreamImplementationConfigProvider,
+  type AIChatStreamImplementationMode,
+} from "@/service/aiChat/AIChatStreamImplementationConfig";
+import { consumeGenerator } from "@/service/aiChat/consumeGenerator";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -397,6 +403,12 @@ export interface AIChatQueryEngineDeps {
     conversationId: string,
     outcome: "completed" | "cancelled" | "failed"
   ) => void;
+  /**
+   * Stage B §16 (FR-018): delivery-mode provider. Default reads
+   * AI_CHAT_STREAM_IMPLEMENTATION once (invalid/absent → callback). The mode
+   * is captured at acceptance; every segment and resume of that run uses it.
+   */
+  streamImplementation?: AIChatStreamImplementationConfigProvider;
 }
 
 /**
@@ -461,6 +473,8 @@ export class AIChatQueryEngine {
    * the original sink for legacy (non-owner) resume callers.
    */
   private pendingSinks = new Map<string, AIChatQueryEventSink>();
+  /** Stage B §16: run-context delivery-mode pins (FR-018/AC-14). */
+  private runStreamModes = new Map<string, AIChatStreamImplementationMode>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly modelCatalog: AIChatModelCatalogService;
@@ -476,6 +490,7 @@ export class AIChatQueryEngine {
   /** Persists steering instructions consumed by active turns' mailboxes. */
   private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
   private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
+  private readonly streamImplementation: AIChatStreamImplementationConfigProvider;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Array<{
@@ -503,6 +518,8 @@ export class AIChatQueryEngine {
     this.toolFilter = deps?.toolFilter;
     this.steeringPromoter = deps?.steeringPromoter;
     this.onTurnTerminalCb = deps?.onTurnTerminal;
+    this.streamImplementation =
+      deps?.streamImplementation ?? new EnvAIChatStreamImplementationConfig();
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -1718,7 +1735,12 @@ export class AIChatQueryEngine {
     };
 
     try {
-      const result = await this.loop.run(loopInput);
+      const streamMode = this.captureStreamMode(conversationId);
+      const result = await this.runLoopSegment(
+        this.loop,
+        loopInput,
+        streamMode
+      );
       await this.handleLoopResult(result, module, streamEventSink, {
         ownerNotifiesTerminal: ownerNotifiesTerminal === true,
       });
@@ -1758,6 +1780,51 @@ export class AIChatQueryEngine {
         this.activeTurns.delete(conversationId);
       }
     }
+  }
+
+  /**
+   * Stage B §6/§8 (FR-001/018): generator-mode consumption. Drains
+   * iterate() through the result-preserving consumer; required writes
+   * (tool_call / tool_result) are AWAITED before the generator advances, so
+   * the tool never starts before its call row is durable and a save failure
+   * (AIChatRequiredPersistenceError) fails the segment instead of the tool
+   * running. Consumer failure aborts the producer (turn controller) first.
+   * The forced-close value is never routed as success.
+   */
+  private async runLoopSegment(
+    loop: AIChatQueryLoop,
+    loopInput: AIChatQueryLoopInput,
+    mode: AIChatStreamImplementationMode
+  ): Promise<AIChatQueryLoopResult> {
+    if (mode === "callback") {
+      return await loop.run(loopInput);
+    }
+    const { eventSink: _sink, ...generatorInput } = loopInput;
+    void _sink;
+    return await consumeGenerator(
+      loop.iterate(generatorInput),
+      async (event) => {
+        loopInput.eventSink.emit(event);
+        if (event.type === "tool_call" || event.type === "tool_result") {
+          // §8 table: forward, then await the required write before the
+          // generator advances (persist-before-execute / before dependent
+          // model work). flush() rejects on save failure.
+          await loopInput.eventSink.flush?.();
+        }
+      },
+      (reason: unknown) => {
+        // Synchronous, non-throwing: abort the producer's underlying work.
+        try {
+          loopInput.abortController.abort();
+        } catch {
+          // never masks the primary error
+        }
+        void reason;
+      },
+      (cleanupError: unknown) => {
+        log.error("[ai-chat-v2] generator cleanup failed:", cleanupError);
+      }
+    );
   }
 
   private dispatchStop(
@@ -2147,7 +2214,11 @@ export class AIChatQueryEngine {
 
       // Stage A §3.5: the continuation is AWAITED and its outcome returned to
       // the owner — no unobserved fire-and-forget promise remains.
-      const result = await this.loop.run(loopInput);
+      const result = await this.runLoopSegment(
+        this.loop,
+        loopInput,
+        this.pinnedStreamMode(conversationId)
+      );
       await this.handleLoopResult(result, module, eventSink, {
         ownerNotifiesTerminal: matchedByToolId.ownerNotifiesTerminal === true,
       });
@@ -2300,7 +2371,11 @@ export class AIChatQueryEngine {
     const eventSink = this.createPersistingEventSink(module, baseSink);
 
     try {
-      const result = await this.loop.run({ ...loopInput, eventSink });
+      const result = await this.runLoopSegment(
+        this.loop,
+        { ...loopInput, eventSink },
+        this.pinnedStreamMode(conversationId)
+      );
       await this.handleLoopResult(result, module, eventSink, {
         ownerNotifiesTerminal: pending.ownerNotifiesTerminal === true,
       });
@@ -2579,6 +2654,7 @@ export class AIChatQueryEngine {
           );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        this.forgetStreamMode(conversationId);
         // Terminal: drop any staged confirmed reference set the turn did not
         // consume so it can never feed a later unrelated batch call.
         this.clearStagedConfirmedBatchRefs(conversationId);
@@ -2792,6 +2868,7 @@ export class AIChatQueryEngine {
     this.pendingPermissions.delete(conversationId);
     this.pendingPlanQuestions.delete(conversationId);
     this.pendingSinks.delete(conversationId);
+    this.runStreamModes.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -2943,6 +3020,30 @@ export class AIChatQueryEngine {
       );
       return input.images;
     }
+  }
+
+  /**
+   * Stage B §16 (FR-018): capture the delivery mode in run context at
+   * acceptance. A later provider change never starts a second implementation
+   * for the same run — resumed segments reuse the captured mode (AC-14).
+   */
+  private captureStreamMode(
+    conversationId: string
+  ): AIChatStreamImplementationMode {
+    const mode = this.streamImplementation.mode;
+    this.runStreamModes.set(conversationId, mode);
+    return mode;
+  }
+
+  /** The mode captured for this conversation's live/paused run. */
+  private pinnedStreamMode(
+    conversationId: string
+  ): AIChatStreamImplementationMode {
+    return this.runStreamModes.get(conversationId) ?? "callback";
+  }
+
+  private forgetStreamMode(conversationId: string): void {
+    this.runStreamModes.delete(conversationId);
   }
 
   private rememberPendingSink(
