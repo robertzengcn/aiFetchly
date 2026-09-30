@@ -101,8 +101,20 @@ export class AIToolOutputEntity extends AuditableEntity {
     @Column("varchar", { length: 500, nullable: true })
     storageKey?: string;
 
-    /** Source row identity for the legacy_message backend. */
+    /**
+     * The generated directory segment on disk (`sha256(outputId)` prefix).
+     *
+     * Stored so the recovery sweep can map a directory back to its registry
+     * row. Without it the sweep only has the hashed directory NAME, which is
+     * not the output id, and would conclude every committed artifact is an
+     * orphan and delete it.
+     */
     @Order(17)
+    @Column("varchar", { length: 100, nullable: true })
+    storageDirName?: string;
+
+    /** Source row identity for the legacy_message backend. */
+    @Order(18)
     @Column("varchar", { length: 100, nullable: true })
     sourceRowKey?: string;
 

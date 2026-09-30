@@ -120,7 +120,10 @@ export class FileSerializerSink implements SerializerSink {
       return false;
     }
     this.total += chunk.byteLength;
+    // A rejection here must not become an unhandled rejection when the walk
+    // aborts before the next flush; drain() rethrows it for the caller.
     this.pending = this.pending.then(() => this.writeChunk(chunk));
+    this.pending.catch(() => undefined);
     return true;
   }
 

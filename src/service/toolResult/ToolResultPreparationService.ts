@@ -2,7 +2,12 @@ import "reflect-metadata";
 import {
   TOOL_RESULT_CONFIG,
   TOOL_RESULT_POLICY_VERSION,
+  type ToolResultConfig,
 } from "@/config/toolResultConfig";
+import {
+  MemorySerializerSink,
+  serializeValue,
+} from "@/service/toolResult/ToolResultSerializer";
 import { toolResultReceiptSchema } from "@/schemas/toolResult";
 import type {
   PreparedToolResult,
@@ -141,6 +146,17 @@ export class ToolResultPreparationService {
 
     // Small results keep their existing wire shape (AC-01): no needless
     // artifact, no receipt, no behavior change.
+    //
+    // The size gate must be BOUNDED. Stringifying the whole envelope to measure
+    // it would materialize a 200 MB result as a 200 MB string purely to throw
+    // it away - the exact behaviour the serializer exists to avoid. So the
+    // output BODY is measured first through a capped sink that stops at the
+    // inline ceiling, and the envelope is only built once the body is known to
+    // be small.
+    if (!(await isInlineEligible(outcome, config))) {
+      return await this.externalize(outcome, deps, operationStatus, control);
+    }
+
     const serialized = trySerializeInline(outcome);
     if (
       serialized !== undefined &&
@@ -159,7 +175,22 @@ export class ToolResultPreparationService {
       };
     }
 
-    // Oversized: preserve, then publish a receipt.
+    // The body passed the bounded probe but the assembled envelope did not
+    // fit (a large `summary` or control payload can do that), so externalize
+    // rather than emit something over the inline ceiling.
+    return await this.externalize(outcome, deps, operationStatus, control);
+  }
+
+  /**
+   * Externalize an oversized result: claim a slot, preserve the body, and
+   * publish a bounded receipt.
+   */
+  private async externalize(
+    outcome: ToolOutcome,
+    deps: PreparationDependencies,
+    operationStatus: ToolOperationStatus,
+    control: Record<string, unknown>
+  ): Promise<PreparedToolResult> {
     // The Module mints the artifact id as part of claiming the writing slot;
     // every later step must use THAT id, not a locally generated one, or the
     // commit would target a row that does not exist.
@@ -276,10 +307,15 @@ export class ToolResultPreparationService {
       // Serialization/disk failure. The tool still succeeded; record the
       // bounded code, release quota, and let the caller publish a degraded
       // receipt. Nothing here re-executes anything.
+      //
+      // The reservation MUST be released here: it is charged against the
+      // conversation quota for as long as it stays 'held', so leaking it on a
+      // failure path would permanently consume quota.
       const code =
         (error as { code?: ToolResultErrorCode }).code ??
         "OUTPUT_WRITE_FAILED";
       await deps.module.markOutputFailed(outputId, code);
+      await settleQuota(deps, claim.reservationId, 0);
       return null;
     }
 
@@ -296,10 +332,13 @@ export class ToolResultPreparationService {
       receiptJson: "{}",
     });
     if (!committed) {
-      // Epoch rotated or the lease expired while we were writing.
+      // Epoch rotated or the lease expired while we were writing. Release the
+      // reservation for the same reason as above: nothing was committed, so the
+      // held bytes must not stay charged.
+      await settleQuota(deps, claim.reservationId, 0);
       return null;
     }
-    await deps.module.settleReservation(claim.reservationId, stored.capturedBytes);
+    await settleQuota(deps, claim.reservationId, stored.capturedBytes);
     return {
       outputId,
       revision: claim.revision,
@@ -481,6 +520,55 @@ export class ToolResultPreparationService {
       ...(receipt.storageErrorCode ? { storage_error: receipt.storageErrorCode } : {}),
     };
     return JSON.stringify(payload);
+  }
+}
+
+
+/**
+ * Decide whether a result is small enough to stay inline, WITHOUT ever
+ * materializing the whole envelope.
+ *
+ * The output body is walked through a sink capped at the inline byte ceiling.
+ * Once the cap is exceeded the walk stops, so the cost of this probe is bounded
+ * by the ceiling rather than by the size of the result. A body that cannot be
+ * represented as JSON is simply not inline-eligible; the external path reports
+ * the precise serialization failure.
+ */
+async function isInlineEligible(
+  outcome: ToolOutcome,
+  config: ToolResultConfig
+): Promise<boolean> {
+  if (outcome.output === undefined) return true;
+  if (typeof outcome.output === "string") {
+    return utf8ByteLength(outcome.output) <= config.inlineMaxBytes;
+  }
+  const sink = new MemorySerializerSink(config.inlineMaxBytes);
+  try {
+    await serializeValue(outcome.output, sink, {
+      format: outcome.outputFormat ?? "json",
+    });
+  } catch {
+    return false;
+  }
+  if (sink.saturated()) return false;
+  return countTextTokens(sink.toBuffer().toString("utf8")) <= config.inlineMaxTokens;
+}
+
+/**
+ * Settle a reservation without ever throwing.
+ *
+ * Quota bookkeeping is secondary to the tool outcome: a failure to release must
+ * not turn a successful tool into a failed one, so it is logged and swallowed.
+ */
+async function settleQuota(
+  deps: PreparationDependencies,
+  reservationId: string,
+  usedBytes: number
+): Promise<void> {
+  try {
+    await deps.module.settleReservation(reservationId, usedBytes);
+  } catch {
+    // Left for the recovery sweep's lease expiry to reclaim.
   }
 }
 

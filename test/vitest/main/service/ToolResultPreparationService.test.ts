@@ -1,8 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultRecoveryService } from "@/service/toolResult/ToolResultRecoveryService";
+import { artifactDirectory } from "@/service/toolResult/ToolResultPaths";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultPreparationService } from "@/service/toolResult/ToolResultPreparationService";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
@@ -23,12 +25,35 @@ import type { TrustedToolOutputContext } from "@/entityTypes/toolResultTypes";
  *   - a producer's own `success` key cannot overwrite the trusted status.
  */
 
+/**
+ * Make `BaseModule` resolve to the SAME database directory the Model uses.
+ *
+ * `SqliteDb.getInstance` tears down and re-runs `synchronize` for the entire
+ * entity set whenever the requested path differs from the current one. Without
+ * this, `new ToolResultModule(dir)` initializes the Token/fallback path first
+ * and then the Model's path, costing a second full schema build per test file —
+ * and those parallel schema builds are what surface as "database is locked" in
+ * unrelated suites. Pointing both at one directory makes it a single build.
+ */
+const DB_DIR_HOLDER = vi.hoisted(() => ({ path: "" }));
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue(): string {
+      return DB_DIR_HOLDER.path;
+    }
+    setValue(): void {
+      /* not used by these tests */
+    }
+  },
+}));
+
 let tmpDir: string;
 let root: string;
 let toolModule: ToolResultModule;
 let storage: ToolResultStorageService;
 let preparation: ToolResultPreparationService;
 let retrieval: ToolResultRetrievalService;
+let recovery: ToolResultRecoveryService;
 let epoch: string;
 let conversationId: string;
 let conversationCounter = 0;
@@ -57,6 +82,7 @@ const SUITE_DB_DIR = path.join(
   os.tmpdir(),
   `aifetchly-toolregistry-${Date.now()}-${Math.random().toString(36).slice(2)}`
 );
+DB_DIR_HOLDER.path = SUITE_DB_DIR;
 
 beforeEach(async () => {
   tmpDir = path.join(
@@ -70,6 +96,7 @@ beforeEach(async () => {
   storage = new ToolResultStorageService({ root });
   preparation = new ToolResultPreparationService();
   retrieval = new ToolResultRetrievalService(storage);
+  recovery = new ToolResultRecoveryService(toolModule, storage);
   // A fresh conversation per test keeps scope state from bleeding between cases.
   conversationCounter += 1;
   conversationId = `prep-conv-${conversationCounter}`;
@@ -772,13 +799,20 @@ describe("ToolResultModule — access authorization", () => {
     expect(beforeGrant.ok).toBe(false);
 
     const parentScope = await mod.ensureScope("prof-1", "parent-conv");
-    await mod.grantAccess({
+    void parentScope;
+    const granted = await mod.grantAccess({
       outputId: claim.outputId,
+      // The grantor is the OWNING conversation; grantAccess re-authorizes it
+      // rather than trusting the caller.
+      ownerProfileId: "prof-1",
+      ownerConversationId: "child-conv",
+      // Ownership is conversation AND agent; the owner agent must be presented.
+      ownerAgentId: "agent-child",
       granteeConversationId: "parent-conv",
-      granteeEpoch: parentScope.outputEpoch,
       granteeAgentId: "agent-parent",
       grantReason: "child exported artifact",
     });
+    expect(granted.granted).toBe(true);
 
     const afterGrant = await mod.authorizeAccess({
       outputId: claim.outputId,
@@ -787,6 +821,28 @@ describe("ToolResultModule — access authorization", () => {
       agentId: "agent-parent",
     });
     expect(afterGrant.ok).toBe(true);
+  });
+
+  it("refuses to grant access to an artifact the grantor cannot read", async () => {
+    const mod = makeModule();
+    const scopeA = await mod.ensureScope("prof-1", "grant-a");
+    const claim = await mod.claimOutput({
+      ...BASE_CLAIM,
+      conversationId: "grant-a",
+      outputEpoch: scopeA.outputEpoch,
+    });
+    expect(claim.kind).toBe("claimed");
+
+    // A conversation with no rights to the artifact must not be able to mint
+    // itself access to it.
+    const result = await mod.grantAccess({
+      outputId: claim.kind === "claimed" ? claim.outputId : "",
+      ownerProfileId: "prof-1",
+      ownerConversationId: "unrelated-conv",
+      granteeConversationId: "grant-a",
+      grantReason: "should not be allowed",
+    });
+    expect(result.granted).toBe(false);
   });
 });
 
@@ -862,5 +918,138 @@ describe("ToolResultModule — retrieval-work allowance", () => {
     await mod.settleRetrievalCall({ ...key, tokens: 1000 });
     const remaining = await mod.remainingRetrievalTokens(key);
     expect(remaining).toBe(32_000 - 1000);
+  });
+});
+
+/**
+ * Recovery-sweep regression tests.
+ *
+ * The sweep DELETES directories it believes are unregistered, so the test that
+ * matters most proves it does not delete a committed artifact. The directory
+ * on disk is named `sha256(outputId)`, not the output id, so a sweep that looks
+ * the directory name up as an output id matches nothing and would delete every
+ * saved result in the profile.
+ */
+/** Backdate a path so it is past the 24h orphan grace period. */
+function backdate(target: string): void {
+  const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  fs.utimesSync(target, old, old);
+}
+
+describe("ToolResultRecoveryService — orphan sweep", () => {
+  let recConv = 0;
+  beforeEach(async () => {
+    recConv = 0;
+    recovery = new ToolResultRecoveryService(toolModule, storage);
+  });
+
+  it("NEVER deletes a committed, registered artifact (data loss regression)", async () => {
+    const scope = await toolModule.ensureScope("prof-1", `rec-${++recConv}`);
+    const claim = await toolModule.claimOutput({
+      profileId: "prof-1",
+      conversationId: `rec-${recConv}`,
+      outputEpoch: scope.outputEpoch,
+      executionId: "exec-1",
+      toolCallId: "call-1",
+      toolName: "scrape_businesses",
+      streamKey: "main",
+      format: "json",
+      mediaType: "application/json",
+      sourceCompleteness: "complete",
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") return;
+
+    const stored = await storage.captureJson({
+      outputId: claim.outputId,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      value: { rows: Array.from({ length: 500 }, (_, i) => ({ i })) },
+      sourceCompleteness: "complete",
+    });
+    await toolModule.commitOutput({
+      outputId: claim.outputId,
+      leaseFence: claim.leaseFence,
+      storageKey: stored.storageKey,
+      capturedBytes: stored.capturedBytes,
+      sha256: stored.sha256,
+      preservation: "complete",
+      sourceCompleteness: "complete",
+      receiptJson: "{}",
+    });
+
+    // Older than the grace period, so ONLY the registration check can save it.
+    const dir = artifactDirectory({
+      root,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      outputId: claim.outputId,
+    });
+    backdate(dir);
+
+    const report = await recovery.run();
+    expect(report.orphansRemoved).toBe(0);
+    // The payload is still on disk and still readable.
+    expect(fs.existsSync(stored.absolutePath)).toBe(true);
+    const window = await storage.readWindow({
+      storageKey: stored.storageKey,
+      startByte: 0,
+      maxBytes: 4096,
+    });
+    expect(window.buffer.byteLength).toBeGreaterThan(0);
+  });
+
+  it("leaves a RECENT unregistered directory alone (a capture may still own it)", async () => {
+    const scope = await toolModule.ensureScope("prof-1", `rec-${++recConv}`);
+    const orphanDir = artifactDirectory({
+      root,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      outputId: "out_ffffffffffffffffffffffffffffffff",
+    });
+    fs.mkdirSync(orphanDir, { recursive: true });
+    fs.writeFileSync(path.join(orphanDir, "payload.json"), "{}");
+
+    const report = await recovery.run();
+    expect(report.orphansRemoved).toBe(0);
+    expect(fs.existsSync(orphanDir)).toBe(true);
+  });
+
+  it("reclaims an old, unregistered directory past the grace period", async () => {
+    const scope = await toolModule.ensureScope("prof-1", `rec-${++recConv}`);
+    const orphanDir = artifactDirectory({
+      root,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      outputId: "out_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    });
+    fs.mkdirSync(orphanDir, { recursive: true });
+    fs.writeFileSync(path.join(orphanDir, "payload.json"), "{}");
+    backdate(orphanDir);
+
+    const report = await recovery.run();
+    expect(report.orphansRemoved).toBe(1);
+    expect(fs.existsSync(orphanDir)).toBe(false);
+  });
+
+  it("does not infer operation success from a payload file", async () => {
+    // A payload with no registry row is an orphan, never a recovered success.
+    const scope = await toolModule.ensureScope("prof-1", `rec-${++recConv}`);
+    const orphanDir = artifactDirectory({
+      root,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      outputId: "out_dddddddddddddddddddddddddddddddd",
+    });
+    fs.mkdirSync(orphanDir, { recursive: true });
+    fs.writeFileSync(path.join(orphanDir, "payload.json"), '{"success":true}');
+    backdate(orphanDir);
+
+    await recovery.run();
+    // No row was created, so nothing became readable.
+    const registered = await toolModule.findRegisteredOutputDir(
+      path.basename(orphanDir)
+    );
+    expect(registered).toBe(false);
   });
 });

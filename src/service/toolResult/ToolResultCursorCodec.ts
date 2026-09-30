@@ -31,7 +31,9 @@ const cursorPayloadSchema = z.object({
   outputId: z.string().max(64),
   revision: z.number().int().min(1).max(1000),
   mode: z.enum(["read", "search"]),
-  position: z.number().int().min(0),
+  // Bounded: an unbounded offset would let a cursor past EOF return an empty
+  // page that still claims the whole output was read.
+  position: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   queryDigest: z.string().max(64).optional(),
   lastMatchEnd: z.number().int().min(0).optional(),
   policyVersion: z.string().max(64),

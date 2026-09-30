@@ -260,9 +260,11 @@ export class ToolResultStorageService {
       if (error instanceof ToolResultSerializationError) {
         throw new ToolResultStorageError(error.code, error.message);
       }
+      // A write failure here is usually a full disk, and reporting it as a
+      // serialization problem would point the user at the wrong cause.
       throw new ToolResultStorageError(
-        "OUTPUT_SERIALIZATION_FAILED",
-        error instanceof Error ? error.message : "unknown serialization failure"
+        isDiskFull(error) ? "OUTPUT_DISK_FULL" : "OUTPUT_WRITE_FAILED",
+        error instanceof Error ? error.message : "capture failed"
       );
     }
     await handle.close();
@@ -294,10 +296,14 @@ export class ToolResultStorageService {
       originalBytes: input.originalBytes,
       sha256: outcome.sha256,
       preservation: outcome.truncated ? "partial" : "complete",
-      recordCount: outcome.recordCount,
+      ...(outcome.truncated ? {} : { recordCount: outcome.recordCount }),
       format,
       mediaType: mediaTypeFor(format),
-      ...(outcome.truncated ? { failureCode: "ARTIFACT_LIMIT_REACHED" as const } : {}),
+      // A capped capture holds only a prefix, so the full source length would
+      // be a false record count next to the "partially saved" banner.
+      ...(outcome.truncated
+        ? { failureCode: "ARTIFACT_LIMIT_REACHED" as const }
+        : {}),
     };
   }
 

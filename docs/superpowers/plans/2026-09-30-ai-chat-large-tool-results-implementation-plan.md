@@ -311,6 +311,40 @@ new path re-runs `synchronize` for the whole entity set. Two consequences:
   schema builds and surfaced as `database is locked` failures in unrelated
   email suites.
 
+### Known test-infrastructure flake (NOT fixed here)
+
+Adding this feature's DB-backed suite makes pre-existing SQLite contention in
+the email reply suites visible. Evidence:
+
+| Run | Result |
+| --- | --- |
+| base `test` branch, full main suite (twice) | 1 failure — `HookDispatcher.skillRef` only |
+| this branch, full main suite **excluding** the new test files | 1 failure — `HookDispatcher.skillRef` only |
+| this branch, full main suite including them | `HookDispatcher.skillRef` + 1–3 **different** email tests, failing `SqliteError: database is locked` |
+
+The failing email test moves between runs, so it is scheduling-dependent.
+
+Root cause: `BaseModule`/`BaseDb` fall back to the shared
+`os.tmpdir()/aifetchly-test` SQLite file, and many pre-existing test files use
+it concurrently across parallel Vitest workers. `busy_timeout = 10000` is set,
+but WAL mode does not honour it for a deferred transaction that upgrades to a
+write lock, which is the case `synchronize` hits. The new suite does not touch
+that shared file (it pins its own directory and its own `Token`), but its
+wall-clock shifts worker scheduling enough to expose the contention.
+
+This is deliberately **not** fixed in this change: the fix belongs in the shared
+`SqliteDb` / test-setup layer, not in a feature branch, and touching connection
+pragmas or the pool configuration would affect every suite. Recommended
+follow-up: give each DB-backed test file its own database directory (the pattern
+this feature's tests use), or move schema synchronization out of per-worker
+startup.
+
+Mitigations already applied here, so the suite adds only ONE extra schema
+build:
+- one database directory for all DB-backed cases, unique conversation per test;
+- `Token` is stubbed so `BaseModule` and the Model resolve the SAME path and
+  `SqliteDb.getInstance` does not tear down and re-`synchronize`.
+
 ### Known unrelated baseline failure
 
 `test/vitest/main/service/HookDispatcher.skillRef.test.ts` fails on the base

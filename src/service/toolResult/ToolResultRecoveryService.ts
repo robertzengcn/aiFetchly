@@ -157,9 +157,12 @@ export class ToolResultRecoveryService {
       for (const epochDir of safeReadDir(profileDir)) {
         for (const outputDir of safeReadDir(epochDir)) {
           if (removed >= maxRemovals) return { removed, skipped };
-          const outputId = path.basename(outputDir);
+          // The directory is named `sha256(outputId)`, NOT the output id.
+          // Looking the name up as an output id matches nothing, which would
+          // make every COMMITTED artifact look like an orphan and delete it.
+          const dirName = path.basename(outputDir);
           const registered = await this.module
-            .findRegisteredOutput(outputId)
+            .findRegisteredOutputDir(dirName)
             .catch(() => null);
           if (registered) continue;
           let mtimeMs: number;

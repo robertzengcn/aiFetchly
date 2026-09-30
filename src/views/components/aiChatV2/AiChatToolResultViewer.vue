@@ -376,10 +376,20 @@ async function loadPage(cursor?: string): Promise<void> {
   }
 }
 
-async function loadDescriptor(): Promise<void> {
+/**
+ * Load the public descriptor.
+ *
+ * Guarded by the same request token as the page load: without it, a slow
+ * descriptor response for a previous output can land after the user has moved
+ * on and overwrite the header of the artifact now being shown.
+ */
+async function loadDescriptor(token: number): Promise<void> {
   try {
-    descriptor.value = await getToolOutput(props.conversationId, props.outputId);
+    const result = await getToolOutput(props.conversationId, props.outputId);
+    if (token !== requestToken) return;
+    descriptor.value = result;
   } catch {
+    if (token !== requestToken) return;
     descriptor.value = null;
   }
 }
@@ -475,8 +485,10 @@ watch(
   () => [props.conversationId, props.outputId] as const,
   async () => {
     reset();
+    const token = requestToken;
     loading.value = true;
-    await loadDescriptor();
+    await loadDescriptor(token);
+    if (token !== requestToken) return;
     await loadPage();
   },
   { immediate: true }

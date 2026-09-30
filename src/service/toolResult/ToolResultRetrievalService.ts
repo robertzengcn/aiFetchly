@@ -12,7 +12,7 @@ import {
   digestSearchQuery,
   encodeToolResultCursor,
 } from "@/service/toolResult/ToolResultCursorCodec";
-import { countTextTokens, utf8ByteLength } from "@/service/ToolResultTextUtil";
+import { utf8ByteLength } from "@/service/ToolResultTextUtil";
 import type { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 
 /**
@@ -140,6 +140,11 @@ export class ToolResultRetrievalService {
       return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
     }
 
+    if (startByte > 0 && startByte >= window.totalBytes) {
+      // The artifact changed or shrank under this cursor. Serving an empty page
+      // marked complete would certify a full read that never happened.
+      return { ok: false, code: "OUTPUT_CHANGED" };
+    }
     const text = decodeUtf8Window(window.buffer, startByte);
     const endByte = startByte + Buffer.byteLength(text, "utf8");
     const complete = endByte >= window.totalBytes;
@@ -186,7 +191,7 @@ export class ToolResultRetrievalService {
       return { ok: false, code: "OUTPUT_FORMAT_UNSUPPORTED" };
     }
     if (input.query.length === 0 || input.query.length > config.searchQueryMaxChars) {
-      return { ok: false, code: "INVALID_OUTPUT_CURSOR" };
+      return { ok: false, code: "INVALID_OUTPUT_CURSOR" as ToolResultErrorCode };
     }
 
     const queryDigest = digestSearchQuery(input.query);

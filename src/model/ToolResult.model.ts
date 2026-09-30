@@ -141,6 +141,19 @@ export class ToolResultModel extends BaseDb {
     return await query.getMany();
   }
 
+  /**
+   * Look up an artifact by its generated on-disk directory segment.
+   *
+   * The directory is named `sha256(outputId)`, NOT the output id, so a sweep
+   * that only has the directory name cannot call findOutputById — doing that
+   * matches nothing and makes every committed artifact look like an orphan.
+   */
+  async findOutputByStorageDirName(
+    storageDirName: string
+  ): Promise<AIToolOutputEntity | null> {
+    return await this.outputs.findOne({ where: { storageDirName } });
+  }
+
   /** Committed artifacts for one scope, oldest first. */
   async listOutputsForScope(input: {
     profileId: string;

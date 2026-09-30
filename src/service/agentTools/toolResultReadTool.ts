@@ -15,6 +15,7 @@ import {
 } from "@/schemas/toolResult";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
+import { countTextTokens } from "@/service/ToolResultTextUtil";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { StoredToolOutputRef } from "@/entityTypes/toolResultTypes";
 
@@ -37,6 +38,23 @@ export async function handleToolResultRead(
     return { success: false, result: { error: target.code } };
   }
 
+  // Charge the SHARED per-turn allowance before doing the work. Read and search
+  // draw on the same budget: without this the model could bypass the cap
+  // entirely by paging with read instead of searching, looping
+  // output_id + next_cursor until the artifact is exhausted.
+  const work = await trusted.reserveWork();
+  if (!work.ok) {
+    return {
+      success: false,
+      result: {
+        error: work.code,
+        // Be explicit that review is incomplete rather than letting the model
+        // infer it read everything.
+        analysis_complete: false,
+      },
+    };
+  }
+
   const service: ToolResultRetrievalService = trusted.retrieval;
   const outcome = await service.read({
     target: target.target,
@@ -45,24 +63,26 @@ export async function handleToolResultRead(
   });
 
   if (!outcome.ok) {
+    await trusted.settleWork(0);
     // An exhausted allowance is reported, never silently treated as empty.
     return { success: false, result: { error: outcome.code } };
   }
 
   const page = outcome.page;
-  return {
-    success: true,
-    result: {
-      output_id: page.outputId,
-      text: page.text,
-      start_byte: page.startByte,
-      end_byte: page.endByte,
-      total_bytes: page.totalBytes,
-      complete: page.complete,
-      next_cursor: page.nextCursor,
-      source_completeness: target.target.sourceCompleteness,
-    },
+  const envelope = {
+    output_id: page.outputId,
+    text: page.text,
+    start_byte: page.startByte,
+    end_byte: page.endByte,
+    total_bytes: page.totalBytes,
+    complete: page.complete,
+    next_cursor: page.nextCursor,
+    source_completeness: target.target.sourceCompleteness,
   };
+  // Settle the tokens actually returned, so a caller asking for a smaller page
+  // spends proportionally less of the turn's allowance.
+  await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
+  return { success: true, result: envelope };
 }
 
 export type { StoredToolOutputRef };

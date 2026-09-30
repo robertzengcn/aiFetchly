@@ -8,6 +8,7 @@ import { AIToolOutputReservationEntity } from "@/entity/AIToolOutputReservation.
 import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
 import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
 import { TOOL_RESULT_CONFIG, TOOL_RESULT_POLICY_VERSION } from "@/config/toolResultConfig";
+import { pathSegmentFor } from "@/service/toolResult/ToolResultPaths";
 import type { ToolOutputFormat, ToolResultErrorCode } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -352,8 +353,12 @@ export class ToolResultModule extends BaseModule {
       return { kind: "rejected", code: admission.code, reason: admission.reason };
     }
 
+    const outputId = newOutputId();
     const output = new AIToolOutputEntity();
-    output.outputId = newOutputId();
+    output.outputId = outputId;
+    // Recorded so the recovery sweep can recognise this directory as
+    // registered instead of deleting a committed artifact as an orphan.
+    output.storageDirName = pathSegmentFor(outputId);
     output.profileId = input.profileId;
     output.conversationId = input.conversationId;
     output.outputEpoch = input.outputEpoch;
@@ -519,21 +524,56 @@ export class ToolResultModule extends BaseModule {
     return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
   }
 
-  /** Record a durable delegation grant created by a child agent's export. */
+  /**
+   * Record a durable delegation grant created by a child agent's export.
+   *
+   * The GRANTOR is the owner agent, so this verifies they can actually read the
+   * artifact before creating a grant. Without that check, any caller able to
+   * reach this method could mint themselves access to an arbitrary output id,
+   * and the grant branch in {@link authorizeAccess} trusts the row.
+   *
+   * The grantee's epoch is also re-resolved from live state rather than taken
+   * on faith, so a stale epoch cannot be used to widen access.
+   */
   async grantAccess(input: {
     outputId: string;
+    ownerProfileId: string;
+    ownerConversationId: string;
+    /**
+     * The owning agent. Required for an agent-owned artifact: ownership is
+     * conversation AND agent, so omitting it would make an agent-owned output
+     * un-grantable by its own owner.
+     */
+    ownerAgentId?: string;
     granteeConversationId: string;
-    granteeEpoch: string;
     granteeAgentId?: string;
     grantReason: string;
-  }): Promise<void> {
+  }): Promise<{ granted: boolean; code?: ToolResultErrorCode }> {
+    const decision = await this.authorizeAccess({
+      outputId: input.outputId,
+      profileId: input.ownerProfileId,
+      conversationId: input.ownerConversationId,
+      agentId: input.ownerAgentId,
+    });
+    if (!decision.ok) return { granted: false, code: decision.code };
+
+    const granteeScope = await this.model.findScope(
+      input.ownerProfileId,
+      input.granteeConversationId
+    );
+    if (!granteeScope || granteeScope.invalidated) {
+      return { granted: false, code: "OUTPUT_NOT_AVAILABLE" };
+    }
+    const granteeEpoch = granteeScope.outputEpoch;
+
     const grant = new AIToolOutputGrantEntity();
     grant.outputId = input.outputId;
     grant.granteeConversationId = input.granteeConversationId;
-    grant.granteeEpoch = input.granteeEpoch;
+    grant.granteeEpoch = granteeEpoch;
     grant.granteeAgentId = input.granteeAgentId ?? "";
     grant.grantReason = input.grantReason;
     await this.model.saveGrant(grant);
+    return { granted: true };
   }
 
   // ---------------------------------------------- retrieval-work budget --
@@ -581,7 +621,13 @@ export class ToolResultModule extends BaseModule {
     row: AIToolOutputRetrievalBudgetEntity,
     maxCalls: number
   ): Promise<{ ok: true; row: AIToolOutputRetrievalBudgetEntity } | { ok: false }> {
+    // BOTH ceilings gate admission. Checking only the call count would let a
+    // turn spend up to maxCalls * readMaxTokens tokens - twice the documented
+    // per-turn allowance - and the token cap would never be enforced at all.
     if (row.reservedCalls + row.settledCalls >= maxCalls) return { ok: false };
+    if (row.settledTokens >= TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn) {
+      return { ok: false };
+    }
     const applied = await this.model.reserveRetrievalCalls({
       profileId: row.profileId,
       conversationId: row.conversationId,
@@ -615,7 +661,12 @@ export class ToolResultModule extends BaseModule {
     });
   }
 
-  /** Remaining returned-token allowance for the current turn. */
+  /**
+   * Remaining returned-token allowance for the current turn.
+   *
+   * Enforced inside {@link reserveRetrievalCall}; exposed for callers that need
+   * to size a request up front.
+   */
   async remainingRetrievalTokens(input: {
     profileId: string;
     conversationId: string;
@@ -649,13 +700,15 @@ export class ToolResultModule extends BaseModule {
   }
 
   /**
-   * Look up an artifact row by id only, with NO authorization check.
+   * Look up an artifact row by its generated directory segment, with NO
+   * authorization check.
    *
    * This exists exclusively for the recovery sweep, which must answer "is this
-   * directory registered?" before deciding whether it is orphaned. It returns
-   * only whether a row exists; it is never used to serve content.
+   * directory registered?" before deciding whether it is orphaned. The argument
+   * is the hashed DIRECTORY NAME, not an output id. It returns only whether a
+   * row exists; it is never used to serve content.
    */
-  async findRegisteredOutput(outputId: string): Promise<boolean> {
-    return (await this.model.findOutputById(outputId)) !== null;
+  async findRegisteredOutputDir(dirName: string): Promise<boolean> {
+    return (await this.model.findOutputByStorageDirName(dirName)) !== null;
   }
 }

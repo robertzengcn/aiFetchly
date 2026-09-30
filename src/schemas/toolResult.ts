@@ -113,30 +113,9 @@ export const toolResultSearchInputSchema = z.object({
 
 export type ToolResultSearchInput = z.infer<typeof toolResultSearchInputSchema>;
 
-/** Renderer `AI_TOOL_RESULT_GET` payload. */
-export const toolResultGetInputSchema = z.object({
-  conversationId: z.string().max(100),
-  outputId: toolOutputIdSchema,
-});
-
-/**
- * Renderer read/search payload.
- *
- * `page` is a UI byte budget, distinct from the model's token page budget. The
- * service clamps it to the smaller of the two.
+/*
+ * NOTE: renderer IPC payloads live in `@/schemas/ipc/toolResult` (zod v3, to
+ * match the validated-handler wrapper). They are deliberately NOT duplicated
+ * here: a second copy of the output-id pattern would be free to drift out of
+ * sync with the one the IPC boundary actually enforces.
  */
-export const toolResultReadRequestSchema = z.object({
-  conversationId: z.string().max(100),
-  outputId: toolOutputIdSchema,
-  cursor: z.string().max(2048).optional(),
-  page: z.number().int().min(256).max(32 * 1024).optional(),
-  query: z.string().min(1).max(200).optional(),
-});
-
-export type ToolResultReadRequest = z.infer<typeof toolResultReadRequestSchema>;
-
-/** Renderer `AI_TOOL_RESULT_EXPORT` payload. */
-export const toolResultExportInputSchema = z.object({
-  conversationId: z.string().max(100),
-  outputId: toolOutputIdSchema,
-});
