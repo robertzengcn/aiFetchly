@@ -2666,6 +2666,7 @@ export default {
     clear_conversation: "会話を消去",
     clear_all: "すべて消去",
     clear_chat: "チャットを消去",
+    scroll_to_bottom: "下までスクロール",
     compact_conversation: "会話を圧縮",
     compact_completed: "会話をメモリに圧縮しました。",
     context_usage: "コンテキスト",

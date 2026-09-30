@@ -2718,6 +2718,7 @@ export default {
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
+    scroll_to_bottom: "Nach unten scrollen",
     compact_conversation: "Unterhaltung komprimieren",
     compact_completed: "Unterhaltung wurde in den Speicher komprimiert.",
     context_usage: "Kontext",

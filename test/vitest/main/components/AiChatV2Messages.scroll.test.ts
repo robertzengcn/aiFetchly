@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatV2Messages from "@/views/components/aiChatV2/AiChatV2Messages.vue";
 import { MessageType } from "@/entityTypes/commonType";
@@ -60,6 +60,10 @@ function mountMessages(messages: ChatV2MessageView[]) {
       stubs: {
         AiChatV2Message: { template: "<div class=\"msg\" />" },
         AiChatV2RecoveryStatus: true,
+        // Render v-btn as a real <button> so the @click listener lands on a
+        // clickable element (same pattern as the AiChatV2 mount tests).
+        VBtn: { template: "<button><slot /></button>" },
+        VIcon: true,
       },
     },
     props: {
@@ -122,6 +126,58 @@ describe("AiChatV2Messages auto-scroll on history load", () => {
 
     // Watch-driven scrollToBottom respects pinnedToBottom=false → stays put.
     expect(scroller.scrollTop).toBe(0);
+
+    wrapper.unmount();
+  });
+
+  it("shows the float scroll-down button only when scrolled away from the bottom", async () => {
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      makeMessage(`m-${i}`, `message ${i}`)
+    );
+    const wrapper = mountMessages(messages);
+    await wrapper.vm.$nextTick();
+
+    const scroller = wrapper.find(".v2-messages").element as HTMLElement;
+    stubScrollGeometry(scroller, 1000);
+
+    // At the top — far from the bottom — the button must be visible.
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="scroll-to-bottom"]').exists()).toBe(true);
+
+    // Scrolling back to the bottom hides it again.
+    scroller.scrollTop = 980;
+    scroller.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="scroll-to-bottom"]').exists()).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("clicking the float button scrolls to the bottom and hides the button", async () => {
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      makeMessage(`m-${i}`, `message ${i}`)
+    );
+    const wrapper = mountMessages(messages);
+    await wrapper.vm.$nextTick();
+
+    const scroller = wrapper.find(".v2-messages").element as HTMLElement;
+    stubScrollGeometry(scroller, 1000);
+
+    // User scrolled up; button visible.
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+    const button = wrapper.find('[data-testid="scroll-to-bottom"]');
+    expect(button.exists()).toBe(true);
+
+    await button.trigger("click");
+    await flushPromises();
+
+    // Click jumps to the latest message and hides the button.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(wrapper.find('[data-testid="scroll-to-bottom"]').exists()).toBe(false);
 
     wrapper.unmount();
   });

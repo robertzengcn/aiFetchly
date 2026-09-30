@@ -2712,6 +2712,7 @@ export default {
     clear_conversation: "Clear conversation",
     clear_all: "Clear all",
     clear_chat: "Clear chat",
+    scroll_to_bottom: "Scroll to bottom",
     compact_conversation: "Compact conversation",
     compact_completed: "Conversation compacted into memory.",
     context_usage: "Context",

@@ -2574,6 +2574,7 @@ export default {
     clear_conversation: "清空对话",
     clear_all: "全部清空",
     clear_chat: "清空聊天",
+    scroll_to_bottom: "滚动到底部",
     compact_conversation: "压缩对话",
     compact_completed: "对话已压缩到记忆中。",
     context_usage: "上下文",

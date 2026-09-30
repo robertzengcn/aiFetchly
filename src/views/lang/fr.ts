@@ -2709,6 +2709,7 @@ export default {
     clear_conversation: "Effacer la conversation",
     clear_all: "Tout effacer",
     clear_chat: "Effacer le chat",
+    scroll_to_bottom: "Aller en bas",
     compact_conversation: "Compacter la conversation",
     compact_completed: "Conversation compactée en mémoire.",
     context_usage: "Contexte",

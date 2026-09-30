@@ -59,6 +59,19 @@
       </span>
     </div>
     <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
+    <v-btn
+      v-if="showScrollButton"
+      class="v2-messages__scroll-down"
+      icon
+      size="small"
+      color="primary"
+      data-testid="scroll-to-bottom"
+      :title="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      :aria-label="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      @click="onScrollButtonClick"
+    >
+      <v-icon>mdi-chevron-down</v-icon>
+    </v-btn>
   </div>
 </template>
 
@@ -120,11 +133,15 @@ function onReportRequest(descriptor: ReportableOutputDescriptor): void {
 
 const scroller = ref<HTMLDivElement | null>(null);
 let pinnedToBottom = true;
+// Float button visibility: shown only when the user has scrolled away from
+// the bottom. Kept in sync by onScroll and hidden on click/force-scroll.
+const showScrollButton = ref(false);
 
 const scrollToBottom = async (): Promise<void> => {
   await nextTick();
   if (scroller.value && pinnedToBottom) {
     scroller.value.scrollTop = scroller.value.scrollHeight;
+    showScrollButton.value = false;
   }
 };
 
@@ -133,6 +150,7 @@ const onScroll = (): void => {
   if (!el) return;
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   pinnedToBottom = atBottom;
+  showScrollButton.value = !atBottom;
 };
 
 /**
@@ -144,6 +162,11 @@ const onScroll = (): void => {
 const scrollToBottomForce = async (): Promise<void> => {
   pinnedToBottom = true;
   await scrollToBottom();
+};
+
+/** Float-button click: jump to the latest message and re-pin auto-scroll. */
+const onScrollButtonClick = (): void => {
+  void scrollToBottomForce();
 };
 
 const onGrantPermission = (
@@ -180,6 +203,13 @@ defineExpose({ scrollToBottomForce });
   min-height: 0;
   overflow-y: auto;
   padding: 12px 16px;
+  position: relative;
+}
+.v2-messages__scroll-down {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  z-index: 10;
 }
 .v2-messages__empty {
   height: 100%;
