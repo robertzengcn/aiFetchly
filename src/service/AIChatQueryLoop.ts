@@ -458,7 +458,7 @@ function estimateTokenUsage(
  * Deliberately contains NO bulk output - the receipt already does not, and
  * message metadata must not become a second copy of the payload.
  */
-function prepared_uiMetadata(receipt: {
+export function toolResultReceiptUiMetadata(receipt: {
   outputs: ReadonlyArray<{
     outputId: string;
     capturedBytes: number;
@@ -2834,7 +2834,7 @@ export class AIChatQueryLoop {
                   // the renderer event and the model projection, so nothing
                   // downstream can act on a result that was never saved.
                   // The bulk output is NOT written into message metadata.
-                  const uiMetadata = prepared_uiMetadata(receipt);
+                  const uiMetadata = toolResultReceiptUiMetadata(receipt);
                   if (this.deps.saveToolResultReceipt) {
                     await this.deps.saveToolResultReceipt({
                       conversationId: input.conversationId,
