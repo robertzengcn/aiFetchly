@@ -251,8 +251,6 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     FakeAPI.fetch(fetchitem).then(
         ({ data, total }) => {
             if (request !== latestRequest) return;
-            console.log(data)
-            // console.log(total)
             //loop data
             if (!data) {
                 data = []
@@ -264,6 +262,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
             if (request !== latestRequest) return;
             loading.value = false;
             console.error(error);
+            loading.value = false
         })
 }
 

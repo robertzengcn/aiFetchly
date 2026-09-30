@@ -85,8 +85,12 @@
           :disabled="toolsLoading"
           @update:model-value="emitChange"
         >
-          <template v-slot:chip="{ item }">
-            <v-chip :color="getRiskColor(item.raw.riskLevel)" size="small">
+          <template #chip="{ props: chipProps, item }">
+            <v-chip
+              v-bind="chipProps"
+              :color="getRiskColor(item.raw.riskLevel)"
+              size="small"
+            >
               {{ item.raw.name }}
             </v-chip>
           </template>
@@ -260,22 +264,56 @@ const formState = reactive<AiMessageTaskFormState>({
   workspacePath: props.initialTaskData?.workspace_path ?? "",
 });
 
-// Watch for initialTaskData changes (async load after component mount)
-watch(() => props.initialTaskData, (newData) => {
-  if (newData) {
-    formState.name = newData.name ?? ''
-    formState.message = newData.message ?? ''
-    formState.systemPrompt = newData.system_prompt ?? ''
-    formState.model = newData.model ?? AI_MESSAGE_TASK_DEFAULTS.model
-    formState.autoApproveTools = newData.auto_approve_tools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools
-    formState.allowedTools = parseAllowedTools(newData.allowed_tools_json)
-    formState.maxToolCalls = newData.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls
-    formState.maxRuntimeMs = newData.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs
-    formState.maxContinueCalls = newData.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls
-    formState.workspacePath = newData.workspace_path ?? ""
-    emitChange()
+function taskDataKey(data: Props["initialTaskData"]): string {
+  if (!data) return "";
+  return [
+    data.name ?? "",
+    data.message ?? "",
+    data.system_prompt ?? "",
+    data.model ?? "",
+    data.allowed_tools_json ?? "",
+    String(data.auto_approve_tools ?? ""),
+    String(data.max_tool_calls ?? ""),
+    String(data.max_runtime_ms ?? ""),
+    String(data.max_continue_calls ?? ""),
+    data.workspace_path ?? "",
+  ].join("\u0000");
+}
+
+const hydratedKey = ref(taskDataKey(props.initialTaskData));
+
+function applyInitialTaskData(
+  data: NonNullable<Props["initialTaskData"]>
+): void {
+  formState.name = data.name ?? "";
+  formState.message = data.message ?? "";
+  formState.systemPrompt = data.system_prompt ?? "";
+  formState.model = data.model ?? AI_MESSAGE_TASK_DEFAULTS.model;
+  formState.autoApproveTools =
+    data.auto_approve_tools ?? AI_MESSAGE_TASK_DEFAULTS.autoApproveTools;
+  formState.allowedTools = parseAllowedTools(data.allowed_tools_json);
+  formState.maxToolCalls =
+    data.max_tool_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxToolCalls;
+  formState.maxRuntimeMs =
+    data.max_runtime_ms ?? AI_MESSAGE_TASK_DEFAULTS.maxRuntimeMs;
+  formState.maxContinueCalls =
+    data.max_continue_calls ?? AI_MESSAGE_TASK_DEFAULTS.maxContinueCalls;
+  formState.workspacePath = data.workspace_path ?? "";
+  emitChange();
+}
+
+// Hydrate once when the edit page finishes loading the task. A later
+// pass of the same payload must not put removed tools back.
+watch(
+  () => props.initialTaskData,
+  (newData) => {
+    if (!newData) return;
+    const key = taskDataKey(newData);
+    if (key === hydratedKey.value) return;
+    hydratedKey.value = key;
+    applyInitialTaskData(newData);
   }
-})
+);
 
 // Tools catalog
 const schedulableTools = ref<SchedulableAiToolSummary[]>([]);
@@ -327,28 +365,45 @@ function getRiskLabel(level: string): string {
   }
 }
 
-// Emit form data to parent
-function emitChange(): void {
+function currentFormState(): AiMessageTaskFormState | undefined {
   if (!formState.name?.trim() || !formState.message?.trim()) {
-    emit("change", undefined);
-    return;
+    return undefined;
   }
-  emit("change", { ...formState });
+  return {
+    name: formState.name,
+    message: formState.message,
+    systemPrompt: formState.systemPrompt,
+    model: formState.model,
+    autoApproveTools: formState.autoApproveTools,
+    allowedTools: [...formState.allowedTools],
+    maxToolCalls: formState.maxToolCalls,
+    maxRuntimeMs: formState.maxRuntimeMs,
+    maxContinueCalls: formState.maxContinueCalls,
+    workspacePath: formState.workspacePath,
+  };
 }
 
-// Load tools catalog
-onMounted(async (): Promise<void> => {
+function emitChange(): void {
+  emit("change", currentFormState());
+}
+
+defineExpose({
+  getFormState: currentFormState,
+});
+
+async function loadToolsCatalog(): Promise<void> {
   toolsLoading.value = true;
   try {
     const tools = await listAvailableAiMessageTaskTools();
     schedulableTools.value = tools.filter((tool) => tool.schedulable);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Failed to load tools catalog:", error);
   } finally {
     toolsLoading.value = false;
   }
+}
 
-  // Load models catalog
+async function loadModelsCatalog(): Promise<void> {
   modelsLoading.value = true;
   try {
     const resp = await getOpenAIChatModels();
@@ -356,13 +411,18 @@ onMounted(async (): Promise<void> => {
       availableModels.value = resp.data ?? [];
       defaultModelId.value = resp.default_model;
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Failed to load models catalog:", error);
   } finally {
     modelsLoading.value = false;
   }
+}
 
-  // Emit initial state if pre-populated from edit mode
+onMounted((): void => {
+  // Model listing hits the provider and can be slow. It must not delay
+  // the allowed-tools catalog or the first form snapshot.
+  void loadToolsCatalog();
+  void loadModelsCatalog();
   if (props.initialTaskData) {
     emitChange();
   }

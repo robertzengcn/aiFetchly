@@ -62,6 +62,9 @@ export interface EmailServiceModuleInterface {
 
   /**
    * List email services with pagination and sorting
+   * NOTE: records are NOT credential-decrypted (passwords stay as stored).
+   * List callers only need non-secret fields; use getEmailService() for
+   * a single row when plaintext credentials are required.
    * @param page Page number (offset)
    * @param size Page size (limit)
    * @param sort Sort parameters (optional)
@@ -78,9 +81,16 @@ export interface EmailServiceModuleInterface {
 
   /**
    * Get total number of email services
+   * @param tagId Optional tag filter (matches listEmailServices)
+   * @param untagged Optional untagged-only filter (matches listEmailServices)
+   * @param search Optional name/from filter (matches listEmailServices)
    * @returns Total count of services
    */
-  countEmailServices(tagId?: number, untagged?: boolean): Promise<number>;
+  countEmailServices(
+    tagId?: number,
+    untagged?: boolean,
+    search?: string
+  ): Promise<number>;
 
   /**
    * Find email service by name

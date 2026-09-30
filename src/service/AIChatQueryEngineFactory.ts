@@ -41,16 +41,28 @@ export class AIChatQueryEngineFactory {
    * Optional interactive services (compact agent, auto-dream) are omitted — the
    * engine runs fine without them; all deps are optional.
    */
-  createScheduled(
+  async createScheduled(
     policy: AiMessageTaskToolPolicy,
     conversationId?: string
-  ): AIChatQueryEngine {
+  ): Promise<AIChatQueryEngine> {
     // Resolve the conversation's approval mode ONCE so the catalog filter and
     // the execution backstop agree, and to avoid a Token read per tool call.
     // null when the conversation has no mode set or conversationId is absent —
     // preserves the pre-existing per-task gating for legacy callers/tests.
+    //
+    // Scheduled loops use getModeForScheduledRunner (not the interactive
+    // getMode): BackgroundScheduler can fire a catch-up occurrence at app
+    // startup as the FIRST reader of the conversation's mode, before the user
+    // re-opens the chat. The scheduled-runner variant honors persisted
+    // full_access for conversations with an active scheduled loop — the user
+    // configured that loop to run unattended — and fails safe (returns the
+    // default mode) on a transient DB error rather than auto-approving on
+    // unknown state. PRD §4.3 override (2026-09-29): full_access persists
+    // across restarts, so the interactive getMode no longer downgrades it.
     const approvalMode: ChatToolApprovalMode | null = conversationId
-      ? new AIChatToolApprovalModule().getMode(conversationId)
+      ? await new AIChatToolApprovalModule().getModeForScheduledRunner(
+          conversationId
+        )
       : null;
     // §11 coordinator with a provider-backed summarize callback. The engine's
     // post-turn hook calls requestCompactionForTurn (§12 incremental path);

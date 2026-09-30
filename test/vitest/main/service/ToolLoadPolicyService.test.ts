@@ -346,9 +346,23 @@ describe("ToolLoadPolicyService.classify", () => {
         currentUserMessage: "create a schedule to run this task every morning",
       })
     ).toBe("contextual");
+    expect(
+      classify("get_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("update_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
     // Unrelated chat leaves them deferred (discoverable via catalog search).
     expect(classify("list_ai_message_tasks", "builtin")).toBe("deferred");
+    expect(classify("get_ai_message_task", "builtin")).toBe("deferred");
     expect(classify("create_ai_message_task", "builtin")).toBe("deferred");
+    expect(classify("update_ai_message_task", "builtin")).toBe("deferred");
     expect(
       classify("create_ai_message_task", "builtin", {
         currentUserMessage: "what is the weather today",

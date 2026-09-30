@@ -166,10 +166,16 @@ export async function processRAGQuery(query: {
 export async function uploadDocument(options: {
   filePath: string;
   name: string;
+  modelName?: string;
   title?: string;
   description?: string;
   tags?: string[];
   author?: string;
+  // Phase 3 document metadata (validated against ragUploadDocumentInputSchema
+  // on the main-process boundary).
+  language?: string;
+  documentDate?: string;
+  customMetadata?: Record<string, string>;
 }): Promise<RAGResponse<DocumentInfo>> {
   return await windowInvoke(RAG_UPLOAD_DOCUMENT, options);
 }

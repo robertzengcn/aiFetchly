@@ -111,22 +111,26 @@ export class EmailServiceModule
     sort?: SortBy
   ): Promise<ListData<EmailServiceEntity>> {
     try {
-      const records = await this.emailServiceModel.listEmailServices(
-        page,
-        size,
-        search,
-        tagId,
-        untagged,
-        sort
-      );
-      const num = await this.emailServiceModel.countEmailServices(
-        tagId,
-        untagged,
-        search
-      );
+      // NOTE: no credential decryption here. List callers (renderer table,
+      // AI tools) project to non-secret fields only; decrypting would force
+      // a backend secret-key HTTP fetch + AES-GCM per row for data that is
+      // immediately discarded. Single-row getters still decrypt.
+      // Tag filtering (tagId/untagged) is preserved from email-service-tags
+      // feature; search covers name OR from.
+      const [records, num] = await Promise.all([
+        this.emailServiceModel.listEmailServices(
+          page,
+          size,
+          search,
+          tagId,
+          untagged,
+          sort
+        ),
+        this.emailServiceModel.countEmailServices(tagId, untagged, search),
+      ]);
 
       return {
-        records: await this.decryptServiceCredentialsList(records),
+        records,
         num,
       };
     } catch (error) {
@@ -135,9 +139,17 @@ export class EmailServiceModule
     }
   }
 
-  async countEmailServices(tagId?: number, untagged?: boolean): Promise<number> {
+<  async countEmailServices(
+    tagId?: number,
+    untagged?: boolean,
+    search?: string
+  ): Promise<number> {
     try {
-      return await this.emailServiceModel.countEmailServices(tagId, untagged);
+      return await this.emailServiceModel.countEmailServices(
+        tagId,
+        untagged,
+        search
+      );
     } catch (error) {
       console.error("Error counting email services:", error);
       throw error;

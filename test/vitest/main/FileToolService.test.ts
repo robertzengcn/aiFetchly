@@ -8,14 +8,19 @@ import { FilePathGuard } from "@/service/FilePathGuard";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { FileToolService } from "@/service/FileToolService";
+import {
+  FileToolService,
+  matchExistingFileName,
+} from "@/service/FileToolService";
 
 describe("FileToolService", () => {
   let service: FileToolService;
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fts-test-")));
+    tmpDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "fts-test-"))
+    );
     // Create service with overridden workspace root to our tmpDir
     service = new FileToolService([tmpDir]);
   });
@@ -104,6 +109,57 @@ describe("FileToolService", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("not found");
+    });
+
+    it("reads a file whose real name has a hidden .txt suffix", async () => {
+      const filePath = path.join(
+        tmpDir,
+        "softwarecompany_contact_list.csv.txt"
+      );
+      fs.writeFileSync(filePath, "email,name\na@example.com,Ada\n");
+
+      const result = await service.execute("file_read", {
+        path: "softwarecompany_contact_list.csv",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.content).toContain("a@example.com");
+    });
+
+    it("names sibling files when the requested file is missing", async () => {
+      fs.writeFileSync(
+        path.join(tmpDir, "softwarecompany_contact_list.csv"),
+        "email\n"
+      );
+
+      const result = await service.execute("file_read", {
+        path: "softwarecompany_contacts.csv",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not found");
+      expect(result.error).toContain("softwarecompany_contact_list.csv");
+    });
+
+    it("does not follow a hidden-suffix symlink outside the workspace", async () => {
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fts-outside-"));
+      try {
+        const secret = path.join(outside, "secret.txt");
+        fs.writeFileSync(secret, "SECRET-OUTSIDE");
+        fs.symlinkSync(
+          secret,
+          path.join(tmpDir, "softwarecompany_contact_list.csv.txt")
+        );
+
+        const result = await service.execute("file_read", {
+          path: "softwarecompany_contact_list.csv",
+        });
+
+        expect(result.success).toBe(false);
+        expect(JSON.stringify(result)).not.toContain("SECRET-OUTSIDE");
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
     });
 
     it("rejects path traversal attempts", async () => {
@@ -687,5 +743,30 @@ describe("FileToolService", () => {
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
+  });
+});
+
+describe("matchExistingFileName", () => {
+  it("matches a unique case difference", () => {
+    expect(
+      matchExistingFileName("softwarecompany_contact_list.csv", [
+        "SoftwareCompany_Contact_List.csv",
+      ])
+    ).toBe("SoftwareCompany_Contact_List.csv");
+  });
+
+  it("matches a unique hidden .txt suffix", () => {
+    expect(
+      matchExistingFileName("softwarecompany_contact_list.csv", [
+        "readme.md",
+        "softwarecompany_contact_list.csv.txt",
+      ])
+    ).toBe("softwarecompany_contact_list.csv.txt");
+  });
+
+  it("does not guess when several hidden-suffix files match", () => {
+    expect(
+      matchExistingFileName("leads.csv", ["leads.csv.txt", "Leads.csv.txt"])
+    ).toBeUndefined();
   });
 });

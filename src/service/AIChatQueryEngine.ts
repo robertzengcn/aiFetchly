@@ -242,6 +242,18 @@ export interface AIChatQuerySubmitInput {
    * object (technical-design §14.1).
    */
   scheduledContext?: AIChatScheduledTurnContext;
+  /**
+   * Main-process-only trusted signal: true only for unattended scheduled-loop
+   * turns where the user pre-allowlisted `start_email_send_task` via the typed
+   * confirmation at loop creation (policy.autoApproveTools AND
+   * policy.allowedTools includes the send tool). When true, the outbound-email
+   * gate honors `skip_review=true` even for blocking reasonCodes (e.g. a dedup
+   * negation the pure resolver misreads as do-not-send), because that typed
+   * pre-allowlist IS the trusted authorization AD-003 requires and there is no
+   * human present to click Review. Never set for interactive chat — the
+   * renderer cannot forge `scheduledContext`, so this flag is unreachable there.
+   */
+  outboundSendPreAuthorized?: boolean;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -846,7 +858,8 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request, scheduledContext } = input;
+    const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
+      input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -1390,6 +1403,7 @@ export class AIChatQueryEngine {
       sourceUserMessageId,
       intentDecisionId,
       turnId,
+      outboundSendPreAuthorized,
       goalAutoContinue: await this.shouldAutoContinueGoal(
         conversationId,
         isPlanMode
@@ -1687,6 +1701,7 @@ export class AIChatQueryEngine {
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
         turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           matchedByToolId.conversationId,
           Boolean(matchedByToolId.planContext)
@@ -1838,6 +1853,7 @@ export class AIChatQueryEngine {
         sourceUserMessageId: matchedByToolId.sourceUserMessageId,
         intentDecisionId: matchedByToolId.intentDecisionId,
         turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
         goalAutoContinue: await this.shouldAutoContinueGoal(
           conversationId,
           Boolean(matchedByToolId.planContext)

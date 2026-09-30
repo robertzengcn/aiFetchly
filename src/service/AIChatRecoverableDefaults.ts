@@ -50,6 +50,14 @@ export const AI_CHAT_RECOVERABLE_DEFAULTS = {
 
   // Generation retention.
   retainedGenerationHistoryCount: 10,
+
+  // Budget-pressure relief (compaction re-entry). A scheduled-loop turn can
+  // run dozens of tool rounds in a single runOnce; the live transcript keeps
+  // growing after the first compaction. Allow relief to re-trigger each round
+  // it is needed, bounded by this per-turn cap so a summarize that won't
+  // shrink can't loop forever. 3 covers: initial relief + two re-reliefs as
+  // later tool rounds push pressure back up.
+  maxBudgetReliefAttemptsPerTurn: 3,
 } as const;
 
 /** Token-based feature-flag names (values are the Token keys to read). */

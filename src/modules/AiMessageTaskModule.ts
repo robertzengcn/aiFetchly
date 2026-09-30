@@ -97,14 +97,18 @@ export class AiMessageTaskModule extends BaseModule {
       updates.max_continue_calls = request.maxContinueCalls;
     if (request.status !== undefined) updates.status = request.status;
     if (request.workspacePath !== undefined) {
-      const conversationId = this.ensureConversationId(
-        updates.conversation_id ?? existing.conversation_id
-      );
-      updates.conversation_id = conversationId;
-      updates.workspace_path = await this.resolveWorkspacePath(
-        conversationId,
-        request.workspacePath
-      );
+      const requested = request.workspacePath?.trim() ?? "";
+      const current = existing.workspace_path?.trim() ?? "";
+      if (requested !== current) {
+        const conversationId = this.ensureConversationId(
+          updates.conversation_id ?? existing.conversation_id
+        );
+        updates.conversation_id = conversationId;
+        updates.workspace_path = await this.resolveWorkspacePath(
+          conversationId,
+          request.workspacePath
+        );
+      }
     }
 
     await this.model.update(request.id, updates);

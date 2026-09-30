@@ -63,6 +63,132 @@ function mountForm(workspacePath = ""): ReturnType<typeof mount> {
   });
 }
 
+function mountFormWithTools(): ReturnType<typeof mount> {
+  return mount(AiMessageTaskForm, {
+    props: {
+      initialTaskData: {
+        name: "Nightly recap",
+        message: "Summarize the folder",
+        allowed_tools_json: JSON.stringify(["file_read", "file_write"]),
+      },
+    },
+    global: {
+      plugins: [i18n],
+      stubs: {
+        VContainer: { template: "<div><slot /></div>" },
+        VRow: { template: "<div><slot /></div>" },
+        VCol: { template: "<div><slot /></div>" },
+        VTextField: { template: "<input />" },
+        VTextarea: { template: "<textarea />" },
+        VSelect: {
+          props: {
+            modelValue: { type: Array, default: () => [] },
+          },
+          emits: ["update:modelValue"],
+          methods: {
+            chipItem(name: string): {
+              raw: { name: string; riskLevel: string };
+              title: string;
+            } {
+              return {
+                raw: { name, riskLevel: "low" },
+                title: name,
+              };
+            },
+            chipProps(name: string): {
+              "onClick:close": (event: Event) => void;
+            } {
+              return {
+                "onClick:close": (event: Event): void => {
+                  event.preventDefault();
+                  const current = Array.isArray(this.modelValue)
+                    ? [...this.modelValue]
+                    : [];
+                  this.$emit(
+                    "update:modelValue",
+                    current.filter((tool: string) => tool !== name)
+                  );
+                },
+              };
+            },
+          },
+          template: `
+            <div class="tool-select">
+              <template v-for="name in modelValue" :key="name">
+                <slot name="chip" :item="chipItem(name)" :props="chipProps(name)" />
+              </template>
+            </div>
+          `,
+        },
+        VSwitch: { template: "<div />" },
+        VAlert: { template: "<div><slot /></div>" },
+        VExpansionPanels: { template: "<div><slot /></div>" },
+        VExpansionPanel: { template: "<div><slot /></div>" },
+        VExpansionPanelTitle: { template: "<div><slot /></div>" },
+        VExpansionPanelText: { template: "<div><slot /></div>" },
+        VIcon: { template: "<span />" },
+        VListItem: { template: "<div><slot /></div>" },
+        VListItemSubtitle: { template: "<div><slot /></div>" },
+        VChip: {
+          inheritAttrs: false,
+          template:
+            '<button type="button" class="tool-chip" @click="close"><slot /></button>',
+          methods: {
+            close(event: Event): void {
+              const attrs = this.$attrs as Record<string, unknown>;
+              const handler = attrs["onClick:close"];
+              if (typeof handler === "function") {
+                (handler as (event: Event) => void)(event);
+              }
+            },
+          },
+        },
+        AiChatV2ModelSelector: { template: "<div />" },
+      },
+    },
+  });
+}
+
+describe("AiMessageTaskForm allowed tools", () => {
+  beforeEach(() => {
+    apiMocks.listAvailableAiMessageTaskTools.mockResolvedValue([
+      {
+        name: "file_read",
+        schedulable: true,
+        riskLevel: "low",
+        description: "Read",
+      },
+      {
+        name: "file_write",
+        schedulable: true,
+        riskLevel: "high",
+        description: "Write",
+      },
+    ]);
+    apiMocks.getOpenAIChatModels.mockResolvedValue({
+      data: [],
+      default_model: "auto",
+    });
+  });
+
+  it("emits the shorter allow list when a tool chip is closed", async () => {
+    const wrapper = mountFormWithTools();
+    await flushPromises();
+
+    const chips = wrapper.findAll("button.tool-chip");
+    const writeChip = chips.find((chip) => chip.text() === "file_write");
+    expect(writeChip).toBeTruthy();
+    await writeChip?.trigger("click");
+    await flushPromises();
+
+    const emitted = wrapper.emitted("change") ?? [];
+    const last = emitted[emitted.length - 1]?.[0] as
+      | { allowedTools?: string[] }
+      | undefined;
+    expect(last?.allowedTools).toEqual(["file_read"]);
+  });
+});
+
 describe("AiMessageTaskForm workspace path", () => {
   beforeEach(() => {
     apiMocks.listAvailableAiMessageTaskTools.mockResolvedValue([]);

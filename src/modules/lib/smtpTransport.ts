@@ -1,4 +1,9 @@
-import nodemailer from "nodemailer";
+import nodemailer, {
+  type Transporter,
+  type TransportOptions,
+  type SendMailOptions,
+  type SentMessageInfo,
+} from "nodemailer";
 import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
@@ -72,7 +77,13 @@ export function buildSmtpTransportOptions(
         smtpUsername: param.smtpUsername,
         from: param.from,
       }).smtpUsername,
-      pass: param.password,
+      // Pasted client-authorization codes (163/126/QQ, Gmail app passwords)
+      // often carry a trailing newline/space from copy-paste. The AUTH
+      // password is the only send-path value that was never normalized
+      // (username/from/replyTo all trim in the identity resolver), so one
+      // invisible byte caused 535 while the same code worked in other mail
+      // apps. Trim ends only — inner content is preserved byte-for-byte.
+      pass: param.password.trim(),
     },
   };
 }
@@ -89,9 +100,9 @@ export function buildSmtpTransportOptions(
 export function createOutboundSmtpTransporter(
   param: EmailServiceEntitydata,
   mode: SmtpTlsMode = "configured"
-): nodemailer.Transporter {
+): Transporter {
   const transporter = nodemailer.createTransport(
-    buildSmtpTransportOptions(param, mode) as nodemailer.TransportOptions
+    buildSmtpTransportOptions(param, mode) as TransportOptions
   );
   transporter.on("error", () => {
     // Failure is observed via `sendMail`'s rejected promise / catch.
@@ -138,7 +149,7 @@ export function shouldRetrySmtpTlsMode(
 }
 
 export function closeSmtpTransporter(
-  transporter: nodemailer.Transporter
+  transporter: Transporter
 ): void {
   try {
     transporter.close();
@@ -154,15 +165,15 @@ export function closeSmtpTransporter(
  */
 export class OutboundSmtpSession {
   private mode: SmtpTlsMode = "configured";
-  private transporter: nodemailer.Transporter;
+  private transporter: Transporter;
 
   constructor(private readonly param: EmailServiceEntitydata) {
     this.transporter = createOutboundSmtpTransporter(param);
   }
 
   async sendMail(
-    mailOptions: nodemailer.SendMailOptions
-  ): Promise<nodemailer.SentMessageInfo> {
+    mailOptions: SendMailOptions
+  ): Promise<SentMessageInfo> {
     try {
       return await this.transporter.sendMail(mailOptions);
     } catch (error: unknown) {

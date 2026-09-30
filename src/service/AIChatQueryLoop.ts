@@ -65,8 +65,9 @@ import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/Outbo
 import { explainOutboundGateBlock } from "@/service/outboundEmail/OutboundEmailGateBlockReason";
 
 /** Outbound-email send tool name, gated by request-scoped intent (§14.2). */
-const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
-const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
+export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
+/** Outbound-email draft tool name (never send-gated; skipPermissionCheck). */
+export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -962,7 +963,7 @@ export class AIChatQueryLoop {
   /**
    * Build a ModelLimitResolver backed by the live AIChatModelCatalogService.
    * Call `ensureLoaded()` before the first preflight so provider rows are
-   * present. Unknown / unloaded models use the catalog's 128k fallback
+   * present. Unknown / unloaded models use the catalog's 256k fallback
    * (same as `getContextWindow()`), not the 8,192-token provisional —
    * an unloaded catalog is not evidence the selected model is small.
    */
@@ -1288,9 +1289,14 @@ export class AIChatQueryLoop {
     // so the budget preflight and the provider dispatch always agree on the
     // same limits. Starts as the requested model; fallback updates it.
     let effectiveModel = input.request.model;
-    // One compact-and-rebuild per turn. Later rounds still preflight, but
-    // they must not loop compaction if the summary itself stays oversized.
-    let relievedBudgetPressure = false;
+    // Budget-pressure relief guard. Compaction may re-trigger on later tool
+    // rounds of the SAME turn (a scheduled-loop turn can run dozens of rounds
+    // and the live transcript keeps growing after the first relief), but is
+    // bounded by maxBudgetReliefAttemptsPerTurn so a summarize that won't
+    // shrink cannot loop forever. `reliefThisRound` is reset every round;
+    // `reliefAttemptsThisTurn` is the cumulative cap across the whole turn.
+    let reliefAttemptsThisTurn = 0;
+    let reliefThisRound = false;
 
     try {
       // Load provider context/output limits before the first preflight.
@@ -1358,6 +1364,12 @@ export class AIChatQueryLoop {
           }
           break;
         }
+
+        // Reset the per-round relief gate. A long scheduled-loop turn runs
+        // many rounds in one runOnce; compaction may need to re-trigger as
+        // later tool results push pressure back up (see reliefAttemptsThisTurn
+        // cap above for the cumulative bound).
+        reliefThisRound = false;
 
         // Free capacity from handoffs the model already saw in an earlier
         // round (or before a permission/plan resume). Idempotent.
@@ -1453,10 +1465,13 @@ export class AIChatQueryLoop {
           const underPressure = !budget.ok || budget.needsCompaction;
           if (
             underPressure &&
-            !relievedBudgetPressure &&
+            !reliefThisRound &&
+            reliefAttemptsThisTurn <
+              AI_CHAT_RECOVERABLE_DEFAULTS.maxBudgetReliefAttemptsPerTurn &&
             input.relieveBudgetPressure
           ) {
-            relievedBudgetPressure = true;
+            reliefThisRound = true;
+            reliefAttemptsThisTurn += 1;
             try {
               const rebuilt = await input.relieveBudgetPressure();
               if (rebuilt && rebuilt.length > 0) {
@@ -2644,6 +2659,10 @@ export class AIChatQueryLoop {
                 sourceUserMessageId: input.sourceUserMessageId,
                 intentDecisionId: input.intentDecisionId,
                 outboundAuthorization,
+                // Carry the scheduled-loop pre-authorization signal across the
+                // pause so a resumed send round still honors skip_review=true
+                // for blocking reasonCodes (mirrors the loop input field).
+                outboundSendPreAuthorized: input.outboundSendPreAuthorized,
                 planContext,
                 eventSink: eventSink,
                 turnId: input.turnId,
@@ -3261,6 +3280,19 @@ export class AIChatQueryLoop {
    * When that flag is set and no draft batch exists, the send proceeds
    * immediately with this call's recipients/content (no draft/review step).
    *
+   * Scheduled-loop pre-authorization: when `input.outboundSendPreAuthorized`
+   * is true (the user pre-allowlisted the send tool via the typed confirmation
+   * at loop creation), `skip_review: true` is honored even for the blocking
+   * reasonCodes above. The pure phrase-matching resolver cannot distinguish a
+   * recipient-exclusion negation ("do not send to already-contacted
+   * companies") from a global send-refusal, so a scheduled outreach prompt
+   * that pairs a send goal with a dedup constraint is misread as do-not-send
+   * — which would structurally disable `skip_review` and deadlock an
+   * unattended run with no human present to click Review. The typed
+   * pre-allowlist is the trusted authorization AD-003 requires in that
+   * unattended context, so the gate treats it as an honor-skip-review signal.
+   * Never true for interactive chat (the renderer cannot forge scheduledContext).
+   *
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
    */
@@ -3308,7 +3340,9 @@ export class AIChatQueryLoop {
       const authService = new OutboundEmailAuthorizationService(dbpath);
 
       const honorModelSkipReview =
-        skipReviewArg && canHonorModelDeclaredSkipReview(intentDecision);
+        skipReviewArg &&
+        (canHonorModelDeclaredSkipReview(intentDecision) ||
+          input.outboundSendPreAuthorized === true);
       const honorPhraseSkipReview =
         intentDecision.mode === "send_now" &&
         allowsOutboundDirectSendAuthorization(intentDecision.reasonCode);

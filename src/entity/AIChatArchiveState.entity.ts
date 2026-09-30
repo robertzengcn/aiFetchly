@@ -9,7 +9,9 @@ import { Order } from "./order.decorator";
  * active run pointers, and the lease/fence used by the compaction coordinator.
  *
  * One row per conversation (conversationId is the primary key). A tombstoned
- * conversation (deletedAt set) must NOT be resurrected — see archive Module.
+ * conversation (deletedAt set) is not reused in place: ensureState mints a new
+ * epoch and clears deletedAt. Readers must still treat a row with deletedAt
+ * set as invalid.
  */
 @Entity("ai_chat_archive_state")
 export class AIChatArchiveStateEntity extends AuditableEntity {

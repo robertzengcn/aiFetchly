@@ -118,6 +118,24 @@ describe("buildSmtpTransportOptions", () => {
     expect(options.secure).toBe(false);
     expect(options.requireTLS).toBe(true);
   });
+
+  it("trims pasted whitespace around the AUTH password (163 auth-code 535)", () => {
+    // Copy-paste from webmail often appends a trailing newline/space.
+    // The probe proved the same code works once trimmed.
+    const options = buildSmtpTransportOptions(
+      service({ port: "465", ssl: 1, password: "  ABCDEF1234567890\n" })
+    );
+
+    expect(options.auth.pass).toBe("ABCDEF1234567890");
+  });
+
+  it("preserves inner password content byte-for-byte when trimming", () => {
+    const options = buildSmtpTransportOptions(
+      service({ port: "465", ssl: 1, password: "ab cd\tEF" })
+    );
+
+    expect(options.auth.pass).toBe("ab cd\tEF");
+  });
 });
 
 describe("shouldRetrySmtpTlsMode", () => {

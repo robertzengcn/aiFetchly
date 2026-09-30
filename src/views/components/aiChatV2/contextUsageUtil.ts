@@ -6,7 +6,7 @@
  */
 
 /** Fallback context window size when the models API doesn't expose one. */
-export const DEFAULT_CONTEXT_WINDOW = 128000;
+export const DEFAULT_CONTEXT_WINDOW = 256_000;
 
 export interface ContextUsageInputs {
   /** Known model id → context window size (tokens). */

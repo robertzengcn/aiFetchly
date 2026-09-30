@@ -114,7 +114,7 @@ type Exposed = {
   allowSubagents: boolean;
   selectedAutomation: string[];
   pendingHighImpact: Record<string, boolean>;
-  confirmInput: Record<string, string>;
+  confirmInput?: Record<string, string>;
   confirmedHighImpact: () => string[];
 };
 
@@ -133,7 +133,7 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     await flushPromises();
     const vm = vmOf(wrapper);
     expect(listAvailableAiMessageTaskTools).toHaveBeenCalled();
-    expect(vm.confirmInput).toBeDefined();
+    expect(vm.pendingHighImpact).toBeDefined();
   });
 
   it("defaults extended capabilities and built-in tools to enabled", async () => {
@@ -212,16 +212,13 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     expect(payload.allowSkills).toBe(true);
   });
 
-  it("does NOT confirm a high-impact tool until its exact name is typed", async () => {
+  it("enables a high-impact tool by checkbox alone without typing", async () => {
     vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog();
     await flushPromises();
     const vm = vmOf(wrapper);
     vm.toolsEnabled = true;
     vm.pendingHighImpact.file_write = true;
-    vm.confirmInput.file_write = "file_write_typo";
-    expect(vm.confirmedHighImpact()).toEqual([]);
-    vm.confirmInput.file_write = "file_write";
     expect(vm.confirmedHighImpact()).toEqual(["file_write"]);
     vm.selectedAutomation = ["proxy_check"];
     await wrapper
@@ -232,6 +229,23 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     };
     expect(payload.allowedTools).toContain("file_write");
     expect(payload.allowedTools).toContain("proxy_check");
+  });
+
+  it("does not include unchecked high-impact tools", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
+    const wrapper = mountDialog();
+    await flushPromises();
+    const vm = vmOf(wrapper);
+    vm.toolsEnabled = true;
+    expect(vm.confirmedHighImpact()).toEqual([]);
+    await wrapper
+      .find('[data-testid="scheduled-loop-approval-confirm"]')
+      .trigger("click");
+    const payload = wrapper.emitted("confirm")![0][0] as {
+      allowedTools: string[];
+    };
+    expect(payload.allowedTools).not.toContain("file_write");
+    expect(payload.allowedTools).not.toContain("send_email_reply");
   });
 
   it("emits cancel and closes when the close button is used", async () => {

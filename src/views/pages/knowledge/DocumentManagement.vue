@@ -131,6 +131,21 @@
         {{ formatFileSize(item.fileSize) }}
       </template>
 
+      <template v-slot:item.author="{ item }">
+        {{ displayAuthor(item) }}
+      </template>
+
+      <template v-slot:item.tags="{ item }">
+        <v-chip
+          v-for="tag in visibleTags(item)"
+          :key="tag"
+          size="small"
+          class="mr-1"
+        >
+          {{ tag }}
+        </v-chip>
+      </template>
+
       <template v-slot:item.uploadDate="{ item }">
         {{ formatDate(item.uploadDate) }}
       </template>
@@ -215,6 +230,12 @@
             chips
             :hint="t('knowledge.tags_hint')"
           />
+          <v-text-field
+            v-model="uploadData.author"
+            :label="t('knowledge.author') || 'Author'"
+            maxlength="255"
+            class="mt-4"
+          />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -268,6 +289,7 @@ import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI, getDocumentErrorLog } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 import { isDocumentFailure, isDocumentProcessing } from "@/views/pages/knowledge/documentStatus";
+import { displayAuthor, visibleTags } from "@/views/pages/knowledge/documentTableDisplay";
 
 const props = defineProps<{
   /**
@@ -289,7 +311,8 @@ const { t } = useI18n();
     const uploadData = ref({
       title: '',
       description: '',
-      tags: []
+      tags: [] as string[],
+      author: ''
     });
     const reembeddingDocIds = ref<number[]>([]);
 
@@ -326,6 +349,8 @@ const { t } = useI18n();
     headers.value = [
       { title: t('knowledge.name'), sortable: true, key: 'name' },
       { title: t('knowledge.title'), sortable: true, key: 'title' },
+      { title: t('knowledge.author') || 'Author', sortable: true, key: 'author' },
+      { title: t('knowledge.tags') || 'Tags', sortable: false, key: 'tags' },
       { title: t('knowledge.status'), sortable: true, key: 'status' },
       { title: t('knowledge.processing'), sortable: true, key: 'processingStatus' },
       { title: t('knowledge.file_type'), sortable: true, key: 'fileType' },
@@ -510,18 +535,25 @@ const { t } = useI18n();
         const file = uploadFile.value;
         console.log('Uploading file:', file);
         console.log('Upload data:', uploadData.value);
-        
-        // In Electron, the file object should have a path property
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const filePath = (file as any).path || file.name;
-        
+
+        // In Electron, the native file-input File carries a non-standard
+        // `path` property pointing at the file on disk. Cast through a typed
+        // shape rather than `any` so the property access stays type-checked.
+        const electronFile = file as File & { path?: unknown };
+        const pathFromFs: string =
+          typeof electronFile.path === 'string' && electronFile.path.length > 0
+            ? electronFile.path
+            : '';
+        const filePath = pathFromFs || file.name;
+
         // Call the upload API
         const result = await uploadDocumentAPI({
           filePath: filePath,
           name: file.name,
           title: uploadData.value.title,
           description: uploadData.value.description,
-          tags: uploadData.value.tags
+          tags: uploadData.value.tags,
+          author: uploadData.value.author.trim() || undefined
         });
         
         if (result.success) {
@@ -531,7 +563,7 @@ const { t } = useI18n();
           // Close dialog and reset form
           showUploadDialog.value = false;
           uploadFile.value = undefined;
-          uploadData.value = { title: '', description: '', tags: [] };
+          uploadData.value = { title: '', description: '', tags: [], author: '' };
 
         } else {
           console.error('❌ Document upload failed:', result.message);

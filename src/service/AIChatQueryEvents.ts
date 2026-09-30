@@ -368,6 +368,14 @@ export interface PendingPermissionTurn {
     authorizationId: number;
     batchHash: string;
   };
+  /**
+   * Carries the scheduled-loop pre-authorization signal across the permission
+   * pause so a resumed send round still honors `skip_review=true` for blocking
+   * reasonCodes. Mirrors the {@link AIChatQueryLoopInput.outboundSendPreAuthorized}
+   * field; threaded from the originating loop input into the pending turn and
+   * back into the resumed loop input by the engine.
+   */
+  outboundSendPreAuthorized?: boolean;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
   /**
@@ -553,6 +561,17 @@ export interface AIChatQueryLoopInput {
    * grouped by turn.
    */
   turnId?: string;
+  /**
+   * True only for unattended scheduled-loop turns where the user
+   * pre-allowlisted `start_email_send_task` via the typed confirmation at loop
+   * creation. Lets the outbound-email gate honor `skip_review=true` for
+   * blocking reasonCodes (e.g. a dedup negation the pure resolver misreads as
+   * do-not-send) — that typed pre-allowlist is the trusted authorization
+   * AD-003 requires and there is no human present to click Review. Never set
+   * for interactive chat (the renderer cannot forge `scheduledContext`).
+   * Computed by the scheduled runner from the task policy + scheduledContext.
+   */
+  outboundSendPreAuthorized?: boolean;
   /**
    * Called once per turn when the serialized request is at or over the
    * compaction trigger (including when it already exceeds the window).

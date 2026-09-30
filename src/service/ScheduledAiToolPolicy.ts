@@ -11,8 +11,10 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
  * Security policy for tools exposed to unattended (scheduled-loop) AI turns.
  *
  * Unattended execution cannot show an interactive permission prompt, so the
- * allowlist must FAIL CLOSED. A tool is schedulable only when it appears in one
- * of the three tiers below AND is not in the permanent deny set.
+ * allowlist FAILS CLOSED for permanently-blocked and hallucinated/unregistered
+ * tool names. A registered built-in tool that is not in any curated tier PAUSES
+ * the run for an interactive permission card (with a 1h auto-deny backstop)
+ * instead of failing closed — the user can grant it at runtime.
  *
  * Three tiers of schedulable tools:
  *  - **Read-only**: AUTO-APPROVE whenever `autoApproveTools` is on. No per-tool
@@ -25,6 +27,10 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
  *    `autoApproveTools` AND membership in the task's `allowedTools`.
  *  - **Automation**: same runtime gating as high-impact; tier exists for risk
  *    labeling (network checks / side effects).
+ *
+ * A registered built-in not in any tier (e.g. a future tool not yet curated)
+ * is treated like a high-impact tool without allowlist membership: it pauses
+ * for interactive permission rather than killing the run.
  *
  * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
@@ -64,6 +70,7 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_schedule_details",
   "list_schedule_executions",
   "list_ai_message_tasks",
+  "get_ai_message_task",
   // General read-only
   "open_app_page",
   "knowledge_library_search",
@@ -89,15 +96,33 @@ export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
   "send_email_reply",
   "start_email_send_task",
   "create_email_reply_draft",
+  "draft_outbound_email_batch",
   "get_email_message",
 ]);
 
 /**
  * Automation tools that are schedulable in unattended mode but require explicit
  * allowlisting because they perform network checks or other side effects.
+ *
+ * The outreach / lead-discovery tools (`scrape_urls_from_search_engine`,
+ * `read_url_content`, `extract_contact_info`) live here rather than in the
+ * uncategorized-built-in fallback so that a scheduled outreach loop can
+ * actually use them. They fetch external content — network side effects —
+ * so they require explicit per-tool allowlisting at loop creation (gated by a
+ * typed confirmation), and when called without allowlist membership they
+ * pause for an interactive permission card (1h auto-deny backstop) instead
+ * of being silently dropped from the catalog. Without tier membership the
+ * scheduled `toolFilter` removed them BEFORE the deferred catalog was built,
+ * so even `tool_catalog_search` could not surface them while
+ * `BuiltInToolCapabilitiesPromptSection` advertised them in the system
+ * prompt — the model then reported them "not available in this session".
  */
 export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   "proxy_check",
+  // Outreach / lead discovery — fetch external content (network side effects).
+  "scrape_urls_from_search_engine",
+  "read_url_content",
+  "extract_contact_info",
 ]);
 
 /**
@@ -265,10 +290,15 @@ export function describeBuiltInToolForSchedule(
     permissionCategory: skill.permissionCategory,
     source: "built-in",
     requiresConfirmation: skill.requiresConfirmation,
+    // Not pre-selectable: uncategorized built-ins have no reviewed risk tier, so
+    // they cannot be pre-approved into allowedTools. At runtime they do NOT fail
+    // closed — canAutoApproveScheduledTool pauses the run for an interactive
+    // permission card (with a 1h auto-deny backstop) so the user can review the
+    // unfamiliar tool. See the uncategorized fallback in canAutoApproveScheduledTool.
     schedulable: false,
     autoApproveAllowed: false,
     blockedReason:
-      "Only explicitly reviewed read-only, high-impact, or automation tools may run unattended in scheduled loops.",
+      "Not pre-curated for unattended auto-approval. If called during a scheduled run, it pauses for your permission (with a 1h auto-deny backstop) rather than auto-executing.",
     riskLevel: "blocked",
   };
 }
@@ -437,9 +467,15 @@ export function canAutoApproveScheduledTool(params: {
     return { allowed: true, riskLevel: "low" };
   }
 
+  // Registered built-in tool that is not in any curated tier. Pause for an
+  // interactive permission card instead of failing closed — the user can grant
+  // the tool at runtime (the run parks, a permission card renders, and a 1h
+  // backstop auto-deny guards the pause). Hallucinated/unregistered tool names
+  // were already rejected above (skill === null returns "not available").
   return {
     allowed: false,
-    reason: `Tool "${toolName}" is not an approved tool for unattended scheduled execution.`,
+    requiresInteractivePermission: true,
+    reason: `Tool "${toolName}" is not pre-approved for unattended scheduled execution. Pausing the scheduled run to ask the user.`,
     riskLevel: "high",
   };
 }

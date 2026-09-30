@@ -35,6 +35,35 @@ function makeChunk(
   };
 }
 
+function makeToolCallChunk(
+  toolCallId: string,
+  toolName: string,
+  argsJson: string
+): OpenAIChatCompletionChunk {
+  return {
+    id: "resp-1",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: "gpt-4o",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: toolCallId,
+              type: "function",
+              function: { name: toolName, arguments: argsJson },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  };
+}
+
 function fatTools(count: number): OpenAITool[] {
   return Array.from({ length: count }, (_, i) => ({
     type: "function",
@@ -112,7 +141,9 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
       getSkillDefinition: () => undefined,
     });
     const limits = loop.getDefaultModelLimitResolver()("gpt-4o");
-    expect(limits.contextLimit).toBe(128_000);
+    // Models without a server-reported context window default to 256k so
+    // long scheduled-loop turns are not rejected on a too-small 128k guess.
+    expect(limits.contextLimit).toBe(256_000);
     expect(limits.limitSource).toBe("fallback");
   });
 
@@ -302,5 +333,89 @@ describe("AIChatQueryLoop request budget (/goal regression)", () => {
     const result = await loop.run(input);
     expect(result.type).toBe("completed");
     expect(stream).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: a scheduled-loop turn runs many tool rounds in a single
+  // runOnce. The live transcript keeps growing after the first budget
+  // relief (compaction), so relief must re-trigger on later rounds as
+  // pressure climbs again — not be gated off for the whole turn. Before
+  // the fix, `relievedBudgetPressure` was a per-turn boolean that blocked
+  // a second relief; the turn overflowed 128k and was rejected.
+  it("re-triggers budget relief across multiple tool rounds of one turn", async () => {
+    const tools: OpenAITool[] = [
+      {
+        type: "function",
+        function: {
+          name: "scrape",
+          description: "scrape a page",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    // Each round emits a tool call; the tool result is fat enough to push
+    // pressure back up after relief shrinks the transcript.
+    const fatResult = "x".repeat(20_000);
+    let round = 0;
+    const stream = vi.fn(
+      async (
+        _req: unknown,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        if (round < 2) {
+          onChunk(makeToolCallChunk(`call-${round}`, "scrape", "{}"));
+        } else {
+          onChunk(makeChunk("done", "stop"));
+        }
+      }
+    );
+    const fakeExecute = vi.fn().mockImplementation(() => {
+      round += 1;
+      return Promise.resolve({
+        tool_call_id: `call-${round - 1}`,
+        tool_name: "scrape",
+        success: true,
+        result: { page: fatResult },
+        execution_time_ms: 5,
+      });
+    });
+    // Relief returns a shrunken transcript each time it is called.
+    let reliefCalls = 0;
+    const relieve = vi.fn(async () => {
+      reliefCalls += 1;
+      return [
+        { role: "system" as const, content: "compacted summary" },
+        { role: "user" as const, content: "continue" },
+      ];
+    });
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: stream,
+      executeTool: fakeExecute,
+      getSkillDefinition: () => undefined,
+      resolveModelLimits: () => ({
+        // Small window so pressure is reached with modest tool results.
+        contextLimit: 8_192,
+        outputLimit: 1_024,
+        limitSource: "configured",
+      }),
+    });
+    const input = goalSizedInput(tools);
+    input.messages = [
+      { role: "system", content: "s" },
+      { role: "user", content: "keep scraping" },
+    ];
+    input.eventSink = { emit: () => undefined };
+    input.relieveBudgetPressure = relieve;
+    input.maxToolRounds = 3;
+    const result = await loop.run(input);
+    expect(result.type).toBe("completed");
+    expect(stream).toHaveBeenCalled();
+    // Relief fired more than once across the multi-round turn — the per-turn
+    // gate no longer blocks the second+ relief. (Capped at
+    // maxBudgetReliefAttemptsPerTurn so it can't loop forever.)
+    expect(reliefCalls).toBeGreaterThan(1);
+    expect(reliefCalls).toBeLessThanOrEqual(
+      // maxBudgetReliefAttemptsPerTurn default is 3.
+      3
+    );
   });
 });

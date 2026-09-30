@@ -231,5 +231,26 @@ describe("AIChatModelCatalogService", () => {
         limitSource: "provider",
       });
     });
+
+    // Regression: models without a server-reported context window must
+    // default to 256k (not 128k) so long scheduled-loop turns are not
+    // rejected with "request budget rejected ... exceeds context (128000)".
+    it("defaults to 256k when constructed with the production default", () => {
+      const listOpenAIModels = vi.fn().mockResolvedValue({
+        object: "list",
+        data: [],
+      } as OpenAIModelsResponse);
+      const api = {
+        listOpenAIModels,
+      } as unknown as ConstructorParameters<
+        typeof AIChatModelCatalogService
+      >[0];
+      // No explicit fallback arg → uses AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens (256k).
+      const service = new AIChatModelCatalogService(api);
+      const limits = service.resolveLimits("agnes-3.0-flash");
+      expect(limits.contextLimit).toBe(256_000);
+      expect(limits.outputLimit).toBe(16_384);
+      expect(limits.limitSource).toBe("fallback");
+    });
   });
 });

@@ -43,8 +43,8 @@ export const TOOL_CATALOG_DEFAULTS = {
   searchMaxResults: 10,
   /** Number of largest tools reported in metrics. */
   largestToolMetricCount: 10,
-  /** Fallback context window when no model metadata is available. */
-  fallbackContextWindowTokens: 128_000,
+  /** Fallback context window when no model metadata is available (256k). */
+  fallbackContextWindowTokens: 256_000,
 } as const;
 
 export type ToolCatalogMode = "off" | "on" | "auto";
