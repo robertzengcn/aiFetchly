@@ -2510,3 +2510,49 @@ describe("nested linked activation + instruction visibility (audit R5)", () => {
     expect(status.safeSummary).toContain("nested-full-skill");
   }, 120_000);
 });
+
+describe("retry restores the full checkpoint (audit R6)", () => {
+  it("a linked request retries as LINKED with its constraints", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-r6",
+      source: fixtureRoot,
+      mode: "linked",
+      constraints: ["read install.md first", "after install, do not transcribe"],
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    // Force a failure so retry becomes available.
+    const models = (await (
+      module as unknown as { getModels: () => Promise<unknown> }
+    ).getModels()) as {
+      sessions: {
+        findBySessionId: (id: string) => Promise<unknown>;
+        create: (e: unknown) => Promise<unknown>;
+      };
+    };
+    const row = (await models.sessions.findBySessionId(
+      prepared.sessionId
+    )) as { state: string; failureCode?: string; failureDetail?: string };
+    row.state = "failed";
+    row.failureCode = "TEST_FORCED_FAILURE";
+    row.failureDetail = "forced for R6";
+    await models.sessions.create(row);
+
+    const retried = await module.retry(prepared.sessionId, "conv-r6");
+    expect(retried.state).toBe("awaiting_approval");
+    // The retried SESSION persisted the same request identity: linked mode
+    // and the constraints ride the plan contract.
+    const status = await module.getStatus(retried.sessionId);
+    const rows = await models.sessions.findBySessionId(retried.sessionId);
+    void status;
+    const retriedRow = rows as { requestedMode?: string | null };
+    expect(retriedRow.requestedMode).toBe("linked");
+    const plan = JSON.parse(
+      (rows as { planJson?: string }).planJson ?? "{}"
+    ) as { constraints?: string[] };
+    expect(plan.constraints).toEqual([
+      "read install.md first",
+      "after install, do not transcribe",
+    ]);
+  }, 120_000);
+});

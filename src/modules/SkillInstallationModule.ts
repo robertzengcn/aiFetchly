@@ -1587,8 +1587,16 @@ export class SkillInstallationModule extends BaseModule {
     // A failed session is not active, so prepare claims a FRESH session for
     // the same canonical source and inherits the failure streak. The
     // RETRY resumes the persisted checkpoint — ref, subdirectory, mode,
-    // and constraints recorded at creation — instead of collapsing the
-    // request to the bare source (audit finding 11 / FR-20 §10.1).
+    // constraints, and selection (audit findings 11 + R6 / FR-20 §10.1).
+    // requestedMode stores the REQUEST-level value ("linked" |
+    // "managed-copy") — earlier code compared against the persisted
+    // symbolic-link/junction forms, so linked retries silently became
+    // managed copies.
+    const priorPlan = this.parsePlan(session);
+    const constraints =
+      priorPlan?.constraints && priorPlan.constraints.length > 0
+        ? [...priorPlan.constraints]
+        : undefined;
     return this.prepare({
       conversationId: session.conversationId,
       source,
@@ -1598,13 +1606,22 @@ export class SkillInstallationModule extends BaseModule {
       ...(session.requestedSubdirectory
         ? { subdirectory: session.requestedSubdirectory }
         : {}),
-      ...(session.requestedMode === "symbolic-link" ||
-      session.requestedMode === "junction"
-        ? { mode: "linked" as const }
-        : session.requestedMode === "managed-copy"
-          ? { mode: "managed-copy" as const }
-          : {}),
+      ...(session.requestedMode === "linked" ||
+      session.requestedMode === "managed-copy"
+        ? { mode: session.requestedMode }
+        : {}),
+      ...(constraints ? { constraints } : {}),
     });
+  }
+
+  /** Parse a session's persisted plan JSON; null when absent/unreadable. */
+  private parsePlan(session: SkillInstallationSessionEntity): SkillInstallPlan | null {
+    try {
+      if (!session.planJson) return null;
+      return JSON.parse(session.planJson) as SkillInstallPlan;
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------
