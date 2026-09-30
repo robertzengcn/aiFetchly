@@ -1352,6 +1352,18 @@ export class SkillInstallationModule extends BaseModule {
     return last as InstallSnapshot;
   }
 
+  /** Compose a requested subdirectory with a candidate wrapper path
+   *  (audit R5): both may be present; neither clobbers the other. */
+  private composeSubdirectory(
+    requested: string | null,
+    candidate: string | null | undefined
+  ): string {
+    const parts = [requested, candidate].filter(
+      (p): p is string => Boolean(p && p !== "." && p !== "")
+    );
+    return parts.length > 0 ? path.join(...parts) : "";
+  }
+
   /** Plan commands not yet executed (audit finding 4 checkpoint). */
   private pendingCommandsFor(
     _session: SkillInstallationSessionEntity,
@@ -2354,8 +2366,37 @@ export class SkillInstallationModule extends BaseModule {
         fs.existsSync(original) &&
         fs.statSync(original).isDirectory()
       ) {
-        sourceRoot = original;
-        linkedTargetPath = original;
+        // Audit R5: the link targets the CANDIDATE's directory inside the
+        // original folder — nested/SKILL.md installs previously reset the
+        // root to the repository root. The candidate path is relative to
+        // the INSPECTION root (already inside the requested subdirectory),
+        // so the link composes original + requested subdir + candidate path.
+        const candidateRoot = selected.rootRelativePath;
+        const requestedSubdir = session.requestedSubdirectory ?? null;
+        const linkedRoot = this.composeSubdirectory(
+          original,
+          this.composeSubdirectory(requestedSubdir, candidateRoot)
+        ) || original;
+        if (
+          linkedRoot !== original &&
+          (!fs.existsSync(linkedRoot) || !fs.statSync(linkedRoot).isDirectory())
+        ) {
+          await this.fail(
+            sessions,
+            events,
+            sessionId,
+            "LINK_CREATION_FAILED",
+            `Linked install mode could not find the selected skill directory (${candidateRoot}) inside the source folder.`
+          );
+          return this.errorSnapshot(
+            "failed",
+            "LINK_CREATION_FAILED",
+            `Linked install mode could not find the selected skill directory (${candidateRoot}) inside the source folder.`,
+            sessionId
+          );
+        }
+        sourceRoot = linkedRoot;
+        linkedTargetPath = linkedRoot;
       } else {
         await this.fail(
           sessions,
@@ -2411,7 +2452,14 @@ export class SkillInstallationModule extends BaseModule {
     entity.workspaceId = 0;
     entity.sourceUri = plan.source.canonicalUri;
     entity.sourceRevision = plan.source.resolvedRevision;
-    entity.sourceSubdirectory = candidateRoot ?? "";
+    // Audit R5: persist the FULL effective subdirectory — a requested
+    // subdirectory PLUS the candidate's wrapper path — so update/reacquire
+    // resolves the same location. (candidateRoot alone loses the request
+    // subdir; the two compose with a path join.)
+    entity.sourceSubdirectory = this.composeSubdirectory(
+      session.requestedSubdirectory ?? null,
+      candidateRoot
+    );
     entity.activationMode = result.mode;
     entity.activationPath = result.activationPath;
     entity.contentHash = plan.source.contentHash;

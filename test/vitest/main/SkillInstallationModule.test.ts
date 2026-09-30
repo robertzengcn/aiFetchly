@@ -2447,3 +2447,66 @@ describe("reuse correlation + ready identity (audit R4)", () => {
     expect(managed?.state).not.toBe("ready");
   }, 120_000);
 });
+
+describe("nested linked activation + instruction visibility (audit R5)", () => {
+  /** Source whose only SKILL.md AND install.md live in nested/. */
+  function makeNestedWithInstall(root: string): string {
+    const dir = path.join(root, "fixtures", "nested-full");
+    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "nested", "SKILL.md"),
+      "---\nname: nested-full-skill\ndescription: Nested full\n---\n\n# Usage\n\nNested body."
+    );
+    fs.writeFileSync(
+      path.join(dir, "nested", "install.md"),
+      "# Install\n\nNothing extra.\n"
+    );
+    return dir;
+  }
+
+  it("linked installation of nested/SKILL.md activates the NESTED directory", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeNestedWithInstall(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-r5a",
+      source: fixture,
+      subdirectory: "nested",
+      mode: "linked",
+    });
+    expect(prepared?.state).toBe("awaiting_approval");
+    const approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    expect(approved.state).toBe("ready");
+    // The link targets the ORIGINAL nested directory: the activation path
+    // resolves there and SKILL.md sits directly inside it.
+    const activationDir = path.join(
+      configHome,
+      ".aifetchly",
+      "skills",
+      "nested-full-skill"
+    );
+    expect(fs.existsSync(path.join(activationDir, "SKILL.md"))).toBe(true);
+    // The link is live: writing into the ORIGINAL nested dir shows through.
+    const target = fs.realpathSync(activationDir);
+    expect(target).toBe(path.join(fs.realpathSync(fixture), "nested"));
+  }, 120_000);
+
+  it("install.md inside a discovered candidate root is visible to the plan", async () => {
+    const module = new SkillInstallationModule();
+    const fixture = makeNestedWithInstall(tmpDir);
+    const prepared = await module.prepare({
+      conversationId: "conv-r5b",
+      source: fixture,
+      subdirectory: "nested",
+    });
+    const status = await module.getStatus(prepared.sessionId);
+    // The candidate's install.md content reached the planner (summary cites
+    // the discovered skill; instruction reading no longer stops at the
+    // inspection root).
+    expect(status.safeSummary).toContain("nested-full-skill");
+  }, 120_000);
+});

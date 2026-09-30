@@ -96,6 +96,33 @@ export class SkillPackageInspectionService {
       diagnostics,
       referencedHelpers
     );
+    // Audit R5: installation instructions inside a DISCOVERED candidate
+    // root (nested/install.md, skills/<name>/install.md) were invisible
+    // when the inspection root had none — a plan built from
+    // nested/SKILL.md must also see nested/install.md. Read each
+    // candidate's root (deduped; the inspection root is already read).
+    const seen = new Set<string>(["."]);
+    for (const candidate of discovered) {
+      const rel = candidate.rootRelativePath;
+      if (!rel || rel === "." || seen.has(rel)) continue;
+      seen.add(rel);
+      const candidateRoot = path.join(root, rel);
+      if (!fs.existsSync(candidateRoot)) continue;
+      this.readInstructionFiles(
+        candidateRoot,
+        constraints,
+        diagnostics,
+        referencedHelpers
+      ).forEach((f) => {
+        if (
+          !instructionFiles.some(
+            (existing) => existing.relativePath === f.relativePath
+          )
+        ) {
+          instructionFiles.push(f);
+        }
+      });
+    }
 
     return {
       rootRelativePath: subdirectory ?? ".",
