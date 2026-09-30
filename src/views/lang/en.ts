@@ -2586,9 +2586,9 @@ export default {
       readOnlyAutoApproved: "Read-only tools auto-approve",
       automationTools: "Automation tools",
       automationToolsHint: "Optional — select network check tools",
-      highImpactTools: "Write / email tools — type the name to enable",
+      highImpactTools: "Write / email tools",
       highImpactWarning:
-        "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Type each tool name to confirm.",
+        "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Tick each tool to enable.",
       typeToConfirm: "Type {name} to confirm",
       createLoop: "Schedule loop",
       errors: {

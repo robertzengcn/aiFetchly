@@ -2586,9 +2586,9 @@ export default {
         "Schreibgeschützte Tools werden automatisch genehmigt",
       automationTools: "Automatisierungs-Tools",
       automationToolsHint: "Optional — Netzwerkprüfungen auswählen",
-      highImpactTools: "Schreib-/E-Mail-Tools — Namen eingeben zum Aktivieren",
+      highImpactTools: "Schreib-/E-Mail-Tools",
       highImpactWarning:
-        "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Geben Sie jeden Tool-Namen ein, um zu bestätigen.",
+        "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Haken Sie jedes Tool an, um es zu aktivieren.",
       typeToConfirm: "{name} eingeben zum Bestätigen",
       errors: {
         INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",

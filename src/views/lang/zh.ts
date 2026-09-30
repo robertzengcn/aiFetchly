@@ -2452,9 +2452,9 @@ export default {
       readOnlyAutoApproved: "只读工具自动批准",
       automationTools: "自动化工具",
       automationToolsHint: "可选 — 选择网络检查工具",
-      highImpactTools: "写入 / 邮件工具 — 输入名称以启用",
+      highImpactTools: "写入 / 邮件工具",
       highImpactWarning:
-        "这些将在每次执行时无人值守运行。注入内容可能覆盖文件或以你的身份发送邮件。请逐个输入工具名称以确认。",
+        "这些将在每次执行时无人值守运行。注入内容可能覆盖文件或以你的身份发送邮件。请勾选每个工具以启用。",
       typeToConfirm: "输入 {name} 以确认",
       errors: {
         INVALID_LOOP_SYNTAX: "无法解析 /loop 命令。",

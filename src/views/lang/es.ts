@@ -2598,10 +2598,9 @@ export default {
         "Las herramientas de solo lectura se aprueban automáticamente",
       automationTools: "Herramientas de automatización",
       automationToolsHint: "Opcional — selecciona comprobaciones de red",
-      highImpactTools:
-        "Herramientas de escritura / correo — escribe el nombre para habilitar",
+      highImpactTools: "Herramientas de escritura / correo",
       highImpactWarning:
-        "Estas se ejecutan sin supervisión en cada ejecución. El contenido inyectado podría sobrescribir archivos o enviar correo como tú. Escribe cada nombre de herramienta para confirmar.",
+        "Estas se ejecutan sin supervisión en cada ejecución. El contenido inyectado podría sobrescribir archivos o enviar correo como tú. Marca cada herramienta para habilitarla.",
       typeToConfirm: "Escribe {name} para confirmar",
       errors: {
         INVALID_LOOP_SYNTAX: "No se pudo analizar el comando /loop.",

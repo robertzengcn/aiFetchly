@@ -2578,10 +2578,9 @@ export default {
       readOnlyAutoApproved: "Les outils en lecture seule sont auto-approuvés",
       automationTools: "Outils d'automatisation",
       automationToolsHint: "Optionnel — sélectionner des vérifications réseau",
-      highImpactTools:
-        "Outils d'écriture / e-mail — saisir le nom pour activer",
+      highImpactTools: "Outils d'écriture / e-mail",
       highImpactWarning:
-        "Ceux-ci s'exécutent sans surveillance à chaque exécution. Le contenu injecté pourrait écraser des fichiers ou envoyer des e-mails en votre nom. Saisissez chaque nom d'outil pour confirmer.",
+        "Ceux-ci s'exécutent sans surveillance à chaque exécution. Le contenu injecté pourrait écraser des fichiers ou envoyer des e-mails en votre nom. Cochez chaque outil pour l'activer.",
       typeToConfirm: "Saisissez {name} pour confirmer",
       errors: {
         INVALID_LOOP_SYNTAX: "La commande /loop n'a pas pu être analysée.",
