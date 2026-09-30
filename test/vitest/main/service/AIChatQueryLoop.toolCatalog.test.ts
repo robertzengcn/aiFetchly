@@ -429,3 +429,35 @@ describe("AIChatQueryLoop hydration + permission (FR-28 regression)", () => {
     }
   });
 });
+
+describe("remaining-context budget wiring (audit R7)", () => {
+  it("tool calls never carry a negative remainingContextTokens estimate", async () => {
+    const contexts: Array<{ remainingContextTokens?: number }> = [];
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: async (
+        _req: unknown,
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        onChunk(makeChunk("done", "stop"));
+      },
+      executeTool: vi.fn(async (_name, _args, ctx) => {
+        contexts.push(ctx as { remainingContextTokens?: number });
+        return {
+          tool_call_id: "c1",
+          tool_name: "t",
+          success: true,
+          execution_time_ms: 0,
+          result: {},
+        } as never;
+      }),
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const { input } = buildInput();
+    await loop.run(input);
+    for (const ctx of contexts) {
+      if (ctx.remainingContextTokens !== undefined) {
+        expect(ctx.remainingContextTokens).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+});

@@ -106,6 +106,9 @@ import { log } from "@/modules/Logger";
  * + execution rounds. 8 was too low and dead-ended conversations after
  * ~7 questions.
  */
+/** FR-24 completion reserve: tokens held back from the skill-instruction
+ * budget so the model can still answer after the hidden block loads. */
+const COMPLETION_RESERVE_TOKENS = 4_000;
 const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
@@ -682,6 +685,10 @@ export class AIChatQueryLoop {
    *  closed until the audit lookup completes). */
   private manualActionApprovedCache: { approved: boolean; target?: string } =
     { approved: false };
+  /** FR-24 (audit R7): the turn's model context window, resolved once
+   *  from the catalog (0 = unknown — the budget field is omitted and the
+   *  invocation falls back to its documented defaults). */
+  private modelContextWindowTokens = 0;
 
   /** FR-13: async allowlist refresh — caches the intersection for later
    *  rounds; never blocks (and never rejects) on the critical path. */
@@ -950,6 +957,21 @@ export class AIChatQueryLoop {
     // Imported fresh per run() to avoid cross-turn contamination.
     let recoveryState = createRecoveryAttemptState(input.request.model);
 
+    // FR-24 (audit R7): resolve the model's context window for the
+    // remaining-context estimate. FIRE-AND-FORGET with a cached value —
+    // an inline await here deadlocks fake-timer environments (the same
+    // hazard the install-boundary refreshes hit); the first turn falls
+    // back to the documented defaults, later turns use the cache.
+    void (async () => {
+      try {
+        this.modelContextWindowTokens =
+          await new (await import("@/service/AIChatModelCatalogService"))
+            .AIChatModelCatalogService()
+            .getContextWindow(input.request.model);
+      } catch {
+        this.modelContextWindowTokens = 0;
+      }
+    })();
     try {
       // Inject the deferred-tool announcement once at the start of the turn
       // (FR-6). First turn gets a compact category-level note; later turns get
@@ -2737,6 +2759,33 @@ export class AIChatQueryLoop {
     };
   }
 
+  /** ~4-chars-per-token estimate of the assembled transcript (string
+   *  contents only — multimodal parts add conservative slack via the
+   *  reserve). */
+  private estimateTranscriptTokens(
+    messages: ReadonlyArray<{ content?: unknown }>
+  ): number {
+    let chars = 0;
+    for (const m of messages) {
+      if (typeof m.content === "string") chars += m.content.length;
+      else if (Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (
+            part &&
+            typeof part === "object" &&
+            typeof (part as { text?: unknown }).text === "string"
+          ) {
+            chars += ((part as { text: string }).text ?? "").length;
+          } else {
+            // non-text part (e.g. image) — count as the reserve budget
+            chars += COMPLETION_RESERVE_TOKENS * 4;
+          }
+        }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
   private async executePreparedToolWithTimeout(
     input: AIChatQueryLoopInput,
     prepared: PreparedToolCall
@@ -2829,6 +2878,21 @@ export class AIChatQueryLoop {
         // cumulative budget against user-selected AND tool-selected images.
         currentRequestImageCount: countImageContentParts(input.messages),
         currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
+        // FR-24 (audit R7): the REAL remaining-context estimate — the
+        // assembled transcript's token cost subtracted from the model
+        // window, minus a completion reserve. use_skill forwards this to
+        // the invocation budget so hidden instruction blocks are bounded
+        // by what the conversation can actually hold.
+        ...(this.modelContextWindowTokens > 0
+          ? {
+              remainingContextTokens: Math.max(
+                0,
+                this.modelContextWindowTokens -
+                  this.estimateTranscriptTokens(input.messages) -
+                COMPLETION_RESERVE_TOKENS
+              ),
+            }
+          : {}),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({
