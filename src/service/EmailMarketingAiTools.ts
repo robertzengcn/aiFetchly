@@ -220,20 +220,22 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
   };
 }
 
-function sanitizeEmailService(service: {
-  id: number;
-  name: string;
-  tag?: { name: string } | null;
-  from: string;
-  host: string;
-  port: string;
-  ssl: number;
-  status: number;
-}): SanitizedEmailService {
+function sanitizeEmailService(
+  service: {
+    id: number;
+    name: string;
+    from: string;
+    host: string;
+    port: string;
+    ssl: number;
+    status: number;
+  },
+  tags: string[] = []
+): SanitizedEmailService {
   return {
     id: service.id,
     name: service.name,
-    tag: service.tag?.name ?? null,
+    tags,
     address: service.from,
     source: service.host,
     port: String(service.port),
@@ -377,9 +379,18 @@ export async function listEmailServices(
       input.search
     );
 
+    // Batch-expand tag names so each sanitized service carries its full tag set.
+    const tagMap = await module.getTagsForServices(
+      result.records.map((s) => s.id)
+    );
     return {
       success: true,
-      records: result.records.map((service) => sanitizeEmailService(service)),
+      records: result.records.map((service) =>
+        sanitizeEmailService(
+          service,
+          (tagMap.get(service.id) ?? []).map((t) => t.name)
+        )
+      ),
       total: result.num,
     };
   } catch (error) {
@@ -397,21 +408,52 @@ export async function getEmailServiceConfig(
     const module = new EmailServiceModule();
     await module.ensureConnection();
 
-    const service =
-      input.tag !== undefined
-        ? await module.findEmailServiceByTag(input.tag)
-        : await module.getEmailService(input.service_id!);
-    if (!service) {
-      throw new Error(
-        input.tag !== undefined
-          ? `Email service tag ${input.tag} not found`
-          : `Email service ${input.service_id} not found`
-      );
+    // service_id resolves directly to one service.
+    if (input.service_id !== undefined) {
+      const service = await module.getEmailService(input.service_id);
+      if (!service) {
+        throw new Error(`Email service ${input.service_id} not found`);
+      }
+      const tagViews = await module.getTagsForService(service.id);
+      return {
+        success: true,
+        service: sanitizeEmailService(
+          service,
+          tagViews.map((t) => t.name)
+        ),
+      };
     }
 
+    // Tag lookup (multi-tag): a tag can be attached to many services. One
+    // match returns it; multiple matches return a candidate list so the AI
+    // must disambiguate via service_id on a follow-up call.
+    const services = await module.findEmailServicesByTag(input.tag!);
+    if (services.length === 0) {
+      throw new Error(`Email service tag ${input.tag} not found`);
+    }
+    if (services.length === 1) {
+      const service = services[0]!;
+      const tagViews = await module.getTagsForService(service.id);
+      return {
+        success: true,
+        service: sanitizeEmailService(
+          service,
+          tagViews.map((t) => t.name)
+        ),
+      };
+    }
+    const tagMap = await module.getTagsForServices(
+      services.map((s) => s.id)
+    );
     return {
       success: true,
-      service: sanitizeEmailService(service),
+      candidates: services.map((service) =>
+        sanitizeEmailService(
+          service,
+          (tagMap.get(service.id) ?? []).map((t) => t.name)
+        )
+      ),
+      message: `Tag "${input.tag}" matches ${services.length} email services. Call again with service_id to pick one.`,
     };
   } catch (error) {
     return error instanceof ZodError

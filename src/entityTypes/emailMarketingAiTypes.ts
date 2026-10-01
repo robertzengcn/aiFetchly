@@ -141,7 +141,7 @@ export interface EmailSearchTaskSummary {
 export interface SanitizedEmailService {
   id: number;
   name: string;
-  tag: string | null;
+  tags: string[];
   address: string;
   source: string;
   port: string;
@@ -149,9 +149,17 @@ export interface SanitizedEmailService {
   status: number;
 }
 
-/** Email service config returned to AI tools */
+/**
+ * Email service config returned to AI tools. When a `tag` argument matches
+ * exactly one service, `service` is set. When it matches multiple, `candidates`
+ * lists the matches and `service` is omitted so the AI must disambiguate via
+ * `service_id` on a follow-up call.
+ */
 export interface EmailServiceConfigSummary {
-  service: SanitizedEmailService;
+  service?: SanitizedEmailService;
+  candidates?: SanitizedEmailService[];
+  /** Disambiguation hint surfaced when a tag matches more than one service. */
+  message?: string;
 }
 
 /** Email marketing template summary for AI tools */
