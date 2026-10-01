@@ -11,6 +11,7 @@ import {
 } from "@/config/channellist";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { isToolOutputUiEnabled } from "@/config/featureFlags";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import {
   toolResultExportIpcSchema,
   toolResultGetIpcSchema,
@@ -161,6 +162,30 @@ export function registerToolResultIpcHandlers(): void {
       }
 
       try {
+        // VERIFY INTEGRITY BEFORE HANDING OVER BYTES. This is the boundary
+        // where the output is presented to the user as the evidence the
+        // registry claims it is, so it is where the stored checksum must
+        // actually be checked. `checksumOf` previously had no caller at all,
+        // so a corrupted payload was exported as though it were intact.
+        const integrity = await verifyArtifactIntegrity({
+          storage,
+          storageKey: row.storageKey,
+          manifest: await storage.readManifest(
+            row.profileId,
+            row.outputEpoch,
+            row.outputId
+          ),
+        });
+        if (!integrity.ok) {
+          toolResultMetrics.record("capture.integrity_failed");
+          return denied(integrity.code);
+        }
+      } catch {
+        // A verification failure must not silently allow the export.
+        return denied("OUTPUT_INTEGRITY_FAILED");
+      }
+
+      try {
         await streamToFile(
           storage,
           row.storageKey,
@@ -255,6 +280,58 @@ async function runSearch(
   if (!outcome.ok) return denied(outcome.code);
   return ok({ ...outcome.page });
 }
+
+/**
+ * Verify one committed artifact against its stored manifest checksum.
+ *
+ * `checksumOf` existed with no production caller, so a silently corrupted
+ * payload was served as though it were the evidence the registry says it is.
+ * This makes the check available at the boundary where trust is actually
+ * claimed, and reports a distinct code so the caller can distinguish "this
+ * output is broken" from "this output is missing".
+ *
+ * `manifest` is the value previously read by `readManifest`. A missing manifest
+ * is NOT treated as corruption: an artifact may legitimately predate manifests,
+ * and the caller decides whether that is acceptable.
+ */
+export async function verifyArtifactIntegrity(input: {
+  readonly storage: ToolResultStorageService;
+  readonly storageKey: string;
+  readonly manifest: {
+    readonly sha256?: string;
+    readonly capturedBytes?: number;
+  } | null;
+}): Promise<
+  | { ok: true; verified: boolean }
+  | { ok: false; code: "OUTPUT_INTEGRITY_FAILED"; reason: string }
+> {
+  if (!input.manifest?.sha256) {
+    // Nothing recorded to verify against; not a failure, but not a pass either.
+    return { ok: true, verified: false };
+  }
+  let actual: string;
+  try {
+    actual = await input.storage.checksumOf(input.storageKey);
+  } catch (error: unknown) {
+    // The payload could not be read at all. That is an availability problem
+    // the retrieval path already reports; do not relabel it as corruption.
+    return {
+      ok: true,
+      verified: false,
+    };
+  }
+  if (actual !== input.manifest.sha256) {
+    return {
+      ok: false,
+      code: "OUTPUT_INTEGRITY_FAILED",
+      // Bounded and free of any path: only the two digests, and only the
+      // recorded one, which is app-managed state rather than user content.
+      reason: `checksum mismatch: expected ${input.manifest.sha256}, computed ${actual}`,
+    };
+  }
+  return { ok: true, verified: true };
+}
+
 
 /**
  * Stream an artifact to a user-chosen destination with bounded buffers.

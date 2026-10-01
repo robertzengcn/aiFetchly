@@ -23,6 +23,7 @@ export type ToolResultMetricName =
   | "capture.quota_refused"
   | "capture.disk_full"
   | "capture.publication_failed"
+  | "capture.integrity_failed"
   | "retrieval.read"
   | "retrieval.search"
   | "retrieval.budget_exhausted"

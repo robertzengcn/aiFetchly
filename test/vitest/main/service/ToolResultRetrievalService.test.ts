@@ -20,6 +20,7 @@ import {
   setToolResultCursorKey,
 } from "@/service/toolResult/ToolResultCursorCodec";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
+import { verifyArtifactIntegrity } from "@/main-process/communication/tool-result-ipc";
 
 /**
  * Bounded read/search and cursor-integrity tests.
@@ -737,3 +738,70 @@ describe("audit regression — T07: search continuation loses no match", () => {
   });
 });
 
+
+describe("audit regression — artifact integrity verification", () => {
+  it("confirms a payload that matches its manifest checksum", async () => {
+    // `checksumOf` existed with no production caller, so a corrupted payload
+    // could be served as though it were the evidence the registry claims.
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text: "authentic captured output",
+      sourceCompleteness: "complete",
+    });
+    const manifest = await storage.readManifest(
+      IDENTITY.profileId,
+      IDENTITY.outputEpoch,
+      outputId
+    );
+    expect(manifest).not.toBeNull();
+
+    const outcome = await verifyArtifactIntegrity({
+      storage,
+      storageKey: stored.storageKey,
+      manifest,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.verified).toBe(true);
+  });
+
+  it("reports a mismatch instead of serving corrupted bytes", async () => {
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text: "authentic captured output",
+      sourceCompleteness: "complete",
+    });
+    const outcome = await verifyArtifactIntegrity({
+      storage,
+      storageKey: stored.storageKey,
+      // A digest that cannot match: exactly what silent corruption looks like.
+      manifest: { sha256: "0".repeat(64) },
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+
+  it("does not call an unrecorded artifact corrupt", async () => {
+    // An artifact that predates manifests is unverified, not corrupt.
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text: "no manifest",
+      sourceCompleteness: "complete",
+    });
+    const outcome = await verifyArtifactIntegrity({
+      storage,
+      storageKey: stored.storageKey,
+      manifest: null,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.verified).toBe(false);
+  });
+});
