@@ -13,6 +13,7 @@ import { EmailFilterTaskRelationEntity } from "@/entity/EmailFilterTaskRelation.
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
+import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
 // import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
 import { EmailMarketingTaskEntity } from "@/entity/EmailMarketingTask.entity";
@@ -528,6 +529,7 @@ export class SqliteDb {
           EmailFilterTaskRelationEntity,
           EmailServiceEntity,
           EmailServiceTagEntity,
+          EmailServiceTagRelationEntity,
           EmailServiceTaskRelationEntity,
           SocialAccountEntity,
           YellowPagesTaskEntity,
