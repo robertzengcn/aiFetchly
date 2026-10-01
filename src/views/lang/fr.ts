@@ -2753,6 +2753,8 @@ export default {
       search_placeholder: "Rechercher dans cette sortie",
       search_no_matches: "Aucune correspondance dans la sortie enregistrée",
       search_incomplete: "Recherche arrêtée prématurément — du contenu peut n'avoir pas été vérifié",
+      search_more: "Rechercher d’autres correspondances",
+      searching: "Recherche en cours…",
       search_scan_complete: "Tout le contenu enregistré a été vérifié",
       source_incomplete: "L'outil s'est arrêté prématurément ; cette sortie peut être incomplète",
       next_page: "Page suivante",

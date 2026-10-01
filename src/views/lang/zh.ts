@@ -2616,6 +2616,8 @@ export default {
       search_placeholder: "搜索该输出",
       search_no_matches: "已保存的输出中未找到匹配",
       search_incomplete: "搜索提前停止 — 可能还有内容未检查",
+      search_more: "继续搜索更多匹配项",
+      searching: "正在搜索…",
       search_scan_complete: "已检查全部已保存内容",
       source_incomplete: "工具本身提前中止，输出可能不完整",
       next_page: "下一页",

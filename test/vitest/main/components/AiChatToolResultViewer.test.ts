@@ -44,6 +44,8 @@ const i18n = createI18n({
           search_placeholder: "Search this output",
           search_no_matches: "No matches in the saved output",
           search_incomplete: "Search stopped early",
+          search_more: "Search for more matches",
+          searching: "Searching…",
           source_incomplete: "The tool itself stopped early",
           next_page: "Next page",
           previous_page: "Previous page",
@@ -351,5 +353,107 @@ describe("AiChatToolResultViewer — safe rendering", () => {
     const copy = wrapper.find('[data-testid="viewer-copy"]');
     expect(copy.text()).toBe("Copy this page");
     expect(copy.text()).not.toMatch(/copy (the )?full/i);
+  });
+
+  // ---- search continuation (AC-17 / audit T12) ----
+
+  it("offers a continuation control when a partial scan returns a cursor", async () => {
+    // Without this the viewer can only ever show the first page of matches, so
+    // a hit beyond the scan ceiling is unreachable from the UI.
+    searchToolOutput.mockResolvedValue({
+      outputId: "out_0123456789abcdef0123456789abcdef",
+      matches: [
+        { startByte: 0, endByte: 3, excerpt: "hit", readCursor: "cursor-1" },
+      ],
+      scanComplete: false,
+      nextCursor: "search-cursor-1",
+      sourceCompleteness: "complete",
+    });
+    const wrapper = mountViewer();
+    await flushPromises();
+    wrapper.find('[data-testid="viewer-search-input"] input').setValue("hit");
+    await wrapper.find('[data-testid="viewer-search-submit"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="viewer-search-more"]').exists()).toBe(true);
+  });
+
+  it("hides the continuation control once the scan completes", async () => {
+    searchToolOutput.mockResolvedValue({
+      outputId: "out_0123456789abcdef0123456789abcdef",
+      matches: [
+        { startByte: 0, endByte: 3, excerpt: "hit", readCursor: "cursor-1" },
+      ],
+      scanComplete: true,
+      nextCursor: null,
+      sourceCompleteness: "complete",
+    });
+    const wrapper = mountViewer();
+    await flushPromises();
+    wrapper.find('[data-testid="viewer-search-input"] input').setValue("hit");
+    await wrapper.find('[data-testid="viewer-search-submit"]').trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="viewer-search-more"]').exists()).toBe(false);
+  });
+
+  it("follows the continuation cursor and appends rather than replaces", async () => {
+    searchToolOutput
+      .mockResolvedValueOnce({
+        outputId: "out_0123456789abcdef0123456789abcdef",
+        matches: [
+          { startByte: 0, endByte: 3, excerpt: "first", readCursor: "r1" },
+        ],
+        scanComplete: false,
+        nextCursor: "search-cursor-2",
+        sourceCompleteness: "complete",
+      })
+      .mockResolvedValueOnce({
+        outputId: "out_0123456789abcdef0123456789abcdef",
+        matches: [
+          { startByte: 900, endByte: 903, excerpt: "second", readCursor: "r2" },
+        ],
+        scanComplete: true,
+        nextCursor: null,
+        sourceCompleteness: "complete",
+      });
+
+    const wrapper = mountViewer();
+    await flushPromises();
+    wrapper.find('[data-testid="viewer-search-input"] input').setValue("hit");
+    await wrapper.find('[data-testid="viewer-search-submit"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="viewer-match"]')).toHaveLength(1);
+
+    await wrapper.find('[data-testid="viewer-search-more"]').trigger("click");
+    await flushPromises();
+
+    // The cursor was forwarded...
+    expect(searchToolOutput).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: "search-cursor-2" })
+    );
+    // ...and the earlier match is still listed.
+    const matches = wrapper.findAll('[data-testid="viewer-match"]');
+    expect(matches).toHaveLength(2);
+    expect(matches[0].text()).toContain("first");
+    expect(matches[1].text()).toContain("second");
+    // A completed scan offers nothing more to follow.
+    expect(wrapper.find('[data-testid="viewer-search-more"]').exists()).toBe(false);
+  });
+
+  it("does not offer a continuation for a fresh query before it is run", async () => {
+    searchToolOutput.mockResolvedValue({
+      outputId: "out_0123456789abcdef0123456789abcdef",
+      matches: [],
+      scanComplete: false,
+      nextCursor: "search-cursor-3",
+      sourceCompleteness: "complete",
+    });
+    const wrapper = mountViewer();
+    await flushPromises();
+    wrapper.find('[data-testid="viewer-search-input"] input').setValue("hit");
+    await flushPromises();
+    // No search has run, so there is nothing to continue.
+    expect(wrapper.find('[data-testid="viewer-search-more"]').exists()).toBe(false);
   });
 });

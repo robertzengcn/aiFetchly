@@ -2755,6 +2755,8 @@ export default {
       search_placeholder: "Search this output",
       search_no_matches: "No matches in the saved output",
       search_incomplete: "Search stopped early \u2014 more content may not have been checked",
+      search_more: "Search for more matches",
+      searching: "Searching…",
       search_scan_complete: "Searched all saved content",
       source_incomplete: "The tool itself stopped early, so this output may be missing content",
       next_page: "Next page",

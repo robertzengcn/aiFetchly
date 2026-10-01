@@ -2762,6 +2762,8 @@ export default {
       search_placeholder: "In dieser Ausgabe suchen",
       search_no_matches: "Keine Treffer in der gespeicherten Ausgabe",
       search_incomplete: "Suche wurde früh beendet — möglicherweise wurde nicht alles geprüft",
+      search_more: "Nach weiteren Übereinstimmungen suchen",
+      searching: "Suche läuft…",
       search_scan_complete: "Gespeicherter Inhalt vollständig geprüft",
       source_incomplete: "Das Werkzeug wurde früh beendet; die Ausgabe könnte unvollständig sein",
       next_page: "Nächste Seite",

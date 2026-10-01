@@ -2708,6 +2708,8 @@ export default {
       search_placeholder: "この出力を検索",
       search_no_matches: "保存された出力に一致するものはありません",
       search_incomplete: "検索が早終しました — 未検証の部分がある可能性があります",
+      search_more: "他の一致を検索",
+      searching: "検索中…",
       search_scan_complete: "保存された内容をすべて検証しました",
       source_incomplete: "ツール自体が早終したため、出力が不完全な可能性があります",
       next_page: "次のページ",

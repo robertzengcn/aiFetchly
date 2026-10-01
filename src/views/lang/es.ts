@@ -2772,6 +2772,8 @@ export default {
       search_placeholder: "Buscar en esta salida",
       search_no_matches: "No hay coincidencias en la salida guardada",
       search_incomplete: "La búsqueda se detuvo antes de tiempo; puede quedar contenido sin revisar",
+      search_more: "Buscar más coincidencias",
+      searching: "Buscando…",
       search_scan_complete: "Se revisó todo el contenido guardado",
       source_incomplete: "La herramienta se detuvo antes de tiempo; esta salida puede estar incompleta",
       next_page: "Página siguiente",

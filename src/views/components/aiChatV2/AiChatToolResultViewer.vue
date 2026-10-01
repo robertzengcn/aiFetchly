@@ -141,6 +141,29 @@
             "Search stopped early — more content may not have been checked"
         }}
       </div>
+    <!--
+        A partial scan returns a continuation cursor. Without a way to follow
+        it the viewer can only ever show the FIRST page of matches, so a hit
+        beyond the scan ceiling was unreachable from the UI entirely.
+      -->
+      <v-btn
+        v-if="searchResults.nextCursor"
+        size="small"
+        variant="tonal"
+        class="mt-2"
+        :disabled="searchLoadingMore"
+        :aria-label="
+          t('aiChatV2.toolOutput.search_more') || 'Search for more matches'
+        "
+        data-testid="viewer-search-more"
+        @click="runSearch(searchCursor, true)"
+      >
+        {{
+          searchLoadingMore
+            ? t("aiChatV2.toolOutput.searching") || "Searching…"
+            : t("aiChatV2.toolOutput.search_more") || "Search for more matches"
+        }}
+      </v-btn>
     </div>
 
     <div
@@ -278,6 +301,14 @@ let nextCursor = ref<string | null>(null);
 let requestToken = 0;
 /** Current literal search query, bound with v-model on the search field. */
 const searchQuery = ref("");
+/**
+ * Continuation cursor for the current literal search.
+ *
+ * Kept separately from `searchResults.nextCursor` so "load more" can pass an
+ * explicit cursor while the displayed page keeps its own value.
+ */
+const searchCursor = ref<string | null>(null);
+const searchLoadingMore = ref(false);
 
 const canGoBack = computed(() => pageIndex.value > 0);
 
@@ -414,9 +445,13 @@ async function openMatch(readCursor: string): Promise<void> {
   await loadPage(readCursor);
 }
 
-async function runSearch(): Promise<void> {
+async function runSearch(
+  cursor?: string | null,
+  append = false
+): Promise<void> {
   const token = ++requestToken;
-  loading.value = true;
+  if (append) searchLoadingMore.value = true;
+  else loading.value = true;
   errorCode.value = null;
   try {
     // Read the bound query, not `document.querySelector`: the element only
@@ -425,21 +460,41 @@ async function runSearch(): Promise<void> {
     const query = searchQuery.value.trim();
     if (!query) {
       searchResults.value = null;
+      searchCursor.value = null;
       return;
     }
     const result: ToolResultSearchPageView | null = await searchToolOutput({
       conversationId: props.conversationId,
       outputId: props.outputId,
       query,
+      ...(cursor ? { cursor } : {}),
     });
     if (token !== requestToken) return;
-    searchResults.value = result;
+    if (!result) {
+      searchResults.value = null;
+      searchCursor.value = null;
+      return;
+    }
+    // APPEND rather than replace, so following a continuation grows the match
+    // list instead of discarding the matches already shown. The backend
+    // suppresses matches it already committed, so the merged list has no
+    // duplicates.
+    searchResults.value = append && searchResults.value
+      ? {
+          ...result,
+          matches: [...searchResults.value.matches, ...result.matches],
+        }
+      : result;
+    searchCursor.value = result.nextCursor;
   } catch (error: unknown) {
     if (token !== requestToken) return;
     errorCode.value =
       error instanceof Error ? error.message : "OUTPUT_NOT_AVAILABLE";
   } finally {
-    if (token === requestToken) loading.value = false;
+    if (token === requestToken) {
+      loading.value = false;
+      searchLoadingMore.value = false;
+    }
   }
 }
 
@@ -473,6 +528,8 @@ function reset(): void {
   page.value = null;
   nextCursor.value = null;
   searchResults.value = null;
+  searchCursor.value = null;
+  searchLoadingMore.value = false;
   pageIndex.value = 0;
   errorCode.value = null;
   copied.value = false;
