@@ -314,6 +314,10 @@ function buildCoordinator(
   return { coordinator, router, fake, runModel: new AIChatRunModel(tmpDir) };
 }
 
+function runModel70(): AIChatRunModel {
+  return new AIChatRunModel(tmpDir);
+}
+
 function request(n: number): Parameters<AIChatCoordinator["startRun"]>[0] {
   return {
     conversationId: `v2-test-${n}`,
@@ -1075,6 +1079,46 @@ describe("AIChatRunEventAdapter", () => {
     expect(fake.resumed.length).toBe(0);
     // Cleanup remaining fillers.
     for (const t of fake.turns) t.resolve();
+  });
+
+
+  it("a stale dispatch cancels its orphaned engine claim (review fix, stop/approve race)", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(70));
+    if (!accepted.ok) return;
+    const runId = accepted.response.runId;
+    await waitFor(() => fake.turns.length === 1);
+
+    // Park the run, then reproduce the raced state directly: an approval
+    // claim that landed AFTER cancelRun finalized the run (so nothing
+    // dispatches it) but whose dispatch is already queued in the pump.
+    fake.parkPending("v2-test-70", { kind: "permission", id: "tool-r-70" });
+    fake.turns[0].resolve({
+      type: "paused_for_permission",
+      conversationId: "v2-test-70",
+      assistantMessageId: "assistant-1",
+    });
+    await waitFor(async () => {
+      const row = await runModel70().getByRunId(runId);
+      return row?.status === "awaiting_permission";
+    }).catch(() => undefined);
+    const cancel = await coordinator.cancelRun({ conversationId: "v2-test-70" });
+    expect(cancel.cancelled).toBe(true);
+    expect(coordinator.ownsConversation("v2-test-70")).toBe(false);
+
+    // The raced approval: claimed just after finalize (the real race
+    // interleaves this before deletion; simulating the post-state directly).
+    const lateClaim = fake.engine.claimPendingPermission("v2-test-70", "tool-r-70");
+    expect(lateClaim.status).toBe("claimed");
+
+    // The already-queued dispatch finally executes: the stale guard must
+    // cancel the orphaned claim so a duplicate approval is rejected later.
+    const stale = coordinator as unknown as {
+      executeDispatch(r: string, c: string): Promise<void>;
+    };
+    await stale.executeDispatch(runId, "v2-test-70");
+    expect(fake.cancelledClaims).toContain("v2-test-70");
   });
 
 });

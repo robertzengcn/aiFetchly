@@ -627,7 +627,11 @@ export class AIChatCoordinator {
   ): Promise<void> {
     const live = this.liveRuns.get(conversationId);
     if (!live || live.runId !== runId) {
-      // Stale dispatch target (e.g. cancelled between pump and execute).
+      // Stale dispatch target (e.g. cancelled between pump and execute, or a
+      // claimed resume whose run was finalized by a racing Stop): cancel any
+      // orphaned engine claim so a later duplicate approval is rejected
+      // instead of silently acknowledged ("already claimed") without running.
+      this.deps.engine.cancelClaimed(conversationId);
       this.startRequests.delete(runId);
       this.runIndex.delete(runId);
       this.deps.scheduler.complete(runId);
