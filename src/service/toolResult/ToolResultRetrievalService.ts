@@ -356,6 +356,13 @@ export class ToolResultRetrievalService {
 
     let position = 0;
     let lastMatchEnd = 0;
+    // True once THIS call has committed at least one match.
+    //
+    // `lastMatchEnd` is only a meaningful resume point after a match was
+    // actually committed. While it is still 0 (no match found yet) it must NOT
+    // be used to rewind, or a document larger than the scan ceiling whose first
+    // window contains no match would resume at byte 0 forever.
+    let committedAnyMatch = false;
     if (input.cursor) {
       const decoded = decodeToolResultCursor(input.cursor, {
         outputId: input.target.outputId,
@@ -366,6 +373,8 @@ export class ToolResultRetrievalService {
       if (!decoded.ok) return { ok: false, code: decoded.code };
       position = decoded.payload.position;
       lastMatchEnd = decoded.payload.lastMatchEnd ?? 0;
+      // A prior page committed matches, so its end is a valid rewind point.
+      committedAnyMatch = lastMatchEnd > 0;
     }
 
     const maxMatches = Math.min(
@@ -428,6 +437,7 @@ export class ToolResultRetrievalService {
             })
           );
           lastMatchEnd = absolute + queryBytes.byteLength;
+          committedAnyMatch = true;
           if (matches.length >= maxMatches) break;
         }
         offset = combined.indexOf(queryBytes, offset + 1);
@@ -479,8 +489,12 @@ export class ToolResultRetrievalService {
           //    trailing overlap can still begin an uncommitted match, and
           //    resuming at `carryStart` avoids re-scanning megabytes.
           //
-          // Taking the minimum covers both without ever skipping a byte.
-          position: Math.min(lastMatchEnd, carryStart),
+          // Clamped so the cursor is MONOTONIC when nothing was committed: with no
+          // match in this page, `lastMatchEnd` is still 0 and using it would
+          // rewind to the very start, re-scanning the same bytes forever.
+          position: committedAnyMatch
+            ? Math.min(lastMatchEnd, carryStart)
+            : carryStart,
           queryDigest,
           lastMatchEnd,
         });

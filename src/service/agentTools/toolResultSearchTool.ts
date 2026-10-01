@@ -29,6 +29,18 @@ export async function handleToolResultSearch(
     return { success: false, result: { error: "OUTPUT_NOT_AVAILABLE" } };
   }
 
+  // Resolve and authorize BEFORE charging the allowance.
+  //
+  // Order matters: a call for an unknown or unauthorized `output_id` performs no
+  // retrieval work, so it must not consume any of the turn's allowance. This
+  // matches `tool_result_read`, which also resolves first. Charging first (as
+  // this handler used to) meant a model naming a bad id repeatedly burned calls
+  // it never used.
+  const target = await trusted.resolveTarget(parsed.data.output_id);
+  if (!target.ok) {
+    return { success: false, result: { error: target.code } };
+  }
+
   // Charge the shared per-turn allowance BEFORE doing the work, so concurrent
   // or repeated retrievals cannot each slip past the cap.
   const work = await trusted.reserveWork();
@@ -45,11 +57,6 @@ export async function handleToolResultSearch(
     };
   }
 
-  const target = await trusted.resolveTarget(parsed.data.output_id);
-  if (!target.ok) {
-    return { success: false, result: { error: target.code } };
-  }
-
   const outcome = await trusted.retrieval.search({
     target: target.target,
     query: parsed.data.query,
@@ -58,6 +65,10 @@ export async function handleToolResultSearch(
   });
 
   if (!outcome.ok) {
+    // Release the reservation before returning. With settlement now RELEASING
+    // `reservedCalls`, an unsettled reservation permanently consumes one of the
+    // turn's 32 calls.
+    await trusted.settleWork(0);
     return { success: false, result: { error: outcome.code } };
   }
 
