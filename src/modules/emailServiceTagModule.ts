@@ -1,5 +1,6 @@
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTagModel } from "@/model/EmailServiceTag.model";
+import { EmailServiceTagRelationModel } from "@/model/EmailServiceTagRelation.model";
 import { BaseModule } from "@/modules/baseModule";
 import type { EmailServiceTagSummary } from "@/entityTypes/emailmarketingType";
 import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
@@ -26,10 +27,12 @@ export function validateEmailServiceTagName(value: string): string {
 
 export class EmailServiceTagModule extends BaseModule {
   private readonly tagModel: EmailServiceTagModel;
+  private readonly tagRelationModel: EmailServiceTagRelationModel;
 
   constructor() {
     super();
     this.tagModel = new EmailServiceTagModel(this.dbpath);
+    this.tagRelationModel = new EmailServiceTagRelationModel(this.dbpath);
   }
 
   async listTags(search?: string): Promise<EmailServiceTagSummary[]> {
@@ -93,16 +96,28 @@ export class EmailServiceTagModule extends BaseModule {
     }
   }
 
-  async deleteTag(id: number): Promise<{ affectedServiceCount: number }> {
+  /**
+   * Delete a tag. Junction rows are removed via the tag's CASCADE relation,
+   * so services simply lose this one tag. Returns:
+   *  - affectedServiceCount: services that had this tag
+   *  - servicesBecomingUntagged: services whose only tag was this one
+   *    (the UI uses this to phrase the confirmation message accurately).
+   */
+  async deleteTag(id: number): Promise<{
+    affectedServiceCount: number;
+    servicesBecomingUntagged: number;
+  }> {
     await this.ensureConnection();
     const existing = await this.tagModel.read(id);
     if (!existing) {
       throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
     }
     const affectedServiceCount = await this.tagModel.countServices(id);
+    const servicesBecomingUntagged =
+      await this.tagRelationModel.countServicesLosingOnlyTag(id);
     await this.tagModel.delete(id);
     incrementEmailServiceMetric("tag_delete");
-    return { affectedServiceCount };
+    return { affectedServiceCount, servicesBecomingUntagged };
   }
 
   async getTag(id: number): Promise<EmailServiceTagEntity | undefined> {

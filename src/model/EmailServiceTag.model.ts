@@ -1,6 +1,6 @@
 import { Repository } from "typeorm";
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
-import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
 import { BaseDb } from "@/model/Basedb";
 
 export class EmailServiceTagModel extends BaseDb {
@@ -62,9 +62,9 @@ export class EmailServiceTagModel extends BaseDb {
 
   async countServices(id: number): Promise<number> {
     return await this.sqliteDb.connection
-      .getRepository(EmailServiceEntity)
-      .createQueryBuilder("service")
-      .where("service.tagId = :tagId", { tagId: id })
+      .getRepository(EmailServiceTagRelationEntity)
+      .createQueryBuilder("relation")
+      .where("relation.tagId = :tagId", { tagId: id })
       .getCount();
   }
 }
