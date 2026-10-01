@@ -136,8 +136,45 @@ export function registerToolResultIpcHandlers(): void {
       if (result.canceled || !result.filePath) {
         return ok({ status: "cancelled" });
       }
+
+      // RE-AUTHORIZE AFTER THE DIALOG. The authorization above proves the
+      // caller may read the output; it does not survive the seconds the modal
+      // spent open. The user can clear the conversation, which rotates the
+      // output epoch, while the dialog is up. Without this second check the
+      // export would happily copy bytes the user just asked to delete.
+      const confirmed = await module.authorizeAccess({
+        outputId: input.outputId,
+        profileId: "default",
+        conversationId: input.conversationId,
+      });
+      if (!confirmed.ok) return denied(confirmed.code);
+      // The epoch must be the SAME one, not merely still valid: a rotate +
+      // re-create cycle must not let a new artifact inherit an in-flight
+      // export that was authorized against the previous epoch.
+      if (confirmed.output.outputEpoch !== row.outputEpoch) {
+        return denied("OUTPUT_CHANGED");
+      }
+
       try {
-        await streamToFile(storage, row.storageKey, result.filePath);
+        await streamToFile(
+          storage,
+          row.storageKey,
+          result.filePath,
+          // Stop promptly if the scope is invalidated mid-copy.
+          async () => {
+            const stillAuthorized = await module.authorizeAccess({
+              outputId: input.outputId,
+              profileId: "default",
+              conversationId: input.conversationId,
+            });
+            if (
+              !stillAuthorized.ok ||
+              stillAuthorized.output.outputEpoch !== row.outputEpoch
+            ) {
+              throw new Error("output scope was invalidated during export");
+            }
+          }
+        );
       } catch {
         // Report the failure without leaking an internal path.
         return denied("OUTPUT_WRITE_FAILED");
@@ -217,14 +254,15 @@ async function runSearch(
 /**
  * Stream an artifact to a user-chosen destination with bounded buffers.
  *
- * The whole payload never passes through the renderer, and the epoch is
- * re-checked between chunks so an export stops promptly if the conversation is
- * cleared mid-copy.
+ * The whole payload never passes through the renderer. `onChunk` is invoked
+ * between chunks so a long copy can stop promptly when the conversation is
+ * cleared mid-export; the copy is abandoned rather than completed.
  */
 async function streamToFile(
   storage: ToolResultStorageService,
   storageKey: string,
-  destination: string
+  destination: string,
+  onChunk?: () => Promise<void>
 ): Promise<void> {
   const { assertReadableRegularFile } = await import(
     "@/service/toolResult/ToolResultPaths"
@@ -232,10 +270,22 @@ async function streamToFile(
   const real = await assertReadableRegularFile(storage.getRoot(), storageKey);
   const stream = fs.createReadStream(real, { highWaterMark: 64 * 1024 });
   const out = fs.createWriteStream(destination);
-  await new Promise<void>((resolve, reject) => {
-    stream.on("error", reject);
-    out.on("error", reject);
-    out.on("finish", resolve);
-    stream.pipe(out);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      stream.on("error", reject);
+      out.on("error", reject);
+      out.on("finish", resolve);
+      stream.on("data", () => {
+        // Re-check between chunks so an invalidated scope aborts promptly.
+        if (!onChunk) return;
+        void onChunk().catch(reject);
+      });
+      stream.pipe(out);
+    });
+  } catch (error: unknown) {
+    // Do not leave a truncated file behind as if it were a complete export.
+    out.destroy();
+    await fs.promises.rm(destination, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }

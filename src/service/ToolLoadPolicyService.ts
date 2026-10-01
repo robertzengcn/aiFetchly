@@ -14,6 +14,10 @@
 
 import type { OpenAITool } from "@/api/aiChatApi";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import {
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+} from "@/entityTypes/toolResultToolTypes";
 import type {
   ToolCatalogRuntimeContext,
   ToolCatalogSource,
@@ -37,6 +41,15 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "knowledge_library_search",
   "run_subagent",
   "conversation_tool_history",
+  // The preserved-output readers are ALWAYS in the core tool set, never behind
+  // `tool_catalog_search`. They are the only way the model can reach an output
+  // it was just told about: a receipt that names an `output_id` is unusable if
+  // the reader sits behind a discovery tool, and the model then reports the data
+  // as missing. Availability is still gated separately
+  // (`isToolResultRetrievalAvailable`), so this widens WHEN they are exposed,
+  // not WHETHER.
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([

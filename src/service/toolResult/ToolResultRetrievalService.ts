@@ -435,6 +435,21 @@ export class ToolResultRetrievalService {
 
       scanned += window.buffer.byteLength;
       cursorPosition += window.buffer.byteLength;
+
+      // Carry the overlap BEFORE any break so it is correct for every exit
+      // path, not just the fall-through one.
+      //
+      // The continuation must resume at the START of the overlap, not at
+      // `cursorPosition`: a match that begins a few bytes before the end of
+      // this window and extends past it cannot be found here (its tail has not
+      // been read yet) and would never be found on a continuation that resumes
+      // at `cursorPosition`, because its START is already behind the cursor.
+      // Resuming at `carryStart` re-reads at most `queryBytes.byteLength - 1`
+      // bytes, and `lastMatchEnd` suppresses anything already committed, so the
+      // overlap is exactly the idempotent window.
+      carry = combined.subarray(Math.max(0, combined.byteLength - overlap));
+      carryStart = cursorPosition - carry.byteLength;
+
       if (matches.length >= maxMatches) break;
       if (cursorPosition >= window.totalBytes) {
         // Only here is it true that EVERY byte of the captured representation
@@ -442,24 +457,30 @@ export class ToolResultRetrievalService {
         scanComplete = true;
         break;
       }
-      // Carry the overlap so a match crossing the boundary is still found.
-      carry = combined.subarray(Math.max(0, combined.byteLength - overlap));
-      carryStart = cursorPosition - carry.byteLength;
       await this.onYield?.();
     }
 
     const nextCursor = scanComplete
       ? null
-      : // A continuation is REQUIRED whenever the scan stopped early, including
-        // when it stopped because the match budget filled up. Returning null
-        // there would tell the model "no more matches exist" when in fact the
-        // rest of the output was never examined - the exact overclaim AC-16/17
-        // exist to prevent. `position` resumes at the first unexamined byte.
-        encodeToolResultCursor({
+      : encodeToolResultCursor({
           outputId: input.target.outputId,
           revision: input.target.revision,
           mode: "search",
-          position: cursorPosition,
+          // Resume at the first byte that could still begin an UNCOMMITTED
+          // match, NOT at the end of the last window.
+          //
+          // Two different stop reasons need two different positions:
+          //
+          //  - Match budget filled: `lastMatchEnd` is where the last COMMITTED
+          //    match ended. Everything from there on was never examined, so
+          //    resuming at the window end would skip the entire remaining body
+          //    and under-report matches.
+          //  - Ceiling/deadline: the whole window WAS examined, so only the
+          //    trailing overlap can still begin an uncommitted match, and
+          //    resuming at `carryStart` avoids re-scanning megabytes.
+          //
+          // Taking the minimum covers both without ever skipping a byte.
+          position: Math.min(lastMatchEnd, carryStart),
           queryDigest,
           lastMatchEnd,
         });

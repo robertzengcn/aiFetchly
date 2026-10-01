@@ -8,6 +8,8 @@ import {
   ToolResultRetrievalService,
   decodeUtf8Window,
   legacySourceReader,
+  createToolResultRetrievalService,
+  dispatchingSourceReader,
   type RetrievalTarget,
 } from "@/service/toolResult/ToolResultRetrievalService";
 import {
@@ -561,3 +563,177 @@ describe("decodeUtf8Window — text-boundary safety", () => {
     expect(decodeUtf8Window(Buffer.from(text, "utf8"), 0)).toBe(text);
   });
 });
+
+/**
+ * Regression tests for the confirmed defects in the 2026-10-01 audit.
+ *
+ * These drive the REAL retrieval service rather than a mock, so a fix that only
+ * satisfies a unit test with an injected stub fails here.
+ */
+
+/**
+ * In-memory legacy source row, standing in for `ai_chat_messages`, exposed
+ * through the same Module seam the production factory uses.
+ */
+function legacyModule(full: string) {
+  return {
+    readLegacySourceSlice: async (args: {
+      sourceRowKey: string;
+      offsetBytes: number;
+      lengthBytes: number;
+    }) => {
+      const buffer = Buffer.from(full, "utf8");
+      const slice = buffer.subarray(
+        args.offsetBytes,
+        args.offsetBytes + args.lengthBytes
+      );
+      return { text: slice.toString("utf8"), totalBytes: buffer.byteLength };
+    },
+  };
+}
+
+describe("audit regression — T01: backend dispatch", () => {
+  it("reads a file-backed artifact through the production factory", async () => {
+    // The audit's probe: the model path was constructed with the LEGACY reader
+    // only, so every file artifact failed with OUTPUT_NOT_AVAILABLE.
+    const target = await storeText("file backed needle content");
+    const wired = createToolResultRetrievalService({
+      storage,
+      module: legacyModule(""),
+    });
+
+    const outcome = await wired.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toContain("file backed needle content");
+  });
+
+  it("reads a legacy_message row through the same service", async () => {
+    const wired = createToolResultRetrievalService({
+      storage,
+      module: legacyModule("legacy row needle content"),
+    });
+    const target: RetrievalTarget = {
+      outputId: newOutputId(),
+      revision: 1,
+      backend: "legacy_message",
+      sourceRowKey: "msg-1",
+      storageKey: "",
+      format: "text",
+      capturedBytes: 25,
+      sourceCompleteness: "complete",
+    };
+
+    const outcome = await wired.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toBe("legacy row needle content");
+  });
+
+  it("refuses a legacy target with no source row instead of reading a file", async () => {
+    const wired = createToolResultRetrievalService({
+      storage,
+      module: legacyModule("legacy"),
+    });
+    const target: RetrievalTarget = {
+      outputId: newOutputId(),
+      revision: 1,
+      backend: "legacy_message",
+      storageKey: "",
+      format: "text",
+      capturedBytes: 6,
+      sourceCompleteness: "complete",
+    };
+
+    const outcome = await wired.read({ target });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("OUTPUT_NOT_AVAILABLE");
+  });
+
+  it("dispatches per target rather than to one injected reader", async () => {
+    const fileTarget = await storeText("from file");
+    const seen: string[] = [];
+    const empty = { buffer: Buffer.alloc(0), totalBytes: 0 };
+    const reader = dispatchingSourceReader({
+      file: {
+        read: async () => {
+          seen.push("file");
+          return empty;
+        },
+      },
+      legacy: {
+        read: async () => {
+          seen.push("legacy");
+          return empty;
+        },
+      },
+    });
+
+    await reader.read({ target: fileTarget, startByte: 0, maxBytes: 10 });
+    await reader.read({
+      target: { ...fileTarget, backend: "legacy_message", sourceRowKey: "m" },
+      startByte: 0,
+      maxBytes: 10,
+    });
+
+    expect(seen).toEqual(["file", "legacy"]);
+  });
+});
+
+describe("audit regression — T07: search continuation loses no match", () => {
+  it("finds a match whose start is inside the first page's window", async () => {
+    // A small per-page match budget stops the scan inside a window. A match
+    // whose START lies in that window but whose END lies past the window end
+    // must still be reported by the continuation.
+    const filler = "x".repeat(70 * 1024);
+    const needle = "BOUNDARY-SPANNING-NEEDLE";
+    const target = await storeText(`${filler}${needle}${filler}`);
+
+    const collected: number[] = [];
+    let cursor: string | undefined;
+    let complete = false;
+
+    for (let i = 0; i < 60 && !complete; i += 1) {
+      const page = await service.search({ target, query: needle, maxMatches: 1, cursor });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      collected.push(...page.page.matches.map((m) => m.startByte));
+      complete = page.page.scanComplete;
+      cursor = page.page.nextCursor ?? undefined;
+      if (!cursor && !complete) break;
+    }
+
+    expect(complete).toBe(true);
+    expect(collected).toHaveLength(1);
+    expect(collected[0]).toBe(Buffer.byteLength(filler, "utf8"));
+  });
+
+  it("collects every occurrence exactly once while paging", async () => {
+    const target = await storeText("hit ".repeat(500));
+    const starts: number[] = [];
+    let cursor: string | undefined;
+    let complete = false;
+
+    for (let i = 0; i < 400 && !complete; i += 1) {
+      const page = await service.search({
+        target,
+        query: "hit",
+        maxMatches: 3,
+        cursor,
+      });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      starts.push(...page.page.matches.map((m) => m.startByte));
+      complete = page.page.scanComplete;
+      cursor = page.page.nextCursor ?? undefined;
+      if (!cursor && !complete) break;
+    }
+
+    expect(complete).toBe(true);
+    // The overlap re-read is idempotent: no duplicates, and none lost.
+    expect(new Set(starts).size).toBe(starts.length);
+    expect(starts).toHaveLength(500);
+  });
+});
+
