@@ -1,64 +1,69 @@
 <template>
-  <div ref="scroller" class="v2-messages" @scroll="onScroll">
-    <div v-if="messages.length === 0" class="v2-messages__empty">
-      <v-icon size="40" color="grey-lighten-1">mdi-chat-outline</v-icon>
-      <div class="v2-messages__empty-title">
-        {{ t("aiChatV2.empty_title") || "Start a conversation" }}
+  <!-- Wrapper is the positioning ancestor for the floating button (sibling of
+       the scroller, NOT a child — an absolute element inside an overflow:auto
+       container scrolls with the content and is pushed off-screen below). -->
+  <div class="v2-messages__wrapper">
+    <div ref="scroller" class="v2-messages" @scroll="onScroll">
+      <div v-if="messages.length === 0" class="v2-messages__empty">
+        <v-icon size="40" color="grey-lighten-1">mdi-chat-outline</v-icon>
+        <div class="v2-messages__empty-title">
+          {{ t("aiChatV2.empty_title") || "Start a conversation" }}
+        </div>
+        <div class="v2-messages__empty-desc">
+          {{ t("aiChatV2.empty_description") || "Ask anything." }}
+        </div>
       </div>
-      <div class="v2-messages__empty-desc">
-        {{ t("aiChatV2.empty_description") || "Ask anything." }}
+      <AiChatV2Message
+        v-for="m in messages"
+        :key="m.id"
+        :message="m"
+        :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
+        :error-message="errorMessage"
+        :disabled="isStreaming"
+        :workspace-root="workspaceRoot"
+        :show-reasoning="showReasoning"
+        :reported="props.reportedMessageIds.has(m.id)"
+        @grant-permission="onGrantPermission"
+        @deny-permission="onDenyPermission"
+        @approve-plan="emit('approve-plan')"
+        @reject-plan="(fb) => emit('reject-plan', fb)"
+        @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
+        @open-artifact="(id: string) => emit('open-artifact', id)"
+        @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+        @report="onReportRequest"
+      />
+      <div
+        v-if="showTypingIndicator"
+        class="v2-messages__typing"
+        :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
+      >
+        <span class="v2-messages__typing-dot" />
+        <span class="v2-messages__typing-dot" />
+        <span class="v2-messages__typing-dot" />
       </div>
-    </div>
-    <AiChatV2Message
-      v-for="m in messages"
-      :key="m.id"
-      :message="m"
-      :status="m.id === activeAssistantMessageId ? streamStatus : 'idle'"
-      :error-message="errorMessage"
-      :disabled="isStreaming"
-      :workspace-root="workspaceRoot"
-      :show-reasoning="showReasoning"
-      :reported="props.reportedMessageIds.has(m.id)"
-      @grant-permission="onGrantPermission"
-      @deny-permission="onDenyPermission"
-      @approve-plan="emit('approve-plan')"
-      @reject-plan="(fb) => emit('reject-plan', fb)"
-      @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
-      @open-artifact="(id: string) => emit('open-artifact', id)"
-      @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
-      @report="onReportRequest"
-    />
-    <div
-      v-if="showTypingIndicator"
-      class="v2-messages__typing"
-      :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
-    >
-      <span class="v2-messages__typing-dot" />
-      <span class="v2-messages__typing-dot" />
-      <span class="v2-messages__typing-dot" />
-    </div>
-    <div
-      v-if="retryInfo"
-      class="v2-messages__retry"
-      :aria-label="
-        t('aiChatV2.reconnecting') || 'Reconnecting to AI server…'
-      "
-    >
-      <v-icon size="16" class="v2-messages__retry-icon">mdi-refresh</v-icon>
-      <span class="v2-messages__retry-text">
-        {{ t("aiChatV2.reconnecting") || "Reconnecting…" }}
-        <span class="v2-messages__retry-count">
-          {{
-            t("aiChatV2.reconnect_attempt", {
-              n: retryInfo.attempt,
-              max: retryInfo.maxAttempts,
-            }) ||
-            `(attempt ${retryInfo.attempt}/${retryInfo.maxAttempts})`
-          }}
+      <div
+        v-if="retryInfo"
+        class="v2-messages__retry"
+        :aria-label="
+          t('aiChatV2.reconnecting') || 'Reconnecting to AI server…'
+        "
+      >
+        <v-icon size="16" class="v2-messages__retry-icon">mdi-refresh</v-icon>
+        <span class="v2-messages__retry-text">
+          {{ t("aiChatV2.reconnecting") || "Reconnecting…" }}
+          <span class="v2-messages__retry-count">
+            {{
+              t("aiChatV2.reconnect_attempt", {
+                n: retryInfo.attempt,
+                max: retryInfo.maxAttempts,
+              }) ||
+              `(attempt ${retryInfo.attempt}/${retryInfo.maxAttempts})`
+            }}
+          </span>
         </span>
-      </span>
+      </div>
+      <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
     </div>
-    <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
     <v-btn
       v-if="showScrollButton"
       class="v2-messages__scroll-down"
@@ -198,12 +203,15 @@ defineExpose({ scrollToBottomForce });
 </script>
 
 <style scoped>
-.v2-messages {
+.v2-messages__wrapper {
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
+}
+.v2-messages {
+  height: 100%;
   overflow-y: auto;
   padding: 12px 16px;
-  position: relative;
 }
 .v2-messages__scroll-down {
   position: absolute;

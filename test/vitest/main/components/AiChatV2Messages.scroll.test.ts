@@ -181,4 +181,31 @@ describe("AiChatV2Messages auto-scroll on history load", () => {
 
     wrapper.unmount();
   });
+
+  it("renders the float button as a sibling (not a child) of the scroll container", async () => {
+    // Regression guard for the positioning bug: an absolute element inside an
+    // overflow:auto container scrolls with the content (bottom:12px lands
+    // below the viewport). The button must be a sibling of .v2-messages
+    // inside a positioned wrapper, not a child of the scroller.
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      makeMessage(`m-${i}`, `message ${i}`)
+    );
+    const wrapper = mountMessages(messages);
+    await wrapper.vm.$nextTick();
+
+    const scroller = wrapper.find(".v2-messages").element as HTMLElement;
+    stubScrollGeometry(scroller, 1000);
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+
+    const button = wrapper.find('[data-testid="scroll-to-bottom"]');
+    expect(button.exists()).toBe(true);
+    // The button's parent must be the wrapper, not the scroller.
+    expect(button.element.parentElement).toBe(
+      wrapper.find(".v2-messages__wrapper").element
+    );
+
+    wrapper.unmount();
+  });
 });
