@@ -156,7 +156,7 @@
                 size="small"
                 variant="text"
                 data-testid="tool-output-view"
-                @click="viewerOpen = !viewerOpen"
+                @click="onToggleViewer"
               >
                 {{ t("aiChatV2.toolOutput.view") || "View full result" }}
               </v-btn>
@@ -763,6 +763,39 @@ const preservedOutput = computed<PreservedOutputView | null>(() => {
 
   return { outputId, stateLabel, sizeLabel, preview };
 });
+
+/**
+ * Open the paged viewer, honouring the `ui` rollout flag.
+ *
+ * The flag is resolved by the MAIN process and reported on the descriptor, not
+ * read from the renderer: the renderer has no Token-store access and must not be
+ * the thing enforcing a rollout gate. When the flag is off the button does
+ * nothing rather than opening a viewer the operator disabled - and the old
+ * bounded content plus export are unaffected.
+ */
+async function onToggleViewer(): Promise<void> {
+  const target = preservedOutput.value;
+  if (!target?.outputId) return;
+  if (viewerOpen.value) {
+    viewerOpen.value = false;
+    return;
+  }
+  try {
+    const { getToolOutput } = await import("@/views/api/aiToolResult");
+    const descriptor = await getToolOutput(
+      String(props.message.conversationId),
+      target.outputId
+    );
+    // A missing descriptor means the output is gone or unauthorized; do not
+    // open an empty viewer.
+    if (!descriptor?.viewerEnabled) return;
+    viewerOpen.value = true;
+  } catch {
+    // Descriptor lookup failed: leave the viewer closed rather than showing an
+    // error state in a button that is only supposed to open a panel.
+  }
+}
+
 
 async function onExportPreserved(): Promise<void> {
   const target = preservedOutput.value;

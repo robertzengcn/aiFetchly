@@ -216,6 +216,15 @@ export interface ToolOutputPublicDescriptor {
   readonly incompleteReason?: string;
   readonly state: ToolOutputState;
   readonly recordCount?: number;
+  /**
+   * Whether the paged viewer may be opened for this output.
+   *
+   * Resolved in the MAIN process from the rollout flag, because the renderer has
+   * no Token-store access and must not be trusted to enforce a rollout gate.
+   * When false the renderer still shows bounded content and still offers
+   * export; only the paged viewer is withheld.
+   */
+  readonly viewerEnabled: boolean;
 }
 
 /** Result of decoding an opaque retrieval cursor. */

@@ -31,6 +31,12 @@ export interface ToolOutputDescriptorView {
   incompleteReason?: string;
   state: string;
   recordCount?: number;
+  /**
+   * Whether main process allows the paged viewer for this output. When false
+   * the renderer withholds the viewer but still shows bounded content and
+   * still offers export.
+   */
+  viewerEnabled?: boolean;
 }
 
 export interface ToolResultReadPageView {

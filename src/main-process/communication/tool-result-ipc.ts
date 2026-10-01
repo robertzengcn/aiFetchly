@@ -10,6 +10,7 @@ import {
   AI_TOOL_RESULT_SEARCH,
 } from "@/config/channellist";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
+import { isToolOutputUiEnabled } from "@/config/featureFlags";
 import {
   toolResultExportIpcSchema,
   toolResultGetIpcSchema,
@@ -69,6 +70,10 @@ export function registerToolResultIpcHandlers(): void {
       if (!decision.ok) return denied(decision.code);
       const row = decision.output;
       return ok({
+        // Resolved HERE, in main, so the renderer never has to read the rollout
+        // flag itself. `ui` off withholds only the paged viewer; bounded
+        // content and export are unaffected.
+        viewerEnabled: isToolOutputUiEnabled(),
         outputId: row.outputId,
         toolName: row.toolName,
         format: (row.outputFormat as ToolOutputPublicDescriptor["format"]) ?? "text",
