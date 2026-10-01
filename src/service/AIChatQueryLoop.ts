@@ -47,6 +47,7 @@ import {
   ToolResultBudgetService,
   type ResultBody,
 } from "@/service/toolResult/ToolResultBudgetService";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import { ENVELOPE_FRAMING_TOKENS } from "@/service/ToolResultTextUtil";
 import { estimateToolsTokens } from "@/service/ToolPromptBudgetService";
 import {
@@ -1146,6 +1147,7 @@ export class AIChatQueryLoop {
       externalize: (body) => body,
     });
     if (!result.reducedAny) return false;
+    toolResultMetrics.record("budget.reduced");
 
     // Applied IN PLACE: `messages` is the live array the rest of the turn
     // pushes onto and persists, so returning a copy would silently discard the
@@ -1744,6 +1746,7 @@ export class AIChatQueryLoop {
             ...(hasExposedTools ? { toolsJson: JSON.stringify(exposedTools) } : {}),
           });
           if (!bodyCheck.ok) {
+            toolResultMetrics.record("budget.body_rejected");
             throw new RecoverableHistoryError(
               bodyCheck.errorCode ?? "REQUEST_BODY_TOO_LARGE",
               `request body rejected: ${bodyCheck.bytes} bytes exceeds the transport ceiling`
@@ -2882,6 +2885,12 @@ export class AIChatQueryLoop {
                   executionId,
                   toolCallId: call.id,
                   toolName: call.name,
+                  // Record which agent owns this artifact, so a sub-agent's
+                  // output is not merged into the parent's scope and its
+                  // retrieval allowance stays separate.
+                  ...(input.ownerAgentId
+                    ? { ownerAgentId: input.ownerAgentId }
+                    : {}),
                   signal: input.abortController.signal,
                 },
                 outcome: {
@@ -3419,6 +3428,11 @@ export class AIChatQueryLoop {
               // so authorization is never derived from tool arguments.
               sourceUserMessageId: input.sourceUserMessageId,
               intentDecisionId: input.intentDecisionId,
+              // Trusted owner identity for preserved outputs (technical design
+              // §8.5). Supplied by the engine, never by tool arguments, so a
+              // sub-agent's retrieval allowance and its ownership of an output
+              // are scoped to the agent that actually ran the call.
+              ownerAgentId: input.ownerAgentId,
               // Trusted gate-resolved authorization for an allowed send
               // (§15.1); threaded for uniformity with the foreground path.
               outboundAuthorization,

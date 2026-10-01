@@ -7,6 +7,7 @@ import {
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultRecoveryService } from "@/service/toolResult/ToolResultRecoveryService";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { ToolResultModule } from "@/modules/ToolResultModule";
 
 /**
@@ -108,6 +109,7 @@ export async function runToolResultStartup(input: {
       input.module,
       input.storage
     ).run();
+    toolResultMetrics.record("recovery.sweep");
     log(
       `[tool-result] recovery sweep: leases=${report.expiredLeasesReclaimed} ` +
         `receipts=${report.pendingReceiptsCompleted} ` +

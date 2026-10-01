@@ -5,6 +5,7 @@ import { ToolResultPreparationService, type ToolOutcome } from "@/service/toolRe
 import { ToolResultPublisher } from "@/service/toolResult/ToolResultPublisher";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type {
   PreparedToolResult,
   ToolResultReceipt,
@@ -148,11 +149,18 @@ export class ToolResultPipeline {
         input.deliver,
         input.store
       );
-      if (!outcome.ok && outcome.durableFailure) {
-        // The caller must stop model continuation rather than assert a result
-        // was saved when it was not.
-        throw new ToolResultPublicationError(outcome.reason);
+      if (!outcome.ok) {
+        toolResultMetrics.record("capture.publication_failed", outcome.reason);
+        if (outcome.durableFailure) {
+          // The caller must stop model continuation rather than assert a result
+          // was saved when it was not.
+          throw new ToolResultPublicationError(outcome.reason);
+        }
+      } else {
+        toolResultMetrics.record("capture.externalized");
       }
+    } else {
+      toolResultMetrics.record("capture.inline");
     }
 
     return prepared;

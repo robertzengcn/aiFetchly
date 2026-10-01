@@ -16,6 +16,7 @@ import {
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { StoredToolOutputRef } from "@/entityTypes/toolResultTypes";
 
@@ -44,6 +45,7 @@ export async function handleToolResultRead(
   // output_id + next_cursor until the artifact is exhausted.
   const work = await trusted.reserveWork();
   if (!work.ok) {
+    toolResultMetrics.record("retrieval.budget_exhausted");
     return {
       success: false,
       result: {
@@ -82,6 +84,7 @@ export async function handleToolResultRead(
   // Settle the tokens actually returned, so a caller asking for a smaller page
   // spends proportionally less of the turn's allowance.
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
+  toolResultMetrics.record("retrieval.read");
   return { success: true, result: envelope };
 }
 

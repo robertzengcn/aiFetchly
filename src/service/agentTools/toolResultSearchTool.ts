@@ -12,6 +12,7 @@
 import { toolResultSearchInputSchema } from "@/schemas/toolResult";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 export async function handleToolResultSearch(
@@ -32,6 +33,7 @@ export async function handleToolResultSearch(
   // or repeated retrievals cannot each slip past the cap.
   const work = await trusted.reserveWork();
   if (!work.ok) {
+    toolResultMetrics.record("retrieval.budget_exhausted");
     return {
       success: false,
       result: {
@@ -75,5 +77,6 @@ export async function handleToolResultSearch(
     source_completeness: page.sourceCompleteness,
   };
   await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
+  toolResultMetrics.record("retrieval.search");
   return { success: true, result: envelope };
 }

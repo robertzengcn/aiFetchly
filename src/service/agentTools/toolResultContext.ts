@@ -77,7 +77,10 @@ function resolveTurnScope(context: SkillExecutionContext): {
   turnId: string;
   agentId: string;
 } {
-  const agentId = context.skillName ?? "";
+  // The TRUSTED owner agent, never a tool argument. `skillName` is only a
+  // fallback so a caller that does not thread `ownerAgentId` still gets a
+  // non-empty, per-call agent scope rather than one shared blank budget.
+  const agentId = context.ownerAgentId ?? context.skillName ?? "";
   const turnId =
     context.sourceUserMessageId ??
     context.toolCallId ??
