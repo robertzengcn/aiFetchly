@@ -427,6 +427,14 @@ export class ToolResultModel extends BaseDb {
     return (result.affected ?? 0) > 0;
   }
 
+  /**
+   * Settle a completed reserved call: convert the reservation into settled work.
+   *
+   * The reservation is RELEASED (`reservedCalls - calls`) and settled work is
+   * added. Incrementing `settledCalls` without releasing the reservation would
+   * make `reservedCalls + settledCalls` count every call twice, so a turn would
+   * exhaust its 32-call allowance after 16 retrievals.
+   */
   async settleRetrievalWork(input: {
     profileId: string;
     conversationId: string;
@@ -436,6 +444,7 @@ export class ToolResultModel extends BaseDb {
     calls: number;
     tokens: number;
   }): Promise<void> {
+    const calls = Math.max(0, Math.floor(input.calls));
     await this.retrievalBudgets.update(
       {
         profileId: input.profileId,
@@ -445,8 +454,12 @@ export class ToolResultModel extends BaseDb {
         turnId: input.turnId,
       },
       {
-        settledCalls: () => `settledCalls + ${Number(input.calls)}`,
-        settledTokens: () => `settledTokens + ${Number(input.tokens)}`,
+        // Never let the release drive the counter negative: a defensive floor
+        // keeps the invariant `reservedCalls >= 0` true even if a settlement
+        // arrives without a matching reservation.
+        reservedCalls: () => `max(0, reservedCalls - ${calls})`,
+        settledCalls: () => `settledCalls + ${calls}`,
+        settledTokens: () => `settledTokens + ${Math.max(0, Math.floor(input.tokens))}`,
         version: () => `version + 1`,
       } as never
     );

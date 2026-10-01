@@ -144,7 +144,14 @@ export type ToolResultErrorCode =
   | "RETRIEVAL_BUDGET_EXHAUSTED"
   | "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
   | "REQUEST_BODY_TOO_LARGE"
-  | "RETRIEVAL_UNSUPPORTED_BY_HOST";
+  | "RETRIEVAL_UNSUPPORTED_BY_HOST"
+  /**
+   * The result was too large to inline but new file capture is disabled, so no
+   * artifact was written. The operation itself still succeeded; only its output
+   * was not preserved. Reported so the model and the user are told the body is
+   * unavailable instead of silently losing it.
+   */
+  | "OUTPUT_CAPTURE_DISABLED";
 
 /** Mode carried by a retrieval cursor. A search cursor is not a read cursor. */
 export type ToolResultCursorMode = "read" | "search";

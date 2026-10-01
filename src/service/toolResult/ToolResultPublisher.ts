@@ -51,7 +51,14 @@ export type ReceiptStore = (input: {
 
 export interface PublisherDependencies {
   readonly module: ToolResultModule;
-  readonly store: ReceiptStore;
+  /**
+   * Default store, used when a caller does not pass one per publication.
+   *
+   * Prefer passing `store` to {@link ToolResultPublisher.publish}: the store is
+   * owned by the execution path, and binding it here would make one long-lived
+   * publisher reuse a single caller's persistence for every later call.
+   */
+  readonly store?: ReceiptStore;
   readonly deliver?: ReceiptDelivery;
 }
 
@@ -80,7 +87,15 @@ export class ToolResultPublisher {
      * the event sink for this turn. Falls back to the publisher's own
      * delivery when omitted.
      */
-    deliverOverride?: ReceiptDelivery
+    deliverOverride?: ReceiptDelivery,
+    /**
+     * Per-call persistence override.
+     *
+     * Supplied by the executing path on every call so a receipt is always saved
+     * through the writer that owns that execution - the tool-result message for
+     * a normal call, the permission-prompt replacement for a resumed one.
+     */
+    storeOverride?: ReceiptStore
   ): Promise<PublishOutcome> {
     // Validate before anything is persisted or emitted: an unvalidated receipt
     // must never reach the model or the renderer.
@@ -97,10 +112,24 @@ export class ToolResultPublisher {
 
     const key = `${context.executionId}:${context.toolCallId}`;
     const alreadyPublished = this.published.has(key);
+    // The per-call store WINS over the constructor default. This is what keeps
+    // each execution's receipt bound to its own writer instead of whichever
+    // writer happened to construct the publisher first.
+    const store = storeOverride ?? this.deps.store;
 
     if (!alreadyPublished) {
+      if (!store) {
+        // Publication cannot be attempted at all. Reporting a durable failure
+        // is correct: the caller must not assert a result was saved.
+        return {
+          ok: false,
+          code: "OUTPUT_PUBLICATION_FAILED",
+          durableFailure: true,
+          reason: "no receipt store was provided",
+        };
+      }
       try {
-        await this.deps.store({ context, receipt: bounded });
+        await store({ context, receipt: bounded });
         this.published.add(key);
       } catch (error: unknown) {
         // Durable publication failed. The caller must stop model continuation

@@ -886,6 +886,41 @@ export function normalizeToolResult(
   };
 }
 
+/**
+ * Bounded content for a tool result whose PREPARATION threw.
+ *
+ * The legacy fallback stringified the producer's whole body, which is the exact
+ * unbounded payload this feature exists to keep out of the transcript and the
+ * model. A preparation failure must therefore degrade to the real operation
+ * outcome plus a machine code - never to the bulk output.
+ *
+ * `success` reports what actually happened, which is why it is derived from the
+ * tool result rather than from the failure.
+ */
+export function buildBoundedToolFailureContent(input: {
+  readonly result: ToolExecutionResult;
+  readonly code: string;
+  readonly message: string;
+}): string {
+  const result = input.result?.result;
+  const diagnostic =
+    typeof result?.error === "string"
+      ? result.error
+      : typeof result?.summary === "string"
+        ? result.summary
+        : "";
+  return JSON.stringify({
+    success: input.result?.success === true,
+    executionTimeMs: input.result?.execution_time_ms,
+    // The allowlisted control subset that stays useful without the body.
+    ...(typeof result?.summary === "string" ? { summary: result.summary } : {}),
+    toolResultErrorCode: input.code,
+    // Bounded: never the producer's full error text.
+    ...(diagnostic ? { error: diagnostic.slice(0, 400) } : {}),
+    error_detail: input.message.slice(0, 400),
+  });
+}
+
 export function isPermissionPromptResult(result: ToolExecutionResult): boolean {
   return result.result.needsPermissionPrompt === true;
 }
@@ -2893,6 +2928,18 @@ export class AIChatQueryLoop {
                   err instanceof Error ? err.message : String(err)
                 }`
               );
+              // Degrade to a BOUNDED, truthful representation. Falling back to
+              // the legacy payload would put the producer's whole body back into
+              // the transcript and the model - the unbounded case this feature
+              // exists to remove - after preparation already decided the body was
+              // too large to emit.
+              toolContent = buildBoundedToolFailureContent({
+                result: toolResult,
+                code: "OUTPUT_NOT_AVAILABLE",
+                message: err instanceof Error ? err.message : String(err),
+              });
+              // The renderer payload must be bounded on the same path.
+              toolPayload = JSON.parse(toolContent) as Record<string, unknown>;
             }
           }
 

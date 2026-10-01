@@ -191,6 +191,21 @@ export class ToolResultPreparationService {
     operationStatus: ToolOperationStatus,
     control: Record<string, unknown>
   ): Promise<PreparedToolResult> {
+    // CAPTURE OFF MUST NOT WRITE. With the rollout flag off this conversation
+    // still externalizes when a result is oversized, because the size ceiling
+    // and the reference contract are not optional. What must not happen is a
+    // new file write: the operator turned capture off. So the result degrades to
+    // a truthful, bounded receipt carrying the real operation outcome, and the
+    // oversized body is never emitted.
+    if (!deps.captureEnabled) {
+      return this.degradedReceipt(outcome, {
+        operationStatus,
+        control,
+        code: "OUTPUT_CAPTURE_DISABLED",
+        deps,
+      });
+    }
+
     // The Module mints the artifact id as part of claiming the writing slot;
     // every later step must use THAT id, not a locally generated one, or the
     // commit would target a row that does not exist.

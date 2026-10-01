@@ -679,6 +679,27 @@ export class ToolResultModule extends BaseModule {
     return Math.max(0, TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn - used);
   }
 
+  /**
+   * Calls already spent or held by this turn, for diagnostics and tests.
+   *
+   * A reservation is NOT yet settled work, but it is spent: it was admitted
+   * against the allowance and the call is running. `reservedCalls` is released
+   * on settlement, so this sum never double-counts a completed call.
+   */
+  async retrievalUsage(input: {
+    profileId: string;
+    conversationId: string;
+    outputEpoch: string;
+    agentId: string;
+    turnId: string;
+  }): Promise<{ calls: number; tokens: number }> {
+    const row = await this.model.findRetrievalBudget(input);
+    return {
+      calls: (row?.reservedCalls ?? 0) + (row?.settledCalls ?? 0),
+      tokens: row?.settledTokens ?? 0,
+    };
+  }
+
   // ------------------------------------------------------------- helpers --
 
   /** Outputs still awaiting terminal receipt publication (recovery sweep). */

@@ -95,10 +95,15 @@ export class ToolResultPipeline {
     return this.storage;
   }
 
-  private getPublisher(store: ToolResultPublisherDeps["store"]): ToolResultPublisher {
+  private getPublisher(): ToolResultPublisher {
+    // The publisher holds ONLY the in-process duplicate-delivery guard. It must
+    // NOT capture a `store`, because the store is owned by the CALLER and
+    // differs per execution path (the loop persists the tool-result message, the
+    // resume path replaces the permission-prompt row). Caching a publisher
+    // bound to the first call's store made every later tool call in the
+    // conversation persist through the first call's closure.
     this.publisher ??=
-      this.deps.publisher ??
-      new ToolResultPublisher({ module: this.getModule(), store });
+      this.deps.publisher ?? new ToolResultPublisher({ module: this.getModule() });
     return this.publisher;
   }
 
@@ -137,10 +142,11 @@ export class ToolResultPipeline {
     if (prepared.receipt) {
       // A receipt is a durable artifact: the terminal receipt is persisted
       // before anything is shown or handed back to the model.
-      const outcome = await this.getPublisher(input.store).publish(
+      const outcome = await this.getPublisher().publish(
         input.context,
         prepared.receipt,
-        input.deliver
+        input.deliver,
+        input.store
       );
       if (!outcome.ok && outcome.durableFailure) {
         // The caller must stop model continuation rather than assert a result

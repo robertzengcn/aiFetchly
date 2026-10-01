@@ -1,14 +1,13 @@
 import "reflect-metadata";
-import * as os from "node:os";
-import * as path from "node:path";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import {
+  createToolResultRetrievalService,
   ToolResultRetrievalService,
-  legacySourceReader,
   type RetrievalTarget,
 } from "@/service/toolResult/ToolResultRetrievalService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import type { ToolResultErrorCode } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -49,40 +48,72 @@ export interface ToolResultToolContext {
 /** Profile key for the single local profile. */
 const DEFAULT_PROFILE_ID = "default";
 
-/** App-managed root for preserved outputs. */
-function resolveStorageRoot(): string {
-  return path.join(os.homedir(), ".aifetchly", "tool-outputs");
+/**
+ * Long-lived, turn-INDEPENDENT wiring.
+ *
+ * Only the collaborators are cached. The per-turn identity (turn id, agent id)
+ * is deliberately resolved on every call, because caching it would scope the
+ * per-turn retrieval allowance to whichever turn happened to arrive first -
+ * which is how one turn's allowance ended up shared across a whole
+ * conversation.
+ */
+interface CachedWiring {
+  readonly module: ToolResultModule;
+  readonly storage: ToolResultStorageService;
+  readonly retrieval: ToolResultRetrievalService;
 }
 
-/** Cached per-conversation wiring; modules open a database connection. */
-const contextCache = new Map<string, ToolResultToolContext>();
+const wiringCache = new Map<string, CachedWiring>();
 
-/** Resolve (and cache) the trusted context for one conversation. */
+/**
+ * Resolve the trusted turn scope for this call.
+ *
+ * The turn id comes from the engine via `sourceUserMessageId`. When it is
+ * absent the fallback must still be STABLE for the lifetime of the call, not
+ * `Date.now()`, otherwise a reserve and its settle can land on different rows
+ * and the reservation is never released.
+ */
+function resolveTurnScope(context: SkillExecutionContext): {
+  turnId: string;
+  agentId: string;
+} {
+  const agentId = context.skillName ?? "";
+  const turnId =
+    context.sourceUserMessageId ??
+    context.toolCallId ??
+    `${context.conversationId}:${Date.now()}`;
+  return { turnId, agentId };
+}
+
+function getWiring(conversationId: string): CachedWiring {
+  const cached = wiringCache.get(conversationId);
+  if (cached) return cached;
+
+  const module = new ToolResultModule();
+  const storage = new ToolResultStorageService({
+    root: getToolResultStorageRoot(),
+  });
+  // Both backends are wired here so a file artifact and a historical source row
+  // are both readable through the same paging/budget contract, and so no caller
+  // can accidentally commit every target to a single backend.
+  const retrieval = createToolResultRetrievalService({ storage, module });
+
+  const wiring: CachedWiring = { module, storage, retrieval };
+  wiringCache.set(conversationId, wiring);
+  return wiring;
+}
+
+/** Resolve the trusted context for one retrieval call. */
 export function getToolResultContext(
   context: SkillExecutionContext
 ): ToolResultToolContext | null {
   const conversationId = context.conversationId;
   if (!conversationId) return null;
 
-  const cached = contextCache.get(conversationId);
-  if (cached) return cached;
+  const { module, retrieval } = getWiring(conversationId);
+  const { turnId, agentId } = resolveTurnScope(context);
 
-  const module = new ToolResultModule();
-  const storage = new ToolResultStorageService({ root: resolveStorageRoot() });
-  // Both backends share one paging/budget contract (technical design §10.2);
-  // only the byte source differs.
-  const retrieval = new ToolResultRetrievalService(
-    storage,
-    legacySourceReader({
-      readSlice: (args) => module.readLegacySourceSlice(args),
-    })
-  );
-
-  // The turn id is trusted (it comes from the engine), and it is what scopes
-  // the per-turn retrieval allowance.
-  const turnId = context.sourceUserMessageId ?? `${conversationId}:${Date.now()}`;
-
-  const resolved: ToolResultToolContext = {
+  return {
     module,
     retrieval,
     async resolveTarget(outputId: string) {
@@ -90,12 +121,16 @@ export function getToolResultContext(
         outputId,
         profileId: DEFAULT_PROFILE_ID,
         conversationId,
+        agentId: agentId || undefined,
       });
       if (!decision.ok) return { ok: false, code: decision.code };
       const row = decision.output;
-      const backend = row.storageBackend === "legacy_message" ? "legacy_message" : "file";
+      const backend =
+        row.storageBackend === "legacy_message" ? "legacy_message" : "file";
       if (backend === "legacy_message") {
-        if (!row.sourceRowKey) return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
+        if (!row.sourceRowKey) {
+          return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
+        }
       } else if (!row.storageKey) {
         return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
       }
@@ -121,7 +156,7 @@ export function getToolResultContext(
         profileId: DEFAULT_PROFILE_ID,
         conversationId,
         outputEpoch: scope.outputEpoch,
-        agentId: "",
+        agentId,
         turnId,
       });
       if (!reserved.ok) return { ok: false, code: "RETRIEVAL_BUDGET_EXHAUSTED" };
@@ -133,18 +168,15 @@ export function getToolResultContext(
         profileId: DEFAULT_PROFILE_ID,
         conversationId,
         outputEpoch: scope.outputEpoch,
-        agentId: "",
+        agentId,
         turnId,
         tokens,
       });
     },
   };
-
-  contextCache.set(conversationId, resolved);
-  return resolved;
 }
 
 /** Drop cached wiring (used by tests and on conversation clear). */
 export function clearToolResultContextCache(): void {
-  contextCache.clear();
+  wiringCache.clear();
 }

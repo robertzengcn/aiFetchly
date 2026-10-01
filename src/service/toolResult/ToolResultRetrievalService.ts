@@ -133,6 +133,82 @@ export function legacySourceReader(input: {
   };
 }
 
+/**
+ * Dispatch by backend so ONE service can serve both representations.
+ *
+ * `ToolResultRetrievalService` already speaks one paging/budget contract for
+ * both backends (technical design §10.2); only the byte SOURCE differs. A
+ * caller that injects a single reader therefore commits every target to that
+ * one backend - which is why passing the file reader alone made every
+ * file-backed output unreadable in the model path, and passing the legacy
+ * reader alone made every legacy row unreadable.
+ *
+ * This factory picks per target instead, so a caller cannot get it wrong.
+ */
+export function dispatchingSourceReader(input: {
+  file: BoundedSourceReader;
+  legacy: BoundedSourceReader;
+}): BoundedSourceReader {
+  return {
+    async read(request) {
+      const reader =
+        request.target.backend === "legacy_message" ? input.legacy : input.file;
+      return await reader.read(request);
+    },
+  };
+}
+
+/**
+ * Build the production retrieval service for a conversation.
+ *
+ * Both backends are wired here, once, from trusted main-process state:
+ *
+ *  - `file`      reads the app-managed artifact under `storageKey`.
+ *  - `legacy`    slices a historical tool-result message row in SQL, through
+ *                the Module so the retrieval service never touches a repository.
+ *
+ * A legacy target without a `sourceRowKey`, or a file target without a
+ * `storageKey`, is a registry inconsistency and is reported as
+ * `OUTPUT_NOT_AVAILABLE` rather than being read from a wrong source.
+ */
+export function createToolResultRetrievalService(input: {
+  readonly storage: ToolResultStorageService;
+  readonly module: {
+    readLegacySourceSlice(args: {
+      sourceRowKey: string;
+      offsetBytes: number;
+      lengthBytes: number;
+    }): Promise<{ text: string; totalBytes: number } | null>;
+  };
+  readonly onYield?: RetrievalYield;
+}): ToolResultRetrievalService {
+  const file = defaultFileSourceReader(input.storage);
+  const legacy: BoundedSourceReader = {
+    async read({ target, startByte, maxBytes }) {
+      if (!target.sourceRowKey) {
+        // Never fall back to the file reader for a legacy row: there are no
+        // file bytes, and guessing a key could read an unrelated artifact.
+        throw new Error("legacy target has no source row key");
+      }
+      const slice = await input.module.readLegacySourceSlice({
+        sourceRowKey: target.sourceRowKey,
+        offsetBytes: startByte,
+        lengthBytes: maxBytes,
+      });
+      if (!slice) throw new Error("legacy source row is missing");
+      return {
+        buffer: Buffer.from(slice.text, "utf8"),
+        totalBytes: slice.totalBytes,
+      };
+    },
+  };
+  return new ToolResultRetrievalService(
+    input.storage,
+    dispatchingSourceReader({ file, legacy }),
+    input.onYield
+  );
+}
+
 export class ToolResultRetrievalService {
   private readonly storage: ToolResultStorageService;
   private readonly onYield?: RetrievalYield;

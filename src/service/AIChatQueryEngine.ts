@@ -33,6 +33,7 @@ import {
   normalizeToolResult,
   isPermissionPromptResult,
   toolResultReceiptUiMetadata,
+  buildBoundedToolFailureContent,
 } from "@/service/AIChatQueryLoop";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import {
@@ -1762,6 +1763,14 @@ export class AIChatQueryEngine {
               err instanceof Error ? err.message : String(err)
             }`
           );
+          // Bounded fallback, for the same reason as the main loop: the legacy
+          // payload is the producer's whole body.
+          toolContent = buildBoundedToolFailureContent({
+            result: toolResult,
+            code: "OUTPUT_NOT_AVAILABLE",
+            message: err instanceof Error ? err.message : String(err),
+          });
+          toolPayload = JSON.parse(toolContent) as Record<string, unknown>;
         }
       }
 
