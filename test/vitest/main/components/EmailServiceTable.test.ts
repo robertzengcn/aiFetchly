@@ -115,8 +115,8 @@ const SAMPLE: EmailServiceListdata[] = [
   {
     id: 1,
     name: "Primary SMTP",
-    tagId: null,
-    tag: null,
+    tagIds: [],
+    tags: [],
     from: "a@example.com",
     host: "smtp.example.com",
     receiveProtocol: "imap",
