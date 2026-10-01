@@ -887,6 +887,37 @@ export function normalizeToolResult(
 }
 
 /**
+ * True when a persisted tool-result body is a terminal receipt.
+ *
+ * The aggregate reducer needs this to know which bodies can still be reduced.
+ * Hard-coding `isReceipt: true` for every `role: "tool"` message made the
+ * reducer treat an inline small result as already-externalized, so it could
+ * not reduce ANY production input and the aggregate path was dead code in
+ * practice.
+ *
+ * Detected structurally rather than by sniffing for a magic string: a
+ * producer's own output could contain the same substring and must not be
+ * mistaken for a receipt. The schema version is the discriminator.
+ */
+function isReceiptBody(content: string): boolean {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith("{")) return false;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (parsed === null || typeof parsed !== "object") return false;
+    const candidate = parsed as Record<string, unknown>;
+    return (
+      typeof candidate.schemaVersion === "string" &&
+      typeof candidate.toolCallId === "string" &&
+      typeof candidate.operationStatus === "string" &&
+      Array.isArray(candidate.outputs)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bounded content for a tool result whose PREPARATION threw.
  *
  * The legacy fallback stringified the producer's whole body, which is the exact
@@ -1097,7 +1128,10 @@ export class AIChatQueryLoop {
       bodies.push({
         key: message.tool_call_id ?? `tool-${index}`,
         content: message.content,
-        isReceipt: true,
+        // Detected, not assumed. Marking every tool body as a receipt made the
+        // reducer treat an inline result as already-externalized, so it could
+        // not reduce any production input and the aggregate path never ran.
+        isReceipt: isReceiptBody(message.content),
       });
     });
     if (bodies.length === 0) return false;
@@ -1700,6 +1734,22 @@ export class AIChatQueryLoop {
               );
             }
           }
+          // TRANSPORT PREFLIGHT. A model's context size is not a transport-size
+          // limit: a request can pass the token preflight and still be rejected
+          // by the provider for being too large on the wire. This is the last
+          // point where the body can be measured cheaply, and it is measured
+          // against the tool bodies that were just reduced.
+          const bodyCheck = new ToolResultBudgetService().checkSerializedBody({
+            messages: messages as Array<{ content?: string | null }>,
+            ...(hasExposedTools ? { toolsJson: JSON.stringify(exposedTools) } : {}),
+          });
+          if (!bodyCheck.ok) {
+            throw new RecoverableHistoryError(
+              bodyCheck.errorCode ?? "REQUEST_BODY_TOO_LARGE",
+              `request body rejected: ${bodyCheck.bytes} bytes exceeds the transport ceiling`
+            );
+          }
+
           if (!budget.ok) {
             throw new RecoverableHistoryError(
               budget.errorCode ?? "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
