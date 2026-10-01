@@ -960,16 +960,30 @@ export class AIChatQueryLoop {
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
     const { eventSink, ...generatorInput } = input;
     const generator = this.iterate(generatorInput);
-    for (;;) {
-      const step = await generator.next();
-      if (step.done === true) {
-        return step.value;
+    try {
+      for (;;) {
+        const step = await generator.next();
+        if (step.done === true) {
+          return step.value;
+        }
+        const event = step.value;
+        eventSink.emit(event);
+        if (event.type === "tool_call") {
+          await eventSink.flush?.();
+        }
       }
-      const event = step.value;
-      eventSink.emit(event);
-      if (event.type === "tool_call") {
-        await eventSink.flush?.();
+    } catch (error) {
+      // Mirror consumeGenerator's cleanup contract (design §6): a sink/flush
+      // failure must close the generator so its finally blocks (progress
+      // slot, provider cleanup) run — never abandon it suspended at a yield.
+      // The forced-close value carries no domain outcome; the error is the
+      // result.
+      try {
+        await generator.return(undefined as never);
+      } catch {
+        // cleanup failure never masks the primary error
       }
+      throw error;
     }
   }
 

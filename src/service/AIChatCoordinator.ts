@@ -2,6 +2,7 @@ import { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+import { userSafeError } from "@/service/AIChatErrorMapper";
 import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import type {
@@ -712,7 +713,9 @@ export class AIChatCoordinator {
           live.terminalChunk = {
             eventType: "error",
             conversationId,
-            errorMessage: message,
+            // Renderer-safe text: engine-thrown messages may wrap provider
+            // output; every other error path sanitizes via userSafeError.
+            errorMessage: userSafeError(err),
           };
         }
         live.unclassifiedExitSummary = message.slice(0, 500);

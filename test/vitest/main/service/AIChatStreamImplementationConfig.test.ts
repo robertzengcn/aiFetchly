@@ -328,3 +328,105 @@ function makeSavedUser(): AIChatMessageEntity {
     updatedAt: new Date(),
   } as unknown as AIChatMessageEntity;
 }
+
+describe("AIChatQueryLoop.run facade cleanup on persistence failure (review fix)", () => {
+  it("callback mode: rejecting tool-call save fails the turn, never starts the tool, and closes the generator", async () => {
+    const { AIChatQueryLoop } = await import("@/service/AIChatQueryLoop");
+    let toolStarted = false;
+    const events: AIChatQueryEvent[] = [];
+    const sink = {
+      emit: (e: AIChatQueryEvent): void => {
+        events.push(e);
+      },
+      flush: vi.fn().mockRejectedValue(
+        Object.assign(new Error("Required persistence failed"), {
+          name: "AIChatRequiredPersistenceError",
+        })
+      ),
+    };
+    // A tool-call chunk that, when processed, drives the loop to the
+    // tool-execution yield; a second next() would start the tool.
+    const toolCallChunk = {
+      id: "resp-f",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "m",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-f",
+                type: "function",
+                function: { name: "send_email", arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    };
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: async (
+        _req: unknown,
+        onChunk: (c: typeof toolCallChunk) => void
+      ): Promise<void> => {
+        onChunk(toolCallChunk);
+      },
+      executeTool: async (): Promise<never> => {
+        toolStarted = true;
+        throw new Error("must not run");
+      },
+      getSkillDefinition: () => undefined,
+    } as never);
+    // Track generator closure: wrap the iterate() result so a forced
+    // .return() (the facade's cleanup contract, design §6) is observable.
+    const originalIterate = loop.iterate.bind(loop);
+    let generatorReturnCalled = false;
+    loop.iterate = ((input: unknown) => {
+      const gen = originalIterate(input as never);
+      return {
+        next: (value?: unknown) => gen.next(value as never),
+        return: (value?: unknown) => {
+          generatorReturnCalled = true;
+          return gen.return(value as never);
+        },
+        throw: (reason?: unknown) => gen.throw(reason),
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      } as unknown as ReturnType<typeof originalIterate>;
+    }) as typeof loop.iterate;
+
+    // The flush rejection propagates OUT of run() (the engine's catch maps
+    // it to a failed outcome) AND the facade closes the generator first.
+    await expect(
+      loop.run({
+        conversationId: "v2-F",
+        assistantMessageId: "assistant-f",
+        messages: [],
+        request: { message: "hi", conversationId: "v2-F" },
+        openAITools: [
+          {
+            type: "function",
+            function: {
+              name: "send_email",
+              description: "s",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        abortController: new AbortController(),
+        eventSink: sink,
+        startRound: 0,
+        isActiveTurn: () => true,
+      } as never)
+    ).rejects.toThrow(/Required persistence failed/);
+
+    expect(toolStarted).toBe(false);
+    expect(generatorReturnCalled).toBe(true);
+    expect(events.some((e) => e.type === "tool_call")).toBe(true);
+  });
+});
