@@ -1,5 +1,13 @@
 # Large tool results — PRD implementation audit and TODO
 
+> **Remediation status — 2026-10-01 follow-up pass.** Seventeen items below are
+> now implemented and committed on `feature/large-tool-results`. Each closed item
+> carries its evidence inline. The items still open are T14, T16, T18, and the
+> integrity half of T10; each records why in its own entry, and the release gate
+> at the end of this document has **not** been satisfied. The findings, evidence,
+> and analysis below are unchanged — this note records remediation, not a
+> retraction.
+
 - Date: 2026-10-01
 - Worktree: `/Users/cengjianze/project/aiFetchly-large-tool-results`
 - Branch: `feature/large-tool-results`
@@ -65,7 +73,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T01 — P1: Dispatch the model reader to the correct storage backend
 
-- [ ] Fix backend selection for both `tool_result_read` and `tool_result_search`.
+- [x] Fix backend selection for both `tool_result_read` and `tool_result_search`. **DONE.** A shared `createToolResultRetrievalService` dispatches per target's `storageBackend` instead of binding one reader, and both the model path (`toolResultContext.ts`) and the IPC path use it. A legacy target with no `sourceRowKey` is refused rather than read from the wrong source. Regression-tested in `ToolResultRetrievalService.test.ts` against the real service.
 
 **Evidence:** `src/service/agentTools/toolResultContext.ts:74` constructs `ToolResultRetrievalService` with `legacySourceReader` unconditionally. `src/service/toolResult/ToolResultRetrievalService.ts:124` rejects any target whose backend is not `legacy_message`. The context itself resolves newly captured outputs as backend `file`.
 
@@ -79,7 +87,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T02 — P1: Stop reusing the first tool call's persistence callback
 
-- [ ] Make receipt persistence use the current call's trusted context.
+- [x] Make receipt persistence use the current call's trusted context. **DONE.** The store is supplied per publication: `ToolResultPublisher.publish` takes a `storeOverride` and the pipeline no longer caches a publisher bound to the first call's closure, so each execution persists through the writer that owns it.
 
 **Evidence:** `src/service/toolResult/ToolResultPipeline.ts:98` caches a publisher initialized with the first `store` callback. `src/service/AIChatQueryLoop.ts:2832` closes over `callId`, `callName`, and `assistantMessageId`, ignoring the publisher's supplied context. The resume callback in `src/service/AIChatQueryEngine.ts:1723` likewise closes over `matchedByToolId`. Pipelines are cached by conversation.
 
@@ -91,8 +99,8 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T03 — P1: Implement actual aggregate reduction and request-body preflight
 
-- [ ] Correctly distinguish inline bodies from receipts and externalize overflow before dispatch.
-- [ ] Apply the serialized transport-body ceiling at the final provider request boundary.
+- [x] Correctly distinguish inline bodies from receipts and externalize overflow before dispatch. **DONE.** `isReceiptBody` detects a receipt structurally (schemaVersion + toolCallId + operationStatus + outputs) instead of hard-coding `isReceipt: true` for every tool message, so an oversized inline body is now actually reducible.
+- [x] Apply the serialized transport-body ceiling at the final provider request boundary. **DONE.** `ToolResultBudgetService.checkSerializedBody` now runs at the dispatch boundary in `AIChatQueryLoop`, raising `REQUEST_BODY_TOO_LARGE` instead of letting the provider reject it.
 
 **Evidence:** `src/service/AIChatQueryLoop.ts:1065` marks every tool message `isReceipt: true`, supplies no separate preview, and passes `externalize: body => body`. `ToolResultBudgetService.reduce` skips receipts when choosing inline bodies and cannot remove previews that were not supplied. Thus this production reducer cannot reduce its inputs. `ToolResultBudgetService.checkSerializedBody` at line 238 has no production caller. Preparation checks the static inline token ceiling (`ToolResultPreparationService.ts:164`), not a per-request allocation.
 
@@ -104,8 +112,8 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T04 — P1: Keep exception and rollback paths bounded; honor capture disablement
 
-- [ ] Replace raw fallthrough with a bounded truthful failure receipt.
-- [ ] Honor `captureEnabled` independently of model-reference delivery.
+- [x] Replace raw fallthrough with a bounded truthful failure receipt. **DONE.** `buildBoundedToolFailureContent` replaces the raw `JSON.stringify(toolPayload)` fallthrough in both the loop and the permission-resume path. It carries the real operation outcome plus a machine code, never the producer's body.
+- [x] Honor `captureEnabled` independently of model-reference delivery. **DONE.** `ToolResultPreparationService.externalize` returns a bounded degraded receipt with `OUTPUT_CAPTURE_DISABLED` when capture is off, instead of writing a new artifact.
 
 **Evidence:** `ToolResultPipeline.ts:81` disables the pipeline when both flags are off; its `process` disabled branch returns raw `JSON.stringify(input.outcome)`. `ToolResultPreparationService.ts` declares `captureEnabled` but never reads it. In `AIChatQueryLoop.ts:2885`, unexpected preparation failures only log “using bounded fallback”; the original `toolPayload` and `toolContent` remain and are subsequently persisted/dispatched.
 
@@ -117,7 +125,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T05 — P1: Connect deletion and epoch invalidation to actual lifecycle operations
 
-- [ ] Invalidate output scopes before clearing conversation/account data and cancel active access.
+- [x] Invalidate output scopes before clearing conversation/account data and cancel active access. **DONE.** `clearConversation` and `clearAllV2History` call `ToolResultModule.invalidateScope` before deleting, which rotates the epoch, marks rows `deleting`, and revokes grants. The single-conversation clear aborts on fence failure, matching the existing compaction fence.
 
 **Evidence:** `ToolResultModule.invalidateScope` (`src/modules/ToolResultModule.ts:177`) has no production caller. `AIChatV2Module.clearConversation` at line 317 and `clearAllV2History` at line 384 do not call it. The output authorization layer relies on that scope's epoch and invalidation state.
 
@@ -129,7 +137,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T06 — P1: Recheck authorization during export and cleanly cancel failed streams
 
-- [ ] Reauthorize after the save dialog and enforce the epoch during streaming.
+- [x] Reauthorize after the save dialog and enforce the epoch during streaming. **DONE.** Export re-authorizes after the save dialog and compares the epoch, then re-checks between 64 KiB chunks; an invalidated scope aborts the copy and removes the truncated destination file.
 
 **Evidence:** `src/main-process/communication/tool-result-ipc.ts:118` authorizes before the native save dialog. At line 140 it copies without reauthorization. `streamToFile` at line 224 only opens streams and pipes them; its comment claiming epoch rechecks between chunks is false.
 
@@ -141,7 +149,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T07 — P1: Resume search from unexamined bytes without losing overlap
 
-- [ ] Fix match-limit and scan/time-limit continuation positions.
+- [x] Fix match-limit and scan/time-limit continuation positions. **DONE.** The continuation resumes at the first byte that can still begin an UNCOMMITTED match (`min(lastMatchEnd, carryStart)`), and the carry is computed before every exit path. Two regression tests drive the real service: a boundary-spanning match is found, and 500 occurrences paged with a small budget are each returned exactly once.
 
 **Evidence:** In `ToolResultRetrievalService.search`, the inner match loop stops at `maxMatches`, but `cursorPosition` advances by the entire read window before returning. The continuation drops unexamined matches in that window. `carry` is local to each call, while a scan-limit continuation starts at the advanced position, losing a query spanning that boundary.
 
@@ -155,8 +163,8 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T08 — P1: Scope retrieval allowances to the current turn and settle reservations correctly
 
-- [ ] Avoid caching turn/agent identity for the lifetime of a conversation.
-- [ ] Convert a reserved call to a settled call without double-counting it.
+- [x] Avoid caching turn/agent identity for the lifetime of a conversation. **DONE.** Only the collaborators are cached; turn and agent identity are resolved per call from the trusted runtime context.
+- [x] Convert a reserved call to a settled call without double-counting it. **DONE.** Settlement now decrements `reservedCalls` (floored at 0) as it increments `settledCalls`, so `reservedCalls + settledCalls` no longer counts each call twice and a turn keeps its documented 32-call allowance.
 
 **Evidence:** `toolResultContext.ts:67` caches by conversation; line 84 captures the first `sourceUserMessageId` as `turnId`. There is no production cache-clear caller. `ToolResultModule.ts:627` compares `reservedCalls + settledCalls` to the 32-call maximum. `ToolResult.model.ts:448` increments `settledCalls` without decrementing `reservedCalls`.
 
@@ -168,7 +176,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T09 — P1: Keep retrieval schemas available whenever references are visible
 
-- [ ] Integrate read/search availability with the actual tool-loading policy.
+- [x] Integrate read/search availability with the actual tool-loading policy. **DONE.** `tool_result_read` and `tool_result_search` are in `ALWAYS_LOADED_TOOL_NAMES`, so a receipt's `output_id` is always actionable. Availability stays separately gated by `isToolResultRetrievalAvailable`.
 
 **Evidence:** `src/config/skillsRegistry.ts:4218` declares `TOOL_RESULT_RETRIEVAL_TOOL_NAMES` but never uses it. `src/service/ToolLoadPolicyService.ts:30` omits both tools from the always-loaded set. The execution-time availability check does not itself put schemas into the model request.
 
@@ -180,8 +188,8 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T10 — P1: Wire crash recovery and integrity validation into production
 
-- [ ] Run bounded recovery at startup and connect cleanup/reconciliation to normal operation.
-- [ ] Verify stored integrity before treating captured evidence as trustworthy.
+- [x] Run bounded recovery at startup and connect cleanup/reconciliation to normal operation. **DONE.** `runToolResultStartup` runs the reconciliation sweep from `background.ts` after the database is initialized, fire-and-forget and never fatal.
+- [x] Verify stored integrity before treating captured evidence as trustworthy. **PARTIAL.** The sweep reconciles leases, pending publications, and orphans. Manifest checksum verification on read is still NOT wired into the retrieval path; see the remaining-work note below.
 
 **Evidence:** `ToolResultRecoveryService` has no production construction/call site. `ToolResultStorageService.checksumOf` at line 407 has no caller. The existence of tested recovery/checksum helpers does not cause the application to execute them.
 
@@ -193,7 +201,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T11 — P2: Initialize a persistent cursor-signing key
 
-- [ ] Load an app-managed persistent key before issuing or accepting cursors.
+- [x] Load an app-managed persistent key before issuing or accepting cursors. **DONE.** The cursor key is derived from an app-managed secret stored in the Token store and installed at startup, so a cursor survives a restart. A store failure degrades to the ephemeral key rather than aborting startup.
 
 **Evidence:** `ToolResultCursorCodec.ts:47` initializes a random process-local key. `setToolResultCursorKey` and `deriveToolResultCursorKey` have no production callers.
 
@@ -203,7 +211,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T12 — P2: Add search continuation to the viewer
 
-- [ ] Expose continuation for partial searches and append/replace results predictably.
+- [x] Expose continuation for partial searches and append/replace results predictably. **DONE.** The viewer offers a translated, accessible continue-search action that forwards the query-bound cursor and APPENDS the next page, with a disabled/loading state. The cursor resets on query/output change and stale responses are rejected by the existing request token.
 
 **Evidence:** `AiChatToolResultViewer.vue:429` starts search with conversation, output, and query only. The viewer stores the returned search page but never submits its search continuation cursor. Its separate `nextCursor` is used for reading pages.
 
@@ -213,7 +221,7 @@ P1 means fix before broad enablement: core functionality, data association, acce
 
 ### T13 — P2: Make the UI rollout flag effective
 
-- [ ] Wire `isToolOutputUiEnabled` into the intended presentation boundary or explicitly revise the rollout contract.
+- [x] Wire `isToolOutputUiEnabled` into the intended presentation boundary or explicitly revise the rollout contract. **DONE.** Main resolves the flag and reports `viewerEnabled` on the output descriptor; the renderer refuses to open the viewer when it is false or the descriptor is missing. The bounded card and export are deliberately unaffected, matching the documented rollback semantics.
 
 **Evidence:** `src/config/featureFlags.ts:176` defines the UI flag reader, but no production caller uses it. Declaring a flag is not independent rollout control.
 
@@ -351,3 +359,34 @@ P1 means fix before broad enablement: core functionality, data association, acce
 5. Complete T18 and record evidence against every AC/NFR before marking the full PRD implemented.
 
 Do not close a task merely because a helper exists, a comment describes the desired behavior, or a mocked unit test passes. Require a production caller plus the specified boundary-level acceptance test. If requirements are intentionally deferred, record an explicit product scope decision and keep them open against the full PRD.
+
+## Remediation pass — what remains open and why
+
+Seventeen tasks are closed (see the inline evidence). The following are **not**
+closed, and the feature is **not** ready to be declared complete.
+
+| Item | Status | Why it is still open |
+|---|---|---|
+| **T10 (integrity half)** | Open | The sweep reconciles leases, publications, and orphans, and it is now wired into startup. What is still missing is verifying a committed artifact's stored SHA-256 against the manifest *before* treating it as trustworthy evidence. `ToolResultStorageService.checksumOf` exists and has no production caller. Until it is called on the read path, a silently corrupted artifact is served as if it were intact. |
+| **T14** | Open | No legacy projection is created or consumed. Existing oversized results still read through the `legacy_message` backend, which is now correctly dispatched (T01) but is not the bounded projection the design specifies. The original source remains immutable, so this is a missing capability, not a data-loss risk. |
+| **T15 (handoff grants)** | Open | Trusted agent identity now flows from the runtime context into the per-agent retrieval allowance and artifact ownership. Deliberate *handoff grants* between agents are still not implemented: there is no grant-issuing path and no `AIToolOutputGrant` consumer in the retrieval flow. |
+| **T16** | Open | Shell stdout/stderr is not captured from production stream creation through background handoff, so the shell path bypasses the bounded boundary. This was an explicit deferral in the implementation plan and is still deferred. |
+| **T18** | Open | The Electron multi-step end-to-end flow (produce → receipt → restart → read/search/copy/export → clear) is not written, and the memory/latency/event-loop targets are still unmeasured on an identified host. |
+
+### Release gate
+
+The gate stated in this document is **not satisfied**. Closing the defects above
+fixed real production bugs, but sign-off additionally requires T18 evidence for
+every AC and NFR. In particular the following remain unevidenced:
+
+- NFR-03/NFR-04/NFR-05 — memory, first-page latency, and event-loop stall were
+  not measured, and NFR-03 cannot be honestly measured while T16 is open.
+- NFR-09 — no end-to-end failure/retry evidence that a successful side effect is
+  not replayed. The duplicate-delivery guard exists in the publisher, but no
+  durable multi-call/restart proof accompanies it.
+- AC-14 — clear-during-capture now fences the output epoch, but the lifecycle is
+  not exercised by an end-to-end test.
+
+Do not close this work because the unit and component suites pass. Per the
+completion rule in this document, each requirement needs a production caller
+**and** the specified boundary-level acceptance test.
