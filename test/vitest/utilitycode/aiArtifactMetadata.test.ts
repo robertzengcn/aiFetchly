@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractArtifactMetadata,
+  extractToolOutputDescriptors,
   ensureArtifactMetadata,
   ensureToolOutputMetadata,
   type MessageWithMaybeArtifactMetadata,
@@ -275,5 +276,119 @@ describe("ensureToolOutputMetadata (history reopen regression)", () => {
     const before = JSON.parse(JSON.stringify(msg));
     ensureToolOutputMetadata(msg);
     expect(JSON.parse(JSON.stringify(msg))).toEqual(before);
+  });
+});
+
+// Regression: PRD §11 — the preserved-output receipt card must render during a
+// LIVE tool_result stream, not only after a history reopen. The live
+// `upsertToolResultMessage` handler extracts descriptors from the payload to
+// metadata top level (the same boundary `artifact` uses); without this the
+// capture pipeline runs (descriptors are present in the payload, spread there
+// by `toolResultReceiptUiMetadata`) but the renderer reads them at the top
+// level and the card never appears. Found while running the T18 E2E spec.
+describe("extractToolOutputDescriptors (live stream render regression)", () => {
+  const validPayload = {
+    success: true,
+    toolResultReceipt: { schemaVersion: 1 },
+    operationStatus: "complete",
+    toolOutputRefs: [
+      {
+        outputId: "out_0123456789abcdef0123456789abcdef",
+        capturedBytes: 102400,
+        preservation: "complete" as const,
+        sourceCompleteness: "complete" as const,
+      },
+    ],
+    toolOutputPreservation: "complete" as const,
+    toolOutputPreview: "first line...",
+    previewComplete: true,
+  };
+
+  it("returns validated descriptors for a live externalized payload", () => {
+    const out = extractToolOutputDescriptors(validPayload);
+    expect(out).not.toBeUndefined();
+    expect(out?.toolOutputRefs).toHaveLength(1);
+    expect(out?.toolOutputRefs[0].outputId).toBe(
+      "out_0123456789abcdef0123456789abcdef"
+    );
+    expect(out?.toolOutputRefs[0].capturedBytes).toBe(102400);
+    expect(out?.toolOutputPreservation).toBe("complete");
+    expect(out?.toolOutputPreview).toBe("first line...");
+  });
+
+  it("defaults preview to empty string when absent", () => {
+    const { toolOutputPreview, ...noPreview } = validPayload;
+    void toolOutputPreview;
+    const out = extractToolOutputDescriptors(noPreview);
+    expect(out?.toolOutputPreview).toBe("");
+  });
+
+  it("returns undefined when there are no refs (inline result)", () => {
+    expect(
+      extractToolOutputDescriptors({ success: true, toolOutputRefs: [] })
+    ).toBeUndefined();
+    expect(
+      extractToolOutputDescriptors({ success: true })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for a malformed ref entry", () => {
+    expect(
+      extractToolOutputDescriptors({
+        ...validPayload,
+        toolOutputRefs: [{ outputId: 123, capturedBytes: 1 }],
+      })
+    ).toBeUndefined();
+    expect(
+      extractToolOutputDescriptors({
+        ...validPayload,
+        toolOutputRefs: [{ outputId: "x", capturedBytes: 1, preservation: "bad" }],
+      })
+    ).toBeUndefined();
+    expect(
+      extractToolOutputDescriptors({
+        ...validPayload,
+        toolOutputRefs: [
+          {
+            outputId: "x",
+            capturedBytes: 1,
+            preservation: "complete",
+            sourceCompleteness: "wrong",
+          },
+        ],
+      })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when preservation is malformed", () => {
+    expect(
+      extractToolOutputDescriptors({
+        ...validPayload,
+        toolOutputPreservation: "maybe",
+      })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when preview is not a string", () => {
+    expect(
+      extractToolOutputDescriptors({
+        ...validPayload,
+        toolOutputPreview: 42,
+      })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for null/undefined/non-object payloads", () => {
+    expect(extractToolOutputDescriptors(undefined)).toBeUndefined();
+    expect(extractToolOutputDescriptors(null)).toBeUndefined();
+    // A non-object payload is rejected at runtime; the cast mirrors how a
+    // defensive boundary would receive genuinely unknown input.
+    expect(extractToolOutputDescriptors("nope" as unknown as Record<string, unknown>)).toBeUndefined();
+  });
+
+  it("does not mutate the input (immutability)", () => {
+    const before = JSON.parse(JSON.stringify(validPayload));
+    extractToolOutputDescriptors(validPayload);
+    expect(JSON.parse(JSON.stringify(validPayload))).toEqual(before);
   });
 });

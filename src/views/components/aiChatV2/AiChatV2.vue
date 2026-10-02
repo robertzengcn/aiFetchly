@@ -906,6 +906,7 @@ import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   extractArtifactMetadata,
+  extractToolOutputDescriptors,
   ensureArtifactMetadata,
   ensureToolOutputMetadata,
 } from "./artifactMetadata";
@@ -3569,6 +3570,13 @@ const upsertToolResultMessage = (
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
     artifact: extractArtifactMetadata(toolResult),
+    // Preserved-output descriptors (recoverable large tool results): the
+    // capture pipeline spreads these into the live `tool_result` payload via
+    // `toolResultReceiptUiMetadata`, so extract them to the metadata top level
+    // on the same boundary as `artifact`. Without this the receipt card never
+    // renders during a live stream — the descriptors are present but nested
+    // under `metadata.toolResult`, where `preservedOutput` does not read.
+    ...(extractToolOutputDescriptors(toolResult) ?? {}),
   };
 
   if (existingIdx !== -1) {
