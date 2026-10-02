@@ -1,8 +1,8 @@
-import { dialog } from "electron";
 import * as fs from "node:fs";
 import {
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_TOOL_RESULT_EXPORT,
   AI_TOOL_RESULT_GET,
@@ -138,14 +138,17 @@ export function registerToolResultIpcHandlers(): void {
         root: getToolResultStorageRoot(),
       });
       // The user must explicitly choose a destination. Cancelling is a normal
-      // outcome, not an error.
-      const result = await dialog.showSaveDialog({
+      // outcome, not an error. The dialog comes through the application
+      // service (design §11) so the E2E bootstrap can substitute it.
+      const dialogService = await getNativeDialogService();
+      const dialogResult = await dialogService.showSaveDialog({
         title: "Export tool result",
         defaultPath: `${row.outputId}.${row.outputFormat === "json" ? "json" : "txt"}`,
       });
-      if (result.canceled || !result.filePath) {
+      if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
         return ok({ status: "cancelled" });
       }
+      const result = { canceled: false, filePath: dialogResult.filePaths[0] };
 
       // RE-AUTHORIZE AFTER THE DIALOG. The authorization above proves the
       // caller may read the output; it does not survive the seconds the modal
