@@ -273,9 +273,12 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
           expect(outcome.ok).toBe(true);
           if (!outcome.ok) continue;
           // The page is bounded regardless of fixture size (NFR-02): far
-          // smaller than the artifact.
+          // smaller than the artifact. This perf harness calls read() with no
+          // maxTokens, so it takes the UI byte path bounded by uiReadMaxBytes
+          // (32 KiB) — NOT the model readMaxBytes (8 KiB) path. See the
+          // b631b379 fix: a byte-only request never consumes model page tokens.
           expect(outcome.page.text.length).toBeLessThanOrEqual(
-            TOOL_RESULT_CONFIG.readMaxBytes
+            TOOL_RESULT_CONFIG.uiReadMaxBytes
           );
           expect(outcome.page.totalBytes).toBe(f.bytes);
           samples.push(dt);
