@@ -32,10 +32,12 @@ export interface E2EStateManifestInput {
   >;
   /**
    * Optional Token-store overrides applied after the standard seed. The four
-   * recoverable-history rollout flags (technical-design §18) are the intended
-   * use — E2E scenarios assert the flag-gated archive/compaction paths. Keys
-   * are restricted to the flag names and values to "true"/"false" by the
-   * bootstrap's manifest validation (E2EEnvironment).
+   * recoverable-history rollout flags (technical-design §18) plus the three
+   * tool-result rollout flags (`ai_tool_output_capture_enabled`,
+   * `ai_tool_output_model_refs_enabled`, `ai_tool_output_ui_enabled`) are the
+   * intended use — E2E scenarios assert the flag-gated archive/compaction and
+   * large-tool-result paths. Keys are restricted to those flag names and values
+   * to "true"/"false" by the bootstrap's manifest validation (E2EEnvironment).
    */
   readonly tokenOverrides?: Readonly<Record<string, string>>;
 }

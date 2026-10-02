@@ -225,6 +225,48 @@ describe("E2EEnvironment", () => {
       });
     });
 
+    it("parses tokenOverrides that include the tool-result rollout flags (T18)", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          tokenOverrides: {
+            ai_tool_output_capture_enabled: "true",
+            ai_tool_output_model_refs_enabled: "true",
+            ai_tool_output_ui_enabled: "false",
+          },
+        }),
+        "utf8"
+      );
+      const m = parseStateManifest(file);
+      expect(m.tokenOverrides).toEqual({
+        ai_tool_output_capture_enabled: "true",
+        ai_tool_output_model_refs_enabled: "true",
+        ai_tool_output_ui_enabled: "false",
+      });
+    });
+
+    it("still rejects a tokenOverrides key outside both flag sets", () => {
+      const root = validRoot();
+      roots.push(root);
+      const file = path.join(root, "state.json");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...validManifest,
+          // A tool-result-shaped key that is NOT one of the three flags.
+          tokenOverrides: { ai_tool_output_arbitrary_key: "true" },
+        }),
+        "utf8"
+      );
+      expect(() => parseStateManifest(file)).toThrow(E2EEnvironmentError);
+    });
+
     it("rejects a tokenOverrides key that is not a rollout flag", () => {
       const root = validRoot();
       roots.push(root);
