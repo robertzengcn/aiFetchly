@@ -26,7 +26,6 @@ import {
   verifyArtifactIntegrity,
 } from "@/service/toolResult/ToolResultIntegrityGate";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
-import type { CommonMessage } from "@/entityTypes/commonType";
 import type { ToolOutputPublicDescriptor } from "@/entityTypes/toolResultTypes";
 
 /**
@@ -45,36 +44,38 @@ import type { ToolOutputPublicDescriptor } from "@/entityTypes/toolResultTypes";
  *   - NO RAW STORAGE PATH and NO RAW PAYLOAD crosses this boundary. Responses
  *     are plain serializable DTOs with bounded error strings, and export
  *     streams from the main process instead of returning bytes to the renderer.
+ *
+ * Envelope contract: handlers return RAW DTO data (or `null` for the optional
+ * get descriptor). `registerAiValidatedHandler` → `dispatchValidated` wraps
+ * the return value as `data` in the `{status:true,msg:"ok",data}` envelope the
+ * renderer's `windowInvoke` unwraps. A denial is signaled by THROWING —
+ * `dispatchValidated` catches, sets `msg` to the error's message (the machine
+ * code), and returns `{status:false,msg,data:null}`, which `windowInvoke`
+ * surfaces as a thrown `Error(code)`. Returning a `{status:false,...}` object
+ * would be double-wrapped as `{status:true,msg:"ok",data:{status:false,...}}`
+ * (an error misread as success); returning a `{status:true,...}` object would
+ * nest the real page one level too deep (`data.data` instead of `data`).
  */
-
-function ok<T>(data: T): CommonMessage<T> {
-  return { status: true, msg: "", data };
-}
-
-/**
- * A denied response carries the machine code in `msg` and NO data. The
- * renderer surfaces it as a translated message; the raw code never reaches the
- * UI as prose, and an unauthorized read is indistinguishable from a missing
- * one so existence is not leaked.
- */
-function denied<T>(code: string): CommonMessage<T> {
-  return { status: false, msg: code };
+function deny(code: string): never {
+  // Throwing (not returning) is what makes the wrapper produce a `status:false`
+  // envelope. `never` lets call sites write `return deny(code)` in any position.
+  throw new Error(code);
 }
 
 export function registerToolResultIpcHandlers(): void {
   registerAiValidatedHandler(
     AI_TOOL_RESULT_GET,
     lazySchema(() => toolResultGetIpcSchema),
-    async (input): Promise<CommonMessage<ToolOutputPublicDescriptor | null>> => {
+    async (input): Promise<ToolOutputPublicDescriptor> => {
       const module = new ToolResultModule();
       const decision = await module.authorizeAccess({
         outputId: input.outputId,
         profileId: "default",
         conversationId: input.conversationId,
       });
-      if (!decision.ok) return denied(decision.code);
+      if (!decision.ok) deny(decision.code);
       const row = decision.output;
-      return ok({
+      return {
         // Resolved HERE, in main, so the renderer never has to read the rollout
         // flag itself. `ui` off withholds only the paged viewer; bounded
         // content and export are unaffected.
@@ -92,14 +93,14 @@ export function registerToolResultIpcHandlers(): void {
         incompleteReason: row.failureCode ?? undefined,
         state: (row.outputState as ToolOutputPublicDescriptor["state"]) ?? "committed",
         recordCount: row.recordCount ?? undefined,
-      });
+      };
     }
   );
 
   registerAiValidatedHandler(
     AI_TOOL_RESULT_READ,
     lazySchema(() => toolResultReadIpcSchema),
-    async (input): Promise<CommonMessage<Record<string, unknown> | null>> => {
+    async (input): Promise<Record<string, unknown>> => {
       // A `query` on this channel means the renderer asked for search; keeping
       // one validated schema avoids a second near-identical payload shape.
       if (input.query !== undefined) {
@@ -112,9 +113,9 @@ export function registerToolResultIpcHandlers(): void {
   registerAiValidatedHandler(
     AI_TOOL_RESULT_SEARCH,
     lazySchema(() => toolResultReadIpcSchema),
-    async (input): Promise<CommonMessage<Record<string, unknown> | null>> => {
+    async (input): Promise<Record<string, unknown>> => {
       if (input.query === undefined) {
-        return denied("INVALID_OUTPUT_ARGUMENTS");
+        deny("INVALID_OUTPUT_ARGUMENTS");
       }
       return await runSearch(input);
     }
@@ -123,16 +124,16 @@ export function registerToolResultIpcHandlers(): void {
   registerAiValidatedHandler(
     AI_TOOL_RESULT_EXPORT,
     lazySchema(() => toolResultExportIpcSchema),
-    async (input): Promise<CommonMessage<Record<string, unknown>>> => {
+    async (input): Promise<Record<string, unknown>> => {
       const module = new ToolResultModule();
       const decision = await module.authorizeAccess({
         outputId: input.outputId,
         profileId: "default",
         conversationId: input.conversationId,
       });
-      if (!decision.ok) return denied(decision.code);
+      if (!decision.ok) deny(decision.code);
       const row = decision.output;
-      if (!row.storageKey) return denied("OUTPUT_NOT_AVAILABLE");
+      if (!row.storageKey) deny("OUTPUT_NOT_AVAILABLE");
 
       const storage = new ToolResultStorageService({
         root: getToolResultStorageRoot(),
@@ -146,7 +147,7 @@ export function registerToolResultIpcHandlers(): void {
         defaultPath: `${row.outputId}.${row.outputFormat === "json" ? "json" : "txt"}`,
       });
       if (dialogResult.canceled || dialogResult.filePaths.length === 0) {
-        return ok({ status: "cancelled" });
+        return { status: "cancelled" };
       }
       const result = { canceled: false, filePath: dialogResult.filePaths[0] };
 
@@ -160,21 +161,28 @@ export function registerToolResultIpcHandlers(): void {
         profileId: "default",
         conversationId: input.conversationId,
       });
-      if (!confirmed.ok) return denied(confirmed.code);
+      if (!confirmed.ok) deny(confirmed.code);
       // The epoch must be the SAME one, not merely still valid: a rotate +
       // re-create cycle must not let a new artifact inherit an in-flight
       // export that was authorized against the previous epoch.
       if (confirmed.output.outputEpoch !== row.outputEpoch) {
-        return denied("OUTPUT_CHANGED");
+        deny("OUTPUT_CHANGED");
       }
 
+      // VERIFY INTEGRITY BEFORE HANDING OVER BYTES. This is the boundary
+      // where the output is presented to the user as the evidence the
+      // registry claims it is, so it is where the stored checksum must
+      // actually be checked. `checksumOf` previously had no caller at all,
+      // so a corrupted payload was exported as though it were intact.
+      //
+      // The I/O (manifest read + artifact stream for the hash) is wrapped so
+      // an unexpected throw becomes a generic integrity denial; the verdict
+      // branch is OUTSIDE the try so a `deny(code)` throw is not recaught and
+      // rewritten (today both codes coincide, but the structure must not
+      // depend on that coincidence).
+      let integrity;
       try {
-        // VERIFY INTEGRITY BEFORE HANDING OVER BYTES. This is the boundary
-        // where the output is presented to the user as the evidence the
-        // registry claims it is, so it is where the stored checksum must
-        // actually be checked. `checksumOf` previously had no caller at all,
-        // so a corrupted payload was exported as though it were intact.
-        const integrity = await verifyArtifactIntegrity({
+        integrity = await verifyArtifactIntegrity({
           storage,
           storageKey: row.storageKey,
           manifest: await storage.readManifest(
@@ -183,13 +191,12 @@ export function registerToolResultIpcHandlers(): void {
             row.outputId
           ),
         });
-        if (!integrity.ok) {
-          toolResultMetrics.record("capture.integrity_failed");
-          return denied(integrity.code);
-        }
       } catch {
-        // A verification failure must not silently allow the export.
-        return denied("OUTPUT_INTEGRITY_FAILED");
+        deny("OUTPUT_INTEGRITY_FAILED");
+      }
+      if (!integrity.ok) {
+        toolResultMetrics.record("capture.integrity_failed");
+        deny(integrity.code);
       }
 
       try {
@@ -212,11 +219,17 @@ export function registerToolResultIpcHandlers(): void {
             }
           }
         );
-      } catch {
-        // Report the failure without leaking an internal path.
-        return denied("OUTPUT_WRITE_FAILED");
+      } catch (err) {
+        // `streamToFile` throws `Error("output scope was invalidated during
+        // export")` when the scope is revoked mid-copy — surface that as the
+        // scope's own denial code rather than a generic write failure; any
+        // other write error is reported without leaking an internal path.
+        if (err instanceof Error && err.message.includes("invalidated")) {
+          deny("OUTPUT_CHANGED");
+        }
+        deny("OUTPUT_WRITE_FAILED");
       }
-      return ok({ status: "exported" });
+      return { status: "exported" };
     }
   );
 }
@@ -224,16 +237,16 @@ export function registerToolResultIpcHandlers(): void {
 /** Read one bounded page for the renderer. */
 async function runRead(
   input: { conversationId: string; outputId: string; cursor?: string; page?: number }
-): Promise<CommonMessage<Record<string, unknown> | null>> {
+): Promise<Record<string, unknown>> {
   const module = new ToolResultModule();
   const decision = await module.authorizeAccess({
     outputId: input.outputId,
     profileId: "default",
     conversationId: input.conversationId,
   });
-  if (!decision.ok) return denied(decision.code);
+  if (!decision.ok) deny(decision.code);
   const row = decision.output;
-  if (!row.storageKey) return denied("OUTPUT_NOT_AVAILABLE");
+  if (!row.storageKey) deny("OUTPUT_NOT_AVAILABLE");
 
   const storage = new ToolResultStorageService({ root: getToolResultStorageRoot() });
   const retrieval = new ToolResultRetrievalService(storage);
@@ -257,7 +270,7 @@ async function runRead(
   });
   if (!verdict.ok) {
     toolResultMetrics.record("capture.integrity_failed");
-    return denied(verdict.code);
+    deny(verdict.code);
   }
   // First-page p95 is an NFR-04 target (≤200 ms). Measure the read itself
   // (authorization + integrity gate already happened above). `detail: "ui"`
@@ -285,23 +298,23 @@ async function runRead(
     performance.now() - readStartedAt,
     "ui"
   );
-  if (!outcome.ok) return denied(outcome.code);
-  return ok({ ...outcome.page });
+  if (!outcome.ok) deny(outcome.code);
+  return { ...outcome.page };
 }
 
 /** Run a literal search for the renderer. */
 async function runSearch(
   input: { conversationId: string; outputId: string; cursor?: string; query?: string }
-): Promise<CommonMessage<Record<string, unknown> | null>> {
+): Promise<Record<string, unknown>> {
   const module = new ToolResultModule();
   const decision = await module.authorizeAccess({
     outputId: input.outputId,
     profileId: "default",
     conversationId: input.conversationId,
   });
-  if (!decision.ok) return denied(decision.code);
+  if (!decision.ok) deny(decision.code);
   const row = decision.output;
-  if (!row.storageKey) return denied("OUTPUT_NOT_AVAILABLE");
+  if (!row.storageKey) deny("OUTPUT_NOT_AVAILABLE");
 
   const storage = new ToolResultStorageService({ root: getToolResultStorageRoot() });
   const retrieval = new ToolResultRetrievalService(storage);
@@ -319,7 +332,7 @@ async function runSearch(
   });
   if (!verdict.ok) {
     toolResultMetrics.record("capture.integrity_failed");
-    return denied(verdict.code);
+    deny(verdict.code);
   }
   // Same latency measurement as `runRead`; `detail: "ui"` marks the renderer
   // path (T17).
@@ -345,8 +358,8 @@ async function runSearch(
     performance.now() - searchStartedAt,
     "ui"
   );
-  if (!outcome.ok) return denied(outcome.code);
-  return ok({ ...outcome.page });
+  if (!outcome.ok) deny(outcome.code);
+  return { ...outcome.page };
 }
 
 /**
