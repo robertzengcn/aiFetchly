@@ -44,6 +44,9 @@ import {
   StreamEventProcessor,
   StreamState,
 } from "@/service/StreamEventProcessor";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
   AI_CHAT_MESSAGE,
@@ -600,6 +603,21 @@ let currentStreamAbortController: AbortController | null = null;
 let currentStreamEventProcessor: StreamEventProcessor | null = null;
 
 /**
+ * Shared tool-result collaborators for the StreamEventProcessor (T15a).
+ *
+ * `ToolResultModule` resolves the DB path via the Token service on each call,
+ * and `ToolResultStorageService` is stateless beyond its root path, so a single
+ * process-wide instance is safe and matches how `AIChatQueryLoop` resolves them.
+ * Eager so the stream-state object always carries present collaborators; the
+ * storage root is safe to read after `app.whenReady`, which has run by the time
+ * IPC handlers fire.
+ */
+const sharedToolResultModule = new ToolResultModule();
+const sharedToolResultStorage = new ToolResultStorageService({
+  root: getToolResultStorageRoot(),
+});
+
+/**
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
@@ -995,6 +1013,12 @@ export function registerAiChatIpcHandlers(): void {
         currentPlan: null,
         planThreadId: undefined,
         awaitingSkillPermissionGrant: false,
+        // Recoverable large tool results (T15a): inject the same collaborators
+        // `AIChatQueryLoop` uses so server/local tool results are routed through
+        // the bounded pipeline. The module resolves the DB path via Token and
+        // the storage root is process-constant, so one shared instance is safe.
+        toolResultModule: sharedToolResultModule,
+        toolResultStorage: sharedToolResultStorage,
       };
 
       // Create stream event processor
