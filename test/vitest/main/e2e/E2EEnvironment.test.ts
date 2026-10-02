@@ -58,6 +58,7 @@ describe("E2EEnvironment", () => {
     expect(env.workspacePath).toBe(path.join(root, "workspace"));
     expect(env.downloadsPath).toBe(path.join(root, "downloads"));
     expect(env.logsPath).toBe(path.join(root, "logs"));
+    expect(env.toolOutputRootPath).toBe(path.join(root, "tool-outputs"));
     expect(env.fakeAiBaseUrl).toBe("http://127.0.0.1:5174/v1");
     expect(env.allowedOrigins).toEqual([
       "http://127.0.0.1:5173",

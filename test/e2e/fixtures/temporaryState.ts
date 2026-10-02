@@ -114,6 +114,7 @@ export function createTemporaryRoot(
   const workspacePath = path.join(rootPath, "workspace");
   const downloadsPath = path.join(rootPath, "downloads");
   const logsPath = path.join(rootPath, "logs");
+  const toolOutputRootPath = path.join(rootPath, "tool-outputs");
   const stateFilePath = path.join(rootPath, "state.json");
   const networkViolationsPath = path.join(rootPath, "network-violations.jsonl");
 
@@ -124,6 +125,7 @@ export function createTemporaryRoot(
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
   ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -135,6 +137,7 @@ export function createTemporaryRoot(
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
     stateFilePath,
     networkViolationsPath,
     remove(): void {

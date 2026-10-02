@@ -42,6 +42,15 @@ export interface E2EEnvironment {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /**
+   * Per-test root for preserved tool-output artifacts. Derived from the
+   * validated E2E root and contained by it, so large-tool-result captures
+   * never write into the real `~/.aifetchly/tool-outputs`. The bootstrap
+   * creates the directory and exports it via `AIFETCHLY_TOOL_OUTPUT_ROOT` so
+   * production code (`getToolResultStorageRoot`) honors the override without
+   * trusting an arbitrary caller-supplied path.
+   */
+  readonly toolOutputRootPath: string;
   readonly fakeAiBaseUrl: string | null;
   readonly allowedOrigins: readonly string[];
   readonly stateFilePath: string | null;
@@ -196,12 +205,14 @@ export function loadE2EEnvironment(env: NodeJS.ProcessEnv): E2EEnvironment {
   const workspacePath = path.join(rootPath, "workspace");
   const downloadsPath = path.join(rootPath, "downloads");
   const logsPath = path.join(rootPath, "logs");
+  const toolOutputRootPath = path.join(rootPath, "tool-outputs");
   for (const [label, p] of [
     ["userDataPath", userDataPath],
     ["databasePath", databasePath],
     ["workspacePath", workspacePath],
     ["downloadsPath", downloadsPath],
     ["logsPath", logsPath],
+    ["toolOutputRootPath", toolOutputRootPath],
   ] as const) {
     assertContained(rootPath, p, label);
   }
@@ -254,6 +265,7 @@ export function loadE2EEnvironment(env: NodeJS.ProcessEnv): E2EEnvironment {
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
     fakeAiBaseUrl,
     allowedOrigins,
     stateFilePath,

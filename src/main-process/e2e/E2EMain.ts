@@ -21,9 +21,11 @@
  */
 
 import { app } from "electron";
+import * as fs from "node:fs";
 import { loadE2EEnvironment } from "./E2EEnvironment";
 import { installE2ENetworkGuard } from "./E2ENetworkGuard";
 import { seedE2EState } from "./E2EStateSeeder";
+import { TOOL_OUTPUT_ROOT_ENV } from "@/service/toolResult/toolResultRoot";
 
 async function start(): Promise<void> {
   const environment = loadE2EEnvironment(process.env);
@@ -36,6 +38,15 @@ async function start(): Promise<void> {
   process.env.ELECTRON_USER_DATA_PATH = environment.userDataPath;
   process.env.IS_TEST = "1";
   process.env.NODE_ENV = "test";
+
+  // Redirect preserved tool-output artifacts into the per-test temp root so
+  // large-tool-result captures never touch the real ~/.aifetchly/tool-outputs.
+  // The root is DERIVED from the validated E2E root (never caller-supplied) and
+  // the directory is created here so getToolResultStorageRoot()'s existence
+  // check honors the override. Set before the dynamic import of background.ts
+  // so production code reads the redirect from first read.
+  fs.mkdirSync(environment.toolOutputRootPath, { recursive: true });
+  process.env[TOOL_OUTPUT_ROOT_ENV] = environment.toolOutputRootPath;
 
   // Plain `vite build` (unlike forge plugin-vite) resolves the package.json
   // `browser` field for some Node packages (e.g. joi, form-data), pulling
