@@ -1243,6 +1243,12 @@ function initialize() {
           writeSecret: (secret: string) =>
             token.setValue(TOOL_RESULT_CURSOR_SECRET_KEY, secret),
           onLog: (message: string) => log.info(message),
+          // The legacy projection backfill (T14 / design §10.2) writes bounded
+          // derived rows over oversized legacy messages; it needs the live
+          // DataSource to scan the source table. Runs regardless of capture
+          // (it touches only the projection table, not artifacts).
+          dataSource: appDataSource.connection,
+          profileId: "default",
         });
       } catch (err) {
         log.warn(

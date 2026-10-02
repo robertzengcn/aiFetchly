@@ -1,11 +1,16 @@
 import "reflect-metadata";
 import * as crypto from "node:crypto";
+import type { DataSource } from "typeorm";
 import {
   deriveToolResultCursorKey,
   setToolResultCursorKey,
 } from "@/service/toolResult/ToolResultCursorCodec";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultRecoveryService } from "@/service/toolResult/ToolResultRecoveryService";
+import {
+  ToolResultBootstrapService,
+  TOOL_OUTPUT_BOOTSTRAP_KEYS,
+} from "@/service/toolResult/ToolResultBootstrapService";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import type { ToolResultModule } from "@/modules/ToolResultModule";
@@ -67,6 +72,8 @@ export interface ToolResultStartupReport {
   readonly orphansRemoved?: number;
   readonly filesSkippedTooRecent?: number;
   readonly errors?: number;
+  /** True when the legacy projection backfill ran (may be skipped/resumed). */
+  readonly legacyProjectionsBackfilled?: boolean;
 }
 
 /**
@@ -83,6 +90,16 @@ export async function runToolResultStartup(input: {
   readSecret: () => string | undefined | null;
   writeSecret: (secret: string) => void;
   onLog?: (message: string) => void;
+  /**
+   * DataSource for the legacy projection backfill. The backfill writes bounded
+   * projections over legacy oversized rows (T14 / design §10.2); it is read-
+   * only with respect to the original source rows, so it runs regardless of
+   * `captureEnabled`. Optional: when absent, the backfill is skipped (the
+   * read path still substitutes any pre-existing projections).
+   */
+  dataSource?: DataSource;
+  /** Profile under which legacy projections are keyed. Defaults to "default". */
+  profileId?: string;
 }): Promise<ToolResultStartupReport> {
   const log = input.onLog ?? (() => undefined);
   const key = installPersistentCursorKey({
@@ -95,12 +112,21 @@ export async function runToolResultStartup(input: {
       : `[tool-result] cursor key NOT persisted: ${key.reason ?? "unknown"}`
   );
 
+  // The legacy projection backfill writes bounded derived rows, not artifacts,
+  // so it is NOT gated on `captureEnabled`. A capture-off rollback must still
+  // let pre-existing projections be rebuilt/refreshed. It is resumable and
+  // bounded, and a failure never aborts startup (the next boot retries).
+  const legacyBackfill = runLegacyProjectionBackfill(input, log);
+
   if (!input.captureEnabled) {
     // Capture off: skip reconciliation so a rollback never touches artifacts.
-    // Existing committed references stay readable regardless of the flag.
+    // Existing committed references stay readable regardless of the flag. The
+    // legacy backfill still runs (it touches only the projection table).
+    const backfill = await legacyBackfill;
     return {
       cursorKeyInstalled: key.installed,
       cursorKeyReason: key.reason,
+      legacyProjectionsBackfilled: backfill,
     };
   }
 
@@ -117,10 +143,12 @@ export async function runToolResultStartup(input: {
         `skipped=${report.filesSkippedTooRecent} ` +
         `errors=${report.errors}`
     );
+    const backfill = await legacyBackfill;
     return {
       cursorKeyInstalled: key.installed,
       cursorKeyReason: key.reason,
       ...report,
+      legacyProjectionsBackfilled: backfill,
     };
   } catch (error: unknown) {
     // Never abort startup for a reconciliation failure.
@@ -129,11 +157,60 @@ export async function runToolResultStartup(input: {
         error instanceof Error ? error.message : String(error)
       }`
     );
+    const backfill = await legacyBackfill;
     return {
       cursorKeyInstalled: key.installed,
       cursorKeyReason: key.reason,
       errors: 1,
+      legacyProjectionsBackfilled: backfill,
     };
+  }
+}
+
+/**
+ * Run the resumable legacy projection backfill (T14 / design §10.2) so it
+ * overlaps the recovery sweep, then report whether it completed. Fire-and-
+ * forget from the caller's perspective: this never throws — a failure is
+ * logged and the step is left incomplete so the next startup retries it.
+ *
+ * Yields between batches via `setImmediate` so a large legacy table never
+ * stalls the event loop (NFR-05).
+ */
+async function runLegacyProjectionBackfill(
+  input: {
+    dataSource?: DataSource;
+    profileId?: string;
+    onLog?: (message: string) => void;
+  },
+  log: (message: string) => void
+): Promise<boolean> {
+  if (!input.dataSource) return false;
+  const profileId = input.profileId ?? "default";
+  try {
+    const result = await new ToolResultBootstrapService(
+      input.dataSource,
+      profileId
+    ).runStep(TOOL_OUTPUT_BOOTSTRAP_KEYS.legacyProjections, {
+      onYield: () =>
+        new Promise<void>((resolve) => setImmediate(resolve)),
+      onLog: log,
+    });
+    if (!result.completed) {
+      log(
+        `[tool-result] legacy projection backfill incomplete: ${result.error ?? "unknown"}`
+      );
+    } else if (result.ran) {
+      log("[tool-result] legacy projection backfill complete");
+    }
+    return result.completed;
+  } catch (error: unknown) {
+    // Never abort startup for a backfill failure.
+    log(
+      `[tool-result] legacy projection backfill failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return false;
   }
 }
 
