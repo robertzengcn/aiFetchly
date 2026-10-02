@@ -53,6 +53,9 @@ export interface MessageWithMaybeArtifactMetadata {
   metadata?: {
     toolResult?: unknown;
     artifact?: AIArtifactToolMetadata;
+    toolOutputRefs?: unknown;
+    toolOutputPreservation?: unknown;
+    toolOutputPreview?: unknown;
   };
 }
 
@@ -83,4 +86,55 @@ export function ensureArtifactMetadata<
     }
   }
   return message;
+}
+
+/**
+ * The tool-output descriptor keys the renderer reads at metadata top level
+ * ({@link AiChatV2Message.vue} `preservedOutput`). Persisted tool-result rows
+ * nest these under `metadata.toolResult` (see `saveToolResultMessage` and
+ * `upsertToolResultMessage`); the live in-memory `tool_result` chunk path sets
+ * them at top level directly. Without a lift on history load, the preserved-
+ * output card disappears after closing and reopening a conversation — the
+ * bounded receipt (the whole point of the feature) would never render from
+ * persisted state.
+ */
+const TOOL_OUTPUT_DESCRIPTOR_KEYS = [
+  "toolOutputRefs",
+  "toolOutputPreservation",
+  "toolOutputPreview",
+] as const;
+
+/**
+ * Derive top-level tool-output descriptor shortcuts for a tool-result message
+ * that lacks them, lifting each from `metadata.toolResult` when the top-level
+ * slot is absent. Mirrors {@link ensureArtifactMetadata}: idempotent (a message
+ * that already has the top-level slots is returned unchanged), defensive (a
+ * malformed `toolResult` is ignored), and returns the message unchanged when no
+ * tool-output descriptors are present. Used in `loadHistory` so the receipt card
+ * reappears after a restart (PRD §11 cross-restart durability).
+ */
+export function ensureToolOutputMetadata<
+  T extends MessageWithMaybeArtifactMetadata
+>(message: T): T {
+  const meta = message.metadata;
+  if (
+    !meta ||
+    !meta.toolResult ||
+    typeof meta.toolResult !== "object"
+  ) {
+    return message;
+  }
+  const source = meta.toolResult as Record<string, unknown>;
+  let lifted: Record<string, unknown> | null = null;
+  for (const key of TOOL_OUTPUT_DESCRIPTOR_KEYS) {
+    const existing = meta[key as keyof typeof meta];
+    if (existing !== undefined) continue;
+    const value = source[key];
+    if (value !== undefined) {
+      if (lifted === null) lifted = {};
+      lifted[key] = value;
+    }
+  }
+  if (lifted === null) return message;
+  return { ...message, metadata: { ...meta, ...lifted } };
 }

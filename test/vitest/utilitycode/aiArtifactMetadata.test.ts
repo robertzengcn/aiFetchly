@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   extractArtifactMetadata,
   ensureArtifactMetadata,
+  ensureToolOutputMetadata,
   type MessageWithMaybeArtifactMetadata,
 } from "@/views/components/aiChatV2/artifactMetadata";
 
@@ -164,6 +165,115 @@ describe("ensureArtifactMetadata (history reopen regression)", () => {
     };
     const before = JSON.parse(JSON.stringify(msg));
     ensureArtifactMetadata(msg);
+    expect(JSON.parse(JSON.stringify(msg))).toEqual(before);
+  });
+});
+
+// Regression: PRD §11 cross-restart durability — the preserved-output receipt
+// card must reappear when a conversation is reopened. Persisted tool-result rows
+// nest the descriptors (`toolOutputRefs`/`toolOutputPreservation`/`toolOutputPreview`)
+// under `metadata.toolResult`; the renderer reads them at metadata top level.
+// Without a lift on history load the card never renders from persisted state.
+describe("ensureToolOutputMetadata (history reopen regression)", () => {
+  const persistedToolResult = {
+    success: true,
+    operationStatus: "complete",
+    toolOutputRefs: [
+      {
+        outputId: "out_0123456789abcdef0123456789abcdef",
+        capturedBytes: 2048,
+        preservation: "complete",
+        sourceCompleteness: "complete",
+      },
+    ],
+    toolOutputPreservation: "complete",
+    toolOutputPreview: "first line...",
+    summary: "ok",
+  };
+
+  it("lifts all three tool-output descriptors to metadata top level", () => {
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: { toolResult: persistedToolResult },
+    };
+    const out = ensureToolOutputMetadata(msg);
+    expect(out.metadata?.toolOutputRefs).toBe(
+      persistedToolResult.toolOutputRefs
+    );
+    expect(out.metadata?.toolOutputPreservation).toBe("complete");
+    expect(out.metadata?.toolOutputPreview).toBe("first line...");
+    // The nested toolResult is preserved.
+    expect(out.metadata?.toolResult).toBe(persistedToolResult);
+  });
+
+  it("lifts only the keys that are absent at top level (partial shortcut)", () => {
+    const existingRefs = [{ outputId: "out_existing", capturedBytes: 1 }];
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: {
+        toolResult: persistedToolResult,
+        toolOutputRefs: existingRefs as never,
+      },
+    };
+    const out = ensureToolOutputMetadata(msg);
+    // Existing top-level slot is NOT overwritten.
+    expect(out.metadata?.toolOutputRefs).toBe(existingRefs);
+    // The other two absent keys are still lifted.
+    expect(out.metadata?.toolOutputPreservation).toBe("complete");
+    expect(out.metadata?.toolOutputPreview).toBe("first line...");
+  });
+
+  it("returns the message unchanged when no descriptors are nested", () => {
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: { toolResult: { success: true, summary: "no outputs" } },
+    };
+    expect(ensureToolOutputMetadata(msg)).toBe(msg);
+  });
+
+  it("returns the message unchanged when there is no toolResult", () => {
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: { toolOutputRefs: [] as never },
+    };
+    expect(ensureToolOutputMetadata(msg)).toBe(msg);
+  });
+
+  it("returns the message unchanged when there is no metadata", () => {
+    const msg: MessageWithMaybeArtifactMetadata = { messageType: "message" };
+    expect(ensureToolOutputMetadata(msg)).toBe(msg);
+  });
+
+  it("composes with ensureArtifactMetadata without clobbering either lift", () => {
+    // A persisted row can carry BOTH an artifact and tool-output descriptors
+    // nested under toolResult. loadHistory applies ensureToolOutputMetadata(
+    // ensureArtifactMetadata(m)) — both shortcuts must end up at top level.
+    const withBoth = {
+      ...persistedToolResult,
+      artifact: {
+        id: "artifact-x",
+        conversationId: "c",
+        type: "html",
+        title: "T",
+        mimeType: "text/html",
+        version: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        openImmediately: true,
+      },
+    };
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: { toolResult: withBoth },
+    };
+    const out = ensureToolOutputMetadata(ensureArtifactMetadata(msg));
+    expect(out.metadata?.artifact?.id).toBe("artifact-x");
+    expect(out.metadata?.toolOutputRefs).toBe(withBoth.toolOutputRefs);
+    expect(out.metadata?.toolOutputPreservation).toBe("complete");
+    expect(out.metadata?.toolOutputPreview).toBe("first line...");
+  });
+
+  it("does not mutate the input (immutability)", () => {
+    const msg: MessageWithMaybeArtifactMetadata = {
+      metadata: { toolResult: persistedToolResult },
+    };
+    const before = JSON.parse(JSON.stringify(msg));
+    ensureToolOutputMetadata(msg);
     expect(JSON.parse(JSON.stringify(msg))).toEqual(before);
   });
 });
