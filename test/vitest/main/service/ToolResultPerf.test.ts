@@ -105,6 +105,59 @@ let retrieval: ToolResultRetrievalService;
 const fixtures: Fixture[] = [];
 
 /**
+ * Measurements accumulated across the run and written to
+ * `test/output/tool-result-perf-report.json` at the end — a durable record
+ * for the release gate (the audit's T18 acceptance asks to record commands,
+ * fixture sizes, host, and measurements; console.log is not reliably visible
+ * through every runner, so the file is the source of truth).
+ */
+interface PerfRecord {
+  readonly fixture: string;
+  readonly kind: "capture" | "read" | "search";
+  readonly p50Ms: number;
+  readonly p95Ms: number;
+  readonly calls?: number;
+  readonly matches?: number;
+  readonly pages?: number;
+}
+const perfRecords: PerfRecord[] = [];
+let nfr03HeapDeltaMiB = 0;
+let nfr05MaxStallMs = 0;
+
+/** Write the accumulated record; best-effort, never fails the suite. */
+function writePerfReport(): void {
+  try {
+    const outDir = path.resolve(__dirname, "../../../output");
+    fs.mkdirSync(outDir, { recursive: true });
+    const report = {
+      feature: "large-tool-results",
+      date: new Date().toISOString(),
+      host: `${os.platform()}/${os.arch()} node ${process.versions.node}`,
+      command:
+        "AIFETCHLY_PERF_TOOLRESULT=1 yarn testmain test/vitest/main/service/ToolResultPerf.test.ts",
+      fixtures: FIXTURE_BYTES.map((b) => `${(b / MiB).toFixed(0)} MiB text`),
+      thresholds: {
+        nfr03AdditionalMemoryMiB: 16,
+        nfr04FirstPageReadP95Ms: 200,
+        nfr05MaxEventLoopStallMs: 50,
+      },
+      measured: {
+        nfr03HeapDeltaMiB,
+        nfr05MaxStallMs,
+        records: perfRecords,
+      },
+    };
+    fs.writeFileSync(
+      path.join(outDir, "tool-result-perf-report.json"),
+      `${JSON.stringify(report, null, 2)}\n`,
+      "utf8"
+    );
+  } catch {
+    // Reporting is best-effort; the measurements are also printed to stdout.
+  }
+}
+
+/**
  * Track the largest observed event-loop stall (NFR-05). A heartbeat timer
  * fires every 5 ms while measurements run; a heartbeat observed more than
  * 50 ms after its schedule proves a synchronous stall somewhere in the
@@ -145,6 +198,7 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
   }, 120_000);
 
   afterAll(() => {
+    writePerfReport();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -194,6 +248,12 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
       console.log(
         `[perf] capture ${label}: p50=${p50(samples).toFixed(1)}ms p95=${p95(samples).toFixed(1)}ms`
       );
+      perfRecords.push({
+        fixture: label,
+        kind: "capture",
+        p50Ms: p50(samples),
+        p95Ms: p95(samples),
+      });
       expect(p95(samples)).toBeLessThan(2_000);
     }, 600_000);
   }
@@ -224,6 +284,12 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
         console.log(
           `[perf] first-page read ${f.label}: p50=${p50(samples).toFixed(1)}ms p95=${lat.toFixed(1)}ms`
         );
+        perfRecords.push({
+          fixture: f.label,
+          kind: "read",
+          p50Ms: p50(samples),
+          p95Ms: lat,
+        });
         // Strict PRD target is 200 ms on reference hardware; assert a
         // machine-independent generous bound (4x) here so the invariant —
         // first-page cost is flat in artifact size — is what is proven.
@@ -247,6 +313,7 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
       console.log(
         `[perf] NFR-05 max event-loop stall observed: ${stalls.maxStallMs().toFixed(1)}ms`
       );
+      nfr05MaxStallMs = Math.max(nfr05MaxStallMs, stalls.maxStallMs());
       expect(stalls.maxStallMs()).toBeLessThan(50);
     }
   }, 600_000);
@@ -286,6 +353,14 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
       console.log(
         `[perf] search ${f.label}: p50=${p50(samples).toFixed(1)}ms p95=${p95(samples).toFixed(1)}ms calls=${calls} matches=${totalMatches}`
       );
+      perfRecords.push({
+        fixture: f.label,
+        kind: "search",
+        p50Ms: p50(samples),
+        p95Ms: p95(samples),
+        calls,
+        matches: totalMatches,
+      });
       // Per-call bounded: the ceiling is searchMaxMs=100ms by design; assert
       // generous headroom for slow hosts.
       expect(p95(samples)).toBeLessThan(500);
@@ -339,6 +414,8 @@ describeGate("ToolResultPerf (1/10/64 MiB fixtures)", () => {
     console.log(
       `[perf] NFR-03 64MiB paged read: pages=${pages} heap delta=${delta.toFixed(2)}MiB maxStall=${stalls.maxStallMs().toFixed(1)}ms`
     );
+    nfr03HeapDeltaMiB = delta;
+    nfr05MaxStallMs = Math.max(nfr05MaxStallMs, stalls.maxStallMs());
     // NFR-03: additional resident memory stays below 16 MiB. Paged reads hold
     // at most one page (~1.6 KiB token-bounded) at a time; pages' decoded text
     // is retained only as the running `textBytes` counter (a number), so the
