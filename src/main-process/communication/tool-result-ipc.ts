@@ -21,6 +21,10 @@ import { lazySchema } from "@/utils/lazySchema";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
+import {
+  toolResultIntegrityGate,
+  verifyArtifactIntegrity,
+} from "@/service/toolResult/ToolResultIntegrityGate";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type { ToolOutputPublicDescriptor } from "@/entityTypes/toolResultTypes";
@@ -230,6 +234,28 @@ async function runRead(
 
   const storage = new ToolResultStorageService({ root: getToolResultStorageRoot() });
   const retrieval = new ToolResultRetrievalService(storage);
+  // Forward the manifest subset so the read path can run the cheap identity+
+  // size check on open (technical design §8.4). A missing manifest is passed
+  // as absent: pre-manifest artifacts are unverified, not corrupt.
+  const manifest = await storage.readManifest(row.profileId, row.outputEpoch, row.outputId);
+  // Full checksum gate (T10): the size check above catches truncation/growth
+  // cheaply, but it cannot catch an in-place byte edit. The gate streams the
+  // whole artifact ONCE per process (cached by storageKey) and compares to
+  // the recorded SHA-256. Prefer the row's `sha256` over the manifest-file
+  // value so the common case needs no manifest I/O.
+  const verdict = await toolResultIntegrityGate.verify({
+    storage,
+    storageKey: row.storageKey,
+    manifest: row.sha256
+      ? { sha256: row.sha256, capturedBytes: row.capturedBytes }
+      : manifest
+        ? { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes }
+        : null,
+  });
+  if (!verdict.ok) {
+    toolResultMetrics.record("capture.integrity_failed");
+    return denied(verdict.code);
+  }
   const outcome = await retrieval.read({
     target: {
       outputId: row.outputId,
@@ -239,6 +265,9 @@ async function runRead(
       capturedBytes: row.capturedBytes,
       sourceCompleteness:
         (row.sourceCompleteness as "complete" | "partial" | "unknown") ?? "unknown",
+      ...(manifest
+        ? { manifest: { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes } }
+        : {}),
     },
     cursor: input.cursor,
     // The renderer uses the UI byte budget, which never exceeds the UI cap.
@@ -264,6 +293,22 @@ async function runSearch(
 
   const storage = new ToolResultStorageService({ root: getToolResultStorageRoot() });
   const retrieval = new ToolResultRetrievalService(storage);
+  // Same manifest forwarding as `runRead` so search is gated identically.
+  const manifest = await storage.readManifest(row.profileId, row.outputEpoch, row.outputId);
+  // Same full-checksum gate as `runRead` (T10).
+  const verdict = await toolResultIntegrityGate.verify({
+    storage,
+    storageKey: row.storageKey,
+    manifest: row.sha256
+      ? { sha256: row.sha256, capturedBytes: row.capturedBytes }
+      : manifest
+        ? { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes }
+        : null,
+  });
+  if (!verdict.ok) {
+    toolResultMetrics.record("capture.integrity_failed");
+    return denied(verdict.code);
+  }
   const outcome = await retrieval.search({
     target: {
       outputId: row.outputId,
@@ -273,6 +318,9 @@ async function runSearch(
       capturedBytes: row.capturedBytes,
       sourceCompleteness:
         (row.sourceCompleteness as "complete" | "partial" | "unknown") ?? "unknown",
+      ...(manifest
+        ? { manifest: { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes } }
+        : {}),
     },
     query: input.query ?? "",
     cursor: input.cursor,
@@ -284,53 +332,18 @@ async function runSearch(
 /**
  * Verify one committed artifact against its stored manifest checksum.
  *
- * `checksumOf` existed with no production caller, so a silently corrupted
- * payload was served as though it were the evidence the registry says it is.
- * This makes the check available at the boundary where trust is actually
- * claimed, and reports a distinct code so the caller can distinguish "this
- * output is broken" from "this output is missing".
+ * Re-exported from `ToolResultIntegrityGate` so the export handler and tests
+ * that imported it from the IPC module keep working. The implementation now
+ * lives in the gate module alongside the cached read-path gate (T10): the
+ * same compare logic serves export AND read/search, so a corrupted artifact
+ * is denied at every boundary that claims trust, not just export.
  *
- * `manifest` is the value previously read by `readManifest`. A missing manifest
- * is NOT treated as corruption: an artifact may legitimately predate manifests,
- * and the caller decides whether that is acceptable.
+ * `manifest` is the value previously read by `readManifest` (or the row's
+ * `sha256`/`capturedBytes`). A missing manifest is NOT treated as corruption:
+ * an artifact may legitimately predate manifests, and the caller decides
+ * whether that is acceptable.
  */
-export async function verifyArtifactIntegrity(input: {
-  readonly storage: ToolResultStorageService;
-  readonly storageKey: string;
-  readonly manifest: {
-    readonly sha256?: string;
-    readonly capturedBytes?: number;
-  } | null;
-}): Promise<
-  | { ok: true; verified: boolean }
-  | { ok: false; code: "OUTPUT_INTEGRITY_FAILED"; reason: string }
-> {
-  if (!input.manifest?.sha256) {
-    // Nothing recorded to verify against; not a failure, but not a pass either.
-    return { ok: true, verified: false };
-  }
-  let actual: string;
-  try {
-    actual = await input.storage.checksumOf(input.storageKey);
-  } catch (error: unknown) {
-    // The payload could not be read at all. That is an availability problem
-    // the retrieval path already reports; do not relabel it as corruption.
-    return {
-      ok: true,
-      verified: false,
-    };
-  }
-  if (actual !== input.manifest.sha256) {
-    return {
-      ok: false,
-      code: "OUTPUT_INTEGRITY_FAILED",
-      // Bounded and free of any path: only the two digests, and only the
-      // recorded one, which is app-managed state rather than user content.
-      reason: `checksum mismatch: expected ${input.manifest.sha256}, computed ${actual}`,
-    };
-  }
-  return { ok: true, verified: true };
-}
+export { verifyArtifactIntegrity } from "@/service/toolResult/ToolResultIntegrityGate";
 
 
 /**

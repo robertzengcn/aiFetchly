@@ -50,6 +50,14 @@ export interface RetrievalTarget {
   readonly format: ToolOutputFormat;
   readonly capturedBytes: number;
   readonly sourceCompleteness: "complete" | "partial" | "unknown";
+  /**
+   * Manifest subset the caller (which holds the output row) forwards for the
+   * cheap identity+size check on open (technical design §8.4). Absent for
+   * artifacts that predate manifests — those are unverified, not corrupt — and
+   * never applied to a `legacy_message` reference (§10.2: it has no checksum
+   * and must not be given a fabricated one).
+   */
+  readonly manifest?: { readonly sha256: string; readonly capturedBytes: number };
 }
 
 /** Trusted identity the authorization layer already validated. */
@@ -232,6 +240,25 @@ export class ToolResultRetrievalService {
   }
 
   /**
+   * Cheap identity+size check on open (technical design §8.4).
+   *
+   * The file backend reports the artifact's actual on-disk size as
+   * `totalBytes`, so comparing it against the manifest's recorded
+   * `capturedBytes` catches a shrunken or replaced payload with NO extra I/O.
+   * The full cryptographic checksum stays on sealing/recovery/export — never a
+   * re-hash per paged read. Skipped for the `legacy_message` backend (§10.2: a
+   * source row has no checksum and must not be judged by a fabricated one) and
+   * when the caller passed no manifest (pre-manifest artifacts are unverified,
+   * not corrupt).
+   */
+  private identityMismatch(target: RetrievalTarget, totalBytes: number): boolean {
+    if (target.backend === "legacy_message") return false;
+    const manifest = target.manifest;
+    if (!manifest) return false;
+    return totalBytes !== manifest.capturedBytes;
+  }
+
+  /**
    * Read one bounded page, resuming from an optional cursor.
    *
    * The page is bounded by BYTES and by the model TOKEN allowance including
@@ -294,6 +321,12 @@ export class ToolResultRetrievalService {
       });
     } catch {
       return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
+    }
+
+    if (this.identityMismatch(input.target, window.totalBytes)) {
+      // The payload on disk no longer matches what the manifest recorded, so
+      // the bytes just fetched are not the evidence the registry claims.
+      return { ok: false, code: "OUTPUT_INTEGRITY_FAILED" };
     }
 
     if (startByte > 0 && startByte >= window.totalBytes) {
@@ -406,6 +439,12 @@ export class ToolResultRetrievalService {
         });
       } catch {
         return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
+      }
+      if (this.identityMismatch(input.target, window.totalBytes)) {
+        // Same gate as `read`: a payload that no longer matches its manifest is
+        // not evidence, and scanning it would report matches against bytes the
+        // registry never wrote.
+        return { ok: false, code: "OUTPUT_INTEGRITY_FAILED" };
       }
       if (window.buffer.byteLength === 0) {
         scanComplete = true;

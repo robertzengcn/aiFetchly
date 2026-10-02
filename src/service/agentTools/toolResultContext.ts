@@ -7,6 +7,8 @@ import {
   ToolResultRetrievalService,
   type RetrievalTarget,
 } from "@/service/toolResult/ToolResultRetrievalService";
+import { toolResultIntegrityGate } from "@/service/toolResult/ToolResultIntegrityGate";
+import { toolResultMetrics } from "@/service/toolResult/ToolResultMetrics";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import type { ToolResultErrorCode } from "@/entityTypes/toolResultTypes";
 
@@ -113,7 +115,7 @@ export function getToolResultContext(
   const conversationId = context.conversationId;
   if (!conversationId) return null;
 
-  const { module, retrieval } = getWiring(conversationId);
+  const { module, storage, retrieval } = getWiring(conversationId);
   const { turnId, agentId } = resolveTurnScope(context);
 
   return {
@@ -137,6 +139,46 @@ export function getToolResultContext(
       } else if (!row.storageKey) {
         return { ok: false, code: "OUTPUT_NOT_AVAILABLE" };
       }
+      // Forward the manifest subset so the read path can run the cheap
+      // identity+size check on open (technical design §8.4). Only the file
+      // backend carries one: a legacy source row must not be given a
+      // fabricated checksum (§10.2).
+      const manifest =
+        backend === "file"
+          ? await storage.readManifest(
+              row.profileId,
+              row.outputEpoch,
+              row.outputId
+            )
+          : null;
+
+      // Full cryptographic checksum gate (T10). The cheap size check above
+      // catches a shrunken/grown payload with no extra I/O, but it cannot
+      // catch an in-place byte edit that preserves length. The gate streams
+      // the whole artifact ONCE per process (cached by storageKey, which
+      // includes the unique outputId) and compares to the recorded SHA-256.
+      // `checksumOf` previously had no caller on the read path, so a silently
+      // corrupted artifact was served as intact evidence.
+      if (backend === "file" && row.storageKey) {
+        const verdict = await toolResultIntegrityGate.verify({
+          storage,
+          storageKey: row.storageKey,
+          // The registry row's `sha256` is the recorded checksum; prefer it
+          // over the manifest-file value so the gate needs no manifest I/O
+          // for the common case. Fall back to the manifest's value for an
+          // artifact whose row predates the `sha256` column.
+          manifest: row.sha256
+            ? { sha256: row.sha256, capturedBytes: row.capturedBytes }
+            : manifest
+              ? { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes }
+              : null,
+        });
+        if (!verdict.ok) {
+          toolResultMetrics.record("capture.integrity_failed");
+          return { ok: false, code: verdict.code };
+        }
+      }
+
       return {
         ok: true,
         target: {
@@ -150,6 +192,9 @@ export function getToolResultContext(
           sourceCompleteness:
             (row.sourceCompleteness as RetrievalTarget["sourceCompleteness"]) ??
             "unknown",
+          ...(manifest
+            ? { manifest: { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes } }
+            : {}),
         },
       };
     },

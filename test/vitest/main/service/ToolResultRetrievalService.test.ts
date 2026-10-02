@@ -20,7 +20,10 @@ import {
   setToolResultCursorKey,
 } from "@/service/toolResult/ToolResultCursorCodec";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
-import { verifyArtifactIntegrity } from "@/main-process/communication/tool-result-ipc";
+import {
+  toolResultIntegrityGate,
+  verifyArtifactIntegrity,
+} from "@/service/toolResult/ToolResultIntegrityGate";
 
 /**
  * Bounded read/search and cursor-integrity tests.
@@ -52,6 +55,49 @@ function newOutputId(): string {
 }
 
 const IDENTITY = { profileId: "prof-1", outputEpoch: "epoch-1" };
+
+/**
+ * Absolute path of the payload file for an artifact, resolved the same way the
+ * storage service does. Used by the T10 tests to tamper with bytes on disk
+ * behind the registry's back.
+ */
+async function payloadPathFor(outputId: string): Promise<string> {
+  const { artifactDirectory, payloadFileName } = await import(
+    "@/service/toolResult/ToolResultPaths"
+  );
+  const dir = artifactDirectory({
+    root,
+    profileId: IDENTITY.profileId,
+    outputEpoch: IDENTITY.outputEpoch,
+    outputId,
+  });
+  return path.join(dir, payloadFileName("text"));
+}
+
+/**
+ * Wrap a `ToolResultStorageService` so calls to `checksumOf` are counted
+ * without disturbing the rest of the interface. A `Proxy` (rather than a
+ * spread) is required so the spy still satisfies the class type — spreading an
+ * instance drops every method not literally enumerated on the object, which
+ * tsc rejects as missing `captureJson`/`captureText`/etc.
+ */
+function spyChecksumOf(
+  storage: ToolResultStorageService,
+  onCall: () => void
+): ToolResultStorageService {
+  return new Proxy(storage, {
+    get(target, prop, receiver) {
+      if (prop === "checksumOf") {
+        const real = target.checksumOf.bind(target);
+        return async (key: string) => {
+          onCall();
+          return real(key);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
 
 /** Store a value and return a retrieval target for it. */
 async function storeValue(
@@ -803,5 +849,338 @@ describe("audit regression — artifact integrity verification", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.verified).toBe(false);
+  });
+});
+
+/**
+ * T10 — read-path integrity (technical design §8.4).
+ *
+ * The read/search path serves bytes without checking them against the manifest.
+ * §8.4 requires a cheap identity+size check ON OPEN (not a full re-hash per
+ * paged read) so a shrunken or replaced payload is reported as
+ * OUTPUT_INTEGRITY_FAILED instead of served. The full checksum stays on
+ * sealing/recovery/export.
+ */
+describe("T10 — read-path integrity on open", () => {
+  /** Store text and return a target carrying its manifest subset. */
+  async function storeTextWithManifest(text: string): Promise<{
+    target: RetrievalTarget;
+    manifest: { sha256: string; capturedBytes: number } | null;
+  }> {
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text,
+      sourceCompleteness: "complete",
+    });
+    const manifest = await storage.readManifest(
+      IDENTITY.profileId,
+      IDENTITY.outputEpoch,
+      outputId
+    );
+    return {
+      target: {
+        outputId,
+        revision: 1,
+        storageKey: stored.storageKey,
+        format: "text",
+        capturedBytes: stored.capturedBytes,
+        sourceCompleteness: "complete",
+        ...(manifest
+          ? { manifest: { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes } }
+          : {}),
+      },
+      manifest: manifest
+        ? { sha256: manifest.sha256, capturedBytes: manifest.capturedBytes }
+        : null,
+    };
+  }
+
+  it("reads when the artifact size matches the manifest", async () => {
+    const { target } = await storeTextWithManifest("intact output");
+    const outcome = await service.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toBe("intact output");
+  });
+
+  it("reports OUTPUT_INTEGRITY_FAILED when the file is smaller than the manifest", async () => {
+    const { target, manifest } = await storeTextWithManifest("a".repeat(4096));
+    if (!manifest) throw new Error("manifest was not written");
+    // Truncate the payload on disk behind the registry's back.
+    const payloadPath = await payloadPathFor(target.outputId);
+    const original = fs.readFileSync(payloadPath);
+    fs.writeFileSync(payloadPath, original.subarray(0, 128));
+
+
+    const outcome = await service.read({ target });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+
+  it("reports OUTPUT_INTEGRITY_FAILED when the file grew past the manifest", async () => {
+    const { target, manifest } = await storeTextWithManifest("small");
+    if (!manifest) throw new Error("manifest was not written");
+    // Append extra bytes on disk behind the registry's back.
+    const payloadPath = await payloadPathFor(target.outputId);
+    fs.writeFileSync(payloadPath, Buffer.concat([fs.readFileSync(payloadPath), Buffer.from("extraneous")]));
+
+    const outcome = await service.read({ target });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+
+  it("serves a target with no manifest (pre-manifest artifact)", async () => {
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text: "legacy artifact without manifest",
+      sourceCompleteness: "complete",
+    });
+    // Simulate a pre-manifest artifact by removing the manifest file.
+    const { artifactDirectory } = await import("@/service/toolResult/ToolResultPaths");
+    const dir = artifactDirectory({
+      root,
+      profileId: IDENTITY.profileId,
+      outputEpoch: IDENTITY.outputEpoch,
+      outputId,
+    });
+    fs.rmSync(path.join(dir, "manifest.json"), { force: true });
+
+    const target: RetrievalTarget = {
+      outputId,
+      revision: 1,
+      storageKey: stored.storageKey,
+      format: "text",
+      capturedBytes: stored.capturedBytes,
+      sourceCompleteness: "complete",
+    };
+    const outcome = await service.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toBe("legacy artifact without manifest");
+  });
+
+  it("skips the size check for the legacy_message backend (TD §179)", async () => {
+    const wired = createToolResultRetrievalService({
+      storage,
+      module: {
+        readLegacySourceSlice: async () => ({
+          text: "legacy row content",
+          totalBytes: 18,
+        }),
+      },
+    });
+    // No file bytes exist for a legacy row; a fabricated checksum/size would be
+    // exactly what TD §179 forbids. The gate must not block this read.
+    const target: RetrievalTarget = {
+      outputId: newOutputId(),
+      revision: 1,
+      backend: "legacy_message",
+      sourceRowKey: "msg-42",
+      storageKey: "",
+      format: "text",
+      capturedBytes: 18,
+      sourceCompleteness: "complete",
+      manifest: { sha256: "0".repeat(64), capturedBytes: 999999 },
+    };
+    const outcome = await wired.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toBe("legacy row content");
+  });
+
+  it("search applies the same integrity gate", async () => {
+    const { target } = await storeTextWithManifest("needle in intact output");
+    // Corrupt (not truncate) so the scan would find the needle otherwise.
+    const payloadPath = await payloadPathFor(target.outputId);
+    fs.writeFileSync(payloadPath, "tampered bytes, no needle here");
+
+    const outcome = await service.search({ target, query: "needle" });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+});
+
+/**
+ * T10 part 2 — the full-checksum gate (`ToolResultIntegrityGate`).
+ *
+ * The cheap per-page size check above catches truncation/growth with no extra
+ * I/O, but it CANNOT catch an in-place byte edit that preserves length. The
+ * gate streams the whole artifact once through `checksumOf` and compares to the
+ * recorded SHA-256; the verdict is cached per `storageKey` so 8192 paged reads
+ * of one artifact do not re-hash 8192 times.
+ */
+describe("T10 — ToolResultIntegrityGate (full-checksum cache)", () => {
+  beforeEach(() => {
+    // Each test starts with a cold cache so a cached-positive verdict from one
+    // test cannot mask a corruption assertion in the next.
+    toolResultIntegrityGate.clear();
+  });
+
+  /** Store authentic text and return the storageKey + recorded sha256. */
+  async function storeAuthentic(text: string): Promise<{
+    storageKey: string;
+    sha256: string;
+    outputId: string;
+  }> {
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text,
+      sourceCompleteness: "complete",
+    });
+    const manifest = await storage.readManifest(
+      IDENTITY.profileId,
+      IDENTITY.outputEpoch,
+      outputId
+    );
+    if (!manifest?.sha256) throw new Error("manifest sha256 was not written");
+    return { storageKey: stored.storageKey, sha256: manifest.sha256, outputId };
+  }
+
+  it("detects same-size byte corruption the size check cannot", async () => {
+    // Same length, different bytes: the per-page size check passes, only the
+    // full checksum catches it. This is the exact gap the gate closes.
+    const original = "authentic captured output of fixed length";
+    const { storageKey, sha256, outputId } = await storeAuthentic(original);
+    const payloadPath = await payloadPathFor(outputId);
+    const buf = fs.readFileSync(payloadPath);
+    // Flip bytes in place so the length is unchanged.
+    const tampered = Buffer.from(buf);
+    tampered[0] = tampered[0] === 0x41 ? 0x42 : 0x41;
+    tampered[tampered.length - 1] = tampered[tampered.length - 1] === 0x41 ? 0x42 : 0x41;
+    fs.writeFileSync(payloadPath, tampered);
+
+    const verdict = await toolResultIntegrityGate.verify({
+      storage,
+      storageKey,
+      manifest: { sha256, capturedBytes: original.length },
+    });
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+
+  it("verifies an intact artifact and caches the positive verdict", async () => {
+    const { storageKey, sha256 } = await storeAuthentic("intact artifact for cache test");
+
+    const first = await toolResultIntegrityGate.verify({
+      storage,
+      storageKey,
+      manifest: { sha256 },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.verified).toBe(true);
+
+    // Corrupt the payload AFTER the cached verdict was taken. A cached verdict
+    // must remain correct because a storageKey includes the unique outputId,
+    // so one key always refers to the same bytes within a process lifetime.
+    // The per-page size check remains the cheap line of defence for changes
+    // after the cache was populated; here we assert the cache itself is stable.
+    const second = await toolResultIntegrityGate.verify({
+      storage,
+      storageKey,
+      manifest: { sha256 },
+    });
+    expect(second).toEqual(first);
+  });
+
+  it("does not re-hash on a cached verdict (checksumOf called once)", async () => {
+    const { storageKey, sha256 } = await storeAuthentic("cache hit avoids rehash");
+    let calls = 0;
+    const spied = spyChecksumOf(storage, () => calls++);
+
+    const v1 = await toolResultIntegrityGate.verify({
+      storage: spied,
+      storageKey,
+      manifest: { sha256 },
+    });
+    const v2 = await toolResultIntegrityGate.verify({
+      storage: spied,
+      storageKey,
+      manifest: { sha256 },
+    });
+    const v3 = await toolResultIntegrityGate.verify({
+      storage: spied,
+      storageKey,
+      manifest: { sha256 },
+    });
+    expect(v1.ok).toBe(true);
+    expect(v2.ok).toBe(true);
+    expect(v3.ok).toBe(true);
+    // Three verifies, one hash: the second and third hit the cache.
+    expect(calls).toBe(1);
+  });
+
+  it("caches the negative verdict for an artifact without a recorded sha256", async () => {
+    // A pre-manifest artifact returns { ok: true, verified: false } and that
+    // verdict is cached too, so 8192 paged reads do not re-stat 8192 times.
+    const outputId = newOutputId();
+    const stored = await storage.captureText({
+      outputId,
+      ...IDENTITY,
+      text: "pre-manifest artifact",
+      sourceCompleteness: "complete",
+    });
+    let calls = 0;
+    const spied = spyChecksumOf(storage, () => calls++);
+
+    const v1 = await toolResultIntegrityGate.verify({
+      storage: spied,
+      storageKey: stored.storageKey,
+      manifest: null,
+    });
+    const v2 = await toolResultIntegrityGate.verify({
+      storage: spied,
+      storageKey: stored.storageKey,
+      manifest: null,
+    });
+    expect(v1.ok).toBe(true);
+    if (!v1.ok) return;
+    expect(v1.verified).toBe(false);
+    expect(v2).toEqual(v1);
+    // No sha256 to compare against, so checksumOf is never called at all.
+    expect(calls).toBe(0);
+  });
+
+  it("invalidate() drops a cached verdict so a subsequent verify re-hashes", async () => {
+    // Capture an intact artifact, populate the cache, then invalidate. After
+    // invalidation a corrupted payload MUST be detected: a stale cached-positive
+    // verdict would mask the corruption, which is the exact regression
+    // invalidation exists to prevent (e.g. after a re-capture to the same key).
+    const { storageKey, sha256, outputId } = await storeAuthentic("invalidate then reverify");
+    const intact = await toolResultIntegrityGate.verify({
+      storage,
+      storageKey,
+      manifest: { sha256 },
+    });
+    expect(intact.ok).toBe(true);
+
+    toolResultIntegrityGate.invalidate(storageKey);
+
+    // Tamper in place (same length) and re-verify. With the cache cleared the
+    // gate must re-hash and detect the mismatch.
+    const payloadPath = await payloadPathFor(outputId);
+    const buf = fs.readFileSync(payloadPath);
+    const tampered = Buffer.from(buf);
+    tampered[0] = tampered[0] === 0x41 ? 0x42 : 0x41;
+    fs.writeFileSync(payloadPath, tampered);
+
+    const verdict = await toolResultIntegrityGate.verify({
+      storage,
+      storageKey,
+      manifest: { sha256 },
+    });
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) return;
+    expect(verdict.code).toBe("OUTPUT_INTEGRITY_FAILED");
   });
 });
