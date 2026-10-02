@@ -16,6 +16,7 @@ import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
 import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
 
 /**
  * Builds production {@link AIChatQueryEngine} instances for non-interactive
@@ -89,6 +90,8 @@ export class AIChatQueryEngineFactory {
     const assembler = new AIChatContextAssembler({
       compactionReader: new AIChatCompactionModule(),
       archiveModule: new AIChatArchiveModule(),
+      // T14: substitute bounded projections for oversized legacy rows.
+      projectionLookup: new ToolResultModule().asLegacyProjectionLookup(),
     });
     return new AIChatQueryEngine(this.createQueryLoop(policy, approvalMode), {
       toolFilter: (name) => this.isToolAllowed(name, policy, approvalMode),

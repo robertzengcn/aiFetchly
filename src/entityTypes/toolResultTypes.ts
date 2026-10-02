@@ -248,3 +248,39 @@ export interface PreparedToolResult {
   readonly serializedBytes: number;
   readonly accountedTokens: number;
 }
+
+// ----------------------------------------------------------- T14 projections --
+
+/**
+ * Bounded projection content shown instead of a legacy oversized row
+ * (T14 / design §10.2). The context assembler substitutes this for the raw
+ * row content at read time; the original archive row is never mutated.
+ */
+export interface LegacyProjection {
+  /** The legacy source row's `messageId` this projection was derived from. */
+  readonly sourceRowKey: string;
+  /** Bounded receipt content shown to the model instead of the bulk body. */
+  readonly content: string;
+  /** Bounded metadata JSON for the projection. */
+  readonly metadataJson: string;
+  /** Output references the projection points at (JSON array). */
+  readonly outputRefsJson: string;
+}
+
+/**
+ * Resolves bounded projections for legacy source rows. The context assembler
+ * calls this with the `messageId`s of the rows a turn read returned; the
+ * lookup returns a map keyed by `messageId` for the rows that HAVE a
+ * projection. Rows absent from the map keep their raw content.
+ *
+ * The `outputEpoch` is optional because legacy rows predate epochs — the
+ * backfill writes the live conversation's epoch, and a read after a
+ * conversation reset still finds the projection when epoch is omitted.
+ */
+export interface LegacyProjectionLookup {
+  lookup(input: {
+    profileId: string;
+    sourceRowKeys: readonly string[];
+    outputEpoch?: string;
+  }): Promise<ReadonlyMap<string, LegacyProjection>>;
+}

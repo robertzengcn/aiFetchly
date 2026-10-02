@@ -9,7 +9,12 @@ import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
 import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
 import { TOOL_RESULT_CONFIG, TOOL_RESULT_POLICY_VERSION } from "@/config/toolResultConfig";
 import { pathSegmentFor } from "@/service/toolResult/ToolResultPaths";
-import type { ToolOutputFormat, ToolResultErrorCode } from "@/entityTypes/toolResultTypes";
+import type {
+  ToolOutputFormat,
+  ToolResultErrorCode,
+  LegacyProjection,
+  LegacyProjectionLookup,
+} from "@/entityTypes/toolResultTypes";
 
 /**
  * Business logic for preserved tool outputs (technical design §5).
@@ -760,5 +765,56 @@ export class ToolResultModule extends BaseModule {
    */
   async findRegisteredOutputDir(dirName: string): Promise<boolean> {
     return (await this.model.findOutputByStorageDirName(dirName)) !== null;
+  }
+
+  /**
+   * Resolve a batch of legacy projections for the context assembler (T14 /
+   * design §10.2). Delegates to the Model's batch lookup and adapts the
+   * entity rows to the `LegacyProjection` interface the assembler consumes,
+   * so the assembler depends on the interface, not the Model/Module.
+   *
+   * Uses the live `policyVersion` so a policy change produces a cache miss
+   * and the backfill rebuilds the projection under the new policy.
+   */
+  async findLegacyProjections(input: {
+    profileId: string;
+    sourceRowKeys: readonly string[];
+    outputEpoch?: string;
+  }): Promise<ReadonlyMap<string, LegacyProjection>> {
+    const entities = await this.model.findProjectionsForRows({
+      profileId: input.profileId,
+      sourceRowKeys: input.sourceRowKeys,
+      policyVersion: TOOL_RESULT_POLICY_VERSION,
+      ...(input.outputEpoch ? { outputEpoch: input.outputEpoch } : {}),
+    });
+    const out = new Map<string, LegacyProjection>();
+    for (const e of entities.values()) {
+      out.set(e.sourceRowKey, {
+        sourceRowKey: e.sourceRowKey,
+        content: e.content,
+        metadataJson: e.metadataJson,
+        outputRefsJson: e.outputRefsJson,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Return a `LegacyProjectionLookup` adapter bound to this Module, for
+   * wiring into `AIChatContextAssembler` deps. The adapter is a thin closure
+   * over {@link findLegacyProjections}; it is the only surface the assembler
+   * sees, keeping the Module's other methods out of the assembler's reach.
+   */
+  asLegacyProjectionLookup(): LegacyProjectionLookup {
+    const self = this;
+    return {
+      async lookup(input: {
+        profileId: string;
+        sourceRowKeys: readonly string[];
+        outputEpoch?: string;
+      }): Promise<ReadonlyMap<string, LegacyProjection>> {
+        return self.findLegacyProjections(input);
+      },
+    };
   }
 }

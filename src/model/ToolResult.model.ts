@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { BaseDb } from "@/model/Basedb";
 import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
 import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
@@ -474,6 +474,54 @@ export class ToolResultModel extends BaseDb {
     policyVersion: string;
   }): Promise<AIToolResultProjectionEntity | null> {
     return await this.projections.findOne({ where: { ...input } });
+  }
+
+  /**
+   * Batch projection lookup for the read path (T14 / design §10.2). Resolves
+   * projections for a set of legacy source-row keys in one query so the
+   * context assembler can substitute bounded content for oversized rows
+   * without re-materializing each one individually. Rows without a
+   * projection are absent from the map (the caller keeps the raw content).
+   *
+   * The `outputEpoch` constraint is applied when supplied; when omitted, the
+   * lookup returns the most recent projection per source row regardless of
+   * epoch (legacy rows predate epochs, so the backfill writes the live
+   * conversation's epoch at backfill time).
+   */
+  async findProjectionsForRows(input: {
+    profileId: string;
+    sourceRowKeys: readonly string[];
+    policyVersion: string;
+    outputEpoch?: string;
+  }): Promise<Map<string, AIToolResultProjectionEntity>> {
+    if (input.sourceRowKeys.length === 0) {
+      return new Map();
+    }
+    const where: Record<string, unknown> = {
+      profileId: input.profileId,
+      policyVersion: input.policyVersion,
+    };
+    if (input.outputEpoch) {
+      where.outputEpoch = input.outputEpoch;
+    }
+    const found = await this.projections.find({
+      where: {
+        ...where,
+        sourceRowKey: input.sourceRowKeys.length === 1
+          ? input.sourceRowKeys[0]
+          : In(input.sourceRowKeys),
+      },
+    });
+    const byKey = new Map<string, AIToolResultProjectionEntity>();
+    for (const p of found) {
+      // When multiple epochs exist, keep the newest (highest outputEpoch) so a
+      // re-backfill after a conversation reset supersedes a stale projection.
+      const existing = byKey.get(p.sourceRowKey);
+      if (!existing || p.outputEpoch > existing.outputEpoch) {
+        byKey.set(p.sourceRowKey, p);
+      }
+    }
+    return byKey;
   }
 
   async saveProjection(

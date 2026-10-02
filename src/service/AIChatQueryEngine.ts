@@ -415,6 +415,8 @@ export class AIChatQueryEngine {
       new AIChatContextAssembler({
         compactionReader: new AIChatCompactionModule(),
         archiveModule: new AIChatArchiveModule(),
+        // T14: substitute bounded projections for oversized legacy rows.
+        projectionLookup: new ToolResultModule().asLegacyProjectionLookup(),
       });
     this.compactAgent = deps?.compactAgent;
     this.compactionCoordinator = deps?.compactionCoordinator;
