@@ -2518,7 +2518,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const shellResult = await executeShellCommand(
         args,
-        context.conversationId
+        context.conversationId,
+        context.toolCallId
       );
 
       // Fire-and-forget audit logging (use validated fields from result)

@@ -219,6 +219,90 @@ export class ToolResultStorageService {
     return written;
   }
 
+  /**
+   * Begin a streaming text capture for a source whose length is unknown up
+   * front (shell stdout/stderr, a tail-followed log). Returns a handle whose
+   * `appendChunk` accepts Buffer chunks as they arrive; `finalize` promotes
+   * the staging file into place with a manifest and returns the descriptor.
+   *
+   * The sink honors {@link TOOL_RESULT_CONFIG.artifactMaxBytes} as the single
+   * cap: once the artifact limit is reached further chunks are dropped and
+   * the capture seals as `partial` with `failureCode: ARTIFACT_LIMIT_REACHED`
+   * — the same honest-completeness contract as {@link captureText}.
+   *
+   * A SHA-256 is computed incrementally as chunks arrive so the manifest
+   * reflects exactly the bytes that were persisted, never a re-hash of the
+   * promoted file (no second full read).
+   */
+  async captureTextStream(input: {
+    outputId: string;
+    profileId: string;
+    outputEpoch: string;
+    sourceCompleteness: string;
+  }): Promise<TextStreamCapture> {
+    const dir = this.artifactDir(
+      input.profileId,
+      input.outputEpoch,
+      input.outputId
+    );
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    const fileName = payloadFileName("text");
+    const finalPath = path.join(dir, fileName);
+    const tempPath = path.join(dir, `${fileName}.staging`);
+    const handle = await fs.promises.open(tempPath, "w", 0o600);
+    const { createHash } = await import("node:crypto");
+    const hash = createHash("sha256");
+    return new TextStreamCapture(
+      handle,
+      tempPath,
+      finalPath,
+      dir,
+      hash,
+      TOOL_RESULT_CONFIG.artifactMaxBytes,
+      async (outcome) => {
+        // Promote + manifest. Reuses the same atomic-rename + fsync pattern as
+        // the buffer path so durability guarantees are identical.
+        const preservation: "complete" | "partial" = outcome.truncated
+          ? "partial"
+          : "complete";
+        const manifest: ToolOutputManifest = {
+          schemaVersion: 1,
+          policyVersion: TOOL_RESULT_POLICY_VERSION,
+          outputId: input.outputId,
+          format: "text",
+          mediaType: mediaTypeFor("text"),
+          capturedBytes: outcome.bytesWritten,
+          originalBytes: outcome.originalBytes,
+          sha256: outcome.sha256,
+          preservation,
+          sourceCompleteness: input.sourceCompleteness,
+          writtenAt: new Date().toISOString(),
+        };
+        await this.writeManifest(dir, manifest);
+        await this.syncDirectory(dir).catch(() => undefined);
+        return {
+          outputId: input.outputId,
+          storageKey: this.storageKey(
+            input.profileId,
+            input.outputEpoch,
+            input.outputId,
+            "text"
+          ),
+          absolutePath: finalPath,
+          capturedBytes: outcome.bytesWritten,
+          originalBytes: outcome.originalBytes,
+          sha256: outcome.sha256,
+          preservation,
+          format: "text",
+          mediaType: mediaTypeFor("text"),
+          ...(outcome.truncated
+            ? { failureCode: "ARTIFACT_LIMIT_REACHED" as const }
+            : {}),
+        };
+      }
+    );
+  }
+
   /** Stream a value straight to the artifact, never buffering it whole. */
   private async streamToArtifact(
     input: {
@@ -504,4 +588,135 @@ export class ToolResultStorageService {
 function isDiskFull(error: unknown): boolean {
   const code = (error as { code?: string } | null)?.code;
   return code === "ENOSPC" || code === "EDQUOT";
+}
+
+/**
+ * Outcome of finalizing a streaming text capture. Mirrors the fields the
+ * manifest + descriptor need, computed incrementally during the stream so
+ * `finalize` never re-reads the file.
+ */
+export interface TextStreamOutcome {
+  readonly bytesWritten: number;
+  readonly originalBytes?: number;
+  readonly sha256: string;
+  readonly truncated: boolean;
+}
+
+/**
+ * Handle for an in-progress streaming text capture (T16). The caller appends
+ * chunks as they arrive from a stream source (e.g. `child.stdout`), then calls
+ * `finalize()` to atomically promote the staging file into place with its
+ * manifest, or `abort()` to discard it on a failure path.
+ *
+ * The handle serializes writes through a single promise chain (same invariant
+ * as {@link FileSerializerSink}): an unordered or still-pending write at
+ * promote time would publish a corrupt artifact that passed its byte counter,
+ * which the design forbids. `finalize` awaits the chain before renaming.
+ */
+export class TextStreamCapture {
+  private bytesWritten = 0;
+  private full = false;
+  private pending: Promise<void> = Promise.resolve();
+  private finalized = false;
+  private aborted = false;
+
+  constructor(
+    private readonly handle: fs.promises.FileHandle,
+    private readonly tempPath: string,
+    private readonly finalPath: string,
+    private readonly dir: string,
+    private readonly hash: ReturnType<
+      typeof import("node:crypto").createHash
+    >,
+    private readonly maxBytes: number,
+    private readonly commit: (outcome: TextStreamOutcome) => Promise<StoredArtifact>
+  ) {}
+
+  /** Bytes accepted so far. */
+  getBytesWritten(): number {
+    return this.bytesWritten;
+  }
+
+  /** True once the artifact cap was reached and further chunks are dropped. */
+  isFull(): boolean {
+    return this.full;
+  }
+
+  /**
+   * Append a chunk. Returns false once the cap is reached (subsequent chunks
+   * are dropped). Writes are serialized; a rejection is surfaced by the next
+   * `finalize`/`appendChunk` via the awaited chain rather than becoming an
+   * unhandled rejection.
+   */
+  appendChunk(chunk: Buffer): boolean {
+    if (this.full || this.aborted || this.finalized) return false;
+    let toWrite = chunk;
+    if (this.bytesWritten + chunk.byteLength > this.maxBytes) {
+      toWrite = chunk.subarray(0, this.maxBytes - this.bytesWritten);
+      this.full = true;
+    }
+    if (toWrite.byteLength === 0) {
+      return false;
+    }
+    this.bytesWritten += toWrite.byteLength;
+    this.hash.update(toWrite);
+    this.pending = this.pending.then(async () => {
+      await this.handle.write(toWrite, 0, toWrite.byteLength, null);
+    });
+    this.pending.catch(() => undefined);
+    return true;
+  }
+
+  /** Await any in-flight writes so the staging file is flushed to disk. */
+  async flush(): Promise<void> {
+    await this.pending;
+    await this.handle.sync().catch(() => undefined);
+  }
+
+  /** Discard the staging file without promoting. Idempotent. */
+  async abort(): Promise<void> {
+    if (this.aborted || this.finalized) return;
+    this.aborted = true;
+    await this.pending.catch(() => undefined);
+    await this.handle.close().catch(() => undefined);
+    await fs.promises.rm(this.tempPath, { force: true }).catch(() => undefined);
+  }
+
+  /**
+   * Flush, close, atomically rename the staging file into place, and write the
+   * manifest. Returns the durable artifact descriptor. Idempotent: a second
+   * call returns the same descriptor.
+   */
+  async finalize(originalBytes?: number): Promise<StoredArtifact> {
+    if (this.aborted) {
+      // `abort()` ran first (kill path). Promoting now would race the
+      // in-flight close/rename of the staging file, so refuse — the caller
+      // treats this as a failed capture and keeps the inline preview.
+      throw new ToolResultStorageError(
+        "OUTPUT_WRITE_FAILED",
+        "stream capture aborted before finalize"
+      );
+    }
+    if (this.finalized) {
+      // Re-finalize is a no-op; the caller already has the descriptor.
+      throw new ToolResultStorageError(
+        "OUTPUT_WRITE_FAILED",
+        "stream capture already finalized"
+      );
+    }
+    this.finalized = true;
+    await this.pending;
+    await this.handle.sync().catch(() => undefined);
+    await this.handle.close().catch(() => undefined);
+    const truncated = this.full;
+    const outcome: TextStreamOutcome = {
+      bytesWritten: this.bytesWritten,
+      originalBytes: originalBytes,
+      sha256: this.hash.digest("hex"),
+      truncated,
+    };
+    // Promote within the same directory so the rename is atomic.
+    await fs.promises.rename(this.tempPath, this.finalPath);
+    return await this.commit(outcome);
+  }
 }
