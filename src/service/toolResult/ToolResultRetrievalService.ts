@@ -295,22 +295,38 @@ export class ToolResultRetrievalService {
       return { ok: false, code: "OUTPUT_CHANGED" };
     }
 
-    // Byte ceiling: the smaller of the model page and the UI page.
-    const byteCeiling = Math.min(
-      input.maxBytes ?? config.readMaxBytes,
-      config.uiReadMaxBytes,
-      config.readMaxBytes
-    );
-    // Token ceiling, converted to a conservative byte bound.
-    const tokenCeiling = Math.min(
-      input.maxTokens ?? config.readMaxTokens,
-      config.readMaxTokens
-    );
-    const tokenByteCeiling = Math.max(
-      1,
-      Math.floor((tokenCeiling * 0.8) / 1)
-    );
-    const maxBytes = Math.max(1, Math.min(byteCeiling, tokenByteCeiling));
+    // Page budget by caller, per TD §557/§563: the user viewer uses the 32 KiB
+    // UI page budget and does NOT consume model retrieval-work tokens; a
+    // model-triggered read uses the stricter model page budget. The caller is
+    // identified by which field it passes: the IPC renderer path passes
+    // `maxBytes` (a UI byte request), the model tool passes `maxTokens`. So a
+    // byte-only request is bounded ONLY by the UI byte ceiling, never by the
+    // model page (`readMaxBytes`) or token ceilings; a token request is also
+    // bounded by both model budgets. Applying the model budgets to a byte-only
+    // request collapsed the 32 KiB UI page to 8 KiB (readMaxBytes) and then to
+    // ~1600 bytes (tokenByteCeiling), making a fact planted a few KiB in
+    // unreachable on page one (T18).
+    let maxBytes: number;
+    if (input.maxTokens !== undefined) {
+      // Model path: token budget + model byte budget, both enforced.
+      const tokenCeiling = Math.min(input.maxTokens, config.readMaxTokens);
+      const tokenByteCeiling = Math.max(1, Math.floor((tokenCeiling * 0.8) / 1));
+      maxBytes = Math.max(
+        1,
+        Math.min(
+          tokenByteCeiling,
+          input.maxBytes ?? config.readMaxBytes,
+          config.readMaxBytes
+        )
+      );
+    } else {
+      // UI path: bounded only by the requested page (clamped to the UI ceiling).
+      // The model byte/token budgets do not apply.
+      maxBytes = Math.max(
+        1,
+        Math.min(input.maxBytes ?? config.uiReadMaxBytes, config.uiReadMaxBytes)
+      );
+    }
 
     let window: { buffer: Buffer; totalBytes: number };
     try {

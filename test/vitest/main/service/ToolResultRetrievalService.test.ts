@@ -162,13 +162,16 @@ describe("ToolResultRetrievalService — bounded read", () => {
     let assembled = "";
     let pages = 0;
     for (;;) {
+      // No maxBytes/maxTokens → the UI path, which per TD §563 uses the 32 KiB
+      // UI page budget (NOT the model readMaxBytes). The page bound is the UI
+      // ceiling; reassembly must still reproduce the payload exactly.
       const outcome = await service.read({ target, cursor });
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;
       assembled += outcome.page.text;
       pages += 1;
       expect(outcome.page.text.length).toBeLessThanOrEqual(
-        TOOL_RESULT_CONFIG.readMaxBytes
+        TOOL_RESULT_CONFIG.uiReadMaxBytes
       );
       if (outcome.page.complete || !outcome.page.nextCursor) break;
       cursor = outcome.page.nextCursor;
@@ -507,9 +510,12 @@ describe("ToolResultCursorCodec — integrity", () => {
 });
 
 describe("legacy_message backend (P1-4)", () => {
-  /** Stand-in for the bounded SQL slice of a historical message row. */
+  /** Stand-in for the bounded SQL slice of a historical message row. Sized
+   * past the 32 KiB UI page so the paging+reassemble contract is exercised
+   * under the UI ceiling (the page bound a caller with neither maxBytes nor
+   * maxTokens — the UI path — actually gets). */
   const legacyText = Array.from(
-    { length: 800 },
+    { length: 1600 },
     (_, i) => `legacy row ${i} with some padding text`
   ).join("\n");
 
@@ -545,9 +551,12 @@ describe("legacy_message backend (P1-4)", () => {
       const outcome = await legacy.read({ target: legacyTarget, cursor });
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;
-      // Identical page ceiling to the file backend (TD §10.2).
+      // Identical paging CONTRACT to the file backend (TD §10.2): a caller
+      // passing neither maxBytes nor maxTokens is the UI path, bounded by the
+      // UI ceiling. The model readMaxBytes budget applies only to a
+      // model-triggered (maxTokens) read.
       expect(outcome.page.text.length).toBeLessThanOrEqual(
-        TOOL_RESULT_CONFIG.readMaxBytes
+        TOOL_RESULT_CONFIG.uiReadMaxBytes
       );
       assembled += outcome.page.text;
       pages += 1;
@@ -1182,5 +1191,89 @@ describe("T10 — ToolResultIntegrityGate (full-checksum cache)", () => {
     expect(verdict.ok).toBe(false);
     if (verdict.ok) return;
     expect(verdict.code).toBe("OUTPUT_INTEGRITY_FAILED");
+  });
+});
+
+/**
+ * UI vs model page-budget regression (TD §557/§563/§634).
+ *
+ * The user viewer uses the 32 KiB UI page budget and does NOT consume model
+ * retrieval-work tokens. A byte-only request (the renderer path, which passes
+ * `maxBytes` and never `maxTokens`) must be bounded only by the UI byte
+ * ceiling — the model token budget (2000 tokens → ~1600 bytes) must NOT be
+ * applied to it, or the renderer's first page collapses from 32 KiB to 1600
+ * bytes and a fact planted a few KiB in can never be reached by page one.
+ *
+ * The discriminant is the caller: the model-tool path passes `maxTokens`, the
+ * IPC renderer path passes only `maxBytes`. Found while running the T18 E2E
+ * lifecycle spec — a 100 KiB file with a NEEDLE at 16 KiB was unreachable on
+ * the first page because the token ceiling shrank the UI window to 1600 B.
+ */
+describe("UI vs model page-budget (T18 regression)", () => {
+  it("a byte-only (UI) read returns a page up to the UI byte ceiling, not the token-byte ceiling", async () => {
+    // 40 KiB text so a 1600-byte token ceiling would clearly fall short of a
+    // 32 KiB UI page. readMaxTokens=2000 → tokenByteCeiling=1600; the UI
+    // ceiling (uiReadMaxBytes) is 32 KiB. Without the fix the page is 1600 B.
+    const filler = "a".repeat(40 * 1024);
+    const target = await storeText(filler);
+    const outcome = await service.read({
+      target,
+      maxBytes: TOOL_RESULT_CONFIG.uiReadMaxBytes,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // 1600 is the token-byte ceiling the bug applied; 32 KiB is the UI budget
+    // the design requires. Assert strictly between the two so the regression
+    // cannot silently re-appear by either tightening or loosening a bound.
+    expect(outcome.page.text.length).toBeGreaterThan(1600);
+    expect(outcome.page.text.length).toBeLessThanOrEqual(32 * 1024);
+    expect(outcome.page.complete).toBe(false);
+    expect(outcome.page.nextCursor).not.toBeNull();
+  });
+
+  it("a byte-only (UI) read reaches a needle planted past the token-byte ceiling but within the UI page", async () => {
+    // Plant the NEEDLE at 8 KiB: past the 1600-byte token ceiling, well within
+    // the 32 KiB UI page. This is the exact T18 E2E shape (NEEDLE past the
+    // inline ceiling, retrievable via the real read IPC).
+    const NEEDLE = "T18_BUDGET_NEEDLE_aifetchly";
+    const prefix = "a".repeat(8 * 1024);
+    const target = await storeText(prefix + NEEDLE + "a".repeat(8 * 1024));
+    const outcome = await service.read({
+      target,
+      maxBytes: TOOL_RESULT_CONFIG.uiReadMaxBytes,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text).toContain(NEEDLE);
+  });
+
+  it("a model-token read is still bounded by the token-byte ceiling", async () => {
+    // The model path passes maxTokens; its page must obey the token budget so
+    // a model retrieval call cannot pull unbounded context. This pins the
+    // other side of the discriminant: token requests stay token-bounded.
+    const filler = "a".repeat(40 * 1024);
+    const target = await storeText(filler);
+    const outcome = await service.read({
+      target,
+      maxTokens: TOOL_RESULT_CONFIG.readMaxTokens,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // tokenByteCeiling = floor(2000 * 0.8) = 1600. The model page must not
+    // exceed it (decodeUtf8Window may trim to a code-point boundary, so the
+    // bound is an upper bound, not equality).
+    expect(outcome.page.text.length).toBeLessThanOrEqual(1600);
+  });
+
+  it("a byte-only (UI) read with no explicit maxBytes defaults to the UI byte ceiling, not the token ceiling", async () => {
+    // The IPC path calls read({ target }) for page 1 when the renderer omits
+    // `page`; it must still get the 32 KiB UI page, not 1600 bytes.
+    const filler = "a".repeat(40 * 1024);
+    const target = await storeText(filler);
+    const outcome = await service.read({ target });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.page.text.length).toBeGreaterThan(1600);
+    expect(outcome.page.text.length).toBeLessThanOrEqual(32 * 1024);
   });
 });
