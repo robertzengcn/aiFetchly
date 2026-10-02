@@ -57,7 +57,7 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
-import { htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
+import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
@@ -1792,7 +1792,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "canonicalized, deduplicated recipients and creates one immutable draft " +
       "revision per recipient. Use this BEFORE start_email_send_task so the user " +
       "can review/approve content. The model supplies campaign inputs (recipient " +
-      "source, service candidates, subject/body or template_ids); it does NOT " +
+      "source, service candidates, subject and plain-text email_content, or " +
+      "template_ids). email_content is plain text, never HTML. It does NOT " +
       "supply delivery mode or authorization. Returns batch_id, draft_count, and " +
       "batch_hash. Conversation and authorization context come from trusted app " +
       "state, not arguments.",
@@ -1828,14 +1829,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Email subject line (required when not using templates).",
         },
-        email_html_content: {
+        email_content: {
           type: "string",
-          description: "Email HTML body (required when not using templates).",
+          description:
+            "Plain-text email body (required when not using templates). " +
+            "Write the message exactly as the recipient should read it, with " +
+            "normal line breaks. Do NOT use HTML, markdown, or tags.",
         },
         template_ids: {
           type: "array",
           description:
-            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+            "Optional email template IDs. Omit when using email_subject and email_content.",
           items: { type: "number" },
         },
         service_ids: {
@@ -1873,6 +1877,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         emails?: EmailMarketingDirectEmailInput[];
         template_ids?: number[];
         email_subject?: string;
+        email_content?: string;
         email_html_content?: string;
         service_ids: number[];
         not_duplicate: boolean;
@@ -1938,11 +1943,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         serviceIds,
         senderAddress: "",
         subject: input.email_subject ?? "",
-        // The model supplies an HTML body; store it as `bodyHtml` and derive a
-        // plain-text fallback so markup never leaks into the text body at send
-        // time (and multipart mail carries both parts, not escaped tags).
-        bodyHtml: input.email_html_content ?? null,
-        bodyText: htmlToPlainText(input.email_html_content ?? ""),
+        // Default outbound mail is text/plain. Leave bodyHtml null so the
+        // worker omits the HTML MIME part. Legacy HTML arguments are reduced
+        // to text before they are stored.
+        bodyHtml: null,
+        bodyText:
+          resolveInlineOutboundBody({
+            email_content: input.email_content,
+            email_html_content: input.email_html_content,
+          }) ?? "",
       });
       return {
         success: result.success,
@@ -1962,7 +1971,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       'If the user has now confirmed in chat (e.g. "yes, send it"), call this ' +
       "again without re-drafting. Provide " +
       "service_ids from list_email_services plus either template_ids or " +
-      "email_subject and email_html_content. Provide exactly one of emails " +
+      "email_subject and email_content. email_content MUST be plain text — " +
+      "the exact words the recipient should read, with normal line breaks. " +
+      "Do NOT use HTML, markdown, or tags. Provide exactly one of emails " +
       "(direct recipients) or email_search_task_id. For different content per " +
       "recipient, call once per address with that email in emails. " +
       "Returns immediately with task_id once sending has started in the background; " +
@@ -2002,14 +2013,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Email subject line (required when not using templates).",
         },
-        email_html_content: {
+        email_content: {
           type: "string",
-          description: "Email HTML body (required when not using templates).",
+          description:
+            "Plain-text email body (required when not using templates). " +
+            "Write the message exactly as the recipient should read it, with " +
+            "normal line breaks. Do NOT use HTML, markdown, or tags.",
         },
         template_ids: {
           type: "array",
           description:
-            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+            "Optional email template IDs. Omit when using email_subject and email_content.",
           items: { type: "number" },
         },
         filter_ids: {
