@@ -58,11 +58,21 @@ export async function handleToolResultRead(
   }
 
   const service: ToolResultRetrievalService = trusted.retrieval;
+  // First-page p95 is an NFR-04 target (≤200 ms); measure the retrieval work
+  // (resolution already happened above) so the metric reflects the read cost
+  // the model actually pays. `detail: "model"` distinguishes this path from
+  // the UI IPC read path that serves the renderer (T17).
+  const readStartedAt = performance.now();
   const outcome = await service.read({
     target: target.target,
     cursor: parsed.data.cursor,
     maxTokens: parsed.data.max_tokens,
   });
+  toolResultMetrics.recordLatency(
+    "retrieval.latency_ms",
+    performance.now() - readStartedAt,
+    "model"
+  );
 
   if (!outcome.ok) {
     await trusted.settleWork(0);

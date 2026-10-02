@@ -57,12 +57,21 @@ export async function handleToolResultSearch(
     };
   }
 
+  // Search p95 is an NFR target; measure the scan itself (resolution already
+  // happened above). `detail: "model"` distinguishes this from the UI IPC
+  // search path that serves the renderer (T17).
+  const searchStartedAt = performance.now();
   const outcome = await trusted.retrieval.search({
     target: target.target,
     query: parsed.data.query,
     cursor: parsed.data.cursor,
     maxMatches: parsed.data.max_matches,
   });
+  toolResultMetrics.recordLatency(
+    "retrieval.latency_ms",
+    performance.now() - searchStartedAt,
+    "model"
+  );
 
   if (!outcome.ok) {
     // Release the reservation before returning. With settlement now RELEASING

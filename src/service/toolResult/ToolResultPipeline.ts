@@ -132,38 +132,51 @@ export class ToolResultPipeline {
       };
     }
 
-    const prepared = await this.preparation.prepare(input.outcome, {
-      context: input.context,
-      storage: this.getStorage(),
-      module: this.getModule(),
-      captureEnabled: this.deps.captureEnabled(),
-      modelRefsEnabled: this.deps.modelRefsEnabled(),
-    });
+    // Capture latency = the work this pipeline does to externalize a result:
+    // preparation (serialization + optional file write) + publication (the
+    // durable receipt). Measured with `performance.now()` (monotonic) so it is
+    // comparable across calls; the disabled fast-path above is excluded so the
+    // metric reflects only real capture work (T17 / NFR-04 evidence).
+    const startedAt = performance.now();
+    try {
+      const prepared = await this.preparation.prepare(input.outcome, {
+        context: input.context,
+        storage: this.getStorage(),
+        module: this.getModule(),
+        captureEnabled: this.deps.captureEnabled(),
+        modelRefsEnabled: this.deps.modelRefsEnabled(),
+      });
 
-    if (prepared.receipt) {
-      // A receipt is a durable artifact: the terminal receipt is persisted
-      // before anything is shown or handed back to the model.
-      const outcome = await this.getPublisher().publish(
-        input.context,
-        prepared.receipt,
-        input.deliver,
-        input.store
-      );
-      if (!outcome.ok) {
-        toolResultMetrics.record("capture.publication_failed", outcome.reason);
-        if (outcome.durableFailure) {
-          // The caller must stop model continuation rather than assert a result
-          // was saved when it was not.
-          throw new ToolResultPublicationError(outcome.reason);
+      if (prepared.receipt) {
+        // A receipt is a durable artifact: the terminal receipt is persisted
+        // before anything is shown or handed back to the model.
+        const outcome = await this.getPublisher().publish(
+          input.context,
+          prepared.receipt,
+          input.deliver,
+          input.store
+        );
+        if (!outcome.ok) {
+          toolResultMetrics.record("capture.publication_failed", outcome.reason);
+          if (outcome.durableFailure) {
+            // The caller must stop model continuation rather than assert a result
+            // was saved when it was not.
+            throw new ToolResultPublicationError(outcome.reason);
+          }
+        } else {
+          toolResultMetrics.record("capture.externalized");
         }
       } else {
-        toolResultMetrics.record("capture.externalized");
+        toolResultMetrics.record("capture.inline");
       }
-    } else {
-      toolResultMetrics.record("capture.inline");
-    }
 
-    return prepared;
+      return prepared;
+    } finally {
+      toolResultMetrics.recordLatency(
+        "capture.latency_ms",
+        performance.now() - startedAt
+      );
+    }
   }
 }
 

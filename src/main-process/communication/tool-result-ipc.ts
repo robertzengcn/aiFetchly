@@ -256,6 +256,10 @@ async function runRead(
     toolResultMetrics.record("capture.integrity_failed");
     return denied(verdict.code);
   }
+  // First-page p95 is an NFR-04 target (≤200 ms). Measure the read itself
+  // (authorization + integrity gate already happened above). `detail: "ui"`
+  // distinguishes the renderer path from the model-tool path (T17).
+  const readStartedAt = performance.now();
   const outcome = await retrieval.read({
     target: {
       outputId: row.outputId,
@@ -273,6 +277,11 @@ async function runRead(
     // The renderer uses the UI byte budget, which never exceeds the UI cap.
     maxBytes: Math.min(input.page ?? TOOL_RESULT_CONFIG.uiReadMaxBytes, TOOL_RESULT_CONFIG.uiReadMaxBytes),
   });
+  toolResultMetrics.recordLatency(
+    "retrieval.latency_ms",
+    performance.now() - readStartedAt,
+    "ui"
+  );
   if (!outcome.ok) return denied(outcome.code);
   return ok({ ...outcome.page });
 }
@@ -309,6 +318,9 @@ async function runSearch(
     toolResultMetrics.record("capture.integrity_failed");
     return denied(verdict.code);
   }
+  // Same latency measurement as `runRead`; `detail: "ui"` marks the renderer
+  // path (T17).
+  const searchStartedAt = performance.now();
   const outcome = await retrieval.search({
     target: {
       outputId: row.outputId,
@@ -325,6 +337,11 @@ async function runSearch(
     query: input.query ?? "",
     cursor: input.cursor,
   });
+  toolResultMetrics.recordLatency(
+    "retrieval.latency_ms",
+    performance.now() - searchStartedAt,
+    "ui"
+  );
   if (!outcome.ok) return denied(outcome.code);
   return ok({ ...outcome.page });
 }
