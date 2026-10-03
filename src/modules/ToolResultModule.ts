@@ -185,19 +185,37 @@ export class ToolResultModule extends BaseModule {
   ): Promise<string | null> {
     const scope = await this.model.findScope(profileId, conversationId);
     if (!scope) return null;
-    const outputs = await this.model.listOutputsForScope({
+    // Paginate: a single bounded page would leave outputs beyond the limit
+    // committed (epoch rotated so reads block, but grants never revoked and
+    // the recovery sweep never reclaims them — a quota/count leak). Walk in
+    // keyset batches by id until a page returns fewer than the page size.
+    const pageSize = 1000;
+    let afterId: number | undefined;
+    let outputs = await this.model.listOutputsForScope({
       profileId,
       conversationId,
       outputEpoch: scope.outputEpoch,
-      limit: 1000,
+      limit: pageSize,
+      afterId,
     });
-    for (const output of outputs) {
-      await this.model.transitionOutputState({
-        outputId: output.outputId,
-        expectedStates: ["committed", "unavailable", "failed", "writing", "staged"],
-        nextState: "deleting",
+    while (outputs.length > 0) {
+      for (const output of outputs) {
+        await this.model.transitionOutputState({
+          outputId: output.outputId,
+          expectedStates: ["committed", "unavailable", "failed", "writing", "staged"],
+          nextState: "deleting",
+        });
+        await this.model.revokeGrantsForOutput(output.outputId);
+      }
+      if (outputs.length < pageSize) break;
+      afterId = outputs[outputs.length - 1].id;
+      outputs = await this.model.listOutputsForScope({
+        profileId,
+        conversationId,
+        outputEpoch: scope.outputEpoch,
+        limit: pageSize,
+        afterId,
       });
-      await this.model.revokeGrantsForOutput(output.outputId);
     }
     scope.invalidated = true;
     // Rotate so a writer still holding the OLD epoch cannot publish.

@@ -519,6 +519,60 @@ describe("ToolResultModule — output epoch fence", () => {
     const after = await mod.ensureScope("prof-1", "suite-conv-7");
     expect(after.outputEpoch).not.toBe(before.outputEpoch);
   });
+
+  it("invalidates EVERY output past the 1000-row page boundary (I6 quota/count leak)", async () => {
+    // I6 regression: invalidateScope listed outputs with limit:1000 and only
+    // transitioned that first page. Outputs beyond 1000 stayed committed (epoch
+    // rotated so reads blocked, but grants never revoked, recovery sweep never
+    // reclaimed, quotaUsage charged them forever). The fix paginates the loop
+    // by id until a page returns fewer than the page size.
+    const mod = await makeModule();
+    const scope = await mod.ensureScope("prof-1", "suite-conv-i6");
+    const total = 1001; // one beyond the old single-page limit
+    const outputIds: string[] = [];
+    for (let i = 0; i < total; i += 1) {
+      const claim = await mod.claimOutput({
+        ...BASE_CLAIM,
+        executionId: `exec-i6-${i}`,
+        toolCallId: `call-i6-${i}`,
+        conversationId: "suite-conv-i6",
+        outputEpoch: scope.outputEpoch,
+      });
+      expect(claim.kind).toBe("claimed");
+      if (claim.kind === "claimed") {
+        await mod.commitOutput({
+          outputId: claim.outputId,
+          leaseFence: claim.leaseFence,
+          storageKey: `p/suite-conv-i6/out/payload-${i}.json`,
+          capturedBytes: 32,
+          sha256: "a".repeat(64),
+          preservation: "complete",
+          sourceCompleteness: "complete",
+          receiptJson: "{}",
+        });
+        outputIds.push(claim.outputId);
+      }
+    }
+    expect(outputIds).toHaveLength(total);
+
+    await mod.invalidateScope("prof-1", "suite-conv-i6");
+
+    // Sample outputs across the full range, including the 1001st (index 1000)
+    // which the old single-page limit would have left committed and readable.
+    const samples = [
+      outputIds[0],
+      outputIds[500],
+      outputIds[1000], // beyond the old 1000-row page
+    ];
+    for (const outputId of samples) {
+      const decision = await mod.authorizeAccess({
+        outputId,
+        profileId: "prof-1",
+        conversationId: "suite-conv-i6",
+      });
+      expect(decision.ok).toBe(false);
+    }
+  });
 });
 
 describe("ToolResultModule — artifact identity and idempotency", () => {

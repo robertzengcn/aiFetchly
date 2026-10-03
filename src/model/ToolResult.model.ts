@@ -223,6 +223,8 @@ export class ToolResultModel extends BaseDb {
     conversationId: string;
     outputEpoch: string;
     limit: number;
+    /** Keyset cursor: only rows with id > afterId are returned. */
+    afterId?: number;
   }): Promise<AIToolOutputEntity[]> {
     const query = this.outputs
       .createQueryBuilder("o")
@@ -235,9 +237,11 @@ export class ToolResultModel extends BaseDb {
       })
       .andWhere("o.outputState IN (:...states)", {
         states: ["committed", "unavailable", "failed", "deleting"],
-      })
-      .orderBy("o.id", "ASC")
-      .take(input.limit);
+      });
+    if (input.afterId !== undefined) {
+      query.andWhere("o.id > :afterId", { afterId: input.afterId });
+    }
+    query.orderBy("o.id", "ASC").take(input.limit);
     return await query.getMany();
   }
 
