@@ -176,12 +176,17 @@ export interface ChatV2ConversationUpdatedEvent {
  * assistant bubble only while that conversation is active and no interactive
  * stream is running; the persisted row (reloaded on the terminal
  * conversation-updated event) is always authoritative.
+ *
+ * `start` is emitted when the scheduled turn begins (before the first token),
+ * mirroring the engine's `start` event so the renderer can show an immediate
+ * "Generating…" loading indicator on the optimistic assistant bubble instead of
+ * waiting for the first token to know the run is in flight.
  */
 export interface ChatV2ScheduledStreamEvent {
   readonly conversationId: string;
   readonly runId: number;
   readonly messageId: string;
-  readonly kind: "token" | "done" | "error";
+  readonly kind: "start" | "token" | "done" | "error";
   readonly contentDelta?: string;
   readonly errorMessage?: string;
 }

@@ -157,12 +157,14 @@ function makeBatch(
 
 function makeGateInput(
   intentDecisionId: number | null,
-  sourceUserMessageId = "msg-1"
+  sourceUserMessageId = "msg-1",
+  outboundSendPreAuthorized = false
 ): Record<string, unknown> {
   return {
     conversationId: "conv-1",
     sourceUserMessageId,
     intentDecisionId,
+    outboundSendPreAuthorized,
   };
 }
 
@@ -665,5 +667,133 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
     expect(result.allowed).toBe(false);
     expect(result.code).toBe("review_required");
     expect(result.skipReviewDirectSend).not.toBe(true);
+  });
+
+  // ------------------------------------------------------------------------
+  // Scheduled-loop pre-allowlist honors skip_review for blocking reasonCodes.
+  // The pure phrase-matching resolver cannot distinguish a recipient-exclusion
+  // negation ("do not send to already-contacted companies") from a global
+  // send-refusal, so a scheduled outreach prompt pairing a send goal with a
+  // dedup constraint is misread as explicit_do_not_send (mode=draft_only).
+  // canHonorModelDeclaredSkipReview returns false for that reasonCode, which
+  // structurally disabled skip_review and deadlocked unattended runs (no human
+  // present to click Review). The typed pre-allowlist at loop creation is the
+  // trusted authorization AD-003 requires in that unattended context, so the
+  // gate honors skip_review=true via the outboundSendPreAuthorized signal.
+  // ------------------------------------------------------------------------
+
+  it("honors skip_review in a scheduled loop pre-allowlisted for send when the resolver misread a dedup negation as do-not-send", async () => {
+    // Reproduction of the deadlock: scheduled outreach prompt contained both
+    // a send goal and a scoped dedup constraint ("do not send to companies
+    // already contacted"). The resolver tagged it explicit_do_not_send.
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "explicit_do_not_send")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    // Pre-allowlisted (scheduled loop) + skip_review=true → allowed.
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id, "msg-1", true),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    // With a draft_ready batch present, the gate creates a direct-send
+    // authorization and returns the batch binding (not skipReviewDirectSend).
+    expect(result.batchId).toBe(batch.id);
+    expect(result.authorizationId).toBeGreaterThan(0);
+
+    const reloaded = await draftModel.readBatch(batch.id);
+    expect(reloaded?.status).toBe("direct_authorized");
+  });
+
+  it("honors skip_review in a scheduled loop pre-allowlisted for send with no draft batch (skipReviewDirectSend)", async () => {
+    // Same misread reasonCode, but the model called start_email_send_task
+    // before drafting (no batch yet). The pre-allowlist lets it send this
+    // call's content directly without a draft/review step.
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "explicit_do_not_send")
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id, "msg-1", true),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.skipReviewDirectSend).toBe(true);
+  });
+
+  it("does NOT honor skip_review for do-not-send in interactive chat (no pre-allowlist)", async () => {
+    // Same intent/reasonCode + same skip_review=true, but interactive chat
+    // (outboundSendPreAuthorized absent/false). The gate must stay blocked —
+    // the live-chat protection for a misread do-not-send is preserved.
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "explicit_do_not_send")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.batchId).toBe(batch.id);
+  });
+
+  it("does NOT authorize a scheduled send when the flag is set but skip_review is absent", async () => {
+    // The pre-allowlist alone never authorizes — the model must still declare
+    // the waiver. Without skip_review, the gate stays blocked.
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "explicit_do_not_send")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id, "msg-1", true)
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.batchId).toBe(batch.id);
   });
 });

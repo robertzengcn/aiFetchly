@@ -42,6 +42,7 @@ export const listKnowledgeDocumentsInputSchema = z.object({
     .transform((value) => (value.startsWith(".") ? value : `.${value}`))
     .optional(),
   tags: z.array(tagSchema).max(20).optional(),
+  author: z.string().trim().min(1).max(255).optional(),
   limit: z.number().int().min(1).max(50).default(20),
   offset: z.number().int().min(0).max(10000).default(0),
 });

@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import type { SendMailOptions } from "nodemailer";
 import type {
   EmailServiceEntitydata,
   EmailSendResult,
@@ -41,7 +41,7 @@ export class ReplyEmailService {
 
   async sendReplyEmail(data: ReplyEmailRequestData): Promise<EmailSendResult> {
     const subject = ensureRePrefix(data.subject);
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: this.fromAddress,
       ...(this.replyToAddress ? { replyTo: this.replyToAddress } : {}),
       to: data.receiver,

@@ -137,4 +137,65 @@ describe("draft_outbound_email_batch input validation", () => {
     expect(payload.validation_errors).toBeInstanceOf(Array);
     expect((payload.validation_errors as string[]).length).toBeGreaterThan(0);
   });
+
+  it("rejects hex and scientific-notation string IDs instead of silently coercing them", async () => {
+    // emailMarketingIdSchema must NOT accept "0x10" (→ 16) or "1e3" (→ 1000)
+    // the way z.coerce.number() would — a model-supplied "0x10" would bind the
+    // wrong template/service ID with no validation error. Only decimal-numeric
+    // strings ("123") and real numbers are valid.
+    const skill = SkillRegistry.getSkill("draft_outbound_email_batch");
+
+    // Hex string in service_ids → must be a validation failure, not ID 16.
+    const hexResult = await skill!.execute!(
+      {
+        emails: [{ address: "someone@example.com" }],
+        service_ids: ["0x10"],
+        email_subject: "Hello",
+        email_html_content: "<p>Hi</p>",
+      },
+      baseContext
+    );
+    expect(hexResult.success).toBe(false);
+    const hexPayload = hexResult.result as Record<string, unknown>;
+    expect(hexPayload.validation_errors).toBeInstanceOf(Array);
+    expect((hexPayload.validation_errors as string[]).length).toBeGreaterThan(0);
+
+    // Scientific-notation string in template_ids → must be a validation
+    // failure, not ID 1000. template_ids has no downstream re-normalizer,
+    // so this is the more dangerous of the two.
+    const sciResult = await skill!.execute!(
+      {
+        emails: [{ address: "someone@example.com" }],
+        service_ids: [1],
+        template_ids: ["1e3"],
+        email_subject: "Hello",
+        email_html_content: "<p>Hi</p>",
+      },
+      baseContext
+    );
+    expect(sciResult.success).toBe(false);
+    const sciPayload = sciResult.result as Record<string, unknown>;
+    expect(sciPayload.validation_errors).toBeInstanceOf(Array);
+    expect((sciPayload.validation_errors as string[]).length).toBeGreaterThan(0);
+  });
+
+  it("accepts a decimal-numeric string service_id and coerces it to a real number", async () => {
+    // The legitimate case the hex/scientific guard must NOT break: an LLM
+    // sending service_ids: ["123"] should still parse to 123 and proceed
+    // (the schema's whole reason for accepting strings). This must NOT
+    // produce a validation_errors payload.
+    const skill = SkillRegistry.getSkill("draft_outbound_email_batch");
+    const result = await skill!.execute!(
+      {
+        emails: [{ address: "someone@example.com" }],
+        service_ids: ["123"],
+        email_subject: "Hello",
+        email_html_content: "<p>Hi</p>",
+      },
+      baseContext
+    );
+    // No validation_errors means the schema accepted the decimal string.
+    const payload = result.result as Record<string, unknown>;
+    expect(payload.validation_errors).toBeUndefined();
+  });
 });

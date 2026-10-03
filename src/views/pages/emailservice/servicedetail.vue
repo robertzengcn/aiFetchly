@@ -22,6 +22,28 @@ v-model="name" :label="t('emailservice.name')" type="input"
         </v-col>
       </v-row>
       <v-row>
+        <v-col cols="12" md="8">
+          <v-autocomplete
+            data-testid="email-service-tag-select"
+            v-model="tagId"
+            :items="tagOptions"
+            item-title="name"
+            item-value="id"
+            :label="t('emailservice.tag') || 'Tag'"
+            :hint="t('emailservice.tag_hint') || 'Optional tag for finding this email service.'"
+            clearable
+            persistent-hint
+            :readonly="loading || tagsLoading"
+            :loading="tagsLoading"
+          />
+        </v-col>
+        <v-col cols="12" md="4" class="d-flex align-center">
+          <v-btn variant="outlined" @click="showTagDialog = true">
+            {{ t("emailservice.manage_tags") || "Manage tags" }}
+          </v-btn>
+        </v-col>
+      </v-row>
+      <v-row>
         <v-col cols="12" md="12">
           <v-text-field
 v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
@@ -244,6 +266,7 @@ v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input
 :show-dialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
     @dialogclose="showDialog = false" />
   <LoadingDialog :load-dialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
+  <EmailServiceTagDialog v-model="showTagDialog" @changed="loadTags" />
 </AppPageShell>
 </template>
 <script setup lang="ts">
@@ -251,14 +274,23 @@ import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { getEmailServiceDetail, createupdateEmailService, sendTestemail, receiveEmailsendevent } from "@/views/api/emailservice";
+import {
+  getEmailServiceDetail,
+  createupdateEmailService,
+  sendTestemail,
+  receiveEmailsendevent,
+  getEmailServiceTags,
+} from "@/views/api/emailservice";
 import { testEmailReceiveConnection } from "@/views/api/emailreceive";
 import { EmailServiceEntitydata, EmailSendParam, EmailRequestData } from "@/entityTypes/emailmarketingType"
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 import ErrorDialog from "@/views/components/widgets/errorDialog.vue"
 import LoadingDialog from "@/views/components/widgets/loadingDialog.vue"
+import EmailServiceTagDialog from "@/views/pages/emailservice/widgets/EmailServiceTagDialog.vue";
+import type { EmailServiceTagSummary } from "@/entityTypes/emailmarketingType";
 import { buildIdentityRules } from "./identityValidationRules";
+import { emailServiceTagErrorKey } from "@/views/utils/emailServiceTagError";
 const showDialog = ref<boolean>(false);
 const alertdiatext = ref<string>("")
 const alertdiatitle = ref<string>("")
@@ -321,6 +353,10 @@ const host = ref<string>("");
 const port = ref<string>("");
 const name = ref<string>("");
 const ssl = ref<number>(0);
+const tagId = ref<number | null>(null);
+const tagOptions = ref<EmailServiceTagSummary[]>([]);
+const showTagDialog = ref(false);
+const tagsLoading = ref(false);
 
 // ---- inbound receive settings ----
 const receiveEnabled = ref<number>(0);
@@ -371,6 +407,22 @@ const testemailReceiver = ref<string>("")
 const testemailTitle = ref<string>("")
 const testemailContent = ref<string>("")
 
+async function loadTags(): Promise<void> {
+  tagsLoading.value = true;
+  try {
+    tagOptions.value = await getEmailServiceTags();
+    if (tagId.value !== null && !tagOptions.value.some((tag) => tag.id === tagId.value)) {
+      tagId.value = null;
+    }
+  } catch (error: unknown) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = t(emailServiceTagErrorKey(error)) || "Unable to load tags.";
+  } finally {
+    tagsLoading.value = false;
+  }
+}
+
 const initialize = async () => {
   const routeId = Number($route.params.id);
   if (Number.isInteger(routeId) && routeId > 0) {
@@ -396,6 +448,7 @@ const initialize = async () => {
         // runtime — coerce so the form state stays a string for the contract.
         port.value = res.port != null ? String(res.port) : "";
         name.value = res.name;
+        tagId.value = res.tagId ?? null;
         ssl.value = res.ssl;
         // receive settings (optional)
         receiveEnabled.value = res.receiveEnabled ?? 0;
@@ -500,6 +553,7 @@ async function onSubmit() {
     }
     const soacc: EmailServiceEntitydata = {
       name: name.value,
+      tagId: tagId.value,
       from: from.value,
       smtpUsername: smtpUsername.value || null,
       replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
@@ -651,6 +705,7 @@ const receiveMsg = () => {
 
 onMounted(() => {
   initialize();
+  void loadTags();
   receiveMsg()
 });
 

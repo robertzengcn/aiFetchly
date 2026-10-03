@@ -157,6 +157,8 @@ export type EmailFilterDetialdata = {
 };
 export type EmailServiceEntitydata = {
   id?: number;
+  tagId?: number | null;
+  tag?: string | null;
   smtpUsername?: string | null;
   from: string;
   replyTo?: string | null;
@@ -183,11 +185,20 @@ export type EmailServiceEntitydata = {
 export type EmailServiceListdata = {
   id: number;
   name: string;
+  tagId: number | null;
+  tag: string | null;
   from: string;
   host: string;
   receiveProtocol: EmailReceiveProtocol;
   create_time: string;
 };
+
+export interface EmailServiceTagSummary {
+  id: number;
+  name: string;
+  normalizedName: string;
+  serviceCount: number;
+}
 
 /**
  * Safe (secret-free) single projection of one email service for both CSV and
@@ -197,6 +208,7 @@ export type EmailServiceListdata = {
 export type SafeEmailServiceExportRow = {
   id: number;
   name: string;
+  tag: string | null;
   smtpUsername: string;
   from: string;
   replyTo: string | null;

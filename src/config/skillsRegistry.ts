@@ -58,7 +58,7 @@ import {
   createEmailReplyDraft,
   sendEmailReply,
 } from "@/service/EmailReceiveAiTools";
-import { htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
+import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
@@ -1694,6 +1694,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "list_email_services",
     description:
       "List configured SMTP email sending services (outbound senders) without exposing passwords. " +
+      "Includes user-defined tags. Resolve tags exactly, ignoring case and surrounding spaces; never guess. " +
+      "If a tag is missing or shared by multiple services, ask the user to choose a service. " +
       "Use these service IDs with start_email_send_task. This is NOT the inbox list — " +
       "list_email_inboxes is IMAP receive-only and may be empty even when senders exist.",
     parameters: {
@@ -1730,7 +1732,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "get_email_service_config",
     description:
-      "Get a single email sending service configuration without exposing passwords.",
+      "Get a single email sending service configuration without exposing passwords. " +
+      "Provide exactly one of service_id or the exact user-defined tag. Tags are case-insensitive; do not guess tags. " +
+      "If a tag is missing or ambiguous, ask the user to choose a service ID. Use the resolved ID in start_email_send_task.",
     parameters: {
       type: "object",
       properties: {
@@ -1738,8 +1742,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           type: "number",
           description: "Email service ID to inspect.",
         },
+        tag: {
+          type: "string",
+          description:
+            "Exact user-defined email-service tag. Use list_email_services first when the tag is unknown.",
+        },
       },
-      required: ["service_id"],
     },
     tier: "main",
     requiresConfirmation: false,
@@ -1818,7 +1826,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "canonicalized, deduplicated recipients and creates one immutable draft " +
       "revision per recipient. Use this BEFORE start_email_send_task so the user " +
       "can review/approve content. The model supplies campaign inputs (recipient " +
-      "source, service candidates, subject/body or template_ids); it does NOT " +
+      "source, service candidates, subject and plain-text email_content, or " +
+      "template_ids). email_content is plain text, never HTML. It does NOT " +
       "supply delivery mode or authorization. Returns batch_id, draft_count, and " +
       "batch_hash. Conversation and authorization context come from trusted app " +
       "state, not arguments.",
@@ -1854,14 +1863,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Email subject line (required when not using templates).",
         },
-        email_html_content: {
+        email_content: {
           type: "string",
-          description: "Email HTML body (required when not using templates).",
+          description:
+            "Plain-text email body (required when not using templates). " +
+            "Write the message exactly as the recipient should read it, with " +
+            "normal line breaks. Do NOT use HTML, markdown, or tags.",
         },
         template_ids: {
           type: "array",
           description:
-            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+            "Optional email template IDs. Omit when using email_subject and email_content.",
           items: { type: "number" },
         },
         service_ids: {
@@ -1899,6 +1911,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         emails?: EmailMarketingDirectEmailInput[];
         template_ids?: number[];
         email_subject?: string;
+        email_content?: string;
         email_html_content?: string;
         service_ids: number[];
         not_duplicate: boolean;
@@ -1916,11 +1929,20 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             },
           };
         }
+        // Unreachable with the current schema (.parse only throws ZodError),
+        // but if a future .transform throws a non-Zod error, do NOT surface
+        // its raw message to the model — it could leak internal path/DB
+        // details. Log server-side, return a generic sanitized message.
+        console.error(
+          "draft_outbound_email_batch: non-Zod parse error for conversation",
+          context.conversationId,
+          error
+        );
         return {
           success: false,
           result: {
             success: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: "Invalid email marketing tool input",
           },
         };
       }
@@ -1955,11 +1977,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         serviceIds,
         senderAddress: "",
         subject: input.email_subject ?? "",
-        // The model supplies an HTML body; store it as `bodyHtml` and derive a
-        // plain-text fallback so markup never leaks into the text body at send
-        // time (and multipart mail carries both parts, not escaped tags).
-        bodyHtml: input.email_html_content ?? null,
-        bodyText: htmlToPlainText(input.email_html_content ?? ""),
+        // Default outbound mail is text/plain. Leave bodyHtml null so the
+        // worker omits the HTML MIME part. Legacy HTML arguments are reduced
+        // to text before they are stored.
+        bodyHtml: null,
+        bodyText:
+          resolveInlineOutboundBody({
+            email_content: input.email_content,
+            email_html_content: input.email_html_content,
+          }) ?? "",
       });
       return {
         success: result.success,
@@ -1979,7 +2005,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       'If the user has now confirmed in chat (e.g. "yes, send it"), call this ' +
       "again without re-drafting. Provide " +
       "service_ids from list_email_services plus either template_ids or " +
-      "email_subject and email_html_content. Provide exactly one of emails " +
+      "email_subject and email_content. email_content MUST be plain text — " +
+      "the exact words the recipient should read, with normal line breaks. " +
+      "Do NOT use HTML, markdown, or tags. Provide exactly one of emails " +
       "(direct recipients) or email_search_task_id. For different content per " +
       "recipient, call once per address with that email in emails. " +
       "Returns immediately with task_id once sending has started in the background; " +
@@ -2019,14 +2047,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Email subject line (required when not using templates).",
         },
-        email_html_content: {
+        email_content: {
           type: "string",
-          description: "Email HTML body (required when not using templates).",
+          description:
+            "Plain-text email body (required when not using templates). " +
+            "Write the message exactly as the recipient should read it, with " +
+            "normal line breaks. Do NOT use HTML, markdown, or tags.",
         },
         template_ids: {
           type: "array",
           description:
-            "Optional email template IDs. Omit when using email_subject and email_html_content.",
+            "Optional email template IDs. Omit when using email_subject and email_content.",
           items: { type: "number" },
         },
         filter_ids: {
@@ -2490,7 +2521,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Search the local knowledge library for factual information from uploaded documents. " +
       "Use this before answering questions that require knowledge-base context. " +
-      "Returns relevant passages with source citations.",
+      "When the user names a person, put that name in `author`; when they name a label, put it in `tags`; " +
+      "put the topical words in `query`. " +
+      "You can also narrow by `language`, a `documentDateRange` for the date the document refers to, " +
+      "or by the four custom metadata keys `product`, `customer`, `campaign`, and `category` " +
+      "(exact, case-insensitive equality). " +
+      "Returns relevant passages with source citations; each hit includes `author`, `tags`, and `description`.",
     parameters: {
       type: "object",
       properties: {
@@ -2533,6 +2569,31 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           },
           description: "Restrict to documents uploaded within this date range.",
         },
+        language: {
+          type: "string",
+          description:
+            "Restrict search to documents with this language tag (e.g. en, zh-CN). Case-insensitive exact match.",
+        },
+        documentDateRange: {
+          type: "object",
+          properties: {
+            start: { type: "string", description: "Start date (ISO 8601)" },
+            end: { type: "string", description: "End date (ISO 8601)" },
+          },
+          description:
+            "Restrict to documents whose document date falls within this range (the date the document refers to, not the upload date).",
+        },
+        customMetadata: {
+          type: "object",
+          properties: {
+            product: { type: "string", description: "Exact match on the product custom key." },
+            customer: { type: "string", description: "Exact match on the customer custom key." },
+            campaign: { type: "string", description: "Exact match on the campaign custom key." },
+            category: { type: "string", description: "Exact match on the category custom key." },
+          },
+          description:
+            "Equality filters on the four custom metadata keys: product, customer, campaign, category. Each is an exact, case-insensitive match.",
+        },
         includeNeighborChunks: {
           type: "boolean",
           description:
@@ -2559,6 +2620,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         tags: args.tags as string[] | undefined,
         author: args.author as string | undefined,
         dateRange: args.dateRange as { start: string; end: string } | undefined,
+        language: args.language as string | undefined,
+        documentDateRange: args.documentDateRange as
+          | { start: string; end: string }
+          | undefined,
+        customMetadata: args.customMetadata as
+          | {
+              product?: string;
+              customer?: string;
+              campaign?: string;
+              category?: string;
+            }
+          | undefined,
         includeNeighborChunks: args.includeNeighborChunks as
           | boolean
           | undefined,
@@ -2572,7 +2645,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "knowledge_library_list_documents",
     description:
-      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, author, tags, status, size), never file contents or paths. Supports filtering by name/title query, author substring, tags, status, processing status, and file type. Documents may also carry optional `language`, `documentDate`, and the four custom metadata keys `product`, `customer`, `campaign`, and `category`; use knowledge_library_search with those filters to narrow by them. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
     parameters: {
       type: "object",
       properties: {
@@ -2600,6 +2673,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           type: "array",
           items: { type: "string" },
           description: "Optional tag filter.",
+        },
+        author: {
+          type: "string",
+          description:
+            "Optional author filter (case-insensitive substring).",
         },
         limit: {
           type: "number",

@@ -19,6 +19,7 @@ import {
 } from "@/service/UploadGrantService";
 import * as fs from "fs";
 import * as path from "path";
+import { saveTempFileMetadataSchema } from "@/schemas/ipc/rag";
 import {
   RAG_INITIALIZE,
   RAG_QUERY,
@@ -219,17 +220,39 @@ export function registerRagIpcHandlers(): void {
             description?: string;
             tags?: string[];
             author?: string;
+            language?: string;
+            documentDate?: string;
+            customMetadata?: unknown;
           };
+          const parsedMetadata = saveTempFileMetadataSchema.safeParse(metadataTyped);
+          if (!parsedMetadata.success) {
+            const errorResponse: CommonMessage<SaveTempFileResponse> = {
+              status: false,
+              msg: `Invalid upload metadata: ${parsedMetadata.error.issues.map((i) => i.message).join("; ")}`,
+              data: {
+                tempFilePath: "",
+                databaseSaved: false,
+                databaseError: "Invalid upload metadata",
+              },
+            };
+            (
+              event as { sender: { send: (c: string, m: string) => void } }
+            ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+            return;
+          }
           const uploadOptions = {
             filePath: appDataFilePath,
             name: originalFileName,
             title:
-              metadataTyped.title || originalFileName.replace(/\.[^/.]+$/, ""),
+              parsedMetadata.data.title || originalFileName.replace(/\.[^/.]+$/, ""),
             description:
-              metadataTyped.description ||
+              parsedMetadata.data.description ||
               `Uploaded document: ${originalFileName}`,
-            tags: metadataTyped.tags || ["uploaded", "knowledge"],
-            author: metadataTyped.author || "User",
+            tags: parsedMetadata.data.tags || ["uploaded", "knowledge"],
+            author: parsedMetadata.data.author || "User",
+            language: parsedMetadata.data.language,
+            documentDate: parsedMetadata.data.documentDate,
+            customMetadata: parsedMetadata.data.customMetadata,
           };
 
           (

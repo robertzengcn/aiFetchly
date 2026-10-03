@@ -14,6 +14,7 @@ import {
   getVectorIndexBaseDir,
   getDocumentVectorIndexPath,
 } from "@/service/VectorIndexPaths";
+import { serializeCustomMetadata } from "@/schemas/knowledge/customMetadata";
 
 /** F2 helper — unique stamp used to build staged-upload filenames. */
 function validationStamp(): string {
@@ -34,6 +35,10 @@ export interface DocumentUploadOptions {
   description?: string;
   tags?: string[];
   author?: string;
+  // Phase 3 document metadata (optional; validated on the upload boundary).
+  language?: string;
+  documentDate?: string;
+  customMetadata?: unknown;
   // modelName?: string;
   // vectorDimensions?: number;
   // Website import provenance (optional; file/attachment uploads omit these).
@@ -120,6 +125,15 @@ export class RAGDocumentModule extends BaseModule {
     document.description = options.description;
     document.tags = options.tags ? JSON.stringify(options.tags) : undefined;
     document.author = options.author;
+    // Phase 3 metadata. The boundary schema already validated language (max
+    // 16) and documentDate (ISO string); parse the date here for the datetime
+    // column. customMetadata is normalized so an empty object stores NULL
+    // rather than "{}" (technical design §6.2).
+    document.language = options.language;
+    document.documentDate = options.documentDate
+      ? new Date(options.documentDate)
+      : undefined;
+    document.customMetadata = serializeCustomMetadata(options.customMetadata);
     document.status = "active";
     document.processingStatus = "pending";
     document.uploadedAt = new Date();

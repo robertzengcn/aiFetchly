@@ -11,7 +11,7 @@
  */
 
 export const EMAIL_SERVICE_IMPORT_TEMPLATE_HEADERS: string =
-  "name,smtpUsername,from,replyTo,host,port,password,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receivePassword,receiveFolder,receiveEnabled";
+  "name,smtpUsername,from,replyTo,host,port,password,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receivePassword,receiveFolder,receiveEnabled,tag";
 
 export const EMAIL_SERVICE_IMPORT_TEMPLATE_FILENAME: string =
   "email_service_import_template.csv";
@@ -37,6 +37,7 @@ export function buildEmailServiceCsvTemplate(): string {
     "",
     "INBOX",
     "0",
+    "",
   ].join(",");
   return `${EMAIL_SERVICE_IMPORT_TEMPLATE_HEADERS}\n${example}\n`;
 }

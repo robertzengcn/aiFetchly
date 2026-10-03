@@ -502,6 +502,28 @@ describe("AIChatCompactionCoordinator", () => {
     ).rejects.toThrow();
   });
 
+  it("compacts a conversation again after ensureState clears the tombstone", async () => {
+    await seedMessages("conv-rearchive", [
+      { role: "user", content: "first message", ts: 1_000 },
+      { role: "assistant", content: "reply one", ts: 2_000 },
+      { role: "user", content: "second message", ts: 3_000 },
+      { role: "assistant", content: "reply two", ts: 4_000 },
+    ]);
+    const stateModel = new AIChatArchiveStateModel(tmpDir);
+    await stateModel.ensureState("conv-rearchive");
+    await stateModel.tombstone("conv-rearchive");
+    await indexConversation("conv-rearchive");
+    const revived = await stateModel.getState("conv-rearchive");
+    expect(revived?.deletedAt ?? null).toBeNull();
+
+    const { fn } = fakeSummarizer();
+    const result = await coordinator.requestCompaction("conv-rearchive", {
+      trigger: "auto",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+  });
+
   it("cancels an in-flight run via the abort signal", async () => {
     await seedMessages("conv-4", [
       { role: "user", content: "x".repeat(2_000), ts: 1_000 },
@@ -630,6 +652,78 @@ describe("AIChatCompactionCoordinator", () => {
     // One structured-output repair inside the 4-attempt ceiling → success.
     expect(result.state).toBe("completed");
     expect(calls).toBe(2);
+  }, 15_000);
+
+  it("parses JSON wrapped in a ```json code fence on the first attempt (fenced-output regression)", async () => {
+    // Flash-tier models on dense content routinely ignore "no prose outside the
+    // JSON" and wrap the SectionSummaryV1 object in a markdown code fence.
+    // The coordinator must extract the fenced JSON and succeed without burning
+    // the 4-attempt ceiling (the original failure surfaced as
+    // "schema: : Invalid input" because JSON.parse threw on the fence).
+    await seedMessages("conv-fenced", [
+      { role: "user", content: "summarize me", ts: 1_000 },
+      { role: "assistant", content: "fenced reply", ts: 2_000 },
+      { role: "user", content: "followup", ts: 3_000 },
+      { role: "assistant", content: "fenced reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-fenced");
+
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      // Wrap every response in a ```json fence + surrounding prose, exactly as
+      // a flash model tends to do on dense content.
+      return (
+        "Here is the section summary:\n\n```json\n" +
+        JSON.stringify({
+          version: 1,
+          synopsis: "fenced synopsis",
+          decisions: [],
+          constraints: [],
+          pending: [],
+          toolOutcomes: [],
+          topics: [],
+        }) +
+        "\n```\n\nLet me know if you need changes."
+      );
+    });
+    const result = await coordinator.requestCompaction("conv-fenced", {
+      trigger: "manual",
+      summarize: fn,
+    });
+    expect(result.state).toBe("completed");
+    // Must succeed on the first call — no repair, no exhaustion.
+    expect(calls).toBe(1);
+  }, 15_000);
+
+  it("surfaces a JSON parse error (not opaque 'schema: : Invalid input') for truncated output", async () => {
+    // When the model output is truncated mid-JSON (max_tokens), the failure
+    // must carry a parse-level signal so the repair prompt gives the model
+    // actionable information. The original swallow-then-null path produced
+    // "schema: : Invalid input" with an empty Zod path — useless for repair.
+    await seedMessages("conv-truncated", [
+      { role: "user", content: "summarize me", ts: 1_000 },
+      { role: "assistant", content: "truncated reply", ts: 2_000 },
+      { role: "user", content: "followup", ts: 3_000 },
+      { role: "assistant", content: "truncated reply two", ts: 4_000 },
+    ]);
+    await indexConversation("conv-truncated");
+
+    // Always return truncated JSON — every attempt fails to parse.
+    const fn = vi.fn(async () => {
+      return '{"version":1,"synopsis":"truncated mid-string...';
+    });
+    // requestCompaction throws RecoverableHistoryError(COMPACTION_OUTPUT_INVALID)
+    // after the bounded ceiling is exhausted.
+    await expect(
+      coordinator.requestCompaction("conv-truncated", {
+        trigger: "manual",
+        summarize: fn,
+      })
+    ).rejects.toThrow();
+    // The model was retried up to the attempt ceiling (not just once).
+    expect(fn).toHaveBeenCalled();
+    expect(fn.mock.calls.length).toBeGreaterThan(1);
   }, 15_000);
 
   it("a retry after a batch-limit pause resumes with a new run instead of joining", async () => {

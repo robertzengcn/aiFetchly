@@ -198,6 +198,7 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
+        ref="messagesListRef"
         :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
@@ -394,22 +395,9 @@
         </v-card>
       </v-dialog>
 
-      <v-sheet
-        v-if="liveScheduledAssistant"
-        class="px-3 py-2 scheduled-live-bubble"
-        color="grey-lighten-4"
-        elevation="0"
-      >
-        <div class="d-flex align-center text-caption text-medium-emphasis mb-1">
-          <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
-          <span>{{
-            t("aiChatV2.scheduledLoop.statusRunning") || "running"
-          }}</span>
-        </div>
-        <div class="text-body-2 scheduled-live-content">
-          {{ liveScheduledAssistant.content }}
-        </div>
-      </v-sheet>
+      <!-- Scheduled-loop turns stream directly into the normal chat message
+           list (see handleScheduledStream) so they look identical to
+           interactive responses. No separate running-area bubble. -->
 
       <!-- TTS prerequisite notice: shown when the user tries to enable spoken
            responses (the header speaker toggle) before a TTS model is installed.
@@ -1160,6 +1148,10 @@ const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map())
  */
 const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+// Template ref on AiChatV2Messages so we can force-scroll to the bottom after
+// history loads (the internal pinnedToBottom flag may be stale from a previous
+// conversation).
+const messagesListRef = ref<{ scrollToBottomForce: () => Promise<void> } | null>(null);
 
 interface MessageListController {
   get(): ChatV2MessageView[];
@@ -2035,6 +2027,12 @@ async function refreshScheduledLoopStatus(): Promise<void> {
 /** Clear scheduled-loop UI state when leaving the current conversation. */
 function resetScheduledLoopViewState(): void {
   activeScheduledLoop.value = null;
+  if (
+    liveScheduledAssistant.value &&
+    activeAssistantMessageId.value === liveScheduledAssistant.value.messageId
+  ) {
+    activeAssistantMessageId.value = null;
+  }
   liveScheduledAssistant.value = null;
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
@@ -2220,8 +2218,16 @@ function handleConversationUpdated(
     scheduledPermissionNotice.value = true;
   }
   if (event.conversationId === activeConversationId.value) {
-    // The persisted row replaces any optimistic live bubble.
+    // The persisted row replaces any optimistic live message. Clear the
+    // streaming marker so the normal chat bubble returns to idle; the
+    // optimistic content stays until loadHistory swaps in the persisted row.
     if (liveScheduledAssistant.value) {
+      if (
+        activeAssistantMessageId.value ===
+        liveScheduledAssistant.value.messageId
+      ) {
+        activeAssistantMessageId.value = null;
+      }
       liveScheduledAssistant.value = null;
     }
     // A permission-requested pause is user-action-required: the persisted
@@ -2252,32 +2258,113 @@ watch(isStreaming, (streaming) => {
 /**
  * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
  * routing: only render when the originating conversation is active and no
- * interactive stream is running, so scheduled tokens never merge into an
- * interactive bubble. Transient — the persisted row replaces it on the
- * terminal conversation-updated reload.
+ * interactive turn is in flight, so scheduled tokens never merge into an
+ * interactive bubble. Renders directly as a normal assistant chat message
+ * (same bubble/markdown path as interactive turns) — transient until the
+ * terminal conversation-updated event reloads authoritative history.
+ *
+ * Guard is `isStreaming || pinnedPermissionPrompt`, NOT `chatIsRunning`.
+ * `chatIsRunning` is `isStreaming || authoritativeRuntimeStatus === "running"`,
+ * and a scheduled turn sets `authoritativeRuntimeStatus` to "running" itself
+ * (its `submitMessage` registers in the engine's `activeTurns`, which
+ * `getConversationRuntimeStatus` reports as "running"). Guarding on
+ * `chatIsRunning` would make a scheduled turn trip its own guard, dropping
+ * every token and leaving only the typing indicator ("running label"). Only an
+ * interactive stream or an interactive permission card should defer scheduled
+ * rendering — the scheduled turn's own "running" status must not.
  */
 function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (event.conversationId !== activeConversationId.value) return;
-  // Defer when the conversation has any active interactive turn (streaming OR
-  // a pending tool-permission prompt) so scheduled tokens never render beside
-  // an interactive bubble/card.
-  if (chatIsRunning.value) return;
+  // Defer only for a genuinely INTERACTIVE turn in flight (an active stream,
+  // or a pinned interactive permission card) so scheduled tokens never render
+  // beside an interactive bubble/card. Do NOT use `chatIsRunning` here: it
+  // includes `authoritativeRuntimeStatus === "running"`, which the scheduled
+  // turn itself causes and which would suppress its own token stream.
+  if (isStreaming.value || pinnedPermissionPrompt.value) return;
+  if (event.kind === "start") {
+    // The scheduled turn has begun (before the first token). Create an empty
+    // optimistic assistant message and mark it active-streaming so the bubble
+    // shows the "Generating…" loading indicator immediately — the user must
+    // see the AI received the message before tokens arrive. The message is
+    // filled in by subsequent `token` events.
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: "",
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
+    }
+    liveScheduledAssistant.value = {
+      messageId: event.messageId,
+      content: "",
+    };
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
+    return;
+  }
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
-    if (
-      !liveScheduledAssistant.value ||
-      liveScheduledAssistant.value.messageId !== event.messageId
-    ) {
-      liveScheduledAssistant.value = { messageId: event.messageId, content: delta };
-    } else {
+    if (!delta) return;
+    const existingIdx = messages.value.findIndex(
+      (m) => m.id === event.messageId
+    );
+    if (existingIdx === -1) {
+      const nowIso = new Date().toISOString();
+      messages.value = [
+        ...messages.value,
+        {
+          id: event.messageId,
+          conversationId: event.conversationId,
+          role: "assistant",
+          content: delta,
+          timestamp: nowIso,
+          messageType: MessageType.MESSAGE,
+          metadata: { source: "chat-v2" },
+        },
+      ];
       liveScheduledAssistant.value = {
         messageId: event.messageId,
-        content: liveScheduledAssistant.value.content + delta,
+        content: delta,
+      };
+    } else {
+      const existing = messages.value[existingIdx];
+      const nextContent = existing.content + delta;
+      const next = [...messages.value];
+      next[existingIdx] = { ...existing, content: nextContent };
+      messages.value = next;
+      liveScheduledAssistant.value = {
+        messageId: event.messageId,
+        content: nextContent,
       };
     }
+    if (activeAssistantMessageId.value !== event.messageId) {
+      activeAssistantMessageId.value = event.messageId;
+    }
+    return;
   }
-  // "done" / "error": leave the bubble in place; the terminal
-  // conversation-updated event reloads authoritative history and clears it.
+  // "done" / "error": the terminal turn has ended. Clear the streaming marker
+  // so the bubble's "Generating…" loading indicator stops; the persisted row
+  // from the terminal conversation-updated reload is authoritative and will
+  // replace the optimistic content. Leave the message itself in place so the
+  // text doesn't vanish before the reload swaps it in.
+  if (liveScheduledAssistant.value?.messageId === event.messageId) {
+    if (activeAssistantMessageId.value === event.messageId) {
+      activeAssistantMessageId.value = null;
+    }
+    liveScheduledAssistant.value = null;
+  }
 }
 
 /** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
@@ -2865,10 +2952,18 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
+//
+// Only fires for INTERACTIVE streams. A scheduled turn sets
+// `authoritativeRuntimeStatus` to "running" (its submitMessage registers in
+// the engine's activeTurns) but never sets `isStreaming`; its tokens stream
+// into a normal assistant message via handleScheduledStream, which already
+// shows its own "Generating…" stream status. Showing the typing dots here too
+// would render a redundant "running label" below the file list during every
+// scheduled run, so we gate on `isStreaming` (interactive) — not
+// `chatIsRunning`, which includes the scheduled turn's own "running" state.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!chatIsRunning.value) return false;
-  if (!isStreaming.value) return true;
+  if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
   // active text streaming — show dots so the user knows the AI is processing.
@@ -2927,9 +3022,10 @@ function onScheduledLoopApprovalCancel(): void {
 /** Set when a scheduled turn completes while an interactive stream is active;
  * the history is reloaded once the active stream terminates (design §18.3). */
 const scheduledRefreshPending = ref(false);
-/** Optimistic live content for a scheduled turn streaming into the active
- * conversation. Transient — cleared on terminal reload; never mutates the
- * persisted message list (technical-design §13.2). */
+/** Tracker for the in-flight scheduled turn rendered as a normal chat
+ * message. Transient — cleared on terminal reload or conversation switch.
+ * The message itself lives in `messages` so it renders through the standard
+ * AiChatV2Messages/AiChatV2Message path (technical-design §13.2). */
 const liveScheduledAssistant = ref<{ messageId: string; content: string } | null>(null);
 const goalStatusDescriptor = computed(() => {
   const status = activeGoal.value?.status;
@@ -3113,7 +3209,14 @@ const applyPlanState = (state: AIChatPlanStateView | null): void => {
 };
 
 const streamStatus = computed<Status>(() => {
-  if (chatIsRunning.value) return "streaming";
+  // A scheduled turn streams into an optimistic assistant message (see
+  // handleScheduledStream) without ever setting `isStreaming`. Treat an
+  // in-flight scheduled stream as streaming so its bubble shows the
+  // "Generating…" loading indicator immediately — `chatIsRunning` alone is
+  // insufficient because it depends on `authoritativeRuntimeStatus`, which is
+  // only refreshed by the 1s runtime-status poll and so may still be "idle"
+  // when the `start` event arrives.
+  if (chatIsRunning.value || liveScheduledAssistant.value) return "streaming";
   if (streamError.value) return "error";
   const last = messages.value[messages.value.length - 1];
   if (last?.metadata?.cancelled) return "cancelled";
@@ -3479,6 +3582,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load tool approval mode for this conversation
     void loadToolApprovalMode(conversationId);
+    // Scroll to the latest message after history loads. Use the force variant
+    // because the child component's pinnedToBottom flag may be stale from a
+    // previous conversation where the user scrolled up.
+    await messagesListRef.value?.scrollToBottomForce();
   } catch (err) {
     if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);

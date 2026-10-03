@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
-import { itemSearchParamSchema } from "@/schemas/ipc/_shared/pagination";
+import {
+  emailServiceListInputSchema,
+  itemSearchParamSchema,
+} from "@/schemas/ipc/_shared/pagination";
 
 /** LIST handlers (TPL/FILTER/SERVICE): pagination */
 export const emailMarketingListInputSchema = itemSearchParamSchema;
+export { emailServiceListInputSchema };
 
 /**
  * EMAILSERVICEEXPORT: optional format enum; renderer may send {}.
@@ -20,7 +24,7 @@ export const emailServiceExportInputSchema = lazySchema(() =>
  * validates that no unexpected payload crosses the boundary.
  */
 export const emailServiceImportInputSchema = lazySchema(() =>
-  z.strictObject({})
+  z.strictObject({ createMissingTags: z.boolean().optional() })
 );
 
 /**
@@ -76,6 +80,7 @@ const portStringSchema = z.union([
 export const emailServiceUpdateInputSchema = lazySchema(() =>
   z.object({
     id: z.union([z.number(), z.string().min(1)]).optional(),
+    tagId: z.number().int().positive().nullable().optional(),
     name: z.string().max(255).optional(),
     smtpUsername: z.string().max(255).nullable().optional(),
     from: z.string().min(1).max(255),
@@ -95,5 +100,34 @@ export const emailServiceUpdateInputSchema = lazySchema(() =>
     receivePassword: z.string().nullable().optional(),
     receiveFolder: z.string().max(255).optional(),
     receiveEnabled: z.number().optional(),
+  })
+);
+
+export const emailServiceTagListInputSchema = lazySchema(() =>
+  z.strictObject({
+    search: z.string().max(64).optional(),
+  })
+);
+
+export const emailServiceTagCreateInputSchema = lazySchema(() =>
+  z.strictObject({
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
+    name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
+  })
+);
+
+export const emailServiceTagUpdateInputSchema = lazySchema(() =>
+  z.strictObject({
+    id: z.number().int().positive(),
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
+    name: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64),
+  })
+);
+
+export const emailServiceTagDeleteInputSchema = lazySchema(() =>
+  z.strictObject({
+    id: z.number().int().positive(),
   })
 );

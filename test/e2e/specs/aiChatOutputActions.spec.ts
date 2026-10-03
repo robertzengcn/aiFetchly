@@ -38,6 +38,47 @@ async function openChat(app: {
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Click Send until the turn is observably running.
+ *
+ * CI #584: on slow xvfb runners the send click can dispatch while the
+ * dock-open transition is still settling (frame stalls defeat the stability
+ * check), silently missing the button — the draft stays, no error surfaces,
+ * and no turn starts. The same signature covers a stale-render drop in the
+ * composer/parent stream guards. Poll for acceptance signals (Stop button or
+ * first-chunk text) and re-click while Send is still mounted; a genuinely
+ * broken send path still fails loudly when the timeout exhausts. The 1s
+ * settle between clicks keeps a slow-to-render turn start from double-sending
+ * (once streaming, Send unmounts and the loop exits via the signals above).
+ */
+async function sendAndAwaitStreaming(app: {
+  readonly mainWindow: import("@playwright/test").Page;
+}): Promise<void> {
+  const send = app.mainWindow.getByTestId("ai-chat-send");
+  const stop = app.mainWindow.getByTestId("ai-chat-stop");
+  const root = app.mainWindow.getByTestId("ai-chat-root");
+  await send.click();
+  await expect
+    .poll(
+      async () => {
+        if ((await stop.count()) > 0) return "streaming";
+        if (((await root.textContent()) ?? "").includes("Streaming")) {
+          return "streaming";
+        }
+        if ((await send.count()) > 0) {
+          await send.click();
+          // Let a just-started turn render before the next check so a slow
+          // runner cannot stack a second send behind the first.
+          await app.mainWindow.waitForTimeout(1_000);
+          return "resent";
+        }
+        return "waiting";
+      },
+      { timeout: 30_000 }
+    )
+    .toBe("streaming");
+}
+
 test.describe("AI output actions row (copy + compact report)", () => {
   test.afterEach(({ aiApp, disabledApp }) => {
     const a = aiApp ?? disabledApp;
@@ -98,13 +139,8 @@ test.describe("AI output actions row (copy + compact report)", () => {
     await openChat(aiApp);
     await composerTextarea(aiApp).fill("e2e-streaming-no-actions");
 
-    await aiApp.mainWindow.getByTestId("ai-chat-send").click();
-
     // The first chunk renders, proving the turn started.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      "Streaming",
-      { timeout: 30_000 }
-    );
+    await sendAndAwaitStreaming(aiApp);
 
     // While streaming, the actions row (copy + report) must NOT be present —
     // it appears only on completed assistant text/image messages.

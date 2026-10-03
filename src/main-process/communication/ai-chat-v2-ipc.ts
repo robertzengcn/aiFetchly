@@ -1918,9 +1918,10 @@ async function handleSetToolApprovalMode(
       payload.conversationId,
       payload.mode as ChatToolApprovalMode
     );
-    // Return the mode that was just set. Do NOT call getMode() here —
-    // its startup-reset downgrades full_access back to ask_for_approval
-    // on the very first read, making it impossible to select "Full access".
+    // Return the mode that was just set directly. getMode() now reflects
+    // persisted state without downgrade (PRD §4.3 override, 2026-09-29), but
+    // returning the payload mode is still correct and avoids a redundant
+    // Token read.
     return ok(payload.mode);
   } catch (err) {
     return denied(userSafeError(err));

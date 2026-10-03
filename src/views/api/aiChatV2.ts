@@ -753,7 +753,7 @@ export async function getChatV2ToolApprovalMode(
 
 /**
  * Set the tool approval mode for a conversation.
- * Returns the stored mode (may differ from requested if downgraded).
+ * Returns the stored mode for the conversation.
  */
 export async function setChatV2ToolApprovalMode(
   conversationId: string,

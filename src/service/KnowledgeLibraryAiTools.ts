@@ -365,9 +365,16 @@ export class KnowledgeLibraryAiTools {
         offset: 0,
       });
 
-      const filtered = input.query
+      const filteredByQuery = input.query
         ? docs.filter((doc) => matchesNameOrTitle(doc, input.query as string))
         : docs;
+      const authorNeedle: string | undefined = input.author?.toLowerCase();
+      const filtered =
+        authorNeedle && authorNeedle.length > 0
+          ? filteredByQuery.filter((doc) =>
+              (doc.author ?? "").toLowerCase().includes(authorNeedle)
+            )
+          : filteredByQuery;
       const page = filtered.slice(input.offset, input.offset + input.limit);
       const documents = page.map(toDocumentSummary);
       // Signal when the scan hit its cap: more documents may exist beyond what

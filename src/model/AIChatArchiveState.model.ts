@@ -3,6 +3,32 @@ import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
 import type { Repository } from "typeorm";
 
 /**
+ * Write SQL NULL for nullable archive columns.
+ * TypeORM's save() ignores `undefined`, so assigning undefined leaves the
+ * previous value in the row.
+ */
+function writeNull(
+  state: AIChatArchiveStateEntity,
+  key:
+    | "deletedAt"
+    | "activeGenerationId"
+    | "activeRunId"
+    | "leaseOwner"
+    | "leaseUntilMs"
+    | "indexCursorJson"
+): void {
+  Object.assign(state, { [key]: null });
+}
+
+function clearArchivePointers(state: AIChatArchiveStateEntity): void {
+  writeNull(state, "activeGenerationId");
+  writeNull(state, "activeRunId");
+  writeNull(state, "leaseOwner");
+  writeNull(state, "leaseUntilMs");
+  writeNull(state, "indexCursorJson");
+}
+
+/**
  * Data access for the per-conversation archive state row: epoch (invalidated
  * on tombstone/restore), source revision counter, high-water mark, active
  * generation/run pointers, and the lease/fence used by the coordinator.
@@ -35,15 +61,32 @@ export class AIChatArchiveStateModel extends BaseDb {
 
   /**
    * Create archive state for a conversation with a fresh random epoch, or
-   * return existing non-deleted state. A tombstoned conversation is NOT
-   * resurrected — a new row with a new epoch is created so prior references
-   * (cursors, source IDs, generations) remain invalid.
+   * return existing non-deleted state. A tombstoned conversation is not
+   * reused: the same primary key is rewritten with a new epoch and deletedAt
+   * cleared, so prior cursors, source IDs, and generations stay invalid.
+   *
+   * deletedAt and the lease pointers must be assigned `null`, not left
+   * `undefined`. TypeORM skips undefined properties on save, which used to
+   * leave deletedAt set and made every later compaction reject the
+   * conversation as tombstoned.
    */
   async ensureState(conversationId: string): Promise<AIChatArchiveStateEntity> {
     return this.sqliteDb.connection.transaction(async (manager) => {
       const repo = manager.getRepository(AIChatArchiveStateEntity);
       const existing = await repo.findOne({ where: { conversationId } });
       if (existing && !existing.deletedAt) return existing;
+      if (existing) {
+        existing.epoch = crypto.randomUUID();
+        existing.sourceRevision = 0;
+        existing.highWaterTimestampMs = 0;
+        existing.highWaterRowId = 0;
+        existing.indexState = "absent";
+        existing.schemaVersion = 1;
+        existing.fence = Number(existing.fence ?? 0) + 1;
+        writeNull(existing, "deletedAt");
+        clearArchivePointers(existing);
+        return repo.save(existing);
+      }
       const entity = new AIChatArchiveStateEntity();
       entity.conversationId = conversationId;
       entity.epoch = crypto.randomUUID();
@@ -70,9 +113,9 @@ export class AIChatArchiveStateModel extends BaseDb {
     state.deletedAt = new Date();
     state.sourceRevision = state.sourceRevision + 1;
     state.fence = state.fence + 1;
-    state.activeRunId = undefined as unknown as string;
-    state.leaseOwner = undefined as unknown as string;
-    state.leaseUntilMs = undefined as unknown as number;
+    // null, not undefined: TypeORM omits undefined columns, so a lease would
+    // otherwise stay active on a tombstoned row.
+    clearArchivePointers(state);
     await this.repository.save(state);
   }
 

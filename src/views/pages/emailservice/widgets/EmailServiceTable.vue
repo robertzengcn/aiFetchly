@@ -1,11 +1,25 @@
 <template>
     <div class="search_bar mt-4 d-flex jsb">
-        <div class="d-flex jsb search_tool">
+        <div class="d-flex jsb search_tool flex-wrap ga-2">
             <div class="search_wrap mr-4">
                 <v-text-field
 rounded class="elevation-0" density="compact" variant="solo" label="Search"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
             </div>
+
+            <v-select
+                data-testid="email-service-tag-filter"
+                v-model="tagFilter"
+                :items="tagFilterOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('emailservice.tag_filter') || 'Filter by tag'"
+                density="compact"
+                variant="solo"
+                hide-details
+                clearable
+                class="tag-filter"
+            />
 
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createService()">
                 {{ CapitalizeFirstLetter(t('emailservice.create_service')) }}
@@ -19,6 +33,16 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
                 @click="handleExport"
             >
                 {{ t('common.export') }}
+            </v-btn>
+
+            <v-btn
+                class="btn ml-3"
+                variant="outlined"
+                prepend-icon="mdi-tag-multiple"
+                data-testid="email-service-manage-tags-btn"
+                @click="showTagDialog = true"
+            >
+                {{ t('emailservice.manage_tags') || 'Manage tags' }}
             </v-btn>
 
             <v-btn
@@ -41,9 +65,13 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
 
     </div>
     <v-data-table-server
-v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+v-model="selected" v-model:page="currentPage" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
+        <template v-slot:[`item.tag`]="{ item }">
+            <v-chip v-if="item.tag" size="small">{{ item.tag }}</v-chip>
+            <span v-else>{{ t('emailservice.untagged') || 'Untagged' }}</span>
+        </template>
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
 
             <v-icon size="small" class="me-2" @click="editItem(item)">
@@ -69,13 +97,18 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
         @imported="handleImportDone"
     />
 
+    <email-service-tag-dialog
+        v-model="showTagDialog"
+        @changed="handleTagsChanged"
+    />
+
 </template>
 
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { EmailServiceListdata } from "@/entityTypes/emailmarketingType"
 import { getEmailServiceList, deleteEmailService, exportEmailServices } from '@/views/api/emailservice'
-import { ref, computed,watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 // import type { VDataTable } from 'vuetify/lib/components/index.mjs'
@@ -84,6 +117,10 @@ import { Header } from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import EmailServiceImportDialog from '@/views/pages/emailservice/widgets/EmailServiceImportDialog.vue';
+import EmailServiceTagDialog from '@/views/pages/emailservice/widgets/EmailServiceTagDialog.vue';
+import { getEmailServiceTags } from '@/views/api/emailservice';
+import type { EmailServiceTagSummary } from '@/entityTypes/emailmarketingType';
+import { emailServiceTagErrorKey } from '@/views/utils/emailServiceTagError';
 const { t } = useI18n({ inheritLocale: true });
 const selected = ref<Array<EmailServiceListdata>>([]);
 const router = useRouter();
@@ -109,13 +146,22 @@ type Fetchparam = {
     page: number,
     itemsPerPage: number,
     sortBy?: { key: string, order: string },
-    search: string
+    search: string,
+    tagId?: number,
+    untagged?: boolean,
 }
 
 const FakeAPI = {
     async fetch(fetchparam: Fetchparam): Promise<SearchResult<EmailServiceListdata>> {
         const fpage = (fetchparam.page - 1) * fetchparam.itemsPerPage
-        return await getEmailServiceList({ page: fpage, size: fetchparam.itemsPerPage, sortby: fetchparam.sortBy, search: fetchparam.search })
+        return await getEmailServiceList({
+            page: fpage,
+            size: fetchparam.itemsPerPage,
+            sortby: fetchparam.sortBy,
+            search: fetchparam.search,
+            tagId: fetchparam.tagId,
+            untagged: fetchparam.untagged,
+        })
     }
 }
 
@@ -139,6 +185,12 @@ const headers = computed<Array<Header>>(() => [
         key: 'from',
     },
     {
+        title: CapitalizeFirstLetter(t("emailservice.tag") || "Tag"),
+        align: 'start',
+        sortable: false,
+        key: 'tag',
+    },
+    {
         title: CapitalizeFirstLetter(t("common.created_time")),
         align: 'start',
         sortable: false,
@@ -157,17 +209,48 @@ const totalItems = ref(0);
 const search = ref('');
 const showDeleteModal = ref(false);
 const deleteId = ref(0);
+const showTagDialog = ref(false);
+const tags = ref<EmailServiceTagSummary[]>([]);
+const currentPage = ref(1);
+let latestRequest = 0;
+const tagFilter = ref<number | 'untagged' | null>(null);
+const tagFilterOptions = computed(() => [
+    { title: t('emailservice.all_tags') || 'All tags', value: null },
+    { title: t('emailservice.untagged') || 'Untagged', value: 'untagged' as const },
+    ...tags.value.map((tag) => ({ title: tag.name, value: tag.id })),
+]);
+
+async function loadTags(): Promise<void> {
+    try {
+        tags.value = await getEmailServiceTags();
+        if (typeof tagFilter.value === 'number' && !tags.value.some((tag) => tag.id === tagFilter.value)) {
+            tagFilter.value = null;
+        }
+    } catch (error) {
+        exportNotice.value = { show: true, type: 'error', message: t(emailServiceTagErrorKey(error)) || 'Unable to load tags.' };
+    }
+}
+
+async function handleTagsChanged(): Promise<void> {
+    await loadTags();
+    currentPage.value = 1;
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+}
 
 function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
+    const request = ++latestRequest;
     loading.value = true
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy?.[0],
-        search: search.value
+        sortBy: Array.isArray(sortBy) ? sortBy[0] : sortBy,
+        search: search.value,
+        tagId: typeof tagFilter.value === 'number' ? tagFilter.value : undefined,
+        untagged: tagFilter.value === 'untagged' ? true : undefined,
     }
     FakeAPI.fetch(fetchitem).then(
         ({ data, total }) => {
+            if (request !== latestRequest) return;
             //loop data
             if (!data) {
                 data = []
@@ -176,10 +259,21 @@ function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage:
             totalItems.value = total
             loading.value = false
         }).catch(function (error) {
+            if (request !== latestRequest) return;
+            loading.value = false;
             console.error(error);
             loading.value = false
         })
 }
+
+watch(tagFilter, () => {
+    currentPage.value = 1;
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+});
+
+onMounted(() => {
+    void loadTags();
+});
 // },
 // }
 const editItem = (item: EmailServiceListdata) => {
@@ -263,6 +357,7 @@ const showImportDialog = ref(false);
 function handleImportDone(): void {
     // The dialog surfaces its own result notice; the table only reloads.
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+    void loadTags();
 }
 
 const emit = defineEmits(['change'])
@@ -272,3 +367,9 @@ watch(selected, (newValue:Array<EmailServiceListdata>|undefined, oldValue:Array<
   emit('change', newValue);
 });
 </script>
+<style scoped>
+.tag-filter {
+    min-width: 180px;
+    max-width: 280px;
+}
+</style>

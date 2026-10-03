@@ -27,6 +27,9 @@ export interface SearchResult {
     name: string;
     title?: string;
     fileType: string;
+    author?: string;
+    description?: string;
+    tags?: string[];
   };
   metadata: {
     chunkIndex: number;
@@ -50,6 +53,7 @@ export interface SearchOptions {
     start: Date;
     end: Date;
   };
+  documentIds?: number[];
 }
 
 /**
@@ -73,6 +77,21 @@ export interface SkippedModelGroup {
 export interface VectorSearchResponse {
   results: SearchResult[];
   skippedModelGroups: SkippedModelGroup[];
+}
+
+function parseDocumentTags(tags: string | null | undefined): string[] | undefined {
+  if (!tags) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(tags);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((t: unknown): t is string => typeof t === "string");
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export class VectorSearchService {
@@ -120,12 +139,17 @@ export class VectorSearchService {
       // Get all documents with embeddings
       const documents = await this.getAllDocumentsWithEmbeddings();
 
-      if (documents.length === 0) {
+      const documentsInScope =
+        options.documentIds && options.documentIds.length > 0
+          ? documents.filter((d) => options.documentIds!.includes(d.id))
+          : documents;
+
+      if (documentsInScope.length === 0) {
         return [];
       }
 
       // Group documents by their embedding model
-      const documentsByModel = await this.groupDocumentsByModel(documents);
+      const documentsByModel = await this.groupDocumentsByModel(documentsInScope);
 
       if (documentsByModel.size === 0) {
         return [];
@@ -278,6 +302,7 @@ export class VectorSearchService {
     const vectorResults = await this.search(query, {
       limit: vectorLimit,
       maxDistance,
+      documentIds: options.documentIds,
     });
 
     // 2. Collect keyword candidates
@@ -348,6 +373,9 @@ export class VectorSearchService {
                 name: chunk.document.name,
                 title: chunk.document.title,
                 fileType: chunk.document.fileType,
+                author: chunk.document.author ?? undefined,
+                description: chunk.document.description ?? undefined,
+                tags: parseDocumentTags(chunk.document.tags),
               }
             : { id: hit.documentId, name: "Unknown", fileType: "unknown" },
         });
@@ -357,6 +385,11 @@ export class VectorSearchService {
     // 4. Sort by combined score descending
     const candidates = Array.from(candidateMap.values());
     candidates.sort((a, b) => b.combinedScore - a.combinedScore);
+
+    if (options.documentIds && options.documentIds.length > 0) {
+      const allowed = new Set<number>(options.documentIds);
+      return candidates.filter((c) => allowed.has(c.documentId));
+    }
 
     return candidates;
   }
@@ -681,6 +714,9 @@ export class VectorSearchService {
             name: chunk.document.name,
             title: chunk.document.title,
             fileType: chunk.document.fileType,
+            author: chunk.document.author ?? undefined,
+            description: chunk.document.description ?? undefined,
+            tags: parseDocumentTags(chunk.document.tags),
           },
           metadata: {
             chunkIndex: chunk.chunkIndex,

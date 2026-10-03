@@ -21,6 +21,7 @@ import type {
 } from "@/entityTypes/aiMessageTaskTypes";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
+import { OUTBOUND_EMAIL_SEND_TOOL } from "@/service/AIChatQueryLoop";
 import {
   ScheduledLoopEventSink,
   type ScheduledTurnOutcome,
@@ -345,10 +346,19 @@ export class ScheduledAiMessageRunner {
       // scheduled context supplies stable message IDs + trusted metadata that
       // the renderer cannot forge, and makes the user/assistant rows idempotent
       // across crash-retries (technical-design §14).
+      const policy = this.parseTaskPolicy(task);
       const engine = await new AIChatQueryEngineFactory().createScheduled(
-        this.parseTaskPolicy(task),
+        policy,
         conversationId
       );
+      // Trusted scheduled-loop pre-authorization for the outbound send gate
+      // (see executeRunLoop for the rationale): the user pre-allowlisted
+      // start_email_send_task via the typed confirmation at loop creation.
+      // That typed pre-allowlist IS the trusted authorization AD-003 requires
+      // for an unattended send — there is no human present to click Review.
+      const outboundSendPreAuthorized =
+        policy.autoApproveTools &&
+        policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
       engineRegistry.register({
         conversationId,
         engine,
@@ -446,10 +456,22 @@ export class ScheduledAiMessageRunner {
             }
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
-        }        // Forward token/done/error chunks for live streaming to a renderer
-        // viewing this conversation (technical-design §13.2). Strict routing
-        // is enforced renderer-side; forwarding failures are non-fatal.
-        if (event.type === "token") {
+        }
+        // Forward start/token/done/error chunks for live streaming to a
+        // renderer viewing this conversation (technical-design §13.2). Strict
+        // routing is enforced renderer-side; forwarding failures are non-fatal.
+        // `start` is emitted by the engine when the turn begins (before the
+        // first token) so the renderer can show an immediate "Generating…"
+        // loading indicator instead of waiting for the first token to know
+        // the run is in flight.
+        if (event.type === "start") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "start",
+          });
+        } else if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
@@ -496,6 +518,7 @@ export class ScheduledAiMessageRunner {
           userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
+        outboundSendPreAuthorized,
       });
       // `submitMessage` resolves on a permission pause (the engine parks the
       // turn in `pendingPermissions` and returns without emitting a terminal
@@ -795,6 +818,20 @@ export class ScheduledAiMessageRunner {
       errorMessage: "NO_TERMINAL_EVENT",
     };
 
+    // Trusted scheduled-loop pre-authorization for the outbound send gate.
+    // The user pre-allowlisted start_email_send_task via the typed
+    // confirmation at loop creation (policy.autoApproveTools AND the tool is
+    // in policy.allowedTools). That typed pre-allowlist IS the trusted
+    // authorization AD-003 requires for an unattended send — there is no human
+    // present to click Review. The gate (AIChatQueryLoop.evaluateOutboundEmailGate)
+    // consults this to honor skip_review=true even for blocking reasonCodes
+    // (e.g. a dedup negation the pure resolver misreads as do-not-send),
+    // unblocking the scheduled outreach deadlock. Never true for interactive
+    // chat — scheduledContext is absent there and the renderer cannot forge it.
+    const outboundSendPreAuthorized =
+      policy.autoApproveTools &&
+      policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
+
     try {
       try {
         lease = await coordinator.acquire({
@@ -913,7 +950,14 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
         }
-        if (event.type === "token") {
+        if (event.type === "start") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "start",
+          });
+        } else if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
@@ -951,6 +995,7 @@ export class ScheduledAiMessageRunner {
           userMessageId: `scheduled-user-${scheduleKey}-${runId}`,
           assistantMessageId,
         },
+        outboundSendPreAuthorized,
       });
       // `submitMessage` resolves on a permission pause (the engine parks the
       // turn in `pendingPermissions` and returns without emitting a terminal

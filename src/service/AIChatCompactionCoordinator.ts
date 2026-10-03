@@ -32,6 +32,7 @@ import type {
   PackedToolReceipt,
 } from "@/service/AIChatSectionPacker";
 import { AIChatSummaryValidator } from "@/service/AIChatSummaryValidator";
+import { parseSummaryJson } from "@/service/AIChatSummaryJsonParse";
 import { AIChatCompactionPromptBuilder } from "@/service/AIChatCompactionPromptBuilder";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import { encodeCursor, decodeCursor } from "@/service/AIChatArchiveCursorCodec";
@@ -200,9 +201,16 @@ export class AIChatCompactionCoordinator extends BaseModule {
       input.sourceCapacityTokens ??
       AI_CHAT_RECOVERABLE_DEFAULTS.sectionSourceTargetTokens;
 
-    // 1. Read archive state; reject tombstoned / unknown conversations.
+    // 1. Read archive state; reject tombstoned conversations. A missing row
+    // is not a tombstone — mint one so a live chat that predates archive
+    // state (or whose append coupler has not committed yet) can compact.
+    // Do not call ensureState when deletedAt is set: that would undo a
+    // clear. Re-archive happens on the next message append.
     const stateModel = new AIChatArchiveStateModel(this.dbpath);
-    const state = await stateModel.getState(conversationId);
+    let state = await stateModel.getState(conversationId);
+    if (!state) {
+      state = await stateModel.ensureState(conversationId);
+    }
     if (!state || state.deletedAt) {
       throw new RecoverableHistoryError(
         "COMPACTION_CONTEXT_REJECTED",
@@ -995,8 +1003,32 @@ export class AIChatCompactionCoordinator extends BaseModule {
         );
       }
 
+      // Tolerant JSON extraction (§10): recover fenced/prose-wrapped model
+      // output, and surface the actual parse error on failure so the repair
+      // prompt carries actionable signal instead of an opaque root-level
+      // "schema: : Invalid input" (the original swallow-then-null path gave
+      // the model nothing to fix, so all 4 attempts failed identically).
+      const parsedJson = parseSummaryJson(raw);
+      if (!parsedJson.ok) {
+        lastErrors = [`JSON parse failed: ${parsedJson.error}`];
+        if (!repaired) {
+          repaired = true;
+          systemPrompt = `${input.prompt.systemPrompt}\nYour previous output was not valid JSON (${parsedJson.error}). Return ONLY a raw JSON object matching the SectionSummaryV1 schema, no markdown code fences, no prose, referencing only supplied source IDs.`;
+          continue;
+        }
+        if (reductions < maxReductions) {
+          reductions += 1;
+          const reduced = Math.max(
+            64,
+            Math.floor(input.getCapacity() / 2)
+          );
+          input.onReduceCapacity(reduced);
+          continue;
+        }
+        break;
+      }
       const validation = this.validator.validate(
-        this.safeJsonParse(raw),
+        parsedJson.value,
         new Set(input.prompt.suppliedSourceIds),
         AI_CHAT_RECOVERABLE_DEFAULTS.sectionOutputCapTokens
       );
@@ -1168,8 +1200,17 @@ export class AIChatCompactionCoordinator extends BaseModule {
         lastErrors = [`overview merge call failed: ${(err as Error).message}`];
         continue;
       }
+      // Tolerant JSON extraction (§10): recover fenced/prose-wrapped overview
+      // output the same way the section path does. Surface the parse error so
+      // the failure log carries actionable signal, not an opaque root-level
+      // "schema: : Invalid input".
+      const parsedJson = parseSummaryJson(raw);
+      if (!parsedJson.ok) {
+        lastErrors = [`overview JSON parse failed: ${parsedJson.error}`];
+        continue;
+      }
       // Overview outputs omit the section version tag — normalize it.
-      const parsed = this.safeJsonParse(raw);
+      const parsed = parsedJson.value;
       const normalized =
         typeof parsed === "object" && parsed !== null && !("version" in parsed)
           ? { ...(parsed as Record<string, unknown>), version: 1 }
@@ -1236,13 +1277,16 @@ export class AIChatCompactionCoordinator extends BaseModule {
     });
   }
 
-  /** Parse JSON safely; return null on failure (validator will reject). */
+  /**
+   * Parse stored/trusted JSON tolerantly; return `null` on failure so the
+   * validator rejects it. Used only by the resume/reuse paths that read
+   * previously-stored summary JSON (written by `JSON.stringify(summary)`).
+   * Live model output uses {@link parseSummaryJson} directly so the actual
+   * parse error reaches the bounded retry loop's repair prompt.
+   */
   private safeJsonParse(raw: string): unknown {
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
+    const result = parseSummaryJson(raw);
+    return result.ok ? result.value : null;
   }
 
   /** Unused budgetService getter (kept for §8.3 capacity allocation wiring). */

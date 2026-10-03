@@ -11,6 +11,7 @@ import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 import { EmailTemplateTaskRelationEntity } from "@/entity/EmailTemplateTaskRelation.entity";
 import { EmailFilterTaskRelationEntity } from "@/entity/EmailFilterTaskRelation.entity";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
 // import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
@@ -534,6 +535,7 @@ export class SqliteDb {
           EmailTemplateTaskRelationEntity,
           EmailFilterTaskRelationEntity,
           EmailServiceEntity,
+          EmailServiceTagEntity,
           EmailServiceTaskRelationEntity,
           SocialAccountEntity,
           YellowPagesTaskEntity,
