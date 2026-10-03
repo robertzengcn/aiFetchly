@@ -22,6 +22,15 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
             </v-btn>
 
             <v-btn
+                v-if="!isSelectedtable"
+                class="btn ml-3" variant="flat" prepend-icon="mdi-import" color="secondary"
+                data-testid="email-service-import-btn"
+                @click="showImportDialog = true"
+            >
+                {{ t('common.import') }}
+            </v-btn>
+
+            <v-btn
                 class="btn ml-3" variant="outlined" prepend-icon="mdi-file-document-multiple"
                 data-testid="email-service-send-log-btn"
                 @click="goToSendLog"
@@ -55,6 +64,11 @@ v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="com
         :type="exportNotice.type"
     />
 
+    <email-service-import-dialog
+        v-model="showImportDialog"
+        @imported="handleImportDone"
+    />
+
 </template>
 
 <script setup lang="ts">
@@ -69,6 +83,7 @@ import { useRouter } from 'vue-router';
 import { Header } from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
+import EmailServiceImportDialog from '@/views/pages/emailservice/widgets/EmailServiceImportDialog.vue';
 const { t } = useI18n({ inheritLocale: true });
 const selected = ref<Array<EmailServiceListdata>>([]);
 const router = useRouter();
@@ -153,8 +168,6 @@ function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage:
     }
     FakeAPI.fetch(fetchitem).then(
         ({ data, total }) => {
-            console.log(data)
-            // console.log(total)
             //loop data
             if (!data) {
                 data = []
@@ -164,6 +177,7 @@ function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage:
             loading.value = false
         }).catch(function (error) {
             console.error(error);
+            loading.value = false
         })
 }
 // },
@@ -242,6 +256,13 @@ async function handleExport() {
     } finally {
         exporting.value = false;
     }
+}
+
+const showImportDialog = ref(false);
+
+function handleImportDone(): void {
+    // The dialog surfaces its own result notice; the table only reloads.
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
 }
 
 const emit = defineEmits(['change'])

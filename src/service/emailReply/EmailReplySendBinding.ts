@@ -1,4 +1,9 @@
 import { normalizeEmailAddressForHash } from "@/service/emailReply/EmailReplyRevisionHasher";
+import {
+  normalizeEmailAddressV2,
+  normalizeSmtpUsernameForHash,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
 
 /**
  * Pure mailbox + envelope binding validation for an approved send (FR-017,
@@ -32,6 +37,12 @@ export interface SendBindingInput {
     senderAddress: string;
     recipientAddress: string;
     contentHash: string;
+    /** Envelope schema version (§18.1). Defaults to 1 (legacy) when omitted. */
+    envelopeVersion?: 1 | 2;
+    /** Frozen SMTP username (v2 only). Null/undefined for v1 revisions. */
+    smtpUsername?: string | null;
+    /** Frozen Reply-To (v2 only). Null/undefined for v1 or no-Reply-To. */
+    replyToAddress?: string | null;
   };
   message: {
     id: number;
@@ -43,22 +54,43 @@ export interface SendBindingInput {
     id: number;
     from: string;
     status: number;
+    /** Current effective SMTP username (§18.2). When null/undefined, falls back to `from`. */
+    smtpUsername?: string | null;
+    /** Current configured Reply-To (§18.2). Null/undefined = no Reply-To configured. */
+    replyTo?: string | null;
   };
   recomputedHash: string;
 }
 
+/**
+ * Stable error codes emitted by {@link validateSendBinding} (P1.2). Each code
+ * identifies exactly one binding failure so the UI can show a distinct,
+ * localized message. `service_missing` is also used by the delivery service
+ * when the bound email-service row cannot be loaded.
+ */
+export type SendBindingErrorCode =
+  | "draft_token_mismatch"
+  | "approval_stale"
+  | "hash_mismatch"
+  | "revision_hash_mismatch"
+  | "mailbox_mismatch"
+  | "service_inactive"
+  | "service_missing"
+  | "sender_mismatch"
+  | "recipient_mismatch"
+  | "smtp_username_mismatch"
+  | "reply_to_mismatch"
+  | "legacy_reply_identity_requires_review";
+
 /** Thrown when an approved-send envelope binding check fails. */
 export class SendBindingError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string
-  ) {
+  constructor(message: string, public readonly code: SendBindingErrorCode) {
     super(message);
     this.name = "SendBindingError";
   }
 }
 
-function fail(code: string, message: string): never {
+function fail(code: SendBindingErrorCode, message: string): never {
   throw new SendBindingError(message, code);
 }
 
@@ -122,7 +154,10 @@ export function validateSendBinding(input: SendBindingInput): void {
   }
 
   if (service.status !== 1) {
-    fail("service_inactive", "Send rejected: bound email service is not active");
+    fail(
+      "service_inactive",
+      "Send rejected: bound email service is not active"
+    );
   }
 
   // Envelope identity: approved sender/recipient must match trusted state.
@@ -145,5 +180,85 @@ export function validateSendBinding(input: SendBindingInput): void {
       "recipient_mismatch",
       "Send rejected: approved recipient does not match the original sender / Reply-To"
     );
+  }
+
+  // §18.2 / §18.3 — identity binding. Version-2 revisions carry the frozen
+  // service identity (smtpUsername + replyToAddress) and must match the
+  // current effective service identity at send time. Version-1 revisions may
+  // send ONLY when the service still satisfies the legacy compatibility gate
+  // (effective SMTP username == From, configured Reply-To == null); otherwise
+  // the approval is invalidated and review is required.
+  const version = revision.envelopeVersion ?? 1;
+  if (version === 2) {
+    // §18.2 — v2 identity comparison. Uses the same v2 normalization as the
+    // hash function so the comparison is byte-identical. Each identity field
+    // fails with its own code (P1.2) so the UI can tell the user exactly
+    // which part of the identity changed after approval.
+    // Effective SMTP username resolved through the shared resolver (AD-003) so
+    // the `smtpUsername ?? from` fallback lives in exactly one place. The v2
+    // comparison below normalizes exactly as the hash does (byte-identical).
+    const effectiveSmtp = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+    }).smtpUsername;
+    if (
+      normalizeSmtpUsernameForHash(revision.smtpUsername ?? "") !==
+      normalizeSmtpUsernameForHash(effectiveSmtp)
+    ) {
+      fail(
+        "smtp_username_mismatch",
+        "Send rejected: revision SMTP username does not match the current effective login"
+      );
+    }
+    // Revision sender already checked above via sender_mismatch; the v2
+    // comparison uses v2 normalization for consistency with the hash.
+    if (
+      normalizeEmailAddressV2(revision.senderAddress) !==
+      normalizeEmailAddressV2(service.from)
+    ) {
+      fail(
+        "sender_mismatch",
+        "Send rejected: revision sender does not match the current From address"
+      );
+    }
+    const revisionReplyTo =
+      revision.replyToAddress === null || revision.replyToAddress === undefined
+        ? null
+        : normalizeEmailAddressV2(revision.replyToAddress);
+    const serviceReplyTo =
+      service.replyTo === null || service.replyTo === undefined
+        ? null
+        : normalizeEmailAddressV2(service.replyTo);
+    if (revisionReplyTo !== serviceReplyTo) {
+      fail(
+        "reply_to_mismatch",
+        "Send rejected: revision Reply-To does not match the current configured Reply-To (null must match null)"
+      );
+    }
+  } else {
+    // §18.3 — legacy v1 gate. A v1 approval may send only when the service's
+    // effective SMTP username equals its From AND configured Reply-To is null.
+    // Otherwise, the identity the v1 hash implicitly assumed no longer holds;
+    // invalidate and require a fresh v2 revision + re-approval.
+    // Effective SMTP username via the shared resolver (AD-003): the legacy
+    // gate treats `smtpUsername == from` (after normalization) as the
+    // pre-identity-split invariant a v1 approval implicitly assumed.
+    const effectiveSmtp = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+    }).smtpUsername;
+    const smtpMatchesLegacy =
+      normalizeSmtpUsernameForHash(effectiveSmtp) ===
+      normalizeSmtpUsernameForHash(service.from);
+    const replyToIsNull =
+      service.replyTo === null || service.replyTo === undefined;
+    if (!smtpMatchesLegacy || !replyToIsNull) {
+      fail(
+        "legacy_reply_identity_requires_review",
+        "Send rejected: legacy v1 approval requires review because the service identity (SMTP username / Reply-To) has changed"
+      );
+    }
   }
 }

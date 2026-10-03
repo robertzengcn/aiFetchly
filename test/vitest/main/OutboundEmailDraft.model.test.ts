@@ -284,6 +284,22 @@ describe("OutboundEmailDraftModel", () => {
     expect(found).toBeNull();
   });
 
+  it("findAuthorizableBatchesForTurn returns every authorizable batch oldest-first", async () => {
+    const model = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    await model.createBatch(buildBatch({ status: "sent" }));
+    const first = await model.createBatch(
+      buildBatch({ status: "draft_ready", batchHash: "a".repeat(64) })
+    );
+    const second = await model.createBatch(
+      buildBatch({ status: "draft_ready", batchHash: "b".repeat(64) })
+    );
+
+    const found = await model.findAuthorizableBatchesForTurn("conv-1", "msg-1");
+    expect(found.map((b) => b.id)).toEqual([first.id, second.id]);
+  });
+
   it("findLatestAuthorizableBatchForConversation returns the newest draft across turns", async () => {
     const model = new OutboundEmailDraftModel(tmpDir);
     await SqliteDb.ensureInitialized();

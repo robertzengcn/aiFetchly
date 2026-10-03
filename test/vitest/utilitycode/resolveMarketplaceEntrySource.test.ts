@@ -11,7 +11,10 @@ import type {
 const ctx = (root: string) => ({
   marketplaceName: "team-tools",
   marketplaceRoot: root,
-  marketplaceSource: { kind: "git", uri: "https://example.com/mkt.git" } as PluginMarketplaceSource,
+  marketplaceSource: {
+    kind: "git",
+    uri: "https://example.com/mkt.git",
+  } as PluginMarketplaceSource,
   marketplaceVersion: "1.0.0",
 });
 
@@ -20,30 +23,49 @@ describe("resolveMarketplaceEntrySource", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "mkt-resolve-"));
     const pluginDir = path.join(root, "plugins", "foo");
     fs.mkdirSync(pluginDir, { recursive: true });
-    const entry = { name: "foo", source: "./plugins/foo" } as PluginMarketplaceEntry;
+    const entry = {
+      name: "foo",
+      source: "./plugins/foo",
+    } as PluginMarketplaceEntry;
     const r = resolveMarketplaceEntrySource(entry, ctx(root));
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.resolved.request.kind).toBe("local-folder");
-      expect(r.resolved.request.folderPath).toBe(pluginDir);
+      // The resolver canonicalizes via realpathSync (symlink-safe containment
+      // check), so folderPath is the CANONICAL path. On macOS tmpdirs the
+      // lexical /var/... path resolves to /private/var/... — assert against
+      // the realpath, not the lexical build.
+      expect(r.resolved.request.folderPath).toBe(fs.realpathSync(pluginDir));
       expect(r.resolved.request.source).toBe("marketplace");
     }
   });
 
   it("rejects relative source that escapes root", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "mkt-resolve-"));
-    const entry = { name: "bad", source: "./../escape" } as PluginMarketplaceEntry;
+    const entry = {
+      name: "bad",
+      source: "./../escape",
+    } as PluginMarketplaceEntry;
     const r = resolveMarketplaceEntrySource(entry, ctx(root));
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.errors.some((e) => e.code === "marketplace-plugin-source-outside-root")).toBe(true);
+      expect(
+        r.errors.some(
+          (e) => e.code === "marketplace-plugin-source-outside-root"
+        )
+      ).toBe(true);
     }
   });
 
   it("converts github source to github request, sha over ref", () => {
     const entry = {
       name: "g",
-      source: { source: "github", repo: "o/r", ref: "main", sha: "a".repeat(40) },
+      source: {
+        source: "github",
+        repo: "o/r",
+        ref: "main",
+        sha: "a".repeat(40),
+      },
     } as unknown as PluginMarketplaceEntry;
     const r = resolveMarketplaceEntrySource(entry, ctx("/tmp"));
     expect(r.success).toBe(true);
@@ -74,16 +96,24 @@ describe("resolveMarketplaceEntrySource", () => {
     const r = resolveMarketplaceEntrySource(entry, ctx("/tmp"));
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.errors.some((e) => e.code === "marketplace-plugin-source-unsupported")).toBe(true);
+      expect(
+        r.errors.some((e) => e.code === "marketplace-plugin-source-unsupported")
+      ).toBe(true);
     }
   });
 
   it("rejects relative source when root has no filesystem tree (URL marketplace)", () => {
     // Simulate a URL marketplace: pass a context whose root does not exist.
-    const entry = { name: "x", source: "./plugins/x" } as PluginMarketplaceEntry;
+    const entry = {
+      name: "x",
+      source: "./plugins/x",
+    } as PluginMarketplaceEntry;
     const urlCtx = {
       ...ctx("/this/path/does/not/exist"),
-      marketplaceSource: { kind: "url", uri: "https://example.com/marketplace.json" } as PluginMarketplaceSource,
+      marketplaceSource: {
+        kind: "url",
+        uri: "https://example.com/marketplace.json",
+      } as PluginMarketplaceSource,
     };
     const r = resolveMarketplaceEntrySource(entry, urlCtx);
     expect(r.success).toBe(false);

@@ -150,6 +150,8 @@ async function seedAuthorizedOutcome(
   revision.emailServiceId = 1;
   revision.senderAddress = "sender@example.com";
   revision.recipientAddress = recipient;
+  revision.smtpUsername = "auth-login@example.com";
+  revision.replyToAddress = "auth-reply@example.com";
   revision.subject = subject;
   revision.bodyText = "body";
   revision.bodyHtml = null;
@@ -340,6 +342,10 @@ describe("OutboundEmailSendLogModule.getUnifiedSendLogDetail", () => {
     entity.content = "full legacy body";
     entity.log = "smtp transcript";
     entity.record_time = "2026-01-01T00:00:00.000Z";
+    entity.email_service_id = 9;
+    entity.from_address = "legacy-sales@svc.com";
+    entity.smtp_username = "legacy-login@svc.com";
+    entity.reply_to = "legacy-reply@svc.com";
     const legacyId = await model.create(entity);
 
     const module = new OutboundEmailSendLogModule();
@@ -354,6 +360,12 @@ describe("OutboundEmailSendLogModule.getUnifiedSendLogDetail", () => {
     expect(detail.content).toBe("full legacy body");
     expect(detail.log).toBe("smtp transcript");
     expect(detail.taskId).toBe(77);
+    // FR-014: legacy rows now carry which service sent + what identity it
+    // presented (visible From, non-secret SMTP login, Reply-To).
+    expect(detail.emailServiceId).toBe(9);
+    expect(detail.fromAddress).toBe("legacy-sales@svc.com");
+    expect(detail.smtpUsername).toBe("legacy-login@svc.com");
+    expect(detail.replyTo).toBe("legacy-reply@svc.com");
     // Authorized-half fields must stay unset on a legacy row.
     expect(detail.bodyText).toBeUndefined();
     expect(detail.sender).toBeUndefined();
@@ -385,6 +397,10 @@ describe("OutboundEmailSendLogModule.getUnifiedSendLogDetail", () => {
     expect(detail.sender).toBe("sender@example.com");
     expect(detail.actor).toBe("ai");
     expect(detail.bodyText).toBe("body");
+    // FR-014: the revision's frozen non-secret identity surfaces here.
+    expect(detail.emailServiceId).toBe(1);
+    expect(detail.smtpUsername).toBe("auth-login@example.com");
+    expect(detail.replyTo).toBe("auth-reply@example.com");
     expect(detail.completedAt).toBe("2026-02-03T04:05:06.000Z");
     expect(detail.batchId).toBeTypeOf("number");
     expect(detail.draftId).toBe(seeded.draftId);

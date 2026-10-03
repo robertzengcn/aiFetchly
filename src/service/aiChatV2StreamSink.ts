@@ -28,6 +28,13 @@ export function createChatV2StreamSink(
             eventType: "start",
             conversationId: e.conversationId,
             messageId: e.messageId,
+            // §13.3: the renderer clears only the accepted selection chips.
+            historySelectionAcceptedIds: e.historySelectionAcceptedIds,
+            // §4.2: surviving chips whose source moved are marked changed.
+            historySelectionChangedIds: e.historySelectionChangedIds,
+            // P2-10: surviving chips that were hard-rejected are marked
+            // rejected.
+            historySelectionRejectedIds: e.historySelectionRejectedIds,
           });
           break;
         case "token":
@@ -191,6 +198,7 @@ export function createChatV2StreamSink(
             promptTokens: e.promptTokens,
             completionTokens: e.completionTokens,
             totalTokens: e.totalTokens,
+            reasoningContent: e.reasoningContent,
           });
           break;
         case "cancelled":

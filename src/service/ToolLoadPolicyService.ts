@@ -36,6 +36,7 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_attachment_content",
   "knowledge_library_search",
   "run_subagent",
+  "conversation_tool_history",
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([
@@ -68,6 +69,10 @@ const CONTEXTUAL_SCHEDULE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "pause_schedule",
   "resume_schedule",
   "run_schedule_now",
+  "list_ai_message_tasks",
+  "get_ai_message_task",
+  "create_ai_message_task",
+  "update_ai_message_task",
 ]);
 
 const CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES: ReadonlySet<string> = new Set([

@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ElectronStoreService (unavailable under vitest). Mock it enabled like
 // AIChatQueryLoopAsyncPoll.test.ts does.
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: vi.fn(function TokenMock() {
+      return {
     getValue: vi.fn().mockReturnValue("true"),
-  })),
+      };
+    }),
 }));
 
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";

@@ -3,9 +3,11 @@ import {
   AI_CHAT_V2_AUTO_COMPACTED,
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
+  AI_CHAT_V2_COMPACTION_PROGRESS,
 } from "@/config/channellist";
 import type {
   ChatV2AutoCompactedEvent,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatV2ConversationUpdatedEvent,
@@ -97,6 +99,21 @@ export class AIChatConversationUpdateBroadcaster
     for (const win of this.windows) {
       if (!win.isDestroyed()) {
         win.webContents.send(AI_CHAT_V2_AUTO_COMPACTED, event);
+      }
+    }
+  }
+
+  /**
+   * Broadcast an incremental-compaction run lifecycle event (technical-design
+   * §13.1). Emitted on AI_CHAT_V2_COMPACTION_PROGRESS whenever a run starts,
+   * packs a section, publishes, pauses, fails, or is cancelled. Renderer-side,
+   * only the window viewing the originating conversation updates its status
+   * badge; routing is by conversationId (same model as emitAutoCompacted).
+   */
+  emitCompactionProgress(event: ChatV2CompactionProgressEvent): void {
+    for (const win of this.windows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(AI_CHAT_V2_COMPACTION_PROGRESS, event);
       }
     }
   }

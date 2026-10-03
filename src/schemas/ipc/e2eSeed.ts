@@ -15,6 +15,14 @@ import { lazySchema } from "@/utils/lazySchema";
 // mid-greeting, so the worker fails with an ambiguous SMTP error and the
 // delivery deterministically ends in delivery_unknown (FR-019), exercising
 // the real worker path without any external network.
+//
+// smtpUsername / replyTo are optional identity columns added in P0.3: the
+// identity scenarios seed a service whose SMTP username differs from From
+// (scenario 1) and/or a Reply-To independent of the From address. They are
+// stored as-is (plaintext, like the password) because the E2E seed channel
+// bypasses the production import-create encryption path — it writes the row
+// directly through EmailServiceModel.create, so no secret-key fetch is
+// needed for the seed itself.
 export const e2eSeedEmailServiceInputSchema = lazySchema(() =>
   z.strictObject({
     name: z.string().min(1, "Service name is required").max(255),
@@ -24,5 +32,7 @@ export const e2eSeedEmailServiceInputSchema = lazySchema(() =>
     port: z.string().min(1, "SMTP port is required").max(10),
     ssl: z.number().int().min(0).max(1).optional(),
     status: z.number().int().min(0).max(1).optional(),
+    smtpUsername: z.string().max(255).optional(),
+    replyTo: z.string().max(320).optional(),
   })
 );

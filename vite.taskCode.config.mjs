@@ -123,6 +123,12 @@ export default ({ mode }) => {
         ssr: {
             noExternal: [
                 ...ZOD_SSR_NO_EXTERNAL,
+                // electron-log is pure JS (zero deps) but is required at
+                // runtime by src/modules/Logger.ts (require('electron-log/main')).
+                // The packaged worker loads from app.asar.unpacked and cannot
+                // resolve modules that only exist inside app.asar, so it must
+                // be bundled like the other pure-JS worker deps.
+                'electron-log',
                 // Token / settings store
                 'electron-store',
                 'conf',

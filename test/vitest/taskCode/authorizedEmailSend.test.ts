@@ -310,7 +310,7 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
     expect(failures[0]?.retrySafety).toBe("safe");
   });
 
-  it("classifies SMTP 535 Invalid login as a safe smtp_rejected failure", async () => {
+  it("classifies SMTP 535 Invalid login as a safe smtp_auth_failed failure", async () => {
     const envelope = makeEnvelope({ draftId: 1 });
     const payload = makePayload([envelope], [makeService(1, "s@x.com")]);
 
@@ -335,7 +335,9 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
       > => e.type === "authorized-email-failed"
     );
     expect(failures).toHaveLength(1);
-    expect(failures[0]?.errorCode).toBe("smtp_rejected");
+    // §19.2 — the worker classifies a 535 auth failure with the specific
+    // smtp_auth_failed code (retry-safe: the server never accepted the msg).
+    expect(failures[0]?.errorCode).toBe("smtp_auth_failed");
     expect(failures[0]?.retrySafety).toBe("safe");
   });
 
@@ -359,7 +361,9 @@ describe("EmailSend.sendAuthorizedEnvelopes", () => {
       > => e.type === "authorized-email-failed"
     );
     expect(failures).toHaveLength(1);
-    expect(failures[0]?.errorCode).toBe("smtp_rejected");
+    // §19.2 — a 550 recipient rejection classifies to the specific
+    // smtp_recipient_rejected code (still retry-safe).
+    expect(failures[0]?.errorCode).toBe("smtp_recipient_rejected");
     expect(failures[0]?.retrySafety).toBe("safe");
     expect(failures[0]?.envelopeHash).toBe(envelope.envelopeHash);
   });

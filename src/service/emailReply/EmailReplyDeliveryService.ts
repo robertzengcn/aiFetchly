@@ -11,8 +11,12 @@ import {
   buildSendIdempotencyKey,
   hashApprovalToken,
   hashApprovalEnvelope,
+  hashApprovalEnvelopeV2,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
+import {
+  SendBindingError,
+  validateSendBinding,
+} from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
 import {
   incrementReplyMetric,
@@ -24,6 +28,7 @@ import {
 } from "@/service/emailReply/replyReliabilityVersions";
 import type {
   EmailReplyApprovalEnvelope,
+  EmailReplyApprovalEnvelopeV2,
   SendApprovedReplyInput,
   SendApprovedReplyOutcome,
 } from "@/entityTypes/emailReplyReliabilityTypes";
@@ -54,6 +59,10 @@ export type ReplySenderFactory = (service: {
   port: string;
   name: string;
   ssl: number;
+  /** SMTP login (§13.1). Null/undefined → resolver falls back to `from`. */
+  smtpUsername?: string | null;
+  /** Configured outgoing Reply-To (§13.2). Null/undefined = no Reply-To. */
+  replyTo?: string | null;
 }) => ReplySender;
 
 /** Minimal mailbox shape the delivery service consumes (a subset of the entity). */
@@ -66,6 +75,10 @@ export interface BoundMailbox {
   port: string;
   name: string;
   ssl: number;
+  /** Current effective SMTP username (§18.2). Null/undefined → falls back to `from`. */
+  smtpUsername?: string | null;
+  /** Current configured Reply-To (§18.2). Null/undefined = no Reply-To. */
+  replyTo?: string | null;
 }
 
 /**
@@ -128,28 +141,62 @@ export class EmailReplyDeliveryService {
     const emailServiceId = draft.emailServiceId ?? message.emailServiceId;
     const service = await this.serviceLoader(emailServiceId);
     if (!service) {
-      throw new Error("Send rejected: bound email service not found");
+      // Stable code (P1.2) so the UI can distinguish a deleted/unreadable
+      // service from other pre-send failures.
+      throw new SendBindingError(
+        "Send rejected: bound email service not found",
+        "service_missing"
+      );
     }
 
-    // Recompute the envelope hash from trusted state.
-    const envelope: EmailReplyApprovalEnvelope = {
-      draftId: draft.id,
-      revisionId: revision.id,
-      emailServiceId,
-      originalMessageId: message.id,
-      senderAddress: revision.senderAddress,
-      recipientAddress: revision.recipientAddress,
-      subject: revision.subject,
-      bodyText: revision.bodyText,
-      bodyHtml: revision.bodyHtml,
-      policyVersion: REPLY_POLICY_VERSION,
-      validationVersion: REPLY_VALIDATOR_VERSION,
-    };
-    const recomputedHash = hashApprovalEnvelope(envelope);
+    // Recompute the envelope hash from trusted state. Version-aware (§18.1):
+    // v2 revisions carry smtpUsername + replyToAddress bound into the hash;
+    // v1 uses the legacy shape. The recomputed hash must match the revision's
+    // materialized content hash (enforced by validateSendBinding).
+    const revisionVersion: 1 | 2 = revision.envelopeVersion ?? 1;
+    let recomputedHash: string;
+    if (revisionVersion === 2) {
+      // The v2 hash requires smtpUsername and replyToAddress from the revision
+      // (frozen at materialization time). The service identity is compared
+      // separately in validateSendBinding (§18.2 delivery-time check).
+      const envelopeV2: EmailReplyApprovalEnvelopeV2 = {
+        version: 2,
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        smtpUsername: revision.smtpUsername ?? "",
+        senderAddress: revision.senderAddress,
+        replyToAddress: revision.replyToAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      recomputedHash = hashApprovalEnvelopeV2(envelopeV2);
+    } else {
+      const envelope: EmailReplyApprovalEnvelope = {
+        draftId: draft.id,
+        revisionId: revision.id,
+        emailServiceId,
+        originalMessageId: message.id,
+        senderAddress: revision.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        subject: revision.subject,
+        bodyText: revision.bodyText,
+        bodyHtml: revision.bodyHtml,
+        policyVersion: REPLY_POLICY_VERSION,
+        validationVersion: REPLY_VALIDATOR_VERSION,
+      };
+      recomputedHash = hashApprovalEnvelope(envelope);
+    }
 
     // 2. Mailbox + envelope binding (FR-017, P0.2). Pure validation; throws
     //    SendBindingError before the atomic claim so no SMTP submission can
     //    occur on any mismatch (wrong mailbox / sender / recipient / draft).
+    //    §18.2/§18.3: identity comparison (v2) or legacy gate (v1) runs here too.
     validateSendBinding({
       requestedDraftId: input.draftId,
       approval: {
@@ -168,6 +215,9 @@ export class EmailReplyDeliveryService {
         senderAddress: revision.senderAddress,
         recipientAddress: revision.recipientAddress,
         contentHash: revision.contentHash,
+        envelopeVersion: revisionVersion,
+        smtpUsername: revision.smtpUsername,
+        replyToAddress: revision.replyToAddress,
       },
       message: {
         id: message.id,
@@ -175,7 +225,13 @@ export class EmailReplyDeliveryService {
         fromAddress: message.fromAddress,
         replyToAddress: message.replyToAddress,
       },
-      service: { id: service.id, from: service.from, status: service.status },
+      service: {
+        id: service.id,
+        from: service.from,
+        status: service.status,
+        smtpUsername: service.smtpUsername,
+        replyTo: service.replyTo,
+      },
       recomputedHash,
     });
 
@@ -242,6 +298,10 @@ export class EmailReplyDeliveryService {
 
     // 8. SMTP submission. classifySubmissionResult turns the raw result into a
     //    certainty; unknown outcomes become delivery_unknown (never retried).
+    // Forward the full identity so the SMTP session authenticates with the
+    // configured SMTP username (not `from`) and the reply carries the
+    // configured Reply-To header (§13.1/§13.2). Omitting these would make the
+    // resolver fall back to `from` for auth and drop the Reply-To header.
     const sender = this.senderFactory({
       id: service.id,
       from: service.from,
@@ -250,6 +310,8 @@ export class EmailReplyDeliveryService {
       port: service.port,
       name: service.name,
       ssl: service.ssl,
+      smtpUsername: service.smtpUsername,
+      replyTo: service.replyTo,
     });
 
     let certainty: "accepted" | "definitely_rejected" | "unknown";

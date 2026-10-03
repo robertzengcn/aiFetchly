@@ -61,6 +61,13 @@ export default {
     log_content: "Contenu du journal",
     optional: "Optionnel",
     import: "Importer",
+    import_success: "Importation réussie",
+    import_partial: "Importés {imported}, ignorées {skipped} lignes invalides",
+    import_partial_skipped: " : {errors}",
+    import_cancelled: "Importation annulée",
+    import_failed: "Importation échouée",
+    import_no_valid_rows: "Aucun service valide trouvé dans le fichier",
+    import_invalid_file: "Format de fichier non valide",
     export: "Exporter",
     clear_filters: "Effacer les filtres",
     columns: "Colonnes",
@@ -74,6 +81,7 @@ export default {
     export_cancelled: "Export annulé",
     exporting: "Exportation...",
     download_template: "Télécharger le modèle",
+    select_file_import: "Sélectionner un fichier et importer",
     drag_drop_file:
       "Glissez-déposez votre fichier ici ou cliquez pour sélectionner un fichier",
     search: "Veille Marché",
@@ -1239,8 +1247,15 @@ export default {
   },
   emailservice: {
     id: "id",
-    from: "sender account",
-    from_hint: "input email sender account",
+    smtp_username: "Nom d'utilisateur SMTP",
+    smtp_username_hint:
+      "Le compte de messagerie utilisé pour vous connecter à votre serveur SMTP.",
+    reply_to: "Répondre à",
+    reply_to_hint:
+      "Les réponses vont ici. Laisser vide pour répondre à l'adresse From.",
+    from: "From",
+    from_hint:
+      "L'adresse que voient les destinataires. Elle doit être autorisée par votre fournisseur de messagerie.",
     password: "password",
     password_hint: "input email password",
     host: "Hôte SMTP",
@@ -1268,6 +1283,61 @@ export default {
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
     required_fields_missing: "Veuillez remplir tous les champs obligatoires",
+    smtp_error_auth_failed:
+      "Échec de l'authentification SMTP. Vérifiez le nom d'utilisateur et le mot de passe SMTP de ce service.",
+    smtp_error_from_rejected:
+      "L'adresse From a été rejetée par votre fournisseur de messagerie. Vérifiez que cet alias est autorisé à envoyer avec cette connexion.",
+    smtp_error_recipient_rejected:
+      "L'adresse du destinataire a été rejetée par le fournisseur de messagerie.",
+    smtp_error_tls_failed:
+      "Erreur TLS ou de certificat lors de la connexion au serveur SMTP. Vérifiez le paramètre SSL/TLS et le port (465 utilise SSL implicite, 587 utilise STARTTLS).",
+    smtp_error_connection_failed:
+      "Impossible de se connecter au serveur SMTP. Vérifiez l'hôte, le port et le réseau.",
+    smtp_error_submission_failed:
+      "Le serveur SMTP a rejeté l'envoi du message.",
+    smtp_error_unknown:
+      "L'e-mail n'a pas pu être envoyé pour une raison inconnue. La réponse du serveur est affichée ci-dessous.",
+    identity_missing_smtp_username:
+      "Un nom d'utilisateur SMTP est requis pour ce service.",
+    identity_from_invalid:
+      "L'adresse From n'est pas une adresse e-mail valide.",
+    identity_reply_to_invalid:
+      "L'adresse de réponse n'est pas une adresse e-mail valide.",
+    identity_changed_after_approval:
+      "L'identité d'envoi (nom d'utilisateur SMTP, From ou réponse) a changé après approbation. Une nouvelle révision est requise avant l'envoi.",
+    identity_import_password_required:
+      "Un mot de passe est requis pour importer cette ligne de service de messagerie.",
+    identity_header_break_forbidden:
+      "Les sauts de ligne ne sont pas autorisés dans ce champ.",
+    import_dialog_title: "Importer des services e-mail",
+    import_dialog_hint:
+      "Téléchargez le modèle CSV, renseignez vos services (mot de passe requis pour les nouveaux services), puis sélectionnez le fichier à importer.",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "L'approbation d'envoi ne correspond pas à ce brouillon. Approuvez à nouveau la réponse.",
+    approval_stale:
+      "La réponse a été modifiée après approbation. Révisez-la et approuvez-la à nouveau.",
+    hash_mismatch:
+      "Le contenu approuvé de la réponse ne correspond plus. Révisez-la et approuvez-la à nouveau.",
+    revision_hash_mismatch:
+      "La révision de la réponse ne correspond plus à l'enveloppe approuvée. Révisez-la et approuvez-la à nouveau.",
+    mailbox_mismatch:
+      "Le brouillon de réponse, le message d'origine et le service de messagerie ne partagent pas la même boîte.",
+    service_inactive:
+      "Le service de messagerie de cette réponse est désactivé. Activez-le et réessayez.",
+    service_missing:
+      "Le service de messagerie de cette réponse est introuvable. Resélectionnez le service dans le brouillon.",
+    sender_mismatch:
+      "L'adresse From a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    recipient_mismatch:
+      "Le destinataire ne correspond plus à l'expéditeur d'origine ou à son adresse de réponse.",
+    smtp_username_mismatch:
+      "Le nom d'utilisateur SMTP a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    reply_to_mismatch:
+      "L'adresse de réponse a changé après approbation. Révisez et approuvez à nouveau la réponse.",
+    legacy_reply_identity_requires_review:
+      "L'identité du service de messagerie a changé après la création de cette approbation. Révisez et approuvez à nouveau la réponse.",
   },
   buckemailsend: {
     email_source: "Email Source",
@@ -1322,6 +1392,10 @@ export default {
     draft_id: "id de brouillon",
     revision_id: "id de révision",
     attempt_id: "id de tentative d’envoi",
+    from_address: "adresse From",
+    email_service: "service de messagerie",
+    smtp_username: "utilisateur SMTP",
+    reply_to: "adresse de réponse",
     detail_not_found: "Enregistrement du journal d’envoi introuvable",
   },
   socialaccount: {
@@ -1740,6 +1814,9 @@ export default {
     ai_message_task_model: "Modèle IA",
     ai_message_task_model_hint:
       "'Auto' utilise le modèle par défaut du serveur. Choisissez un modèle spécifique pour remplacer.",
+    ai_message_task_workspace_path: "Chemin de l'espace de travail",
+    ai_message_task_workspace_path_hint:
+      "Dossier absolu utilisé comme espace de travail par le message IA planifié",
     ai_message_task_allowed_tools: "Outils autorisés",
     ai_message_task_allowed_tools_hint:
       "Sélectionnez les outils intégrés que l'IA peut utiliser",
@@ -2459,6 +2536,8 @@ export default {
       hide_content: "Masquer le contenu collé",
       removed: "Contenu collé supprimé",
       loading: "Chargement du contenu collé...",
+      missing_contents:
+        "Le texte collé n'est plus disponible. Veuillez le coller à nouveau.",
     },
     goalLoop: {
       objectiveRequired: "Indique un objectif. Utilisation : /goal <objectif>",
@@ -2616,6 +2695,9 @@ export default {
       "Le raisonnement n'est pas disponible pour ce modèle.",
     copy_reasoning: "Copier le raisonnement",
     reasoning_copied: "Raisonnement copié",
+    copy_message: "Copier le message",
+    copied: "Copié",
+    copy_message_aria: "Copier cette réponse de l'IA",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
     empty_description:
@@ -2683,6 +2765,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_requested_scheduled:
+      "Une tâche planifiée demande l'autorisation d'utiliser un outil. Examinez et approuvez ou refusez.",
     auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
     quota_exhausted:
       "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
@@ -2875,6 +2959,64 @@ export default {
     status_rejected: "Rejeté",
     status_completed: "Terminé",
     status_cancelled: "Annulé",
+  },
+  aiChatHistory: {
+    drawer_title: "Historique de conversation",
+    close: "Fermer l'historique",
+    tab_browse: "Parcourir",
+    tab_search: "Rechercher",
+    search_button: "Rechercher",
+    search_placeholder: "Rechercher dans l'historique archivé…",
+    search_query_too_long: "La recherche ne doit pas dépasser 200 caractères.",
+    no_match: "Aucun message correspondant trouvé.",
+    partial_scan:
+      "Affichage partiel des résultats — l'analyse complète n'est pas terminée.",
+    index_incomplete:
+      "L'indexation de l'historique est en cours ; les résultats peuvent être incomplets.",
+    read_more: "Lire la suite",
+    go_to_message: "Aller au message",
+    select_passage: "Sélectionner le passage",
+    selected_context: "Contexte sélectionné",
+    estimated_cost: "Coût estimé : {tokens} tokens",
+    clear_selections: "Effacer la sélection",
+    source_changed:
+      "Ce passage a été modifié depuis la sélection et a été actualisé.",
+    source_unavailable: "Ce passage n'est plus disponible.",
+    scope_invalid: "Portée de l'historique invalide. Veuillez réessayer.",
+    load_error: "Échec du chargement de l'historique. {message}",
+    empty: "Aucun historique archivé pour cette conversation.",
+  },
+  aiChatCompaction: {
+    status_idle: "Inactif",
+    status_queued: "En file",
+    status_running: "Compactage…",
+    status_joined: "Rejoint",
+    status_paused: "En pause",
+    status_completed: "Compacté",
+    status_failed: "Échec du compactage",
+    status_cancelled: "Annulé",
+    panel_title: "Compactage",
+    in_progress_note:
+      "Traitement par lots limités — vous pouvez continuer à discuter.",
+    view_history: "Voir les messages précédents",
+    completed_detail:
+      "Les messages précédents restent consultables. La vue active conserve les tours récents et un aperçu limité.",
+    failed_detail:
+      "Le compactage s'est arrêté sur une erreur. Votre conversation est intacte — réessayez quand vous voulez.",
+    cancelled_detail:
+      "Compactage annulé. Les sections enregistrées sont conservées pour la prochaine exécution.",
+    joined_detail: "Compactage déjà en cours rejoint pour cette conversation.",
+    running_detail:
+      "Compactage de l'historique précédent par sections limitées.",
+    idle_detail: "Le compactage est inactif.",
+    compaction_in_progress:
+      "Compactage en cours ({packed} sections empaquetées).",
+    compaction_paused: "Compactage en pause. Il reprendra automatiquement.",
+    compaction_start_failed: "Échec du démarrage du compactage.",
+    compaction_failed: "Échec du compactage : {message}",
+    compaction_retry: "Réessayer",
+    compaction_cancel: "Annuler le compactage",
+    cancel_failed: "Impossible d'annuler le compactage. {message}",
   },
   subagents: {
     title: "Sous-agents",

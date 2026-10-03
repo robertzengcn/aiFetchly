@@ -4,7 +4,13 @@ export type AIChatSessionMemoryStatus =
   | "failed"
   | "disabled";
 
-export type AIChatCompactSummaryStatus = "active" | "superseded" | "failed";
+export type AIChatCompactSummaryStatus =
+  | "active"
+  | "superseded"
+  | "failed"
+  | "paused"
+  | "joined"
+  | "cancelled";
 
 /** Serializer-friendly view used by modules, services, and IPC. */
 export interface AIChatSessionMemoryView {

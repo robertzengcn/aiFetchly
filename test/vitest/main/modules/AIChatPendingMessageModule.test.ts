@@ -6,21 +6,27 @@ const attachmentGetByMessageId = vi.fn().mockResolvedValue([]);
 const attachmentDeleteByConversation = vi.fn().mockResolvedValue(0);
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn(function TokenMock() {
+      return { getValue: vi.fn() };
+    }),
 }));
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn(function AIChatV2ModuleMock() {
+      return {
     createConversationIfNeeded: (existing?: string) =>
       existing && existing.startsWith("v2-") ? existing : "v2-created",
-  })),
+      };
+    }),
 }));
 vi.mock("@/modules/AIChatAttachmentModule", () => ({
-  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
+  AIChatAttachmentModule: vi.fn(function AIChatAttachmentModuleMock() {
+      return {
     saveUploadedFiles: attachmentSave,
     deleteByMessageId: attachmentDeleteByMessageId,
     deleteByConversation: attachmentDeleteByConversation,
     getByMessageId: attachmentGetByMessageId,
-  })),
+      };
+    }),
 }));
 
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";

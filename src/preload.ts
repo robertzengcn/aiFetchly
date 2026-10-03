@@ -234,6 +234,7 @@ import {
   AI_CHAT_CONVERSATIONS,
   AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+  AI_CHAT_V2_DENY_TOOL_PERMISSION,
   AI_KEYWORDS_GENERATE,
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
@@ -267,7 +268,6 @@ import {
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
-  AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_PLAN_STATE,
   AI_CHAT_V2_ANSWER_QUESTION,
   AI_CHAT_V2_APPROVE_PLAN,
@@ -289,6 +289,16 @@ import {
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
   AI_CHAT_V2_AUTO_COMPACTED,
+  // AiChatV2 Recoverable History Channels (technical-design §13)
+  AI_CHAT_V2_HISTORY_SEARCH,
+  AI_CHAT_V2_HISTORY_READ,
+  AI_CHAT_V2_HISTORY_BROWSE,
+  AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+  AI_CHAT_V2_HISTORY_UI_ENABLED,
+  AI_CHAT_V2_COMPACTION_STATUS,
+  AI_CHAT_V2_COMPACTION_CANCEL,
+  AI_CHAT_V2_COMPACTION_START,
+  AI_CHAT_V2_COMPACTION_PROGRESS,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -721,6 +731,8 @@ contextBridge.exposeInMainWorld("api", {
       // Application lifecycle events (main -> renderer, design §10)
       APPLICATION_CLOSE_CHOICE_REQUEST,
       APPLICATION_LIFECYCLE_STATE_CHANGED,
+      // Incremental compaction run progress broadcast (§13.1)
+      AI_CHAT_V2_COMPACTION_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -799,6 +811,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_SCHEDULED_STREAM,
       // Auto full-compact broadcast (context badge reset)
       AI_CHAT_V2_AUTO_COMPACTED,
+      // Incremental compaction run progress broadcast (§13.1)
+      AI_CHAT_V2_COMPACTION_PROGRESS,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
       // Managed Browser events (main -> renderer, design §22)
@@ -867,6 +881,8 @@ contextBridge.exposeInMainWorld("api", {
       // Application lifecycle events (main -> renderer, design §10)
       APPLICATION_CLOSE_CHOICE_REQUEST,
       APPLICATION_LIFECYCLE_STATE_CHANGED,
+      // Incremental compaction run progress broadcast (§13.1)
+      AI_CHAT_V2_COMPACTION_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -1090,7 +1106,6 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_PENDING_RESUME,
       AI_CHAT_V2_CLEAR_CONVERSATION,
       AI_CHAT_V2_CLEAR_ALL,
-      AI_CHAT_V2_COMPACT_CONVERSATION,
       AI_CHAT_WORKSPACE_BOOTSTRAP,
       AI_CHAT_WORKSPACE_SELECT,
       AI_CHAT_WORKSPACE_START_RUN,
@@ -1106,6 +1121,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_WORKSPACE_SET_FLAG,
       AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
       AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
+      AI_CHAT_V2_DENY_TOOL_PERMISSION,
       AI_CHAT_V2_PLAN_STATE,
       AI_CHAT_V2_ANSWER_QUESTION,
       AI_CHAT_V2_APPROVE_PLAN,
@@ -1126,6 +1142,15 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+      // AiChatV2 Recoverable History Channels (technical-design §13)
+      AI_CHAT_V2_HISTORY_SEARCH,
+      AI_CHAT_V2_HISTORY_READ,
+      AI_CHAT_V2_HISTORY_BROWSE,
+      AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
+      AI_CHAT_V2_HISTORY_UI_ENABLED,
+      AI_CHAT_V2_COMPACTION_STATUS,
+      AI_CHAT_V2_COMPACTION_CANCEL,
+      AI_CHAT_V2_COMPACTION_START,
       // AiChatV2 Local Voice Channels (all request/response invoke handlers)
       AI_CHAT_V2_VOICE_STATUS,
       AI_CHAT_V2_VOICE_TRANSCRIBE,

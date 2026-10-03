@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   getEmailServiceList: vi.fn(),
   deleteEmailService: vi.fn(),
   exportEmailServices: vi.fn(),
+  importEmailServices: vi.fn(),
 }));
 
 vi.mock("@/views/api/emailservice", () => ({
@@ -18,9 +19,12 @@ vi.mock("@/views/api/emailservice", () => ({
     apiMocks.deleteEmailService(...args),
   exportEmailServices: (...args: unknown[]) =>
     apiMocks.exportEmailServices(...args),
+  importEmailServices: (...args: unknown[]) =>
+    apiMocks.importEmailServices(...args),
 }));
 
 // Stub vue-router's useRouter — component pushes routes on edit/create.
+// (Hoisted mocks are required so navigation tests can assert push calls.)
 const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push: routerMocks.push }),
@@ -38,6 +42,14 @@ const i18n = createI18n({
         export_success: "Export successful",
         export_failed: "Export failed",
         export_cancelled: "Export cancelled",
+        import: "Import",
+        import_success: "Import successful",
+        import_partial: "Imported {imported}, skipped {skipped} invalid rows",
+        import_partial_skipped: ": {errors}",
+        import_cancelled: "Import cancelled",
+        import_failed: "Import failed",
+        import_no_valid_rows: "No valid services found in file",
+        import_invalid_file: "Invalid file format",
         actions: "Actions",
         created_time: "created time",
       },
@@ -80,6 +92,13 @@ const stubs = {
   },
   VIcon: true,
   DeleteDialog: true,
+  EmailServiceImportDialog: {
+    name: "EmailServiceImportDialog",
+    props: ["modelValue"],
+    emits: ["update:modelValue", "imported"],
+    template:
+      '<div data-testid="email-service-import-dialog" v-if="modelValue" />',
+  },
   NoticeSnackbar: {
     props: ["modelValue", "message", "type"],
     emits: ["update:modelValue"],
@@ -170,6 +189,64 @@ describe("EmailServiceTable export", () => {
       const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
       expect(snackbar.exists()).toBe(true);
       expect(snackbar.attributes("data-message")).toContain("disk full");
+    });
+  });
+});
+
+describe("EmailServiceTable import", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
+  });
+
+  it("renders an import button (standalone list mode)", () => {
+    const wrapper = mountTable();
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(true);
+  });
+
+  it("hides the import button in selection mode (isSelectedtable=true)", () => {
+    const wrapper = mountTable({ isSelectedtable: true });
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(false);
+  });
+
+  it("opens the import dialog instead of calling the import IPC directly", async () => {
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+
+    await vi.waitFor(() => {
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
+    });
+    expect(apiMocks.importEmailServices).not.toHaveBeenCalled();
+  });
+
+  it("reloads the list when the dialog reports an import", async () => {
+    const wrapper = mountTable();
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
+    });
+
+    const callsBefore = apiMocks.getEmailServiceList.mock.calls.length;
+    await wrapper
+      .findComponent({ name: "EmailServiceImportDialog" })
+      .vm.$emit("imported");
+    await vi.waitFor(() => {
+      expect(apiMocks.getEmailServiceList.mock.calls.length).toBeGreaterThan(
+        callsBefore
+      );
     });
   });
 });

@@ -60,6 +60,13 @@ export default {
     log_content: "log content",
     optional: "optional",
     import: "Import",
+    import_success: "Import successful",
+    import_partial: "Imported {imported}, skipped {skipped} invalid rows",
+    import_partial_skipped: ": {errors}",
+    import_cancelled: "Import cancelled",
+    import_failed: "Import failed",
+    import_no_valid_rows: "No valid services found in file",
+    import_invalid_file: "Invalid file format",
     export: "Export",
     clear_filters: "Clear Filters",
     columns: "Columns",
@@ -74,6 +81,7 @@ export default {
     export_cancelled: "Export cancelled",
     exporting: "Exporting...",
     download_template: "Download Template",
+    select_file_import: "Select file and import",
     drag_drop_file: "Drag and drop your file here or click to select file",
     search: "Search",
     replace: "Replace",
@@ -1249,8 +1257,14 @@ export default {
   },
   emailservice: {
     id: "id",
-    from: "sender account",
-    from_hint: "input email sender account",
+    smtp_username: "SMTP username",
+    smtp_username_hint:
+      "The mailbox account used to sign in to your SMTP server.",
+    reply_to: "Reply-To",
+    reply_to_hint: "Replies go here. Leave empty to reply to the From address.",
+    from: "From",
+    from_hint:
+      "The address recipients see. It must be allowed by your email provider.",
     password: "password",
     password_hint: "input email password",
     host: "SMTP Host",
@@ -1278,6 +1292,70 @@ export default {
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
     required_fields_missing: "Please fill in all required fields",
+    // §19.2 SMTP failure categories — distinct, localized messages so the
+    // Test Email dialog and reply send show actionable guidance instead of
+    // raw provider text. From-alias rejection tells the user to verify the
+    // alias with their email provider (PRD §15); auth/recipient/TLS/connection
+    // are NOT treated as alias issues.
+    smtp_error_auth_failed:
+      "SMTP authentication failed. Check the SMTP username and password for this service.",
+    smtp_error_from_rejected:
+      "The From address was rejected by your email provider. Verify this alias is allowed to send on this login.",
+    smtp_error_recipient_rejected:
+      "The recipient address was rejected by the email provider.",
+    smtp_error_tls_failed:
+      "TLS or certificate error connecting to the SMTP server. Check the SSL/TLS setting and port (465 uses implicit SSL, 587 uses STARTTLS).",
+    smtp_error_connection_failed:
+      "Could not connect to the SMTP server. Check the host, port, and network.",
+    smtp_error_submission_failed:
+      "The SMTP server rejected the message submission.",
+    smtp_error_unknown:
+      "The email could not be sent for an unknown reason. The server response is shown below.",
+    // §15 identity validation and approval categories — distinct from the
+    // SMTP transport codes above. These surface validation/approval outcomes
+    // rather than provider responses.
+    identity_missing_smtp_username:
+      "An SMTP username is required for this service.",
+    identity_from_invalid: "The From address is not a valid email address.",
+    identity_reply_to_invalid:
+      "The Reply-To address is not a valid email address.",
+    identity_changed_after_approval:
+      "The send identity (SMTP username, From, or Reply-To) changed after approval. Re-review is required before sending.",
+    identity_import_password_required:
+      "A password is required to import this email service row.",
+    identity_header_break_forbidden:
+      "Line breaks are not allowed in this field.",
+    import_dialog_title: "Import email services",
+    import_dialog_hint:
+      "Download the CSV template, fill in your services (password is required for new services), then select the file to import.",
+  },
+  // Approved-reply send binding failures (P1.2, FR-013). Distinct messages so
+  // the user can tell exactly which binding check failed.
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "The send approval does not match this draft. Approve the reply again.",
+    approval_stale:
+      "The reply was edited after approval. Review and approve it again.",
+    hash_mismatch:
+      "The approved reply content no longer matches. Review and approve it again.",
+    revision_hash_mismatch:
+      "The reply revision no longer matches the approved envelope. Review and approve it again.",
+    mailbox_mismatch:
+      "The reply draft, original message, and email service do not share one mailbox.",
+    service_inactive:
+      "The email service for this reply is disabled. Enable it and try again.",
+    service_missing:
+      "The email service for this reply could not be found. Re-select the service in the draft.",
+    sender_mismatch:
+      "The From address changed after approval. Review and approve the reply again.",
+    recipient_mismatch:
+      "The recipient no longer matches the original sender or their Reply-To address.",
+    smtp_username_mismatch:
+      "The SMTP username changed after approval. Review and approve the reply again.",
+    reply_to_mismatch:
+      "The Reply-To address changed after approval. Review and approve the reply again.",
+    legacy_reply_identity_requires_review:
+      "The email service identity changed after this approval was created. Review and approve the reply again.",
   },
   buckemailsend: {
     email_source: "Email Source",
@@ -1332,6 +1410,10 @@ export default {
     draft_id: "draft id",
     revision_id: "revision id",
     attempt_id: "send attempt id",
+    from_address: "From address",
+    email_service: "email service",
+    smtp_username: "SMTP username",
+    reply_to: "Reply-To",
     detail_not_found: "Send log record not found",
   },
   socialaccount: {
@@ -1937,6 +2019,9 @@ export default {
     ai_message_task_model: "AI Model",
     ai_message_task_model_hint:
       "'Auto' uses the server's default model. Choose a specific model to override.",
+    ai_message_task_workspace_path: "Workspace Path",
+    ai_message_task_workspace_path_hint:
+      "Absolute folder the scheduled AI message uses as its workspace",
     ai_message_task_allowed_tools: "Allowed Tools",
     ai_message_task_allowed_tools_hint:
       "Select built-in tools the AI can use during unattended runs",
@@ -2459,6 +2544,8 @@ export default {
       hide_content: "Hide pasted content",
       removed: "Removed pasted content",
       loading: "Loading pasted content...",
+      missing_contents:
+        "Pasted text is no longer available. Please paste it again.",
     },
     goalLoop: {
       objectiveRequired:
@@ -2610,6 +2697,9 @@ export default {
     reasoning_unavailable: "Reasoning is not available for this model.",
     copy_reasoning: "Copy reasoning",
     reasoning_copied: "Reasoning copied",
+    copy_message: "Copy message",
+    copied: "Copied",
+    copy_message_aria: "Copy this AI response",
     new_conversation: "New conversation",
     empty_title: "Start a conversation",
     empty_description: "Ask anything. Your history stays on this device.",
@@ -2675,6 +2765,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    permission_requested_scheduled:
+      "A scheduled task is asking for permission to use a tool. Review and approve or deny it.",
     auth_expired: "Your session has expired. Please sign in again.",
     quota_exhausted:
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
@@ -2864,6 +2956,61 @@ export default {
     status_rejected: "Rejected",
     status_completed: "Completed",
     status_cancelled: "Cancelled",
+  },
+  aiChatHistory: {
+    drawer_title: "Conversation History",
+    close: "Close history",
+    tab_browse: "Browse",
+    tab_search: "Search",
+    search_button: "Search",
+    search_placeholder: "Search archived history…",
+    search_query_too_long: "Search query must be 200 characters or fewer.",
+    no_match: "No matching messages found.",
+    partial_scan: "Showing partial results — the full scan is not complete.",
+    index_incomplete:
+      "History indexing is still in progress; results may be incomplete.",
+    read_more: "Read more",
+    go_to_message: "Go to message",
+    select_passage: "Select passage",
+    selected_context: "Selected context",
+    estimated_cost: "Estimated cost: {tokens} tokens",
+    clear_selections: "Clear selections",
+    source_changed: "This passage changed since selection and was refreshed.",
+    source_unavailable: "This passage is no longer available.",
+    scope_invalid: "Invalid history scope. Please retry.",
+    load_error: "Failed to load history. {message}",
+    empty: "No archived history yet for this conversation.",
+  },
+  aiChatCompaction: {
+    status_idle: "Idle",
+    status_queued: "Queued",
+    status_running: "Compacting…",
+    status_joined: "Joined",
+    status_paused: "Paused",
+    status_completed: "Compacted",
+    status_failed: "Compaction failed",
+    status_cancelled: "Cancelled",
+    panel_title: "Compaction",
+    in_progress_note: "Working in bounded batches — safe to keep chatting.",
+    view_history: "View earlier messages",
+    completed_detail:
+      "Earlier messages remain searchable. The active view keeps recent turns plus a bounded overview.",
+    failed_detail:
+      "Compaction stopped with an error. Your conversation is intact — retry when ready.",
+    cancelled_detail:
+      "Compaction was cancelled. Saved sections are kept for the next run.",
+    joined_detail:
+      "Joined an already-running compaction for this conversation.",
+    running_detail: "Compacting earlier history in bounded sections.",
+    idle_detail: "Compaction is idle.",
+    compaction_in_progress:
+      "Compaction in progress ({packed} sections packed).",
+    compaction_paused: "Compaction paused. It will resume automatically.",
+    compaction_start_failed: "Compaction failed to start.",
+    compaction_failed: "Compaction failed: {message}",
+    compaction_retry: "Retry",
+    compaction_cancel: "Cancel compaction",
+    cancel_failed: "Could not cancel compaction. {message}",
   },
   subagents: {
     title: "Subagents",

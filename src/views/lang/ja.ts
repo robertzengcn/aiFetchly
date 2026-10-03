@@ -61,6 +61,13 @@ export default {
     log_content: "ログ内容",
     optional: "任意",
     import: "インポート",
+    import_success: "インポート成功",
+    import_partial: "{imported}件インポート、{skipped}件の無効な行をスキップ",
+    import_partial_skipped: "：{errors}",
+    import_cancelled: "インポートはキャンセルされました",
+    import_failed: "インポート失敗",
+    import_no_valid_rows: "ファイルに有効なメールサービスが見つかりません",
+    import_invalid_file: "無効なファイル形式",
     export: "エクスポート",
     clear_filters: "フィルターをクリア",
     columns: "列",
@@ -74,6 +81,7 @@ export default {
     export_cancelled: "エクスポートをキャンセルしました",
     exporting: "エクスポート中...",
     download_template: "テンプレートをダウンロード",
+    select_file_import: "ファイルを選択してインポート",
     drag_drop_file:
       "ここにファイルをドラッグ＆ドロップするか、クリックして選択してください",
     search: "市場インサイト",
@@ -1228,8 +1236,14 @@ export default {
   },
   emailservice: {
     id: "ID",
-    from: "送信者アカウント",
-    from_hint: "メール送信者アカウントを入力",
+    smtp_username: "SMTPユーザー名",
+    smtp_username_hint: "SMTPサーバーへのログインに使用するメールアカウント。",
+    reply_to: "返信先",
+    reply_to_hint:
+      "返信はここに送信されます。空欄の場合はFromアドレスに返信します。",
+    from: "From",
+    from_hint:
+      "受信者が表示するアドレス。メールプロバイダーで送信が許可されている必要があります。",
     password: "パスワード",
     password_hint: "メールパスワードを入力",
     host: "SMTP ホスト",
@@ -1256,6 +1270,59 @@ export default {
     send_test_email_error: "テストメール送信エラー",
     email_send_success: "メール送信成功",
     required_fields_missing: "すべての必須項目を入力してください",
+    smtp_error_auth_failed:
+      "SMTP認証に失敗しました。このサービスのSMTPユーザー名とパスワードを確認してください。",
+    smtp_error_from_rejected:
+      "Fromアドレスがメールプロバイダーによって拒否されました。このログインでこのエイリアスの送信が許可されていることを確認してください。",
+    smtp_error_recipient_rejected:
+      "受信者アドレスがメールプロバイダーによって拒否されました。",
+    smtp_error_tls_failed:
+      "SMTPサーバーへの接続でTLSまたは証明書エラーが発生しました。SSL/TLS設定とポートを確認してください（465は暗黙的SSL、587はSTARTTLSを使用）。",
+    smtp_error_connection_failed:
+      "SMTPサーバーに接続できませんでした。ホスト、ポート、ネットワークを確認してください。",
+    smtp_error_submission_failed:
+      "SMTPサーバーがメッセージの送信を拒否しました。",
+    smtp_error_unknown:
+      "不明な理由によりメールを送信できませんでした。サーバーの応答を以下に示します。",
+    identity_missing_smtp_username:
+      "このサービスにはSMTPユーザー名が必要です。",
+    identity_from_invalid: "Fromアドレスが有効なメールアドレスではありません。",
+    identity_reply_to_invalid:
+      "返信先アドレスが有効なメールアドレスではありません。",
+    identity_changed_after_approval:
+      "承認後に送信 identity（SMTPユーザー名・From・返信先）が変更されました。送信前に再確認が必要です。",
+    identity_import_password_required:
+      "このメールサービス行をインポートするにはパスワードが必要です。",
+    identity_header_break_forbidden: "このフィールドに改行は使用できません。",
+    import_dialog_title: "メールサービスをインポート",
+    import_dialog_hint:
+      "CSVテンプレートをダウンロードしてサービス情報を入力し（新規サービスにはパスワードが必須）、ファイルを選択してインポートしてください。",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "送信承認がこの下書きと一致しません。返信を再度承認してください。",
+    approval_stale:
+      "返信は承認後に編集されました。再確認して再度承認してください。",
+    hash_mismatch:
+      "承認された返信の内容が一致しなくなりました。再確認して再度承認してください。",
+    revision_hash_mismatch:
+      "返信リビジョンが承認済みエンベロープと一致しなくなりました。再確認して再度承認してください。",
+    mailbox_mismatch:
+      "返信下書き・元メッセージ・メールサービスが同じメールボックスを共有していません。",
+    service_inactive:
+      "この返信のメールサービスは無効です。有効にして再試行してください。",
+    service_missing:
+      "この返信のメールサービスが見つかりません。下書きでサービスを再選択してください。",
+    sender_mismatch:
+      "承認後にFromアドレスが変更されました。再確認して返信を再度承認してください。",
+    recipient_mismatch:
+      "受信者が元の差出人またはその返信先アドレスと一致しなくなりました。",
+    smtp_username_mismatch:
+      "承認後にSMTPユーザー名が変更されました。再確認して返信を再度承認してください。",
+    reply_to_mismatch:
+      "承認後に返信先アドレスが変更されました。再確認して返信を再度承認してください。",
+    legacy_reply_identity_requires_review:
+      "この承認の作成後にメールサービスの identity が変更されました。返信を再確認して再度承認してください。",
   },
   buckemailsend: {
     email_source: "メールソース",
@@ -1310,6 +1377,10 @@ export default {
     draft_id: "ドラフトID",
     revision_id: "リビジョンID",
     attempt_id: "送信試行ID",
+    from_address: "差出人アドレス",
+    email_service: "メールサービス",
+    smtp_username: "SMTPユーザー名",
+    reply_to: "返信先アドレス",
     detail_not_found: "送信ログ記録が見つかりません",
   },
   socialaccount: {
@@ -1898,6 +1969,9 @@ export default {
     ai_message_task_model: "AIモデル",
     ai_message_task_model_hint:
       "「自動」はサーバーのデフォルトモデルを使用します。特定のモデルを選択で上書きできます。",
+    ai_message_task_workspace_path: "ワークスペースのパス",
+    ai_message_task_workspace_path_hint:
+      "スケジュールされた AI メッセージがワークスペースとして使う絶対フォルダ",
     ai_message_task_allowed_tools: "許可されたツール",
     ai_message_task_allowed_tools_hint:
       "無人実行中にAIが使用できる組み込みツールを選択",
@@ -2423,6 +2497,8 @@ export default {
       hide_content: "貼り付け内容を隠す",
       removed: "貼り付け内容を削除",
       loading: "貼り付け内容を読み込み中...",
+      missing_contents:
+        "貼り付けたテキストはもう利用できません。もう一度貼り付けてください。",
     },
     goalLoop: {
       objectiveRequired: "目標を入力してください。使い方: /goal <目標>",
@@ -2575,6 +2651,9 @@ export default {
     reasoning_unavailable: "このモデルでは推論を利用できません。",
     copy_reasoning: "推論をコピー",
     reasoning_copied: "推論をコピーしました",
+    copy_message: "メッセージをコピー",
+    copied: "コピーしました",
+    copy_message_aria: "この AI の返信をコピー",
     new_conversation: "新しい会話",
     empty_title: "会話を始める",
     empty_description: "何でも聞いてください。履歴はこの端末に保存されます。",
@@ -2638,6 +2717,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    permission_requested_scheduled:
+      "スケジュールされたタスクがツールの使用許可を要求しています。確認して承認または拒否してください。",
     auth_expired:
       "セッションの有効期限が切れました。もう一度サインインしてください。",
     quota_exhausted:
@@ -2828,6 +2909,59 @@ export default {
     status_rejected: "拒否済み",
     status_completed: "完了",
     status_cancelled: "キャンセル済み",
+  },
+  aiChatHistory: {
+    drawer_title: "会話履歴",
+    close: "履歴を閉じる",
+    tab_browse: "閲覧",
+    tab_search: "検索",
+    search_button: "検索",
+    search_placeholder: "アーカイブ履歴を検索…",
+    search_query_too_long: "検索クエリは200文字以下にしてください。",
+    no_match: "一致するメッセージが見つかりませんでした。",
+    partial_scan: "部分結果を表示中 — 完全なスキャンは未完了です。",
+    index_incomplete:
+      "履歴のインデックス作成中です。結果が不完全な場合があります。",
+    read_more: "続きを読む",
+    go_to_message: "メッセージに移動",
+    select_passage: "一節を選択",
+    selected_context: "選択したコンテキスト",
+    estimated_cost: "推定コスト: {tokens} トークン",
+    clear_selections: "選択をクリア",
+    source_changed: "この一節は選択後に変更されたため更新されました。",
+    source_unavailable: "この一節は利用できなくなりました。",
+    scope_invalid: "履歴スコープが無効です。再試行してください。",
+    load_error: "履歴の読み込みに失敗しました。{message}",
+    empty: "この会話にはまだアーカイブ履歴がありません。",
+  },
+  aiChatCompaction: {
+    status_idle: "アイドル",
+    status_queued: "キュー済み",
+    status_running: "圧縮中…",
+    status_joined: "参加中",
+    status_paused: "一時停止",
+    status_completed: "圧縮済み",
+    status_failed: "圧縮失敗",
+    status_cancelled: "キャンセル済み",
+    panel_title: "圧縮",
+    in_progress_note: "制限付きバッチで処理中 — チャットを続けられます。",
+    view_history: "以前のメッセージを見る",
+    completed_detail:
+      "以前のメッセージは引き続き検索可能です。アクティブビューは最新のターンと制限付き概要を保持します。",
+    failed_detail:
+      "圧縮はエラーで停止しました。会話は無事です — 後で再試行してください。",
+    cancelled_detail:
+      "圧縮をキャンセルしました。保存済みセクションは次回に引き継がれます。",
+    joined_detail: "この会話で実行中の圧縮に参加しました。",
+    running_detail: "以前の履歴を制限付きセクションで圧縮しています。",
+    idle_detail: "圧縮はアイドル状態です。",
+    compaction_in_progress: "圧縮進行中（{packed} セクション圧縮済み）。",
+    compaction_paused: "圧縮が一時停止されました。自動的に再開されます。",
+    compaction_start_failed: "圧縮を開始できませんでした。",
+    compaction_failed: "圧縮失敗: {message}",
+    compaction_retry: "再試行",
+    compaction_cancel: "圧縮をキャンセル",
+    cancel_failed: "圧縮をキャンセルできませんでした。{message}",
   },
   subagents: {
     title: "サブエージェント",

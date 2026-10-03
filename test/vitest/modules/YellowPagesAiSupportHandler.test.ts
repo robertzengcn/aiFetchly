@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import {
   YellowPagesAiSupportHandler,
-  AiSupportErrorCode,
 } from "@/modules/YellowPagesAiSupportHandler";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import type { UtilityProcess } from "electron";
@@ -13,22 +12,28 @@ vi.mock("electron", () => ({
   },
 }));
 
-// Mock Token service
+// Mock Token service (vitest 4: `new Token()` needs a constructable mock,
+// so the implementation uses `function`, not an arrow function).
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn((key: string) => {
-      if (key === "USER_AI_ENABLED") return "true";
-      return "";
-    }),
-  })),
+  Token: vi.fn().mockImplementation(function (this: unknown) {
+    return {
+      getValue: vi.fn((key: string) => {
+        if (key === "USER_AI_ENABLED") return "true";
+        return "";
+      }),
+    };
+  }),
 }));
 
-// Mock AiChatApi
+// Mock AiChatApi (vitest 4: mock must stay constructable for `new AiChatApi()`,
+// so the implementation uses `function`, not an arrow function).
 vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
-    extractContactInfo: vi.fn(),
-    scrapeAssist: vi.fn(),
-  })),
+  AiChatApi: vi.fn().mockImplementation(function (this: unknown) {
+    return {
+      extractContactInfo: vi.fn(),
+      scrapeAssist: vi.fn(),
+    };
+  }),
 }));
 
 // Mock WriteLog
@@ -39,7 +44,7 @@ vi.mock("@/modules/lib/function", () => ({
 describe("YellowPagesAiSupportHandler", () => {
   let handler: YellowPagesAiSupportHandler;
   let mockChildProcess: Partial<UtilityProcess>;
-  let mockPostMessage: ReturnType<typeof vi.fn>;
+  let mockPostMessage: Mock;
 
   beforeEach(() => {
     // Reset all mocks
@@ -64,7 +69,10 @@ describe("YellowPagesAiSupportHandler", () => {
     it("should return error when AI is not enabled", async () => {
       // Create handler that mocks AI as disabled
       const disabledHandler = new YellowPagesAiSupportHandler();
-      vi.spyOn(disabledHandler as any, "isAiEnabled").mockReturnValue(false);
+      vi.spyOn(
+        disabledHandler as unknown as { isAiEnabled: () => Promise<boolean> },
+        "isAiEnabled"
+      ).mockResolvedValue(false);
 
       const request: AiSupportRequestMessage = {
         type: "AI_SUPPORT_REQUEST",
@@ -77,7 +85,7 @@ describe("YellowPagesAiSupportHandler", () => {
 
       await disabledHandler.handleAiSupportRequest(
         request,
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
@@ -102,7 +110,7 @@ describe("YellowPagesAiSupportHandler", () => {
         pageUrl: "https://example.com",
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
@@ -121,7 +129,7 @@ describe("YellowPagesAiSupportHandler", () => {
         screenshot: "invalid-format-not-base64",
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
@@ -154,7 +162,7 @@ describe("YellowPagesAiSupportHandler", () => {
           "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
       expect(response.success).toBe(true);
@@ -190,17 +198,17 @@ describe("YellowPagesAiSupportHandler", () => {
       // First two requests should succeed (or at least not be rate limited)
       await rateLimitedHandler.handleAiSupportRequest(
         { ...request, requestId: "test-001" },
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
       await rateLimitedHandler.handleAiSupportRequest(
         { ...request, requestId: "test-002" },
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
 
       // Third request should be rate limited
       await rateLimitedHandler.handleAiSupportRequest(
         { ...request, requestId: "test-003" },
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
 
       // Check that at least one request was rate limited
@@ -240,13 +248,13 @@ describe("YellowPagesAiSupportHandler", () => {
       };
 
       // First request
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
       expect(callCount).toBe(1);
 
       // Second identical request - should use cache
       await handler.handleAiSupportRequest(
         { ...request, requestId: "test-cache-002" },
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
       expect(callCount).toBe(1); // API should not be called again
 
@@ -286,7 +294,7 @@ describe("YellowPagesAiSupportHandler", () => {
       // First request
       await shortLivedHandler.handleAiSupportRequest(
         request,
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
       expect(callCount).toBe(1);
 
@@ -296,7 +304,7 @@ describe("YellowPagesAiSupportHandler", () => {
       // Second request - cache should be expired
       await shortLivedHandler.handleAiSupportRequest(
         { ...request, requestId: "test-ttl-002" },
-        mockChildProcess as any
+        mockChildProcess as UtilityProcess
       );
       expect(callCount).toBe(2); // API should be called again
     });
@@ -329,7 +337,7 @@ describe("YellowPagesAiSupportHandler", () => {
         businessName: "Example Business",
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
@@ -361,7 +369,7 @@ describe("YellowPagesAiSupportHandler", () => {
         pageUrl: "https://example.com",
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
@@ -409,7 +417,7 @@ describe("YellowPagesAiSupportHandler", () => {
         },
       };
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
@@ -433,8 +441,12 @@ describe("YellowPagesAiSupportHandler", () => {
   describe("Cache Management", () => {
     it("should clear cache", () => {
       // Add something to cache by setting it directly
-      (handler as any).cache.set("test-key", {
-        data: { type: "AI_SUPPORT_RESPONSE" } as any,
+      (
+        handler as unknown as {
+          cache: Map<string, { data: unknown; timestamp: number }>;
+        }
+      ).cache.set("test-key", {
+        data: { type: "AI_SUPPORT_RESPONSE" },
         timestamp: Date.now(),
       });
 
@@ -447,11 +459,16 @@ describe("YellowPagesAiSupportHandler", () => {
 
     it("should reset rate limit", () => {
       // Add some timestamps
-      (handler as any).requestTimestamps = [Date.now(), Date.now() - 1000];
+      (handler as unknown as { requestTimestamps: number[] }).requestTimestamps = [
+        Date.now(),
+        Date.now() - 1000,
+      ];
 
       handler.resetRateLimit();
 
-      expect((handler as any).requestTimestamps).toEqual([]);
+      expect(
+        (handler as unknown as { requestTimestamps: number[] }).requestTimestamps
+      ).toEqual([]);
     });
   });
 
@@ -466,7 +483,7 @@ describe("YellowPagesAiSupportHandler", () => {
         pageUrl: "https://example.com",
       } as unknown as AiSupportRequestMessage;
 
-      await handler.handleAiSupportRequest(request, mockChildProcess as any);
+      await handler.handleAiSupportRequest(request, mockChildProcess as UtilityProcess);
 
       const response = JSON.parse(mockPostMessage.mock.calls[0][0]);
       expect(response.success).toBe(false);

@@ -4,6 +4,7 @@ import { expect } from "chai";
 import sinon from "sinon";
 import { EmailMarketingController } from "@/controller/emailMarketingController";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailServiceModuleInterface } from "@/modules/interface/EmailServiceModuleInterface";
 import type { EmailServiceImportResult } from "@/entityTypes/emailmarketingType";
 
@@ -113,6 +114,7 @@ describe("EmailMarketingController", () => {
       entity.name = name;
       entity.from = `user${id}@example.com`;
       entity.password = "SECRET-smtp-password";
+      entity.receivePassword = "SECRET-recv-password";
       entity.host = "smtp.example.com";
       entity.port = "465";
       entity.ssl = 1;
@@ -137,12 +139,19 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.contain(
-        "id,name,from,host,port,ssl,receiveProtocol,create_time"
+        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time"
+      );
+      // Full first data row locks the column ORDER (legacy row: effective
+      // smtpUsername === from, replyTo → empty cell, receive fields unset →
+      // empty cells except ssl defaults of 1, folder INBOX, enabled 0).
+      expect(csv).to.contain(
+        "1,Primary SMTP,user1@example.com,user1@example.com,,smtp.example.com,465,1,imap,,,1,,,1,,INBOX,0,2026-01-15T10:30:00.000Z"
       );
       expect(csv).to.contain("Primary SMTP");
       expect(csv).to.contain("user1@example.com");
       expect(csv).to.contain('"Secondary, SMTP ""quoted"""');
       expect(csv).to.not.contain("SECRET-smtp-password");
+      expect(csv).to.not.contain("SECRET-recv-password");
     });
 
     it("exports JSON with safe fields only (no password)", async () => {
@@ -158,8 +167,17 @@ describe("EmailMarketingController", () => {
 
       expect(payload.total).to.equal(1);
       expect(JSON.stringify(payload)).to.not.contain("SECRET-smtp-password");
+      expect(JSON.stringify(payload)).to.not.contain("SECRET-recv-password");
+      expect(JSON.stringify(payload)).to.not.contain('"password"');
+      expect(JSON.stringify(payload)).to.not.contain('"receivePassword"');
       // Safe fields present: the sender email is a visible list column.
       expect(JSON.stringify(payload)).to.contain("user1@example.com");
+      // New identity fields are exported. makeService leaves smtpUsername /
+      // replyTo unset (legacy row), so the resolver's fallbacks apply:
+      // effective smtpUsername === from, replyTo === null.
+      const service0 = payload.services[0] as Record<string, unknown>;
+      expect(service0.smtpUsername).to.equal("user1@example.com");
+      expect(service0.replyTo).to.equal(null);
     });
 
     it("returns a header-only CSV when there are no services", async () => {
@@ -172,10 +190,161 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.equal(
-        "id,name,from,host,port,ssl,receiveProtocol,create_time\n"
+        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time\n"
       );
     });
+
+    it("exports explicit smtpUsername and replyTo values (no fallback)", async () => {
+      // A service with explicit identity columns exports those values, not
+      // the resolver's legacy fallbacks (smtpUsername -> from, replyTo -> null).
+      const service = makeService(3, "Identity Service");
+      service.smtpUsername = "login@example.com";
+      service.replyTo = "replies@example.com";
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([service]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      expect(csv).to.contain("login@example.com");
+      expect(csv).to.contain("replies@example.com");
+
+      const payload = (await emailMarketingController.exportEmailServices(
+        "json"
+      )) as {
+        total: number;
+        services: Record<string, unknown>[];
+        exportDate: string;
+      };
+      const service0 = payload.services[0];
+      expect(service0.smtpUsername).to.equal("login@example.com");
+      expect(service0.replyTo).to.equal("replies@example.com");
+    });
+
+    it("exports explicit receive connection fields (no receivePassword)", async () => {
+      const service = makeService(5, "Receive Service");
+      service.imapHost = "imap.example.com";
+      service.imapPort = "993";
+      service.imapSsl = 0;
+      service.pop3Host = "pop3.example.com";
+      service.pop3Port = "995";
+      service.pop3Ssl = 1;
+      service.receiveUsername = "recvuser";
+      service.receiveFolder = "Archive";
+      service.receiveEnabled = 1;
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([service]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+      expect(csv).to.contain(
+        "imap.example.com,993,0,pop3.example.com,995,1,recvuser,Archive,1"
+      );
+      expect(csv).to.not.contain("SECRET-recv-password");
+
+      const payload = (await emailMarketingController.exportEmailServices(
+        "json"
+      )) as {
+        total: number;
+        services: Record<string, unknown>[];
+        exportDate: string;
+      };
+      const service0 = payload.services[0];
+      expect(service0.imapHost).to.equal("imap.example.com");
+      expect(service0.imapPort).to.equal("993");
+      expect(service0.imapSsl).to.equal(0);
+      expect(service0.pop3Host).to.equal("pop3.example.com");
+      expect(service0.receiveUsername).to.equal("recvuser");
+      expect(service0.receiveFolder).to.equal("Archive");
+      expect(service0.receiveEnabled).to.equal(1);
+      expect("receivePassword" in service0).to.equal(false);
+    });
+
+    it("exports no password key or value in either format for a password-bearing service", async () => {
+      // makeService sets a real password; neither the CSV nor the JSON export
+      // may carry it, and the JSON row must not even contain a `password` key.
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon
+          .stub()
+          .resolves([makeService(4, "Secret Service")]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+      expect(csv).to.not.contain("SECRET-smtp-password");
+      expect(csv).to.not.contain("SECRET-recv-password");
+
+      const payload = await emailMarketingController.exportEmailServices(
+        "json"
+      );
+      const serialized = JSON.stringify(payload);
+      expect(serialized).to.not.contain("SECRET-smtp-password");
+      expect(serialized).to.not.contain("SECRET-recv-password");
+      expect(serialized).to.not.contain('"password"');
+      expect(serialized).to.not.contain('"receivePassword"');
+    });
+
+    it("escapes comma/quote-bearing port, receiveProtocol, and create_time fields (Finding 9)", async () => {
+      // Finding 9: port, receiveProtocol, ssl, and create_time were emitted
+      // raw (no escapeCsvField), so a value containing a comma or quote could
+      // inject an extra CSV column. Every field now goes through the same
+      // escaper; verify the dangerous values are quoted and inner quotes
+      // doubled, and that no extra column appears.
+      const service = makeService(6, "Injection Service");
+      // port is a string column in the entity; a malicious/odd value.
+      service.port = '25,"evil"';
+      service.receiveProtocol = "IMAP,SSL" as unknown as typeof service.receiveProtocol;
+      // ssl is numeric; keep a sane value but ensure it still routes through
+      // the escaper without breaking.
+      service.ssl = 1;
+      emailMarketingController.emailServiceModule = {
+        exportEmailServicesList: sinon.stub().resolves([service]),
+      } as unknown as EmailServiceModuleInterface;
+
+      const csv = (await emailMarketingController.exportEmailServices(
+        "csv"
+      )) as string;
+
+      // port and receiveProtocol are quoted; inner quotes doubled.
+      expect(csv).to.contain('"25,""evil"""');
+      expect(csv).to.contain('"IMAP,SSL"');
+      // The bare dangerous values must NOT appear unquoted (they would
+      // inject a column). The quoted, escaped forms are the only occurrences.
+      expect(csv).to.not.contain('25,"evil"');
+      // The data row must still split into exactly 19 fields (the header
+      // count) - no injected column. Count field separators outside quotes.
+      const lines = csv.trim().split("\n");
+      expect(lines).to.have.lengthOf(2);
+      expect(countCsvFields(lines[1])).to.equal(19);
+    });
   });
+
+  /**
+   * Count RFC-4180 fields in a CSV row (commas inside quoted fields do not
+   * count as separators; doubled quote inside a quoted field is literal).
+   */
+  function countCsvFields(row: string): number {
+    let fields = 1;
+    let inQuotes = false;
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (ch === '"') {
+        if (inQuotes && row[i + 1] === '"') {
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        fields += 1;
+      }
+    }
+    return fields;
+  }
 
   describe("importEmailServices", () => {
     // Build a stubbed module with sensible defaults; individual tests override
@@ -258,9 +427,10 @@ describe("EmailMarketingController", () => {
     });
 
     it("preserves the existing receivePassword when updating by name match", async () => {
-      // Import files never carry receive credentials — the existing service's
-      // receive password must survive the update (encryptCredentialsForStorage
-      // nulls absent receivePassword values, which would wipe it).
+      // When the import row omits the receivePassword column, the existing
+      // service's receive password must survive the update
+      // (encryptCredentialsForStorage nulls absent receivePassword values,
+      // which would wipe it).
       const existing = new EmailServiceEntity();
       existing.id = 7;
       existing.name = "Primary SMTP";
@@ -287,11 +457,353 @@ describe("EmailMarketingController", () => {
       );
       // The SMTP password is still overwritten by the imported value.
       expect(update.firstCall.args[1].password).to.equal("newpass");
-      // Documented invariant: other receive fields stay undefined on update —
-      // TypeORM's changed-column diffing leaves them untouched, so the import
-      // never silently rewrites existing receive config.
-      expect(update.firstCall.args[1].receiveEnabled).to.equal(undefined);
-      expect(update.firstCall.args[1].imapHost).to.equal(undefined);
+      // Other receive fields are materialized from the existing service (not
+      // undefined) — the update always writes the merged receive config,
+      // which equals the existing service's values since this row omits all
+      // receive columns. Here `existing` has no receive fields set, so
+      // the defaults apply: receiveEnabled 0, imapHost null.
+      expect(update.firstCall.args[1].receiveEnabled).to.equal(0);
+      expect(update.firstCall.args[1].imapHost).to.equal(null);
+    });
+
+    it("preserves the existing receiveProtocol when the import row omits it", async () => {
+      // A hand-edited CSV without a receiveProtocol column must not rewrite
+      // an existing pop3 service to imap — the mapper default must only
+      // apply on create, never on update-by-name.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Pop Service";
+      existing.receiveProtocol = "pop3";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      // No receiveProtocol column in the header row.
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Pop Service,pop@example.com,pop.example.com,995,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receiveProtocol).to.equal("pop3");
+    });
+
+    it("maps receive connection columns on create (imap/pop host, port, ssl)", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receivePassword,receiveFolder,receiveEnabled\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,imap.example.com,993,1,pop3.example.com,995,0,recvuser,recvpass,INBOX,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.calledOnce).to.equal(true);
+      const candidate = create.firstCall.args[0];
+      expect(candidate.imapHost).to.equal("imap.example.com");
+      expect(candidate.imapPort).to.equal("993");
+      expect(candidate.imapSsl).to.equal(1);
+      expect(candidate.pop3Host).to.equal("pop3.example.com");
+      expect(candidate.pop3Port).to.equal("995");
+      expect(candidate.pop3Ssl).to.equal(0);
+      expect(candidate.receiveUsername).to.equal("recvuser");
+      expect(candidate.receivePassword).to.equal("recvpass");
+      expect(candidate.receiveFolder).to.equal("INBOX");
+      expect(candidate.receiveEnabled).to.equal(1);
+    });
+
+    it("updates receive connection columns when the name matches", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Recv Service";
+      existing.imapHost = "old-imap.example.com";
+      existing.receivePassword = "old-recv-pass";
+      existing.receiveEnabled = 0;
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapHost,imapPort,imapSsl,receivePassword,receiveEnabled\n" +
+        "Recv Service,user@example.com,smtp.example.com,465,1,smtppass,new-imap.example.com,993,1,new-recv-pass,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      const candidate = update.firstCall.args[1];
+      expect(candidate.imapHost).to.equal("new-imap.example.com");
+      expect(candidate.imapPort).to.equal("993");
+      expect(candidate.imapSsl).to.equal(1);
+      expect(candidate.receivePassword).to.equal("new-recv-pass");
+      expect(candidate.receiveEnabled).to.equal(1);
+    });
+
+    it("preserves stored receive columns on update when the import row omits them", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Recv Service";
+      existing.imapHost = "kept-imap.example.com";
+      existing.imapPort = "993";
+      existing.imapSsl = 1;
+      existing.receivePassword = "kept-recv-pass";
+      existing.receiveUsername = "kept-recv-user";
+      existing.receiveEnabled = 1;
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Recv Service,user@example.com,smtp.example.com,465,1,smtppass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      const candidate = update.firstCall.args[1];
+      expect(candidate.imapHost).to.equal("kept-imap.example.com");
+      expect(candidate.receivePassword).to.equal("kept-recv-pass");
+      expect(candidate.receiveUsername).to.equal("kept-recv-user");
+      expect(candidate.receiveEnabled).to.equal(1);
+    });
+
+    it("clears a stored receive host on update when the cell is blank", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Recv Service";
+      existing.imapHost = "kept-imap.example.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapHost\n" +
+        "Recv Service,user@example.com,smtp.example.com,465,1,smtppass,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.firstCall.args[1].imapHost).to.equal(null);
+    });
+
+    it("rejects a row with an unparseable imapSsl instead of writing it", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapHost,imapSsl\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,imap.example.com,maybe\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.join(" ")).to.contain("imapSsl");
+      expect(create.called).to.equal(false);
+    });
+
+    it("rejects a receiveProtocol other than imap or pop3", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol,pop3Host,pop3Port,receiveEnabled\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,pop,pop.example.com,995,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.join(" ")).to.contain(
+        "receiveProtocol must be imap or pop3"
+      );
+      expect(create.called).to.equal(false);
+    });
+
+    it("accepts POP3 regardless of letter case", async () => {
+      const create = sinon.stub().resolves(11);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,POP3\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("pop3");
+    });
+
+    it("rejects an out-of-range receive port when receive is enabled", async () => {
+      const create = sinon.stub().resolves(11);
+      const realModule = new EmailServiceModule();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+        validateEmailService: realModule.validateEmailService.bind(realModule),
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol,imapHost,imapPort,receiveEnabled\n" +
+        "Recv,user@example.com,smtp.example.com,465,1,smtppass,imap,imap.example.com,99999,1\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.join(" ")).to.contain("1 and 65535");
+      expect(create.called).to.equal(false);
+    });
+
+    it("preserves stored imapSsl/pop3Ssl on update when the cells are blank", async () => {
+      // Blank is not a value: it must fall back to the stored setting, not
+      // to the secure default (1).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Recv Service";
+      existing.imapSsl = 0;
+      existing.pop3Ssl = 0;
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,imapSsl,pop3Ssl\n" +
+        "Recv Service,user@example.com,smtp.example.com,465,1,smtppass,,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.firstCall.args[1].imapSsl).to.equal(0);
+      expect(update.firstCall.args[1].pop3Ssl).to.equal(0);
+    });
+
+    it("prefers the non-empty alias value when duplicate columns carry one blank and one value", async () => {
+      // A JSON row can carry BOTH aliases; the blank one must not win over
+      // the explicit value when they don't conflict.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const rows = JSON.stringify([
+        {
+          name: "Alias",
+          from: "user@x.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          password: "pw",
+          imapHost: "",
+          imap_host: "imap.example.com",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        rows,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].imapHost).to.equal("imap.example.com");
+    });
+
+    it("defaults receiveProtocol to imap on create when the import row omits it", async () => {
+      // A new service (no name match) always needs a valid protocol.
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Newbie,n@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.calledOnce).to.equal(true);
+      expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
+    });
+
+    it("lets an explicit receiveProtocol in the import row win over the existing one", async () => {
+      // Import carries pop3 explicitly while the existing service is imap:
+      // the imported value is the user's explicit intent and must win.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Switch Service";
+      existing.receiveProtocol = "imap";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password,receiveProtocol\n" +
+        "Switch Service,s@example.com,smtp.example.com,465,1,newpass,pop3\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].receiveProtocol).to.equal("pop3");
     });
 
     it("skips a row with a field-count mismatch and imports the valid rows (partial import)", async () => {
@@ -415,9 +927,12 @@ describe("EmailMarketingController", () => {
 
     it("caps reported errors at 10 while counting all skipped rows", async () => {
       // All 12 rows fail validation → skipped 12, but errors capped at 10.
-      const validate = sinon
-        .stub()
-        .resolves({ valid: false, errors: ["Password is required"] });
+      const validate = sinon.stub().resolves({
+        valid: false,
+        errors: [
+          { code: "password_required", message: "Password is required" },
+        ],
+      });
       emailMarketingController.emailServiceModule = makeStubModule({
         validateEmailService: validate,
       });
@@ -494,9 +1009,12 @@ describe("EmailMarketingController", () => {
     it("skips rows with a missing password and reports the file row number", async () => {
       // validateEmailService returns errors for the passwordless row.
       const validate = sinon.stub();
-      validate
-        .onCall(0)
-        .resolves({ valid: false, errors: ["Password is required"] });
+      validate.onCall(0).resolves({
+        valid: false,
+        errors: [
+          { code: "password_required", message: "Password is required" },
+        ],
+      });
       validate.onCall(1).resolves({ valid: true, errors: [] });
       const create = sinon.stub().resolves(1);
       emailMarketingController.emailServiceModule = makeStubModule({
@@ -605,6 +1123,85 @@ describe("EmailMarketingController", () => {
       expect(threw).to.equal(true);
     });
 
+    it("treats a 0-byte CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("treats a whitespace-only CSV as zero rows, not a malformed file", async () => {
+      emailMarketingController.emailServiceModule = makeStubModule();
+      const result = (await emailMarketingController.importEmailServices(
+        "   \n  \n",
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(0);
+      expect(result.errors.length).to.equal(0);
+    });
+
+    it("imports a BOM-prefixed CSV (Excel/Windows export) normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // U+FEFF BOM before the first header, as Excel-on-Windows writes.
+      // Papa does not strip it (trim() treats Cf as non-whitespace), so it
+      // otherwise lands in the first column name and every row loses `name`.
+      const bom = String.fromCharCode(0xfeff);
+      const csv =
+        bom +
+        "name,from,host,port,ssl,password\n" +
+        "Bom,b@x.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(result.skipped).to.equal(0);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
+    });
+
+    it("imports a BOM-prefixed JSON file normally", async () => {
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      // A leading BOM makes JSON.parse reject the whole file otherwise.
+      const bom = String.fromCharCode(0xfeff);
+      const json =
+        bom +
+        JSON.stringify([
+          {
+            name: "Bom",
+            from: "b@example.com",
+            host: "h",
+            port: "25",
+            ssl: 1,
+            password: "p",
+          },
+        ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        json,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(create.firstCall.args[0].name).to.equal("Bom");
+    });
+
     it("applies defaults: ssl=1, receiveProtocol=imap when columns absent", async () => {
       // A minimal CSV with only required columns — ssl/receiveProtocol columns omitted.
       const create = sinon.stub().resolves(1);
@@ -619,6 +1216,313 @@ describe("EmailMarketingController", () => {
 
       expect(create.firstCall.args[0].ssl).to.equal(1);
       expect(create.firstCall.args[0].receiveProtocol).to.equal("imap");
+    });
+
+    it("maps all documented header aliases (smtpUsername/smtpusername/smtp_username; replyTo/replyto/reply_to)", async () => {
+      // §10.2 — every documented alias form must land on the same normalized
+      // identity field: CSV headers are lowercased by transformHeader, JSON
+      // rows keep their original key case (camelCase export shape + snake_case
+      // legacy shape).
+      const runImport = async (
+        content: string,
+        format: "csv" | "json"
+      ): Promise<sinon.SinonStub> => {
+        const create = sinon.stub().resolves(1);
+        emailMarketingController.emailServiceModule = makeStubModule({
+          createEmailService: create,
+        });
+        const result = (await emailMarketingController.importEmailServices(
+          content,
+          format
+        )) as EmailServiceImportResult;
+        expect(result.imported).to.equal(1);
+        expect(result.skipped).to.equal(0);
+        return create;
+      };
+
+      // CSV: lowercase headers `smtpusername` / `replyto` (transformHeader
+      // lowercases them; `smtpusername` is itself an alias).
+      let create = await runImport(
+        "name,smtpusername,replyto,from,host,port,ssl,password\n" +
+          "CsvLower,login1@x.com,replies1@x.com,user1@x.com,smtp.example.com,465,1,pw\n",
+        "csv"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login1@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies1@x.com");
+
+      // JSON: snake_case keys smtp_username / reply_to (legacy documented form).
+      create = await runImport(
+        JSON.stringify([
+          {
+            name: "JsonSnake",
+            smtp_username: "login2@x.com",
+            reply_to: "replies2@x.com",
+            from: "user2@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login2@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies2@x.com");
+
+      // JSON: camelCase keys smtpUsername / replyTo (export shape).
+      create = await runImport(
+        JSON.stringify([
+          {
+            name: "JsonCamel",
+            smtpUsername: "login3@x.com",
+            replyTo: "replies3@x.com",
+            from: "user3@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      );
+      expect(create.firstCall.args[0].smtpUsername).to.equal("login3@x.com");
+      expect(create.firstCall.args[0].replyTo).to.equal("replies3@x.com");
+    });
+
+    it("rejects a row whose aliases conflict with duplicate_field_conflict", async () => {
+      // A JSON row can carry BOTH aliases (CSV cannot — Papa dedupes headers).
+      // Different non-empty values → duplicate_field_conflict; same value in
+      // two aliases → no conflict (≤ 1 distinct non-empty value).
+      const create = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: create,
+      });
+
+      const conflicting = JSON.stringify([
+        {
+          name: "Conflict",
+          smtpUsername: "login@x.com",
+          smtp_username: "other@x.com",
+          from: "user@x.com",
+          host: "smtp.example.com",
+          port: "465",
+          ssl: 1,
+          password: "pw",
+        },
+      ]);
+
+      const result = (await emailMarketingController.importEmailServices(
+        conflicting,
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(
+        result.errors.some((e) => e.includes("duplicate_field_conflict"))
+      ).to.equal(true);
+      expect(create.called).to.equal(false);
+
+      // Same value in two aliases: NOT a conflict — imports fine.
+      const agree = sinon.stub().resolves(1);
+      emailMarketingController.emailServiceModule = makeStubModule({
+        createEmailService: agree,
+      });
+      const agreeResult = (await emailMarketingController.importEmailServices(
+        JSON.stringify([
+          {
+            name: "Agree",
+            smtpUsername: "login@x.com",
+            smtp_username: "login@x.com",
+            from: "user@x.com",
+            host: "smtp.example.com",
+            port: "465",
+            ssl: 1,
+            password: "pw",
+          },
+        ]),
+        "json"
+      )) as EmailServiceImportResult;
+
+      expect(agreeResult.imported).to.equal(1);
+      expect(agreeResult.skipped).to.equal(0);
+      expect(agree.firstCall.args[0].smtpUsername).to.equal("login@x.com");
+    });
+
+    it("preserves existing identity when a legacy file omits the new columns", async () => {
+      // §10.4 absent = preserve: a legacy CSV without smtpUsername/replyTo
+      // columns must never wipe stored identity values on update.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Legacy Service";
+      existing.smtpUsername = "legacy-login@x.com";
+      existing.replyTo = "legacy-reply@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Legacy Service,sender@example.com,smtp.example.com,465,1,newpass\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].smtpUsername).to.equal(
+        "legacy-login@x.com"
+      );
+      expect(update.firstCall.args[1].replyTo).to.equal("legacy-reply@x.com");
+    });
+
+    it("clears replyTo to null when the imported value is blank", async () => {
+      // §10.4 blank = clear: an empty replyto cell is an explicit reset.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Clear Reply";
+      existing.replyTo = "old-reply@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,replyto,from,host,port,ssl,password\n" +
+        "Clear Reply,,sender@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].replyTo).to.equal(null);
+    });
+
+    it("resets smtpUsername to the From fallback when the imported value is blank", async () => {
+      // §10.4 blank = reset: an empty smtpusername cell resets the stored
+      // login to null (which resolves to From at runtime).
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Reset Login";
+      existing.smtpUsername = "legacy-login@x.com";
+      const update = sinon.stub().resolves();
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+      });
+
+      const csv =
+        "name,smtpusername,from,host,port,ssl,password\n" +
+        "Reset Login,,sender@example.com,smtp.example.com,465,1,pw\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].smtpUsername).to.equal(null);
+    });
+
+    it("preserves the stored password when the imported password is blank (update)", async () => {
+      // §10.4: a blank/absent password NEVER clears the stored one on update,
+      // and validation runs in update mode with hasStoredPassword=true.
+      const existing = new EmailServiceEntity();
+      existing.id = 7;
+      existing.name = "Keep Secret";
+      existing.password = "stored-secret";
+      const update = sinon.stub().resolves();
+      let captured: { mode?: string; hasStoredPassword?: boolean } = {};
+      const validate = sinon
+        .stub()
+        .callsFake(
+          (
+            _entity: unknown,
+            options: { mode: string; hasStoredPassword?: boolean }
+          ) => {
+            captured = options;
+            return Promise.resolve({ valid: true, errors: [] });
+          }
+        );
+      emailMarketingController.emailServiceModule = makeStubModule({
+        findEmailServiceByName: sinon.stub().resolves(existing),
+        updateEmailService: update,
+        validateEmailService: validate,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "Keep Secret,sender@example.com,smtp.example.com,465,1,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(1);
+      expect(update.calledOnce).to.equal(true);
+      expect(update.firstCall.args[1].password).to.equal("stored-secret");
+      expect(captured.mode).to.equal("update");
+      expect(captured.hasStoredPassword).to.equal(true);
+    });
+
+    it("rejects a new service with a blank password (create mode)", async () => {
+      // No existing service → create mode; a blank password must be rejected
+      // by validation (password_required) with hasStoredPassword=false.
+      const create = sinon.stub().resolves(1);
+      let captured: { mode?: string; hasStoredPassword?: boolean } = {};
+      const validate = sinon
+        .stub()
+        .callsFake(
+          (
+            entity: { password?: string },
+            options: { mode: string; hasStoredPassword?: boolean }
+          ) => {
+            captured = options;
+            return Promise.resolve(
+              options.mode === "create" && !entity.password
+                ? {
+                    valid: false,
+                    errors: [
+                      {
+                        code: "password_required",
+                        message: "Password is required",
+                      },
+                    ],
+                  }
+                : { valid: true, errors: [] }
+            );
+          }
+        );
+      emailMarketingController.emailServiceModule = makeStubModule({
+        validateEmailService: validate,
+        createEmailService: create,
+      });
+
+      const csv =
+        "name,from,host,port,ssl,password\n" +
+        "NewNoPass,user@example.com,smtp.example.com,465,1,\n";
+
+      const result = (await emailMarketingController.importEmailServices(
+        csv,
+        "csv"
+      )) as EmailServiceImportResult;
+
+      expect(result.imported).to.equal(0);
+      expect(result.skipped).to.equal(1);
+      expect(result.errors.some((e) => /password/i.test(e))).to.equal(true);
+      expect(captured.mode).to.equal("create");
+      expect(captured.hasStoredPassword).to.equal(false);
+      expect(create.called).to.equal(false);
     });
   });
 
@@ -722,6 +1626,150 @@ describe("EmailMarketingController", () => {
         threw = true;
       }
       expect(threw).to.equal(true);
+    });
+  });
+
+  describe("validateEmailServiceForSave", () => {
+    // §7.2: the EMAILSERVICEUPDATE IPC handler must reject CR/LF in
+    // smtpUsername/from/replyTo before persistence. The controller method is
+    // the boundary the handler calls; it delegates to
+    // EmailServiceModule.validateEmailService and resolves hasStoredPassword
+    // from the existing row on update. These tests stub the module so the
+    // controller's wiring (mode dispatch, hasStoredPassword resolution,
+    // throw-on-invalid) is verified without a database.
+
+    const makeEntity = (): EmailServiceEntity => {
+      const e = new EmailServiceEntity();
+      e.name = "Primary SMTP";
+      e.from = "sender@example.com";
+      e.smtpUsername = null;
+      e.replyTo = null;
+      e.password = "pw";
+      e.host = "smtp.example.com";
+      e.port = "465";
+      e.ssl = 1;
+      e.status = 1;
+      e.receiveProtocol = "imap";
+      e.receiveEnabled = 0;
+      return e;
+    };
+
+    it("create mode validates without a DB lookup and resolves when valid", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "create"
+      );
+
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.mode).to.equal("create");
+      expect(captured.hasStoredPassword).to.equal(false);
+    });
+
+    it("update mode resolves hasStoredPassword from the existing row", async () => {
+      const existing = new EmailServiceEntity();
+      existing.id = 5;
+      existing.password = "stored-secret";
+
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      const getEmailService = sinon.stub().resolves(existing);
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "update",
+        5
+      );
+
+      expect(getEmailService.firstCall.args[0]).to.equal(5);
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.mode).to.equal("update");
+      expect(captured.hasStoredPassword).to.equal(true);
+    });
+
+    it("update mode treats a missing stored password as no stored password", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "update",
+        42
+      );
+
+      const captured = validateEmailService.firstCall.args[1];
+      expect(captured.hasStoredPassword).to.equal(false);
+    });
+
+    it("throws a concatenated message when validation finds blocking errors (CR/LF)", async () => {
+      const validateEmailService = sinon.stub().resolves({
+        valid: false,
+        errors: [
+          {
+            code: "email_header_break_forbidden",
+            message: "SMTP username must not contain line breaks",
+          },
+          { code: "from_invalid", message: "From email format is invalid" },
+        ],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService: sinon.stub().resolves(undefined),
+      } as unknown as EmailServiceModuleInterface;
+
+      let threw = false;
+      let message = "";
+      try {
+        await emailMarketingController.validateEmailServiceForSave(
+          makeEntity(),
+          "create"
+        );
+      } catch (err: unknown) {
+        threw = true;
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(threw).to.equal(true);
+      expect(message).to.contain("SMTP username must not contain line breaks");
+      expect(message).to.contain("From email format is invalid");
+    });
+
+    it("create mode never reads the existing row (no hasStoredPassword lookup)", async () => {
+      const getEmailService = sinon.stub().resolves(undefined);
+      const validateEmailService = sinon.stub().resolves({
+        valid: true,
+        errors: [],
+      });
+      emailMarketingController.emailServiceModule = {
+        validateEmailService,
+        getEmailService,
+      } as unknown as EmailServiceModuleInterface;
+
+      await emailMarketingController.validateEmailServiceForSave(
+        makeEntity(),
+        "create"
+      );
+
+      expect(getEmailService.called).to.equal(false);
     });
   });
 });

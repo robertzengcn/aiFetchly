@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
+  EMPTY_STOP_AFTER_TOOLS_PROMPT,
+  GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+  GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+  MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
+  MAX_GOAL_TEXT_STOP_CONTINUATIONS,
+  TOOL_ROUND_CAP_CONTINUATION_PROMPT,
   parseTextToolCalls,
   resolveToolChoiceForRound,
+  splitConcatenatedToolCallArguments,
   type AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
@@ -197,6 +204,133 @@ describe("AIChatQueryLoop", () => {
     });
   });
 
+  describe("splitConcatenatedToolCallArguments", () => {
+    const malformedCall = (rawArgumentsJson: string) => ({
+      index: 0,
+      id: "call-1",
+      name: "glob_files",
+      ok: false as const,
+      rawArgumentsJson,
+    });
+
+    it("splits concatenated JSON objects into individual calls", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"}{"pattern":"src/**"}')
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0]).toMatchObject({
+        id: "call-1__split_0",
+        name: "glob_files",
+        ok: true,
+        arguments: { pattern: "*" },
+      });
+      expect(calls?.[1]).toMatchObject({
+        id: "call-1__split_1",
+        name: "glob_files",
+        ok: true,
+        arguments: { pattern: "src/**" },
+      });
+    });
+
+    it("handles braces and escaped quotes inside string values", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"query":"a } \\"b\\" {c"}{"query":"plain"}')
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ query: 'a } "b" {c' });
+      expect(calls?.[1].arguments).toEqual({ query: "plain" });
+    });
+
+    it("collapses identical duplicate segments", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"}{"pattern":"*"}{"pattern":"*"}')
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+    });
+
+    // Finding 6: the dedup is keyed on the RAW segment string, not the
+    // parsed object. Two calls that resolve to the same arguments but
+    // differ by whitespace are separate provider-issued calls and must be
+    // preserved — only exact byte-identical replays (the delta-replay
+    // artifact) are collapsed. If the model actually intended two
+    // identical calls, the agentic loop continues after salvage and the
+    // model can re-issue the second one once it sees the first result.
+    it("preserves whitespace-distinct variants of the same object (Finding 6)", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"pattern":"*"} {"pattern": "*"}')
+      );
+      // Both segments parse to { pattern: "*" } but differ as raw strings
+      // (space after the colon), so both are kept as separate calls.
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ pattern: "*" });
+    });
+
+    it("collapses a mix of identical replays and distinct calls", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall(
+          '{"pattern":"*"}{"pattern":"*"}{"query":"x"}{"query":"x"}'
+        )
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls?.[0].arguments).toEqual({ pattern: "*" });
+      expect(calls?.[1].arguments).toEqual({ query: "x" });
+    });
+
+    it("allows whitespace between concatenated segments", () => {
+      const calls = splitConcatenatedToolCallArguments(
+        malformedCall('{"a":1}  \n {"b":2}')
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("returns null for a single object (nothing to salvage)", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}'))
+      ).toBeNull();
+    });
+
+    it("returns null when any segment is not valid JSON", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}{invalid}'))
+      ).toBeNull();
+    });
+
+    it("returns null for trailing non-object content", () => {
+      expect(
+        splitConcatenatedToolCallArguments(
+          malformedCall('{"a":1} trailing-garbage')
+        )
+      ).toBeNull();
+    });
+
+    it("returns null for truncated input", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}{"b":2'))
+      ).toBeNull();
+    });
+
+    it("returns null when a segment is a JSON array", () => {
+      expect(
+        splitConcatenatedToolCallArguments(malformedCall('{"a":1}[1,2]'))
+      ).toBeNull();
+    });
+
+    it("returns null for already-valid calls", () => {
+      expect(
+        splitConcatenatedToolCallArguments({
+          index: 0,
+          id: "call-1",
+          name: "glob_files",
+          ok: true,
+          arguments: { pattern: "*" },
+          rawArgumentsJson: '{"pattern":"*"}',
+        })
+      ).toBeNull();
+    });
+  });
+
   describe("tool calls", () => {
     it("parses a textual run_subagent call with a structured batch packet", () => {
       const calls = parseTextToolCalls(
@@ -357,6 +491,435 @@ describe("AIChatQueryLoop", () => {
       );
     });
 
+    it("continues after an empty stop that follows tool results", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-empty-1", "search", '{"q":"test"}')
+            );
+            return;
+          }
+          if (callCount === 2) {
+            onChunk(makeChunk("", "stop"));
+            return;
+          }
+          const last = req.messages[req.messages.length - 1];
+          expect(last).toEqual({
+            role: "user",
+            content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
+          });
+          onChunk(makeChunk("Next: scrape more distributors.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-empty-1",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Next: scrape more distributors.");
+      }
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps calling the model after empty stops following tools are exhausted", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-empty-2", "search", '{"q":"test"}')
+            );
+            return;
+          }
+          if (callCount <= 1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 1) {
+            onChunk(makeChunk("", "stop"));
+            return;
+          }
+          onChunk(makeChunk("Still working on the scrape.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-empty-2",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const tokens: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "token" && e.contentDelta) {
+              tokens.push(e.contentDelta);
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Still working on the scrape.");
+        expect(result.fullContent).not.toContain("/loop");
+      }
+      expect(tokens).toContain("Still working on the scrape.");
+      expect(tokens.some((t) => t.includes("/loop"))).toBe(false);
+      expect(fakeStream).toHaveBeenCalledTimes(
+        1 + MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS + 2
+      );
+    });
+
+    it("sends a hidden continuation to the model after the tool-round cap", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount <= 2) {
+            onChunk(
+              makeToolCallChunk(
+                `call-cap-${callCount}`,
+                "search",
+                `{"q":"${callCount}"}`
+              )
+            );
+            return;
+          }
+          const lastUser = [...req.messages]
+            .reverse()
+            .find((m) => m.role === "user");
+          expect(lastUser?.content).toBe(TOOL_ROUND_CAP_CONTINUATION_PROMPT);
+          onChunk(makeChunk("Scraped 40 of 200 rows. Continuing.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-cap",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "scrape these pages" },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 2,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Scraped 40 of 200 rows. Continuing.");
+        expect(result.fullContent).not.toContain("/loop");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not show a canned pause when continuation cycles keep calling tools", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          onChunk(
+            makeToolCallChunk(
+              `call-cap-${callCount}`,
+              "search",
+              `{"q":"${callCount}"}`
+            )
+          );
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-cap",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const tokens: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "scrape these pages" },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "token" && e.contentDelta) {
+              tokens.push(e.contentDelta);
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 2,
+        maxRoundCapContinuations: 1,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).not.toContain("/loop");
+        expect(result.fullContent).not.toContain("Reached the maximum");
+      }
+      expect(tokens.some((t) => t.includes("/loop"))).toBe(false);
+      expect(fakeStream).toHaveBeenCalledTimes(4);
+      expect(fakeExecute).toHaveBeenCalledTimes(4);
+    });
+
+    it("auto-continues past the tool-round cap when goalAutoContinue is set", async () => {
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount <= 2) {
+            onChunk(
+              makeToolCallChunk(
+                `call-goal-${callCount}`,
+                "search",
+                `{"q":"${callCount}"}`
+              )
+            );
+            return;
+          }
+          const lastUser = [...req.messages]
+            .reverse()
+            .find((m) => m.role === "user");
+          if (callCount === 3) {
+            // First continuation past the round cap uses the goal prompt.
+            expect(lastUser?.content).toBe(
+              GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT
+            );
+          } else {
+            // After that, continuations are either goal text-stop nudges
+            // or further round-cap continuations (a text stop consumes a
+            // round, so with maxToolRounds=2 the two interleave).
+            expect([
+              GOAL_TOOL_ROUND_CAP_CONTINUATION_PROMPT,
+              GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+            ]).toContain(lastUser?.content);
+          }
+          onChunk(makeChunk("Contacts saved. Goal complete.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-goal",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        maxToolRounds: 2,
+        goalAutoContinue: true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toContain("Contacts saved. Goal complete.");
+        expect(result.fullContent).not.toContain("/loop");
+      }
+      // 2 tool rounds + 1 round-cap continuation + MAX_GOAL_TEXT_STOP_CONTINUATIONS
+      // text-stop nudges + 1 final accepted text stop. With maxToolRounds=2,
+      // one extra round-cap continuation interleaves between the 2nd and 3rd
+      // text-stop nudges (a text stop consumes a round).
+      expect(fakeStream).toHaveBeenCalledTimes(
+        3 + MAX_GOAL_TEXT_STOP_CONTINUATIONS
+      );
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+    });
+
+    it("nudges the model when a /goal turn text-stops after tools mid-task", async () => {
+      // Reproduces the real-world premature stop: mid-goal the model writes
+      // "Now at 54 records. Let me continue building volume..." with
+      // finish_reason=stop and NO tool call. The turn must not end — the
+      // loop injects a hidden continuation so the goal keeps executing.
+      let callCount = 0;
+      const recoveryAttempts: number[] = [];
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(
+              makeToolCallChunk("call-text-stop-1", "search", '{"q":"canada"}')
+            );
+            return;
+          }
+          if (callCount === 2) {
+            onChunk(
+              makeChunk(
+                "Now at **54 records**. Let me continue building volume with more Bing SERP queries.",
+                "stop"
+              )
+            );
+            return;
+          }
+          if (callCount === 3) {
+            // The nudge must preserve the streamed text as an assistant
+            // message and append the hidden continuation prompt.
+            const tail = req.messages.slice(-2);
+            expect(tail[0]).toEqual({
+              role: "assistant",
+              content:
+                "Now at **54 records**. Let me continue building volume with more Bing SERP queries.",
+            });
+            expect(tail[1]).toEqual({
+              role: "user",
+              content: GOAL_TEXT_STOP_CONTINUATION_PROMPT,
+            });
+            // After the nudge the model goes back to calling tools; this
+            // resets the consecutive text-stop budget.
+            onChunk(
+              makeToolCallChunk("call-text-stop-2", "search", '{"q":"ontario"}')
+            );
+            return;
+          }
+          // The model then insists on text-only replies; after
+          // MAX_GOAL_TEXT_STOP_CONTINUATIONS consecutive nudges the loop
+          // accepts the reply and completes the turn.
+          onChunk(makeChunk("All reachable leads collected.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-text-stop",
+        tool_name: "search",
+        success: true,
+        result: { answer: "found" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: "/goal find 1000+ companies that trade in Canada",
+        },
+        openAITools: [tool("search")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "recovery_status" && e.attempt !== undefined) {
+              recoveryAttempts.push(e.attempt);
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+        goalAutoContinue: true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        // The mid-task progress text survives in the persisted content.
+        expect(result.fullContent).toContain("Now at **54 records**.");
+        expect(result.fullContent).toContain("All reachable leads collected.");
+      }
+      // 1 tool round + 1 text stop + 1 nudged tool round +
+      // MAX_GOAL_TEXT_STOP_CONTINUATIONS nudged text stops + 1 accepted stop.
+      expect(fakeStream).toHaveBeenCalledTimes(
+        3 + MAX_GOAL_TEXT_STOP_CONTINUATIONS + 1
+      );
+      // The tool round after the first nudge resets the consecutive budget:
+      // attempts go 1 (first text stop), then 1..MAX again after the reset.
+      expect(recoveryAttempts).toEqual([
+        1,
+        ...Array.from(
+          { length: MAX_GOAL_TEXT_STOP_CONTINUATIONS },
+          (_, i) => i + 1
+        ),
+      ]);
+    });
+
     it("retries when provider emits a tool-call marker as plain text", async () => {
       const events: Array<{ type: string; message?: string }> = [];
       let callCount = 0;
@@ -462,15 +1025,21 @@ describe("AIChatQueryLoop", () => {
           onChunk(makeChunk("Done", "stop"));
         }
       );
-      const fakeExecute = vi.fn().mockImplementation(
-        async (toolName: string, args: Record<string, unknown>) => ({
-          tool_call_id: `text-call-${String(args.query)}`,
-          tool_name: toolName,
-          success: true,
-          result: { selected: args.query },
-          execution_time_ms: 1,
-        })
-      );
+      const fakeExecute = vi
+        .fn()
+        .mockImplementation(
+          async (toolName: string, args: Record<string, unknown>) => ({
+            tool_call_id: `text-call-${String(args.query)}`,
+            tool_name: toolName,
+            success: true,
+            result: { selected: args.query },
+            execution_time_ms: 1,
+          })
+        );
+      const toolResultEvents: Array<{
+        toolName?: string;
+        toolResult?: Record<string, unknown>;
+      }> = [];
       const loop = new AIChatQueryLoop({
         streamChatCompletion: fakeStream,
         executeTool: fakeExecute,
@@ -487,7 +1056,16 @@ describe("AIChatQueryLoop", () => {
         },
         openAITools: [tool("tool_catalog_search")],
         abortController: new AbortController(),
-        eventSink: { emit: vi.fn() },
+        eventSink: {
+          emit: (event) => {
+            if (event.type === "tool_result") {
+              toolResultEvents.push({
+                toolName: event.toolName,
+                toolResult: event.toolResult,
+              });
+            }
+          },
+        },
         startRound: 0,
         isActiveTurn: () => true,
       });
@@ -497,18 +1075,22 @@ describe("AIChatQueryLoop", () => {
         expect(result.fullContent).toBe("Done");
       }
       expect(fakeStream).toHaveBeenCalledTimes(2);
-      expect(fakeExecute).toHaveBeenNthCalledWith(
-        1,
-        "tool_catalog_search",
-        { query: "filesystem" },
-        expect.objectContaining({ toolCallId: expect.any(String) })
-      );
-      expect(fakeExecute).toHaveBeenNthCalledWith(
-        2,
-        "tool_catalog_search",
-        { query: "image" },
-        expect.objectContaining({ toolCallId: expect.any(String) })
-      );
+      // tool_catalog_search is a synthetic discovery tool intercepted locally
+      // by the loop (standard mode builds the catalog on-demand). It must NOT
+      // reach executeTool — under the real SkillExecutor it would return
+      // "Unknown tool". Both textual calls are intercepted in one round.
+      expect(fakeExecute).not.toHaveBeenCalled();
+      expect(toolResultEvents).toHaveLength(2);
+      expect(toolResultEvents[0]?.toolName).toBe("tool_catalog_search");
+      expect(toolResultEvents[1]?.toolName).toBe("tool_catalog_search");
+      // The parser normalizes `category` → `query` before the interception
+      // runs, so each search result reflects the query term.
+      expect(toolResultEvents[0]?.toolResult).toMatchObject({
+        query: "filesystem",
+      });
+      expect(toolResultEvents[1]?.toolResult).toMatchObject({
+        query: "image",
+      });
     });
 
     it("sends forced shell_execute tool_choice for first-round file deletion", async () => {
@@ -791,6 +1373,540 @@ describe("AIChatQueryLoop", () => {
       };
       const result = await loop.run(input);
       expect(result.type).toBe("failed");
+    });
+
+    it("salvages provider-merged parallel calls from concatenated JSON arguments", async () => {
+      // Some providers merge several parallel tool calls into one tool_call,
+      // producing concatenated JSON arguments. The loop must split and
+      // execute each call instead of failing the turn.
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      let secondRoundMessages: readonly OpenAIChatMessage[] = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          secondRoundMessages = request.messages;
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "src/**" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+      // The assistant message and tool results sent in the next round must
+      // use the split ids consistently so the provider accepts them.
+      const serialized = JSON.stringify(secondRoundMessages);
+      expect(serialized).toContain("call-1__split_0");
+      expect(serialized).toContain("call-1__split_1");
+    });
+
+    it("dedupes identical segments in provider-merged concatenated arguments", async () => {
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"pattern":"*"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+    });
+
+    it("does not salvage concatenated arguments with unparseable trailing content", async () => {
+      const badChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"} trailing-garbage'
+      );
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(badChunk);
+        }
+      );
+      const fakeExecute = vi.fn();
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("failed");
+      expect(fakeExecute).not.toHaveBeenCalled();
+    });
+
+    it("recovers on the next round when the model self-corrects malformed arguments", async () => {
+      // Regression: a malformed round must feed an error tool result back to
+      // the model and continue, so a follow-up round with valid arguments
+      // completes the turn instead of failing it.
+      // Ends without a closing brace so the loop takes the "not valid JSON"
+      // branch (a `{...}` prefix without a trailing `}` is treated as
+      // truncated instead).
+      const badChunk = makeToolCallChunk("call-1", "glob_files", "not-json");
+      const goodChunk = makeToolCallChunk(
+        "call-2",
+        "glob_files",
+        '{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      // Snapshot the transcript at the start of the retry round — the request
+      // messages array is mutated in place as later rounds complete.
+      let retryRoundMessages: Array<{ role: string; content: string }> = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          const round = callCount++;
+          if (round === 0) {
+            onChunk(badChunk);
+            return;
+          }
+          if (round === 1) {
+            retryRoundMessages = request.messages.map((m) => ({
+              role: m.role,
+              content: String(m.content),
+            }));
+            onChunk(goodChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenCalledTimes(1);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "glob_files",
+        { pattern: "src/**" },
+        expect.objectContaining({ toolCallId: "call-2" })
+      );
+      // The retry round must carry the error tool result for the malformed
+      // call, including the nudge to emit separate tool_call entries.
+      const toolMessages = retryRoundMessages.filter((m) => m.role === "tool");
+      expect(toolMessages).toHaveLength(1);
+      const content = toolMessages[0].content;
+      expect(content).toContain("not valid JSON");
+      expect(content).toContain("separate tool_call entries");
+    });
+
+    it("splits three-way concatenated arguments from a provider-merged call", async () => {
+      // Matches the production failure trace payload shape, where a provider
+      // merged three parallel calls into one tool_call:
+      // {"pattern":"*"}{"query":...}{"query":...}
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"query":"email marketing"}{"query":"lead generation"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(mergedChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "glob_files",
+        { query: "email marketing" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        3,
+        "glob_files",
+        { query: "lead generation" },
+        expect.objectContaining({ toolCallId: "call-1__split_2" })
+      );
+    });
+
+    it("salvages concatenated arguments streamed across multiple delta chunks", async () => {
+      // Real providers stream the merged call incrementally — the
+      // concatenation only becomes visible after the accumulator joins the
+      // argument deltas, so the salvage must operate on the joined buffer.
+      const firstDelta: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-1",
+                  type: "function",
+                  function: { name: "glob_files", arguments: '{"pattern":"*' },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      };
+      const secondDelta: OpenAIChatCompletionChunk = {
+        id: "resp-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "test-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  function: { arguments: '"}{"query":"email marketing"}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      };
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(firstDelta);
+            onChunk(secondDelta);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "glob_files",
+        { pattern: "*" },
+        expect.objectContaining({ toolCallId: "call-1__split_0" })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "glob_files",
+        { query: "email marketing" },
+        expect.objectContaining({ toolCallId: "call-1__split_1" })
+      );
+    });
+
+    it("does not count a salvaged round toward the malformed retry budget", async () => {
+      // A provider-merged round that gets salvaged contains no malformed
+      // calls, so it must reset consecutiveMalformedRounds. If it were still
+      // counted, the sequence below (salvaged round + 3 malformed rounds)
+      // would exceed MAX_MALFORMED_ARGUMENT_RETRIES and fail the turn.
+      const mergedChunk = makeToolCallChunk(
+        "call-1",
+        "glob_files",
+        '{"pattern":"*"}{"query":"x"}'
+      );
+      const badChunk = makeToolCallChunk(
+        "call-bad",
+        "glob_files",
+        '{"pattern":"*"}garbage'
+      );
+      const goodChunk = makeToolCallChunk(
+        "call-good",
+        "glob_files",
+        '{"pattern":"src/**"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          const round = callCount++;
+          if (round === 0) {
+            onChunk(mergedChunk);
+            return;
+          }
+          if (round >= 1 && round <= 3) {
+            onChunk(badChunk);
+            return;
+          }
+          if (round === 4) {
+            onChunk(goodChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn(
+        async (
+          name: string,
+          _args: Record<string, unknown>,
+          meta: { toolCallId: string }
+        ) => ({
+          tool_call_id: meta.toolCallId,
+          tool_name: name,
+          success: true,
+          result: { files: [] },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "find files" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      // 2 salvaged executions (round 0) + 1 self-corrected execution (round 4)
+      expect(fakeExecute).toHaveBeenCalledTimes(3);
+      expect(fakeStream).toHaveBeenCalledTimes(6);
     });
 
     it("returns failed when stream ends after an unusable tool call delta", async () => {

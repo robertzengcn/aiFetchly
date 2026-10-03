@@ -62,10 +62,25 @@ export class SocialTaskRun {
         return await taskrunmodel.getTaskidbytaskrunNum(taskrunNum)
     }
     //get social task run list
-    public async getrunlist(taskId: number, page: number, size: number): Promise<taskrunSearchres> {
+    public async getrunlist(
+        taskId: number,
+        page: number,
+        size: number,
+        callback?: (arg: readonly unknown[]) => unknown
+    ): Promise<taskrunSearchres> {
         const taskrunmodel = new TaskRunModel(this.dbpath)
         const total = await taskrunmodel.getTaskrunTotal(taskId)
         const list = await taskrunmodel.getTaskrunlist(taskId, page, size)
+        // Legacy callback contract (kept from the raw-SQL era): observe the
+        // page rows. Best-effort — consumers must not rely on it for control
+        // flow.
+        if (callback) {
+            try {
+                callback(list)
+            } catch {
+                /* observation must never fail the read */
+            }
+        }
         return {
             Total: total,
             Records: list

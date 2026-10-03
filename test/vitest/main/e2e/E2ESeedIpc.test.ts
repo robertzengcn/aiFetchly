@@ -46,20 +46,28 @@ vi.mock("@/modules/Logger", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockReturnValue("/tmp/aifetchly-e2e-seed/test-db"),
-    setValue: vi.fn(),
-  })),
+  // Class-based mock so `new Token()` works (arrow-function
+  // mockImplementation breaks under `new` — arrow functions have no
+  // [[Construct]], so vitest 4.x throws "is not a constructor").
+  Token: class {
+    getValue(name: string): string {
+      return name === "user_dbpath" ? "/tmp/aifetchly-e2e-seed/test-db" : "";
+    }
+    setValue(): void {
+      // no-op for tests
+    }
+  },
 }));
 
 vi.mock("@/model/EmailService.model", () => ({
-  EmailServiceModel: vi.fn().mockImplementation((dbpath: string) => ({
-    dbpath,
-    create: vi.fn(async (entity: Record<string, unknown>) => {
+  // Class-based mock for the same reason as Token above.
+  EmailServiceModel: class {
+    constructor(public dbpath: string) {}
+    async create(entity: Record<string, unknown>): Promise<number> {
       seedState.createdEntities.push(entity);
       return seedState.nextId++;
-    }),
-  })),
+    }
+  },
 }));
 
 import { registerE2ESeedIpcHandlers } from "@/main-process/e2e/E2ESeedIpc";
@@ -112,7 +120,7 @@ describe("E2ESeedIpc", () => {
     expect(handlers.has(E2E_SEED_EMAIL_SERVICE)).toBe(false);
   });
 
-  it("registers nothing when AIFETCHLY_E2E has a non-\"1\" value", () => {
+  it('registers nothing when AIFETCHLY_E2E has a non-"1" value', () => {
     process.env.AIFETCHLY_E2E = "0";
     registerE2ESeedIpcHandlers();
     expect(handlers.has(E2E_SEED_EMAIL_SERVICE)).toBe(false);
@@ -187,6 +195,56 @@ describe("E2ESeedIpc", () => {
 
     const result = await invokeSeed(
       JSON.stringify({ ...validInput, port: 465 })
+    );
+    expect(result.status).toBe(false);
+    expect(seedState.createdEntities).toHaveLength(0);
+  });
+
+  it("stamps optional smtpUsername and replyTo onto the entity (P0.3 identity scenarios)", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      JSON.stringify({
+        ...validInput,
+        smtpUsername: "smtp-login@example.com",
+        replyTo: "replies@example.com",
+      })
+    );
+    expect(result.status).toBe(true);
+    const entity = seedState.createdEntities[0];
+    expect(entity.smtpUsername).toBe("smtp-login@example.com");
+    expect(entity.replyTo).toBe("replies@example.com");
+  });
+
+  it("defaults smtpUsername and replyTo to null when omitted (mirrors production merge)", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(JSON.stringify(validInput));
+    expect(result.status).toBe(true);
+    const entity = seedState.createdEntities[0];
+    expect(entity.smtpUsername).toBeNull();
+    expect(entity.replyTo).toBeNull();
+  });
+
+  it("rejects an smtpUsername that exceeds the 255-char column width", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      JSON.stringify({ ...validInput, smtpUsername: "x".repeat(256) })
+    );
+    expect(result.status).toBe(false);
+    expect(seedState.createdEntities).toHaveLength(0);
+  });
+
+  it("rejects a replyTo that exceeds the 320-char column width", async () => {
+    process.env.AIFETCHLY_E2E = "1";
+    registerE2ESeedIpcHandlers();
+
+    const result = await invokeSeed(
+      JSON.stringify({ ...validInput, replyTo: "x".repeat(321) })
     );
     expect(result.status).toBe(false);
     expect(seedState.createdEntities).toHaveLength(0);

@@ -34,11 +34,16 @@ import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversatio
 import {
   SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
   SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES,
+  SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS,
+  SCHEDULED_LOOP_RESUME_TIMEOUT_MS,
   SCHEDULED_LOOP_RUN_TIMEOUT_MS,
   nextFutureOccurrence,
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { bindApprovedWorkspace } from "@/service/AiMessageTaskWorkspace";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
+import { showNotification } from "@/modules/lib/function";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -134,6 +139,10 @@ export class ScheduledAiMessageRunner {
     }
 
     const conversationId = await this.ensureV2Conversation(task);
+    const workspaceError = await this.bindTaskWorkspace(task, conversationId);
+    if (workspaceError) {
+      return this.failFast(taskId, scheduleId, workspaceError);
+    }
 
     // 3. Parse policy and limits
     const policy = this.parseTaskPolicy(task);
@@ -274,6 +283,33 @@ export class ScheduledAiMessageRunner {
     this.runRegistry.register(runId, abortController);
     let lease: ConversationTurnLease | null = null;
 
+    const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
+    let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearPermissionBackstop = (): void => {
+      if (permissionBackstopHandle) {
+        clearTimeout(permissionBackstopHandle);
+        permissionBackstopHandle = null;
+      }
+    };
+    // Bounded resume await (adversarial F1/F2): armed in the sink callback the
+    // moment the turn RESUMES (a `tool_result` with `replacesPermissionPromptForToolId`
+    // — emitted by both grant and deny BEFORE the resumed `loop.run` starts). The
+    // runtime `timeoutHandle` was cleared at the pause and is NOT re-armed on the
+    // resumed turn; the provider's own timeout only guards header arrival, so a
+    // silent mid-stream stall (headers arrived, body hung) never resolves
+    // `sink.waitForTerminalOutcome()` — the runner hangs indefinitely holding the
+    // run row + conversation lease. This cap force-resolves the sink via
+    // `failOutstanding` and stops the engine so the run finalizes. It bounds only
+    // the resumed turn (phase 2); the park window (phase 1) stays bounded by the
+    // 1h permission backstop. Cleared in `finally` on every exit path.
+    let resumeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearResumeTimeout = (): void => {
+      if (resumeTimeoutHandle) {
+        clearTimeout(resumeTimeoutHandle);
+        resumeTimeoutHandle = null;
+      }
+    };
+
     let outcome: ScheduledTurnOutcome;
     try {
       try {
@@ -309,12 +345,108 @@ export class ScheduledAiMessageRunner {
       // scheduled context supplies stable message IDs + trusted metadata that
       // the renderer cannot forge, and makes the user/assistant rows idempotent
       // across crash-retries (technical-design §14).
-      const engine = new AIChatQueryEngineFactory().createScheduled(
-        this.parseTaskPolicy(task)
+      const engine = await new AIChatQueryEngineFactory().createScheduled(
+        this.parseTaskPolicy(task),
+        conversationId
       );
+      engineRegistry.register({
+        conversationId,
+        engine,
+        runId,
+        scheduleId,
+        clearPermissionBackstop,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
       const ownerSink = new ScheduledLoopEventSink((event) => {
-        // Forward token/done/error chunks for live streaming to a renderer
+        // Gated tool paused for permission: suspend the runtime timeout,
+        // notify, broadcast, publish pending metadata, and start the
+        // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
+        // forwarding so the pause is observed even when the engine emits a
+        // tool_result mid-stream.
+        if (
+          event.type === "tool_result" &&
+          event.toolResult?.needsPermissionPrompt === true
+        ) {
+          clearTimeout(timeoutHandle);
+          engineRegistry.setPendingPermission(conversationId, {
+            toolId: event.toolCallId,
+          });
+          try {
+            showNotification(
+              "AiFetchly — permission required",
+              `A scheduled run wants to use ${event.toolName}. Click to review.`
+            );
+          } catch {
+            /* notification must never fail the run */
+          }
+          try {
+            this.broadcaster.emit({
+              conversationId,
+              reason: "scheduled_turn_permission_requested",
+              scheduleId,
+              runId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              occurredAt: new Date().toISOString(),
+            });
+          } catch {
+            /* broadcast failure is non-fatal */
+          }
+          permissionBackstopHandle = setTimeout(() => {
+            void engine
+              .denyToolPermission({
+                toolId: event.toolCallId,
+                conversationId,
+              })
+              .then((result) => {
+                // Only clear pending metadata when this backstop actually matched
+                // and denied the tool. If a newer tool replaced the pending
+                // entry (ok:false → "no active permission-gated tool call" or
+                // toolId mismatch), clearing would orphan the new permission
+                // card. The IPC grant/deny path owns the clear in that case.
+                if (result.ok) {
+                  engineRegistry.clearPendingPermission(conversationId);
+                }
+              })
+              .catch((err: unknown) => {
+                console.error(
+                  "[scheduled-loop] backstop auto-deny failed:",
+                  err
+                );
+              });
+          }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
+          return;
+        }
+        // Resume signal (adversarial F1/F2): the resumed turn has re-entered
+        // the loop after a grant/deny. Both grant and deny emit a `tool_result`
+        // carrying `replacesPermissionPromptForToolId` BEFORE restarting
+        // `loop.run`. At the pause we cleared the runtime timeout and it is
+        // NOT re-armed on the resumed turn — re-arm it here so a silent
+        // provider mid-stream stall (which never resolves
+        // `waitForTerminalOutcome`) is bounded: the timer force-resolves the
+        // sink via `failOutstanding` and stops the engine. The 1h backstop is
+        // irrelevant now (the user already responded), so it stays untouched;
+        // its own `clearPermissionBackstop` runs in `finally`.
+        if (
+          event.type === "tool_result" &&
+          event.replacesPermissionPromptForToolId
+        ) {
+          clearResumeTimeout();
+          resumeTimeoutHandle = setTimeout(() => {
+            ownerSink.failOutstanding(
+              `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
+            );
+            try {
+              engine.stopActiveTurn(conversationId);
+            } catch (err) {
+              console.error(
+                "[scheduled-loop] stopActiveTurn after resume timeout failed:",
+                err
+              );
+            }
+          }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
+          return;
+        }        // Forward token/done/error chunks for live streaming to a renderer
         // viewing this conversation (technical-design §13.2). Strict routing
         // is enforced renderer-side; forwarding failures are non-fatal.
         if (event.type === "token") {
@@ -365,13 +497,22 @@ export class ScheduledAiMessageRunner {
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
       });
-      outcome = ownerSink.getOutcome() ?? {
-        kind: "failed",
-        errorMessage: "NO_TERMINAL_EVENT",
-      };
+      // `submitMessage` resolves on a permission pause (the engine parks the
+      // turn in `pendingPermissions` and returns without emitting a terminal
+      // event). When that happens, stay alive — engine registered, runtime
+      // timeout cleared, 1h backstop armed — and wait for the resumed loop
+      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
+      // Without this wait, the `finally` below would unregister the engine
+      // and clear the backstop before the user can respond, orphaning every
+      // permission card (the headline feature would be non-functional).
+      outcome =
+        ownerSink.getOutcome() ?? (await ownerSink.waitForTerminalOutcome());
     } finally {
       clearTimeout(timeoutHandle);
+      clearPermissionBackstop();
+      clearResumeTimeout();
       this.runRegistry.unregister(runId);
+      engineRegistry.unregister(conversationId);
       if (lease) lease.release();
     }
 
@@ -580,6 +721,37 @@ export class ScheduledAiMessageRunner {
   }
 
   /**
+   * Approve the task's stored folder as the conversation workspace so file
+   * tools in the scheduled run stay inside that directory.
+   */
+  private async bindTaskWorkspace(
+    task: AiMessageTaskEntity,
+    conversationId: string
+  ): Promise<string | null> {
+    const stored = task.workspace_path?.trim();
+    if (!stored) {
+      return null;
+    }
+    try {
+      const canonical = await bindApprovedWorkspace(conversationId, stored);
+      if (canonical !== stored) {
+        // Persist the canonicalized path durably; do NOT mutate the passed-in
+        // task entity. Nothing downstream in the run reads workspace_path
+        // (file tools resolve the bound workspace via the workspace service,
+        // not via this entity field), so an in-memory mutation would be dead
+        // state that violates immutability without serving a consumer.
+        await this.taskModule.updateTask({
+          id: task.id,
+          workspacePath: canonical,
+        });
+      }
+      return null;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : "Invalid workspace path";
+    }
+  }
+
+  /**
    * Cron / schedule-page run: persist the turn through AIChatQueryEngine so
    * user + assistant rows land in the originating v2 conversation (and therefore
    * in AiChatV2 history). Interval counters are owned by the chat-loop path.
@@ -601,6 +773,23 @@ export class ScheduledAiMessageRunner {
     }, limits.maxRuntimeMs);
     this.runRegistry.register(runId, abortController);
     let lease: ConversationTurnLease | null = null;
+    const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
+    let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearPermissionBackstop = (): void => {
+      if (permissionBackstopHandle) {
+        clearTimeout(permissionBackstopHandle);
+        permissionBackstopHandle = null;
+      }
+    };
+    // Bounded resume await (adversarial F1/F2) — see runOnce for the full
+    // rationale. Armed on the resume signal, cleared in `finally`.
+    let resumeTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const clearResumeTimeout = (): void => {
+      if (resumeTimeoutHandle) {
+        clearTimeout(resumeTimeoutHandle);
+        resumeTimeoutHandle = null;
+      }
+    };
     let outcome: ScheduledTurnOutcome = {
       kind: "failed",
       errorMessage: "NO_TERMINAL_EVENT",
@@ -629,9 +818,101 @@ export class ScheduledAiMessageRunner {
         };
       }
 
-      const engine = new AIChatQueryEngineFactory().createScheduled(policy);
+      const engine = await new AIChatQueryEngineFactory().createScheduled(
+        policy,
+        conversationId
+      );
+      engineRegistry.register({
+        conversationId,
+        engine,
+        runId,
+        scheduleId: scheduleKey,
+        clearPermissionBackstop,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
       const sink = new ScheduledLoopEventSink((event) => {
+        // Gated tool paused for permission: suspend the runtime timeout,
+        // notify, broadcast, publish pending metadata, and start the
+        // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
+        // forwarding so the pause is observed even when the engine emits a
+        // tool_result mid-stream.
+        if (
+          event.type === "tool_result" &&
+          event.toolResult?.needsPermissionPrompt === true
+        ) {
+          clearTimeout(timeoutHandle);
+          engineRegistry.setPendingPermission(conversationId, {
+            toolId: event.toolCallId,
+          });
+          try {
+            showNotification(
+              "AiFetchly — permission required",
+              `A scheduled run wants to use ${event.toolName}. Click to review.`
+            );
+          } catch {
+            /* notification must never fail the run */
+          }
+          try {
+            this.broadcaster.emit({
+              conversationId,
+              reason: "scheduled_turn_permission_requested",
+              scheduleId: scheduleKey,
+              runId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              occurredAt: new Date().toISOString(),
+            });
+          } catch {
+            /* broadcast failure is non-fatal */
+          }
+          permissionBackstopHandle = setTimeout(() => {
+            void engine
+              .denyToolPermission({
+                toolId: event.toolCallId,
+                conversationId,
+              })
+              .then((result) => {
+                // Only clear pending metadata when this backstop actually matched
+                // and denied the tool. If a newer tool replaced the pending
+                // entry (ok:false → "no active permission-gated tool call" or
+                // toolId mismatch), clearing would orphan the new permission
+                // card. The IPC grant/deny path owns the clear in that case.
+                if (result.ok) {
+                  engineRegistry.clearPendingPermission(conversationId);
+                }
+              })
+              .catch((err: unknown) => {
+                console.error(
+                  "[scheduled-loop] backstop auto-deny failed:",
+                  err
+                );
+              });
+          }, SCHEDULED_LOOP_PERMISSION_BACKSTOP_MS);
+          return;
+        }
+        // Resume signal (adversarial F1/F2) — see runOnce for the full
+        // rationale. Re-arm the runtime cap on the resumed turn so a silent
+        // provider mid-stream stall is bounded instead of hanging the runner.
+        if (
+          event.type === "tool_result" &&
+          event.replacesPermissionPromptForToolId
+        ) {
+          clearResumeTimeout();
+          resumeTimeoutHandle = setTimeout(() => {
+            sink.failOutstanding(
+              `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
+            );
+            try {
+              engine.stopActiveTurn(conversationId);
+            } catch (err) {
+              console.error(
+                "[scheduled-loop] stopActiveTurn after resume timeout failed:",
+                err
+              );
+            }
+          }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
+          return;
+        }
         if (event.type === "token") {
           this.broadcaster.emitScheduledStream({
             conversationId,
@@ -671,10 +952,15 @@ export class ScheduledAiMessageRunner {
           assistantMessageId,
         },
       });
-      outcome = sink.getOutcome() ?? {
-        kind: "failed",
-        errorMessage: "NO_TERMINAL_EVENT",
-      };
+      // `submitMessage` resolves on a permission pause (the engine parks the
+      // turn in `pendingPermissions` and returns without emitting a terminal
+      // event). When that happens, stay alive — engine registered, runtime
+      // timeout cleared, 1h backstop armed — and wait for the resumed loop
+      // (grant / deny / backstop auto-deny) to emit the terminal outcome.
+      // Without this wait, the `finally` below would unregister the engine
+      // and clear the backstop before the user can respond, orphaning every
+      // permission card (the headline feature would be non-functional).
+      outcome = sink.getOutcome() ?? (await sink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;
@@ -700,7 +986,10 @@ export class ScheduledAiMessageRunner {
       throw error;
     } finally {
       clearTimeout(timeoutHandle);
+      clearPermissionBackstop();
+      clearResumeTimeout();
       this.runRegistry.unregister(runId);
+      engineRegistry.unregister(conversationId);
       if (lease) lease.release();
     }
 

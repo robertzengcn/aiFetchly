@@ -1,4 +1,3 @@
-//import {EmailMarketingTemplateApi} from "@/api/emailMarketingTemplateApi";
 import { EmailTemplateModule } from "@/modules/EmailTemplateModule";
 import { ListData } from "@/entityTypes/commonType";
 import {
@@ -8,10 +7,12 @@ import {
   EmailSendParam,
   EmailServiceExportPayload,
   EmailServiceImportResult,
+  SafeEmailServiceExportRow,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
-//import {EmailMarketingFilterApi} from "@/api/emailMarketingFilterApi";
-//import {EmailServiceApi} from "@/api/emailServiceApi";
 import { EmailService } from "@/modules/lib/emailService";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { incrementEmailServiceMetric } from "@/modules/lib/EmailServiceMetrics";
 import { EmailTemplateModuleInterface } from "@/modules/interface/EmailTemplateModuleInterface";
 import { EmailTemplateEntity } from "@/entity/EmailTemplate.entity";
 import { EmailFilterTaskRelationModule } from "@/modules/EmailFilterTaskRelationModule";
@@ -27,23 +28,68 @@ import { EmailFilterDetailModule } from "@/modules/EmailFilterDetailModule";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailTemplateRespdata } from "@/entityTypes/emailmarketingType";
 import Papa from "papaparse";
+
+type EmailServiceImportField =
+  | "name"
+  | "smtpUsername"
+  | "from"
+  | "replyTo"
+  | "host"
+  | "port"
+  | "password"
+  | "ssl"
+  | "receiveProtocol"
+  | "imapHost"
+  | "imapPort"
+  | "imapSsl"
+  | "pop3Host"
+  | "pop3Port"
+  | "pop3Ssl"
+  | "receiveUsername"
+  | "receivePassword"
+  | "receiveFolder"
+  | "receiveEnabled";
+
+interface ParsedEmailServiceImportRow {
+  readonly values: Partial<EmailServiceEntitydata>;
+  readonly presentFields: ReadonlySet<EmailServiceImportField>;
+}
+
+/** Source keys accepted for each normalized field (§10.2). */
+const IMPORT_FIELD_ALIASES: Record<EmailServiceImportField, string[]> = {
+  name: ["name"],
+  smtpUsername: ["smtpUsername", "smtpusername", "smtp_username"],
+  from: ["from", "from_email"],
+  replyTo: ["replyTo", "replyto", "reply_to"],
+  host: ["host"],
+  port: ["port"],
+  password: ["password"],
+  ssl: ["ssl"],
+  receiveProtocol: ["receiveProtocol", "receiveprotocol", "receive_protocol"],
+  imapHost: ["imapHost", "imaphost", "imap_host"],
+  imapPort: ["imapPort", "imapport", "imap_port"],
+  imapSsl: ["imapSsl", "imapssl", "imap_ssl"],
+  pop3Host: ["pop3Host", "pop3host", "pop3_host"],
+  pop3Port: ["pop3Port", "pop3port", "pop3_port"],
+  pop3Ssl: ["pop3Ssl", "pop3ssl", "pop3_ssl"],
+  receiveUsername: ["receiveUsername", "receiveusername", "receive_username"],
+  receivePassword: ["receivePassword", "receivepassword", "receive_password"],
+  receiveFolder: ["receiveFolder", "receivefolder", "receive_folder"],
+  receiveEnabled: ["receiveEnabled", "receiveenabled", "receive_enabled"],
+};
+
 export class EmailMarketingController {
   emailTemplateModule: EmailTemplateModuleInterface;
   emailFilterTaskRelationModule: EmailFilterTaskRelationModuleInterface;
   emailFilterModule: EmailFilterModuleInterface;
   emailServiceModule: EmailServiceModuleInterface;
   emailFilterDetailModule: EmailFilterDetailModuleInterface;
-  // emailMarketingFilterApi:EmailMarketingFilterApi
-  // emailServiceApi:EmailServiceApi
   constructor() {
     this.emailTemplateModule = new EmailTemplateModule();
     this.emailFilterTaskRelationModule = new EmailFilterTaskRelationModule();
     this.emailFilterModule = new EmailFilterModule();
     this.emailServiceModule = new EmailServiceModule();
     this.emailFilterDetailModule = new EmailFilterDetailModule();
-    //         this.emailMarketingTemplateApi = new EmailMarketingTemplateApi();
-    //         this.emailMarketingFilterApi=new EmailMarketingFilterApi();
-    // this.emailServiceApi=new EmailServiceApi();
   }
   //list email template
   public async listEmailTemplate(
@@ -187,7 +233,6 @@ export class EmailMarketingController {
       size,
       search
     );
-    const count = await this.emailServiceModule.countEmailServices();
     const listdata2: EmailServiceListdata[] = listdata.records.map((item) => {
       return {
         id: item.id,
@@ -200,7 +245,7 @@ export class EmailMarketingController {
     });
     return {
       records: listdata2,
-      num: count,
+      num: listdata.num,
     };
   }
   //get email service detail
@@ -237,6 +282,8 @@ export class EmailMarketingController {
     entity.host = param.host;
     entity.port = param.port;
     entity.from = param.from;
+    entity.smtpUsername = param.smtpUsername ?? null;
+    entity.replyTo = param.replyTo ?? null;
     entity.password = param.password;
     entity.ssl = param.ssl;
     // inbound receive fields
@@ -299,6 +346,35 @@ export class EmailMarketingController {
   ): Promise<void> {
     return await this.emailServiceModule.updateEmailService(id, entity);
   }
+
+  /**
+   * Validate an email-service entity before create/update persistence
+   * (§7.2: reject CR/LF in smtpUsername/from/replyTo before persistence,
+   * hashing, and sending). Resolves `hasStoredPassword` from the existing
+   * row on update so the empty-sentinel password rule is enforced. Throws a
+   * single concatenated message on any blocking finding so the IPC handler
+   * surfaces a clear error to the renderer without persisting unsafe input.
+   */
+  public async validateEmailServiceForSave(
+    entity: EmailServiceEntity,
+    mode: "create" | "update",
+    existingId?: number
+  ): Promise<void> {
+    let hasStoredPassword = false;
+    if (mode === "update" && existingId !== undefined) {
+      const existing = await this.emailServiceModule.getEmailService(
+        existingId
+      );
+      hasStoredPassword = Boolean(existing?.password);
+    }
+    const validation = await this.emailServiceModule.validateEmailService(
+      entity,
+      { mode, hasStoredPassword }
+    );
+    if (!validation.valid) {
+      throw new Error(validation.errors.map((e) => e.message).join("; "));
+    }
+  }
   //find email service by name
   public async findEmailServiceByName(
     name: string
@@ -316,15 +392,36 @@ export class EmailMarketingController {
   ): Promise<string | EmailServiceExportPayload> {
     const entities = await this.emailServiceModule.exportEmailServicesList();
 
-    if (format === "json") {
-      const rows: EmailServiceListdata[] = entities.map((item) => ({
+    const rows: SafeEmailServiceExportRow[] = entities.map((item) => {
+      const identity = resolveEmailServiceIdentity({
+        smtpUsername: item.smtpUsername,
+        from: item.from,
+        replyTo: item.replyTo,
+      });
+      return {
         id: item.id,
         name: item.name,
+        smtpUsername: identity.smtpUsername,
         from: item.from,
+        replyTo: identity.replyToAddress,
         host: item.host,
+        port: item.port,
+        ssl: item.ssl,
         receiveProtocol: item.receiveProtocol,
+        imapHost: item.imapHost ?? null,
+        imapPort: item.imapPort ?? null,
+        imapSsl: item.imapSsl ?? 1,
+        pop3Host: item.pop3Host ?? null,
+        pop3Port: item.pop3Port ?? null,
+        pop3Ssl: item.pop3Ssl ?? 1,
+        receiveUsername: item.receiveUsername ?? null,
+        receiveFolder: item.receiveFolder ?? "INBOX",
+        receiveEnabled: item.receiveEnabled ?? 0,
         create_time: item.createdAt?.toISOString() || "",
-      }));
+      };
+    });
+
+    if (format === "json") {
       return {
         total: rows.length,
         services: rows,
@@ -335,36 +432,65 @@ export class EmailMarketingController {
     const headers = [
       "id",
       "name",
+      "smtpUsername",
       "from",
+      "replyTo",
       "host",
       "port",
       "ssl",
       "receiveProtocol",
+      "imapHost",
+      "imapPort",
+      "imapSsl",
+      "pop3Host",
+      "pop3Port",
+      "pop3Ssl",
+      "receiveUsername",
+      "receiveFolder",
+      "receiveEnabled",
       "create_time",
     ];
-    const csvRows = entities.map((item) => [
-      item.id?.toString() ?? "",
-      this.escapeCsvField(item.name ?? ""),
-      this.escapeCsvField(item.from ?? ""),
-      this.escapeCsvField(item.host ?? ""),
-      item.port ?? "",
-      item.ssl?.toString() ?? "",
-      item.receiveProtocol ?? "",
-      item.createdAt?.toISOString() ?? "",
+    const csvRows = rows.map((row) => [
+      this.escapeCsvField(row.id),
+      this.escapeCsvField(row.name),
+      this.escapeCsvField(row.smtpUsername),
+      this.escapeCsvField(row.from),
+      this.escapeCsvField(row.replyTo),
+      this.escapeCsvField(row.host),
+      this.escapeCsvField(row.port),
+      this.escapeCsvField(row.ssl),
+      this.escapeCsvField(row.receiveProtocol),
+      this.escapeCsvField(row.imapHost),
+      this.escapeCsvField(row.imapPort),
+      this.escapeCsvField(row.imapSsl),
+      this.escapeCsvField(row.pop3Host),
+      this.escapeCsvField(row.pop3Port),
+      this.escapeCsvField(row.pop3Ssl),
+      this.escapeCsvField(row.receiveUsername),
+      this.escapeCsvField(row.receiveFolder),
+      this.escapeCsvField(row.receiveEnabled),
+      this.escapeCsvField(row.create_time),
     ]);
-    const csv = [
-      headers.join(","),
-      ...csvRows.map((row) => row.join(",")),
-    ].join("\n");
+    const csv = [headers.join(","), ...csvRows.map((r) => r.join(","))].join(
+      "\n"
+    );
     return csv.length > 0 ? `${csv}\n` : `${headers.join(",")}\n`;
   }
 
-  /** Quote/escape a CSV field when it contains `,`, `"`, or newline. */
-  private escapeCsvField(value: string): string {
-    if (/[",\n\r]/.test(value)) {
-      return `"${value.replace(/"/g, '""')}"`;
+  /**
+   * Quote/escape a CSV field when it contains `,`, `"`, or newline.
+   * Accepts string | number | null | undefined so every CSV column —
+   * including numeric ports/flags, enum protocols, and nullable hosts —
+   * goes through the same escaping path (Finding 9). Null/undefined become
+   * empty string; numbers are stringified.
+   */
+  private escapeCsvField(value: string | number | null | undefined): string {
+    if (value === null || value === undefined) return "";
+    const text = typeof value === "number" ? String(value) : value;
+    if (/[",\n\r]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
     }
-    return value;
+    return text;
   }
 
   // Import email services from raw file content. format: "csv" | "json".
@@ -386,16 +512,12 @@ export class EmailMarketingController {
       // index + 1. (Approximate when blank lines are skipped mid-file —
       // accepted trade-off.)
       const rowNumber = index + (format === "csv" ? 2 : 1);
-
-      // Non-object entries (e.g. null in a JSON array) can't map to a row.
       const rawRow = rows[index];
       if (!rawRow || typeof rawRow !== "object") {
         skipped++;
         errors.push(`row ${rowNumber}: invalid row entry`);
         continue;
       }
-
-      // Field-count mismatches Papa flagged for this data row index.
       const parseError = rowErrors.get(index);
       if (parseError) {
         skipped++;
@@ -403,47 +525,167 @@ export class EmailMarketingController {
         continue;
       }
 
-      const entity = this.mapImportRowToEntity(rawRow);
-
-      // Unparseable ssl is a row error, never a silent NULL in the DB
-      // (better-sqlite3 binds NaN as NULL, which would disable secure SMTP).
-      if (Number.isNaN(entity.ssl)) {
+      const mapped = this.mapImportRowToPresenceAware(rawRow);
+      if (mapped.error) {
         skipped++;
-        errors.push(`row ${rowNumber}: ssl must be 0 or 1`);
+        errors.push(`row ${rowNumber}: ${mapped.error}`);
+        continue;
+      }
+      const parsedRow = mapped.row!;
+      const values = parsedRow.values;
+      const present = parsedRow.presentFields;
+
+      // 0/1 flags unparseable → row error (NaN would bind as NULL in
+      // better-sqlite3). Absent/blank-skipped fields stay undefined and are
+      // never NaN, so only explicitly provided garbage fails the row.
+      const badFlagField = (
+        ["ssl", "imapSsl", "pop3Ssl", "receiveEnabled"] as const
+      ).find((field) => Number.isNaN(values[field] as number));
+      if (badFlagField !== undefined) {
+        skipped++;
+        errors.push(`row ${rowNumber}: ${badFlagField} must be 0 or 1`);
         continue;
       }
 
-      const name = entity.name ?? "";
+      const name = values.name ?? "";
+      // §10.3 — lookup BEFORE validate (password requirements depend on
+      // create vs update).
+      const existing = name
+        ? await this.emailServiceModule.findEmailServiceByName(name)
+        : undefined;
+      const isUpdate = Boolean(existing?.id && existing.id > 0);
 
-      // validateEmailService covers email format, port numeric, required
-      // fields (incl. password), and receive-protocol-specific rules.
+      const candidate = new EmailServiceEntity();
+      if (isUpdate) {
+        const ex = existing!;
+        candidate.name = (values.name ?? ex.name) as string;
+        candidate.host = (values.host ?? ex.host) as string;
+        candidate.port = (values.port ?? ex.port) as string;
+        candidate.from = (values.from ?? ex.from) as string;
+        candidate.ssl = (values.ssl ?? ex.ssl) as number;
+        candidate.password =
+          values.password && values.password.length > 0
+            ? values.password
+            : ex.password; // blank/absent password NEVER clears on update (§10.4)
+        // §21 observability: an import update that kept the stored password
+        // because the import row omitted/blanked it. No labels — the counter
+        // never carries the password or any identity value.
+        if (!(values.password && values.password.length > 0)) {
+          incrementEmailServiceMetric("import_password_preserved");
+        }
+        candidate.receiveProtocol =
+          present.has("receiveProtocol") && values.receiveProtocol
+            ? values.receiveProtocol
+            : ex.receiveProtocol ?? "imap";
+        // §10.4 merge matrix for receive hosts/ports/ssl:
+        //  absent = preserve stored, blank = clear to null (hosts/ports) /
+        //  keep stored (ssl falls back via ??), value = overwrite.
+        candidate.imapHost = present.has("imapHost")
+          ? values.imapHost ?? null
+          : ex.imapHost ?? null;
+        candidate.imapPort = present.has("imapPort")
+          ? values.imapPort ?? null
+          : ex.imapPort ?? null;
+        candidate.imapSsl = present.has("imapSsl")
+          ? values.imapSsl ?? ex.imapSsl ?? 1
+          : ex.imapSsl ?? 1;
+        candidate.pop3Host = present.has("pop3Host")
+          ? values.pop3Host ?? null
+          : ex.pop3Host ?? null;
+        candidate.pop3Port = present.has("pop3Port")
+          ? values.pop3Port ?? null
+          : ex.pop3Port ?? null;
+        candidate.pop3Ssl = present.has("pop3Ssl")
+          ? values.pop3Ssl ?? ex.pop3Ssl ?? 1
+          : ex.pop3Ssl ?? 1;
+        candidate.receiveFolder =
+          values.receiveFolder ?? ex.receiveFolder ?? "INBOX";
+        candidate.receiveEnabled =
+          values.receiveEnabled ?? ex.receiveEnabled ?? 0;
+        // §10.4 merge matrix:
+        //  SMTP username: absent=Preserve stored, blank=Reset to From fallback (null).
+        candidate.smtpUsername = present.has("smtpUsername")
+          ? values.smtpUsername ?? null
+          : ex.smtpUsername ?? null;
+        //  Reply-To: absent=Preserve stored, blank=Clear to null.
+        candidate.replyTo = present.has("replyTo")
+          ? values.replyTo ?? null
+          : ex.replyTo ?? null;
+        //  Receive username: absent = preserve stored, blank = reset to the
+        //  runtime fallback chain (null), value = overwrite.
+        candidate.receiveUsername = present.has("receiveUsername")
+          ? values.receiveUsername ?? null
+          : ex.receiveUsername ?? null;
+        //  Receive password (like SMTP password): blank/absent NEVER clears
+        //  — always preserve (§10.4); a non-empty value overwrites.
+        candidate.receivePassword =
+          values.receivePassword && values.receivePassword.length > 0
+            ? values.receivePassword
+            : ex.receivePassword;
+        candidate.status = ex.status;
+      } else {
+        // New service: absent SMTP username → From; absent Reply-To → null;
+        // password absent/blank → rejected by validation (create mode).
+        candidate.name = (values.name ?? "") as string;
+        candidate.host = (values.host ?? "") as string;
+        candidate.port = (values.port ?? "") as string;
+        candidate.from = (values.from ?? "") as string;
+        candidate.ssl = (values.ssl ?? 1) as number;
+        candidate.password = (values.password ?? "") as string;
+        // §21 observability: an import create row that arrived without a
+        // password (FR-002 requires one in create mode). Validation below will
+        // reject it; this counter makes the gap visible before that. No labels
+        // — never carries the password or any identity value.
+        if (!values.password || values.password.length === 0) {
+          incrementEmailServiceMetric("import_new_password_missing");
+        }
+        candidate.receiveProtocol = values.receiveProtocol ?? "imap";
+        candidate.imapHost = values.imapHost ?? null;
+        candidate.imapPort = values.imapPort ?? null;
+        candidate.imapSsl = values.imapSsl ?? 1;
+        candidate.pop3Host = values.pop3Host ?? null;
+        candidate.pop3Port = values.pop3Port ?? null;
+        candidate.pop3Ssl = values.pop3Ssl ?? 1;
+        candidate.receiveFolder = values.receiveFolder ?? "INBOX";
+        candidate.receiveEnabled = values.receiveEnabled ?? 0;
+        candidate.smtpUsername = values.smtpUsername ?? null;
+        candidate.replyTo = values.replyTo ?? null;
+        candidate.receiveUsername = values.receiveUsername ?? null;
+        // Receive password is optional on create: when absent/blank the
+        // runtime falls back to the SMTP password (see validateEmailService
+        // and getEmailServiceReceiveConfig).
+        candidate.receivePassword =
+          values.receivePassword && values.receivePassword.length > 0
+            ? values.receivePassword
+            : null;
+        candidate.status = 1;
+      }
+
       const validation = await this.emailServiceModule.validateEmailService(
-        entity
+        candidate,
+        {
+          mode: isUpdate ? "update" : "create",
+          hasStoredPassword: Boolean(existing?.password),
+        }
       );
       if (!validation.valid) {
         skipped++;
-        errors.push(`row ${rowNumber}: ${validation.errors.join("; ")}`);
+        errors.push(
+          `row ${rowNumber}: ${validation.errors
+            .map((e) => e.message)
+            .join("; ")}`
+        );
         continue;
       }
+
       try {
-        const existing = name
-          ? await this.emailServiceModule.findEmailServiceByName(name)
-          : undefined;
-        if (existing?.id && existing.id > 0) {
-          // Import files never carry inbound-receive credentials — preserve
-          // the existing service's receivePassword so the update doesn't
-          // wipe it (encryptCredentialsForStorage nulls absent values).
-          // Other receive fields survive as undefined via TypeORM's changed-
-          // column diffing; do NOT default them here — a default would
-          // silently rewrite existing receive config on every import update.
-          if (!entity.receivePassword || entity.receivePassword.length === 0) {
-            entity.receivePassword = existing.receivePassword;
-          }
-          // The SMTP password IS always overwritten by the imported value
-          // (import is an explicit act; the file carries the password).
-          await this.emailServiceModule.updateEmailService(existing.id, entity);
+        if (isUpdate) {
+          await this.emailServiceModule.updateEmailService(
+            existing!.id!,
+            candidate
+          );
         } else {
-          await this.emailServiceModule.createEmailService(entity);
+          await this.emailServiceModule.createEmailService(candidate);
         }
         imported++;
       } catch (rowError) {
@@ -464,8 +706,13 @@ export class EmailMarketingController {
     content: string,
     format: "csv" | "json"
   ): { rows: Record<string, unknown>[]; rowErrors: Map<number, string> } {
+    // Strip a leading BOM (U+FEFF) — common in Excel-on-Windows and Notepad
+    // exports. JSON.parse rejects it outright; on the CSV side it would land
+    // in the first header name unless stripped (done here explicitly rather
+    // than relying on the transformHeader trim()).
+    const sanitized = content.replace(/^\uFEFF/, "");
     if (format === "json") {
-      const parsed: unknown = JSON.parse(content);
+      const parsed: unknown = JSON.parse(sanitized);
       // Export shape { total, services, exportDate } or bare array.
       if (Array.isArray(parsed)) {
         return {
@@ -489,11 +736,24 @@ export class EmailMarketingController {
     // CSV — header row, case-insensitive columns. "greedy" also skips
     // whitespace-only lines (stray-space lines are common in hand-edited
     // CSVs; with plain `true` they surface as TooFewFields errors).
-    const result = Papa.parse<Record<string, unknown>>(content, {
+    const result = Papa.parse<Record<string, unknown>>(sanitized, {
       header: true,
       skipEmptyLines: "greedy",
       transformHeader: (header: string) => header.trim().toLowerCase(),
     });
+    // A file with no data rows whose only Papa errors are an undetectable
+    // delimiter (0-byte, whitespace-only, BOM-only, header-only, or text
+    // without row breaks) is an empty-in-effect file, not a malformed one:
+    // return zero rows so the caller reports "no valid rows"
+    // (import_no_valid_rows) instead of "invalid file".
+    if (
+      (result.data?.length ?? 0) === 0 &&
+      (result.errors ?? []).every(
+        (parseError) => parseError.code === "UndetectableDelimiter"
+      )
+    ) {
+      return { rows: [], rowErrors: new Map() };
+    }
     const rowErrors = new Map<number, string>();
     for (const parseError of result.errors ?? []) {
       // Field-count mismatches are row-level problems: collect them keyed by
@@ -514,28 +774,125 @@ export class EmailMarketingController {
     return { rows: result.data, rowErrors };
   }
 
-  /** Map a parsed row record to an EmailServiceEntity (strict whitelist). */
-  private mapImportRowToEntity(
-    row: Record<string, unknown>
-  ): EmailServiceEntity {
-    const entity = new EmailServiceEntity();
-    entity.name = this.rowValueToString(row.name);
-    entity.from = this.rowValueToString(row.from);
-    entity.host = this.rowValueToString(row.host);
-    entity.port = this.rowValueToString(row.port);
-    entity.password = this.rowValueToString(row.password);
-    // ssl defaults to 1 (secure) when absent/blank; invalid → NaN → row error.
-    entity.ssl = this.parseImportSsl(this.rowValueToString(row.ssl));
-    // receiveProtocol defaults to "imap" when absent/blank.
-    const protocolRaw = this.rowValueToString(
-      row.receiveProtocol
-    ).toLowerCase();
-    entity.receiveProtocol =
-      protocolRaw.length === 0
-        ? "imap"
-        : (protocolRaw as EmailServiceEntity["receiveProtocol"]);
-    // id and create_time are read but intentionally ignored on write.
-    return entity;
+  /**
+   * Map a parsed row to a presence-aware import row (§10.1/§10.2). Tracks
+   * which fields were PRESENT so the merge step can distinguish absent
+   * (preserve) from blank (clear/reset). Rejects rows where two aliases for
+   * one field carry different non-empty values (duplicate_field_conflict).
+   */
+  private mapImportRowToPresenceAware(row: Record<string, unknown>): {
+    row: ParsedEmailServiceImportRow | null;
+    error: string | null;
+  } {
+    const values: Partial<EmailServiceEntitydata> = {};
+    const presentFields = new Set<EmailServiceImportField>();
+
+    for (const field of Object.keys(
+      IMPORT_FIELD_ALIASES
+    ) as EmailServiceImportField[]) {
+      const aliases = IMPORT_FIELD_ALIASES[field];
+      const found: { alias: string; raw: unknown }[] = [];
+      for (const alias of aliases) {
+        // CSV headers are lowercased by transformHeader; JSON keys keep their
+        // case — check both the alias and its lowercase form.
+        if (Object.prototype.hasOwnProperty.call(row, alias)) {
+          found.push({ alias, raw: row[alias] });
+        } else if (
+          alias !== alias.toLowerCase() &&
+          Object.prototype.hasOwnProperty.call(row, alias.toLowerCase())
+        ) {
+          found.push({ alias, raw: row[alias.toLowerCase()] });
+        }
+      }
+      if (found.length === 0) continue;
+
+      // duplicate_field_conflict: two aliases, different non-empty values.
+      const nonEmpty = found.filter(
+        (f) =>
+          f.raw !== null &&
+          f.raw !== undefined &&
+          String(f.raw).trim().length > 0
+      );
+      const distinctValues = new Set(nonEmpty.map((f) => String(f.raw).trim()));
+      if (distinctValues.size > 1) {
+        return {
+          row: null,
+          error: "duplicate_field_conflict",
+        };
+      }
+
+      // When aliases disagree only by blank-vs-value (no conflict), the
+      // explicit value wins — found[0] may be the blank entry.
+      const raw = (nonEmpty.length > 0 ? nonEmpty[0] : found[0]).raw;
+      const str = this.rowValueToString(raw);
+      presentFields.add(field);
+      switch (field) {
+        case "ssl":
+          (values as Record<string, unknown>)[field] = this.parseImportSsl(str);
+          break;
+        case "imapSsl":
+        case "pop3Ssl":
+          // Unlike SMTP ssl, a blank cell must NOT flip the stored value to
+          // the secure default: skip it so the merge falls back to stored.
+          if (str.length > 0) {
+            (values as Record<string, unknown>)[field] =
+              this.parseImportSsl(str);
+          }
+          break;
+        case "receiveEnabled": {
+          // Unlike ssl, a blank cell must NOT enable receive: skip it so the
+          // merge falls back to the stored value (update) or 0 (create).
+          if (str.length > 0) {
+            values.receiveEnabled = this.parseImportSsl(str);
+          }
+          break;
+        }
+        case "receiveProtocol": {
+          const lower = str.toLowerCase();
+          if (lower.length > 0) {
+            if (lower !== "imap" && lower !== "pop3") {
+              return {
+                row: null,
+                error: "receiveProtocol must be imap or pop3",
+              };
+            }
+            (values as Record<string, unknown>).receiveProtocol =
+              lower as EmailServiceEntitydata["receiveProtocol"];
+          }
+          break;
+        }
+        case "receiveFolder": {
+          // Blank falls back to INBOX via the merge (same as receiveProtocol).
+          if (str.length > 0) {
+            values.receiveFolder = str;
+          }
+          break;
+        }
+        case "smtpUsername":
+        case "receiveUsername":
+          // Blank resets to the runtime fallback chain (null); the merge
+          // distinguishes absent (preserve) from blank (reset) via presence.
+          (values as Record<string, unknown>)[field] =
+            str.length > 0 ? str : null;
+          break;
+        case "replyTo":
+          values.replyTo = str.length > 0 ? str : null;
+          break;
+        case "imapHost":
+        case "imapPort":
+        case "pop3Host":
+        case "pop3Port":
+          // Blank clears to null (presence-aware merge below); absent keeps
+          // the stored value.
+          (values as Record<string, unknown>)[field] =
+            str.length > 0 ? str : null;
+          break;
+        default:
+          (values as Record<string, unknown>)[field] = str;
+      }
+    }
+
+    return { row: { values, presentFields }, error: null };
   }
 
   /**
@@ -598,7 +955,7 @@ export class EmailMarketingController {
   //send email
   public async sendEmail(
     param: EmailSendParam,
-    errorCall?: (errorMessage: string) => void,
+    errorCall?: (error: SendEmailError) => void,
     successCallback?: () => void
   ): Promise<void> {
     try {
@@ -606,9 +963,9 @@ export class EmailMarketingController {
       const emailService = new EmailService(setting);
       await emailService.sendEmail(
         param.EmailRequestData,
-        function (errorString) {
+        function (sendEmailError: SendEmailError) {
           if (errorCall) {
-            errorCall(errorString);
+            errorCall(sendEmailError);
           }
         },
         function () {
@@ -620,10 +977,11 @@ export class EmailMarketingController {
     } catch (error: unknown) {
       // Resolution failures (missing service / no stored password) surface
       // through the same error channel as SMTP failures so the test-email
-      // dialog reports them instead of crashing the IPC handler.
+      // dialog reports them instead of crashing the IPC handler. These are
+      // setup errors, not classified SMTP rejections, so `code` is null.
       const message = error instanceof Error ? error.message : String(error);
       if (errorCall) {
-        errorCall(message);
+        errorCall({ message, code: null });
         return;
       }
       throw error;

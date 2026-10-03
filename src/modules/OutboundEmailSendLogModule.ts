@@ -155,6 +155,11 @@ export class OutboundEmailSendLogModule extends BaseModule {
         content: row.content,
         log: row.log,
         taskId: row.task_id,
+        // Identity columns (FR-014) — null on rows written before the split.
+        emailServiceId: row.email_service_id ?? undefined,
+        fromAddress: row.from_address ?? undefined,
+        smtpUsername: row.smtp_username ?? null,
+        replyTo: row.reply_to ?? null,
       };
     }
 
@@ -162,7 +167,9 @@ export class OutboundEmailSendLogModule extends BaseModule {
     if (!outcome) {
       throw new Error("send log record not found");
     }
-    // Join the EXACT revision sent — the outcome pins revisionId.
+    // Join the EXACT revision sent — the outcome pins revisionId. The
+    // revision's frozen identity fields are non-secret (§6.4) and surface
+    // here for FR-014 diagnostics.
     const revision = await this.draftModule.readRevision(outcome.revisionId);
     return {
       id: outcome.id,
@@ -185,6 +192,9 @@ export class OutboundEmailSendLogModule extends BaseModule {
       draftId: outcome.draftId,
       revisionId: outcome.revisionId,
       attemptId: outcome.sendAttemptId,
+      emailServiceId: revision?.emailServiceId,
+      smtpUsername: revision?.smtpUsername ?? null,
+      replyTo: revision?.replyToAddress ?? null,
     };
   }
 

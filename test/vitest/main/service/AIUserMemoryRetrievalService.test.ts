@@ -6,14 +6,22 @@ const mockListActive = vi.fn();
 const mockMarkUsed = vi.fn();
 
 vi.mock("@/modules/AIUserMemoryModule", () => ({
-  AIUserMemoryModule: vi.fn().mockImplementation(() => ({
+  AIUserMemoryModule: class {
+    constructor() {
+      return {
     listActiveForRetrieval: mockListActive,
     markMemoriesUsed: mockMarkUsed,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: class {
+    constructor() {
+      return { getValue: vi.fn() };
+    }
+  },
 }));
 
 function mem(opts: Partial<AIUserMemoryView>): AIUserMemoryView {

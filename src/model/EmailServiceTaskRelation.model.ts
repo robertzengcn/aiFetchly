@@ -45,7 +45,32 @@ export class EmailServiceTaskRelationModel extends BaseDb {
             order: { id: 'DESC' }
         });
 
-        return relations.map(relation => relation.emailService);
+        return relations
+            .map((relation) => relation.emailService)
+            .filter((service): service is EmailServiceEntity => service != null);
+    }
+
+    /**
+     * Service IDs bound to the task, read from the relation column so a
+     * missing TypeORM join cannot drop the ids the send worker needs.
+     */
+    async listEmailServiceIdsByTaskId(buckemailTaskId: number): Promise<number[]> {
+        const relations = await this.repository.find({
+            where: { buckemailTaskId, status: 1 },
+            order: { id: "DESC" },
+            select: ["emailServiceId"],
+        });
+        const ids: number[] = [];
+        const seen = new Set<number>();
+        for (const relation of relations) {
+            const id = relation.emailServiceId;
+            if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
+                continue;
+            }
+            seen.add(id);
+            ids.push(id);
+        }
+        return ids;
     }
 
     async updateEmailServicesByTaskId(buckemailTaskId: number, emailServiceIds: number[]): Promise<void> {

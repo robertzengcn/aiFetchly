@@ -349,6 +349,13 @@ export class DocumentService {
       conversationId || "default"
     );
     const stageDir = path.join(this.stagedAttachmentRoot, safeConversationId);
+    // Canonicalize the staging dir when it exists. Comparing a realpath'd
+    // candidate against a LEXICAL stageDir false-positives
+    // "outside staging directory" whenever the root path contains a symlink
+    // (macOS: app.getPath("userData") under /tmp → /private/tmp). If the dir
+    // does not exist yet, realpathSync throws — but then the candidate files
+    // cannot exist either, so the lexical path is already canonical here.
+    const resolvedStageDir = this.resolveExistingPath(stageDir);
     const metadataPath = path.join(stageDir, `${refId}.meta.json`);
     const metadata = this.readStagedAttachmentMetadata(metadataPath);
 
@@ -370,7 +377,7 @@ export class DocumentService {
     }
 
     const resolved = fs.realpathSync(candidatePath);
-    if (!this.isPathUnderRoot(resolved, stageDir)) {
+    if (!this.isPathUnderRoot(resolved, resolvedStageDir)) {
       throw new Error("Attachment source path is outside staging directory");
     }
 
@@ -471,6 +478,20 @@ export class DocumentService {
       relative === "" ||
       (!relative.startsWith("..") && !path.isAbsolute(relative))
     );
+  }
+
+  /**
+   * Canonicalize a directory that is expected to exist. Returns the lexical
+   * path unchanged when it does not (realpathSync would throw), which is safe
+   * for containment checks: nothing under a non-existent root can resolve to
+   * a realpath inside it either.
+   */
+  private resolveExistingPath(lexicalPath: string): string {
+    try {
+      return fs.realpathSync(lexicalPath);
+    } catch {
+      return lexicalPath;
+    }
   }
 
   private resolveSupportedExtension(

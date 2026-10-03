@@ -35,11 +35,16 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "send_email_reply",
       "list_schedules",
       "create_schedule",
+      "list_ai_message_tasks",
+      "get_ai_message_task",
+      "create_ai_message_task",
+      "update_ai_message_task",
       "knowledge_library_import_attachment",
       "scrape_urls_from_search_engine",
       "extract_contact_info",
       "verify_contact_info",
       "shell_execute",
+      "conversation_tool_history",
     ];
     for (const name of must) {
       expect(s).toContain(name);
@@ -121,7 +126,8 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s).toContain("draft_outbound_email_batch");
     expect(s).toContain("list_email_services");
     expect(s.toLowerCase()).toContain("outbound");
-    expect(s.toLowerCase()).toContain("wait for the user to click review");
+    expect(s).toContain("skip_review=true");
+    expect(s).toContain("do NOT draft first");
     expect(s.toLowerCase()).toContain("marketing");
     // The model previously treated an empty IMAP inbox list as "cannot send".
     expect(s.toLowerCase()).toContain("empty inbox");

@@ -8,9 +8,13 @@ const mockTokenGetValue = vi.hoisted(() =>
 );
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: mockTokenGetValue,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/fieldCipher", () => ({

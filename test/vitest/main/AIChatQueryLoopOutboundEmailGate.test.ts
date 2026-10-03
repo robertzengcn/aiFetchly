@@ -9,7 +9,8 @@
  *      direct-send authorization here is what let the model send in the
  *      same turn as the draft.
  *   3. Blocks draft_required when the turn is send_now but has no authorizable
- *      batch (only terminal batches exist).
+ *      batch (only terminal batches exist), unless skip_review=true — then
+ *      the send proceeds without a draft (skipReviewDirectSend).
  *   4. Threads the allowed triple through prepareToolCall →
  *      executePreparedToolWithTimeout → the SkillExecutionContext passed to
  *      deps.executeTool, so `start_email_send_task` receives
@@ -89,12 +90,16 @@ import type { OutboundEmailIntentReasonCode } from "@/entityTypes/outboundEmailD
 
 /** Type-erased accessors for the loop's private seams. */
 interface LoopWithInternals {
-  evaluateOutboundEmailGate: (input: Record<string, unknown>) => Promise<{
+  evaluateOutboundEmailGate: (
+    input: Record<string, unknown>,
+    toolArguments?: Record<string, unknown>
+  ) => Promise<{
     allowed: boolean;
     code?: string;
     batchId?: number | null;
     authorizationId?: number;
     batchHash?: string;
+    skipReviewDirectSend?: boolean;
   }>;
 }
 
@@ -177,6 +182,20 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
     const result = await loop.evaluateOutboundEmailGate(makeGateInput(null));
     expect(result.allowed).toBe(false);
     expect(result.code).toBe("draft_required");
+  });
+
+  it("allows skip_review with no intent and no draft", async () => {
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(makeGateInput(null), {
+      skip_review: true,
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.skipReviewDirectSend).toBe(true);
   });
 
   it("blocks review_required for a send_now turn with an unreviewed draft_ready batch", async () => {
@@ -268,6 +287,46 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
     expect(result.code).toBe("draft_required");
   });
 
+  it("allows skip_review send_now with no draft batch", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(makeIntent("send_now"));
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.skipReviewDirectSend).toBe(true);
+  });
+
+  it("allows skip_review draft_only with no draft batch", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "ambiguous_instruction")
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.skipReviewDirectSend).toBe(true);
+  });
+
   it("blocks review_required for a review_first intent even with a batch", async () => {
     const intentModel = new OutboundEmailIntentModel(tmpDir);
     const draftModel = new OutboundEmailDraftModel(tmpDir);
@@ -320,6 +379,71 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
 
     const reloaded = await draftModel.readBatch(batch.id);
     expect(reloaded?.status).toBe("direct_authorized");
+  });
+
+  it("blocks review_required for draft_only after a draft exists so the model stops re-drafting", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "ambiguous_instruction")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id)
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.batchId).toBe(batch.id);
+  });
+
+  it("binds a distinct batch per skip-review send when the turn drafted several", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("send_now", "explicit_skip_review")
+    );
+    const firstBatch = await draftModel.createBatch(
+      makeBatch({
+        intentDecisionId: intent.id,
+        status: "draft_ready",
+        batchHash: "a".repeat(64),
+      })
+    );
+    const secondBatch = await draftModel.createBatch(
+      makeBatch({
+        intentDecisionId: intent.id,
+        status: "draft_ready",
+        batchHash: "b".repeat(64),
+      })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const first = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id)
+    );
+    const second = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id)
+    );
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(first.batchId).toBe(firstBatch.id);
+    expect(second.batchId).toBe(secondBatch.id);
   });
 
   it("allows a chat confirmation turn to send the previous turn's draft", async () => {
@@ -392,5 +516,154 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
 
     const reloaded = await draftModel.readBatch(batch.id);
     expect(reloaded?.status).toBe("direct_authorized");
+  });
+
+  it("allows draft_only send when the model passes skip_review after a draft exists", async () => {
+    // Phrase matching missed the waiver (draft_only), but the user asked
+    // to send without review and the model declared skip_review=true.
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "ambiguous_instruction")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.batchId).toBe(batch.id);
+    expect(result.authorizationId).toBeGreaterThan(0);
+
+    const reloaded = await draftModel.readBatch(batch.id);
+    expect(reloaded?.status).toBe("direct_authorized");
+  });
+
+  it("does not treat skip_review string true as a waiver", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "ambiguous_instruction")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: "true" }
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.batchId).toBe(batch.id);
+  });
+
+  it("allows ordinary send_now when skip_review is true after a draft exists", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(makeIntent("send_now"));
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.batchId).toBe(batch.id);
+  });
+
+  it("ignores skip_review when the user asked to review first", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(makeIntent("review_first"));
+    await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+  });
+
+  it("ignores skip_review when the user said not to send", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(
+      makeIntent("draft_only", "explicit_do_not_send")
+    );
+    const batch = await draftModel.createBatch(
+      makeBatch({ intentDecisionId: intent.id, status: "draft_ready" })
+    );
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.batchId).toBe(batch.id);
+  });
+
+  it("ignores skip_review for review_first even when no draft exists", async () => {
+    const intentModel = new OutboundEmailIntentModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const intent = await intentModel.create(makeIntent("review_first"));
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      getSkillDefinition: vi.fn(),
+      executeTool: vi.fn(),
+    } as never) as unknown as LoopWithInternals;
+
+    const result = await loop.evaluateOutboundEmailGate(
+      makeGateInput(intent.id),
+      { skip_review: true }
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.code).toBe("review_required");
+    expect(result.skipReviewDirectSend).not.toBe(true);
   });
 });

@@ -17,6 +17,8 @@
 - [Technical Design: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-technical-design.md)
 - [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
 - [Technical Design: Contact Verification AI Tool](./prd/contact-verification-ai-tool-technical-design.md)
+- [PRD: Separate SMTP Login, From, and Reply-To](./prd/email-service-from-reply-to-prd.md)
+- [Technical Design: Separate SMTP Login, From, and Reply-To](./prd/email-service-from-reply-to-technical-design.md)
 - [PRD: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-prd.md)
 - [Technical Design: Intent-Aware AI Outbound Email Delivery](./prd/ai-outbound-email-intent-aware-delivery-technical-design.md)
 - [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)

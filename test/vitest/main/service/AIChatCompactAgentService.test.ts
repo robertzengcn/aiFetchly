@@ -14,38 +14,52 @@ const mockRecordFailure = vi.fn();
 const mockResetFailures = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
     getByConversation: mockGetByConversation,
     upsertMemory: mockUpsertMemory,
     markUpdating: mockMarkUpdating,
     recordFailure: mockRecordFailure,
     resetFailures: mockResetFailures,
-  })),
+  };
+  }),
 }));
 
 const mockGetConversationMessages = vi.fn();
+const mockHasMessagesAfter = vi.fn();
+const mockFindBoundary = vi.fn();
+const mockGetMessagesAfter = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockSaveFullCompact = vi.fn();
 const mockMarkSuperseded = vi.fn();
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     getConversationMessages: mockGetConversationMessages,
+    hasMessagesAfter: mockHasMessagesAfter,
+    findBoundaryInConversation: mockFindBoundary,
+    getMessagesAfter: mockGetMessagesAfter,
     getDefaultSystemPrompt: vi.fn().mockReturnValue("sysp"),
     createConversationIfNeeded: vi.fn((id?: string) => id ?? "v2-x"),
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
     getActiveSummary: mockGetActiveSummary,
     saveFullCompact: mockSaveFullCompact,
     markSuperseded: mockMarkSuperseded,
-  })),
+  };
+  }),
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn() };
+  }),
 }));
 
 import { Token } from "@/modules/token";
@@ -72,6 +86,18 @@ function makeCompletion(text: string): OpenAIChatCompletionResponse {
   };
 }
 
+/** Fake bounded coordinator: resolves like a completed single-batch run. */
+function makeCoordinator() {
+  return {
+    requestCompaction: vi.fn().mockResolvedValue({
+      state: "completed",
+      generationId: "gen-test",
+      sectionsPacked: 1,
+      runId: "run-test",
+    }),
+  };
+}
+
 function makeAgent(opts: {
   aiEnabled?: boolean;
   completeChat?: (req: unknown) => Promise<OpenAIChatCompletionResponse>;
@@ -80,6 +106,8 @@ function makeAgent(opts: {
     import("@/api/aiChatApi").OpenAISmallModelCapability | null
   >;
   onAutoCompacted?: (summary: AIChatCompactSummaryView) => void;
+  /** Coordinator double; `null` omits it (fail-closed test). Defaults wired. */
+  coordinator?: { requestCompaction: ReturnType<typeof vi.fn> } | null;
 }) {
   const tokenService = new Token();
   // Wrap a raw-response mock into the lightweight result shape the service
@@ -105,9 +133,17 @@ function makeAgent(opts: {
   const defaultFn = vi
     .fn()
     .mockResolvedValue(makeCompletion("# Session Memory\n## Current Goal\nx"));
-  const completeLightweight = wrap(opts.completeChat ?? defaultFn);
+  const completeLightweight = opts.completeChat
+    ? wrap(opts.completeChat)
+    : undefined;
+  // Keep the raw spy visible as deps.completeChat as well: the coordinator
+  // delegation's summarize path reads completeChat directly (merged union).
+  const completeChatDep = opts.completeChat;
+  const coordinator =
+    opts.coordinator === undefined ? makeCoordinator() : opts.coordinator;
   const deps = {
     completeLightweight,
+    ...(completeChatDep ? { completeChat: completeChatDep } : {}),
     isEnabled: () => opts.aiEnabled ?? true,
     ...(opts.getContextWindow
       ? { getContextWindow: opts.getContextWindow }
@@ -116,11 +152,11 @@ function makeAgent(opts: {
       ? { getSmallModelCapability: opts.getSmallModelCapability }
       : {}),
     ...(opts.onAutoCompacted ? { onAutoCompacted: opts.onAutoCompacted } : {}),
+    ...(coordinator ? { compactionCoordinator: coordinator as never } : {}),
   };
   return new AIChatCompactAgentService(tokenService, deps);
 }
 
-/** Two plain message rows for conversation `convId` (timestamps 1 and 2). */
 function messageRows(convId: string) {
   return [
     {
@@ -142,7 +178,6 @@ function messageRows(convId: string) {
   ];
 }
 
-/** Minimal compact summary view returned by saveFullCompact. */
 function compactView(convId: string): AIChatCompactSummaryView {
   return {
     compactId: "compact-1",
@@ -185,9 +220,9 @@ describe("AIChatCompactAgentService", () => {
     expect(mockGetByConversation).not.toHaveBeenCalled();
   });
 
-  it("updates session memory with new messages", async () => {
+  it("delegates new messages to the shared bounded coordinator (one algorithm)", async () => {
     mockGetByConversation.mockResolvedValue(null);
-    mockGetConversationMessages.mockResolvedValue([
+    mockGetMessagesAfter.mockResolvedValue([
       {
         messageId: "m1",
         conversationId: "v2-new",
@@ -205,19 +240,13 @@ describe("AIChatCompactAgentService", () => {
         messageType: "message",
       },
     ]);
-    mockUpsertMemory.mockImplementation(async (input) => ({
-      conversationId: input.conversationId,
-      summary: input.summary,
-      failureCount: 0,
-      status: "active",
-    }));
+    mockResetFailures.mockResolvedValue({ failureCount: 0 });
 
-    const completeChat = vi
-      .fn()
-      .mockResolvedValue(
-        makeCompletion("# Session Memory\n## Current Goal\nx")
-      );
-    const agent = makeAgent({ completeChat });
+    // Session memory owns NO summarizer: even a tiny delta goes through the
+    // coordinator's pack → summarize → validate → checkpoint pipeline (FR-07).
+    const completeChat = vi.fn();
+    const coordinator = makeCoordinator();
+    const agent = makeAgent({ completeChat, coordinator });
 
     await agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-new",
@@ -226,13 +255,14 @@ describe("AIChatCompactAgentService", () => {
       promptTokens: 103_000,
     });
 
-    expect(completeChat).toHaveBeenCalled();
-    expect(mockUpsertMemory).toHaveBeenCalled();
-    const call = mockUpsertMemory.mock.calls[0][0];
-    expect(call.conversationId).toBe("v2-new");
-    expect(call.sourceMessageCount).toBe(2);
-    expect(call.coveredThroughMessageId).toBe("m2");
-    expect(call.failureCount).toBeUndefined();
+    expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
+    expect(coordinator.requestCompaction.mock.calls[0][1]).toMatchObject({
+      trigger: "session-memory",
+    });
+    expect(completeChat).not.toHaveBeenCalled();
+    // The session store is read-only advisory now: no direct upsert.
+    expect(mockUpsertMemory).not.toHaveBeenCalled();
+    expect(mockResetFailures).toHaveBeenCalled();
   });
 
   it("skips when there are no new messages after boundary", async () => {
@@ -240,16 +270,12 @@ describe("AIChatCompactAgentService", () => {
       conversationId: "v2-stale",
       coveredThroughMessageId: "m-last",
     });
-    mockGetConversationMessages.mockResolvedValue([
-      {
-        messageId: "m-last",
-        conversationId: "v2-stale",
-        role: "user",
-        content: "x",
-        timestamp: new Date(1),
-        messageType: "message",
-      },
-    ]);
+    mockFindBoundary.mockResolvedValue({
+      messageId: "m-last",
+      id: 7,
+      timestamp: new Date(1),
+    });
+    mockGetMessagesAfter.mockResolvedValue([]);
     const agent = makeAgent({});
     await agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-stale",
@@ -258,9 +284,9 @@ describe("AIChatCompactAgentService", () => {
     expect(mockUpsertMemory).not.toHaveBeenCalled();
   });
 
-  it("records failure when the model call throws", async () => {
+  it("records failure when the delegated coordinator run throws", async () => {
     mockGetByConversation.mockResolvedValue(null);
-    mockGetConversationMessages.mockResolvedValue([
+    mockGetMessagesAfter.mockResolvedValue([
       {
         messageId: "m1",
         conversationId: "v2-fail",
@@ -279,8 +305,9 @@ describe("AIChatCompactAgentService", () => {
       },
     ]);
     mockRecordFailure.mockResolvedValue({ failureCount: 1 });
-    const completeChat = vi.fn().mockRejectedValue(new Error("boom"));
-    const agent = makeAgent({ completeChat });
+    const coordinator = makeCoordinator();
+    coordinator.requestCompaction.mockRejectedValueOnce(new Error("boom"));
+    const agent = makeAgent({ coordinator });
 
     await agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-fail",
@@ -296,7 +323,7 @@ describe("AIChatCompactAgentService", () => {
 
   it("does not run two updates for the same conversation in parallel", async () => {
     mockGetByConversation.mockResolvedValue(null);
-    mockGetConversationMessages.mockResolvedValue([
+    mockGetMessagesAfter.mockResolvedValue([
       {
         messageId: "m1",
         conversationId: "v2-parallel",
@@ -315,16 +342,25 @@ describe("AIChatCompactAgentService", () => {
       },
     ]);
     mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
-    const holder: {
-      resolve: ((v: OpenAIChatCompletionResponse) => void) | null;
-    } = { resolve: null };
-    const completeChat = vi.fn(
+    const coordinator = makeCoordinator();
+    let release!: (v: {
+      state: "completed";
+      generationId: string;
+      sectionsPacked: number;
+      runId: string;
+    }) => void;
+    coordinator.requestCompaction.mockImplementation(
       () =>
-        new Promise<OpenAIChatCompletionResponse>((r) => {
-          holder.resolve = r;
+        new Promise<{
+          state: "completed";
+          generationId: string;
+          sectionsPacked: number;
+          runId: string;
+        }>((resolve) => {
+          release = resolve;
         })
     );
-    const agent = makeAgent({ completeChat });
+    const agent = makeAgent({ coordinator });
 
     const p1 = agent.enqueueSessionMemoryUpdate({
       conversationId: "v2-parallel",
@@ -336,22 +372,30 @@ describe("AIChatCompactAgentService", () => {
       reason: "test",
       promptTokens: 103_000,
     });
-    // Wait for p1 to reach the parked model call; p2 must skip via in-flight check.
-    await vi.waitFor(() => expect(completeChat).toHaveBeenCalledTimes(1));
-    holder.resolve?.(makeCompletion("# Session Memory\n## Current Goal\nx"));
+    // Wait for p1 to reach the parked coordinator call; p2 must skip via
+    // in-flight check.
+    await vi.waitFor(() =>
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1)
+    );
+    release({
+      state: "completed",
+      generationId: "gen-1",
+      sectionsPacked: 1,
+      runId: "run-1",
+    });
     await Promise.all([p1, p2]);
-    expect(completeChat).toHaveBeenCalledTimes(1);
+    expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
   });
 
   describe("auto compact", () => {
     it("runs a full compact when promptTokens >= 80% of the real context window", async () => {
       mockGetActiveSummary.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue(messageRows("v2-auto"));
-      mockSaveFullCompact.mockResolvedValue(compactView("v2-auto"));
+      const coordinator = makeCoordinator();
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
         getContextWindow: vi.fn().mockResolvedValue(8192),
         onAutoCompacted,
+        coordinator,
       });
 
       // 0.8 * 8192 = 6553.6 -> 7000 trips the gate with the REAL window
@@ -364,17 +408,19 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(ran).toBe(true);
-      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
       expect(onAutoCompacted).toHaveBeenCalledTimes(1);
       expect(onAutoCompacted.mock.calls[0][0].conversationId).toBe("v2-auto");
     });
 
     it("skips below the threshold and reports false", async () => {
       mockGetActiveSummary.mockResolvedValue(null);
+      const coordinator = makeCoordinator();
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
         getContextWindow: vi.fn().mockResolvedValue(8192),
         onAutoCompacted,
+        coordinator,
       });
 
       // AUTO_COMPACT_THRESHOLD_FRACTION is 0.7: floor(0.7 * 8192) = 5734,
@@ -386,23 +432,42 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(ran).toBe(false);
-      expect(mockGetConversationMessages).not.toHaveBeenCalled();
-      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      expect(coordinator.requestCompaction).not.toHaveBeenCalled();
       expect(onAutoCompacted).not.toHaveBeenCalled();
     });
 
-    it("falls back to the 128k default window when no resolver is wired", async () => {
-      const agent = makeAgent({});
+    it("falls back to the §8.1 unknown-model window (8,192) when no resolver is wired", async () => {
+      const coordinator = makeCoordinator();
+      const agent = makeAgent({ coordinator });
 
       // 80_000 < floor(0.7 * 128_000) = 89_600 -> skipped without a resolver.
+      // 0.8 * 8_192 = 6553.6 -> 7000 trips the gate WITHOUT a resolver.
+      // Never assume 128k: that denominator would delay auto-compact past a
+      // small model's real window (AC-16).
       const ran = await agent.enqueueAutoCompact({
         conversationId: "v2-auto-default",
         reason: "assistant_turn_completed",
         promptTokens: 80_000,
       });
 
+      expect(ran).toBe(true);
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("still skips below the fallback threshold without a resolver", async () => {
+      const coordinator = makeCoordinator();
+      const agent = makeAgent({ coordinator });
+
+      // Merged product uses the 8,192 fallback window (§8.1 AC-16), so the
+      // gate is floor(0.7 * 8192) = 5734 — 5000 stays below it.
+      const ran = await agent.enqueueAutoCompact({
+        conversationId: "v2-auto-default-low",
+        reason: "assistant_turn_completed",
+        promptTokens: 5000,
+      });
+
       expect(ran).toBe(false);
-      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      expect(coordinator.requestCompaction).not.toHaveBeenCalled();
     });
 
     it("skips when the active compact boundary already covers the latest message", async () => {
@@ -412,10 +477,14 @@ describe("AIChatCompactAgentService", () => {
       mockGetConversationMessages.mockResolvedValue(
         messageRows("v2-auto-bound")
       );
+      // Bounded coverage check: nothing after the boundary — no full load.
+      mockHasMessagesAfter.mockResolvedValue(false);
+      const coordinator = makeCoordinator();
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
         getContextWindow: vi.fn().mockResolvedValue(8192),
         onAutoCompacted,
+        coordinator,
       });
 
       const ran = await agent.enqueueAutoCompact({
@@ -425,21 +494,21 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(ran).toBe(false);
-      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      expect(coordinator.requestCompaction).not.toHaveBeenCalled();
       expect(onAutoCompacted).not.toHaveBeenCalled();
     });
 
     it("compacts when messages exist beyond the boundary", async () => {
       mockGetActiveSummary.mockResolvedValue({
-        // Boundary sits between m1 (t=1) and m2 (t=2): m2 is new.
         throughTimestamp: new Date(1).toISOString(),
       });
-      mockGetConversationMessages.mockResolvedValue(messageRows("v2-auto-new"));
-      mockSaveFullCompact.mockResolvedValue(compactView("v2-auto-new"));
+      mockHasMessagesAfter.mockResolvedValue(true);
+      const coordinator = makeCoordinator();
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
         getContextWindow: vi.fn().mockResolvedValue(8192),
         onAutoCompacted,
+        coordinator,
       });
 
       const ran = await agent.enqueueAutoCompact({
@@ -449,18 +518,19 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(ran).toBe(true);
-      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
       expect(onAutoCompacted).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false and does not throw when the compact model call fails", async () => {
+    it("returns false and does not throw when the coordinator call fails", async () => {
       mockGetActiveSummary.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue(messageRows("v2-auto-err"));
+      const coordinator = makeCoordinator();
+      coordinator.requestCompaction.mockRejectedValueOnce(new Error("boom"));
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
-        completeChat: vi.fn().mockRejectedValue(new Error("boom")),
         getContextWindow: vi.fn().mockResolvedValue(8192),
         onAutoCompacted,
+        coordinator,
       });
 
       const ran = await agent.enqueueAutoCompact({
@@ -470,7 +540,6 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(ran).toBe(false);
-      expect(mockSaveFullCompact).not.toHaveBeenCalled();
       expect(onAutoCompacted).not.toHaveBeenCalled();
     });
 
@@ -530,7 +599,7 @@ describe("AIChatCompactAgentService", () => {
 
     it("triggers when promptTokens >= 80% of context window", async () => {
       mockGetByConversation.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue([
+      mockGetMessagesAfter.mockResolvedValue([
         {
           messageId: "m1",
           conversationId: "v2-gate-tokens",
@@ -548,16 +617,11 @@ describe("AIChatCompactAgentService", () => {
           messageType: "message",
         },
       ]);
-      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
-      const completeChat = vi
-        .fn()
-        .mockResolvedValue(
-          makeCompletion("# Session Memory\n## Current Goal\nx")
-        );
-      const agent = makeAgent({ completeChat });
+      const coordinator = makeCoordinator();
+      const agent = makeAgent({ coordinator });
 
-      // 0.8 * 128_000 = 102_400. 103_000 must trip the gate even on a
-      // fresh conversation (token check fires before time check).
+      // 0.8 * 8_192 = 6553.6 (§8.1 fallback). 103_000 must trip the gate
+      // even on a fresh conversation (token check fires before time check).
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-gate-tokens",
         reason: "test",
@@ -565,8 +629,7 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(mockGetByConversation).toHaveBeenCalledWith("v2-gate-tokens");
-      expect(completeChat).toHaveBeenCalled();
-      expect(mockUpsertMemory).toHaveBeenCalled();
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
     });
 
     it("uses the real context window as the gate denominator when provided", async () => {
@@ -580,8 +643,27 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValue(
           makeCompletion("# Session Memory\n## Current Goal\nx")
         );
+      mockGetMessagesAfter.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-gate-real",
+          role: "user",
+          content: "hello",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-gate-real",
+          role: "assistant",
+          content: "hi",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      const coordinator = makeCoordinator();
       const agent = makeAgent({
-        completeChat,
+        coordinator,
         // Small-window model: 0.8 * 8192 = 6553.6. The hard-coded 128k
         // denominator would have skipped 7_000 forever.
         getContextWindow: vi.fn().mockResolvedValue(8192),
@@ -594,8 +676,7 @@ describe("AIChatCompactAgentService", () => {
       });
 
       expect(mockGetByConversation).toHaveBeenCalledWith("v2-gate-real");
-      expect(completeChat).toHaveBeenCalled();
-      expect(mockUpsertMemory).toHaveBeenCalled();
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
     });
 
     it("triggers when >60 min have passed since the first observation", async () => {
@@ -603,7 +684,7 @@ describe("AIChatCompactAgentService", () => {
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
       try {
         mockGetByConversation.mockResolvedValue(null);
-        mockGetConversationMessages.mockResolvedValue([
+        mockGetMessagesAfter.mockResolvedValue([
           {
             messageId: "m1",
             conversationId: "v2-gate-time",
@@ -621,13 +702,8 @@ describe("AIChatCompactAgentService", () => {
             messageType: "message",
           },
         ]);
-        mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
-        const completeChat = vi
-          .fn()
-          .mockResolvedValue(
-            makeCompletion("# Session Memory\n## Current Goal\nx")
-          );
-        const agent = makeAgent({ completeChat });
+        const coordinator = makeCoordinator();
+        const agent = makeAgent({ coordinator });
 
         // First call: low tokens + fresh timestamp (lazy-init to now) -> skip.
         await agent.enqueueSessionMemoryUpdate({
@@ -635,7 +711,7 @@ describe("AIChatCompactAgentService", () => {
           reason: "test",
           promptTokens: 1000,
         });
-        expect(completeChat).not.toHaveBeenCalled();
+        expect(coordinator.requestCompaction).not.toHaveBeenCalled();
 
         // Advance past 60 min -> time gate opens.
         vi.setSystemTime(new Date("2026-01-01T01:01:00Z"));
@@ -644,15 +720,112 @@ describe("AIChatCompactAgentService", () => {
           reason: "test",
           promptTokens: 1000,
         });
-        expect(completeChat).toHaveBeenCalledTimes(1);
+        expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
     });
 
+  describe("session memory unification (AC-23: one algorithm)", () => {
+    const memRows = (convId: string, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        messageId: `m${i}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${i}`,
+        timestamp: new Date(1 + i),
+        messageType: "message",
+      }));
+
+    it("routes an over-row delta to the coordinator (no direct summarize)", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetMessagesAfter.mockResolvedValue(memRows("v2-sess-big", 65));
+      const coordinator = makeCoordinator();
+      const completeChat = vi.fn();
+      const agent = makeAgent({ completeChat, coordinator });
+
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sess-big",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
+      expect(coordinator.requestCompaction.mock.calls[0][1]).toMatchObject({
+        trigger: "session-memory",
+      });
+      expect(completeChat).not.toHaveBeenCalled();
+      expect(mockUpsertMemory).not.toHaveBeenCalled();
+    });
+
+    it("routes a tiny delta to the coordinator too (no second summarizer)", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetMessagesAfter.mockResolvedValue(memRows("v2-sess-tiny", 2));
+      const coordinator = makeCoordinator();
+      const completeChat = vi.fn();
+      const agent = makeAgent({ completeChat, coordinator });
+
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sess-tiny",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      // Small deltas do NOT take a buildSessionMemoryUserPrompt + completeChat
+      // fast path: one bounded incremental algorithm for every size (FR-07).
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
+      expect(completeChat).not.toHaveBeenCalled();
+      expect(mockUpsertMemory).not.toHaveBeenCalled();
+    });
+
+    it("delegates a boundary-unresolvable backlog instead of skipping blindly", async () => {
+      mockGetByConversation.mockResolvedValue({
+        conversationId: "v2-sess-gone",
+        coveredThroughMessageId: "m-vanished",
+      });
+      mockFindBoundary.mockResolvedValue(null);
+      const coordinator = makeCoordinator();
+      const agent = makeAgent({ coordinator });
+
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sess-gone",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      // Deleted/ambiguous boundary: the coordinator rebuild owns legacy
+      // migration via bounded sections — never a full-archive rescan here.
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
+      expect(mockGetMessagesAfter).not.toHaveBeenCalled();
+    });
+
+    it("records failure when the coordinator is unavailable (fail closed)", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetMessagesAfter.mockResolvedValue(memRows("v2-sess-nocoord", 65));
+      mockRecordFailure.mockResolvedValue({ failureCount: 1 });
+      // Fail-closed branch keys on BOTH routes being unwired (merged union:
+      // flag-off + lightweight-off → limitation recorded). Omit completeChat
+      // so the harness stops wiring the lightweight wrapper.
+      const agent = makeAgent({ coordinator: null });
+
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sess-nocoord",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+
+      // Fail closed with a limitation — never a direct unbounded summarize.
+      expect(mockRecordFailure).toHaveBeenCalledWith(
+        "v2-sess-nocoord",
+        expect.stringMatching(/coordinator/i)
+      );
+      expect(mockUpsertMemory).not.toHaveBeenCalled();
+    });
+  });
+
     it("resets the timer on success so an immediate second call is skipped", async () => {
       mockGetByConversation.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue([
+      mockGetMessagesAfter.mockResolvedValue([
         {
           messageId: "m1",
           conversationId: "v2-gate-reset",
@@ -670,22 +843,17 @@ describe("AIChatCompactAgentService", () => {
           messageType: "message",
         },
       ]);
-      mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
-      const completeChat = vi
-        .fn()
-        .mockResolvedValue(
-          makeCompletion("# Session Memory\n## Current Goal\nx")
-        );
-      const agent = makeAgent({ completeChat });
+      const coordinator = makeCoordinator();
+      const agent = makeAgent({ coordinator });
 
-      // Force the gate open via high tokens so the LLM fires and the timer
+      // Force the gate open via high tokens so delegation fires and the timer
       // gets reset on success.
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-gate-reset",
         reason: "test",
         promptTokens: 103_000,
       });
-      expect(completeChat).toHaveBeenCalledTimes(1);
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
 
       // Second call immediately after success: low tokens + fresh timer -> skip.
       await agent.enqueueSessionMemoryUpdate({
@@ -693,7 +861,7 @@ describe("AIChatCompactAgentService", () => {
         reason: "test",
         promptTokens: 1000,
       });
-      expect(completeChat).toHaveBeenCalledTimes(1);
+      expect(coordinator.requestCompaction).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -701,6 +869,24 @@ describe("AIChatCompactAgentService", () => {
     beforeEach(() => {
       mockGetByConversation.mockResolvedValue(null);
       mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-sm",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-sm",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      mockGetMessagesAfter.mockResolvedValue([
         {
           messageId: "m1",
           conversationId: "v2-sm",
@@ -729,7 +915,9 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValue(
           makeCompletion("# Session Memory\n## Current Goal\nx")
         );
-      const agent = makeAgent({ completeChat });
+      // Workload routing lives on the SMBW bounded lightweight path; the
+      // coordinator delegation (flag-on) owns the same workload elsewhere.
+      const agent = makeAgent({ completeChat, coordinator: null });
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-sm",
         reason: "test",
@@ -747,7 +935,7 @@ describe("AIChatCompactAgentService", () => {
       // No prior session-memory row (first run). recordFailure must still
       // create one so the breaker can trip (tech-design §15.3).
       const completeChat = vi.fn().mockRejectedValue(new Error("boom"));
-      const agent = makeAgent({ completeChat });
+      const agent = makeAgent({ completeChat, coordinator: null });
       await agent.enqueueSessionMemoryUpdate({
         conversationId: "v2-sm",
         reason: "test",
@@ -763,7 +951,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockRejectedValue(new DOMException("aborted", "AbortError"));
-      const agent = makeAgent({ completeChat });
+      const agent = makeAgent({ completeChat, coordinator: null });
       // Should not throw past enqueueSessionMemoryUpdate.
       await expect(
         agent.enqueueSessionMemoryUpdate({
@@ -797,7 +985,7 @@ describe("AIChatCompactAgentService", () => {
         if (calls >= 1) controller.abort();
         return makeCompletion("# Compact\n## Summary\npart");
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -832,7 +1020,7 @@ describe("AIChatCompactAgentService", () => {
         if (calls >= 1) controller.abort();
         return makeCompletion("# Session Memory\n## Current Goal\nx");
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -876,7 +1064,7 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValue(
           makeCompletion("# Session Memory\n## Current Goal\nx")
         );
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         // Tiny window forces many chunks.
         getContextWindow: vi.fn().mockResolvedValue(2000),
@@ -902,7 +1090,7 @@ describe("AIChatCompactAgentService", () => {
           makeCompletion("# Session Memory\n## Current Goal\nok")
         )
         .mockResolvedValueOnce(makeCompletion("")); // empty -> invalid
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -923,7 +1111,7 @@ describe("AIChatCompactAgentService", () => {
         void lwInput;
         return makeCompletion("# Session Memory\n## Current Goal\nnext");
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -986,7 +1174,7 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValue(
           makeCompletion("# Session Memory\n## Current Goal\nx")
         );
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         // Tiny window forces the 3-message delta into 2 chunks.
         getContextWindow: vi.fn().mockResolvedValue(120),
@@ -1017,7 +1205,7 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValueOnce(
           makeCompletion("# Session Memory\n## Current Goal\nrepaired")
         );
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1075,7 +1263,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nchunk"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -1096,7 +1284,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\none"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1118,7 +1306,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nx"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
         getSmallModelCapability: vi.fn().mockResolvedValue(null),
@@ -1138,7 +1326,7 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValueOnce(
           makeCompletion("") // empty -> normalizeFullCompactSummary returns ok=false
         );
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -1180,7 +1368,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         // Tiny window forces many chunks; summaries then require a
         // multi-level recursive reduce to reach one final summary.
@@ -1214,7 +1402,7 @@ describe("AIChatCompactAgentService", () => {
         .mockResolvedValue(
           makeCompletion("# Compact\n## Summary\n" + "y".repeat(8000))
         );
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(500),
       });
@@ -1232,7 +1420,7 @@ describe("AIChatCompactAgentService", () => {
         vi.fn().mockResolvedValue(makeCompletion("# Compact\n## Summary\np"));
       const run = async () => {
         const completeChat = mk();
-        const agent = makeAgent({
+        const agent = makeAgent({ coordinator: null,
           completeChat,
           getContextWindow: vi.fn().mockResolvedValue(1500),
         });
@@ -1274,7 +1462,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });
@@ -1307,7 +1495,7 @@ describe("AIChatCompactAgentService", () => {
         return ok;
       });
       // Provide a small-model capability so the small route is eligible.
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
         getSmallModelCapability: vi
@@ -1346,7 +1534,7 @@ describe("AIChatCompactAgentService", () => {
         // Reduced-budget retry succeeds on the small route.
         return makeCompletion("# Compact\n## Summary\nreduced-ok");
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
         getSmallModelCapability: vi
@@ -1375,7 +1563,7 @@ describe("AIChatCompactAgentService", () => {
           definitive: false,
         });
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
         getSmallModelCapability: vi
@@ -1401,7 +1589,7 @@ describe("AIChatCompactAgentService", () => {
           definitive: true,
         });
       });
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
         getSmallModelCapability: vi
@@ -1453,7 +1641,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1478,7 +1666,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1513,7 +1701,7 @@ describe("AIChatCompactAgentService", () => {
         fiveRows("v2-reuse").slice(0, 2) // only covered rows exist
       );
       const completeChat = vi.fn();
-      const agent = makeAgent({ completeChat });
+      const agent = makeAgent({ coordinator: null, completeChat });
 
       const view = await agent.runFullCompact({ conversationId: "v2-reuse" });
 
@@ -1530,7 +1718,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1556,7 +1744,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\nall"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(128_000),
       });
@@ -1589,7 +1777,7 @@ describe("AIChatCompactAgentService", () => {
       const completeChat = vi
         .fn()
         .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
-      const agent = makeAgent({
+      const agent = makeAgent({ coordinator: null,
         completeChat,
         getContextWindow: vi.fn().mockResolvedValue(2000),
       });

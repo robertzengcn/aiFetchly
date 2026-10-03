@@ -40,6 +40,7 @@ import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
 const WORKSPACE_AUTO_DREAM_PROFILE = getLightweightProfile(
   "workspace_auto_dream"
 );
+import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -100,9 +101,12 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; sent as the fallback when the
+     * hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       log.error("[workspace-auto-dream] chat trigger failed:", err);
     }
@@ -111,9 +115,12 @@ export class AIWorkspaceAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, used as the fallback when
+     * the hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       log.error("[workspace-auto-dream] agent trigger failed:", err);
     }
@@ -128,6 +135,8 @@ export class AIWorkspaceAutoDreamService {
     /** Caller cancellation signal, propagated to every lightweight request
      * and checked before retry/repair/transactional apply (SMBW-011). */
     signal?: AbortSignal;
+    /** Explicit fallback model for the "small"-alias retry (test branch). */
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
@@ -135,6 +144,7 @@ export class AIWorkspaceAutoDreamService {
       reason: input?.reason ?? "manual",
       conversationId: input?.conversationId,
       signal: input?.signal,
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -161,6 +171,7 @@ export class AIWorkspaceAutoDreamService {
     reason: string;
     conversationId?: string;
     signal?: AbortSignal;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -177,6 +188,7 @@ export class AIWorkspaceAutoDreamService {
     reason: string;
     conversationId?: string;
     signal?: AbortSignal;
+    model?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;

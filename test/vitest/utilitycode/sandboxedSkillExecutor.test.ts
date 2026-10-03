@@ -3,10 +3,15 @@ import { describe, test, expect, vi } from "vitest";
 
 // Mock Token (used by SkillPermissionService which may be imported transitively)
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn(() => ""),
-    setValue: vi.fn(),
-  })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue(): string {
+      return "";
+    }
+    setValue(): void {
+      return undefined;
+    }
+  },
 }));
 
 // Mock ToolExecutor (used by skillsRegistry at module load time)
@@ -17,9 +22,9 @@ vi.mock("@/service/ToolExecutor", () => ({
 }));
 
 vi.mock("@/service/MCPToolService", () => ({
-  MCPToolService: vi.fn().mockImplementation(() => ({
-    getEnabledMCPToolsAsFunctions: vi.fn().mockResolvedValue([]),
-  })),
+  MCPToolService: class {
+    getEnabledMCPToolsAsFunctions = vi.fn().mockResolvedValue([]);
+  },
 }));
 
 import { SandboxedSkillExecutor } from "@/service/SandboxedSkillExecutor";

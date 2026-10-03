@@ -15,10 +15,15 @@ const { startMock, stopMock, transcribeVoiceMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/views/components/aiChatV2/voice/BrowserVoiceRecorder", () => ({
-  BrowserVoiceRecorder: vi.fn(() => ({
-    start: startMock,
-    stop: stopMock,
-  })),
+  // Vitest 4 invokes class mocks with new; an arrow function is not
+  // constructable, so use a regular function returning the mock instance
+  // (same pattern as commit 1236f046 for the engine/assembler suites).
+  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock() {
+    return {
+      start: startMock,
+      stop: stopMock,
+    };
+  }),
 }));
 
 vi.mock("@/views/components/aiChatV2/voice/audioConversion", () => ({

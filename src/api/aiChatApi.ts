@@ -1,5 +1,6 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpResponseError } from "@/modules/lib/httpResponseError";
 import {
   CommonApiresp,
   ChatApiResponse,
@@ -14,6 +15,7 @@ import {
 } from "@/schemas/api/aiChat";
 import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import { isSmallModelAlias } from "@/service/aiProvider/SmallModelAlias";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
 import { type AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
@@ -525,6 +527,14 @@ export interface OpenAIReasoningOptions {
 export interface OpenAIChatCompletionRequest {
   messages: OpenAIChatMessage[];
   model?: string;
+  /**
+   * Desktop-internal fallback model for `SMALL_MODEL_ALIAS` requests. Never
+   * serialized on the wire: every payload builder copies explicit fields
+   * only. When the hosted server has no small row flagged (HTTP 404
+   * `small_model_unavailable`), the request is retried once with this model,
+   * or with no model (server default) when absent.
+   */
+  fallbackModel?: string;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
@@ -629,6 +639,13 @@ export interface OpenAIStreamDelta {
   reasoning_content?: string | null;
   reasoning_summary?: string | null;
   reasoning_delta?: string | null;
+  /** OpenRouter / some hosted models emit a plain `reasoning` string. */
+  reasoning?: string | null;
+  /** Ollama / Qwen thinking models. */
+  thinking?: string | null;
+  thought?: string | null;
+  /** OpenRouter structured reasoning parts. */
+  reasoning_details?: unknown;
   tool_calls?: OpenAIStreamToolCallDelta[];
   images?: OpenAIChatImage[];
 }
@@ -796,6 +813,14 @@ export interface StreamRecoveryInfo {
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
 const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
 const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
+ * discards the response body, so only the numeric status is observable).
+ */
+function isHttpNotFoundError(err: unknown): boolean {
+  return err instanceof HttpResponseError && err.status === 404;
+}
 
 export class AiChatApi {
   private _httpClient: HttpClient;
@@ -2166,6 +2191,25 @@ export class AiChatApi {
     return this.openAIChatCompletionHosted(request, signal);
   }
 
+  /**
+   * Copy the opt-in reasoning request onto a hosted payload. Local providers
+   * omit this field (strict OpenAI-compatible servers 400 on it). The hosted
+   * server uses it as the gate for emitting reasoning_delta / reasoning_content.
+   */
+  private copyEnabledReasoningOption(
+    request: OpenAIChatCompletionRequest,
+    data: OpenAIChatCompletionRequest
+  ): void {
+    if (!request.reasoning?.enabled) {
+      return;
+    }
+    data.reasoning = {
+      enabled: true,
+      effort: request.reasoning.effort,
+      summary: request.reasoning.summary ?? "auto",
+    };
+  }
+
   /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
   private async openAIChatCompletionHosted(
     request: OpenAIChatCompletionRequest,
@@ -2196,12 +2240,44 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this.copyEnabledReasoningOption(request, data);
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson(
-      "/api/ai/v1/chat/completions",
-      data,
-      signal ? { signal } : {}
-    );
+    try {
+      return await this._httpClient.postJson(
+        "/api/ai/v1/chat/completions",
+        data,
+        signal ? { signal } : {}
+      );
+    } catch (err) {
+      // The hosted server resolves the virtual "small" alias only when a
+      // small row is flagged (otherwise HTTP 404 `small_model_unavailable`;
+      // `postJson` surfaces it as `HttpResponseError` with status 404 and no
+      // body). Retry exactly once with the caller-supplied fallback model, or
+      // with no model (server default) when absent, so background
+      // consolidation still runs on backends without a small row. Any other
+      // error — including a 404 for a literal model id — propagates unchanged.
+      if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
+        throw err;
+      }
+      const retry: OpenAIChatCompletionRequest = { ...data };
+      if (
+        typeof request.fallbackModel === "string" &&
+        request.fallbackModel.length > 0
+      ) {
+        retry.model = request.fallbackModel;
+      } else {
+        delete retry.model;
+      }
+      this._debugLogRequest(
+        "/api/ai/v1/chat/completions (small-model fallback)",
+        retry
+      );
+      return await this._httpClient.postJson(
+        "/api/ai/v1/chat/completions",
+        retry,
+        signal ? { signal } : {}
+      );
+    }
   }
 
   /**
@@ -2293,6 +2369,7 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    this.copyEnabledReasoningOption(request, data);
     // Ask the server to include token usage in the final stream chunk so we
     // can display live context-usage percentage in the UI. Servers that do
     // not implement stream_options simply ignore it.
@@ -2708,7 +2785,10 @@ export class AiChatApi {
     finishReason?: string | null;
     usage?: OpenAIUsage;
     images?: OpenAIChatImage[];
+    reasoning?: Partial<OpenAIStreamDelta>;
   }): OpenAIChatCompletionChunk {
+    const reasoningFields = params.reasoning ?? {};
+    const hasReasoning = Object.keys(reasoningFields).length > 0;
     const chunk: OpenAIChatCompletionChunk = {
       id: params.id ?? `normalized-${Date.now()}`,
       object: "chat.completion.chunk",
@@ -2718,8 +2798,9 @@ export class AiChatApi {
         {
           index: 0,
           delta:
-            params.content !== undefined || params.images
+            params.content !== undefined || params.images || hasReasoning
               ? {
+                  ...reasoningFields,
                   ...(params.content !== undefined
                     ? { content: params.content }
                     : {}),
@@ -2773,6 +2854,32 @@ export class AiChatApi {
     );
   }
 
+  /**
+   * Copy provider reasoning aliases from a choice or message onto a delta.
+   * Some proxies emit reasoning on `choice.message` (or the choice itself)
+   * instead of `choice.delta`; dropping those fields hid the live panel.
+   */
+  private copyReasoningFields(
+    source: Record<string, unknown>
+  ): Partial<OpenAIStreamDelta> {
+    const fields: (keyof OpenAIStreamDelta)[] = [
+      "reasoning_delta",
+      "reasoning_content",
+      "reasoning_summary",
+      "reasoning",
+      "thinking",
+      "thought",
+      "reasoning_details",
+    ];
+    const copied: Partial<OpenAIStreamDelta> = {};
+    for (const field of fields) {
+      if (source[field] !== undefined) {
+        (copied as Record<string, unknown>)[field] = source[field];
+      }
+    }
+    return copied;
+  }
+
   private normalizeOpenAIStreamPayload(
     payload: unknown,
     eventType?: string
@@ -2787,7 +2894,7 @@ export class AiChatApi {
     const model = this.getStringField(payload, "model");
     const usage = this.extractUsageFromPayload(payload);
 
-    if (Array.isArray(payload.choices)) {
+    if (Array.isArray(payload.choices) && payload.choices.length > 0) {
       const normalizedChoices: OpenAIStreamChoice[] = payload.choices.map(
         (choice, index) => {
           if (!this.isRecord(choice)) {
@@ -2800,7 +2907,11 @@ export class AiChatApi {
           if (this.isRecord(delta)) {
             return {
               index: choiceIndex,
-              delta: delta as OpenAIStreamDelta,
+              delta: {
+                ...this.copyReasoningFields(payload),
+                ...this.copyReasoningFields(choice),
+                ...(delta as OpenAIStreamDelta),
+              },
               finish_reason: finishReason,
             };
           }
@@ -2808,17 +2919,25 @@ export class AiChatApi {
           if (this.isRecord(message)) {
             const content = message.content;
             const images = this.normalizeOpenAIChatImages(message.images);
+            const reasoningFields = {
+              ...this.copyReasoningFields(payload),
+              ...this.copyReasoningFields(choice),
+              ...this.copyReasoningFields(message),
+            };
+            const hasReasoning = Object.keys(reasoningFields).length > 0;
             return {
               index: choiceIndex,
               delta:
                 typeof content === "string" ||
                 content === null ||
-                images.length > 0
+                images.length > 0 ||
+                hasReasoning
                   ? {
                       ...(typeof content === "string" || content === null
                         ? { content }
                         : {}),
                       ...(images.length > 0 ? { images } : {}),
+                      ...reasoningFields,
                     }
                   : {},
               finish_reason: finishReason,
@@ -2857,29 +2976,50 @@ export class AiChatApi {
       });
     }
 
+    const payloadReasoning = this.copyReasoningFields(payload);
+    const hasPayloadReasoning = Object.keys(payloadReasoning).length > 0;
     const directContent = payload.content;
-    if (typeof directContent === "string" || directContent === null) {
+    if (
+      typeof directContent === "string" ||
+      directContent === null ||
+      hasPayloadReasoning
+    ) {
       return this.buildOpenAIStreamChunk({
         id,
         created,
         model,
-        content: directContent,
+        ...(typeof directContent === "string" || directContent === null
+          ? { content: directContent }
+          : {}),
         finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
         images: this.normalizeOpenAIChatImages(payload.images),
+        reasoning: hasPayloadReasoning ? payloadReasoning : undefined,
       });
     }
 
     const nestedData = payload.data;
     if (this.isRecord(nestedData)) {
       const nestedContent = nestedData.content;
-      if (typeof nestedContent === "string" || nestedContent === null) {
+      const nestedReasoning = {
+        ...payloadReasoning,
+        ...this.copyReasoningFields(nestedData),
+      };
+      const hasNestedReasoning = Object.keys(nestedReasoning).length > 0;
+      if (
+        typeof nestedContent === "string" ||
+        nestedContent === null ||
+        hasNestedReasoning
+      ) {
         return this.buildOpenAIStreamChunk({
           id,
           created,
           model,
-          content: nestedContent,
+          ...(typeof nestedContent === "string" || nestedContent === null
+            ? { content: nestedContent }
+            : {}),
           finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
           images: this.normalizeOpenAIChatImages(nestedData.images),
+          reasoning: hasNestedReasoning ? nestedReasoning : undefined,
         });
       }
     }

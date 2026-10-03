@@ -51,7 +51,7 @@ export default ({ mode }) => {
         resolve: {
             alias: {
                 "@": path.resolve(__dirname, "./src"),
-                "ws": './node_modules/ws/index.js',
+                "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "bufferutil": path.resolve(__dirname, "./node_modules/bufferutil"),
                 "utf-8-validate": path.resolve(__dirname, "./node_modules/utf-8-validate"),
             },

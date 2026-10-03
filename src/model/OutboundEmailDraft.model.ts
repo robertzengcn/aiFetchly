@@ -18,6 +18,9 @@ export interface AppendRevisionInput {
   readonly draftId: number;
   readonly actor: "ai" | "user";
   readonly emailServiceId: number;
+  readonly envelopeVersion?: 1 | 2;
+  readonly smtpUsername?: string | null;
+  readonly replyToAddress?: string | null;
   readonly senderAddress: string;
   readonly recipientAddress: string;
   readonly subject: string;
@@ -70,6 +73,31 @@ export class OutboundEmailDraftModel extends BaseDb {
     const repo =
       manager?.getRepository(OutboundEmailDraftBatchEntity) ?? this.batchRepo;
     return await repo.findOne({ where: { id } });
+  }
+
+  /**
+   * Every authorizable batch for a conversation + user turn, oldest first.
+   * Per-recipient `draft_outbound_email_batch` calls create one batch each;
+   * skip-review send must drain them in order instead of only the newest.
+   */
+  async findAuthorizableBatchesForTurn(
+    conversationId: string,
+    sourceUserMessageId: string
+  ): Promise<OutboundEmailDraftBatchEntity[]> {
+    const authorizable = [
+      "draft_ready",
+      "direct_authorized",
+      "review_authorized",
+      "awaiting_review",
+    ] as const;
+    return await this.batchRepo.find({
+      where: {
+        conversationId,
+        sourceUserMessageId,
+        status: In(authorizable),
+      },
+      order: { id: "ASC" },
+    });
   }
 
   /**
@@ -273,6 +301,9 @@ export class OutboundEmailDraftModel extends BaseDb {
         revisionNumber: nextRevisionNumber,
         actor: input.actor,
         emailServiceId: input.emailServiceId,
+        envelopeVersion: input.envelopeVersion ?? 1,
+        smtpUsername: input.smtpUsername ?? null,
+        replyToAddress: input.replyToAddress ?? null,
         senderAddress: input.senderAddress,
         recipientAddress: input.recipientAddress,
         subject: input.subject,

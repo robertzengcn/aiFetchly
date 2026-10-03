@@ -36,10 +36,14 @@ vi.mock("@/service/AiFeatureGate", () => ({
 }));
 
 vi.mock("@/modules/SkillManagementModule", () => ({
-  SkillManagementModule: vi.fn().mockImplementation(() => ({
+  SkillManagementModule: class {
+    constructor() {
+      return {
     listInstalledSkills: mocks.listInstalledSkills,
     toggleSkill: mocks.toggleSkill,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/config/skillsRegistry", () => ({

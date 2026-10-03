@@ -46,6 +46,25 @@ export interface AIChatQueryStartEvent {
   type: "start";
   conversationId: string;
   messageId: string;
+  /**
+   * Opaque refs of the archived passages the user selected and the backend
+   * accepted for this turn (technical-design §13.3). The renderer clears only
+   * these chips on `start`; drafts whose source changed or did not fit are
+   * retained so a rejected selection is never silently dropped.
+   */
+  historySelectionAcceptedIds?: readonly string[];
+  /**
+   * Submitted refs whose source revision moved (§4.2, AC-18). The turn quoted
+   * nothing for these; the renderer marks the surviving chips so the user can
+   * explicitly re-confirm the refreshed passage before it is ever quoted.
+   */
+  historySelectionChangedIds?: readonly string[];
+  /**
+   * Submitted refs hard-rejected (unavailable/oversized, not stale) (P2-10,
+   * AC-18). The renderer marks the surviving chips rejected so the user can
+   * remove or replace them.
+   */
+  historySelectionRejectedIds?: readonly string[];
 }
 
 export interface AIChatQueryTokenEvent {
@@ -171,6 +190,8 @@ export interface AIChatQueryCompleteEvent {
   totalTokens?: number;
   promptTokens?: number;
   completionTokens?: number;
+  /** Final accumulated reasoning so the renderer can recover if live deltas were missed. */
+  reasoningContent?: string;
 }
 
 export interface AIChatQueryCancelledEvent {
@@ -349,6 +370,11 @@ export interface PendingPermissionTurn {
   toolName: string;
   toolArguments: Record<string, unknown>;
   /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
+  /**
    * Trusted intent context (technical design §9/§14.2): the persisted user
    * message id + outbound intent decision id from the originating turn. The
    * permission-resume re-execution must carry them so outbound-email tools
@@ -389,6 +415,11 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Turn association (technical-design §4.3) carried from the originating
+   * active turn so resumed-flow tool/assistant saves stay grouped by turn.
+   */
+  turnId?: string;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user answers the plan question (AC-8). Present only when deferred
@@ -503,6 +534,23 @@ export interface AIChatQueryLoopInput {
     baseDelayMs?: number;
   };
   /**
+   * Optional override for the per-turn model→tool→model round cap.
+   * Tests use a small value; production omits this and uses the default.
+   */
+  maxToolRounds?: number;
+  /**
+   * Optional override for how many hidden continuation cycles may start
+   * after the per-cycle tool-round cap. Tests use a small value.
+   */
+  maxRoundCapContinuations?: number;
+  /**
+   * When true, the hidden round-cap continuation tells the model to keep
+   * going until the goal's completion conditions are met. All chat turns
+   * auto-continue past the cap; this only changes that in-memory prompt.
+   * Engine sets this for chat-mode turns that have a non-terminal goal.
+   */
+  goalAutoContinue?: boolean;
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.
@@ -538,6 +586,20 @@ export interface AIChatQueryLoopInput {
    * or the resolver failed. Supplied by the main process, not tool arguments.
    */
   intentDecisionId?: number | null;
+  /**
+   * Turn association (technical-design §4.3). The engine stamps this when it
+   * accepts a user request; the loop threads it into paused-for-permission /
+   * paused-for-plan-question pending state so resumed-flow saves stay
+   * grouped by turn.
+   */
+  turnId?: string;
+  /**
+   * Called once per turn when the serialized request is at or over the
+   * compaction trigger (including when it already exceeds the window).
+   * Should compact, then return a rebuilt message list. Null keeps the
+   * current messages and lets preflight reject.
+   */
+  relieveBudgetPressure?: () => Promise<OpenAIChatMessage[] | null>;
 }
 
 /**

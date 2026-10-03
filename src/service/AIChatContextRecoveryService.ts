@@ -23,7 +23,10 @@ export interface AIChatContextBudgetPolicy {
 }
 
 export const DEFAULT_CONTEXT_BUDGET_POLICY: AIChatContextBudgetPolicy = {
-  contextWindowTokens: 128_000,
+  // Matches the 256k default used when a model's context window is unknown
+  // (AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens). Long scheduled-
+  // loop turns must not be drained/rejected against an undersized 128k guess.
+  contextWindowTokens: 256_000,
   softThresholdRatio: 0.9,
   hardThresholdRatio: 0.95,
   reserveOutputTokens: 4_096,
@@ -79,9 +82,8 @@ export class AIChatContextRecoveryService {
     const { state, policy, currentTokens, conversationId } = input;
     const target =
       input.targetTokens ??
-      Math.floor(
-        policy.contextWindowTokens * policy.softThresholdRatio
-      ) - policy.reserveOutputTokens;
+      Math.floor(policy.contextWindowTokens * policy.softThresholdRatio) -
+        policy.reserveOutputTokens;
 
     if (!state.contextDrainAttempted && currentTokens > target) {
       const trimmed = this.drainTo(input.messages, target, policy);
@@ -157,18 +159,14 @@ export class AIChatContextRecoveryService {
    * Compute the soft-threshold token count for a policy.
    */
   softThreshold(policy: AIChatContextBudgetPolicy): number {
-    return Math.floor(
-      policy.contextWindowTokens * policy.softThresholdRatio
-    );
+    return Math.floor(policy.contextWindowTokens * policy.softThresholdRatio);
   }
 
   /**
    * Compute the hard-threshold token count for a policy.
    */
   hardThreshold(policy: AIChatContextBudgetPolicy): number {
-    return Math.floor(
-      policy.contextWindowTokens * policy.hardThresholdRatio
-    );
+    return Math.floor(policy.contextWindowTokens * policy.hardThresholdRatio);
   }
 
   /**
@@ -187,9 +185,7 @@ export class AIChatContextRecoveryService {
         (msg?.tool_calls?.length ?? 0) > 0;
       if (isAssistantToolCall) {
         // Capture matching tool messages.
-        const callIds = new Set(
-          (msg?.tool_calls ?? []).map((c) => c.id)
-        );
+        const callIds = new Set((msg?.tool_calls ?? []).map((c) => c.id));
         let j = i + 1;
         while (
           j < messages.length &&

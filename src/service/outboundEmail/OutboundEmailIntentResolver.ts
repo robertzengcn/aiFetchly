@@ -80,6 +80,10 @@ export class OutboundEmailIntentResolver {
     const effectiveSkipReview = skipReview.filter(
       (s) => !overlapsAny(s, negation)
     );
+    // Word-boundary "send" so "send them without review" still authorizes.
+    // Exact SEND_PHRASES miss that wording because "send without review"
+    // requires those three words to be consecutive.
+    const sendVerb = findSendVerbEvidence(normalized, negation);
     // Absorb "review" spans that sit inside skip-review wording
     // ("without review") so they are not misread as a Review request.
     const effectiveReview = review.filter(
@@ -128,7 +132,9 @@ export class OutboundEmailIntentResolver {
       }
     } else if (
       effectiveSkipReview.length > 0 &&
-      (effectiveSend.length > 0 || effectiveCompose.length > 0)
+      (effectiveSend.length > 0 ||
+        effectiveCompose.length > 0 ||
+        sendVerb.length > 0)
     ) {
       // Explicit waiver of Review plus a send/compose instruction.
       // Skip-review alone does not authorize a send.
@@ -138,6 +144,9 @@ export class OutboundEmailIntentResolver {
         ...effectiveSkipReview,
         ...effectiveSend.slice(0, 1),
         ...effectiveCompose.slice(0, 1),
+        ...(effectiveSend.length === 0 && effectiveCompose.length === 0
+          ? sendVerb.slice(0, 1)
+          : []),
       ];
       confidence = 0.99;
     } else if (effectiveSend.length > 0) {
@@ -164,14 +173,12 @@ export class OutboundEmailIntentResolver {
     }
 
     // Evidence sanity: offsets must always refer back into the source text.
+    // A mapping glitch (NFKC / lowercase expansion) must drop evidence only —
+    // never downgrade an already-resolved send_now to draft_only.
     const sourceLength = input.userAuthoredText.length;
     for (const e of evidence) {
       if (e.start < 0 || e.end > sourceLength || e.end < e.start) {
-        // Defensive: a normalization bug must never produce bogus evidence.
         evidence = [];
-        mode = "draft_only";
-        reasonCode = "resolver_failure";
-        confidence = 0.5;
         break;
       }
     }
@@ -318,6 +325,42 @@ function overlapsAny(
   targets: OutboundEmailIntentEvidence[]
 ): boolean {
   return targets.some((t) => evidence.start < t.end && evidence.end > t.start);
+}
+
+/**
+ * Word-boundary "send" that is not inside a negated clause. Used with
+ * skip-review so "send them without review" / "send emails without review"
+ * authorize delivery even when the exact SEND_PHRASES miss.
+ */
+function findSendVerbEvidence(
+  normalized: NormalizedText,
+  negation: OutboundEmailIntentEvidence[]
+): OutboundEmailIntentEvidence[] {
+  const found: OutboundEmailIntentEvidence[] = [];
+  const re = /\bsend\b/g;
+  let match: RegExpExecArray | null = re.exec(normalized.matching);
+  while (match !== null) {
+    const startIdx = match.index;
+    const endIdx = match.index + match[0].length - 1;
+    const start = normalized.offsetMap[startIdx];
+    const endExclusive = normalized.offsetMap[endIdx];
+    if (start != null && endExclusive != null) {
+      const candidate = {
+        start,
+        end: endExclusive + 1,
+        normalizedPhrase: match[0],
+        category: "send" as const,
+      };
+      if (!overlapsAny(candidate, negation)) {
+        const parsed = outboundEmailIntentEvidenceSchema.safeParse(candidate);
+        if (parsed.success) {
+          found.push(parsed.data);
+        }
+      }
+    }
+    match = re.exec(normalized.matching);
+  }
+  return found;
 }
 
 // ---------------------------------------------------------------------------

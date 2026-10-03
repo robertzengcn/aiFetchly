@@ -81,7 +81,16 @@ async function main() {
   try {
     app = await _electron.launch({
       executablePath: exe,
-      args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+      // --enable-logging=stderr surfaces Electron/main-process errors (missing
+      // shared libs, sandbox failures, uncaught exceptions) on the CI log so a
+      // firstWindow timeout is debuggable instead of a bare 30s wait.
+      args: [
+        "--no-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--enable-logging=stderr",
+        "--v=1",
+      ],
       env: {
         ...process.env,
         // Isolated user-data; do NOT set AIFETCHLY_E2E (packaged app must run normally).
@@ -89,7 +98,54 @@ async function main() {
       },
       timeout: 60_000,
     });
-    const page = await app.firstWindow();
+    // Capture the packaged app's own stdout/stderr so a launch-time failure
+    // (missing .so, native-module load error, main-process crash) appears in
+    // the CI log before the firstWindow timeout, not as a silent 30s stall.
+    // Playwright's ElectronApplication exposes the spawned process via
+    // process() (a Node ChildProcess); its stdout/stderr are Readable streams.
+    // There is NO app.stdout() method (that was a bug — it threw before
+    // firstWindow and masked the real failure).
+    const proc = app.process();
+    if (proc?.stdout) {
+      proc.stdout.on("data", (chunk) =>
+        process.stdout.write(`[packaged-smoke][app:stdout] ${chunk}`)
+      );
+    }
+    if (proc?.stderr) {
+      proc.stderr.on("data", (chunk) =>
+        process.stderr.write(`[packaged-smoke][app:stderr] ${chunk}`)
+      );
+    }
+    // Renderer/main console messages (console.log / console.error / uncaught).
+    app.on("console", (msg) => {
+      process.stderr.write(`[packaged-smoke][app:console:${msg.type()}] ${msg.text()}\n`);
+    });
+    // If the process dies before opening a window, surface it immediately rather
+    // than stalling for the full firstWindow timeout with no actionable signal.
+    const exitedEarly = new Promise((resolve) => {
+      app.on("close", () => {
+        let ec;
+        try {
+          ec = app.process()?.exitCode;
+        } catch {
+          /* ignore */
+        }
+        process.stderr.write(`[packaged-smoke][app:close] process exitCode=${ec}\n`);
+        resolve({ earlyExit: true, exitCode: ec });
+      });
+    });
+    // firstWindow rejects on its own timeout; raced against early process exit.
+    const page = await Promise.race([
+      app.firstWindow(),
+      exitedEarly,
+    ]).then((result) => {
+      if (result && result.earlyExit) {
+        throw new Error(
+          `packaged app exited before opening a window (exitCode=${result.exitCode}); see [app:stderr] above`
+        );
+      }
+      return result;
+    });
     // Renderer HTML loaded from the packaged layout (file:// or app://), not 5173.
     await page.waitForLoadState("domcontentloaded", { timeout: 60_000 });
     const hasBridge = await page

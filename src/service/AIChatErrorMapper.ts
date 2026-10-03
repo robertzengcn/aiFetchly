@@ -23,6 +23,8 @@ export {
   IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
 } from "./AIChatErrorSentinels";
 export type { ImageEditErrorCode } from "./AIChatErrorSentinels";
+import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
@@ -67,7 +69,8 @@ export function isQuotaError(err: unknown): boolean {
 
 /**
  * Broad pattern for transient, retryable server-side failures: empty
- * responses, finish_reason=error, rate limits, timeouts, 502s, AI-server 5xx
+ * responses, finish_reason=error, rate limits, timeouts, 502s, HTTP 5xx
+ * envelopes (including Cloudflare 520 origin failures), AI-server 5xx
  * codes, and the SQLite "database connection is not open" hiccup. These
  * recover on a fresh attempt after a short backoff. Drives the user-facing
  * message only — the query loop's auto-retry decision uses the narrower
@@ -75,7 +78,7 @@ export function isQuotaError(err: unknown): boolean {
  * streaming HTTP client's own retry layer.
  */
 const TRANSIENT_ERROR_PATTERN =
-  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i;
+  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|HTTP\s+5\d{2}|AI server error code=5\d\d|database connection is not open/i;
 
 /**
  * Returns true when the error represents a transient, retryable AI-server
@@ -305,6 +308,15 @@ export function userSafeError(err: unknown): string {
     // clobber them with a generic "unexpected error".
     if (err instanceof AIProviderError) {
       return err.message || "AI provider error.";
+    }
+    // Recoverable-history errors carry pre-written, user-safe messages
+    // (e.g. "selected passages exceed …; remove or narrow a selection and
+    // resend") — surface them directly so the guidance reaches the UI.
+    if (err instanceof RecoverableHistoryError) {
+      return err.message || err.code;
+    }
+    if (err instanceof UnresolvedPastedTextError) {
+      return err.message;
     }
     const msg = err.message || "Unknown error";
     if (

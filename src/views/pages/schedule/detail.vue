@@ -539,6 +539,7 @@ const runScheduleNow = async () => {
     await runScheduleNowApi(scheduleId)
     showAlert(t('schedule.detail_success'), t('schedule.detail_schedule_execution_started'), 'success')
     await loadSchedule()
+    await loadExecutionHistory()
   } catch (err) {
     showAlert(t('schedule.detail_error'), `${t('schedule.detail_failed_to_run_schedule')}: ${err}`, 'error')
   } finally {

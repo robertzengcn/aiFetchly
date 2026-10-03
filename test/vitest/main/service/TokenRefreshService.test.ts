@@ -20,23 +20,24 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
-    Signout: mockSignout,
-    removeToken: mockRemoveToken,
-  })),
+  // Vitest 4: vi.fn() is not constructable; production does `new User()`.
+  User: class {
+    Signout = mockSignout;
+    removeToken = mockRemoveToken;
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: mockGetValue,
-    setValue: mockSetValue,
-  })),
+  Token: class {
+    getValue = mockGetValue;
+    setValue = mockSetValue;
+  },
 }));
 
 vi.mock("@/modules/remotesource", () => ({
-  RemoteSource: vi.fn().mockImplementation(() => ({
-    removeRemoteToken: vi.fn().mockResolvedValue(undefined),
-  })),
+  RemoteSource: class {
+    removeRemoteToken = vi.fn().mockResolvedValue(undefined);
+  },
 }));
 
 vi.mock("@/modules/Logger", () => ({

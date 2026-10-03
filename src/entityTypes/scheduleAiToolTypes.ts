@@ -83,7 +83,11 @@ export interface SafeExecutionPayload {
 
 const scheduleIdSchema = z.coerce.number().int().positive();
 
-const taskTypeEnumSchema = z.nativeEnum(TaskType);
+// The AI-facing schedule tools only permit scheduling AI message tasks.
+// Other task types (search, buck_email, etc.) remain available to the UI
+// schedule page and execution path, but the LLM must not create schedules
+// for them — AI-created schedules are restricted to ai_message.
+const aiMessageTaskTypeSchema = z.enum([TaskType.AI_MESSAGE]);
 
 const triggerTypeEnumSchema = z.nativeEnum(TriggerType);
 
@@ -117,7 +121,7 @@ export const listScheduleExecutionsSchema = z.object({
 export const createScheduleSchema = z.object({
   name: z.string().trim().min(1).max(255),
   description: z.string().trim().max(1000).optional(),
-  task_type: taskTypeEnumSchema,
+  task_type: aiMessageTaskTypeSchema,
   task_id: scheduleIdSchema,
   cron_expression: z.string().trim().min(1).max(100),
   is_active: z.boolean().default(false),
@@ -125,13 +129,14 @@ export const createScheduleSchema = z.object({
   parent_schedule_id: scheduleIdSchema.optional(),
   dependency_condition: dependencyConditionEnumSchema.optional(),
   delay_minutes: z.number().int().min(0).max(1440).default(0),
+  workspace_path: z.string().trim().min(1).max(1024).optional(),
 });
 
 export const updateScheduleSchema = z.object({
   schedule_id: scheduleIdSchema,
   name: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(1000).optional(),
-  task_type: taskTypeEnumSchema.optional(),
+  task_type: aiMessageTaskTypeSchema.optional(),
   task_id: scheduleIdSchema.optional(),
   cron_expression: z.string().trim().min(1).max(100).optional(),
   is_active: z.boolean().optional(),
@@ -140,6 +145,7 @@ export const updateScheduleSchema = z.object({
   parent_schedule_id: scheduleIdSchema.nullable().optional(),
   dependency_condition: dependencyConditionEnumSchema.optional(),
   delay_minutes: z.number().int().min(0).max(1440).optional(),
+  workspace_path: z.string().trim().min(1).max(1024).nullable().optional(),
 });
 
 export const deleteScheduleSchema = z.object({

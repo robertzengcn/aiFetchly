@@ -10,9 +10,13 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
  * always returns 'true' for USER_AI_ENABLED.
  */
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn().mockReturnValue("true"),
-  })),
+  };
+    }
+  },
 }));
 
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";

@@ -9,7 +9,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // (HttpClient.setheaderToken calls `new Token()` asynchronously) that crashes
 // the vitest worker after the test environment is torn down.
 vi.mock("@/modules/electronstoreservice", () => ({
-  ElectronStoreService: vi.fn().mockImplementation(() => ({
+  ElectronStoreService: class {
+    constructor() {
+      return {
     get: vi.fn(),
     set: vi.fn(),
     delete: vi.fn(),
@@ -18,7 +20,9 @@ vi.mock("@/modules/electronstoreservice", () => ({
     deleteValue: vi.fn(),
     hasValue: vi.fn(),
     getStoreForTests: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/config/usersetting", async (importOriginal) => {
   // Spread the real constants (TOKENNAME, USERSERVICE, REFRESHTOKEN, …) so the
@@ -27,10 +31,14 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/usersetting")>();
   return {
     ...actual,
-    Token: vi.fn().mockImplementation(() => ({
+    Token: class {
+      constructor() {
+        return {
       getValue: vi.fn(() => "tok"),
       setValue: vi.fn(),
-    })),
+    };
+      }
+    },
   };
 });
 vi.mock("@/modules/lib/webWorkerIdentifier", () => ({

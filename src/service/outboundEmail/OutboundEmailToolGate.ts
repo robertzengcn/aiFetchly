@@ -46,6 +46,12 @@ export class OutboundEmailToolGate {
 
     switch (intentDecision.mode) {
       case "draft_only":
+        // A durable batch is already reviewable. Returning draft_required here
+        // tells the model to call draft_outbound_email_batch again, which is
+        // what produced the 24-batch retry storm after the first draft.
+        if (batchId != null) {
+          return { allowed: false, code: "review_required", batchId };
+        }
         return { allowed: false, code: "draft_required", batchId };
       case "review_first":
         return { allowed: false, code: "review_required", batchId };

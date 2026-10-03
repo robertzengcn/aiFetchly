@@ -10,6 +10,7 @@ import type {
 } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
+import type { ResolvedModelLimits } from "@/service/AIChatRequestBudgetService";
 
 export interface AIChatModelCatalogEntry {
   readonly id: string;
@@ -20,7 +21,7 @@ export interface AIChatModelCatalogEntry {
 
 /**
  * Process-lifetime catalog of AI server models. Falls back to a
- * default context window (128k) when the server doesn't report one
+ * default context window (256k) when the server doesn't report one
  * or when the lookup fails. Never throws.
  */
 export class AIChatModelCatalogService {
@@ -99,7 +100,7 @@ export class AIChatModelCatalogService {
 
   /**
    * Look up the context window for a model. Falls back to the default
-   * context window (128k) when unknown. Never throws.
+   * context window (256k) when unknown. Never throws.
    */
   async getContextWindow(model?: string): Promise<number> {
     await this.ensureLoaded();
@@ -141,5 +142,38 @@ export class AIChatModelCatalogService {
   /** The timestamp of the last successful refresh, in ms since epoch. */
   getFetchedAt(): number {
     return this.fetchedAt;
+  }
+
+  /**
+   * Synchronous limit lookup for budget preflight. Call `ensureLoaded()`
+   * first so provider rows are available.
+   *
+   * Unknown / not-yet-loaded models use this catalog's fallback context
+   * window (256k by default) — the same value as `getContextWindow()` —
+   * not the 8,192-token unknown-model provisional. An unloaded catalog
+   * is not evidence the model is small; treating it as 8k falsely
+   * rejected first `/goal` Plan Mode turns whose tool+system payload
+   * is ~6.5k tokens.
+   */
+  resolveLimits(model?: string): ResolvedModelLimits {
+    const id = model || this.defaultModelId || undefined;
+    if (id) {
+      const entry = this.cache?.get(id);
+      if (entry) {
+        return {
+          contextLimit: entry.contextWindow,
+          // Match the query-loop default maxTokens when the server omits
+          // max_tokens. Capping unknown large models at 1,024 truncated
+          // `/goal` plans even after the 128k context fallback landed.
+          outputLimit: entry.maxOutputTokens ?? 16_384,
+          limitSource: "provider",
+        };
+      }
+    }
+    return {
+      contextLimit: this.fallbackContextWindow,
+      outputLimit: 16_384,
+      limitSource: "fallback",
+    };
   }
 }

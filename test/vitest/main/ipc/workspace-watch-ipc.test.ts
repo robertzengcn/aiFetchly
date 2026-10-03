@@ -53,16 +53,24 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
-    resolve: resolverMocks.resolve,
-  })),
+  WorkspaceResolver: class {
+    constructor() {
+      return {
+        resolve: resolverMocks.resolve,
+      };
+    }
+  },
 }));
 
 vi.mock("@/modules/WorkspaceModule", () => ({
-  WorkspaceModule: vi.fn().mockImplementation(() => ({
-    approveWorkspace: workspaceModuleMocks.approveWorkspace,
-    revokeWorkspace: workspaceModuleMocks.revokeWorkspace,
-  })),
+  WorkspaceModule: class {
+    constructor() {
+      return {
+        approveWorkspace: workspaceModuleMocks.approveWorkspace,
+        revokeWorkspace: workspaceModuleMocks.revokeWorkspace,
+      };
+    }
+  },
 }));
 
 // The production singleton pulls portable-memory + config-manager graphs

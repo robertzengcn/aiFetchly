@@ -12,6 +12,15 @@ import {
 import { FieldCipher } from "@/modules/fieldCipher/FieldCipher";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 import { SecretKeyUnavailableError } from "@/modules/fieldCipher/SecretKeyUnavailableError";
+import {
+  resolveEmailServiceIdentity,
+  containsEmailHeaderBreak,
+} from "@/modules/lib/EmailServiceIdentityResolver";
+import type {
+  ValidateEmailServiceOptions,
+  EmailServiceValidationError,
+  EmailServiceValidationCode,
+} from "@/modules/interface/EmailServiceModuleInterface";
 
 export class EmailServiceModule
   extends BaseModule
@@ -97,16 +106,17 @@ export class EmailServiceModule
     sort?: SortBy
   ): Promise<ListData<EmailServiceEntity>> {
     try {
-      const records = await this.emailServiceModel.listEmailServices(
-        page,
-        size,
-        search,
-        sort
-      );
-      const num = await this.emailServiceModel.countEmailServices();
+      // NOTE: no credential decryption here. List callers (renderer table,
+      // AI tools) project to non-secret fields only; decrypting would force
+      // a backend secret-key HTTP fetch + AES-GCM per row for data that is
+      // immediately discarded. Single-row getters still decrypt.
+      const [records, num] = await Promise.all([
+        this.emailServiceModel.listEmailServices(page, size, search, sort),
+        this.emailServiceModel.countEmailServices(search),
+      ]);
 
       return {
-        records: await this.decryptServiceCredentialsList(records),
+        records,
         num,
       };
     } catch (error) {
@@ -115,9 +125,9 @@ export class EmailServiceModule
     }
   }
 
-  async countEmailServices(): Promise<number> {
+  async countEmailServices(search?: string): Promise<number> {
     try {
-      return await this.emailServiceModel.countEmailServices();
+      return await this.emailServiceModel.countEmailServices(search);
     } catch (error) {
       log.error("Error counting email services:", error);
       throw error;
@@ -232,11 +242,13 @@ export class EmailServiceModule
       const ssl = protocol === "imap" ? service.imapSsl : service.pop3Ssl;
       if (!host || !portStr) return null;
 
-      // Username defaults to the SMTP `from` address when not provided.
-      const username =
-        service.receiveUsername && service.receiveUsername.trim().length > 0
-          ? service.receiveUsername
-          : service.from ?? "";
+      // Username: explicit receiveUsername → SMTP username → From (§8.3).
+      const identity = resolveEmailServiceIdentity({
+        smtpUsername: service.smtpUsername,
+        from: service.from,
+        receiveUsername: service.receiveUsername,
+      });
+      const username = identity.receiveUsername;
       // Password defaults to the SMTP password when not provided.
       const password =
         service.receivePassword && service.receivePassword.length > 0
@@ -260,76 +272,200 @@ export class EmailServiceModule
     }
   }
 
+  /**
+   * Read the complete effective identity snapshot for a service (§22.2).
+   * Main-process only — never returned to the renderer or surfaced in an AI
+   * tool result. Returns null when the service does not exist.
+   */
+  async readIdentity(id: number): Promise<{
+    smtpUsername: string;
+    fromAddress: string;
+    replyToAddress: string | null;
+    receiveUsername: string;
+  } | null> {
+    await this.ensureConnection();
+    const service = await this.getEmailService(id);
+    if (!service) return null;
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+      receiveUsername: service.receiveUsername,
+    });
+    return identity;
+  }
+
   async validateEmailService(
-    service: EmailServiceEntity
-  ): Promise<{ valid: boolean; errors: string[] }> {
-    const errors: string[] = [];
+    service: EmailServiceEntity,
+    options: ValidateEmailServiceOptions
+  ): Promise<{ valid: boolean; errors: EmailServiceValidationError[] }> {
+    const errors: EmailServiceValidationError[] = [];
+    const push = (code: EmailServiceValidationCode, message: string): void => {
+      errors.push({ code, message });
+    };
 
     if (!service.name || service.name.trim().length === 0) {
-      errors.push("Service name is required");
+      push("service_name_required", "Service name is required");
+    }
+
+    // Effective SMTP username is resolved (blank → From) but still bounded.
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: service.smtpUsername,
+      from: service.from,
+      replyTo: service.replyTo,
+      receiveUsername: service.receiveUsername,
+    });
+
+    if (!identity.smtpUsername || identity.smtpUsername.length === 0) {
+      push("smtp_username_required", "SMTP username is required");
+    } else if (identity.smtpUsername.length > 255) {
+      push(
+        "smtp_username_too_long",
+        "SMTP username must be 255 characters or fewer"
+      );
+    }
+    if (containsEmailHeaderBreak(identity.smtpUsername)) {
+      push(
+        "email_header_break_forbidden",
+        "SMTP username must not contain line breaks"
+      );
     }
 
     if (!service.from || service.from.trim().length === 0) {
-      errors.push("From email is required");
-    } else if (!this.isValidEmail(service.from)) {
-      errors.push("From email format is invalid");
+      push("from_required", "From email is required");
+    } else if (containsEmailHeaderBreak(service.from)) {
+      push("email_header_break_forbidden", "From must not contain line breaks");
+    } else if (!this.isValidEmail(service.from) || service.from.length > 255) {
+      push("from_invalid", "From email format is invalid");
     }
 
-    if (!service.password || service.password.trim().length === 0) {
-      errors.push("Password is required");
+    if (service.replyTo !== null && service.replyTo !== undefined) {
+      if (containsEmailHeaderBreak(service.replyTo)) {
+        push(
+          "email_header_break_forbidden",
+          "Reply-To must not contain line breaks"
+        );
+      } else if (
+        service.replyTo.trim().length > 0 &&
+        (!this.isValidEmail(service.replyTo) || service.replyTo.length > 320)
+      ) {
+        push("reply_to_invalid", "Reply-To email format is invalid");
+      }
+    }
+
+    // Password: create/send require a real value; update permits the sentinel
+    // only when a stored password exists (AD-004).
+    const hasPassword =
+      typeof service.password === "string" &&
+      service.password.trim().length > 0;
+    if (options.mode === "create" || options.mode === "send") {
+      if (!hasPassword) {
+        push("password_required", "Password is required");
+      }
+    } else {
+      // update
+      if (!hasPassword && !options.hasStoredPassword) {
+        push("password_required", "Password is required");
+      }
     }
 
     if (!service.host || service.host.trim().length === 0) {
-      errors.push("Host is required");
+      push("host_required", "Host is required");
     }
 
     if (!service.port || service.port.trim().length === 0) {
-      errors.push("Port is required");
-    } else if (isNaN(Number(service.port))) {
-      errors.push("Port must be a valid number");
+      push("port_required", "Port is required");
+    } else if (!this.isCanonicalPort(service.port)) {
+      // Canonical decimal digits only: fractional ("4.65"), hex ("0x1f"),
+      // and scientific notation ("1e2") coerce to passing numbers via
+      // Number() but are not valid port literals (§8.2).
+      push("port_invalid", "Port must be a valid number between 1 and 65535");
     }
 
-    // Receive settings are only validated when receive is enabled.
-    if (service.receiveEnabled === 1) {
+    const rawProtocol = service.receiveProtocol;
+    const protocolIsKnown = rawProtocol === "imap" || rawProtocol === "pop3";
+    if (
+      typeof rawProtocol === "string" &&
+      rawProtocol.length > 0 &&
+      !protocolIsKnown
+    ) {
+      push("receive_config_invalid", "Receive protocol must be imap or pop3");
+    }
+
+    // Receive settings only validated when receive is enabled (§8.3).
+    // A non-empty unknown protocol is already rejected above. Missing
+    // protocol still falls back to IMAP so a receive-enabled row must
+    // name an IMAP host.
+    const protocolExplicitlyInvalid =
+      typeof rawProtocol === "string" &&
+      rawProtocol.length > 0 &&
+      !protocolIsKnown;
+    if (service.receiveEnabled === 1 && !protocolExplicitlyInvalid) {
       const protocol: EmailReceiveProtocol =
-        service.receiveProtocol === "pop3" ? "pop3" : "imap";
+        rawProtocol === "pop3" ? "pop3" : "imap";
       const host = protocol === "imap" ? service.imapHost : service.pop3Host;
       const portStr = protocol === "imap" ? service.imapPort : service.pop3Port;
+      const receiveErrors: string[] = [];
       if (!host || host.trim().length === 0) {
-        errors.push(
+        receiveErrors.push(
           `Receive ${protocol.toUpperCase()} host is required when receive is enabled`
         );
       }
-      if (!portStr || portStr.trim().length === 0 || isNaN(Number(portStr))) {
-        errors.push(
-          `Receive ${protocol.toUpperCase()} port must be a valid number when receive is enabled`
+      if (!portStr || !this.isCanonicalPort(portStr)) {
+        receiveErrors.push(
+          `Receive ${protocol.toUpperCase()} port must be a valid number between 1 and 65535 when receive is enabled`
         );
       }
-      const rxUser =
-        service.receiveUsername && service.receiveUsername.trim().length > 0
-          ? service.receiveUsername
-          : service.from;
+      const inactivePort =
+        protocol === "imap" ? service.pop3Port : service.imapPort;
+      const inactiveLabel = protocol === "imap" ? "POP3" : "IMAP";
+      if (
+        inactivePort &&
+        inactivePort.trim().length > 0 &&
+        !this.isCanonicalPort(inactivePort)
+      ) {
+        receiveErrors.push(
+          `Receive ${inactiveLabel} port must be a valid number between 1 and 65535 when receive is enabled`
+        );
+      }
+      // 3-level receive fallback: explicit → SMTP username → From (§8.3).
+      const rxUser = identity.receiveUsername;
       if (!rxUser || rxUser.trim().length === 0) {
-        errors.push("Receive username is required when receive is enabled");
+        receiveErrors.push(
+          "Receive username is required when receive is enabled"
+        );
       }
       const rxPass =
         service.receivePassword && service.receivePassword.length > 0
           ? service.receivePassword
           : service.password;
       if (!rxPass || rxPass.length === 0) {
-        errors.push("Receive password is required when receive is enabled");
+        receiveErrors.push(
+          "Receive password is required when receive is enabled"
+        );
+      }
+      if (receiveErrors.length > 0) {
+        push("receive_config_invalid", receiveErrors.join("; "));
       }
     }
 
-    return {
-      valid: errors.length === 0,
-      errors,
-    };
+    return { valid: errors.length === 0, errors };
   }
 
   private isValidEmail(email: string): boolean {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  }
+
+  /**
+   * True for a decimal port literal in 1..65535. Rejects fractions, hex,
+   * and scientific notation, which Number() would otherwise accept.
+   */
+  private isCanonicalPort(portStr: string): boolean {
+    const trimmed = portStr.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return false;
+    const portNum = Number(trimmed);
+    return Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535;
   }
 
   private async encryptCredentialsForStorage(

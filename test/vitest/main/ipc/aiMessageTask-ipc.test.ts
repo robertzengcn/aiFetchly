@@ -48,13 +48,21 @@ vi.mock("@/service/AiMessageToolCatalogService", () => ({
 }));
 
 vi.mock("@/modules/AiMessageTaskModule", () => ({
-  AiMessageTaskModule: vi.fn().mockImplementation(() => ({
+  AiMessageTaskModule: class {
+    constructor() {
+      return {
     createTask: mocks.createTask,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/AiMessageTaskRunModule", () => ({
-  AiMessageTaskRunModule: vi.fn().mockImplementation(() => ({})),
+  AiMessageTaskRunModule: class {
+    constructor() {
+      return {};
+    }
+  },
 }));
 
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";

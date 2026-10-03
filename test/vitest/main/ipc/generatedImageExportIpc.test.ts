@@ -35,7 +35,8 @@ const mockState = vi.hoisted(() => ({
   tokenStore: new Map<string, string>(),
 }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: vi.fn(function TokenMock() {
+      return {
     getValue: vi.fn().mockImplementation((key: string) => {
       if (key === "USER_AI_ENABLED") return mockState.aiEnabled;
       return mockState.tokenStore.get(key) ?? "";
@@ -43,7 +44,8 @@ vi.mock("@/modules/token", () => ({
     setValue: vi.fn(),
     deleteValue: vi.fn(),
     hasValue: vi.fn(() => false),
-  })),
+      };
+    }),
 }));
 vi.mock("@/config/usersetting", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/usersetting")>();
@@ -58,29 +60,33 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
 // Mock the v2 module (chip-compatible tool_result persistence).
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn(function AIChatV2ModuleMock() {
+      return {
     saveToolResultMessage: mockSaveToolResultMessage,
     getDefaultSystemPrompt: vi.fn().mockReturnValue("You are helpful."),
-  })),
+      };
+    }),
 }));
 
 // Mock workspace resolution seam shared with the export tool.
 const mockResolveWorkspace = vi.fn();
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
+  WorkspaceResolver: vi.fn(function WorkspaceResolverMock() {
+      return {
     resolve: mockResolveWorkspace,
-  })),
+      };
+    }),
 }));
 
 // Mock reference authorization at the service boundary; the typed error class
 // stays real so forged-reference handling exercises actual error mapping.
 const mockAuthorizeOnly = vi.fn();
 vi.mock("@/service/GeneratedImageReferenceService", () => ({
-  GeneratedImageReferenceService: vi
-    .fn()
-    .mockImplementation(() => ({
+  GeneratedImageReferenceService: vi.fn(function GeneratedImageReferenceServiceMock() {
+    return {
       authorizeOnly: mockAuthorizeOnly,
-    })),
+    };
+  }),
 }));
 
 import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";

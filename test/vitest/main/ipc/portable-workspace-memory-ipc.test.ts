@@ -15,7 +15,8 @@ const spies = vi.hoisted(() => ({
 }));
 
 vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
-  PortableWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+  PortableWorkspaceMemoryService: vi.fn(function PortableWorkspaceMemoryServiceMock() {
+      return {
     getStatus: spies.mockGetStatus,
     previewEnable: spies.mockPreviewEnable,
     enable: spies.mockEnable,
@@ -27,7 +28,8 @@ vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
     applyBridge: spies.mockApplyBridge,
     listConflicts: spies.mockListConflicts,
     resolveConflict: spies.mockResolveConflict,
-  })),
+      };
+    }),
 }));
 
 const handlers: Record<string, (e: unknown, data: string) => Promise<unknown>> =

@@ -1,6 +1,7 @@
 import type { ChatV2PastedBlockMetadata } from "@/entityTypes/pastedTextTypes";
 import { expandPastedTextRefs } from "./PastedTextExpander";
 import { PastedTextPersistenceService } from "./PastedTextPersistenceService";
+import { UnresolvedPastedTextError } from "./UnresolvedPastedTextError";
 
 export interface PastedTextResolutionResult {
   readonly displayMessage: string;
@@ -20,12 +21,11 @@ export class PastedTextResolutionService {
   ): Promise<PastedTextResolutionResult> {
     const expanded = expandPastedTextRefs(displayMessage, pastedContents);
 
-    const warnings: string[] = [];
     if (expanded.unknownPasteIds.length > 0) {
-      warnings.push(
-        `Unknown pasted text refs: ${expanded.unknownPasteIds.join(", ")}`
-      );
+      throw new UnresolvedPastedTextError(expanded.unknownPasteIds);
     }
+
+    const warnings: string[] = [];
 
     const persistedBlocks = await this.persistence.persistPastedBlocks(
       expanded.pastedBlocks,

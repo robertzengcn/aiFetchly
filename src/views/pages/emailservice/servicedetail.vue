@@ -24,9 +24,27 @@ v-model="name" :label="t('emailservice.name')" type="input"
       <v-row>
         <v-col cols="12" md="12">
           <v-text-field
-v-model="from" :label="t('emailservice.from')" type="email"
-            :hint="t('emailservice.from_hint')" :readonly="loading" clearable required
-            :rules="[rules.email]"></v-text-field>
+v-model="smtpUsername" :label="t('emailservice.smtp_username') || 'SMTP username'" type="input"
+            :hint="t('emailservice.smtp_username_hint') || 'The mailbox account used to sign in to your SMTP server.'"
+            :rules="identityRules.smtpUsername"
+            persistent-hint :readonly="loading" clearable></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
+v-model="from" :label="t('emailservice.from') || 'From'" type="email"
+            :hint="t('emailservice.from_hint') || 'The address recipients see. It must be allowed by your email provider.'" :readonly="loading" clearable required
+            :rules="identityRules.from"></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row>
+        <v-col cols="12" md="12">
+          <v-text-field
+v-model="replyTo" :label="t('emailservice.reply_to') || 'Reply-To'" type="email"
+            :hint="t('emailservice.reply_to_hint') || 'Replies go here. Leave empty to reply to the From address.'"
+            :rules="identityRules.replyTo"
+            persistent-hint :readonly="loading" clearable></v-text-field>
         </v-col>
       </v-row>
       <v-row>
@@ -240,6 +258,7 @@ import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
 import ErrorDialog from "@/views/components/widgets/errorDialog.vue"
 import LoadingDialog from "@/views/components/widgets/loadingDialog.vue"
+import { buildIdentityRules } from "./identityValidationRules";
 const showDialog = ref<boolean>(false);
 const alertdiatext = ref<string>("")
 const alertdiatitle = ref<string>("")
@@ -257,17 +276,33 @@ watch(loadDialogshow, (newValue) => {
   setTimeout(() => (loadDialogshow.value = false), 10000)
 });
 
+// Generic rules for non-identity fields (name, host, test-email receiver).
 const rules = {
-  required: (value: unknown) => {
+  required: (value: unknown): true | string => {
     if (!value) return "The field is required";
     return true;
   },
-  email: (value: string) => {
+  email: (value: unknown): true | string => {
     if (!value) return "E-mail is required";
-    if (!/.+@.+\..+/.test(value)) return "E-mail must be valid.";
+    if (!/.+@.+\..+/.test(String(value))) return "E-mail must be valid.";
     return true;
   },
 };
+// Identity-field rule sets (P1.1): SMTP username is required (not email-only —
+// some logins aren't addresses); From is a required single address; Reply-To
+// is optional but non-empty must validate. All three reject CR/LF (§7.2).
+const identityRules = buildIdentityRules({
+  required:
+    t("emailservice.identity_missing_smtp_username") ||
+    "An SMTP username is required for this service.",
+  emailRequired:
+    t("emailservice.identity_from_invalid") || "From email is required.",
+  emailInvalid:
+    t("emailservice.identity_from_invalid") || "E-mail must be valid.",
+  noLineBreak:
+    t("emailservice.identity_header_break_forbidden") ||
+    "Line breaks are not allowed.",
+});
 const $route = useRoute();
 const router = useRouter();
 const FakeAPI = {
@@ -279,6 +314,8 @@ const FakeAPI = {
 const form = ref<HTMLFormElement>();
 const testform = ref<HTMLFormElement>();
 const from = ref<string>("");
+const smtpUsername = ref<string>("");
+const replyTo = ref<string>("");
 const password = ref<string>("");
 const host = ref<string>("");
 const port = ref<string>("");
@@ -349,19 +386,25 @@ const initialize = async () => {
           Id.value = res.id;
         }
         from.value = res.from;
+        // §12.1 legacy fallback: a service created before this feature has no
+        // smtpUsername — prefill the form with From so the user sees a value.
+        smtpUsername.value = res.smtpUsername?.trim() || res.from;
+        replyTo.value = res.replyTo ?? "";
         password.value = res.password;
         host.value = res.host;
-        port.value = res.port;
+        // Ports are VARCHAR in storage but v-number-input emits numbers at
+        // runtime — coerce so the form state stays a string for the contract.
+        port.value = res.port != null ? String(res.port) : "";
         name.value = res.name;
         ssl.value = res.ssl;
         // receive settings (optional)
         receiveEnabled.value = res.receiveEnabled ?? 0;
         receiveProtocol.value = (res.receiveProtocol === "pop3" ? "pop3" : "imap");
         imapHost.value = res.imapHost ?? "";
-        imapPort.value = res.imapPort ?? "";
+        imapPort.value = res.imapPort != null ? String(res.imapPort) : "";
         imapSsl.value = res.imapSsl ?? 1;
         pop3Host.value = res.pop3Host ?? "";
-        pop3Port.value = res.pop3Port ?? "";
+        pop3Port.value = res.pop3Port != null ? String(res.pop3Port) : "";
         pop3Ssl.value = res.pop3Ssl ?? 1;
         receiveUsername.value = res.receiveUsername ?? "";
         receivePassword.value = res.receivePassword ?? "";
@@ -382,7 +425,8 @@ const initialize = async () => {
 /** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
   const missing: string[] = [];
-  const usernameForTest = receiveUsername.value || from.value;
+  const usernameForTest =
+    receiveUsername.value || smtpUsername.value || from.value;
   const passwordForTest = receivePassword.value || password.value;
   const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
@@ -444,7 +488,9 @@ async function onSubmit() {
     loading.value = false;
     return
   } else {
-    if (port.value.length > 5) {
+    // v-number-input emits a number at runtime (port is ref<string> for the
+    // EmailServiceEntitydata contract), so coerce before measuring/sending.
+    if (String(port.value ?? "").length > 5) {
 
       alert.value = true;
       alertcolor.value = "error";
@@ -455,17 +501,19 @@ async function onSubmit() {
     const soacc: EmailServiceEntitydata = {
       name: name.value,
       from: from.value,
+      smtpUsername: smtpUsername.value || null,
+      replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
       password: password.value,
       host: host.value,
-      port: port.value,
+      port: String(port.value ?? ""),
       ssl: ssl.value,
       receiveEnabled: receiveEnabled.value,
       receiveProtocol: receiveProtocol.value,
       imapHost: imapHost.value || null,
-      imapPort: imapPort.value || null,
+      imapPort: imapPort.value != null && String(imapPort.value).length > 0 ? String(imapPort.value) : null,
       imapSsl: imapSsl.value,
       pop3Host: pop3Host.value || null,
-      pop3Port: pop3Port.value || null,
+      pop3Port: pop3Port.value != null && String(pop3Port.value).length > 0 ? String(pop3Port.value) : null,
       pop3Ssl: pop3Ssl.value,
       receiveUsername: receiveUsername.value || null,
       receivePassword: receivePassword.value || null,
@@ -547,9 +595,11 @@ const submitTestemail = async () => {
   const emailSetting: EmailServiceEntitydata = {
     name: name.value,
     from: from.value,
+    smtpUsername: smtpUsername.value || null,
+    replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
     password: password.value,
     host: host.value,
-    port: port.value,
+    port: String(port.value ?? ""),
     ssl: ssl.value
   }
   // Carry the id so a test send in edit mode can reuse the stored password

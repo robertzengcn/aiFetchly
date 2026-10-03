@@ -37,7 +37,12 @@ const updateSchema = lazySchema(() =>
 );
 const memoryIdSchema = lazySchema(() => z.string().min(1));
 const runAutoDreamSchema = lazySchema(() =>
-  z.object({ force: z.boolean().optional() }).passthrough()
+  z
+    .object({
+      force: z.boolean().optional(),
+      model: z.string().optional(),
+    })
+    .passthrough()
 );
 
 let memoryService: AIUserMemoryService | null = null;
@@ -94,13 +99,17 @@ export function registerAIUserMemoryIpcHandlers(): void {
   });
 
   // RUN_AUTO_DREAM is AI-gated (it invokes the AI auto-dream service).
+  // Test-side feature kept: optional per-call model override.
   registerAiValidatedHandler(
     AI_USER_MEMORY_RUN_AUTO_DREAM,
     runAutoDreamSchema,
     async (input) => {
+      const model =
+        typeof input.model === "string" ? input.model.trim() : "";
       const result = await getSharedAutoDreamService().runNow({
         force: input.force === true,
         reason: "manual_ipc",
+        ...(model.length > 0 ? { model } : {}),
       });
       return result;
     }

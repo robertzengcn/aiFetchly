@@ -33,17 +33,22 @@ vi.mock("@/modules/token", () => ({
  * (drafts, revisions, approvals, attempts, messages, conversations, audits)
  * in one transaction, and never touches another mailbox's rows.
  *
- * The retention service reads the Token-resolved dbpath, so seed through the
- * same Token-fallback connection the service uses.
+ * The whole suite runs on an isolated per-run temp database, not the shared
+ * `aifetchly-test` fallback: under parallel vitest workers, two workers
+ * running TypeORM synchronize() DDL against the shared file throw
+ * SQLITE_BUSY_SNAPSHOT (busy_timeout does not cover WAL snapshot conflicts).
+ * The service accepts an explicit dbpath, so both the seed models and the
+ * purge call point at the same private connection — no Token mock needed.
+ * Mirrors the isolation pattern in EmailReplyRecovery.model.test.ts.
  */
 describe("EmailReplyRetentionService (P4.4)", () => {
+  let dbpath: string;
   let draftModel: EmailReplyDraftModel;
   let revisionModel: EmailReplyDraftRevisionModel;
   let approvalModel: EmailReplyApprovalModel;
   let attemptModel: EmailReplySendAttemptModel;
   let messageModel: EmailReceivedMessageModel;
   let conversationModel: EmailConversationModel;
-  let dbpath: string;
 
   beforeAll(async () => {
     // Stand up an isolated temp DB (not the shared os.tmpdir()/aifetchly-test)
@@ -73,6 +78,26 @@ describe("EmailReplyRetentionService (P4.4)", () => {
       fs.rmSync(dbpath, { recursive: true, force: true });
     } catch {
       /* ignore */
+    }
+    dbpath = path.join(os.tmpdir(), `aifetchly-reply-retention-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Construct AFTER reset so every model holds the isolated dbpath.
+    draftModel = new EmailReplyDraftModel(dbpath);
+    revisionModel = new EmailReplyDraftRevisionModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+    attemptModel = new EmailReplySendAttemptModel(dbpath);
+    messageModel = new EmailReceivedMessageModel(dbpath);
+    conversationModel = new EmailConversationModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
     }
   });
 
@@ -157,7 +182,11 @@ describe("EmailReplyRetentionService (P4.4)", () => {
     // getInstance, which lands on the authoritative isolated connection
     // resetInstance installed in beforeAll (passing the shared fallback
     // path would purge the WRONG database).
-    const counts = await new EmailReplyRetentionService().purgeMailboxData(71);
+    // Same isolated dbpath the seed models use.
+    const counts = await new EmailReplyRetentionService().purgeMailboxData(
+      71,
+      dbpath
+    );
 
     expect(counts.drafts).toBe(1);
     expect(counts.revisions).toBe(1);

@@ -87,6 +87,14 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
+        <AiChatCompactionStatus
+          :status="compactionStatus"
+          :busy="compactionBusy"
+          class="mx-1"
+          @retry="handleCompactionRetry"
+          @cancel="handleCompactionCancel"
+          @open-history="historyUiEnabled && (showHistoryDrawer = true)"
+        />
         <AiChatVoiceOutputToggle
           :enabled="spokenResponseEnabled"
           :saving="voiceSettingsSaving"
@@ -103,12 +111,24 @@
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
           "
-          @click="handleCompactConversation"
+          @click="handleCompactStart"
           :title="
             t('aiChatV2.compact_conversation') || 'Compact conversation'
           "
         >
           <v-icon size="small">mdi-arrow-collapse</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          v-if="historyUiEnabled"
+          data-testid="ai-history-drawer-toggle"
+          :disabled="!activeConversationId"
+          @click="showHistoryDrawer = true"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+        >
+          <v-icon size="small">mdi-book-search-outline</v-icon>
         </v-btn>
         <v-btn
           icon
@@ -145,6 +165,22 @@
           compact
           @open="onOpenConversationReport"
         />
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          data-testid="toggle-reasoning"
+          @click="toggleReasoningVisible"
+          :title="
+            showReasoning
+              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
+              : t('aiChatV2.show_reasoning') || 'Show reasoning'
+          "
+        >
+          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
+            mdi-brain
+          </v-icon>
+        </v-btn>
         <v-btn
           icon
           size="small"
@@ -419,6 +455,13 @@
         </v-btn>
       </div>
 
+      <AiChatSelectedContext
+        v-if="historyUiEnabled"
+        :selections="selectedContextItems"
+        @remove="removeSelectedContext"
+        @clear="clearSelectedContext"
+      />
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -454,13 +497,11 @@
             v-model="selectedModel"
             :items="availableModels"
             :default-model="defaultModelId"
-            :disabled="chatIsRunning"
             :loading="availableModels.length === 0"
             class="ml-2"
           />
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
             class="ml-2"
             @update:model-value="onToolApprovalModeChange"
           />
@@ -624,6 +665,15 @@
 
 
 
+    <v-snackbar
+      v-model="scheduledPermissionNotice"
+      timeout="5000"
+      location="bottom"
+      data-testid="scheduled-permission-notice"
+    >
+      {{ scheduledPermissionNoticeText }}
+    </v-snackbar>
+
     <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
       {{
         t("aiChatV2.compact_completed") ||
@@ -734,6 +784,17 @@
         </v-card-text>
       </v-card>
     </v-dialog>
+    <!-- Recoverable-history browser drawer (technical-design §13.1, §18 stage 3).
+         Gated on the history-UI rollout flag: no drawer, toggle, or selection
+         chips when the stage is off so users cannot select passages that
+         resolve to empty. -->
+    <AiChatHistoryDrawer
+      v-if="activeConversationId && historyUiEnabled"
+      v-model="showHistoryDrawer"
+      :conversation-id="activeConversationId"
+      @select="handleHistorySelect"
+      @navigate="handleHistoryNavigate"
+    />
     <!-- Single-output report dialog (lifted from AiChatV2Messages, design §11.1). -->
     <AIContentReportDialog
       v-if="singleReportDialogOpen && activeSingleDescriptor"
@@ -779,6 +840,7 @@ import type {
   ChatV2RuntimeStatus,
   ChatV2AutoCompactedEvent,
   ChatV2GeneratedImageReference,
+  ChatV2CompactionProgressEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -805,7 +867,7 @@ import {
   subscribeChatV2PendingEvents,
   stopChatV2Stream,
   getChatV2PlanState,
-  compactChatV2Conversation,
+  startCompaction,
   subscribeAutoCompacted,
   unsubscribeAutoCompacted,
   answerChatV2Question,
@@ -817,9 +879,41 @@ import {
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
   exportGeneratedImage,
+  getCompactionStatus,
+  cancelCompaction,
+  subscribeCompactionProgress,
+  unsubscribeCompactionProgress,
+  denyChatV2ToolPermission,
 } from "@/views/api/aiChatV2";
 import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
+import * as aiChatV2Api from "@/views/api/aiChatV2";
+import {
+  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+  downloadVoiceModel,
+  getVoiceSettings,
+  getVoiceStatus,
+  notifyVoiceModelsChanged,
+  onVoiceModelDownloadProgress,
+  setVoiceSettings,
+} from "@/views/api/aiChatV2Voice";
+import {
+  installLocalAiRuntime,
+  onLocalAiRuntimeProgress,
+  prepareLocalAiRuntimeInstall,
+} from "@/views/api/localAiRuntime";
+import type {
+  AiChatVoiceRuntimeStatus,
+  AiChatVoiceSettingsView,
+  AiChatVoiceTtsMode,
+  VoiceModelDownloadProgress,
+} from "@/entityTypes/aiChatVoiceTypes";
+import type {
+  LocalAiRuntimeDownloadProgress,
+  LocalAiRuntimeInstallOffer,
+} from "@/entityTypes/localAiRuntimeTypes";
+import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -841,6 +935,12 @@ import ManagedBrowserStartPanel from "./ManagedBrowserStartPanel.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
+import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
+import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
+import AiChatSelectedContext from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
@@ -864,6 +964,7 @@ import {
   isValidLoopCount,
 } from "@/views/utils/aiGoalCommand";
 import { parseAiLoopCommand } from "@/service/slashCommands/AiChatLoopCommandParser";
+import { pastedBlocksFromSend } from "@/service/pastedText/PastedTextDisplay";
 import {
   createScheduledLoop,
   controlScheduledLoop,
@@ -896,6 +997,7 @@ import {
 import type { OpenAIModel } from "@/api/aiChatApi";
 import {
   computeContextPercent,
+  estimateVisibleContextTokens,
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
@@ -908,6 +1010,7 @@ import { isPlanStateActive } from "./planStateUtil";
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
+  writeAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import {
@@ -1026,6 +1129,36 @@ const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
+// Persistent (timeout=-1) notice shown when a scheduled run pauses for
+// interactive tool permission — action-required, so it stays until dismissed.
+const scheduledPermissionNotice = ref(false);
+const scheduledPermissionNoticeText = ref("");
+// Recoverable-history + incremental-compaction state (technical-design §13).
+const showHistoryDrawer = ref(false);
+/**
+ * History-UI rollout flag (design §18 stage 3). Fail-closed: false until the
+ * main-process flag read resolves true. When false the drawer toggle,
+ * selected-context chips, and "use in next reply" affordances are hidden so
+ * users cannot select passages that backend resolution would no-op.
+ */
+const historyUiEnabled = ref(false);
+const compactionStatus = ref<CompactionStatusSnapshot | null>(null);
+const compactionBusy = ref(false);
+const selectedContextItems = ref<SelectedContextItem[]>([]);
+/**
+ * Per-conversation selection drafts (§13.3, FR-10): switching conversations
+ * preserves each conversation's draft instead of discarding it, so context
+ * choices never leak across chats and are restored on return.
+ */
+const selectedContextDrafts = ref<Map<string, SelectedContextItem[]>>(new Map());
+/**
+ * Stable submission identity (§13.3): kept until acceptance is resolved.
+ * Transport retry reuses the same ID so the backend reuses the accepted
+ * user-turn metadata instead of duplicating the message + selected context.
+ * Provider-failure retry re-executes the existing turn rather than adding a
+ * second selected-context message.
+ */
+const pendingSubmissionId = ref<string | null>(null);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 
 interface MessageListController {
@@ -1626,9 +1759,14 @@ const mergePersistedAndLiveMessages = (
         liveMessage.metadata?.generatedImages?.length ?? 0;
       const persistedImageCount =
         persistedMessage.metadata?.generatedImages?.length ?? 0;
+      const liveReasoningLen =
+        liveMessage.metadata?.reasoning?.content?.length ?? 0;
+      const persistedReasoningLen =
+        persistedMessage.metadata?.reasoning?.content?.length ?? 0;
       if (
         liveMessage.content.length > persistedMessage.content.length ||
-        liveImageCount > persistedImageCount
+        liveImageCount > persistedImageCount ||
+        liveReasoningLen > persistedReasoningLen
       ) {
         const metadataSource =
           liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
@@ -1923,6 +2061,142 @@ function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
 }
 
 /**
+ * Incremental-compaction run lifecycle broadcast (technical-design §13.1).
+ * Updates the status badge for the active conversation; ignored for other
+ * conversations (the badge is per-conversation, not global). A `completed`
+ * event also raises the compacted notice — the manual flow no longer waits
+ * on a blocking RPC, so completion is observed here instead.
+ */
+function handleCompactionProgress(
+  event: ChatV2CompactionProgressEvent
+): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  compactionStatus.value = {
+    state: event.state,
+    runId: event.runId,
+    generationId: event.generationId,
+    sectionsPacked: event.sectionsPacked,
+  };
+  if (event.state === "completed") {
+    compactNotice.value = true;
+  }
+}
+
+/**
+ * Build a SelectedContextItem from a resolved history excerpt (§13.3). The
+ * preview text is display-only — the backend re-resolves the opaque sourceId
+ * on submit; renderer text is never trusted as the original quote.
+ */
+function handleHistorySelect(excerpt: HistoryExcerpt): void {
+  // Fail-closed when the history-UI stage is off: ignore drawer selections
+  // so no chips render without backend resolution (§18).
+  if (!historyUiEnabled.value) return;
+  const existing = selectedContextItems.value.find(
+    (item) => item.sourceId === excerpt.sourceId
+  );
+  if (existing) return; // dedup: a passage can be selected only once
+  const preview =
+    excerpt.text.length > 80
+      ? excerpt.text.slice(0, 77) + "…"
+      : excerpt.text;
+  const estimatedTokens = Math.ceil(excerpt.text.length / 4);
+  selectedContextItems.value = [
+    ...selectedContextItems.value,
+    { sourceId: excerpt.sourceId, preview, estimatedTokens },
+  ];
+  syncActiveDraft();
+}
+
+function removeSelectedContext(sourceId: string): void {
+  selectedContextItems.value = selectedContextItems.value.filter(
+    (item) => item.sourceId !== sourceId
+  );
+  syncActiveDraft();
+}
+
+function clearSelectedContext(): void {
+  selectedContextItems.value = [];
+  syncActiveDraft();
+}
+
+/** Persist the active conversation's draft (per-conversation drafts, §13.3). */
+function syncActiveDraft(): void {
+  const id = activeConversationId.value;
+  if (id) {
+    selectedContextDrafts.value.set(id, [...selectedContextItems.value]);
+  }
+}
+
+/**
+ * Source navigation from the history drawer (§13.2, AC-17): close the drawer
+ * and return to the transcript without touching model state. Viewing never
+ * mutates the next model request — only an explicit "Select passage" action
+ * (handleHistorySelect) adds context chips. In particular, navigating must
+ * NOT draft a selection: otherwise a look-only browse would silently grow the
+ * next request.
+ */
+function handleHistoryNavigate(excerpt?: HistoryExcerpt): void {
+  showHistoryDrawer.value = false;
+  if (!excerpt) return;
+  void nextTick(() => {
+    const selector = `[data-message-id="${excerpt.messageId}"]`;
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLElement)) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const previous = el.style.outline;
+    el.style.outline = "2px solid var(--v-primary-base, #1976d2)";
+    window.setTimeout(() => {
+      el.style.outline = previous;
+    }, 1_600);
+  });
+}
+
+/** Bounded retry for a failed/paused/cancelled compaction run (§13, FR-11). */
+async function handleCompactionRetry(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await handleCompactStart();
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/** User-initiated cancel of the active compaction run (§11.6, FR-09). */
+async function handleCompactionCancel(): Promise<void> {
+  if (!activeConversationId.value || compactionBusy.value) return;
+  compactionBusy.value = true;
+  try {
+    await cancelCompaction(activeConversationId.value);
+  } catch (err) {
+    streamError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    compactionBusy.value = false;
+    void refreshCompactionStatus();
+  }
+}
+
+/**
+ * Load the current compaction status when switching conversations so the
+ * badge reflects the active run (if any) for the focused conversation.
+ */
+async function refreshCompactionStatus(): Promise<void> {
+  if (!activeConversationId.value) {
+    compactionStatus.value = null;
+    return;
+  }
+  try {
+    compactionStatus.value = await getCompactionStatus(
+      activeConversationId.value
+    );
+  } catch {
+    // Status is best-effort; a failure leaves the prior badge (or null).
+    compactionStatus.value = null;
+  }
+}
+
+/**
  * Handle a scheduled-turn completion broadcast (refresh hint only). Reloads the
  * authoritative history when the originating conversation is active and idle;
  * defers until the active stream ends so scheduled tokens never merge into an
@@ -1932,12 +2206,30 @@ function handleConversationUpdated(
   event: ChatV2ConversationUpdatedEvent
 ): void {
   void loadConversations();
+  if (event.reason === "scheduled_turn_permission_requested") {
+    // Surface an action-required notice so the user knows a scheduled run is
+    // paused waiting for approval. Auto-dismisses after 5s — the actionable
+    // permission card is also persisted in the rendered history below, so the
+    // snackbar is a transient attention-grabber, not the only entry point.
+    const baseText =
+      t("aiChatV2.permission_requested_scheduled") ||
+      "A scheduled task is asking for permission to use a tool.";
+    scheduledPermissionNoticeText.value = event.toolName
+      ? `${baseText} (${event.toolName})`
+      : baseText;
+    scheduledPermissionNotice.value = true;
+  }
   if (event.conversationId === activeConversationId.value) {
     // The persisted row replaces any optimistic live bubble.
     if (liveScheduledAssistant.value) {
       liveScheduledAssistant.value = null;
     }
-    if (isStreaming.value) {
+    // A permission-requested pause is user-action-required: the persisted
+    // permission card must render immediately even mid-stream, so bypass the
+    // scheduledRefreshPending deferral for this reason.
+    const isPermissionRequested =
+      event.reason === "scheduled_turn_permission_requested";
+    if (isStreaming.value && !isPermissionRequested) {
       scheduledRefreshPending.value = true;
     } else {
       void loadHistory(event.conversationId);
@@ -2096,6 +2388,17 @@ watch(activeConversationId, (id, previousId) => {
     // Drop any stale ambiguity-chooser / pending send from the previous
     // conversation so it can never replay into the newly active one.
     cancelAmbiguityChooser();
+    // Per-conversation drafts (§13.3): stash the outgoing draft and restore
+    // the incoming one so switching preserves work without cross-chat leaks.
+    if (previousId) {
+      selectedContextDrafts.value.set(previousId, [
+        ...selectedContextItems.value,
+      ]);
+    }
+    selectedContextItems.value = id
+      ? [...(selectedContextDrafts.value.get(id) ?? [])]
+      : [];
+    void refreshCompactionStatus();
   }
   void refreshActiveGoal();
   if (id) {
@@ -2211,6 +2514,11 @@ const handleReasoningVisibilityChanged = (event: Event): void => {
     typeof customEvent.detail?.visible === "boolean"
       ? customEvent.detail.visible
       : readAiChatReasoningVisible();
+};
+const toggleReasoningVisible = (): void => {
+  const next = !showReasoning.value;
+  showReasoning.value = next;
+  writeAiChatReasoningVisible(next);
 };
 
 const resolveContextWindowLocal = (model?: string): number =>
@@ -3116,10 +3424,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       messages.value,
       activeWorkspace.value?.rootPath
     );
-    // Reset context-usage tracking for the loaded conversation. If any
-    // history rows carry tokensUsed, seed the baseline estimate from the
-    // most recent assistant message; otherwise start at zero until the
-    // next server usage_update arrives.
+    // Reset context-usage tracking for the loaded conversation. Prefer a
+    // persisted tokensUsed value. When history has none (the request was
+    // rejected before a usage report), estimate from the visible transcript
+    // so the header meter is not stuck at 0%.
     lastUsage.value = null;
     const latestWithTokens = [...messages.value]
       .reverse()
@@ -3129,10 +3437,14 @@ const loadHistory = async (conversationId: string): Promise<void> => {
           typeof m.tokensUsed === "number" &&
           m.tokensUsed > 0
       );
-    streamingEstimatedTokens.value =
+    const persistedTokens =
       typeof latestWithTokens?.tokensUsed === "number"
         ? latestWithTokens.tokensUsed
         : 0;
+    streamingEstimatedTokens.value =
+      persistedTokens > 0
+        ? persistedTokens
+        : estimateVisibleContextTokens(messages.value);
     if (latestWithTokens?.model) {
       activeModel.value = latestWithTokens.model;
     }
@@ -3529,7 +3841,9 @@ const handlePinnedPermissionGrant = (): void => {
   void handleSkillPermissionGrant(message);
 };
 
-const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
+const handleSkillPermissionDeny = async (
+  message: ChatV2MessageView
+): Promise<void> => {
   const idx = messages.value.findIndex((m) => m.id === message.id);
   const deniedMessage =
     t("aiChatV2.permission_denied") ||
@@ -3546,10 +3860,25 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       },
     };
   }
-  // Stop only the conversation that owns the denied tool — background
-  // conversations are unaffected. Detach its listener and resolve its pending
-  // stream promise so its onSend await unblocks.
   const targetConversationId = message.conversationId || undefined;
+  const toolId = resolveToolIdForPermissionMessage(message);
+  if (toolId) {
+    try {
+      const result = await denyChatV2ToolPermission(
+        toolId,
+        targetConversationId
+      );
+      if (result.handled) {
+        // Scheduled engine owned the paused turn — it synthesized a denied
+        // tool_result and the run continues. Do NOT stop the stream; the
+        // terminal event resolves the card.
+        return;
+      }
+    } catch {
+      // IPC denied (e.g. AI gate) — fall through to interactive stop below.
+    }
+  }
+  // Interactive path (no scheduled engine, or IPC failed): stop the stream.
   stopChatV2Stream(targetConversationId);
   if (message.conversationId) {
     detachChatV2ConversationStreamListeners(message.conversationId, true);
@@ -3562,7 +3891,7 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 const handlePinnedPermissionDeny = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  handleSkillPermissionDeny(message);
+  void handleSkillPermissionDeny(message);
 };
 
 // ---------------------------------------------------------------------------
@@ -3818,7 +4147,14 @@ const handleRequestPlanChanges = async (feedback: string): Promise<void> => {
   }
 };
 
-const handleCompactConversation = async (): Promise<void> => {
+/**
+ * Manual compact entry point (design §13.1 start/status/progress). Starts a
+ * bounded run and returns IMMEDIATELY — the batch continues in the main
+ * process while the badge follows progress events + status, so navigating
+ * away mid-batch loses nothing. Resume/retry is just another start call.
+ * Completion surfaces via `handleCompactionProgress` (notice + badge).
+ */
+const handleCompactStart = async (): Promise<void> => {
   if (
     !activeConversationId.value ||
     chatIsRunning.value ||
@@ -3829,21 +4165,16 @@ const handleCompactConversation = async (): Promise<void> => {
   isCompacting.value = true;
   streamError.value = null;
   try {
-    const summary = await compactChatV2Conversation(
+    const ack = await startCompaction(
       activeConversationId.value,
       resolveModelForRequest()
     );
-    if (summary) {
-      const tokenEstimate =
-        summary.outputTokenEstimate ??
-        Math.ceil(summary.summary.length / CHARS_PER_TOKEN_ESTIMATE);
-      streamingEstimatedTokens.value = tokenEstimate;
-      lastUsage.value = null;
-      if (summary.model) {
-        activeModel.value = summary.model;
-      }
-      compactNotice.value = true;
+    if (!ack.started) {
+      streamError.value =
+        t("aiChatCompaction.compaction_start_failed") ||
+        "Compaction failed to start.";
     }
+    void refreshCompactionStatus();
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -3999,6 +4330,19 @@ const onSend = async (
   // before acknowledgement would silently discard a rejected message.
   options?.onAccepted?.();
   streamError.value = null;
+  // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
+  // (§13.3) — never the passage text. The backend re-resolves each reference
+  // against the current epoch/revision and the final budget. The draft is kept
+  // until the `start` event reports which references were accepted, so a
+  // rejected/unchanged selection is never silently dropped.
+  const pendingSelectionIds = selectedContextItems.value.map((item) => item.sourceId);
+  // Stable submission identity (§13.3): reuse the pending ID across transport
+  // retries so the backend reuses the same user-turn metadata instead of
+  // duplicating the message. Resolved (cleared) on `start` acceptance below.
+  if (!pendingSubmissionId.value) {
+    pendingSubmissionId.value = crypto.randomUUID();
+  }
+  const submissionId = pendingSubmissionId.value;
 
   attachmentError.value = null;
   // Record whether this user message originated from voice input so the
@@ -4195,6 +4539,22 @@ const onSend = async (
     (!chunk.conversationId || chunk.conversationId === streamConversationId);
 
   const nowIso = new Date().toISOString();
+  const optimisticPastedBlocks = pastedBlocksFromSend(
+    displayText,
+    options?.pastedContents
+  );
+  const tempUserMetadata: ChatV2MessageMetadata | undefined =
+    attachmentMetadata || optimisticPastedBlocks
+      ? {
+          source: "chat-v2",
+          ...(attachmentMetadata
+            ? { attachments: attachmentMetadata }
+            : {}),
+          ...(optimisticPastedBlocks
+            ? { pastedBlocks: optimisticPastedBlocks }
+            : {}),
+        }
+      : undefined;
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: streamConversationId,
@@ -4202,9 +4562,7 @@ const onSend = async (
     content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
-    metadata: attachmentMetadata
-      ? { source: "chat-v2", attachments: attachmentMetadata }
-      : undefined,
+    metadata: tempUserMetadata,
   };
   let streamMessages = [...messages.value, tempUser];
   const streamMessageListController: MessageListController = {
@@ -4328,11 +4686,15 @@ const onSend = async (
         references: [...options.confirmedBatchReferences],
       };
     }
+    // Selected archived passages (§13.3): opaque refs + stable submission id.
+    if (pendingSelectionIds.length > 0) {
+      streamRequest.historySelectionIds = pendingSelectionIds;
+    }
+    streamRequest.submissionId = submissionId;
     // Queue path (design §9.2/§14.3): attach the turn renderer FIRST, then
     // create the durable pending row; the main process dispatches it.
     const queuedTurn = awaitChatV2Turn(
       streamConversationId,
-
       (chunk: ChatV2StreamChunk) => {
         if (!turnActive) {
           if (turnParked) {
@@ -4363,12 +4725,58 @@ const onSend = async (
             tempUser.conversationId = chunk.conversationId;
             assistant.conversationId = chunk.conversationId;
           }
-          if (chunk.messageId) {
+          if (chunk.messageId && chunk.messageId !== assistant.id) {
+            const previousId = assistant.id;
             assistant.id = chunk.messageId;
             patchConversationRuntimeState(streamConversationId, {
               activeAssistantMessageId: chunk.messageId,
             });
+            if (assistantAdded) {
+              const currentMessages = streamMessageListController.get();
+              const idx = currentMessages.findIndex(
+                (m) => m.id === previousId
+              );
+              if (idx !== -1) {
+                const nextMessages = [...currentMessages];
+                nextMessages[idx] = {
+                  ...nextMessages[idx],
+                  id: chunk.messageId,
+                };
+                streamMessageListController.set(nextMessages);
+              }
+            }
           }
+          // `start` marks acceptance/persistence (§13.3): clear ONLY the
+          // selected passages the backend actually accepted — those are now
+          // folded into the turn. Drafts whose source changed or could not
+          // fit stay in the chips so the user is not silently charged for
+          // context they did not get. Changed-source survivors are flagged
+          // so the user explicitly re-confirms the refreshed passage before
+          // it is ever quoted (§4.2, AC-18). Acceptance also resolves the
+          // stable submission identity so the next turn mints a fresh ID.
+          if (pendingSelectionIds.length > 0) {
+            const accepted = new Set<string>(
+              chunk.historySelectionAcceptedIds ?? []
+            );
+            const changed = new Set<string>(
+              chunk.historySelectionChangedIds ?? []
+            );
+            const rejected = new Set<string>(
+              (chunk as { historySelectionRejectedIds?: readonly string[] })
+                .historySelectionRejectedIds ?? []
+            );
+            selectedContextItems.value = selectedContextItems.value
+              .filter((item) => !accepted.has(item.sourceId))
+              .map((item) =>
+                changed.has(item.sourceId)
+                  ? { ...item, refreshed: true }
+                  : rejected.has(item.sourceId)
+                    ? { ...item, rejected: true }
+                    : item
+              );
+            syncActiveDraft();
+          }
+          pendingSubmissionId.value = null;
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
           // Real token counts from the server. Replace the streaming
@@ -4442,14 +4850,17 @@ const onSend = async (
               truncated: over,
             },
           };
-          const reasoningIdx = messages.value.findIndex(
+          const currentMessages = streamMessageListController.get();
+          const reasoningIdx = currentMessages.findIndex(
             (m) => m.id === assistant.id
           );
           if (reasoningIdx !== -1) {
-            messages.value[reasoningIdx] = {
-              ...messages.value[reasoningIdx],
+            const nextMessages = [...currentMessages];
+            nextMessages[reasoningIdx] = {
+              ...nextMessages[reasoningIdx],
               metadata: assistant.metadata,
             };
+            streamMessageListController.set(nextMessages);
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
@@ -4529,6 +4940,8 @@ const onSend = async (
               nextMessages[idx] = {
                 ...nextMessages[idx],
                 content: assistant.content,
+                metadata:
+                  assistant.metadata ?? nextMessages[idx].metadata,
               };
               streamMessageListController.set(nextMessages);
             }
@@ -4733,6 +5146,30 @@ const onSend = async (
             source: "chat-v2",
             generatedImages,
           };
+        }
+        if (
+          showReasoning.value &&
+          typeof complete.reasoningContent === "string" &&
+          complete.reasoningContent.length > 0
+        ) {
+          ensureAssistantAdded();
+          const existing = assistant.metadata?.reasoning?.content ?? "";
+          if (complete.reasoningContent.length >= existing.length) {
+            const truncated =
+              complete.reasoningContent.length > REASONING_LIVE_MAX_CHARS;
+            assistant.metadata = {
+              ...(assistant.metadata ?? { source: "chat-v2" }),
+              reasoning: {
+                content: truncated
+                  ? complete.reasoningContent.slice(0, REASONING_LIVE_MAX_CHARS)
+                  : complete.reasoningContent,
+                format: "plain_text",
+                source: "server",
+                model: complete.model,
+                truncated,
+              },
+            };
+          }
         }
         if (assistantAdded) {
           const currentMessages = streamMessageListController.get();
@@ -5025,6 +5462,27 @@ onMounted(() => {
   unsubscribePendingEvents = subscribeChatV2PendingEvents(handlePendingEvent);
   void loadConversations();
   void loadVoiceSettings();
+  // History-UI rollout flag (§18 stage 3, R-1): fail-closed. A missing
+  // helper is treated like a transport error (false) — never enabled.
+  // Component tests that need the drawer stub `isHistoryUiEnabled`.
+  // Production always exports the function via preload + IPC.
+  try {
+    const fn = (aiChatV2Api as unknown as Record<string, unknown>)
+      .isHistoryUiEnabled as (() => Promise<boolean>) | undefined;
+    if (typeof fn !== "function") {
+      historyUiEnabled.value = false;
+    } else {
+      void fn()
+        .then((enabled) => {
+          historyUiEnabled.value = enabled === true;
+        })
+        .catch(() => {
+          historyUiEnabled.value = false;
+        });
+    }
+  } catch {
+    historyUiEnabled.value = false;
+  }
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(
@@ -5076,6 +5534,8 @@ onMounted(() => {
   // Auto full-compact completions reset the context badge (strict routing
   // renderer-side: only the active conversation's badge updates).
   subscribeAutoCompacted(handleAutoCompacted);
+  // Incremental-compaction run lifecycle updates the status badge (§13.1).
+  subscribeCompactionProgress(handleCompactionProgress);
 });
 
 // --- Conversation + single-output report orchestration (design §11.1) -----
@@ -5136,6 +5596,7 @@ onBeforeUnmount(() => {
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
   unsubscribeAutoCompacted();
+  unsubscribeCompactionProgress();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
@@ -5149,6 +5610,12 @@ onBeforeUnmount(() => {
   // consumer when no other consumers reference the workspace.
   void conversationWorkspace.dispose();
 });
+
+// Expose internal handlers for component tests. The permission card and
+// conversation list have deep rendering dependencies (many stubbed
+// subcomponents); driving them through the template proved brittle, so tests
+// assert contracts at this level instead.
+defineExpose({ handleSkillPermissionDeny, onSelectConversation });
 </script>
 
 <style scoped>
