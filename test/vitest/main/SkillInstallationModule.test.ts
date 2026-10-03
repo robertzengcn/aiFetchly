@@ -1506,6 +1506,8 @@ describe("session-aware installer tool boundary + manual-action transition (FR-3
     const wrongToken = await module.approveManualAction({
       sessionId: prepared.sessionId,
       approvalToken: "not-the-token",
+      toolName: "shell_execute",
+      operation: "git clone https://github.com/a/b",
     });
     expect(wrongToken.errorCode).toBe("APPROVAL_REQUIRED");
 
@@ -1514,8 +1516,19 @@ describe("session-aware installer tool boundary + manual-action transition (FR-3
       sessionId: prepared.sessionId,
       approvalToken: token,
       conversationId: "conv-other",
+      toolName: "shell_execute",
+      operation: "git clone https://github.com/a/b",
     });
     expect(foreign.errorCode).toBe("INSTALL_SESSION_CONVERSATION_MISMATCH");
+
+    // Audit R8: a typed manual-action result is REQUIRED — refusing to
+    // name the exact operation keeps the fallback closed.
+    const unbound = await module.approveManualAction({
+      sessionId: prepared.sessionId,
+      approvalToken: token,
+      conversationId: "conv-manual",
+    } as unknown as Parameters<SkillInstallationModule["approveManualAction"]>[0]);
+    expect(unbound.errorCode).toBe("MANUAL_ACTION_OPERATION_REQUIRED");
 
     // Correct binding → audited transition; boundary sees it.
     expect((await module.hasApprovedManualAction(prepared.sessionId)).approved).toBe(false);
@@ -1523,6 +1536,13 @@ describe("session-aware installer tool boundary + manual-action transition (FR-3
       sessionId: prepared.sessionId,
       approvalToken: token,
       conversationId: "conv-manual",
+      toolName: "shell_execute",
+      operation: "git clone https://github.com/a/b",
+      cwd: "/tmp/skill-staging",
+      reason: "no typed provider performs a shallow git clone",
+      permission: "shell.execute",
+      verification: "clone directory exists",
+      rollback: "rm -rf the clone",
     });
     expect(approved.state).toBe("awaiting_approval");
     const approval = await module.hasApprovedManualAction(prepared.sessionId);
@@ -1531,6 +1551,14 @@ describe("session-aware installer tool boundary + manual-action transition (FR-3
     // canonical target the approval covers.
     expect(typeof approval.target).toBe("string");
     expect(approval.target).toContain("video-use");
+    // Audit R8: the record binds the EXACT approved operation, cwd, and
+    // §8.6 payload — not just the target.
+    expect(approval.toolName).toBe("shell_execute");
+    expect(approval.operation).toBe("git clone https://github.com/a/b");
+    expect(approval.cwd).toBe("/tmp/skill-staging");
+    expect(approval.reason).toContain("typed provider");
+    expect(approval.verification).toBe("clone directory exists");
+    expect(approval.rollback).toBe("rm -rf the clone");
   }, 120_000);
 
   it("the conversation's persisted session activates the boundary across turns", async () => {

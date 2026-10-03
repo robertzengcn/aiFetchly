@@ -24,6 +24,7 @@ import {
   intersectSkillToolAllowlists,
   applySkillToolNarrowing,
 } from "@/service/PromptSkillToolNarrowing";
+import { parseManualActionApprovalDetail } from "@/entityTypes/skillInstallationTypes";
 
 // ---------------------------------------------------------------------------
 // Intent guard — FR-01 / FR-26 / FR-27 boundary matrix (design §21.1)
@@ -246,7 +247,7 @@ describe("evaluateSkillInstallationToolPolicy", () => {
     expect(verdict.allowed).toBe(true);
   });
 
-  it("permits a generic fallback after a typed manual-action approval", () => {
+  it("permits a generic fallback after a typed manual-action approval (legacy boolean)", () => {
     const verdict = evaluateSkillInstallationToolPolicy({
       routing,
       toolName: "shell_execute",
@@ -256,6 +257,90 @@ describe("evaluateSkillInstallationToolPolicy", () => {
       manualActionApproved: true,
     });
     expect(verdict.allowed).toBe(true);
+  });
+
+  it("an operation-bound approval authorizes ONLY that exact command (audit R8)", () => {
+    const approved = {
+      target: "https://github.com/browser-use/video-use",
+      toolName: "shell_execute",
+      operation: "git clone https://github.com/browser-use/video-use",
+    };
+    // The exact approved command passes.
+    const exact = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command: "git clone https://github.com/browser-use/video-use",
+      },
+      manualActionApproved: approved,
+    });
+    expect(exact.allowed).toBe(true);
+    // A DIFFERENT command against the same target is refused — a
+    // target-only scope authorized any call.
+    const other = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command:
+          "curl -L -o v.zip https://github.com/browser-use/video-use/archive.zip",
+      },
+      manualActionApproved: approved,
+    });
+    expect(other.allowed).toBe(false);
+    // Whitespace normalization: the same command with different spacing
+    // still matches.
+    const spaced = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command: "git   clone   https://github.com/browser-use/video-use",
+      },
+      manualActionApproved: approved,
+    });
+    expect(spaced.allowed).toBe(true);
+    // A different TOOL is refused even with a matching target+command.
+    const otherTool = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "file_write",
+      toolArguments: {
+        command: "git clone https://github.com/browser-use/video-use",
+      },
+      manualActionApproved: approved,
+    });
+    expect(otherTool.allowed).toBe(false);
+  });
+
+  it("an approval naming a cwd refuses the same command elsewhere (audit R8)", () => {
+    const approved = {
+      target: "https://github.com/browser-use/video-use",
+      toolName: "shell_execute",
+      operation: "uv sync",
+      cwd: "/tmp/skill-staging/abc",
+    };
+    // Same command + same cwd → allowed.
+    const ok = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: { command: "uv sync", cwd: "/tmp/skill-staging/abc" },
+      manualActionApproved: approved,
+    });
+    expect(ok.allowed).toBe(true);
+    // Same command, DIFFERENT cwd → refused.
+    const elsewhere = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: { command: "uv sync", cwd: "/etc" },
+      manualActionApproved: approved,
+    });
+    expect(elsewhere.allowed).toBe(false);
+    // Same command, cwd OMITTED → refused (fail closed).
+    const noCwd = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: { command: "uv sync" },
+      manualActionApproved: approved,
+    });
+    expect(noCwd.allowed).toBe(false);
   });
 });
 
@@ -524,5 +609,82 @@ describe("evaluateSkillInstallationToolPolicy — flag-tolerant shell matching +
       manualActionApproved: { target: "https://github.com/browser-use/video-use" },
     });
     expect(verdictOther.allowed).toBe(false);
+  });
+});
+
+describe("shell policy cp/tar flag boundaries (audit R8)", () => {
+  const routing = classifySkillRequestIntent(
+    "Set up https://github.com/browser-use/video-use for me"
+  );
+
+  it("blocks cp -r into the skills directory (the \\b-r space-hyphen bug)", () => {
+    const verdict = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command: "cp -r video-use ~/.aifetchly/skills/video-use",
+      },
+    });
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("blocks generic cp -r and tar extraction, still allows benign commands", () => {
+    for (const [command, allowed] of [
+      ["cp -r a b", false],
+      ["tar -xvf s.tar.gz", false],
+      ["tar -xf bundle.tar", false],
+      ["cp a.txt b.txt", true],
+      ["ls -la", true],
+      ["echo hi && ffmpeg -version", true],
+    ] as const) {
+      const verdict = evaluateSkillInstallationToolPolicy({
+        routing,
+        toolName: "shell_execute",
+        toolArguments: { command },
+      });
+      expect(verdict.allowed, command).toBe(allowed);
+    }
+  });
+});
+
+describe("parseManualActionApprovalDetail — audit-event → policy record (audit R8)", () => {
+  it("parses a structured R8 record with every bound field", () => {
+    const record = parseManualActionApprovalDetail(
+      JSON.stringify({
+        target: "https://github.com/a/b",
+        toolName: "shell_execute",
+        operation: "uv sync",
+        cwd: "/tmp/x",
+        reason: "r",
+        permission: "p",
+        verification: "v",
+        rollback: "rb",
+      })
+    );
+    expect(record).toEqual({
+      target: "https://github.com/a/b",
+      toolName: "shell_execute",
+      operation: "uv sync",
+      cwd: "/tmp/x",
+      reason: "r",
+      permission: "p",
+      verification: "v",
+      rollback: "rb",
+    });
+  });
+
+  it("reads a pre-R8 plain-string detail as target-only legacy", () => {
+    expect(
+      parseManualActionApprovalDetail("https://github.com/a/b")
+    ).toEqual({ target: "https://github.com/a/b" });
+  });
+
+  it("drops non-string and empty fields, and returns empty for no detail", () => {
+    expect(
+      parseManualActionApprovalDetail(
+        JSON.stringify({ target: "t", operation: 3, cwd: "" })
+      )
+    ).toEqual({ target: "t" });
+    expect(parseManualActionApprovalDetail("")).toEqual({});
   });
 });

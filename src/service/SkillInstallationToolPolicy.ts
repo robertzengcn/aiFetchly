@@ -42,7 +42,17 @@ export interface ToolPolicyInput {
    */
   readonly manualActionApproved?:
     | boolean
-    | { readonly target: string };
+    | {
+        readonly target: string;
+        /** Audit R8: the EXACT approved operation — tool name plus the
+         *  command line for shell fallbacks. A target-only record
+         *  authorized ANY call against that target. */
+        readonly toolName?: string;
+        readonly operation?: string;
+        /** Audit R8: the exact working directory, when the approval names
+         *  one — a matching command in a different cwd is refused. */
+        readonly cwd?: string;
+      };
 }
 
 export type ToolPolicyVerdict =
@@ -61,7 +71,7 @@ export type ToolPolicyVerdict =
  * stops at shell separators (| ; &&) — each segment is judged on its own.
  */
 const SHELL_INSTALL_RE =
-  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\b-[xf]\b|\bcp\b[^\n|;&]*\b-r\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
+  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\s-[xf]|\bcp\b[^\n|;&]*\s-r\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
 
 /** File writes that mutate the install destination. */
 const INSTALL_DEST_RE =
@@ -85,9 +95,20 @@ export function evaluateSkillInstallationToolPolicy(
     // explicit-install routing decision's target, not to every future
     // call. When the caller records the approved target, a different
     // target (or a later, unrelated decision) is NOT covered.
+    // Legacy boolean `true` keeps the finding-9 scope: the CURRENT
+    // routing decision's target. A record carries the R8 operation
+    // binding.
+    if (input.manualActionApproved === true) {
+      return { allowed: true };
+    }
     const approvedTarget = (
       input.manualActionApproved as unknown as
-        | { target?: string }
+        | {
+            target?: string;
+            toolName?: string;
+            operation?: string;
+            cwd?: string;
+          }
         | string
         | undefined
     );
@@ -95,11 +116,46 @@ export function evaluateSkillInstallationToolPolicy(
       typeof approvedTarget === "string"
         ? approvedTarget
         : approvedTarget?.target;
+    const approvedTool =
+      typeof approvedTarget === "string" ? undefined : approvedTarget?.toolName;
+    const approvedOperation =
+      typeof approvedTarget === "string" ? undefined : approvedTarget?.operation;
+    const approvedCwd =
+      typeof approvedTarget === "string" ? undefined : approvedTarget?.cwd;
+    const targetMatches =
+      approvedTargetStr !== undefined &&
+      target &&
+      approvedTargetStr.toLowerCase() === target;
+    // Operation binding (audit R8): when the record names the approved
+    // operation, ONLY that operation is authorized — the tool name must
+    // match, the command line must match exactly (normalized
+    // whitespace), and, when the approval names a cwd, the call's
+    // working directory must match it. A target-only record keeps the
+    // legacy target scope (never broader).
     if (
-      approvedTargetStr === undefined ||
-      !target ||
-      approvedTargetStr.toLowerCase() === target
+      approvedTool !== undefined ||
+      approvedOperation !== undefined ||
+      approvedCwd !== undefined
     ) {
+      const toolMatches =
+        approvedTool === undefined || approvedTool === input.toolName;
+      const command = String(
+        input.toolArguments.command ?? ""
+      ).replace(/\s+/g, " ").trim();
+      const operationMatches =
+        approvedOperation === undefined ||
+        approvedOperation.replace(/\s+/g, " ").trim() === command;
+      // Fail closed: an approval naming a cwd refuses calls that omit it.
+      const callCwd = String(input.toolArguments.cwd ?? "").trim();
+      const cwdMatches =
+        approvedCwd === undefined ||
+        (callCwd !== "" && callCwd === approvedCwd.trim());
+      if (targetMatches && toolMatches && operationMatches && cwdMatches) {
+        return { allowed: true };
+      }
+      return blocked();
+    }
+    if (targetMatches) {
       return { allowed: true };
     }
   }

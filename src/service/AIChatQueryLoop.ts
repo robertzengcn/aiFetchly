@@ -682,9 +682,15 @@ export class AIChatQueryLoop {
   } | null = null;
   private installBoundaryDirty = true;
   /** FR-30: cached manual-action approval for the active session (fail
-   *  closed until the audit lookup completes). */
-  private manualActionApprovedCache: { approved: boolean; target?: string } =
-    { approved: false };
+   *  closed until the audit lookup completes). Audit R8: a bound record
+   *  carries the exact approved tool/operation/cwd. */
+  private manualActionApprovedCache: {
+    approved: boolean;
+    target?: string;
+    toolName?: string;
+    operation?: string;
+    cwd?: string;
+  } = { approved: false };
   /** FR-24 (audit R7): the turn's model context window, resolved once
    *  from the catalog (0 = unknown — the budget field is omitted and the
    *  invocation falls back to its documented defaults). */
@@ -1987,6 +1993,18 @@ export class AIChatQueryLoop {
                       manualActionApproved.target ??
                       installRouting.source ??
                       "",
+                    // Audit R8: forward the exact approved operation so
+                    // the policy authorizes ONLY it (a target-only record
+                    // keeps the legacy, broader target scope).
+                    ...(manualActionApproved.toolName !== undefined
+                      ? { toolName: manualActionApproved.toolName }
+                      : {}),
+                    ...(manualActionApproved.operation !== undefined
+                      ? { operation: manualActionApproved.operation }
+                      : {}),
+                    ...(manualActionApproved.cwd !== undefined
+                      ? { cwd: manualActionApproved.cwd }
+                      : {}),
                   }
                 : undefined,
             });

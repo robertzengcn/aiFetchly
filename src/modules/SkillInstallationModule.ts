@@ -34,7 +34,9 @@ import type {
   SkillInstallPlan,
   SkillInstallationState,
   SkillInstallNextAction,
+  SkillManualActionApprovalRecord,
 } from "@/entityTypes/skillInstallationTypes";
+import { parseManualActionApprovalDetail } from "@/entityTypes/skillInstallationTypes";
 import {
   SkillSourceAcquisitionService,
   normalizeSkillSource,
@@ -2092,6 +2094,11 @@ export class SkillInstallationModule extends BaseModule {
    * a bounded generic fallback. Marks the session as having an approved
    * manual action (audit event + session approval flag semantics), which the
    * tool boundary then honors for generic tools on the recognized target.
+   *
+   * Audit R8: the approval MUST carry the typed provider manual-action
+   * result — the exact operation it authorizes. The event records target +
+   * tool + operation + cwd, and the policy layer authorizes ONLY that
+   * operation; a matching target alone no longer opens every call.
    */
   async approveManualAction(input: {
     sessionId: string;
@@ -2099,6 +2106,20 @@ export class SkillInstallationModule extends BaseModule {
     approvalToken: string;
     /** FR-29 conversation binding. */
     conversationId?: string;
+    /** Audit R8: the exact tool the fallback will run (e.g. shell_execute). */
+    toolName: string;
+    /** Audit R8: the exact command line being approved. */
+    operation: string;
+    /** Audit R8: the exact working directory, when the plan names one. */
+    cwd?: string;
+    /** §8.6 payload: why no typed provider can perform this step. */
+    reason?: string;
+    /** §8.6 payload: the permission the operation needs. */
+    permission?: string;
+    /** §8.6 payload: how the user verifies the step happened. */
+    verification?: string;
+    /** §8.6 payload: how to undo the operation. */
+    rollback?: string;
   }): Promise<InstallSnapshot> {
     const { sessions, events } = await this.getModels();
     const session = await sessions.findBySessionId(input.sessionId);
@@ -2129,16 +2150,57 @@ export class SkillInstallationModule extends BaseModule {
         input.sessionId
       );
     }
-    // Bounded approval (audit finding 9): the event records the EXACT
-    // canonical target the fallback was approved for, so the policy can
-    // refuse the same boolean for a different target.
+    // Audit R8: a typed manual-action result names the exact operation.
+    // Target-only approvals (finding 9) authorized ANY call against the
+    // target; refusing an unbound approval keeps the contract typed.
+    const toolName = (input.toolName ?? "").trim();
+    const operation = (input.operation ?? "").trim();
+    if (!toolName || toolName.length > 100 || !/^[a-z0-9_]+$/i.test(toolName)) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "MANUAL_ACTION_OPERATION_REQUIRED",
+        "Manual action approval must name the exact tool it authorizes.",
+        input.sessionId
+      );
+    }
+    if (!operation || operation.length > 2_000) {
+      return this.errorSnapshot(
+        session.state as SkillInstallationState,
+        "MANUAL_ACTION_OPERATION_REQUIRED",
+        "Manual action approval must name the exact operation it authorizes.",
+        input.sessionId
+      );
+    }
+    // Bounded approval (audit finding 9 + R8): the event records the
+    // EXACT canonical target AND the exact approved operation, so the
+    // policy can refuse any other call even against the same target.
+    const boundOperation = JSON.stringify({
+      target: session.canonicalUri ?? "",
+      toolName,
+      operation,
+      ...(input.cwd !== undefined && input.cwd !== ""
+        ? { cwd: input.cwd }
+        : {}),
+      ...(input.reason !== undefined && input.reason !== ""
+        ? { reason: input.reason.slice(0, 500) }
+        : {}),
+      ...(input.permission !== undefined && input.permission !== ""
+        ? { permission: input.permission.slice(0, 500) }
+        : {}),
+      ...(input.verification !== undefined && input.verification !== ""
+        ? { verification: input.verification.slice(0, 500) }
+        : {}),
+      ...(input.rollback !== undefined && input.rollback !== ""
+        ? { rollback: input.rollback.slice(0, 500) }
+        : {}),
+    } as SkillManualActionApprovalRecord);
     await this.appendEvent(
       events,
       input.sessionId,
       "manual-action-approved",
       session.state,
       session.state,
-      session.canonicalUri
+      boundOperation
     );
     await this.appendEvent(
       events,
@@ -2146,7 +2208,7 @@ export class SkillInstallationModule extends BaseModule {
       "generic-fallback-opened",
       session.state,
       session.state,
-      "generic fallback opened for the recognized target"
+      `generic fallback opened for ${toolName}: ${operation.slice(0, 120)}`
     );
     const current = await sessions.findBySessionId(input.sessionId);
     return this.snapshotFromEntity(current ?? session);
@@ -2155,20 +2217,31 @@ export class SkillInstallationModule extends BaseModule {
   /**
    * FR-30: has this session an approved manual-action transition? The tool
    * boundary supplies this as manualActionApproved before allowing generic
-   * fallback tools on the install target.
+   * fallback tools on the install target. Audit R8: a structured record
+   * carries the bound operation; a plain-string detail (pre-R8 event) is
+   * read as target-only legacy.
    */
   async hasApprovedManualAction(
     sessionId: string
-  ): Promise<{ approved: boolean; target?: string }> {
+  ): Promise<{
+    approved: boolean;
+    target?: string;
+    toolName?: string;
+    operation?: string;
+    cwd?: string;
+    reason?: string;
+    permission?: string;
+    verification?: string;
+    rollback?: string;
+  }> {
     const { events } = await this.getModels();
     const history = await events.listBySession(sessionId);
     const approval = [...history]
       .reverse()
       .find((e) => e.eventType === "manual-action-approved");
-    return {
-      approved: approval !== undefined,
-      ...(approval?.detail ? { target: approval.detail } : {}),
-    };
+    if (!approval) return { approved: false };
+    const parsed = parseManualActionApprovalDetail(approval.detail ?? "");
+    return { approved: true, ...parsed };
   }
 
   async disable(

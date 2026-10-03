@@ -371,6 +371,74 @@ export function rejectCredentialedSource(source: string): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Manual-action fallback approval (design §8.6, PRD §9.7 — audit R8)
+// ---------------------------------------------------------------------------
+
+/**
+ * The typed provider manual-action result a user approves to open the
+ * bounded generic fallback. The audit event stores this as JSON; the tool
+ * boundary authorizes ONLY the exact tool + operation (+ cwd) it names —
+ * never every call against the target.
+ */
+export interface SkillManualActionApprovalRecord {
+  /** Canonical install target the fallback was approved for. */
+  readonly target: string;
+  /** The exact generic tool the fallback may run (e.g. shell_execute). */
+  readonly toolName: string;
+  /** The exact command line (or file path) being authorized. */
+  readonly operation: string;
+  /** The exact working directory, when the plan names one. */
+  readonly cwd?: string;
+  /** §8.6 payload: why no typed provider can perform this step. */
+  readonly reason?: string;
+  /** §8.6 payload: the permission the operation needs. */
+  readonly permission?: string;
+  /** §8.6 payload: how the user verifies the step happened. */
+  readonly verification?: string;
+  /** §8.6 payload: how to undo the operation. */
+  readonly rollback?: string;
+}
+
+/**
+ * Parse an audit event detail back into an approval record. Pre-R8 events
+ * stored the bare target URI — those parse as target-only (legacy scope,
+ * never broader). Unparseable details yield an empty record (fail closed
+ * to "approved with no binding", which the policy refuses for bounded use).
+ */
+export function parseManualActionApprovalDetail(
+  detail: string
+): Partial<SkillManualActionApprovalRecord> {
+  if (!detail) return {};
+  try {
+    const parsed: unknown = JSON.parse(detail);
+    if (typeof parsed !== "object" || parsed === null) {
+      return { target: detail };
+    }
+    const record = parsed as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const key of [
+      "target",
+      "toolName",
+      "operation",
+      "cwd",
+      "reason",
+      "permission",
+      "verification",
+      "rollback",
+    ] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value !== "") {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch {
+    // Legacy plain-string detail: the target URI itself.
+    return { target: detail };
+  }
+}
+
 /**
  * Session/installation ids are app-generated opaque tokens (UUID hex or
  * `update-<hex>-<ts>` shapes). A strict charset at every schema boundary
