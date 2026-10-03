@@ -200,6 +200,14 @@ describe("SkillInstallationModule — video-use acceptance sequence", () => {
     const status = await module.getStatus(prepared.sessionId);
     expect(status.sessionId).toBe(prepared.sessionId);
     expect(status.state).toBe("ready");
+
+    // Audit R10 (design §19): reaching ready records prepare-to-ready
+    // timing (elapsed ≥ 0) and the ready count.
+    const { toolCatalogCounters } = await import("@/service/ToolCatalogCounters");
+    expect(
+      toolCatalogCounters.get("install_prepare_to_ready_ms_total")
+    ).toBeGreaterThanOrEqual(0);
+    expect(toolCatalogCounters.get("install_ready_total")).toBeGreaterThan(0);
   }, 120_000);
 
   it("repeated prepare after approval REPORTS the ready installation (§10.2)", async () => {

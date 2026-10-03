@@ -13,7 +13,10 @@ import {
   buildSkillInstallationRoutingSection,
   SKILL_INSTALL_COMPACT_REMINDER,
 } from "@/service/SkillInstallationRoutingPromptSection";
-import { evaluateSkillInstallationToolPolicy } from "@/service/SkillInstallationToolPolicy";
+import {
+  evaluateSkillInstallationToolPolicy,
+  installFirstToolCounterKey,
+} from "@/service/SkillInstallationToolPolicy";
 import {
   shouldHydrateAndReplay,
   HydrationReplayLedger,
@@ -686,5 +689,31 @@ describe("parseManualActionApprovalDetail — audit-event → policy record (aud
       )
     ).toEqual({ target: "t" });
     expect(parseManualActionApprovalDetail("")).toEqual({});
+  });
+});
+
+describe("installFirstToolCounterKey — first-tool-category correlation (audit R10)", () => {
+  it("categorizes the first tool after an explicit install request", () => {
+    expect(installFirstToolCounterKey("skill_install_prepare")).toBe(
+      "install_first_tool_installer"
+    );
+    expect(installFirstToolCounterKey("skill_install_approve")).toBe(
+      "install_first_tool_installer"
+    );
+    expect(installFirstToolCounterKey("shell_execute")).toBe(
+      "install_first_tool_shell"
+    );
+    expect(installFirstToolCounterKey("file_write")).toBe(
+      "install_first_tool_file"
+    );
+    expect(installFirstToolCounterKey("glob_files")).toBe(
+      "install_first_tool_file"
+    );
+    expect(installFirstToolCounterKey("tool_catalog_search")).toBe(
+      "install_first_tool_search"
+    );
+    expect(installFirstToolCounterKey("get_current_time")).toBe(
+      "install_first_tool_other"
+    );
   });
 });

@@ -47,6 +47,7 @@ import { SkillActivationService } from "@/service/SkillActivationService";
 import { detectAll } from "@/service/SkillDependencyOrchestrator";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { SKILL_INSTALL_PROGRESS } from "@/config/channellist";
 import type { PromptSkillDefinition } from "@/entityTypes/promptSkillTypes";
 
@@ -2793,6 +2794,23 @@ export class SkillInstallationModule extends BaseModule {
       fromState,
       toState
     );
+    // Audit R10 (design §19): prepare-to-ready timing — record the elapsed
+    // ms once, on the transition INTO ready. Failures inside the timing
+    // read never affect the installation.
+    if (toState === "ready" && fromState !== "ready") {
+      try {
+        const startedAt = current.createdAt;
+        if (startedAt instanceof Date) {
+          toolCatalogCounters.increment(
+            "install_prepare_to_ready_ms_total",
+            Math.max(0, Date.now() - startedAt.getTime())
+          );
+        }
+        toolCatalogCounters.increment("install_ready_total");
+      } catch {
+        /* metrics are best-effort */
+      }
+    }
   }
 
   private async fail(

@@ -16,7 +16,10 @@
  */
 
 import type { SkillRoutingDecision } from "@/service/SkillInstallIntentGuard";
-import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import {
+  toolCatalogCounters,
+  type ToolCatalogCounterKey,
+} from "@/service/ToolCatalogCounters";
 
 export const INSTALLER_TOOL_NAMES: ReadonlySet<string> = new Set([
   "skill_install_prepare",
@@ -234,4 +237,32 @@ function blocked(): ToolPolicyVerdict {
       "skill_install_prepare with the source and continue via its returned " +
       "session_id and next_action.",
   };
+}
+
+/**
+ * Audit R10 (design §19): the counter key for the FIRST model tool call
+ * made after an explicit install request — the correlation/alert dimension
+ * for "the first tool was shell/file/search instead of the installer".
+ */
+export function installFirstToolCounterKey(
+  toolName: string
+): ToolCatalogCounterKey {
+  if (INSTALLER_TOOL_NAMES.has(toolName)) {
+    return "install_first_tool_installer";
+  }
+  if (toolName === "shell_execute") {
+    return "install_first_tool_shell";
+  }
+  if (
+    toolName === "file_write" ||
+    toolName === "file_edit" ||
+    toolName === "file_read" ||
+    toolName === "glob_files"
+  ) {
+    return "install_first_tool_file";
+  }
+  if (toolName === "tool_catalog_search") {
+    return "install_first_tool_search";
+  }
+  return "install_first_tool_other";
 }

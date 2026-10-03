@@ -67,6 +67,7 @@ import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
   evaluateSkillInstallationToolPolicy,
+  installFirstToolCounterKey,
   INSTALLER_TOOL_NAMES,
 } from "@/service/SkillInstallationToolPolicy";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
@@ -957,6 +958,10 @@ export class AIChatQueryLoop {
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
     let currentMaxTokens = input.request.maxTokens ?? 16384;
+    // Audit R10 (design §19): first-tool-category correlation — the FIRST
+    // tool call of a turn whose user message expresses explicit install
+    // intent is categorized once (installer/shell/file/search/other).
+    let installFirstToolRecorded = false;
 
     // Per-turn seven-layer recovery state. Tracks which layers have
     // already been attempted so the coordinator doesn't loop forever.
@@ -1951,6 +1956,15 @@ export class AIChatQueryLoop {
           const skillInstallRouting = classifySkillRequestIntent(
             input.request.message
           );
+          // Audit R10: record the first-tool category once per explicit
+          // install REQUEST (the user message itself carries the intent).
+          if (
+            skillInstallRouting.confidence === "explicit" &&
+            !installFirstToolRecorded
+          ) {
+            installFirstToolRecorded = true;
+            toolCatalogCounters.increment(installFirstToolCounterKey(call.name));
+          }
           let installRouting = skillInstallRouting;
           if (installRouting.confidence !== "explicit") {
             if (this.installBoundaryDirty) {
