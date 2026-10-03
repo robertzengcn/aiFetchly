@@ -1297,6 +1297,8 @@ export default {
     name_hint: "Ingrese el nombre del correo",
     tag: "Etiqueta",
     tag_hint: "Etiqueta opcional para seleccionar este servicio de correo.",
+    tags: "Etiquetas",
+    tags_hint: "Etiquetas opcionales para seleccionar este servicio de correo. Escriba un nombre nuevo para crearlo al guardar.",
     tag_filter: "Filtrar por etiqueta",
     all_tags: "Todas las etiquetas",
     untagged: "Sin etiqueta",
@@ -1308,7 +1310,8 @@ export default {
     tag_required: "La etiqueta es obligatoria",
     tag_too_long: "La etiqueta debe tener 64 caracteres o menos",
     tag_service_count: "Usada por {count} servicio(s) de correo",
-    delete_tag_confirm: "¿Eliminar la etiqueta {name}? {count} servicio(s) quedarán sin etiqueta.",
+    tag_create_on_save: "Crear \"{name}\" al guardar",
+    delete_tag_confirm: "¿Eliminar la etiqueta {name}? {count} servicio(s) perderán esta etiqueta.",
     ssl: "SSL",
     ssl_hint: "Ingrese SSL del correo",
     email_service_deleted:

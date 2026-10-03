@@ -43,7 +43,9 @@ import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import * as path from "path";
 import { pathToFileURL } from "url";
+import Database from "better-sqlite3";
 import { Token } from "@/modules/token";
+import { snapshotLegacyServiceTags } from "@/modules/migrations/emailServiceTagMigration";
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import {
   USERSDBPATH,
@@ -1186,8 +1188,50 @@ function initialize() {
         );
       }
       const appDataSource = SqliteDb.getInstance(userdataPath);
+      // Snapshot legacy service→tag assignments BEFORE TypeORM synchronize
+      // runs (synchronize may drop the old tagId column during init). The
+      // snapshot is replayed into the new junction table after init.
+      let legacyTagSnapshot: Array<{ id: number; tagId: number }> = [];
+      try {
+        const dbFile = path.join(userdataPath, "scraper.db");
+        if (fs.existsSync(dbFile)) {
+          const rawDb = new Database(dbFile, { readonly: true });
+          legacyTagSnapshot = snapshotLegacyServiceTags(rawDb);
+          rawDb.close();
+        }
+      } catch (err) {
+        log.warn(
+          "[email-service-tag-migration] pre-init snapshot failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
       if (!appDataSource.connection.isInitialized) {
         await SqliteDb.ensureInitialized();
+      }
+      // Multi-tag migration: replay the legacy snapshot into the junction
+      // table, then drop the old tagId column. Idempotent — no-op on an
+      // already-migrated DB. Fire-and-forget so it never blocks startup,
+      // but awaited in tests via migrateEmailServiceTagsToManyToMany.
+      try {
+        const { replayLegacyServiceTags, dropLegacyServiceTagColumn } =
+          await import("@/modules/migrations/emailServiceTagMigration");
+        const backfilled = await replayLegacyServiceTags(
+          appDataSource.connection,
+          legacyTagSnapshot
+        );
+        const columnDropped = await dropLegacyServiceTagColumn(
+          appDataSource.connection
+        );
+        if (backfilled > 0 || columnDropped) {
+          log.info(
+            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}`
+          );
+        }
+      } catch (err) {
+        log.error(
+          "[email-service-tag-migration] replay/drop failed:",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // Best-effort cache cleanup so stale paste expansions do not grow

@@ -1294,6 +1294,8 @@ export default {
     name_hint: "E-Mail-Name eingeben",
     tag: "Tag",
     tag_hint: "Optionales Label zur Auswahl dieses E-Mail-Dienstes.",
+    tags: "Tags",
+    tags_hint: "Optionale Labels zur Auswahl dieses E-Mail-Dienstes. Geben Sie einen neuen Namen ein, um ihn beim Speichern zu erstellen.",
     tag_filter: "Nach Tag filtern",
     all_tags: "Alle Tags",
     untagged: "Ohne Tag",
@@ -1305,7 +1307,8 @@ export default {
     tag_required: "Tag-Name ist erforderlich",
     tag_too_long: "Der Tag darf höchstens 64 Zeichen enthalten",
     tag_service_count: "Von {count} E-Mail-Dienst(en) verwendet",
-    delete_tag_confirm: "Tag {name} löschen? {count} Dienst(e) werden ohne Tag fortgeführt.",
+    tag_create_on_save: "„{name}“ beim Speichern erstellen",
+    delete_tag_confirm: "Tag {name} löschen? {count} Dienst(e) verlieren dieses Tag.",
     ssl: "SSL",
     ssl_hint: "E-Mail-SSL eingeben",
     email_service_deleted:

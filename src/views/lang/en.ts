@@ -1295,6 +1295,8 @@ export default {
     name_hint: "input email name",
     tag: "Tag",
     tag_hint: "Optional reusable label for selecting this email service.",
+    tags: "Tags",
+    tags_hint: "Optional reusable labels for selecting this email service. Type a new name to create it on save.",
     tag_filter: "Filter by tag",
     all_tags: "All tags",
     untagged: "Untagged",
@@ -1306,7 +1308,8 @@ export default {
     tag_required: "Tag name is required",
     tag_too_long: "Tag name must be 64 characters or fewer",
     tag_service_count: "Used by {count} email service(s)",
-    delete_tag_confirm: "Delete tag {name}? {count} service(s) will become untagged.",
+    tag_create_on_save: "Create \"{name}\" on save",
+    delete_tag_confirm: "Delete tag {name}? {count} service(s) will lose this tag.",
     ssl: "ssl",
     ssl_hint: "input email ssl",
     email_service_deleted:

@@ -1286,6 +1286,8 @@ export default {
     name_hint: "input email name",
     tag: "Étiquette",
     tag_hint: "Étiquette facultative pour sélectionner ce service de messagerie.",
+    tags: "Étiquettes",
+    tags_hint: "Étiquettes facultatives pour sélectionner ce service de messagerie. Saisissez un nouveau nom pour le créer lors de l'enregistrement.",
     tag_filter: "Filtrer par étiquette",
     all_tags: "Toutes les étiquettes",
     untagged: "Sans étiquette",
@@ -1297,7 +1299,8 @@ export default {
     tag_required: "Le nom de l’étiquette est obligatoire",
     tag_too_long: "L’étiquette doit contenir au plus 64 caractères",
     tag_service_count: "Utilisée par {count} service(s) de messagerie",
-    delete_tag_confirm: "Supprimer l’étiquette {name} ? {count} service(s) deviendront sans étiquette.",
+    tag_create_on_save: "Créer « {name} » lors de l'enregistrement",
+    delete_tag_confirm: "Supprimer l’étiquette {name} ? {count} service(s) perdront cette étiquette.",
     ssl: "ssl",
     ssl_hint: "input email ssl",
     email_service_deleted:
