@@ -493,9 +493,11 @@ export class EmailMarketingController {
   private async resolveTagIds(tagIds: number[]): Promise<number[]> {
     if (tagIds.length === 0) return [];
     const unique = [...new Set(tagIds)];
+    // Batch-validate in one query rather than one getTag(id) per ID (N+1).
+    const found = await this.emailServiceTagModule.getTagsByIds(unique);
     const resolved: number[] = [];
     for (const id of unique) {
-      const tag = await this.emailServiceTagModule.getTag(id);
+      const tag = found.get(id);
       if (!tag) {
         throw new Error("EMAIL_SERVICE_TAG_NOT_FOUND");
       }

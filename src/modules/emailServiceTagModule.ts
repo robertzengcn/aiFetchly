@@ -125,6 +125,17 @@ export class EmailServiceTagModule extends BaseModule {
     return await this.tagModel.read(id);
   }
 
+  /**
+   * Batch-resolve tags by ID. Returns a map keyed by id so callers can
+   * validate a submitted tag-ID set in one query (no N+1). Tags not in the
+   * returned map do not exist.
+   */
+  async getTagsByIds(ids: number[]): Promise<Map<number, EmailServiceTagEntity>> {
+    await this.ensureConnection();
+    const found = await this.tagModel.findByIds(ids);
+    return new Map(found.map((t) => [t.id, t]));
+  }
+
   async findByName(name: string): Promise<EmailServiceTagEntity | undefined> {
     await this.ensureConnection();
     const normalizedName = normalizeEmailServiceTag(

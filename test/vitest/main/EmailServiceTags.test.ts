@@ -160,6 +160,33 @@ describe("email service tag persistence and AI resolution", () => {
     expect(await services.getServiceTagIds(serviceId)).toEqual([tagB]);
   });
 
+  it("servicesBecomingUntagged stays non-negative for a service with 3+ tags", async () => {
+    // Regression: countServicesLosingOnlyTag previously subtracted raw
+    // relation rows (not distinct services), so a service with the target
+    // tag plus two others reported -1. The delete-tag confirmation would
+    // then show a negative count.
+    const tagA = await tags.createTag("A");
+    const tagB = await tags.createTag("B");
+    const tagC = await tags.createTag("C");
+    const serviceId = await seedService("multi", [tagA, tagB, tagC]);
+    expect((await services.getServiceTagIds(serviceId)).sort()).toEqual(
+      [tagA, tagB, tagC].sort()
+    );
+    const deletion = await tags.deleteTag(tagA);
+    expect(deletion.affectedServiceCount).toBe(1);
+    // Still has B and C — must be 0, never -1.
+    expect(deletion.servicesBecomingUntagged).toBe(0);
+    expect((await services.getServiceTagIds(serviceId)).sort()).toEqual(
+      [tagB, tagC].sort()
+    );
+    // Deleting the next-to-last tag still leaves one — 0 again.
+    const deletion2 = await tags.deleteTag(tagB);
+    expect(deletion2.servicesBecomingUntagged).toBe(0);
+    // Deleting the only remaining tag now makes the service untagged — 1.
+    const deletion3 = await tags.deleteTag(tagC);
+    expect(deletion3.servicesBecomingUntagged).toBe(1);
+  });
+
   it("combines search, tag and untagged filters with matching paginated totals", async () => {
     const tagId = await tags.createTag("Sales");
     await seedService("alpha", [tagId]);

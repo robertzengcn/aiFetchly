@@ -33,7 +33,7 @@ v-model="name" :label="t('emailservice.name')" type="input"
             persistent-hint
             :readonly="loading || tagsLoading"
             :loading="tagsLoading"
-            @update:search="tagSearch = $event ?? ''"
+            v-model:search="tagSearch"
           >
             <!-- Auto-create: typed names not yet in the option list surface as
                  a "Create" chip and are sent to the server as tagNames. -->

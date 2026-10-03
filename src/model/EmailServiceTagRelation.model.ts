@@ -179,7 +179,10 @@ export class EmailServiceTagRelationModel extends BaseDb {
    * that would lose their only tag become untagged).
    */
   async countServicesLosingOnlyTag(tagId: number): Promise<number> {
-    // Services that have this tag AND no other tag.
+    // Services that have this tag AND no other tag. Count DISTINCT services
+    // having another tag — a service with the target tag plus two other tags
+    // contributes two relation rows to `withOtherTagRows`, so subtracting raw
+    // relation rows would undercount (and go negative with 3+ tags).
     const relationsRepo = this.relationRepository;
     const targetServices = await relationsRepo.find({
       where: { tagId },
@@ -187,13 +190,17 @@ export class EmailServiceTagRelationModel extends BaseDb {
     });
     if (targetServices.length === 0) return 0;
     const serviceIds = [...new Set(targetServices.map((r) => r.emailServiceId))];
-    const withOtherTag = await relationsRepo.count({
+    const withOtherTagRows = await relationsRepo.find({
       where: {
         emailServiceId: In(serviceIds),
         tagId: Not(tagId),
       },
+      select: ["emailServiceId"],
     });
-    return serviceIds.length - withOtherTag;
+    const servicesKeepingATag = new Set(
+      withOtherTagRows.map((r) => r.emailServiceId)
+    );
+    return serviceIds.length - servicesKeepingATag.size;
   }
 
   private isUniqueConstraintError(error: unknown): boolean {

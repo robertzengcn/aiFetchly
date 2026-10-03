@@ -1,4 +1,4 @@
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTagRelationEntity } from "@/entity/EmailServiceTagRelation.entity";
 import { BaseDb } from "@/model/Basedb";
@@ -26,6 +26,20 @@ export class EmailServiceTagModel extends BaseDb {
 
   async read(id: number): Promise<EmailServiceTagEntity | undefined> {
     return (await this.repository.findOne({ where: { id } })) ?? undefined;
+  }
+
+  /**
+   * Batch lookup of tags by ID. Used by the controller's tag-ID validation
+   * to avoid one query per ID (N+1) when a service form submits many tags.
+   * Returns only the tags that exist — callers diff the input set to find
+   * missing IDs.
+   */
+  async findByIds(ids: number[]): Promise<EmailServiceTagEntity[]> {
+    if (ids.length === 0) return [];
+    const unique = [...new Set(ids)];
+    return await this.repository.find({
+      where: { id: In(unique) },
+    });
   }
 
   async update(id: number, name: string, normalizedName: string): Promise<void> {
