@@ -220,6 +220,20 @@ export class ShellCapture implements ShellCaptureHandle {
       // A capture-setup failure must never break the shell command itself.
       this.beginFailed = true;
       this.pendingChunks = [];
+      // If the claim succeeded (outputId set) but the stream open failed, the
+      // row is sitting in the `writing` state. `finalize()` short-circuits on
+      // `beginFailed` and returns null before reaching its own mark-failed
+      // path, and `abort()` is only called on the spawn-error path — so without
+      // this mark the row orphans in `writing` until the recovery sweep
+      // eventually tombstones it. Mark it failed here (best-effort: a mark
+      // failure must not mask the original stream-open error), matching the
+      // code `finalize`'s catch uses. Skipped when no outputId was minted
+      // (claim rejected / conflicted — no row was transitioned to `writing`).
+      if (this.outputId) {
+        await this.module
+          .markOutputFailed(this.outputId, "OUTPUT_WRITE_FAILED")
+          .catch(() => undefined);
+      }
       await this.releaseReservationSafe();
       return false;
     }
