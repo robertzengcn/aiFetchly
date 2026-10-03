@@ -43,6 +43,22 @@ import {
   HookInput,
   HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
+import {
+  ToolResultPipeline,
+  ToolResultPublicationError,
+} from "@/service/toolResult/ToolResultPipeline";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import {
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
+} from "@/config/featureFlags";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
+import type {
+  PreparedToolResult,
+  TrustedToolOutputContext,
+} from "@/entityTypes/toolResultTypes";
+import type { ToolOutcome } from "@/service/toolResult/ToolResultPreparationService";
 
 /**
  * Configuration constants for plan execution
@@ -113,6 +129,16 @@ export interface StreamState {
   awaitingSkillPermissionGrant?: boolean;
   /** Clears main-process stream globals when this turn no longer needs them. */
   releaseMainProcessStreamBinding?: () => void;
+  /**
+   * Optional collaborators for recoverable large tool results (T15a). When
+   * absent (older callers), the legacy inline persistence path is used
+   * unchanged. When present, the StreamEventProcessor routes oversized tool
+   * results through the bounded pipeline so the bulk body is externalized to
+   * an artifact and a bounded receipt is what is persisted and streamed — the
+   * same contract `AIChatQueryLoop` already enforces.
+   */
+  readonly toolResultModule?: ToolResultModule;
+  readonly toolResultStorage?: ToolResultStorageService;
 }
 
 /**
@@ -139,9 +165,161 @@ export class StreamEventProcessor {
     }
   >();
 
+  /**
+   * One pipeline per conversation (T15a). Reused across tool calls in the same
+   * turn so the module/storage collaborators are resolved once, mirroring
+   * `AIChatQueryLoop.getToolResultPipeline`.
+   */
+  private toolResultPipeline: ToolResultPipeline | null = null;
+  /** Cached epoch so a turn's results are fenced against the same fence. */
+  private conversationEpoch: string | null = null;
+
   constructor(event: IpcMainEvent, state: StreamState) {
     this.event = event;
     this.state = state;
+  }
+
+  /**
+   * Build (or reuse) the tool-result pipeline for this stream's conversation
+   * (T15a). Returns null when the feature is off OR no collaborators were
+   * injected, so callers fall back to the legacy inline persistence path.
+   */
+  private getToolResultPipeline(): ToolResultPipeline | null {
+    if (this.toolResultPipeline) return this.toolResultPipeline;
+    if (!this.state.toolResultModule && !this.state.toolResultStorage) {
+      // Older callers did not inject collaborators; the legacy path stays.
+      return null;
+    }
+    this.toolResultPipeline = new ToolResultPipeline({
+      captureEnabled: isToolOutputCaptureEnabled,
+      modelRefsEnabled: isToolOutputModelRefsEnabled,
+      module: this.state.toolResultModule,
+      storage: this.state.toolResultStorage,
+    });
+    return this.toolResultPipeline;
+  }
+
+  /**
+   * Resolve the conversation's current output epoch (T15a). Cached per
+   * processor so one turn's receipts are fenced consistently; the durable
+   * commit rejects a receipt prepared against a stale epoch.
+   */
+  private async resolveConversationEpoch(): Promise<string> {
+    if (this.conversationEpoch) return this.conversationEpoch;
+    const module = this.state.toolResultModule ?? new ToolResultModule();
+    this.conversationEpoch = await module.currentEpoch(
+      "default",
+      this.state.streamConversationId
+    );
+    return this.conversationEpoch;
+  }
+
+  /**
+   * Run a tool result through the bounded pipeline (T15a). When the pipeline
+   * is inactive or no collaborators are wired, returns null so the caller
+   * keeps the legacy inline representation. When active, returns the prepared
+   * result whose `modelContent` is a bounded receipt (when externalized) or
+   * the inline body, and persists the receipt via the durable store callback
+   * BEFORE the renderer event, mirroring `AIChatQueryLoop`'s ordering invariant.
+   *
+   * The caller forwards `prepared.modelContent` to the renderer instead of the
+   * raw `toolResult`, so an oversized result never reaches the transcript.
+   */
+  private async prepareToolResultThroughPipeline(input: {
+    readonly toolId: string;
+    readonly toolName: string;
+    readonly toolResult: Record<string, unknown>;
+    readonly toolStartMs: number;
+  }): Promise<PreparedToolResult | null> {
+    const pipeline = this.getToolResultPipeline();
+    if (!pipeline || !pipeline.isActive()) return null;
+
+    const conversationEpoch = await this.resolveConversationEpoch();
+    const executionId = `${this.state.streamConversationId}:${this.state.assistantMessageId}:${input.toolId}`;
+    const context: TrustedToolOutputContext = {
+      profileId: "default",
+      conversationId: this.state.streamConversationId,
+      conversationEpoch,
+      turnId: this.state.assistantMessageId,
+      executionId,
+      toolCallId: input.toolId,
+      toolName: input.toolName,
+      signal: this.state.abortSignal ?? new AbortController().signal,
+    };
+
+    const successFlag =
+      typeof (input.toolResult as { success?: unknown }).success === "boolean"
+        ? ((input.toolResult as { success?: boolean }).success as boolean)
+        : true;
+
+    const outcome: ToolOutcome = {
+      success: successFlag,
+      executionTimeMs: Date.now() - input.toolStartMs,
+      // The whole producer body is the output; the pipeline decides whether
+      // to externalize it or keep it inline.
+      output: input.toolResult,
+      outputFormat: "json",
+      previewKind:
+        Array.isArray(input.toolResult) ? "records" : "text",
+      sourceCompleteness: "complete",
+    };
+
+    try {
+      const prepared = await pipeline.process({
+        context,
+        outcome,
+        store: async ({ receipt }) => {
+          // Persist the bounded receipt as the tool-result message content
+          // BEFORE the renderer event. The bulk output is NOT written into
+          // message metadata.
+          const metadata = ToolExecutionService.prepareToolMetadata(
+            input.toolName,
+            input.toolId,
+            successFlag,
+            Date.now() - input.toolStartMs,
+            receipt
+          );
+          await ToolExecutionService.saveToolResult(
+            this.state.chatModule,
+            this.state.streamConversationId,
+            input.toolId,
+            input.toolName,
+            receipt,
+            metadata
+          );
+        },
+        // No `deliver` callback: the caller builds the renderer chunk from the
+        // returned `prepared.modelContent`. The pipeline's `deliver` hook is for
+        // callers that need to push mid-process; here the chunk is sent after
+        // `process` resolves, which is after the receipt is durable anyway.
+      });
+      return prepared;
+    } catch (err: unknown) {
+      // A durable publication failure must stop the turn rather than imply the
+      // result was saved. Non-durable preparation failures degrade to a
+      // bounded fallback below.
+      if (err instanceof ToolResultPublicationError) throw err;
+      console.warn(
+        `[stream] tool result preparation failed, using bounded fallback: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      return {
+        canonicalMessageContent: JSON.stringify({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          code: "OUTPUT_NOT_AVAILABLE",
+        }),
+        modelContent: JSON.stringify({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          code: "OUTPUT_NOT_AVAILABLE",
+        }),
+        uiMetadata: {},
+        serializedBytes: 0,
+        accountedTokens: 0,
+      };
+    }
   }
 
   /** True when a skill is waiting for the user to approve execution in the chat UI. */
@@ -240,14 +418,21 @@ export class StreamEventProcessor {
         };
       }
 
-      await this.saveToolResult(toolId, toolName, toolResult, resumeStart);
+      const resumePrepared = await this.saveAndSerializeToolResult({
+        toolId,
+        toolName,
+        toolResult,
+        toolStartMs: resumeStart,
+      });
 
       const resultChunk: ChatStreamChunk = {
-        content: this.serializeToolResultContent(toolResult),
+        content: resumePrepared.content,
         isComplete: false,
         messageId: this.state.assistantMessageId,
         eventType: StreamEventType.TOOL_RESULT,
-        toolResult,
+        // Bounded payload (receipt + uiMetadata) when externalized; the raw
+        // result when inline. Never the unbounded bulk body (T15a).
+        toolResult: resumePrepared.payload,
         conversationId: this.state.streamConversationId,
         toolId,
         toolName,
@@ -301,6 +486,66 @@ export class StreamEventProcessor {
       console.warn("Failed to serialize tool result content:", error);
       return String(toolResult);
     }
+  }
+
+  /**
+   * Persist a tool result and return the content to stream to the renderer
+   * (T15a). When the recoverable-large-tool-results pipeline externalizes the
+   * result, the returned content is a BOUNDED receipt and the caller must use
+   * it verbatim for the chunk — re-serializing the raw `toolResult` would put
+   * the bulk body back into the transcript. When the pipeline is inactive,
+   * falls back to `serializeToolResultContent(toolResult)` (legacy behaviour).
+   */
+  /**
+   * Persist + serialize a tool result, returning BOTH the bounded content
+   * string (for the chunk `content`) AND the bounded payload (for the chunk
+   * `toolResult` field).
+   *
+   * When the pipeline externalized (T15a), the content is the model projection
+   * and the payload is a bounded `{ success, executionTimeMs,
+   * toolResultReceipt, ...uiMetadata }` envelope mirroring `AIChatQueryLoop`'s
+   * `toolPayload` — NEVER the raw producer body. When the pipeline was
+   * inactive, both fall back to the legacy inline representation so behavior
+   * is unchanged with both feature flags off.
+   */
+  private async saveAndSerializeToolResult(input: {
+    readonly toolId: string;
+    readonly toolName: string;
+    readonly toolResult: Record<string, unknown>;
+    readonly toolStartMs: number;
+  }): Promise<{
+    readonly content: string;
+    readonly payload: Record<string, unknown>;
+  }> {
+    const prepared = await this.saveToolResult(
+      input.toolId,
+      input.toolName,
+      input.toolResult,
+      input.toolStartMs
+    );
+    if (prepared) {
+      // Externalized: build a bounded renderer payload from the trusted
+      // receipt + bounded UI metadata, mirroring AIChatQueryLoop lines
+      // 2966-2977. The bulk body lives ONLY in the artifact.
+      const successFlag =
+        typeof (input.toolResult as { success?: unknown }).success ===
+        "boolean"
+          ? ((input.toolResult as { success?: boolean }).success as boolean)
+          : true;
+      const payload: Record<string, unknown> = {
+        success: successFlag,
+        executionTimeMs: Date.now() - input.toolStartMs,
+        ...(prepared.receipt
+          ? { toolResultReceipt: prepared.receipt }
+          : {}),
+        ...prepared.uiMetadata,
+      };
+      return { content: prepared.modelContent, payload };
+    }
+    return {
+      content: this.serializeToolResultContent(input.toolResult),
+      payload: input.toolResult,
+    };
   }
 
   /**
@@ -632,8 +877,14 @@ export class StreamEventProcessor {
         }
       }
 
-      // Save tool result to database
-      await this.saveToolResult(toolId, toolName, toolResult, toolStartMs);
+      // Save tool result to database (T15a: externalizes when the pipeline is
+      // active; returns the bounded receipt content AND payload for the chunk).
+      const toolResultPrepared = await this.saveAndSerializeToolResult({
+        toolId,
+        toolName,
+        toolResult,
+        toolStartMs,
+      });
 
       // If the user stopped the stream while the tool was executing,
       // do NOT send the result to the AI server or start a continuation stream.
@@ -648,13 +899,15 @@ export class StreamEventProcessor {
 
       const deferredPermission = isDeferredSkillPermissionResult(toolResult);
 
-      // Send tool result to UI
+      // Send tool result to UI (T15a: use the bounded content + payload when
+      // the pipeline externalized the result; otherwise the legacy inline
+      // representation). The bulk body never reaches the transcript.
       const resultChunk: ChatStreamChunk = {
-        content: this.serializeToolResultContent(toolResult),
+        content: toolResultPrepared.content,
         isComplete: false,
         messageId: this.state.assistantMessageId,
         eventType: StreamEventType.TOOL_RESULT,
-        toolResult: toolResult,
+        toolResult: toolResultPrepared.payload,
         conversationId: this.state.streamConversationId,
         toolId,
         toolName,
@@ -906,20 +1159,44 @@ export class StreamEventProcessor {
   }
 
   /**
-   * Save tool result to database
+   * Save tool result to database.
+   *
+   * Returns the BOUNDED `PreparedToolResult` when the
+   * recoverable-large-tool-results pipeline externalized the result (T15a), so
+   * the caller forwards the receipt (not the raw bulk body) to BOTH the
+   * persisted message content AND the renderer chunk's `toolResult` payload.
+   * Returns `null` when the pipeline was inactive, in which case the caller
+   * keeps the legacy `serializeToolResultContent(toolResult)` representation —
+   * behavior is unchanged when both feature flags are off.
    */
   private async saveToolResult(
     toolId: string,
     toolName: string,
     toolResult: Record<string, unknown>,
     toolStartMs: number
-  ): Promise<void> {
+  ): Promise<PreparedToolResult | null> {
     try {
       const successFlag =
         typeof (toolResult as { success?: unknown }).success === "boolean"
           ? ((toolResult as { success?: boolean }).success as boolean)
           : true;
       const execMs = Date.now() - toolStartMs;
+
+      // Recoverable large tool results (T15a): route through the bounded
+      // pipeline when active. The pipeline persists a bounded receipt via the
+      // store callback BEFORE returning, so the legacy `saveToolResult` below
+      // is skipped — writing the raw `toolResult` afterward would overwrite
+      // the receipt with the unbounded body, which is exactly what this
+      // feature exists to prevent.
+      const prepared = await this.prepareToolResultThroughPipeline({
+        toolId,
+        toolName,
+        toolResult,
+        toolStartMs,
+      });
+      if (prepared) {
+        return prepared;
+      }
 
       const metadata = ToolExecutionService.prepareToolMetadata(
         toolName,
@@ -937,8 +1214,10 @@ export class StreamEventProcessor {
         toolResult,
         metadata
       );
+      return null;
     } catch (saveError) {
       console.error("Failed to save tool result to database:", saveError);
+      return null;
     }
   }
 
@@ -1086,43 +1365,19 @@ export class StreamEventProcessor {
     const toolId = toolCallData?.id;
     const toolName = toolCallData?.name;
 
-    // Save tool result from server to database
-    if (toolId && toolName) {
-      (async () => {
-        try {
-          const serverMetadata = ToolExecutionService.prepareToolMetadata(
-            toolName,
-            toolId,
-            true,
-            0,
-            toolResult
-          );
-
-          const extendedMetadata = {
-            ...serverMetadata,
-            source: "server",
-          };
-
-          await ToolExecutionService.saveToolResult(
-            this.state.chatModule,
-            this.state.streamConversationId,
-            toolId,
-            toolName,
-            toolResult,
-            extendedMetadata
-          );
-        } catch (saveError) {
-          console.error(
-            "Failed to save server tool result to database:",
-            saveError
-          );
-        }
-      })();
-    }
+    // Normalize the server-originated result to a record for the pipeline +
+    // renderer payload. A string result is wrapped so the pipeline sees a
+    // uniform `output` shape (T15a).
+    const normalizedResult: Record<string, unknown> =
+      typeof toolResult === "object" && toolResult !== null
+        ? (toolResult as Record<string, unknown>)
+        : { result: toolResult };
 
     // For locally executed tools, the continuation stream may emit a TOOL_RESULT
     // acknowledgement before TOKEN/DONE. The renderer already received the result
-    // from the local execution path, so skip sending a duplicate chunk.
+    // from the local execution path, so skip sending a duplicate chunk. The
+    // local path already persisted through the pipeline, so this branch MUST NOT
+    // re-save (it would overwrite the receipt with the raw server echo).
     if (toolId && this.localExecutingToolIds.has(toolId)) {
       console.log(
         `Skipping duplicate server TOOL_RESULT for locally executed tool (ID: ${toolId})`
@@ -1143,15 +1398,64 @@ export class StreamEventProcessor {
       this.sendDeferredCompletionIfReady();
     }
 
+    // Persist + stream the result. When the pipeline externalizes (T15a),
+    // `saveAndSerializeToolResult` persists a bounded receipt and returns its
+    // content for the chunk; otherwise it falls back to the legacy inline
+    // save + serialization. The chunk is built from the returned content so
+    // an oversized server result never reaches the transcript.
+    if (toolId && toolName) {
+      (async () => {
+        try {
+          const { content, payload } = await this.saveAndSerializeToolResult({
+            toolId,
+            toolName,
+            toolResult: normalizedResult,
+            toolStartMs: Date.now(),
+          });
+          const chunk: ChatStreamChunk = {
+            content,
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.TOOL_RESULT,
+            // Bounded payload (receipt + uiMetadata) when externalized; the
+            // normalized result itself when inline. Never the raw bulk body.
+            toolResult: payload,
+            conversationId: this.state.streamConversationId,
+          };
+          this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+        } catch (saveError) {
+          console.error(
+            "Failed to save server tool result to database:",
+            saveError
+          );
+          // Degrade to the legacy inline representation so the renderer still
+          // gets a chunk, but never the unbounded bulk body when the pipeline
+          // is active — the bounded failure content is already persisted.
+          const fallbackChunk: ChatStreamChunk = {
+            content: this.serializeToolResultContent(normalizedResult),
+            isComplete: false,
+            messageId: this.state.assistantMessageId,
+            eventType: StreamEventType.TOOL_RESULT,
+            toolResult: normalizedResult,
+            conversationId: this.state.streamConversationId,
+          };
+          this.event.sender.send(
+            AI_CHAT_STREAM_CHUNK,
+            JSON.stringify(fallbackChunk)
+          );
+        }
+      })();
+      return;
+    }
+
+    // No toolId/toolName: cannot route through the pipeline. Keep the legacy
+    // inline chunk so the renderer still shows something.
     const chunk: ChatStreamChunk = {
       content: this.serializeToolResultContent(toolResult),
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
-      toolResult:
-        typeof toolResult === "object"
-          ? (toolResult as Record<string, unknown>)
-          : { result: toolResult },
+      toolResult: normalizedResult,
       conversationId: this.state.streamConversationId,
     };
     this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
@@ -2208,20 +2512,22 @@ export class StreamEventProcessor {
       };
     }
 
-    // Save and send the result
-    await this.saveToolResult(
+    // Save and send the result (T15a: use bounded receipt content + payload
+    // when the pipeline externalized the result; otherwise the legacy inline
+    // serialization).
+    const retryPrepared = await this.saveAndSerializeToolResult({
       toolId,
-      pending.context.toolName,
+      toolName: pending.context.toolName,
       toolResult,
-      pending.toolStartMs
-    );
+      toolStartMs: pending.toolStartMs,
+    });
 
     const resultChunk: ChatStreamChunk = {
-      content: this.serializeToolResultContent(toolResult),
+      content: retryPrepared.content,
       isComplete: false,
       messageId: this.state.assistantMessageId,
       eventType: StreamEventType.TOOL_RESULT,
-      toolResult,
+      toolResult: retryPrepared.payload,
       conversationId: this.state.streamConversationId,
       toolId,
       toolName: pending.context.toolName,

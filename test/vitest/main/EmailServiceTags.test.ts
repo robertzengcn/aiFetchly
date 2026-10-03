@@ -3,6 +3,30 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DataSource, EntitySchema } from "typeorm";
+
+// The temp directory must exist BEFORE any @/* import resolves: importing
+// EmailMarketingController → ToolExecutor → ai-chat-ipc constructs a
+// `new ToolResultModule()` at module top level, whose BaseModule ctor calls
+// `Token.getValue("user_dbpath")` during module evaluation — before a plain
+// `const directory = ...` line would run. `vi.hoisted` runs the factory before
+// the test file's imports evaluate; use `require` inside it so the factory
+// does not depend on the ESM `node:*` import bindings (which are themselves in
+// a temporal dead zone when the hoisted call runs).
+const { directory } = vi.hoisted(() => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  return { directory: fs.mkdtempSync(path.join(os.tmpdir(), "email-tags-")) };
+});
+
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue(key: string): string {
+      return key === "user_dbpath" ? directory : "";
+    }
+  },
+}));
+
 import { SqliteDb } from "@/config/SqliteDb";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
@@ -17,15 +41,6 @@ import {
   emailServiceTagUpdateInputSchema,
   emailServiceTagDeleteInputSchema,
 } from "@/schemas/ipc/emailMarketing";
-
-const directory = mkdtempSync(join(tmpdir(), "email-tags-"));
-vi.mock("@/modules/token", () => ({
-  Token: class {
-    getValue(key: string): string {
-      return key === "user_dbpath" ? directory : "";
-    }
-  },
-}));
 vi.mock("@/modules/fieldCipher", () => ({
   userSecretKeyService: { getKey: async (): Promise<Buffer> => Buffer.alloc(32, 7) },
 }));

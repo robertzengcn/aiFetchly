@@ -27,6 +27,7 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import { AI_CHAT_RECOVERABLE_FLAGS } from "@/service/AIChatRecoverableDefaults";
+import { TOOL_RESULT_FLAGS } from "@/config/toolResultConfig";
 
 /** The shared run-root segment that every E2E temp root must live under. */
 export const E2E_RUN_ROOT_SEGMENT = "aifetchly-e2e";
@@ -41,6 +42,15 @@ export interface E2EEnvironment {
   readonly workspacePath: string;
   readonly downloadsPath: string;
   readonly logsPath: string;
+  /**
+   * Per-test root for preserved tool-output artifacts. Derived from the
+   * validated E2E root and contained by it, so large-tool-result captures
+   * never write into the real `~/.aifetchly/tool-outputs`. The bootstrap
+   * creates the directory and exports it via `AIFETCHLY_TOOL_OUTPUT_ROOT` so
+   * production code (`getToolResultStorageRoot`) honors the override without
+   * trusting an arbitrary caller-supplied path.
+   */
+  readonly toolOutputRootPath: string;
   readonly fakeAiBaseUrl: string | null;
   readonly allowedOrigins: readonly string[];
   readonly stateFilePath: string | null;
@@ -84,14 +94,16 @@ const ALLOWED_MANIFEST_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Token keys a manifest may override. Restricting to the four recoverable-history
- * rollout flags (technical-design §18) keeps a hostile/stale manifest from
- * rewriting arbitrary Token state (e.g. USERSDBPATH or USER_AI_ENABLED — the
- * standard seed owns those).
+ * Token keys a manifest may override. Restricted to the four recoverable-history
+ * rollout flags plus the three tool-result rollout flags (technical-design §18)
+ * — both sets are boolean feature flags of the same trust class. Restricting
+ * the set keeps a hostile/stale manifest from rewriting arbitrary Token state
+ * (e.g. USERSDBPATH or USER_AI_ENABLED — the standard seed owns those).
  */
-const ALLOWED_TOKEN_OVERRIDE_KEYS: ReadonlySet<string> = new Set(
-  Object.values(AI_CHAT_RECOVERABLE_FLAGS)
-);
+const ALLOWED_TOKEN_OVERRIDE_KEYS: ReadonlySet<string> = new Set([
+  ...Object.values(AI_CHAT_RECOVERABLE_FLAGS),
+  ...Object.values(TOOL_RESULT_FLAGS),
+]);
 
 export class E2EEnvironmentError extends Error {
   constructor(message: string) {
@@ -193,12 +205,14 @@ export function loadE2EEnvironment(env: NodeJS.ProcessEnv): E2EEnvironment {
   const workspacePath = path.join(rootPath, "workspace");
   const downloadsPath = path.join(rootPath, "downloads");
   const logsPath = path.join(rootPath, "logs");
+  const toolOutputRootPath = path.join(rootPath, "tool-outputs");
   for (const [label, p] of [
     ["userDataPath", userDataPath],
     ["databasePath", databasePath],
     ["workspacePath", workspacePath],
     ["downloadsPath", downloadsPath],
     ["logsPath", logsPath],
+    ["toolOutputRootPath", toolOutputRootPath],
   ] as const) {
     assertContained(rootPath, p, label);
   }
@@ -251,6 +265,7 @@ export function loadE2EEnvironment(env: NodeJS.ProcessEnv): E2EEnvironment {
     workspacePath,
     downloadsPath,
     logsPath,
+    toolOutputRootPath,
     fakeAiBaseUrl,
     allowedOrigins,
     stateFilePath,
@@ -339,7 +354,7 @@ export function parseStateManifest(stateFilePath: string): E2EStateManifest {
     )) {
       if (!ALLOWED_TOKEN_OVERRIDE_KEYS.has(key)) {
         throw new E2EEnvironmentError(
-          `state manifest tokenOverrides key is not a recoverable-history rollout flag: "${key}"`
+          `state manifest tokenOverrides key is not an allowed rollout flag: "${key}"`
         );
       }
       if (value !== "true" && value !== "false") {

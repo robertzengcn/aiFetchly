@@ -143,6 +143,12 @@ export interface RunAgentRequest {
   prompt: string;
   taskPacket: AgentTaskPacket;
   parentConversationId?: string;
+  /**
+   * The parent agent's id. Used (with {@link parentConversationId}) to issue
+   * inter-agent handoff grants so the parent can read the child's preserved
+   * tool outputs (T15b). Absent for top-level / user-driven runs.
+   */
+  parentAgentId?: string;
   parentTaskId?: string;
   workflowRunId?: string;
   model?: string;
@@ -183,6 +189,14 @@ export interface AgentResult {
    * still completes, but callers should surface this so the user knows the
    * batch's artifacts may be incomplete. */
   storageWarning?: string;
+  /**
+   * Preserved tool-output ids the child agent externalized during its run
+   * (T15b). Populated only when the sub-agent's loop was wired with
+   * preserved-output collaborators AND at least one tool result exceeded the
+   * inline ceiling. The parent agent reads these via the grant the child
+   * issues at its terminal; callers may use them for observability.
+   */
+  outputIds?: string[];
 }
 
 /** Snapshot returned by getTask / tool polling. */

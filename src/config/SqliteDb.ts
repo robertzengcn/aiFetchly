@@ -92,6 +92,13 @@ import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.en
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
 import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
+import { AIToolOutputScopeEntity } from "@/entity/AIToolOutputScope.entity";
+import { AIToolOutputEntity } from "@/entity/AIToolOutput.entity";
+import { AIToolOutputReservationEntity } from "@/entity/AIToolOutputReservation.entity";
+import { AIToolOutputGrantEntity } from "@/entity/AIToolOutputGrant.entity";
+import { AIToolOutputRetrievalBudgetEntity } from "@/entity/AIToolOutputRetrievalBudget.entity";
+import { AIToolResultProjectionEntity } from "@/entity/AIToolResultProjection.entity";
+import { AIToolOutputBootstrapEntity } from "@/entity/AIToolOutputBootstrap.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
@@ -557,6 +564,14 @@ export class SqliteDb {
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
           ConversationToolStateEntity,
+          // Recoverable large tool results (additive; feature-flag gated).
+          AIToolOutputScopeEntity,
+          AIToolOutputEntity,
+          AIToolOutputReservationEntity,
+          AIToolOutputGrantEntity,
+          AIToolOutputRetrievalBudgetEntity,
+          AIToolResultProjectionEntity,
+          AIToolOutputBootstrapEntity,
           EmailReceivedMessageEntity,
           EmailReplyDraftEntity,
           EmailReplyIdentityProfileEntity,

@@ -3,6 +3,9 @@ import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { clearToolResultContextCache } from "@/service/agentTools/toolResultContext";
 
 export interface SaveMessageOptions {
   messageId: string;
@@ -158,21 +161,74 @@ export class AIChatModule extends BaseModule {
   }
 
   /**
-   * Clear conversation history
+   * Clear conversation history.
+   *
+   * The preserved-tool-output scope is invalidated BEFORE the messages are
+   * deleted, mirroring `AIChatV2Module.clearConversation`: rotating the epoch
+   * marks the rows `deleting` and revokes their grants, so an in-flight writer
+   * cannot publish and a cleared conversation cannot be retrieved. A failed
+   * fence aborts the clear — a successful delete with a stale epoch would
+   * silently reopen the resurrection window (every captured artifact would
+   * stay readable).
    */
   async clearConversation(conversationId: string): Promise<number> {
+    try {
+      await new ToolResultModule().invalidateScope("default", conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat] clearConversation: tool output scope invalidate failed, aborting clear:",
+        err
+      );
+      throw new RecoverableHistoryError(
+        "COMPACTION_CONTEXT_REJECTED",
+        `clear aborted: tool output scope invalidate failed for ${conversationId}`
+      );
+    }
     // Delete attachment bytes first to keep storage consistent.
     await this.attachmentModule.deleteByConversation(conversationId);
-    return await this.chatMessageModel.deleteConversation(conversationId);
+    const deleted = await this.chatMessageModel.deleteConversation(conversationId);
+    // Drop the cached tool-result wiring for this conversation so the
+    // long-lived main process does not retain a CachedWiring (with a
+    // ToolResultModule + DB-connection refs) for a cleared conversation.
+    clearToolResultContextCache(conversationId);
+    return deleted;
   }
 
   /**
-   * Clear all chat history
+   * Clear all chat history.
+   *
+   * Each conversation's preserved-output scope is invalidated before its
+   * messages are deleted, using the same fence as `clearConversation`. A
+   * per-conversation fence failure is logged and that conversation is skipped
+   * (its messages are NOT deleted) rather than aborting the whole bulk clear —
+   * matching `AIChatV2Module.clearAllV2History`'s per-conversation isolation
+   * while still respecting the invariant that a failed fence must not be
+   * followed by a successful delete.
    */
   async clearAllHistory(): Promise<number> {
-    // Delete all attachment bytes first.
-    await this.attachmentModule.deleteAll();
-    return await this.chatMessageModel.deleteAllMessages();
+    const conversationIds = await this.chatMessageModel.getAllConversations();
+    let total = 0;
+    for (const conversationId of conversationIds) {
+      try {
+        await new ToolResultModule().invalidateScope("default", conversationId);
+      } catch (err) {
+        console.error(
+          `[ai-chat] clearAllHistory: tool output scope invalidate failed for ${conversationId}, skipping:`,
+          err
+        );
+        // A failed fence must not be followed by a delete: skip this
+        // conversation so its artifacts stay consistent with its messages.
+        // The epoch was not rotated, so reads remain valid for both.
+        continue;
+      }
+      await this.attachmentModule.deleteByConversation(conversationId);
+      total += await this.chatMessageModel.deleteConversation(conversationId);
+      // Drop the cached tool-result wiring for this cleared conversation so
+      // the long-lived main process does not retain a CachedWiring (with a
+      // ToolResultModule + DB-connection refs) for a cleared conversation.
+      clearToolResultContextCache(conversationId);
+    }
+    return total;
   }
 
   /**

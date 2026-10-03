@@ -31,6 +31,7 @@ import { dispatchSectionSummarize } from "@/service/AIChatSummarizeDispatch";
 import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AIChatCompactionModule } from "@/modules/AIChatCompactionModule";
+import { ToolResultModule } from "@/modules/ToolResultModule";
 import {
   isHistoryUiEnabled,
   isNewCompactionEnabled,
@@ -384,6 +385,8 @@ function getQueryEngine(): AIChatQueryEngine {
       contextAssembler: new AIChatContextAssembler({
         compactionReader: new AIChatCompactionModule(),
         archiveModule: new AIChatArchiveModule(),
+        // T14: substitute bounded projections for oversized legacy rows.
+        projectionLookup: new ToolResultModule().asLegacyProjectionLookup(),
       }),
     });
     queryEngineDbPath = dbPath;

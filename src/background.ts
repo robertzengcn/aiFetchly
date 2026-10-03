@@ -1263,6 +1263,44 @@ function initialize() {
         );
       }
 
+      // Preserved tool outputs: install the persistent cursor key and run the
+      // reconciliation sweep (technical design §12.2). Without this the cursor
+      // key is ephemeral per process, so every cursor a model received before a
+      // restart is rejected afterwards, and crash residue is never reclaimed.
+      // Fire-and-forget and never fatal.
+      try {
+        const {
+          runToolResultStartup,
+          createToolResultStorage,
+          TOOL_RESULT_CURSOR_SECRET_KEY,
+        } = await import("@/service/toolResult/ToolResultStartupService");
+        const { ToolResultModule } = await import("@/modules/ToolResultModule");
+        const { isToolOutputCaptureEnabled } = await import(
+          "@/config/featureFlags"
+        );
+        const token = new Token();
+        void runToolResultStartup({
+          module: new ToolResultModule(),
+          storage: createToolResultStorage(),
+          captureEnabled: isToolOutputCaptureEnabled(),
+          readSecret: () => token.getValue(TOOL_RESULT_CURSOR_SECRET_KEY),
+          writeSecret: (secret: string) =>
+            token.setValue(TOOL_RESULT_CURSOR_SECRET_KEY, secret),
+          onLog: (message: string) => log.info(message),
+          // The legacy projection backfill (T14 / design §10.2) writes bounded
+          // derived rows over oversized legacy messages; it needs the live
+          // DataSource to scan the source table. Runs regardless of capture
+          // (it touches only the projection table, not artifacts).
+          dataSource: appDataSource.connection,
+          profileId: "default",
+        });
+      } catch (err) {
+        log.warn(
+          "[tool-result] startup sequence failed to launch:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Seed built-in agent definitions (marketing subagent system).
       try {
         const { AgentDefinitionModule } = await import(

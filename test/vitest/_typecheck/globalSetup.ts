@@ -39,7 +39,14 @@ export default function setup(): void {
   console.log(`[typecheck] running tsc --noEmit -p ${path.relative(process.cwd(), tsconfig)}`)
 
   try {
-    execFileSync(tscBin, ['--noEmit', '-p', tsconfig], {
+    // `--incremental false` makes the gate's verdict DETERMINISTIC.
+    //
+    // Without it a stale `*.tsbuildinfo` can make an identical working tree
+    // report a flood of phantom syntax errors, or worse report clean while a
+    // real error is present. A gate whose answer changes between runs on
+    // unchanged source is not a gate. The project itself does not use
+    // incremental builds, so this costs nothing.
+    execFileSync(tscBin, ['--noEmit', '--incremental', 'false', '-p', tsconfig], {
       cwd: projectRoot,
       stdio: 'pipe', // capture stdout/stderr; we'll format below
       timeout: 180_000, // hard cap; tsc should finish well under this

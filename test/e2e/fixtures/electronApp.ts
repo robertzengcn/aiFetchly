@@ -119,6 +119,12 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.ROOT] = testRoot.rootPath;
   allowed[E2E_ENV.STATE_FILE] = testRoot.stateFilePath;
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
+  // Redirect preserved tool-output artifacts into the per-test temp root so
+  // large-tool-result captures never touch the real ~/.aifetchly/tool-outputs.
+  // The bootstrap (E2EMain) re-derives this from the validated root and creates
+  // the directory; setting it here too means the override is present from the
+  // moment the child process starts (defense-in-depth).
+  allowed[E2E_ENV.TOOL_OUTPUT_ROOT] = testRoot.toolOutputRootPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
   const allowedOrigins = [RENDERER_ORIGIN];

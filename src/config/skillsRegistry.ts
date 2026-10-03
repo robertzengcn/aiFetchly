@@ -19,7 +19,13 @@ import type {
 import {
   isArchiveReadsEnabled,
   isHistoryToolsEnabled,
+  isToolOutputCaptureEnabled,
+  isToolOutputModelRefsEnabled,
 } from "@/config/featureFlags";
+import {
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+} from "@/entityTypes/toolResultToolTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -1299,6 +1305,115 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: TOOL_RESULT_READ_TOOL_NAME,
+    description:
+      "Read a bounded page of a large saved tool result by output_id (given in a tool result receipt). " +
+      "Returns a page of text plus a next_cursor; keep passing the cursor until complete is true. " +
+      "The receipt's preview is only a sample, so read before concluding a large result does not contain " +
+      "something. If you stop reading early, say so rather than claiming you reviewed the whole output. " +
+      "The output belongs to the active conversation — access is bound by trusted context, never by argument.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior read's next_cursor. Do not modify.",
+        },
+        max_tokens: {
+          type: "number",
+          description:
+            "Optional smaller page request in tokens. Can only reduce the page, never exceed the limit.",
+          minimum: 1,
+          maximum: 32000,
+        },
+      },
+      required: ["output_id"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      // Available while reference delivery is on OR this conversation already
+      // holds committed references (technical design §8.1). Gating on the
+      // `capture` flag instead would make a default install return
+      // OUTPUT_NOT_AVAILABLE for artifacts it already saved, which is exactly
+      // what PRD §12 and TD §13.4 forbid.
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "OUTPUT_NOT_AVAILABLE" },
+        };
+      }
+      const { handleToolResultRead } = await import(
+        "@/service/agentTools/toolResultReadTool"
+      );
+      return handleToolResultRead(args, context);
+    },
+  },
+  {
+    name: TOOL_RESULT_SEARCH_TOOL_NAME,
+    description:
+      "Search a large saved tool result for a literal phrase (1-200 chars) by output_id. " +
+      "Returns bounded matches with read cursors. No-match is final only when scan_complete is true; " +
+      "otherwise resume with next_cursor. scan_complete refers to the saved bytes only - if " +
+      "source_completeness is 'partial', the producer itself truncated and absence cannot be concluded. " +
+      "The query is literal text, never a regular expression.",
+    parameters: {
+      type: "object",
+      properties: {
+        output_id: {
+          type: "string",
+          description: "output_id from a saved-result receipt (e.g. out_...).",
+        },
+        query: {
+          type: "string",
+          description: "Literal text to search for (1-200 characters). Never a regex.",
+          minLength: 1,
+          maxLength: 200,
+        },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation cursor from a prior search's next_cursor. Do not modify.",
+        },
+        max_matches: {
+          type: "number",
+          description: "Max matches to return (default 10, max 20).",
+          default: 10,
+          minimum: 1,
+          maximum: 20,
+        },
+      },
+      required: ["output_id", "query"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context): Promise<SkillExecutionResult> => {
+      if (!(await isToolResultRetrievalAvailable(context))) {
+        return {
+          success: false,
+          result: { error: "OUTPUT_NOT_AVAILABLE" },
+        };
+      }
+      const { handleToolResultSearch } = await import(
+        "@/service/agentTools/toolResultSearchTool"
+      );
+      return handleToolResultSearch(args, context);
+    },
+  },
+  {
     name: "file_edit",
     description:
       "Perform a precise string replacement in an existing file within the allowed workspace. " +
@@ -2425,7 +2540,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const shellResult = await executeShellCommand(
         args,
-        context.conversationId
+        context.conversationId,
+        context.toolCallId
       );
 
       // Fire-and-forget audit logging (use validated fields from result)
@@ -4113,6 +4229,46 @@ const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
   CONVERSATION_HISTORY_SEARCH_TOOL_NAME,
   CONVERSATION_HISTORY_READ_TOOL_NAME,
 ]);
+
+/**
+ * Retrieval tools for preserved outputs are ALWAYS in the core tool set, not
+ * deferred behind `tool_catalog_search`.
+ *
+ * They are the only way the model can reach an output it was just told about.
+ * If a receipt names an output_id but the reader sits behind a discovery tool,
+ * the model cannot act on the reference and will report the data as missing.
+ */
+const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+]);
+
+/**
+ * True when the retrieval tools may run for this conversation.
+ *
+ * Two independent reasons, both required by the design:
+ *   1. model-visible reference delivery is enabled, OR
+ *   2. the conversation already holds committed references.
+ *
+ * Condition 2 is what makes rollback safe: disabling capture stops new writes
+ * but must never unregister readers for output that is already on disk.
+ */
+async function isToolResultRetrievalAvailable(
+  context: { conversationId: string }
+): Promise<boolean> {
+  if (isToolOutputModelRefsEnabled()) return true;
+  if (isToolOutputCaptureEnabled()) return true;
+  try {
+    const { ToolResultModule } = await import("@/modules/ToolResultModule");
+    const { hasCommittedOutputs } = await import(
+      "@/service/toolResult/toolResultAvailability"
+    );
+    return await hasCommittedOutputs(new ToolResultModule(), context.conversationId);
+  } catch {
+    // Fail closed: an unreadable registry must not expose retrieval.
+    return false;
+  }
+}
 
 function isSkillRuntimeEnabled(
   skill: SkillDefinition,
