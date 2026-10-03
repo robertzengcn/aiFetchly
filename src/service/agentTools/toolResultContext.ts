@@ -224,7 +224,19 @@ export function getToolResultContext(
   };
 }
 
-/** Drop cached wiring (used by tests and on conversation clear). */
-export function clearToolResultContextCache(): void {
-  wiringCache.clear();
+/**
+ * Drop cached wiring. With no argument, drops every conversation's wiring (used
+ * by tests and as a belt-and-suspenders full reset). With a conversationId,
+ * drops only that conversation's wiring — the targeted eviction used on
+ * conversation clear, so a cleared conversation does not leave a
+ * `CachedWiring` (holding a `ToolResultModule` + DB-connection refs) resident
+ * in the long-lived main process. The wiring is lazy-constructed, so the next
+ * retrieval for that conversation rebuilds it transparently.
+ */
+export function clearToolResultContextCache(conversationId?: string): void {
+  if (conversationId === undefined) {
+    wiringCache.clear();
+    return;
+  }
+  wiringCache.delete(conversationId);
 }

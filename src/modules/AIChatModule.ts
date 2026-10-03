@@ -5,6 +5,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { ToolResultModule } from "@/modules/ToolResultModule";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { clearToolResultContextCache } from "@/service/agentTools/toolResultContext";
 
 export interface SaveMessageOptions {
   messageId: string;
@@ -185,7 +186,12 @@ export class AIChatModule extends BaseModule {
     }
     // Delete attachment bytes first to keep storage consistent.
     await this.attachmentModule.deleteByConversation(conversationId);
-    return await this.chatMessageModel.deleteConversation(conversationId);
+    const deleted = await this.chatMessageModel.deleteConversation(conversationId);
+    // Drop the cached tool-result wiring for this conversation so the
+    // long-lived main process does not retain a CachedWiring (with a
+    // ToolResultModule + DB-connection refs) for a cleared conversation.
+    clearToolResultContextCache(conversationId);
+    return deleted;
   }
 
   /**
@@ -217,6 +223,10 @@ export class AIChatModule extends BaseModule {
       }
       await this.attachmentModule.deleteByConversation(conversationId);
       total += await this.chatMessageModel.deleteConversation(conversationId);
+      // Drop the cached tool-result wiring for this cleared conversation so
+      // the long-lived main process does not retain a CachedWiring (with a
+      // ToolResultModule + DB-connection refs) for a cleared conversation.
+      clearToolResultContextCache(conversationId);
     }
     return total;
   }
