@@ -1,5 +1,7 @@
 import { BaseModule } from "@/modules/baseModule";
 import { EmailServiceModel } from "@/model/EmailService.model";
+import { EmailServiceTagRelationModel } from "@/model/EmailServiceTagRelation.model";
+import type { ServiceTagView } from "@/model/EmailServiceTagRelation.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { SortBy } from "@/entityTypes/commonType";
 import { ListData } from "@/entityTypes/commonType";
@@ -29,11 +31,51 @@ export class EmailServiceModule
 {
   private emailServiceModel: EmailServiceModel;
   private readonly emailServiceTagModule: EmailServiceTagModule;
+  private readonly tagRelationModel: EmailServiceTagRelationModel;
 
   constructor() {
     super();
     this.emailServiceModel = new EmailServiceModel(this.dbpath);
     this.emailServiceTagModule = new EmailServiceTagModule();
+    this.tagRelationModel = new EmailServiceTagRelationModel(this.dbpath);
+  }
+
+  /**
+   * Expand tags (id + name) for a single service via the junction table.
+   * Callers (controller detail/list views) use this to attach `tags` to the
+   * projected payload without coupling to the relation model directly.
+   */
+  async getTagsForService(serviceId: number): Promise<ServiceTagView[]> {
+    await this.ensureConnection();
+    return await this.tagRelationModel.getTagsForService(serviceId);
+  }
+
+  /**
+   * Batch-expand tags for many services. Returns a Map keyed by serviceId so
+   * list views can attach `tags` to each row in one query (no N+1).
+   */
+  async getTagsForServices(
+    serviceIds: number[]
+  ): Promise<Map<number, ServiceTagView[]>> {
+    await this.ensureConnection();
+    return await this.tagRelationModel.getTagsForServices(serviceIds);
+  }
+
+  /**
+   * Replace the full tag set for a service. `tagIds` is authoritative —
+   * tags not in the array are removed. Pass an empty array to clear all.
+   */
+  async setServiceTags(serviceId: number, tagIds: number[]): Promise<void> {
+    await this.ensureConnection();
+    await this.tagRelationModel.replaceTags(serviceId, tagIds);
+  }
+
+  /**
+   * Tag IDs currently attached to a service (deterministic order).
+   */
+  async getServiceTagIds(serviceId: number): Promise<number[]> {
+    await this.ensureConnection();
+    return await this.tagRelationModel.getTagIdsForService(serviceId);
   }
 
   async createEmailService(service: EmailServiceEntity): Promise<number> {
@@ -168,32 +210,47 @@ export class EmailServiceModule
     }
   }
 
-  async findEmailServiceByTag(
+  /**
+   * Find all email services sharing a tag name. With multi-tag, a tag can
+   * legitimately match many services, so this returns the full list rather
+   * than failing on ambiguity. Single-element list when only one matches;
+   * empty array when the tag or no services match.
+   *
+   * Credentials are NOT decrypted here — the AI-tool layer projects to a
+   * safe summary. Callers needing decrypted credentials use getEmailService(id).
+   */
+  async findEmailServicesByTag(
     tagName: string
-  ): Promise<EmailServiceEntity | undefined> {
+  ): Promise<EmailServiceEntity[]> {
     try {
       const tag = await this.emailServiceTagModule.findByName(tagName);
       if (!tag) {
         incrementEmailServiceMetric("tag_lookup_not_found");
-        return undefined;
+        return [];
       }
       const services = await this.emailServiceModel.findAllByTagId(tag.id);
       if (services.length === 0) {
         incrementEmailServiceMetric("tag_lookup_not_found");
-        return undefined;
-      }
-      if (services.length > 1) {
-        incrementEmailServiceMetric("tag_lookup_ambiguous");
-        throw new Error(
-          `Email service tag "${tag.name}" is ambiguous; ${services.length} services use it`
-        );
+        return [];
       }
       incrementEmailServiceMetric("tag_lookup_success");
-      return await this.decryptServiceCredentials(services[0]);
+      return services;
     } catch (error) {
-      console.error("Error finding email service by tag:", error);
+      console.error("Error finding email services by tag:", error);
       throw error;
     }
+  }
+
+  /**
+   * Back-compat single-result tag lookup. Returns the first (newest) match
+   * or undefined when none. Prefer findEmailServicesByTag for callers that
+   * need to handle multi-match disambiguation.
+   */
+  async findEmailServiceByTag(
+    tagName: string
+  ): Promise<EmailServiceEntity | undefined> {
+    const services = await this.findEmailServicesByTag(tagName);
+    return services[0] !== undefined ? services[0] : undefined;
   }
 
   async findEmailServicesByHost(host: string): Promise<EmailServiceEntity[]> {

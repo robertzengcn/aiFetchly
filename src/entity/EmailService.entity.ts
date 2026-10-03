@@ -1,14 +1,10 @@
 import {
   Column,
   Entity,
-  JoinColumn,
-  ManyToOne,
   PrimaryGeneratedColumn,
-  Index,
 } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 import type { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
-import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 
 @Entity("email_service")
 export class EmailServiceEntity extends AuditableEntity {
@@ -17,17 +13,6 @@ export class EmailServiceEntity extends AuditableEntity {
 
   @Column({ type: "varchar", length: 255 })
   name: string;
-
-  @Index("idx_email_service_tag_id")
-  @Column({ type: "integer", nullable: true })
-  tagId: number | null;
-
-  @ManyToOne(() => EmailServiceTagEntity, {
-    nullable: true,
-    onDelete: "SET NULL",
-  })
-  @JoinColumn({ name: "tagId" })
-  tag: EmailServiceTagEntity | null;
 
   @Column({ type: "varchar", length: 255 })
   from: string;

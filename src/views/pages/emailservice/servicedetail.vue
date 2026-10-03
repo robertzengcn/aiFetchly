@@ -20,17 +20,53 @@ v-model="name" :label="t('emailservice.name')" type="input"
         <v-col cols="12" md="8">
           <v-autocomplete
             data-testid="email-service-tag-select"
-            v-model="tagId"
+            v-model="tagIds"
             :items="tagOptions"
             item-title="name"
             item-value="id"
-            :label="t('emailservice.tag') || 'Tag'"
-            :hint="t('emailservice.tag_hint') || 'Optional tag for finding this email service.'"
+            :label="t('emailservice.tags') || 'Tags'"
+            :hint="t('emailservice.tags_hint') || 'Optional reusable labels for selecting this email service.'"
+            multiple
+            chips
+            closable-chips
             clearable
             persistent-hint
             :readonly="loading || tagsLoading"
             :loading="tagsLoading"
-          />
+            v-model:search="tagSearch"
+          >
+            <!-- Auto-create: typed names not yet in the option list surface as
+                 a "Create" chip and are sent to the server as tagNames. -->
+            <template v-if="tagSearch" #prepend-item>
+              <v-list-item @click="addPendingTagName(tagSearch)">
+                <template #prepend>
+                  <v-icon icon="mdi-plus" />
+                </template>
+                <v-list-item-title>
+                  {{ t('emailservice.tag_create_on_save', { name: tagSearch }) || `Create "${tagSearch}"` }}
+                </v-list-item-title>
+              </v-list-item>
+              <v-divider />
+            </template>
+          </v-autocomplete>
+          <!-- Pending tag names (typed but not yet committed) are auto-created
+               on save; each chip is removable until then. -->
+          <div
+            v-if="pendingTagNames.length > 0"
+            data-testid="pending-tag-names"
+            class="d-flex flex-wrap mt-2"
+          >
+            <v-chip
+              v-for="pendingName in pendingTagNames"
+              :key="pendingName"
+              closable
+              size="small"
+              class="ma-1"
+              @click:close="removePendingTagName(pendingName)"
+            >
+              {{ pendingName }}
+            </v-chip>
+          </div>
         </v-col>
         <v-col cols="12" md="4" class="d-flex align-center">
           <v-btn variant="outlined" @click="showTagDialog = true">
@@ -346,10 +382,54 @@ const host = ref<string>("");
 const port = ref<string>("");
 const name = ref<string>("");
 const ssl = ref<number>(0);
-const tagId = ref<number | null>(null);
+// Multi-tag selection: selected tag IDs plus any raw strings the user typed
+// that aren't committed options yet (Vuetify keeps typed text in the model).
+// Split by type on submit — numbers → tagIds, strings → tagNames.
+const tagIds = ref<Array<number | string>>([]);
 const tagOptions = ref<EmailServiceTagSummary[]>([]);
 const showTagDialog = ref(false);
 const tagsLoading = ref(false);
+// Pending tag names the user typed that aren't in the option list — auto-
+// created on the server during save. Tracked separately from tagIds so the
+// form never shows a fake chip with a non-existent id.
+const pendingTagNames = ref<string[]>([]);
+// Current search text inside the autocomplete (drives the "Create" prepend-item).
+const tagSearch = ref<string>("");
+
+/**
+ * Add a typed name the user wants to create on save. The name is collected in
+ * pendingTagNames; the server resolves+creates it. Once added it is removed
+ * from the visible search box so the user sees a clean input.
+ */
+function addPendingTagName(rawName: string): void {
+  const trimmed = rawName.trim();
+  if (trimmed.length === 0) return;
+  // Avoid duplicate pending entries and duplicate-of-existing-option.
+  const exists = tagOptions.value.some(
+    (opt) => opt.normalizedName === trimmed.toLocaleLowerCase("en-US")
+  );
+  if (exists) {
+    const existing = tagOptions.value.find(
+      (opt) => opt.normalizedName === trimmed.toLocaleLowerCase("en-US")
+    );
+    if (existing && !tagIds.value.includes(existing.id)) {
+      tagIds.value = [...tagIds.value, existing.id];
+    }
+    tagSearch.value = "";
+    return;
+  }
+  if (!pendingTagNames.value.some((n) => n.toLocaleLowerCase("en-US") === trimmed.toLocaleLowerCase("en-US"))) {
+    pendingTagNames.value = [...pendingTagNames.value, trimmed];
+  }
+  tagSearch.value = "";
+}
+
+/**
+ * Remove a pending tag name (user clicked the close button on its chip).
+ */
+function removePendingTagName(name: string): void {
+  pendingTagNames.value = pendingTagNames.value.filter((n) => n !== name);
+}
 
 // ---- inbound receive settings ----
 const receiveEnabled = ref<number>(0);
@@ -404,9 +484,13 @@ async function loadTags(): Promise<void> {
   tagsLoading.value = true;
   try {
     tagOptions.value = await getEmailServiceTags();
-    if (tagId.value !== null && !tagOptions.value.some((tag) => tag.id === tagId.value)) {
-      tagId.value = null;
-    }
+    // Drop any selected IDs that no longer correspond to a real tag (e.g. the
+    // tag was deleted in another tab while this form was open). Raw typed
+    // strings are kept — they are pending creates.
+    const validIds = new Set(tagOptions.value.map((tag) => tag.id));
+    tagIds.value = tagIds.value.filter(
+      (entry) => typeof entry === "string" || validIds.has(entry)
+    );
   } catch (error: unknown) {
     alert.value = true;
     alertcolor.value = "error";
@@ -441,7 +525,7 @@ const initialize = async () => {
         // runtime — coerce so the form state stays a string for the contract.
         port.value = res.port != null ? String(res.port) : "";
         name.value = res.name;
-        tagId.value = res.tagId ?? null;
+        tagIds.value = res.tagIds ?? [];
         ssl.value = res.ssl;
         // receive settings (optional)
         receiveEnabled.value = res.receiveEnabled ?? 0;
@@ -546,7 +630,17 @@ async function onSubmit() {
     }
     const soacc: EmailServiceEntitydata = {
       name: name.value,
-      tagId: tagId.value,
+      // Multi-tag: the autocomplete model may contain both selected IDs and
+      // typed strings (Vuetify keeps uncommitted text in the model in
+      // multi-select mode). Split them: numbers → tagIds, strings → tagNames
+      // for server-side auto-create on save. tagIds is always defined here
+      // (absent would mean "preserve", wrong for a form submit — the form is
+      // the authoritative source).
+      tagIds: tagIds.value.filter((entry): entry is number => typeof entry === "number"),
+      tagNames: [
+        ...pendingTagNames.value,
+        ...tagIds.value.filter((entry): entry is string => typeof entry === "string"),
+      ],
       from: from.value,
       smtpUsername: smtpUsername.value || null,
       replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
