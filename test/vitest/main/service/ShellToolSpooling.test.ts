@@ -306,3 +306,45 @@ describe("shell spooling — capture disabled falls back to inline", () => {
     expect(result.stdout).toContain("no capture");
   });
 });
+
+describe("shell spooling — UTF-8 boundary across chunks (I7)", () => {
+  /**
+   * I7(a) regression: appendStdout/appendStderr decoded each chunk with
+   * chunk.toString("utf-8"), which emits U+FFFD when a multibyte sequence is
+   * split across two chunks. A chatty shell emitting CJK/emoji would corrupt
+   * at every boundary. The fix uses StringDecoder, which buffers the partial
+   * tail and emits the completed character once the next chunk completes it.
+   *
+   * This drives `ShellCapture.create` directly and feeds a CJK buffer split
+   * mid-sequence before begin() completes (chunks buffer in pendingChunks, but
+   * the inline preview updates synchronously — so getInlineStdout() reflects
+   * the decoder's output without needing the async claim to settle). No DB
+   * commit is awaited; the test aborts the capture to clean up.
+   */
+  it("reconstructs a CJK sequence split across chunks with no U+FFFD in the inline preview", async () => {
+    const { ShellCapture } = await import("@/service/ShellCaptureService");
+    const capture = ShellCapture.create({
+      conversationId: `conv-i7-${crypto.randomBytes(4).toString("hex")}`,
+      toolCallId: `call-i7-${crypto.randomBytes(4).toString("hex")}`,
+      toolName: "shell",
+      executionId: `exec-i7-${crypto.randomBytes(4).toString("hex")}`,
+    });
+    const text = "你好世界".repeat(50);
+    const full = Buffer.from(text, "utf8");
+    // Split mid-multibyte (odd byte offset lands inside a 3-byte CJK char).
+    const mid = Math.floor(full.byteLength / 2) | 1;
+    capture.appendStdout(full.subarray(0, mid));
+    capture.appendStdout(full.subarray(mid));
+
+    const inline = capture.getInlineStdout();
+    // No replacement character at any chunk boundary.
+    expect(inline.includes("�")).toBe(false);
+    // The decoder reassembled the full sequence (the preview holds it all,
+    // well under the 256 KiB ceiling).
+    expect(inline).toContain("你好世界");
+
+    // Abort to release the staging file; the claim may still be in-flight so
+    // swallow any rejection.
+    await capture.abort().catch(() => undefined);
+  });
+});

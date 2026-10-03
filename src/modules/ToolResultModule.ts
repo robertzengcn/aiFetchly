@@ -753,7 +753,7 @@ export class ToolResultModule extends BaseModule {
     sourceRowKey: string;
     offsetBytes: number;
     lengthBytes: number;
-  }): Promise<{ text: string; totalBytes: number } | null> {
+  }): Promise<{ buffer: Buffer; totalBytes: number } | null> {
     return await this.model.readLegacySourceSlice(input);
   }
 

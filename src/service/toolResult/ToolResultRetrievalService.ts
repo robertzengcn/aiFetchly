@@ -186,7 +186,7 @@ export function createToolResultRetrievalService(input: {
       sourceRowKey: string;
       offsetBytes: number;
       lengthBytes: number;
-    }): Promise<{ text: string; totalBytes: number } | null>;
+    }): Promise<{ buffer: Buffer; totalBytes: number } | null>;
   };
   readonly onYield?: RetrievalYield;
 }): ToolResultRetrievalService {
@@ -204,8 +204,12 @@ export function createToolResultRetrievalService(input: {
         lengthBytes: maxBytes,
       });
       if (!slice) throw new Error("legacy source row is missing");
+      // Use the raw bytes directly — no string round-trip. A slice that ends
+      // mid-multibyte-sequence keeps its partial bytes so `decodeUtf8Window`
+      // can re-sync; a toString("utf8")→Buffer.from round-trip would replace
+      // the partial sequence with U+FFFD's bytes and corrupt the window.
       return {
-        buffer: Buffer.from(slice.text, "utf8"),
+        buffer: slice.buffer,
         totalBytes: slice.totalBytes,
       };
     },

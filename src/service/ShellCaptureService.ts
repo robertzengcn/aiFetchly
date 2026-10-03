@@ -37,6 +37,7 @@
  * the cap seals as `preservation: "partial"`.
  */
 import type { ChildProcess } from "child_process";
+import { StringDecoder } from "node:string_decoder";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 import { isToolOutputCaptureEnabled } from "@/config/featureFlags";
 import { ToolResultModule } from "@/modules/ToolResultModule";
@@ -105,6 +106,16 @@ export class ShellCapture implements ShellCaptureHandle {
   private stderrTruncated = false;
   private stdoutBytes = 0;
   private stderrBytes = 0;
+  /**
+   * StringDecoders buffer trailing incomplete multibyte sequences across
+   * chunks so a sequence split across two chunks does not emit U+FFFD. The
+   * raw `chunk.toString("utf-8")` per chunk would corrupt CJK/emoji output
+   * at boundaries; the decoder emits completed characters and holds the
+   * partial tail until the next chunk completes it. Shared across chunks for
+   * the lifetime of the capture.
+   */
+  private readonly stdoutDecoder = new StringDecoder("utf8");
+  private readonly stderrDecoder = new StringDecoder("utf8");
   private beginFailed = false;
   private beginPromise: Promise<boolean> | null = null;
   private readonly conversationId: string;
@@ -230,10 +241,18 @@ export class ShellCapture implements ShellCaptureHandle {
     this.stdoutBytes += chunk.byteLength;
     if (this.stdoutInline.length < SHELL_INLINE_STDOUT_MAX) {
       const room = SHELL_INLINE_STDOUT_MAX - this.stdoutInline.length;
-      this.stdoutInline += chunk.toString("utf-8").slice(0, room);
+      // Decode through StringDecoder so a multibyte sequence split across
+      // chunks does not emit U+FFFD; the decoder holds the partial tail and
+      // emits the completed character once the next chunk completes it.
+      const decoded = this.stdoutDecoder.write(chunk).slice(0, room);
+      this.stdoutInline += decoded;
       if (this.stdoutInline.length >= SHELL_INLINE_STDOUT_MAX) {
         this.stdoutTruncated = true;
       }
+    } else {
+      // Even when the preview is full, drain the decoder so its internal
+      // partial-sequence buffer does not grow unbounded across the stream.
+      this.stdoutDecoder.write(chunk);
     }
     if (this.stream) {
       this.writeStdoutToStream(chunk);
@@ -248,10 +267,13 @@ export class ShellCapture implements ShellCaptureHandle {
     this.stderrBytes += chunk.byteLength;
     if (this.stderrInline.length < SHELL_INLINE_STDERR_MAX) {
       const room = SHELL_INLINE_STDERR_MAX - this.stderrInline.length;
-      this.stderrInline += chunk.toString("utf-8").slice(0, room);
+      const decoded = this.stderrDecoder.write(chunk).slice(0, room);
+      this.stderrInline += decoded;
       if (this.stderrInline.length >= SHELL_INLINE_STDERR_MAX) {
         this.stderrTruncated = true;
       }
+    } else {
+      this.stderrDecoder.write(chunk);
     }
     if (this.stream) {
       this.writeStderrToStream(chunk);

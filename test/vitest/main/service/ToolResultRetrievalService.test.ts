@@ -643,7 +643,9 @@ function legacyModule(full: string) {
         args.offsetBytes,
         args.offsetBytes + args.lengthBytes
       );
-      return { text: slice.toString("utf8"), totalBytes: buffer.byteLength };
+      // Returns the RAW bytes (not a decoded string) so a slice ending
+      // mid-multibyte keeps its partial sequence for decodeUtf8Window.
+      return { buffer: slice, totalBytes: buffer.byteLength };
     },
   };
 }
@@ -979,7 +981,7 @@ describe("T10 — read-path integrity on open", () => {
       storage,
       module: {
         readLegacySourceSlice: async () => ({
-          text: "legacy row content",
+          buffer: Buffer.from("legacy row content", "utf8"),
           totalBytes: 18,
         }),
       },

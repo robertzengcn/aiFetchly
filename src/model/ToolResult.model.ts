@@ -189,7 +189,7 @@ export class ToolResultModel extends BaseDb {
     sourceRowKey: string;
     offsetBytes: number;
     lengthBytes: number;
-  }): Promise<{ text: string; totalBytes: number } | null> {
+  }): Promise<{ buffer: Buffer; totalBytes: number } | null> {
     // Identity is generated internally; reject anything that is not a plain
     // message id rather than trusting it into a query.
     if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(input.sourceRowKey)) return null;
@@ -207,8 +207,14 @@ export class ToolResultModel extends BaseDb {
       | undefined;
     if (!record) return null;
     const totalBytes = Number(record.totalBytes ?? 0);
-    const chunk = record.chunk ?? Buffer.alloc(0);
-    return { text: chunk.toString("utf8"), totalBytes };
+    // Return the RAW bytes — do not decode to a string. A byte window that
+    // ends mid-multibyte-sequence must stay as its partial bytes so the
+    // retrieval's `decodeUtf8Window` can re-sync; a toString("utf8") here
+    // would emit U+FFFD and the round-trip Buffer.from(text,"utf8") in the
+    // retrieval would replace the partial sequence with the replacement
+    // char's bytes, destroying the window's ability to decode correctly.
+    const buffer = record.chunk ?? Buffer.alloc(0);
+    return { buffer, totalBytes };
   }
 
   async findOutputByStorageDirName(
