@@ -3140,6 +3140,14 @@ export default {
   skillInstall: {
     chooseSkills: "Mehrere Skills gefunden — wähle, welche installiert werden:",
     depStatus: { satisfied: "Erfüllt", missing: "Fehlt", incompatible: "Inkompatibel", unknown: "Unbekannt" },
+    // Audit R9 (PRD §22.1-22.3): Enum-Beschriftungen und Planfelder.
+    kind: { prompt: "Prompt-Skill", executable: "Ausführbarer Skill", plugin: "Plugin", ambiguous: "Unbekanntes Format" },
+    risk: { low: "Niedriges Risiko", medium: "Mittleres Risiko", high: "Hohes Risiko" },
+    permission: { "helper-execution": "Hilfsprogramme ausführen", network: "Netzwerkzugriff", "workspace-write": "In den Arbeitsbereich schreiben", "package-manager": "Pakete installieren" },
+    depKind: { "system-binary": "Systembinärdatei", "python-environment": "Python-Umgebung", "node-environment": "Node-Umgebung", "repository-command": "Repository-Befehl", "mcp-server": "MCP-Server", "model-artifact": "Modellartefakt" },
+    depRequired: "benötigt {version}",
+    activationTarget: "Installationsort",
+    planPermissions: "Angeforderte Berechtigungen",
     modeLabel: { "managed-copy": "Verwaltete Kopie", "symbolic-link": "Verknüpft (Entwicklung)", junction: "Verknüpft (Entwicklung)" },
     planCommands: "Befehle, die ausgeführt werden",
     highRiskHint:
@@ -3186,6 +3194,12 @@ export default {
       deleteSecrets: 'Gespeicherte Zugangsdaten ebenfalls löschen',
       cancel: 'Abbrechen',
       updateApprovalHint: "Eine neue Version wurde gefunden. Prüfen und genehmigen Sie den Plan im Chat der Anfrage.",
+      linkedTarget: "Verknüpfte Quelle",
+      grantedPermissions: "Erteilte Berechtigungen",
+      lastVerified: "Zuletzt geprüft",
+      dependencies: "Abhängigkeiten",
+      revealSource: "Dateien anzeigen",
+      revealFailed: "Der Installationsordner konnte nicht geöffnet werden.",
     },
     command: {
       sectionHint:

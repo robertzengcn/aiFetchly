@@ -16,6 +16,7 @@ vi.mock("@/views/api/skillInstallation", () => ({
   disableSkillInstall: vi.fn(),
   enableSkillInstall: vi.fn(),
   uninstallSkillInstall: vi.fn(),
+  revealSkillInstallSource: vi.fn(),
 }));
 
 import {
@@ -24,6 +25,7 @@ import {
   disableSkillInstall,
   enableSkillInstall,
   uninstallSkillInstall,
+  revealSkillInstallSource,
 } from "@/views/api/skillInstallation";
 
 const i18n = createI18n({
@@ -186,6 +188,98 @@ describe("SkillInstallManager", () => {
     expect(uninstallSkillInstall).toHaveBeenCalledWith({
       installationId: "inst-1",
       deleteSecrets: true,
+    });
+  });
+});
+
+describe("SkillInstallManager — audit R9 (§22.3 detail completeness)", () => {
+  it("renders the linked canonical target for linked installations", async () => {
+    vi.mocked(listSkillInstallations).mockResolvedValue([
+      makeRow({
+        activationMode: "symbolic-link",
+        linkedTargetPath: "/home/me/src/video-use",
+      }),
+    ]);
+    const wrapper = mountManager();
+    await flushPromises();
+    const target = wrapper.find(
+      '[data-testid="skill-install-manager-linked-target"]'
+    );
+    expect(target.exists()).toBe(true);
+    expect(target.text()).toContain("/home/me/src/video-use");
+    expect(target.text()).toContain("Linked source");
+  });
+
+  it("renders granted permissions, last verification, and translated kind", async () => {
+    vi.mocked(listSkillInstallations).mockResolvedValue([
+      makeRow({
+        grantedPermissions: ["network", "package-manager"],
+        verifiedAt: "2026-09-28T12:00:00.000Z",
+      }),
+    ]);
+    const wrapper = mountManager();
+    await flushPromises();
+    const perms = wrapper.find(
+      '[data-testid="skill-install-manager-permissions"]'
+    );
+    expect(perms.exists()).toBe(true);
+    expect(perms.text()).toContain("Network access");
+    expect(perms.text()).toContain("Install packages");
+    expect(
+      wrapper.find('[data-testid="skill-install-manager-verified"]').text()
+    ).toContain("Last verified");
+    // The kind chip is translated, not raw (audit R9 enum coverage).
+    expect(wrapper.text()).toContain("Prompt skill");
+  });
+
+  it("renders dependency bindings with detected versions and resolved paths", async () => {
+    vi.mocked(listSkillInstallations).mockResolvedValue([
+      makeRow({
+        dependencies: [
+          {
+            name: "ffmpeg",
+            kind: "system-binary",
+            status: "satisfied",
+            detectedVersion: "4.4.2",
+            resolvedPath: "/usr/bin/ffmpeg",
+            provider: "apt: ffmpeg",
+            verifiedAt: "2026-09-28T12:00:00.000Z",
+          },
+          {
+            name: "python",
+            kind: "system-binary",
+            status: "incompatible",
+            requiredVersion: ">=3.10",
+          },
+        ],
+      }),
+    ]);
+    const wrapper = mountManager();
+    await flushPromises();
+    const deps = wrapper.find(
+      '[data-testid="skill-install-manager-dependencies"]'
+    );
+    expect(deps.exists()).toBe(true);
+    expect(deps.text()).toContain("ffmpeg:");
+    expect(deps.text()).toContain("Satisfied");
+    expect(deps.text()).toContain("4.4.2");
+    expect(deps.text()).toContain("/usr/bin/ffmpeg");
+    expect(deps.text()).toContain("python:");
+    expect(deps.text()).toContain("Incompatible");
+    expect(deps.text()).toContain("needs >=3.10");
+  });
+
+  it("reveal-source sends only the installation id", async () => {
+    vi.mocked(listSkillInstallations).mockResolvedValue([makeRow()]);
+    vi.mocked(revealSkillInstallSource).mockResolvedValue({ revealed: true });
+    const wrapper = mountManager();
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="skill-install-manager-reveal"]')
+      .trigger("click");
+    await flushPromises();
+    expect(revealSkillInstallSource).toHaveBeenCalledWith({
+      installationId: "inst-1",
     });
   });
 });

@@ -3143,6 +3143,14 @@ export default {
   skillInstall: {
     chooseSkills: "Se encontraron varias habilidades: elige cuáles instalar:",
     depStatus: { satisfied: "Satisfecho", missing: "Falta", incompatible: "Incompatible", unknown: "Desconocido" },
+    // Auditoría R9 (PRD §22.1-22.3): etiquetas de enumeración y campos del plan.
+    kind: { prompt: "Habilidad de instrucciones", executable: "Habilidad ejecutable", plugin: "Complemento", ambiguous: "Formato no reconocido" },
+    risk: { low: "Riesgo bajo", medium: "Riesgo medio", high: "Riesgo alto" },
+    permission: { "helper-execution": "Ejecutar programas auxiliares", network: "Acceso a la red", "workspace-write": "Escribir en el espacio de trabajo", "package-manager": "Instalar paquetes" },
+    depKind: { "system-binary": "binario del sistema", "python-environment": "entorno Python", "node-environment": "entorno Node", "repository-command": "comando del repositorio", "mcp-server": "servidor MCP", "model-artifact": "artefacto de modelo" },
+    depRequired: "requiere {version}",
+    activationTarget: "Ubicación de instalación",
+    planPermissions: "Permisos solicitados",
     modeLabel: { "managed-copy": "Copia administrada", "symbolic-link": "Enlazado (desarrollo)", junction: "Enlazado (desarrollo)" },
     planCommands: "Comandos que se ejecutarán",
     highRiskHint:
@@ -3188,6 +3196,12 @@ export default {
       deleteSecrets: 'Eliminar también las credenciales guardadas',
       cancel: 'Cancelar',
       updateApprovalHint: "Se encontró una nueva versión. Revisa y aprueba el plan en el chat donde pediste la actualización.",
+      linkedTarget: "Origen vinculado",
+      grantedPermissions: "Permisos concedidos",
+      lastVerified: "Última verificación",
+      dependencies: "Dependencias",
+      revealSource: "Mostrar archivos",
+      revealFailed: "No se pudo abrir la carpeta de instalación.",
     },
     command: {
       sectionHint:

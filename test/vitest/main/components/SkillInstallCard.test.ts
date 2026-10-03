@@ -264,7 +264,8 @@ describe("SkillInstallCard", () => {
     );
     expect(skillRows).toHaveLength(1);
     expect(skillRows[0].text()).toContain("video-use");
-    expect(skillRows[0].text()).toContain("prompt");
+    // Audit R9: the skill-kind enum is translated, not raw.
+    expect(skillRows[0].text()).toContain("Prompt skill");
     const deps = wrapper.find('[data-testid="skill-install-plan-deps"]');
     // Localized dependency statuses (audit finding 12).
     expect(deps.text()).toContain("ffmpeg: Satisfied");
@@ -315,9 +316,10 @@ describe("SkillInstallCard", () => {
     const rows = wrapper.findAll('[data-testid="skill-install-command-row"]');
     expect(rows).toHaveLength(2);
     expect(rows[0].text()).toContain("pip install -r requirements.txt");
-    expect(rows[0].text()).toContain("low");
+    // Audit R9: risk levels render localized, not raw.
+    expect(rows[0].text()).toContain("Low risk");
     expect(rows[1].text()).toContain("sudo apt install ffmpeg");
-    expect(rows[1].text()).toContain("high");
+    expect(rows[1].text()).toContain("High risk");
     // The never-run-automatically hint accompanies the list.
     expect(section.text()).toContain("never run automatically");
   });
@@ -554,7 +556,8 @@ describe("SkillInstallCard", () => {
     expect(wrapper.text()).toContain(
       "python -m pip install -r requirements.txt"
     );
-    expect(wrapper.text()).toContain("medium");
+    // Audit R9: risk level renders localized.
+    expect(wrapper.text()).toContain("Medium risk");
     // Env-var NAMES surface for informed consent; values never do.
     expect(wrapper.text()).toContain("ELEVENLABS_API_KEY");
     expect(wrapper.text()).not.toMatch(/sk-[a-zA-Z0-9]{10,}/);
@@ -740,5 +743,114 @@ describe("SkillInstallCard — multi-secret advance (audit R3)", () => {
       })
     );
     expect(wrapper.text()).toContain("LEGACY_API_KEY");
+  });
+});
+
+describe("SkillInstallCard — audit R9 (plan detail completeness)", () => {
+  it("renders the real activation target (not a placeholder)", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+          dependencies: [],
+          credentials: [],
+          mode: "managed-copy",
+          commands: [],
+          warnings: [],
+          activationTarget: "/home/me/.aifetchly/skills",
+        },
+      })
+    );
+    const target = wrapper.find('[data-testid="skill-install-plan-target"]');
+    expect(target.exists()).toBe(true);
+    expect(target.text()).toContain("Installation location");
+    expect(target.text()).toContain("/home/me/.aifetchly/skills");
+  });
+
+  it("renders requested permissions with translated kinds", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+          dependencies: [],
+          credentials: [],
+          mode: "managed-copy",
+          commands: [],
+          warnings: [],
+          permissions: [{ kind: "network" }, { kind: "package-manager" }],
+        },
+      })
+    );
+    const perms = wrapper.find(
+      '[data-testid="skill-install-plan-permissions"]'
+    );
+    expect(perms.exists()).toBe(true);
+    expect(perms.text()).toContain("Requested permissions");
+    expect(perms.text()).toContain("Network access");
+    expect(perms.text()).toContain("Install packages");
+  });
+
+  it("omits the target and permissions rows when the plan carries neither", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+          dependencies: [],
+          credentials: [],
+          mode: "managed-copy",
+          commands: [],
+          warnings: [],
+        },
+      })
+    );
+    expect(
+      wrapper.find('[data-testid="skill-install-plan-target"]').exists()
+    ).toBe(false);
+    expect(
+      wrapper.find('[data-testid="skill-install-plan-permissions"]').exists()
+    ).toBe(false);
+  });
+
+  it("renders dependency kind, detected version, and an unsatisfied constraint", () => {
+    const wrapper = mountCard(
+      makeSnapshot({
+        safePlan: {
+          source: "https://github.com/a/video-use",
+          revision: "abc123def456",
+          skills: [{ name: "video-use", kind: "prompt", description: "d" }],
+          dependencies: [
+            {
+              id: "dep:ffmpeg",
+              name: "ffmpeg",
+              status: "satisfied",
+              kind: "system-binary",
+              detectedVersion: "4.4.2",
+            },
+            {
+              id: "dep:python",
+              name: "python",
+              status: "incompatible",
+              kind: "system-binary",
+              requiredVersion: ">=3.10",
+            },
+          ],
+          credentials: [],
+          mode: "managed-copy",
+          commands: [],
+          warnings: [],
+        },
+      })
+    );
+    const deps = wrapper.find('[data-testid="skill-install-plan-deps"]');
+    expect(deps.text()).toContain("system binary");
+    expect(deps.text()).toContain("4.4.2");
+    expect(deps.text()).toContain("Incompatible");
+    expect(deps.text()).toContain("needs >=3.10");
   });
 });

@@ -45,6 +45,36 @@
             {{ safePlan.source }} @ {{ safePlan.revision }}
           </span>
         </div>
+        <!-- Audit R9 (PRD §22.2): installation LOCATION — the real
+             activation directory, not a placeholder. -->
+        <div
+          v-if="safePlan.activationTarget"
+          class="text-caption text-medium-emphasis mt-1"
+          data-testid="skill-install-plan-target"
+        >
+          {{ t("skillInstall.activationTarget") }}:
+          <code>{{ safePlan.activationTarget }}</code>
+        </div>
+        <!-- Audit R9 (PRD §22.2): requested permissions (tools/network). -->
+        <div
+          v-if="safePlan.permissions?.length"
+          class="mt-1 d-flex ga-1 flex-wrap align-center"
+          data-testid="skill-install-plan-permissions"
+        >
+          <span class="text-caption text-medium-emphasis">
+            {{ t("skillInstall.planPermissions") }}:
+          </span>
+          <v-chip
+            v-for="perm in safePlan.permissions"
+            :key="perm.kind"
+            size="x-small"
+            variant="tonal"
+          >
+            {{
+              t(`skillInstall.permission.${perm.kind}`) || perm.kind
+            }}
+          </v-chip>
+        </div>
         <div
           v-if="safePlan.skills.length > 1"
           class="mt-2 text-caption"
@@ -69,7 +99,7 @@
           />
           <strong v-else>{{ skillRow.name }}</strong>
           <span class="text-caption text-medium-emphasis">
-            ({{ skillRow.kind }})
+            ({{ t(`skillInstall.kind.${skillRow.kind}`) || skillRow.kind }})
           </span>
           <div class="text-caption">{{ skillRow.description }}</div>
         </div>
@@ -84,8 +114,19 @@
             class="mr-2"
             :class="dep.status === 'satisfied' ? 'text-success' : 'text-warning'"
           >
-            {{ dep.name }}:
+            {{ dep.name }}{{ dep.kind ? ` (${t(`skillInstall.depKind.${dep.kind}`) || dep.kind})` : "" }}:
             {{ t(`skillInstall.depStatus.${dep.status}`) || dep.status }}
+            <!-- Audit R9 (PRD §18.2): the detected version, and the
+                 constraint when one was declared. -->
+            <span v-if="dep.detectedVersion" class="text-success">
+              {{ dep.detectedVersion }}
+            </span>
+            <span
+              v-if="dep.requiredVersion && dep.status === 'incompatible'"
+              class="text-warning"
+            >
+              ({{ t("skillInstall.depRequired", { version: dep.requiredVersion }) }})
+            </span>
           </span>
         </div>
         <div
@@ -143,7 +184,7 @@
             variant="tonal"
             class="ml-1"
           >
-            {{ cmd.riskLevel }}
+            {{ t(`skillInstall.risk.${cmd.riskLevel}`) || cmd.riskLevel }}
           </v-chip>
         </div>
         <div class="text-caption text-warning mb-1">
@@ -269,7 +310,7 @@
               :color="cmd.riskLevel === 'high' ? 'warning' : 'default'"
               variant="tonal"
             >
-              {{ cmd.riskLevel }}
+              {{ t(`skillInstall.risk.${cmd.riskLevel}`) || cmd.riskLevel }}
             </v-chip>
             <v-btn
               size="x-small"

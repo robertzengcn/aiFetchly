@@ -31,6 +31,7 @@ import {
   registerSkillInstallationLifecycleIpcHandlers,
   registerPromptSkillInvokeIpcHandler,
   registerSkillInstallRunCommandIpcHandler,
+  registerSkillInstallRevealSourceIpcHandler,
 } from "@/main-process/communication/skill-installation-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
@@ -114,6 +115,7 @@ export function registerCommunicationIpcHandlers(
     registerSkillInstallationLifecycleIpcHandlers();
     registerPromptSkillInvokeIpcHandler();
     registerSkillInstallRunCommandIpcHandler();
+    registerSkillInstallRevealSourceIpcHandler();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();

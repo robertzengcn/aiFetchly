@@ -2592,3 +2592,102 @@ describe("retry restores the full checkpoint (audit R6)", () => {
     ]);
   }, 120_000);
 });
+
+describe("dependency contract upgrade (audit R9 / PRD §18)", () => {
+  it("captures named version constraints onto matching binaries", async () => {
+    const { detectDependencyProposals } = await import(
+      "@/service/SkillDependencyOrchestrator"
+    );
+    const items = detectDependencyProposals([
+      "Requires Python 3.10+ and node >= 18",
+    ]);
+    const python = items.find((i) => i.name === "python");
+    expect(python?.requiredVersion).toBe(">=3.10");
+    expect(python?.approvalRisk).toBe("medium");
+    const node = items.find((i) => i.name === "node");
+    expect(node?.requiredVersion).toBe(">=18");
+  });
+
+  it("parses detected versions and enforces constraints", async () => {
+    const {
+      parseDetectedVersion,
+      satisfiesVersion,
+    } = await import("@/service/SkillDependencyOrchestrator");
+    expect(parseDetectedVersion("Python 3.11.4 (main)")).toBe("3.11.4");
+    expect(parseDetectedVersion("ffmpeg version 4.4.2-0ubuntu0")).toBe("4.4.2");
+    expect(parseDetectedVersion("v18.20.0")).toBe("18.20.0");
+    expect(parseDetectedVersion("no numbers here")).toBeUndefined();
+    expect(satisfiesVersion("3.11.4", ">=3.10")).toBe(true);
+    expect(satisfiesVersion("3.9.7", ">=3.10")).toBe(false);
+    expect(satisfiesVersion("18.0.0", ">=18")).toBe(true);
+    expect(satisfiesVersion("4.4.2", ">=5")).toBe(false);
+  });
+
+  it("classifies language environments from staged manifests", async () => {
+    const { detectDependencyProposals } = await import(
+      "@/service/SkillDependencyOrchestrator"
+    );
+    const items = detectDependencyProposals([""], [
+      "SKILL.md",
+      "requirements.txt",
+    ]);
+    const pyEnv = items.find((i) => i.name === "python-environment");
+    expect(pyEnv?.kind).toBe("python-environment");
+    expect(pyEnv?.shared).toBe(false);
+    expect(items.find((i) => i.name === "node-environment")).toBeUndefined();
+
+    const nodeItems = detectDependencyProposals([""], ["package.json"]);
+    expect(
+      nodeItems.find((i) => i.name === "node-environment")?.kind
+    ).toBe("node-environment");
+  });
+
+  it("classifies MCP-server and model-artifact mentions as visible items", async () => {
+    const { detectDependencyProposals } = await import(
+      "@/service/SkillDependencyOrchestrator"
+    );
+    const items = detectDependencyProposals([
+      "Runs an MCP server for file access and downloads the whisper GGUF model",
+    ]);
+    expect(items.find((i) => i.kind === "mcp-server")).toBeDefined();
+    expect(items.find((i) => i.kind === "model-artifact")).toBeDefined();
+    // Classification items carry no probes — a visible decision, not a
+    // fake pass.
+    expect(items.find((i) => i.kind === "mcp-server")?.probes).toHaveLength(0);
+  });
+
+  it("persisted bindings surface in the management rows after ready", async () => {
+    const module = new SkillInstallationModule();
+    const prepared = await module.prepare({
+      conversationId: "conv-dep-bindings",
+      source: fixtureRoot,
+    });
+    let approved = await module.approve({
+      sessionId: prepared.sessionId,
+      planRevision: prepared.planRevision as string,
+      approve: true,
+      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+    });
+    if (approved.state === "awaiting_secret") {
+      approved = await module.resumeAfterSecret(prepared.sessionId);
+    }
+    expect(approved.state).toBe("ready");
+
+    const rows = await module.listInstallations();
+    const row = rows.find(
+      (r) => r.installationId === approved.installationId
+    );
+    expect(row).toBeDefined();
+    if (!row) return;
+    // Audit R9: bindings + granted permissions + verification + activation
+    // location all surface for the management UI (§22.3).
+    expect(Array.isArray(row.dependencies)).toBe(true);
+    expect(row.grantedPermissions).toBeDefined();
+    expect(row.verifiedAt).toBeDefined();
+    expect(row.activationPath).toBeDefined();
+    if (row.linkedTargetPath === undefined && row.activationMode === "managed-copy") {
+      // managed copies have no linked target — only linked rows do.
+      expect(row.linkedTargetPath).toBeUndefined();
+    }
+  }, 120_000);
+});

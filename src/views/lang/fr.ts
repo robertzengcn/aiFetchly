@@ -3127,6 +3127,14 @@ export default {
   skillInstall: {
     chooseSkills: "Plusieurs compétences trouvées — choisissez celles à installer :",
     depStatus: { satisfied: "Satisfait", missing: "Manquant", incompatible: "Incompatible", unknown: "Inconnu" },
+    // Audit R9 (PRD §22.1-22.3) : libellés d'énumération et champs du plan.
+    kind: { prompt: "Compétence d'invites", executable: "Compétence exécutable", plugin: "Extension", ambiguous: "Format non reconnu" },
+    risk: { low: "Risque faible", medium: "Risque moyen", high: "Risque élevé" },
+    permission: { "helper-execution": "Exécuter des programmes auxiliaires", network: "Accès réseau", "workspace-write": "Écrire dans l'espace de travail", "package-manager": "Installer des paquets" },
+    depKind: { "system-binary": "binaire système", "python-environment": "environnement Python", "node-environment": "environnement Node", "repository-command": "commande du dépôt", "mcp-server": "serveur MCP", "model-artifact": "artefact de modèle" },
+    depRequired: "nécessite {version}",
+    activationTarget: "Emplacement d'installation",
+    planPermissions: "Permissions demandées",
     modeLabel: { "managed-copy": "Copie gérée", "symbolic-link": "Lié (développement)", junction: "Lié (développement)" },
     planCommands: "Commandes qui seront exécutées",
     highRiskHint:
@@ -3173,6 +3181,12 @@ export default {
       deleteSecrets: 'Supprimer aussi les identifiants stockés',
       cancel: 'Annuler',
       updateApprovalHint: "Une nouvelle version a été trouvée. Vérifiez et approuvez le plan dans la conversation de la demande.",
+      linkedTarget: "Source liée",
+      grantedPermissions: "Permissions accordées",
+      lastVerified: "Dernière vérification",
+      dependencies: "Dépendances",
+      revealSource: "Afficher les fichiers",
+      revealFailed: "Impossible d'ouvrir le dossier d'installation.",
     },
     command: {
       sectionHint:

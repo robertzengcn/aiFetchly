@@ -77,6 +77,7 @@ import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
 import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
 import { SkillInstallationEventEntity } from "@/entity/SkillInstallationEvent.entity";
 import { SkillCredentialBindingEntity } from "@/entity/SkillCredentialBinding.entity";
+import { SkillDependencyBindingEntity } from "@/entity/SkillDependencyBinding.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
@@ -189,6 +190,7 @@ export const DB_ENTITIES = [
   SkillInstallationSessionEntity,
   SkillInstallationEventEntity,
   SkillCredentialBindingEntity,
+  SkillDependencyBindingEntity,
   AgentDefinitionEntity,
   AgentTaskEntity,
   AgentTaskMessageEntity,

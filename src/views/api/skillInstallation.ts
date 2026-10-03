@@ -16,6 +16,7 @@ import {
   SKILL_INSTALL_PREPARE,
   SKILL_INSTALL_REPAIR,
   SKILL_INSTALL_RETRY,
+  SKILL_INSTALL_REVEAL_SOURCE,
   SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
@@ -253,6 +254,26 @@ export interface SkillInstallationView {
   readonly enabled: boolean;
   readonly updatedAt: string;
   readonly credentialNames: readonly string[];
+  /** Audit R9 (PRD §22.3): canonical target for linked installations. */
+  readonly linkedTargetPath?: string;
+  readonly sourceSubdirectory?: string;
+  readonly contentHash?: string;
+  /** Audit R9 (PRD §22.3): detected dependency versions/paths + the last
+   *  verification time (from the persisted dependency bindings). */
+  readonly dependencies?: readonly {
+    readonly name: string;
+    readonly kind: string;
+    readonly status: string;
+    readonly detectedVersion?: string;
+    readonly requiredVersion?: string;
+    readonly resolvedPath?: string;
+    readonly provider?: string;
+    readonly verifiedAt?: string;
+  }[];
+  /** Audit R9 (PRD §22.3): permission kinds granted at approval. */
+  readonly grantedPermissions?: readonly string[];
+  /** Audit R9 (PRD §22.3): activation verification baseline time. */
+  readonly verifiedAt?: string;
 }
 
 /** List every installation across package kinds for the management UI. */
@@ -292,6 +313,18 @@ export async function repairSkillInstall(input: {
 }): Promise<SkillRepairReport | null> {
   const resp = await windowInvoke(SKILL_INSTALL_REPAIR, input);
   return (resp as SkillRepairReport | null) ?? null;
+}
+
+/**
+ * Audit R9 (PRD §22.3 reveal-source): open the activation location in the
+ * OS file manager. Sends ONLY the installation id — the main process
+ * resolves the path from its own row, never from the renderer.
+ */
+export async function revealSkillInstallSource(input: {
+  installationId: string;
+}): Promise<{ revealed: boolean } | null> {
+  const resp = await windowInvoke(SKILL_INSTALL_REVEAL_SOURCE, input);
+  return (resp as { revealed: boolean } | null) ?? null;
 }
 
 export async function disableSkillInstall(

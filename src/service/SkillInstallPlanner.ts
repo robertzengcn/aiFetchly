@@ -38,6 +38,10 @@ export interface PlanInput {
   /** Enabled installations by skill NAME (any source) for same-name
    *  replacement warnings (audit finding 3 / §24.1). */
   readonly existingEnabledByName?: ReadonlyMap<string, string>;
+  /** Audit R9 (PRD §18.1): names of the staged root's top-level files —
+   *  language-environment manifests (requirements.txt / package.json …)
+   *  classify as their own skill-specific dependency kinds. */
+  readonly stagedFiles?: readonly string[];
 }
 
 /**
@@ -53,7 +57,8 @@ const CREDENTIAL_ENV_RE =
 
 export function buildSkillInstallPlan(input: PlanInput): SkillInstallPlan {
   const dependencies = detectDependencyProposals(
-    input.instructionFiles.map((f) => f.content)
+    input.instructionFiles.map((f) => f.content),
+    input.stagedFiles
   );
   const credentials = detectCredentialRequirements(
     input.instructionFiles.map((f) => f.content)

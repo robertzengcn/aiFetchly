@@ -2989,6 +2989,14 @@ export default {
   skillInstall: {
     chooseSkills: "发现多个技能——请选择要安装的：",
     depStatus: { satisfied: "已满足", missing: "缺失", incompatible: "不兼容", unknown: "未知" },
+    // Audit R9 (PRD §22.1-22.3)：枚举标签与计划详情字段。
+    kind: { prompt: "提示词技能", executable: "可执行技能", plugin: "插件", ambiguous: "未识别格式" },
+    risk: { low: "低风险", medium: "中风险", high: "高风险" },
+    permission: { "helper-execution": "运行辅助程序", network: "网络访问", "workspace-write": "写入工作区", "package-manager": "安装软件包" },
+    depKind: { "system-binary": "系统二进制", "python-environment": "Python 环境", "node-environment": "Node 环境", "repository-command": "仓库命令", "mcp-server": "MCP 服务器", "model-artifact": "模型文件" },
+    depRequired: "需要 {version}",
+    activationTarget: "安装位置",
+    planPermissions: "请求的权限",
     modeLabel: { "managed-copy": "托管副本", "symbolic-link": "链接（开发）", junction: "链接（开发）" },
     planCommands: "将执行的命令",
     highRiskHint: "高危命令仅作展示，不会自动执行——需要你手动运行。",
@@ -3029,6 +3037,12 @@ export default {
       deleteSecrets: '同时删除已存储的凭据',
       cancel: '取消',
       updateApprovalHint: '发现新版本。请在发起更新的对话中查看并批准更新计划。',
+      linkedTarget: "链接源",
+      grantedPermissions: "已授予的权限",
+      lastVerified: "上次校验",
+      dependencies: "依赖项",
+      revealSource: "显示文件",
+      revealFailed: "无法打开安装文件夹。",
     },
     command: {
       sectionHint:

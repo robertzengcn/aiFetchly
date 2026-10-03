@@ -11,7 +11,8 @@
  *     the session resumes only after the store confirms.
  */
 
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
+import * as path from "path";
 import { z } from "zod";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
@@ -27,6 +28,7 @@ import {
   SKILL_INSTALL_LIST,
   SKILL_INSTALL_PREPARE,
   SKILL_INSTALL_REPAIR,
+  SKILL_INSTALL_REVEAL_SOURCE,
   SKILL_INSTALL_RUN_COMMAND,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
@@ -549,6 +551,40 @@ const runCommandSchema = z.object({
    *  authorized at the same strength as approve, not by a bare boolean). */
   approvalToken: z.string().min(16).max(128),
 });
+
+const revealSourceSchema = z.object({
+  installationId: z.string().min(1).max(100),
+});
+
+/**
+ * Audit R9 (PRD §22.3 reveal-source): open the installation's activation
+ * location in the OS file manager. The renderer supplies ONLY the
+ * installation id — the path is resolved from the persisted row in the
+ * main process, so no renderer-supplied path ever reaches the shell.
+ */
+export function registerSkillInstallRevealSourceIpcHandler(): void {
+  ipcMain.handle(
+    SKILL_INSTALL_REVEAL_SOURCE,
+    async (_event, data: unknown) => {
+      const decoded = decode(revealSourceSchema, data);
+      if (!decoded.ok) return denied(decoded.message);
+      try {
+        const outcome = await new SkillInstallationModule().getActivationPath(
+          decoded.value.installationId
+        );
+        if (!outcome.ok) return denied(outcome.message);
+        const folder = path.dirname(outcome.activationPath);
+        const errorMessage = await shell.openPath(folder);
+        if (errorMessage) return denied(errorMessage);
+        return ok({ revealed: true });
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "Reveal source failed."
+        );
+      }
+    }
+  );
+}
 
 // TODO 5 / FR-16: renderer-only execution of one APPROVED plan command.
 // The model never supplies the command — only the persisted template id.

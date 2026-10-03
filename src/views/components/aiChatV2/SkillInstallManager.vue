@@ -48,7 +48,7 @@
               }}
             </v-chip>
             <v-chip size="x-small" class="ml-1" variant="tonal">
-              {{ item.kind }}
+              {{ t(`skillInstall.kind.${item.kind}`) || item.kind }}
             </v-chip>
           </v-expansion-panel-title>
           <v-expansion-panel-text>
@@ -72,6 +72,65 @@
                     ? item.credentialNames.join(", ")
                     : t("skillInstall.manager.none")
                 }}
+              </div>
+              <!-- Audit R9 (PRD §22.3): canonical target for links. -->
+              <div
+                v-if="item.linkedTargetPath"
+                data-testid="skill-install-manager-linked-target"
+              >
+                {{ t("skillInstall.manager.linkedTarget") }}:
+                <code>{{ item.linkedTargetPath }}</code>
+              </div>
+              <!-- Audit R9 (PRD §22.3): granted permissions. -->
+              <div
+                v-if="item.grantedPermissions?.length"
+                data-testid="skill-install-manager-permissions"
+              >
+                {{ t("skillInstall.manager.grantedPermissions") }}:
+                {{
+                  item.grantedPermissions
+                    .map((kind) => t(`skillInstall.permission.${kind}`) || kind)
+                    .join(", ")
+                }}
+              </div>
+              <!-- Audit R9 (PRD §22.3): last verification time. -->
+              <div
+                v-if="item.verifiedAt"
+                data-testid="skill-install-manager-verified"
+              >
+                {{ t("skillInstall.manager.lastVerified") }}:
+                {{ new Date(item.verifiedAt).toLocaleString() }}
+              </div>
+            </div>
+
+            <!-- Audit R9 (PRD §22.3): dependency bindings - detected
+                 versions, resolved paths, last verification per item. -->
+            <div
+              v-if="item.dependencies?.length"
+              class="text-caption mt-2"
+              data-testid="skill-install-manager-dependencies"
+            >
+              <div class="text-medium-emphasis mb-1">
+                {{ t("skillInstall.manager.dependencies") }}:
+              </div>
+              <div
+                v-for="dep in item.dependencies"
+                :key="dep.name"
+                :class="dep.status === 'satisfied' ? 'text-success' : 'text-warning'"
+                :data-testid="`skill-install-manager-dep-${dep.name}`"
+              >
+                {{ dep.name }}:
+                {{ t(`skillInstall.depStatus.${dep.status}`) || dep.status }}
+                <span v-if="dep.detectedVersion">({{ dep.detectedVersion }})</span>
+                <span
+                  v-if="dep.requiredVersion && dep.status === 'incompatible'"
+                  class="text-warning"
+                >
+                  ({{ t("skillInstall.depRequired", { version: dep.requiredVersion }) }})
+                </span>
+                <div v-if="dep.resolvedPath" class="text-medium-emphasis">
+                  <code>{{ dep.resolvedPath }}</code>
+                </div>
               </div>
             </div>
 
@@ -142,6 +201,18 @@
               >
                 {{ t("skillInstall.manager.uninstall") }}
               </v-btn>
+              <!-- Audit R9 (PRD §22.3): reveal-source — opens the activation
+                   folder in the OS file manager (id-only IPC; the main
+                   process resolves the path from its own row). -->
+              <v-btn
+                size="x-small"
+                variant="outlined"
+                :loading="busy === item.installationId"
+                data-testid="skill-install-manager-reveal"
+                @click="onRevealSource(item)"
+              >
+                {{ t("skillInstall.manager.revealSource") }}
+              </v-btn>
             </div>
           </v-expansion-panel-text>
         </v-expansion-panel>
@@ -197,6 +268,7 @@ import {
   enableSkillInstall,
   listSkillInstallations,
   repairSkillInstall,
+  revealSkillInstallSource,
   uninstallSkillInstall,
   updateSkillInstall,
   type SkillInstallationView,
@@ -279,6 +351,25 @@ async function onToggle(item: SkillInstallationView): Promise<void> {
       await enableSkillInstall(item.installationId);
     }
     await load();
+  } finally {
+    busy.value = null;
+  }
+}
+
+/**
+ * Audit R9 (PRD §22.3 reveal-source): open the activation folder in the
+ * OS file manager. Sends only the installation id — the main process owns
+ * the path. A failed reveal surfaces a non-blocking alert.
+ */
+async function onRevealSource(item: SkillInstallationView): Promise<void> {
+  busy.value = item.installationId;
+  try {
+    const result = await revealSkillInstallSource({
+      installationId: item.installationId,
+    });
+    if (!result) {
+      alert(t("skillInstall.manager.revealFailed"));
+    }
   } finally {
     busy.value = null;
   }

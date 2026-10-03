@@ -103,7 +103,11 @@ export type DependencyKind =
   | "system-binary"
   | "python-environment"
   | "node-environment"
-  | "repository-command";
+  | "repository-command"
+  /** PRD §18.1 classification: MCP server / model-or-artifact requirements
+   *  surface as visible plan items instead of being silently ignored. */
+  | "mcp-server"
+  | "model-artifact";
 
 export interface VerificationProbe {
   readonly command: string;
@@ -126,6 +130,17 @@ export interface DependencyPlanItem {
    *  readiness report show WHAT was detected, not just satisfied/missing
    *  (audit finding 12 / NFR-08). */
   readonly detectionEvidence?: string;
+  /** Audit R9 (PRD §18.2): the version the probe actually detected (e.g.
+   *  "4.4.2" parsed from `ffmpeg -version` output). */
+  readonly detectedVersion?: string;
+  /** Audit R9 (PRD §18.3): the resolved executable path (`which`/`where`)
+   *  for the detected binary — stored in typed skill configuration, never
+   *  in the repository. */
+  readonly resolvedPath?: string;
+  /** Audit R9 (PRD §18.2): whether the dependency is a shared system
+   *  package (true) or skill-specific (false — e.g. managed language
+   *  environments under skill-environments/<installation-id>/). */
+  readonly shared?: boolean;
 }
 
 export interface CredentialRequirement {
@@ -222,6 +237,14 @@ export interface SafePlanView {
     readonly id: string;
     readonly name: string;
     readonly status: string;
+    /** Audit R9 (PRD §18.1): the dependency's classification — shown so
+     *  the review card distinguishes system binaries from managed language
+     *  environments, MCP servers, and model artifacts. */
+    readonly kind?: string;
+    /** Audit R9 (PRD §18.2): optional version range the plan requires. */
+    readonly requiredVersion?: string;
+    /** Audit R9 (PRD §18.2): the version the probe detected. */
+    readonly detectedVersion?: string;
     readonly installMethod?: string;
     /** Whether the typed installer may need OS elevation (winget/apt/brew). */
     readonly requiresElevation?: boolean;

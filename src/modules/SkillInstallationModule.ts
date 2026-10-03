@@ -25,6 +25,7 @@ import {
   SkillInstallationSessionModel,
   SkillInstallationEventModel,
 } from "@/model/SkillInstallation.model";
+import { SkillDependencyBindingModel } from "@/model/SkillDependencyBinding.model";
 import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
 import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
 import type {
@@ -43,7 +44,10 @@ import {
 } from "@/service/SkillSourceAcquisitionService";
 import { SkillPackageInspectionService } from "@/service/SkillPackageInspectionService";
 import { buildSkillInstallPlan } from "@/service/SkillInstallPlanner";
-import { SkillActivationService } from "@/service/SkillActivationService";
+import {
+  SkillActivationService,
+  resolvePromptSkillRoot,
+} from "@/service/SkillActivationService";
 import { detectAll } from "@/service/SkillDependencyOrchestrator";
 import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
 import { loadSkillMarkdownFile } from "@/service/PromptSkillLoader";
@@ -222,6 +226,8 @@ export class SkillInstallationModule extends BaseModule {
   private progressSink: SkillInstallationProgressSink | null = null;
   private sessionModel: SkillInstallationSessionModel | null = null;
   private eventModel: SkillInstallationEventModel | null = null;
+  /** Audit R9: persistent dependency bindings (design §14.1). */
+  private dependencyBindingModel: SkillDependencyBindingModel | null = null;
 
   private async getModels(): Promise<{
     installations: SkillInstallationModel;
@@ -239,6 +245,17 @@ export class SkillInstallationModule extends BaseModule {
       sessions: this.sessionModel!,
       events: this.eventModel!,
     };
+  }
+
+  /** Audit R9: lazily-built dependency-binding model on the shared path. */
+  private async getDependencyBindingModel(): Promise<SkillDependencyBindingModel> {
+    await this.ensureConnection();
+    if (!this.dependencyBindingModel) {
+      this.dependencyBindingModel = new SkillDependencyBindingModel(
+        this.dbpath
+      );
+    }
+    return this.dependencyBindingModel;
   }
 
   // -------------------------------------------------------------------------
@@ -509,15 +526,30 @@ export class SkillInstallationModule extends BaseModule {
     const inspectionRoot = descriptor.subdirectory
       ? path.join(acquired.source.acquiredRoot, descriptor.subdirectory)
       : acquired.source.acquiredRoot;
+    // Audit R9 (PRD §18.1): a bounded top-level file listing feeds
+    // language-environment classification (requirements.txt / package.json).
+    let stagedFiles: string[] = [];
+    try {
+      stagedFiles = fs
+        .readdirSync(inspectionRoot, { withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+        .slice(0, 500);
+    } catch {
+      /* unreadable root — environment classification stays text-based */
+    }
     const prePlan = buildSkillInstallPlan({
       sessionId,
       source: { ...acquired.source, acquiredRoot: inspectionRoot },
       discovered: inspection.discovered,
       instructionFiles: inspection.instructionFiles,
       activationMode: request.mode === "linked" ? "linked" : "managed-copy",
-      activationTargetDir: "<global prompt skills>",
+      // Audit R9 (PRD §22.2): the REAL activation location the plan names —
+      // the review card shows where the files land, not a placeholder.
+      activationTargetDir: resolvePromptSkillRoot(),
       constraints: request.constraints ?? [],
       existingEnabledByName,
+      stagedFiles,
     });
     const detectedDeps = await detectAll(
       prePlan.dependencies,
@@ -1942,6 +1974,26 @@ export class SkillInstallationModule extends BaseModule {
       readonly linkedTargetPath?: string;
       readonly sourceSubdirectory?: string;
       readonly contentHash?: string;
+      /** Audit R9 (PRD §22.3): the activation location on disk — the
+       *  reveal-source action opens its containing folder. Main-process
+       *  owned value from the installation row, never renderer-supplied. */
+      readonly activationPath?: string;
+      /** Audit R9 (PRD §22.3): dependency bindings — detected versions,
+       *  resolved paths, and the last verification time. */
+      readonly dependencies?: readonly {
+        readonly name: string;
+        readonly kind: string;
+        readonly status: string;
+        readonly detectedVersion?: string;
+        readonly requiredVersion?: string;
+        readonly resolvedPath?: string;
+        readonly provider?: string;
+        readonly verifiedAt?: string;
+      }[];
+      /** Audit R9 (PRD §22.3): permission kinds granted at approval. */
+      readonly grantedPermissions?: readonly string[];
+      /** Audit R9 (PRD §22.3): the activation verification baseline time. */
+      readonly verifiedAt?: string;
     }[]
   > {
     const { installations } = await this.getModels();
@@ -1962,15 +2014,60 @@ export class SkillInstallationModule extends BaseModule {
       }
       let linkedTargetPath: string | undefined;
       let contentHash: string | undefined;
+      let grantedPermissions: string[] | undefined;
+      let verifiedAt: string | undefined;
       try {
         const metadata = JSON.parse(row.metadataJson ?? "{}") as {
           linkedTargetPath?: string;
           activationContentHash?: string;
+          grantedPermissions?: string[];
+          verifiedAt?: string;
         };
         linkedTargetPath = metadata.linkedTargetPath;
         contentHash = metadata.activationContentHash;
+        grantedPermissions = metadata.grantedPermissions;
+        verifiedAt = metadata.verifiedAt;
       } catch {
         /* unreadable metadata — optional fields stay absent */
+      }
+      // Audit R9 (design §14.1): the installation's persisted dependency
+      // bindings — detected version, resolved path, last verification.
+      let dependencies:
+        | {
+            name: string;
+            kind: string;
+            status: string;
+            detectedVersion?: string;
+            requiredVersion?: string;
+            resolvedPath?: string;
+            provider?: string;
+            verifiedAt?: string;
+          }[]
+        | undefined;
+      try {
+        const bindingRows = await (
+          await this.getDependencyBindingModel()
+        ).listByInstallation(row.installationId);
+        dependencies = bindingRows.map((binding) => ({
+          name: binding.dependencyName,
+          kind: binding.kind,
+          status: binding.status,
+          ...(binding.detectedVersion
+            ? { detectedVersion: binding.detectedVersion }
+            : {}),
+          ...(binding.requiredVersion
+            ? { requiredVersion: binding.requiredVersion }
+            : {}),
+          ...(binding.resolvedPath
+            ? { resolvedPath: binding.resolvedPath }
+            : {}),
+          ...(binding.provider ? { provider: binding.provider } : {}),
+          ...(binding.verifiedAt
+            ? { verifiedAt: binding.verifiedAt.toISOString() }
+            : {}),
+        }));
+      } catch {
+        /* bindings unavailable — optional field stays absent */
       }
       views.push({
         installationId: row.installationId,
@@ -1988,9 +2085,41 @@ export class SkillInstallationModule extends BaseModule {
           ? { sourceSubdirectory: row.sourceSubdirectory }
           : {}),
         ...(contentHash ? { contentHash } : {}),
+        ...(row.activationPath ? { activationPath: row.activationPath } : {}),
+        ...(dependencies ? { dependencies } : {}),
+        ...(grantedPermissions ? { grantedPermissions } : {}),
+        ...(verifiedAt ? { verifiedAt } : {}),
       });
     }
     return views;
+  }
+
+  /**
+   * Audit R9 (PRD §22.3 reveal-source): the installation's activation path
+   * resolved from the persisted row — the reveal action opens its
+   * containing folder. The id is looked up; the renderer never supplies a
+   * path.
+   */
+  async getActivationPath(
+    installationId: string
+  ): Promise<{ ok: true; activationPath: string } | { ok: false; code: string; message: string }> {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) {
+      return {
+        ok: false,
+        code: "SKILL_NOT_FOUND",
+        message: `No installation with id '${installationId}'.`,
+      };
+    }
+    if (!entity.activationPath) {
+      return {
+        ok: false,
+        code: "ACTIVATION_PATH_MISSING",
+        message: "This installation has no recorded activation path.",
+      };
+    }
+    return { ok: true, activationPath: entity.activationPath };
   }
 
   /**
@@ -2356,6 +2485,15 @@ export class SkillInstallationModule extends BaseModule {
         /* credential store unavailable — files still removed */
       }
     }
+    // Audit R9 (design §14.1): dependency bindings are installation-scoped
+    // rows — remove them with the installation (shared binaries stay put).
+    try {
+      await (
+        await this.getDependencyBindingModel()
+      ).deleteByInstallation(input.installationId);
+    } catch {
+      /* binding cleanup is best-effort — uninstall still completes */
+    }
 
     entity.status = "revoked";
     entity.enabled = false;
@@ -2573,6 +2711,11 @@ export class SkillInstallationModule extends BaseModule {
       backupPath: result.backupPath,
       ...(activationContentHash ? { activationContentHash } : {}),
       ...(linkedTargetPath ? { linkedTargetPath } : {}),
+      // Audit R9 (PRD §22.3): the permission kinds the user granted at
+      // approval and the verification baseline timestamp — the management
+      // detail view shows both.
+      grantedPermissions: plan.permissions.map((p) => p.kind),
+      verifiedAt: new Date().toISOString(),
     });
     // Upsert by installation identity (D2 review test): a prior
     // revoked/failed row for the same source+revision+mode must be
@@ -2810,6 +2953,58 @@ export class SkillInstallationModule extends BaseModule {
       } catch {
         /* metrics are best-effort */
       }
+      // Audit R9 (design §14.1): persist the dependency bindings — the
+      // skill-management view of what was detected (version, resolved
+      // path, last verification). Best-effort: never blocks readiness.
+      try {
+        await this.persistDependencyBindings(current);
+      } catch {
+        /* binding persistence is repairable via repair() */
+      }
+    }
+  }
+
+  /**
+   * Audit R9 (design §14.1 / PRD §22.3): write one binding row per plan
+   * dependency — detected version, resolved path, provider, evidence, and
+   * the verification timestamp. The row never claims ownership of shared
+   * system packages.
+   */
+  private async persistDependencyBindings(
+    session: SkillInstallationSessionEntity
+  ): Promise<void> {
+    if (!session.installationId || !session.planJson) return;
+    let plan: SkillInstallPlan;
+    try {
+      plan = JSON.parse(session.planJson) as SkillInstallPlan;
+    } catch {
+      return;
+    }
+    const model = await this.getDependencyBindingModel();
+    const verifiedAt = new Date();
+    for (const dep of plan.dependencies ?? []) {
+      await model.upsert({
+        installationId: session.installationId,
+        dependencyName: dep.name,
+        kind: dep.kind,
+        status: dep.currentStatus,
+        ...(dep.detectedVersion !== undefined
+          ? { detectedVersion: dep.detectedVersion }
+          : {}),
+        ...(dep.requiredVersion !== undefined
+          ? { requiredVersion: dep.requiredVersion }
+          : {}),
+        ...(dep.resolvedPath !== undefined
+          ? { resolvedPath: dep.resolvedPath }
+          : {}),
+        ...(dep.installMethod !== undefined
+          ? { provider: dep.installMethod }
+          : {}),
+        ...(dep.detectionEvidence !== undefined
+          ? { probeEvidence: dep.detectionEvidence }
+          : {}),
+        verifiedAt,
+      });
     }
   }
 
@@ -2951,6 +3146,13 @@ export class SkillInstallationModule extends BaseModule {
         id: d.id,
         name: d.name,
         status: d.currentStatus,
+        kind: d.kind,
+        ...(d.requiredVersion !== undefined
+          ? { requiredVersion: d.requiredVersion }
+          : {}),
+        ...(d.detectedVersion !== undefined
+          ? { detectedVersion: d.detectedVersion }
+          : {}),
         ...(d.installMethod !== undefined
           ? { installMethod: d.installMethod }
           : {}),

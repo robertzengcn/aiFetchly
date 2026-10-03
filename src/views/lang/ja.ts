@@ -3080,6 +3080,14 @@ export default {
   skillInstall: {
     chooseSkills: "複数のスキルが見つかりました。インストールするものを選択してください:",
     depStatus: { satisfied: "充足", missing: "不足", incompatible: "非互換", unknown: "不明" },
+    // 監査 R9（PRD §22.1-22.3）：列挙ラベルとプラン詳細フィールド。
+    kind: { prompt: "プロンプトスキル", executable: "実行型スキル", plugin: "プラグイン", ambiguous: "未認識フォーマット" },
+    risk: { low: "低リスク", medium: "中リスク", high: "高リスク" },
+    permission: { "helper-execution": "ヘルパープログラムの実行", network: "ネットワークアクセス", "workspace-write": "ワークスペースへの書き込み", "package-manager": "パッケージのインストール" },
+    depKind: { "system-binary": "システムバイナリ", "python-environment": "Python 環境", "node-environment": "Node 環境", "repository-command": "リポジトリコマンド", "mcp-server": "MCP サーバー", "model-artifact": "モデルアーティファクト" },
+    depRequired: "{version} が必要",
+    activationTarget: "インストール先",
+    planPermissions: "要求される権限",
     modeLabel: { "managed-copy": "管理コピー", "symbolic-link": "リンク（開発）", junction: "リンク（開発）" },
     planCommands: "実行されるコマンド",
     highRiskHint:
@@ -3124,6 +3132,12 @@ export default {
       deleteSecrets: '保存済みの認証情報も削除する',
       cancel: 'キャンセル',
       updateApprovalHint: '新しいバージョンが見つかりました。依頼したチャットで更新プランを確認して承認してください。',
+      linkedTarget: "リンク元",
+      grantedPermissions: "付与された権限",
+      lastVerified: "最終検証",
+      dependencies: "依存関係",
+      revealSource: "ファイルを表示",
+      revealFailed: "インストールフォルダーを開けませんでした。",
     },
     command: {
       sectionHint:

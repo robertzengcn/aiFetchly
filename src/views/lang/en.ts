@@ -3112,6 +3112,14 @@ export default {
   skillInstall: {
     chooseSkills: "Multiple skills were found — choose which to install:",
     depStatus: { satisfied: "Satisfied", missing: "Missing", incompatible: "Incompatible", unknown: "Unknown" },
+    // Audit R9 (PRD §22.1-22.3): enum labels + plan detail fields.
+    kind: { prompt: "Prompt skill", executable: "Executable skill", plugin: "Plugin", ambiguous: "Unrecognized format" },
+    risk: { low: "Low risk", medium: "Medium risk", high: "High risk" },
+    permission: { "helper-execution": "Run helper programs", network: "Network access", "workspace-write": "Write in workspace", "package-manager": "Install packages" },
+    depKind: { "system-binary": "system binary", "python-environment": "Python environment", "node-environment": "Node environment", "repository-command": "repository command", "mcp-server": "MCP server", "model-artifact": "model artifact" },
+    depRequired: "needs {version}",
+    activationTarget: "Installation location",
+    planPermissions: "Requested permissions",
     modeLabel: { "managed-copy": "Managed copy", "symbolic-link": "Linked (development)", junction: "Linked (development)" },
     planCommands: "Commands that will run",
     highRiskHint:
@@ -3158,6 +3166,12 @@ export default {
       deleteSecrets: 'Also delete stored credentials',
       cancel: 'Cancel',
       updateApprovalHint: "A new version was found. Review and approve the updated plan in the chat where you requested the update.",
+      linkedTarget: "Linked source",
+      grantedPermissions: "Granted permissions",
+      lastVerified: "Last verified",
+      dependencies: "Dependencies",
+      revealSource: "Show files",
+      revealFailed: "Could not open the installation folder.",
     },
     command: {
       sectionHint:

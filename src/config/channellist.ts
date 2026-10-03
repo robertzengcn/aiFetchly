@@ -391,6 +391,10 @@ export const PROMPT_SKILL_INVOKE = "prompt-skill:invoke";
 export const SKILL_INSTALL_APPROVAL_TOKEN = "skill-install:approval-token";
 /** Execute one APPROVED plan command (renderer diagnostics view; TODO 5 / FR-16). */
 export const SKILL_INSTALL_RUN_COMMAND = "skill-install:run-command";
+/** Reveal-source action (audit R9 / PRD §22.3): open the activation
+ *  location in the OS file manager. The path comes from the installation
+ *  row in the main process — the renderer sends only the installation id. */
+export const SKILL_INSTALL_REVEAL_SOURCE = "skill-install:reveal-source";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
