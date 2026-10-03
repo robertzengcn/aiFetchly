@@ -1036,7 +1036,14 @@ export class AIChatQueryLoop {
     string,
     ToolResultPipeline
   >();
-  private conversationEpochCache: string | null = null;
+  /**
+   * Per-conversation epoch cache. MUST be keyed by conversationId: a single
+   * loop instance can serve more than one conversation, and returning
+   * conversation A's cached epoch for conversation B would cause the publisher
+   * to reject B's output at commit (EPOCH_MISMATCH) and silently drop it.
+   * Mirrors {@link AIChatQueryEngine.conversationEpochs}.
+   */
+  private readonly conversationEpochs = new Map<string, string>();
 
   /** Build (or reuse) the pipeline for a conversation. */
   private getToolResultPipeline(
@@ -1064,10 +1071,11 @@ export class AIChatQueryLoop {
   private async resolveConversationEpoch(
     conversationId: string
   ): Promise<string> {
-    if (this.conversationEpochCache) return this.conversationEpochCache;
+    const cached = this.conversationEpochs.get(conversationId);
+    if (cached) return cached;
     const module = this.deps.toolResultModule ?? new ToolResultModule();
     const epoch = await module.currentEpoch("default", conversationId);
-    this.conversationEpochCache = epoch;
+    this.conversationEpochs.set(conversationId, epoch);
     return epoch;
   }
 

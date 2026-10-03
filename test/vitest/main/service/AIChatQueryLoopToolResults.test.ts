@@ -259,4 +259,49 @@ describe("AIChatQueryLoop — preserved tool results are wired", () => {
     const payload = resultEvent?.type === "tool_result" ? resultEvent.toolResult : {};
     expect(payload).not.toHaveProperty("toolResultReceipt");
   });
+
+  it("resolves a DISTINCT epoch per conversation on the same loop instance (I3 cross-conversation leak)", async () => {
+    // I3 regression: `conversationEpochCache` was a single `string | null`
+    // ignoring the conversationId param. A loop instance serving conversation
+    // A then B would return A's cached epoch for B → the publisher rejects B's
+    // output at commit (EPOCH_MISMATCH) → catch degrades to a bounded-failure
+    // content → silent output loss. The fix keys the cache by conversationId,
+    // mirroring AIChatQueryEngine.conversationEpochs.
+    const epochCalls: string[] = [];
+    const stubModule = {
+      ...toolModule,
+      currentEpoch: vi.fn(async (_profile: string, conversationId: string) => {
+        epochCalls.push(conversationId);
+        // Distinct epoch per conversation so a leaked cache would be caught.
+        return `epoch-for-${conversationId}`;
+      }),
+    } as unknown as ToolResultModule;
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(),
+      executeTool: vi.fn(),
+      getSkillDefinition: () => undefined,
+      toolResultModule: stubModule,
+      toolResultStorage: storage,
+      saveToolResultReceipt: vi.fn(),
+    } as never);
+
+    // Access the private resolver to pin the invariant directly. Both calls
+    // go through the SAME instance; a single-value cache would return the
+    // first epoch for both.
+    const resolve = (
+      loop as unknown as {
+        resolveConversationEpoch: (id: string) => Promise<string>;
+      }
+    ).resolveConversationEpoch.bind(loop);
+
+    const epochA = await resolve("conv-a");
+    const epochB = await resolve("conv-b");
+
+    expect(epochA).toBe("epoch-for-conv-a");
+    expect(epochB).toBe("epoch-for-conv-b");
+    // Both conversations were looked up — B was not short-circuited by A's
+    // cache entry.
+    expect(epochCalls).toEqual(["conv-a", "conv-b"]);
+  });
 });
