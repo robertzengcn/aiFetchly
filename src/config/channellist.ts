@@ -56,6 +56,10 @@ export const EMAILSERVICELIST = "email:service:list";
 export const EMAILSERVICEDELETE = "email:service:delete";
 export const EMAILSERVICEEXPORT = "email:service:export";
 export const EMAILSERVICEIMPORT = "email:service:import";
+export const EMAILSERVICETAGLIST = "email:service:tag:list";
+export const EMAILSERVICETAGCREATE = "email:service:tag:create";
+export const EMAILSERVICETAGUPDATE = "email:service:tag:update";
+export const EMAILSERVICETAGDELETE = "email:service:tag:delete";
 
 //email template
 export const EMAILTEMPLATE_LIST = "email:template:list";

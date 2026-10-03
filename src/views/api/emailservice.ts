@@ -10,6 +10,10 @@ import {
   EMAILSERVICEDELETE,
   EMAILSERVICEEXPORT,
   EMAILSERVICEIMPORT,
+  EMAILSERVICETAGLIST,
+  EMAILSERVICETAGCREATE,
+  EMAILSERVICETAGUPDATE,
+  EMAILSERVICETAGDELETE,
   SENDTESTEMAIL,
   RECEIVESENDTESTEMAILMESSAGE,
 } from "@/config/channellist";
@@ -20,6 +24,7 @@ import {
   EmailServiceListdata,
   EmailSendParam,
   EmailServiceImportResult,
+  EmailServiceTagSummary,
 } from "@/entityTypes/emailmarketingType";
 //get email service list
 export async function getEmailServiceList(
@@ -71,12 +76,39 @@ export async function exportEmailServices(
 // file path is picked in the main process; the renderer sends no data).
 // Resolves with the import summary; rejects (Error) on cancel/failure so the
 // component's try/catch can pick the snackbar type from error.message.
-export async function importEmailServices(): Promise<EmailServiceImportResult> {
-  const resp = await windowInvoke(EMAILSERVICEIMPORT, {});
+export async function importEmailServices(
+  options: { createMissingTags?: boolean } = {}
+): Promise<EmailServiceImportResult> {
+  const resp = await windowInvoke(EMAILSERVICEIMPORT, options);
   if (!resp) {
     throw new Error("unknow error");
   }
   return resp as EmailServiceImportResult;
+}
+
+export async function getEmailServiceTags(
+  search?: string
+): Promise<EmailServiceTagSummary[]> {
+  return await windowInvoke(EMAILSERVICETAGLIST, { search });
+}
+
+export async function createEmailServiceTag(
+  name: string
+): Promise<CommonIdrequest<number>> {
+  return await windowInvoke(EMAILSERVICETAGCREATE, { name });
+}
+
+export async function updateEmailServiceTag(
+  id: number,
+  name: string
+): Promise<CommonIdrequest<number>> {
+  return await windowInvoke(EMAILSERVICETAGUPDATE, { id, name });
+}
+
+export async function deleteEmailServiceTag(
+  id: number
+): Promise<{ affectedServiceCount: number }> {
+  return await windowInvoke(EMAILSERVICETAGDELETE, { id });
 }
 //send test email
 export async function sendTestemail(params: EmailSendParam) {

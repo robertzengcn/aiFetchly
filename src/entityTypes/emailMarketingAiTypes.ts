@@ -47,9 +47,18 @@ export const getEmailSearchTaskEmailsInputSchema = z.object({
   email_search_task_id: emailMarketingIdSchema,
 });
 
-export const getEmailServiceConfigInputSchema = z.object({
-  service_id: emailMarketingIdSchema,
-});
+export const getEmailServiceConfigInputSchema = z
+  .strictObject({
+    service_id: emailMarketingIdSchema.optional(),
+    // Intentional control-character guard for tag names (security validation).
+    // eslint-disable-next-line no-control-regex
+    tag: z.string().regex(/^[^\u0000-\u001f\u007f]*$/).trim().min(1).max(64).optional(),
+  })
+  .refine(
+    (value) =>
+      (value.service_id !== undefined) !== (value.tag !== undefined),
+    { message: "Provide exactly one of service_id or tag" }
+  );
 
 export const bulkEmailContentSchema = z.object({
   subject: z.string().trim().min(1).max(500),
@@ -61,6 +70,9 @@ const bulkEmailBaseSchema = z.object({
   emails: z.array(emailMarketingEmailInputSchema).min(1).optional(),
   template_ids: z.array(emailMarketingIdSchema).optional(),
   email_subject: z.string().trim().min(1).max(500).optional(),
+  /** Plain-text body. Preferred over the legacy HTML field. */
+  email_content: z.string().trim().min(1).max(50000).optional(),
+  /** @deprecated Models should send email_content. Markup is coerced to text. */
   email_html_content: z.string().trim().min(1).max(50000).optional(),
   filter_ids: z.array(emailMarketingIdSchema).default([]),
   service_ids: z.array(emailMarketingIdSchema).min(1),
@@ -76,10 +88,12 @@ export const bulkEmailTaskInputSchema = bulkEmailBaseSchema.superRefine(
       data.template_ids !== undefined && data.template_ids.length > 0;
     const hasSubject =
       data.email_subject !== undefined && data.email_subject.trim().length > 0;
-    const hasHtml =
+    const hasPlain =
+      data.email_content !== undefined && data.email_content.trim().length > 0;
+    const hasLegacyHtml =
       data.email_html_content !== undefined &&
       data.email_html_content.trim().length > 0;
-    const hasInlineContent = hasSubject && hasHtml;
+    const hasInlineContent = hasSubject && (hasPlain || hasLegacyHtml);
 
     if (hasSearchTask === hasEmails) {
       ctx.addIssue({
@@ -93,7 +107,7 @@ export const bulkEmailTaskInputSchema = bulkEmailBaseSchema.superRefine(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "Provide either template_ids or email_subject and email_html_content",
+          "Provide either template_ids or email_subject and email_content",
         path: ["template_ids"],
       });
     }
@@ -132,6 +146,7 @@ export interface EmailSearchTaskSummary {
 export interface SanitizedEmailService {
   id: number;
   name: string;
+  tag: string | null;
   address: string;
   source: string;
   port: string;

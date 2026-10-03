@@ -94,5 +94,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s.toLowerCase()).toContain("empty inbox");
     expect(s).toContain("send_email_reply");
     expect(s.toLowerCase()).toContain("not inbox replies");
+    expect(s).toContain("email_content");
+    expect(s.toLowerCase()).toContain("never html");
   });
 });

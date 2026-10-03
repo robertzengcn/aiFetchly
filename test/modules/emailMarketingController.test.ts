@@ -139,13 +139,13 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.contain(
-        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time"
+        "id,name,tag,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time"
       );
       // Full first data row locks the column ORDER (legacy row: effective
       // smtpUsername === from, replyTo → empty cell, receive fields unset →
       // empty cells except ssl defaults of 1, folder INBOX, enabled 0).
       expect(csv).to.contain(
-        "1,Primary SMTP,user1@example.com,user1@example.com,,smtp.example.com,465,1,imap,,,1,,,1,,INBOX,0,2026-01-15T10:30:00.000Z"
+        "1,Primary SMTP,,user1@example.com,user1@example.com,,smtp.example.com,465,1,imap,,,1,,,1,,INBOX,0,2026-01-15T10:30:00.000Z"
       );
       expect(csv).to.contain("Primary SMTP");
       expect(csv).to.contain("user1@example.com");
@@ -190,7 +190,7 @@ describe("EmailMarketingController", () => {
       )) as string;
 
       expect(csv).to.equal(
-        "id,name,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time\n"
+        "id,name,tag,smtpUsername,from,replyTo,host,port,ssl,receiveProtocol,imapHost,imapPort,imapSsl,pop3Host,pop3Port,pop3Ssl,receiveUsername,receiveFolder,receiveEnabled,create_time\n"
       );
     });
 
@@ -320,7 +320,7 @@ describe("EmailMarketingController", () => {
       // count) - no injected column. Count field separators outside quotes.
       const lines = csv.trim().split("\n");
       expect(lines).to.have.lengthOf(2);
-      expect(countCsvFields(lines[1])).to.equal(19);
+      expect(countCsvFields(lines[1])).to.equal(20);
     });
   });
 

@@ -3,20 +3,22 @@
 ## Document Information
 
 - **Version**: 1.0
-- **Status**: Proposed
+- **Status**: Implemented
 - **Created**: 2026-09-26
 - **Owner**: AiFetchly Desktop Engineering
 - **Product requirements**: `docs/prd/email-service-tagging-prd.md`
 
 ## 1. Design Summary
 
-Add reusable email-service tags through a normalized `email_service_tag` table and a nullable `tag_id` foreign key on `email_service`.
+Add reusable email-service tags through a normalized `email_service_tag` table and a nullable `tagId` foreign key on `email_service`. The camel-case column name follows the existing TypeORM relation-column convention.
 
 The first release models a one-to-many relationship:
 
 ```text
 EmailServiceTag 1 ──────── * EmailService
 ```
+
+A tag may be shared by multiple services. AI lookup must reject multiple matches and require an explicit service ID; uniqueness of the tag record does not imply uniqueness of its assigned service.
 
 The user-facing tag is an alias. The numeric `EmailServiceEntity.id` remains the canonical execution identifier. AI tools may accept a tag as input, but the resolved ID is used for the existing send pipeline.
 
@@ -127,7 +129,7 @@ CREATE TABLE IF NOT EXISTS email_service_tag (
 
 Add the nullable column and index to `email_service` through the repository's supported schema-upgrade mechanism. Do not assume that editing only the legacy SQL file upgrades existing user databases.
 
-The exact migration mechanism should be verified against `src/config/SqliteDb.ts` and the database initialization code before implementation. The migration must be idempotent or guarded by the existing schema-version strategy.
+The implementation uses the existing TypeORM `synchronize: true` initialization in `src/config/SqliteDb.ts`. Registering the tag entity and service relation creates the nullable column, foreign key, and `idx_email_service_tag_id` index on both fresh and existing databases. The legacy SQL definitions cover fresh initialization only. Integration tests exercise an existing pre-tag table and repeated synchronization while checking service IDs and encrypted values.
 
 ### 3.4 Normalization
 
@@ -313,7 +315,7 @@ SELECT
   email_service_tag.name AS tag
 FROM email_service
 LEFT JOIN email_service_tag
-  ON email_service.tag_id = email_service_tag.id
+  ON email_service.tagId = email_service_tag.id
 WHERE ...
 ORDER BY ...
 LIMIT ? OFFSET ?;
@@ -517,7 +519,7 @@ The tag table and nullable service column are created as part of the normal data
 The migration must:
 
 - Detect whether the tag table already exists.
-- Detect whether `email_service.tag_id` already exists.
+- Detect whether `email_service.tagId` already exists.
 - Preserve all existing service rows and encrypted values.
 - Preserve existing indexes and foreign keys.
 - Be safe to retry after an interrupted startup.
@@ -685,7 +687,7 @@ Allowed labels should be outcome or operation type only. Do not use tag names, e
 
 ## 17. Future Extension: Multiple Tags
 
-If product requirements later change to multiple tags per email service, replace `email_service.tag_id` with:
+If product requirements later change to multiple tags per email service, replace `email_service.tagId` with:
 
 ```text
 email_service_tag_relation
@@ -694,5 +696,45 @@ email_service_tag_relation
 - unique(email_service_id, tag_id)
 ```
 
-The tag entity and AI exact-lookup behavior can remain. The only semantic change is that a tag may resolve to multiple services, in which case the AI must require an explicit selection or the product must define a deterministic priority rule. No priority rule should be introduced implicitly.
+The tag entity and AI exact-lookup behavior can remain. Tags can already be shared by several services in the first release; multiple tags per service changes assignment cardinality only. AI lookup must continue to require explicit selection whenever more than one service matches.
 
+## 18. Implementation Notes and Verification
+
+- Main-process tag CRUD uses `EmailServiceTagModule` and `EmailServiceTagModel`; all four IPC channels are validated and included in the preload allowlist.
+- Assignment uses nullable `tagId`; omitted values preserve the assignment on updates, and explicit null clears it. Deleting a tag uses the SQLite foreign key's `ON DELETE SET NULL`, preserving service rows and credential ciphertext.
+- Lookup trims and lowercases exact tag names. Existing ID lookups remain supported; simultaneous ID and tag selectors are rejected. Lookup results and service listings expose a tag display name with the existing sanitized fields.
+- The detail form provides a searchable selector and tag management. The table includes tag chips, all/tag/untagged filtering, matching totals, and refresh after rename, delete, or import.
+- Import defaults to resolving existing tags. The optional `createMissingTags` checkbox explicitly enables tag creation. Missing columns preserve assignments on update; blank values clear them. CSV/JSON exports and the download template include the display-name field `tag`.
+- New UI strings and errors are translated into English, Chinese, Spanish, French, German, and Japanese.
+- Privacy-safe operation and lookup counters use the existing email-service metrics helper without tag names or credentials.
+
+Verification entry points:
+
+```sh
+yarn typecheck
+yarn vue-typecheck
+yarn test:components
+yarn vitest --config vite.main.config.mjs run test/vitest/main/EmailServiceTags.test.ts test/vitest/main/ipc/emailMarketingIpc.test.ts test/vitest/main/EmailMarketingControllerImport.test.ts
+yarn build:e2e
+yarn playwright test test/e2e/specs/emailServiceTags.test.ts --workers=1
+```
+
+The integration suite checks pre-tag database upgrades, repeated schema initialization, duplicate and concurrent creation, rename propagation, deletion without credential changes, combined list filters and totals, AI ambiguity and secret exclusion, assignment validation, and import/export behavior. The Electron scenario drives create, assign, filter, rename, and delete through the renderer and production IPC bridge using isolated test data.
+
+Verified on 2026-09-27:
+
+| Check | Result |
+| --- | --- |
+| TypeScript and Vue type checks | Passed |
+| Component suite | 63 files, 377 tests passed |
+| Tag persistence, AI, import and IPC suites | 3 files, 49 tests passed |
+| Existing controller, credential encryption and validation regressions | 82 tests passed |
+| Electron E2E build | Passed |
+| Tag create/assign/filter/rename/delete Electron scenario | 1 test passed |
+| Git whitespace check | Passed |
+
+The focused module regressions ran with the existing Node-compatible SQLite dependency using:
+
+```sh
+NODE_OPTIONS='--import tsx' yarn mocha --require tsconfig-paths/register test/modules/emailMarketingController.test.ts test/modules/emailServiceModule.cipher.test.ts test/modules/emailServiceModule.validation.test.ts
+```

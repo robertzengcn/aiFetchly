@@ -21,13 +21,17 @@ describe("AI chat V2 panel layout", () => {
 
     const shellRule = extractRule(shellSource, ".v2-shell");
     const bodyRule = extractRule(shellSource, ".v2-shell__body");
+    const messagesWrapperRule = extractRule(messagesSource, ".v2-messages__wrapper");
     const messagesRule = extractRule(messagesSource, ".v2-messages");
     const composerRule = extractRule(composerSource, ".v2-composer");
 
     expect(shellRule).toContain("min-height: 0");
     expect(shellRule).toContain("overflow: hidden");
     expect(bodyRule).toContain("overflow: hidden");
-    expect(messagesRule).toContain("min-height: 0");
+    // The flexbox scroll-shrink invariant lives on the wrapper so the composer
+    // stays visible; the scroller itself fills the wrapper and owns overflow.
+    expect(messagesWrapperRule).toContain("min-height: 0");
+    expect(messagesRule).toContain("overflow-y: auto");
     expect(composerRule).toContain("flex: 0 0 auto");
     expect(composerRule).toContain("position: relative");
   });

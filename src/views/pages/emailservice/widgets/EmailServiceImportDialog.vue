@@ -6,6 +6,12 @@
       }}</v-card-title>
       <v-card-text>
         {{ t("emailservice.import_dialog_hint") }}
+        <v-checkbox
+          v-model="createMissingTags"
+          :label="t('emailservice.create_missing_tags') || 'Create missing tags'"
+          :disabled="importing"
+          data-testid="create-missing-tags"
+        />
       </v-card-text>
       <v-card-actions class="d-flex flex-wrap ga-2 pa-4">
         <v-btn
@@ -62,6 +68,7 @@ const emit = defineEmits(["update:modelValue", "imported"]);
 const dialog = computed<boolean>(() => props.modelValue);
 
 const importing = ref<boolean>(false);
+const createMissingTags = ref(false);
 const notice = ref<{
   show: boolean;
   type: "success" | "error" | "info" | "warning";
@@ -88,7 +95,9 @@ async function handleSelectFile(): Promise<void> {
   if (importing.value) return;
   importing.value = true;
   try {
-    const result = await importEmailServices();
+    const result = createMissingTags.value
+      ? await importEmailServices({ createMissingTags: true })
+      : await importEmailServices();
     if (result.skipped > 0) {
       const errs: string = result.errors.join(", ");
       notice.value = {

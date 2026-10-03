@@ -52,6 +52,7 @@ const i18n = createI18n({
 });
 
 const stubs = {
+  VCheckbox: { name: "VCheckbox", props: ["modelValue"], emits: ["update:modelValue"], template: "<input type='checkbox' />" },
   VDialog: {
     props: ["modelValue"],
     emits: ["update:modelValue"],
@@ -83,6 +84,16 @@ function mountDialog(props: Record<string, unknown> = {}) {
 }
 
 describe("EmailServiceImportDialog", () => {
+  it("creates missing tags only when explicitly selected", async () => {
+    apiMocks.importEmailServices.mockResolvedValue({ imported: 1, skipped: 0, errors: [] });
+    const wrapper = mountDialog();
+    const checkbox = wrapper.findComponent({ name: "VCheckbox" });
+    expect(checkbox.props("modelValue")).toBe(false);
+    checkbox.vm.$emit("update:modelValue", true);
+    await wrapper.get('[data-testid="email-service-import-select-btn"]').trigger("click");
+    expect(apiMocks.importEmailServices).toHaveBeenCalledWith({ createMissingTags: true });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
