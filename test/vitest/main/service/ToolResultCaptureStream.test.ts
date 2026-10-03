@@ -36,7 +36,9 @@ vi.mock("@/config/toolResultConfig", async (importOriginal) => {
 import {
   ToolResultStorageService,
   ToolResultStorageError,
+  TextStreamCapture,
 } from "@/service/toolResult/ToolResultStorageService";
+import type { StoredArtifact, TextStreamOutcome } from "@/service/toolResult/ToolResultStorageService";
 import { artifactDirectory } from "@/service/toolResult/ToolResultPaths";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
 
@@ -247,5 +249,123 @@ describe("captureTextStream — serialization invariants", () => {
     capture.appendChunk(Buffer.from("first", "utf8"));
     await capture.finalize();
     expect(capture.appendChunk(Buffer.from("late", "utf8"))).toBe(false);
+  });
+});
+
+describe("captureTextStream — write-rejection corruption (C2)", () => {
+  /**
+   * C2 regression: if a serialized `handle.write` rejects (ENOSPC, EIO, quota),
+   * the capture must NOT promote the staging file. The incremental hash already
+   * counted the failed chunk's bytes, so the digest would not match the on-disk
+   * content (hole at the failed offset). Before the fix, `appendChunk` did
+   * `.catch(() => undefined)` on the write chain, so `finalize`'s
+   * `await this.pending` resolved to undefined and the artifact was committed
+   * with a wrong sha256. Now a write failure sets `writeFailed`, refuses
+   * further appends, and makes `finalize` throw `OUTPUT_WRITE_FAILED` after
+   * discarding the staging file.
+   *
+   * We construct `TextStreamCapture` directly with a stub handle whose `write`
+   * rejects on the 3rd chunk, a real temp file (so finalize's cleanup hits a
+   * real path), and a `commit` sentinel that must never be invoked.
+   */
+  it("finalize throws OUTPUT_WRITE_FAILED and does not promote when a write rejects mid-stream", async () => {
+    const dir = path.join(root, "c2-write-fail");
+    fs.mkdirSync(dir, { recursive: true });
+    const tempPath = path.join(dir, "payload.staging");
+    const finalPath = path.join(dir, "payload.text");
+    // Open a real temp file so the capture's write calls land somewhere; the
+    // stub handle forwards to the real fd but rejects on the 3rd write.
+    const realHandle = await fs.promises.open(tempPath, "w");
+    let writeCalls = 0;
+    const stubHandle = {
+      write: vi.fn(
+        async (
+          buffer: Buffer,
+          offset: number | null,
+          length: number | null,
+          position: number | null
+        ): Promise<{ bytesWritten: number }> => {
+          writeCalls += 1;
+          if (writeCalls === 3) {
+            const err: NodeJS.ErrnoException = new Error("ENOSPC: no space");
+            err.code = "ENOSPC";
+            throw err;
+          }
+          // Forward to the real handle so the file grows for chunks 1 and 2.
+          const written = await realHandle.write(
+            buffer,
+            offset ?? 0,
+            length ?? buffer.byteLength,
+            position
+          );
+          return { bytesWritten: written.bytesWritten };
+        }
+      ),
+      sync: vi.fn(async () => {
+        await realHandle.sync().catch(() => undefined);
+      }),
+      close: vi.fn(async () => {
+        await realHandle.close().catch(() => undefined);
+      }),
+    } as unknown as fs.promises.FileHandle;
+
+    const commit = vi.fn(
+      async (_outcome: TextStreamOutcome): Promise<StoredArtifact> => {
+        throw new Error("commit must not be called when a write failed");
+      }
+    );
+
+    const capture = new TextStreamCapture(
+      stubHandle,
+      tempPath,
+      finalPath,
+      dir,
+      crypto.createHash("sha256"),
+      CAP,
+      commit
+    );
+
+    // Two good chunks, then a third that rejects mid-stream.
+    expect(capture.appendChunk(Buffer.from("chunk-one-", "utf8"))).toBe(true);
+    expect(capture.appendChunk(Buffer.from("chunk-two-", "utf8"))).toBe(true);
+    expect(capture.appendChunk(Buffer.from("chunk-three", "utf8"))).toBe(true);
+
+    // `appendChunk` swallows the write rejection into `writeFailed` and
+    // resolves the chain, so await the chain (a microtask cycle) for the
+    // flag to propagate before asserting the post-failure append refusal.
+    await capture.flush();
+
+    // After a write failure, further appends are refused.
+    expect(capture.appendChunk(Buffer.from("after-fail", "utf8"))).toBe(false);
+
+    // finalize must throw OUTPUT_WRITE_FAILED, not call commit, and not promote.
+    await expect(capture.finalize()).rejects.toMatchObject({
+      name: "ToolResultStorageError",
+      code: "OUTPUT_WRITE_FAILED",
+    });
+    expect(commit).not.toHaveBeenCalled();
+
+    // The staging file is discarded and the artifact is never promoted.
+    await expect(fs.promises.access(tempPath)).rejects.toThrow();
+    await expect(fs.promises.access(finalPath)).rejects.toThrow();
+  });
+
+  it("a write failure after the cap is reached does not corrupt an already-complete capture", async () => {
+    // Fill to the cap (no write failure), then append a surplus chunk. The
+    // surplus is dropped before any write, so no write rejection occurs and
+    // finalize succeeds normally. Guards against the fix over-rejecting.
+    const { outputId, capture } = await openCapture();
+    const exact = Buffer.alloc(CAP, 0x61);
+    expect(capture.appendChunk(exact)).toBe(true);
+    expect(capture.appendChunk(Buffer.from("surplus", "utf8"))).toBe(false);
+
+    const stored = await capture.finalize(CAP + 7);
+    expect(stored.capturedBytes).toBe(CAP);
+    expect(stored.preservation).toBe("partial");
+    expect(stored.failureCode).toBe("ARTIFACT_LIMIT_REACHED");
+
+    // Ensure the staging file is gone and the artifact is promoted.
+    const dirEntries = await fs.promises.readdir(artifactDir(outputId));
+    expect(dirEntries.some((name) => name.endsWith(".staging"))).toBe(false);
   });
 });

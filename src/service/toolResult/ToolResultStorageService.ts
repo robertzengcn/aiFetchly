@@ -619,6 +619,15 @@ export class TextStreamCapture {
   private pending: Promise<void> = Promise.resolve();
   private finalized = false;
   private aborted = false;
+  /**
+   * Set when a serialized `handle.write` rejected. Once set, no further chunks
+   * are accepted and `finalize` must fail without promoting: the on-disk file
+   * has a hole at the failed offset, but `bytesWritten` and the incremental
+   * hash already counted the failed chunk's bytes, so the digest would not
+   * match the file content. Promoting would commit a wrong sha256 to the
+   * registry and silently corrupt the artifact.
+   */
+  private writeFailed = false;
 
   constructor(
     private readonly handle: fs.promises.FileHandle,
@@ -644,12 +653,15 @@ export class TextStreamCapture {
 
   /**
    * Append a chunk. Returns false once the cap is reached (subsequent chunks
-   * are dropped). Writes are serialized; a rejection is surfaced by the next
-   * `finalize`/`appendChunk` via the awaited chain rather than becoming an
-   * unhandled rejection.
+   * are dropped). Writes are serialized through `this.pending`; a write
+   * rejection is captured into `writeFailed` (not swallowed) so that the next
+   * `appendChunk` returns false and `finalize` throws — the artifact is never
+   * promoted with a sha256 that does not match the on-disk bytes.
    */
   appendChunk(chunk: Buffer): boolean {
-    if (this.full || this.aborted || this.finalized) return false;
+    if (this.full || this.aborted || this.finalized || this.writeFailed) {
+      return false;
+    }
     let toWrite = chunk;
     if (this.bytesWritten + chunk.byteLength > this.maxBytes) {
       toWrite = chunk.subarray(0, this.maxBytes - this.bytesWritten);
@@ -661,15 +673,27 @@ export class TextStreamCapture {
     this.bytesWritten += toWrite.byteLength;
     this.hash.update(toWrite);
     this.pending = this.pending.then(async () => {
+      // Skip the write if an earlier write in the chain already failed: the
+      // capture will be discarded at finalize and must not append to a
+      // corrupt file out of order.
+      if (this.writeFailed) return;
       await this.handle.write(toWrite, 0, toWrite.byteLength, null);
     });
-    this.pending.catch(() => undefined);
+    // Record a write failure into `writeFailed` and swallow the rejection.
+    // `finalize` checks `writeFailed` (set here) and refuses to promote —
+    // never committing a sha256 that does not match the on-disk bytes.
+    // Swallowing rather than rethrowing avoids an unhandled rejection in the
+    // window between the last append and the finalize await; the flag is the
+    // source of truth, not the promise's rejection state.
+    this.pending = this.pending.catch(() => {
+      this.writeFailed = true;
+    });
     return true;
   }
 
   /** Await any in-flight writes so the staging file is flushed to disk. */
   async flush(): Promise<void> {
-    await this.pending;
+    await this.pending.catch(() => undefined);
     await this.handle.sync().catch(() => undefined);
   }
 
@@ -705,7 +729,23 @@ export class TextStreamCapture {
       );
     }
     this.finalized = true;
+    // Await the write chain. `appendChunk` swallows write rejections into
+    // `writeFailed` (rather than rethrowing) so this await resolves cleanly
+    // even when a write failed — no unhandled rejection can escape between
+    // the last append and this finalize. The `writeFailed` flag is then the
+    // single source of truth for whether the on-disk file is trustworthy.
     await this.pending;
+    if (this.writeFailed) {
+      // The on-disk file has a hole at the failed offset but the incremental
+      // hash counted the failed chunk, so the digest would not match. Discard
+      // the staging file and fail the capture — never commit a wrong sha256.
+      await this.handle.close().catch(() => undefined);
+      await fs.promises.rm(this.tempPath, { force: true }).catch(() => undefined);
+      throw new ToolResultStorageError(
+        "OUTPUT_WRITE_FAILED",
+        "stream capture write failed; artifact not promoted"
+      );
+    }
     await this.handle.sync().catch(() => undefined);
     await this.handle.close().catch(() => undefined);
     const truncated = this.full;
