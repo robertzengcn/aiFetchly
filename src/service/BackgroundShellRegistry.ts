@@ -132,11 +132,15 @@ export class BackgroundShellRegistry {
         // Spool to the SAME artifact sink the foreground path opened, so the
         // full backgrounded stream still reaches the bounded artifact store.
         capture.appendStdout(b);
+        // Bound the inline preview per chunk (O(1) per chunk) rather than
+        // re-reading the full inline buffer on every chunk (O(n²) over the
+        // output size — a chatty backgrounded shell could freeze the main
+        // process). The authoritative final snapshot is synced from the
+        // capture on close below.
         if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
-          state.stdout = capture.getInlineStdout().slice(
-            0,
-            MAX_BACKGROUND_SHELL_OUTPUT_CHARS
-          );
+          state.stdout += b
+            .toString("utf-8")
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stdout.length);
         }
       } else if (state.stdout.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
         state.stdout += b
@@ -147,11 +151,12 @@ export class BackgroundShellRegistry {
     child.stderr?.on("data", (b: Buffer) => {
       if (capture) {
         capture.appendStderr(b);
+        // Per-chunk bounded append (see stdout comment): never re-read the
+        // full inline buffer per chunk.
         if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
-          state.stderr = capture.getInlineStderr().slice(
-            0,
-            MAX_BACKGROUND_SHELL_OUTPUT_CHARS
-          );
+          state.stderr += b
+            .toString("utf-8")
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS - state.stderr.length);
         }
       } else if (state.stderr.length < MAX_BACKGROUND_SHELL_OUTPUT_CHARS) {
         state.stderr += b
@@ -173,6 +178,20 @@ export class BackgroundShellRegistry {
       // leaves the terminal status above intact.
       const activeCapture = this.captures.get(shellId);
       if (activeCapture) {
+        // Sync the inline preview ONCE on close from the authoritative capture
+        // buffer, so poll() reflects the capture's final state rather than the
+        // per-chunk appends (which cap early and never re-read). This replaces
+        // the O(n²) per-chunk re-read the capture branch used to do.
+        try {
+          state.stdout = activeCapture
+            .getInlineStdout()
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS);
+          state.stderr = activeCapture
+            .getInlineStderr()
+            .slice(0, MAX_BACKGROUND_SHELL_OUTPUT_CHARS);
+        } catch {
+          // Best-effort: the per-chunk preview remains if the sync throws.
+        }
         activeCapture
           .finalize()
           .then((ref) => {
