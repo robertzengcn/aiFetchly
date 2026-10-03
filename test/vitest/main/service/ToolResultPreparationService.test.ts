@@ -1052,4 +1052,74 @@ describe("ToolResultRecoveryService — orphan sweep", () => {
     );
     expect(registered).toBe(false);
   });
+
+  it("NEVER deletes a registered artifact when the registration lookup throws (C3 transient-DB-error regression)", async () => {
+    // Commit a real artifact so it has a registered row and a backdated dir,
+    // then run a recovery whose module's `findRegisteredOutputDir` rejects
+    // (SQLITE_BUSY / connection rebound / locked WAL checkpoint). Before the
+    // fix, `.catch(() => null)` collapsed that into "not registered" and the
+    // sweep deleted the committed artifact on a transient DB error.
+    const scope = await toolModule.ensureScope("prof-1", `rec-${++recConv}`);
+    const claim = await toolModule.claimOutput({
+      profileId: "prof-1",
+      conversationId: `rec-${recConv}`,
+      outputEpoch: scope.outputEpoch,
+      executionId: "exec-c3",
+      toolCallId: "call-c3",
+      toolName: "scrape_businesses",
+      streamKey: "main",
+      format: "json",
+      mediaType: "application/json",
+      sourceCompleteness: "complete",
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") return;
+
+    const stored = await storage.captureJson({
+      outputId: claim.outputId,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      value: { rows: [{ i: 1 }, { i: 2 }] },
+      sourceCompleteness: "complete",
+    });
+    await toolModule.commitOutput({
+      outputId: claim.outputId,
+      leaseFence: claim.leaseFence,
+      storageKey: stored.storageKey,
+      capturedBytes: stored.capturedBytes,
+      sha256: stored.sha256,
+      preservation: "complete",
+      sourceCompleteness: "complete",
+      receiptJson: "{}",
+    });
+
+    const dir = artifactDirectory({
+      root,
+      profileId: "prof-1",
+      outputEpoch: scope.outputEpoch,
+      outputId: claim.outputId,
+    });
+    backdate(dir);
+
+    // Stub module: every method delegates to the real module EXCEPT
+    // `findRegisteredOutputDir`, which rejects to simulate a transient DB
+    // error during the sweep. The sweep must skip the directory, not delete.
+    const failingModule = {
+      ...toolModule,
+      findRegisteredOutputDir: vi
+        .fn()
+        .mockRejectedValue(new Error("SQLITE_BUSY: database is locked")),
+    } as unknown as ToolResultModule;
+    const failingRecovery = new ToolResultRecoveryService(
+      failingModule,
+      storage
+    );
+
+    const report = await failingRecovery.run();
+    // The committed artifact must survive the transient DB error.
+    expect(report.orphansRemoved).toBe(0);
+    expect(fs.existsSync(stored.absolutePath)).toBe(true);
+    // The lookup error is surfaced, not silently swallowed into a deletion.
+    expect(report.errors).toBeGreaterThanOrEqual(1);
+  });
 });

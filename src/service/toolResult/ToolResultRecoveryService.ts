@@ -123,6 +123,7 @@ export class ToolResultRecoveryService {
       const result = await this.sweepOrphans(cutoff, maxOrphanRemovals);
       orphansRemoved += result.removed;
       filesSkippedTooRecent += result.skipped;
+      errors += result.errors;
     } catch {
       errors += 1;
     }
@@ -141,29 +142,47 @@ export class ToolResultRecoveryService {
    *
    * The grace period is what makes this safe: a directory younger than the
    * grace window may belong to a capture that is still running.
+   *
+   * A DB lookup failure (SQLITE_BUSY, rebound connection, locked WAL
+   * checkpoint) must NEVER be treated as "not registered" — that would delete a
+   * committed artifact on a transient error. `findRegisteredOutputDir`
+   * resolves `false` for not-found and rejects only on a real DB error, so a
+   * rejection is surfaced as a per-directory error and that directory is
+   * skipped this pass (retry next cycle), not deleted.
    */
   private async sweepOrphans(
     cutoff: number,
     maxRemovals: number
-  ): Promise<{ removed: number; skipped: number }> {
+  ): Promise<{ removed: number; skipped: number; errors: number }> {
     const toolResultsRoot = path.join(this.root, "tool-results");
-    if (!fs.existsSync(toolResultsRoot)) return { removed: 0, skipped: 0 };
+    if (!fs.existsSync(toolResultsRoot))
+      return { removed: 0, skipped: 0, errors: 0 };
 
     let removed = 0;
     let skipped = 0;
+    let errors = 0;
     // Walk profile -> epoch -> output-id. One level at a time keeps memory
     // bounded regardless of how many artifacts exist.
     for (const profileDir of safeReadDir(toolResultsRoot)) {
       for (const epochDir of safeReadDir(profileDir)) {
         for (const outputDir of safeReadDir(epochDir)) {
-          if (removed >= maxRemovals) return { removed, skipped };
+          if (removed >= maxRemovals)
+            return { removed, skipped, errors };
           // The directory is named `sha256(outputId)`, NOT the output id.
           // Looking the name up as an output id matches nothing, which would
           // make every COMMITTED artifact look like an orphan and delete it.
           const dirName = path.basename(outputDir);
-          const registered = await this.module
-            .findRegisteredOutputDir(dirName)
-            .catch(() => null);
+          let registered: boolean;
+          try {
+            registered = await this.module.findRegisteredOutputDir(dirName);
+          } catch {
+            // DB error (not "not found"): cannot safely decide this directory
+            // is an orphan. Skip it this pass and count the error; the next
+            // sweep retries once the DB is healthy. Deleting here would
+            // destroy a committed artifact on a transient failure.
+            errors += 1;
+            continue;
+          }
           if (registered) continue;
           let mtimeMs: number;
           try {
@@ -183,7 +202,7 @@ export class ToolResultRecoveryService {
         }
       }
     }
-    return { removed, skipped };
+    return { removed, skipped, errors };
   }
 }
 
