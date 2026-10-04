@@ -1,6 +1,6 @@
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { AiChatApi } from "@/api/aiChatApi";
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type { OpenAIChatMessage, OpenAIUsage } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -37,6 +37,7 @@ import {
   parseStrictGeneratedReply,
   buildCorrectionPrompt,
   type GeneratedEmailReply,
+  type StrictParseResult,
 } from "@/service/emailReply/EmailReplyGenerationSchema";
 import {
   classifyMessage,
@@ -59,6 +60,46 @@ export type CreateDraftOutcome =
   | { success: false; error: string };
 
 /**
+ * Typed raw LLM call result (FR-027). Carries completion metadata so the
+ * validation loop can distinguish a clean `stop` from a truncated `length`
+ * completion, a content-filter refusal, or an unexpected tool-call. A missing
+ * `finishReason` is recorded as metadata only — it does not by itself fail
+ * validation (some providers omit it); the strict local parse remains
+ * authoritative. `usage`/`returnedModel` are captured for audit metrics.
+ */
+export interface LlmRawResult {
+  readonly content: string;
+  readonly finishReason: string | null;
+  readonly returnedModel: string | null;
+  readonly usage: OpenAIUsage | null;
+}
+
+/**
+ * Transport-level failure (network/timeout/HTTP/unsupported-parameter),
+ * distinct from a VALIDATION failure. Transport failures are NOT counted as
+ * one of the two validation strikes — the bounded regeneration budget exists
+ * to correct malformed model output, not to retry provider outages. A
+ * transport failure surfaces as a provider error with no draft persisted.
+ */
+export class LlmTransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LlmTransportError";
+  }
+}
+
+/**
+ * Factory for the OpenAI-compatible chat client. Default constructs a real
+ * {@link AiChatApi}; tests inject a stub that returns canned responses so the
+ * validation loop can be exercised without network access. Mirrors the
+ * `senderFactory`/`serviceLoader` seam pattern in {@link EmailReplyDeliveryService}.
+ */
+export type AiChatApiFactory = () => Pick<
+  AiChatApi,
+  "openAIChatCompletion"
+>;
+
+/**
  * Knowledge-grounded, owner-voice reply draft generation.
  *
  * Pipeline: AI-enable gate -> load message + identity profile -> retrieve
@@ -73,6 +114,11 @@ export class EmailReplyDraftGenerationService {
   private profileModule = new EmailReplyIdentityProfileModule();
   private replyAuditModule = new EmailReplyAuditLogModule();
   private autoAuditModule = new EmailAutoReplyAuditLogModule();
+  private readonly apiFactory: AiChatApiFactory;
+
+  constructor(options?: { readonly apiFactory?: AiChatApiFactory }) {
+    this.apiFactory = options?.apiFactory ?? (() => new AiChatApi());
+  }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
     // 1. AI-enable gate (CLAUDE.md mandate). Lazy-reconcile once when the
@@ -242,26 +288,29 @@ export class EmailReplyDraftGenerationService {
       conversationSection,
     });
 
-    // 6. Call the LLM and STRICTLY validate (FR-011): at most one bounded
-    //    regeneration carrying only validation codes; a second failure routes
-    //    to needs_human_review and persists NO sendable prose.
+    // 6. Call the LLM and STRICTLY validate (FR-011/FR-027): at most one
+    //    bounded regeneration carrying only validation codes; a second failure
+    //    routes to needs_human_review and persists NO sendable prose.
+    //
+    //    A transport failure (network/timeout/HTTP/unsupported-parameter) is
+    //    NOT counted as a validation strike — the regeneration budget corrects
+    //    malformed model output, not provider outages. Transport errors surface
+    //    as a provider error with no draft persisted and no strike consumed.
     let generated: GeneratedEmailReply;
     try {
-      const first = parseStrictGeneratedReply(
-        await this.callLlmRaw(systemMsg, userMsg)
-      );
+      const firstRaw = await this.callLlmRaw(systemMsg, userMsg);
+      const first = this.validateLlmResult(firstRaw);
       if (first.ok) {
         generated = first.value;
       } else {
-        const second = parseStrictGeneratedReply(
-          await this.callLlmRaw(systemMsg, {
-            role: "user",
-            content: buildCorrectionPrompt({
-              originalUserContent: openAIContentToString(userMsg.content),
-              codes: first.codes,
-            }),
-          })
-        );
+        const secondRaw = await this.callLlmRaw(systemMsg, {
+          role: "user",
+          content: buildCorrectionPrompt({
+            originalUserContent: openAIContentToString(userMsg.content),
+            codes: first.codes,
+          }),
+        });
+        const second = this.validateLlmResult(secondRaw);
         if (!second.ok) {
           const allCodes = [...first.codes, ...second.codes];
           await this.recordFailure(
@@ -279,6 +328,17 @@ export class EmailReplyDraftGenerationService {
         generated = second.value;
       }
     } catch (error) {
+      // Transport failure: not a validation strike. Persist a provider-error
+      // audit row (semantically reply_skipped, NOT send_failed — no send was
+      // attempted) and surface the provider error to the caller.
+      if (error instanceof LlmTransportError) {
+        await this.recordFailure(
+          message.emailServiceId,
+          message.id,
+          `[provider_error] ${error.message}`
+        );
+        return { success: false, error: `[provider_error] ${error.message}` };
+      }
       const errMsg = error instanceof Error ? error.message : String(error);
       await this.recordFailure(
         message.emailServiceId,
@@ -430,18 +490,56 @@ export class EmailReplyDraftGenerationService {
     };
   }
 
-  /** Call the LLM and parse the JSON reply. Overrideable shape for tests. */
+  /**
+   * Call the LLM and return the typed raw result (FR-027). Captures
+   * `finish_reason`, `model`, and `usage` so the validation loop can treat a
+   * truncated `length` completion, a `content_filter` refusal, or an
+   * unexpected tool-call as a validation failure even if the JSON happens to
+   * parse. Raises `max_tokens` to 1500 (a 400-word reply can approach ~700
+   * tokens with JSON framing and the model needs headroom) and passes
+   * `response_format: json_object` (FR-026) so providers that honor the hint
+   * emit valid JSON only.
+   *
+   * Provider/transport failures throw {@link LlmTransportError} so the caller
+   * can distinguish them from validation strikes.
+   */
   private async callLlmRaw(
     systemMsg: OpenAIChatMessage,
     userMsg: OpenAIChatMessage
-  ): Promise<string> {
-    const api = new AiChatApi();
-    const resp = await api.openAIChatCompletion({
-      messages: [systemMsg, userMsg],
-      temperature: 0.4,
-      max_tokens: 700,
-    });
-    return openAIContentToString(resp.choices?.[0]?.message?.content);
+  ): Promise<LlmRawResult> {
+    const api = this.apiFactory();
+    let resp;
+    try {
+      resp = await api.openAIChatCompletion({
+        messages: [systemMsg, userMsg],
+        temperature: 0.4,
+        max_tokens: 1500,
+        response_format: { type: "json_object" },
+      });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      throw new LlmTransportError(errMsg);
+    }
+    const choice = resp.choices?.[0];
+    return {
+      content: openAIContentToString(choice?.message?.content),
+      finishReason: choice?.finish_reason ?? null,
+      returnedModel: resp.model ?? null,
+      usage: resp.usage ?? null,
+    };
+  }
+
+  /**
+   * Validate a typed LLM result against the strict schema AND the completion
+   * metadata (FR-027). A `length` finish_reason means the output was truncated
+   * mid-JSON — even if it parses, the content is incomplete and must be treated
+   * as a validation failure. `content_filter` and tool-call completions are
+   * likewise failures. A missing `finishReason` proceeds through the local
+   * parse only (some providers omit the field). Never silently repairs or
+   * persists a truncated answer.
+   */
+  private validateLlmResult(raw: LlmRawResult): StrictParseResult {
+    return validateLlmRawResult(raw);
   }
 
   private async writeReplyAudit(
@@ -509,6 +607,12 @@ export class EmailReplyDraftGenerationService {
     }
   }
 
+  /**
+   * Record a generation-path refusal (FR-027/FR-034). A generation failure is
+   * NOT a send failure — no SMTP submission was attempted — so the audit action
+   * is `reply_skipped`, not `send_failed`. The `send_failed` action is reserved
+   * for the delivery service path where an actual SMTP submission failed.
+   */
   private async recordFailure(
     emailServiceId: number,
     messageId: number,
@@ -518,7 +622,7 @@ export class EmailReplyDraftGenerationService {
       const log = new EmailReplyAuditLogEntity();
       log.emailServiceId = emailServiceId;
       log.messageId = messageId;
-      log.action = "send_failed";
+      log.action = "reply_skipped";
       log.actor = "ai";
       log.reason = reason;
       await this.replyAuditModule.create(log);
@@ -526,6 +630,37 @@ export class EmailReplyDraftGenerationService {
       console.error("Failed to write failure audit:", e);
     }
   }
+}
+
+/**
+ * Validate a typed LLM result against the strict schema AND the completion
+ * metadata (FR-027). Exported (pure) so the validation contract is testable
+ * without constructing the full service + DB stack. See
+ * {@link EmailReplyDraftGenerationService.validateLlmResult} for the instance
+ * wrapper.
+ *
+ * Precedence:
+ *  1. `length` finish_reason → `truncated_output` (truncated mid-JSON; never
+ *     persist even if it parses).
+ *  2. `content_filter` → `content_filtered` (provider refused on policy).
+ *  3. `tool_calls`/`function_call` → `unexpected_tool_call` (model emitted a
+ *     tool invocation instead of a JSON reply).
+ *  4. Otherwise → strict local parse of the content. A missing `finishReason`
+ *     reaches the parse (some providers omit the field); the strict schema is
+ *     authoritative either way.
+ */
+export function validateLlmRawResult(raw: LlmRawResult): StrictParseResult {
+  const finish = raw.finishReason;
+  if (finish === "length") {
+    return { ok: false, codes: ["truncated_output"] };
+  }
+  if (finish === "content_filter") {
+    return { ok: false, codes: ["content_filtered"] };
+  }
+  if (finish === "tool_calls" || finish === "function_call") {
+    return { ok: false, codes: ["unexpected_tool_call"] };
+  }
+  return parseStrictGeneratedReply(raw.content);
 }
 
 /** Parse the LLM JSON reply, tolerating stray text / code fences. */
