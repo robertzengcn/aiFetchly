@@ -256,7 +256,10 @@ export class EmailReplyDraftGenerationService {
         const second = parseStrictGeneratedReply(
           await this.callLlmRaw(systemMsg, {
             role: "user",
-            content: buildCorrectionPrompt(first.codes),
+            content: buildCorrectionPrompt({
+              originalUserContent: openAIContentToString(userMsg.content),
+              codes: first.codes,
+            }),
           })
         );
         if (!second.ok) {

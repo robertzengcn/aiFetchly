@@ -88,11 +88,50 @@ export function parseStrictGeneratedReply(raw: string): StrictParseResult {
   return { ok: true, value: parsed.data };
 }
 
-/** Short correction prompt carrying ONLY validation codes (§12.3). */
-export function buildCorrectionPrompt(codes: readonly string[]): string {
-  return [
-    "Your previous reply failed validation.",
-    "Fix exactly these issues and return ONLY a corrected JSON object with the same shape:",
+/**
+ * Bounded regeneration prompt (FR-025, §12.3).
+ *
+ * Carries the validation CODES plus the ORIGINAL inbound-email context so the
+ * model can regenerate a fresh reply from scratch. It does NOT echo the
+ * invalid raw model output (that would leak malformed content back into the
+ * prompt). It names the correct field `intentSuggestion` explicitly, because
+ * the v1 prompt asked for `classification` and every well-formed reply failed
+ * the strict schema on the field-name mismatch alone. When a length/truncation
+ * code is present, a bounded shortening instruction is appended so the model
+ * produces a shorter reply instead of hitting the same token cap.
+ */
+export interface CorrectionPromptInput {
+  /** Original user-message content (inbound email + knowledge + instructions). */
+  readonly originalUserContent: string;
+  /** Validation codes from the first failed {@link parseStrictGeneratedReply}. */
+  readonly codes: readonly string[];
+}
+
+/** True when a code indicates the prior output was too long / truncated. */
+function isLengthCode(code: string): boolean {
+  return /truncat|too_long|length/i.test(code);
+}
+
+export function buildCorrectionPrompt(input: CorrectionPromptInput): string {
+  const { originalUserContent, codes } = input;
+  const needsShortening = codes.some(isLengthCode);
+  const lines: string[] = [
+    "Your previous reply failed strict validation. Do NOT repeat the invalid reply.",
+    "Regenerate a FRESH reply as valid JSON only, with this exact shape:",
+    '{"subject": string, "bodyText": string, "intentSuggestion": string, "confidence": number}.',
+    "The classification field is named intentSuggestion (NOT classification).",
+    "intentSuggestion must be one of: interested, not_interested, unsubscribe, bounce, auto_reply, support_request, needs_human_review, unknown.",
+    "Fix these validation issues:",
     ...codes.map((c) => `- ${c}`),
-  ].join("\n");
+  ];
+  if (needsShortening) {
+    lines.push(
+      "Your previous output was too long and was truncated. Produce a SHORTER reply this time: bodyText under 300 words, start with the reply directly, no preamble, no markdown fences."
+    );
+  }
+  lines.push(
+    "Original inbound email and instructions follow. Regenerate the reply from this context, not from your failed output:",
+    originalUserContent
+  );
+  return lines.join("\n");
 }

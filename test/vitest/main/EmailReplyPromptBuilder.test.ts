@@ -73,9 +73,13 @@ describe("buildReplySystemMessage", () => {
     expect(sys.content).toContain("discount");
   });
 
-  it("requests valid JSON with the classification enum", () => {
+  it("requests valid JSON with the intentSuggestion enum (FR-025)", () => {
     const sys = buildReplySystemMessage(fakeProfile());
-    expect(sys.content).toContain("classification");
+    // The JSON field name must match the strict Zod schema (intentSuggestion),
+    // NOT the legacy `classification` name that caused every well-formed reply
+    // to fail validation on the field-name mismatch.
+    expect(sys.content).toContain("intentSuggestion");
+    expect(sys.content).not.toContain('"classification"');
     expect(sys.content).toContain("interested");
     expect(sys.content).toContain("needs_human_review");
   });
