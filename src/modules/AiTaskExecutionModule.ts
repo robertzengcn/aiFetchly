@@ -5,6 +5,7 @@ import type {
   FinalizeInput,
   FinalizeResult,
 } from "@/model/AiTaskExecution.model";
+import type { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 
 /**
  * Business logic for task executions (technical-design §6.3, FR-24).
@@ -32,7 +33,9 @@ export class AiTaskExecutionModule extends BaseModule {
     return this.model.createExecution(input);
   }
 
-  async getExecution(executionId: string) {
+  async getExecution(
+    executionId: string
+  ): Promise<AiTaskExecutionEntity | null> {
     await this.ensureConnection();
     return this.model.getById(executionId);
   }
@@ -42,7 +45,7 @@ export class AiTaskExecutionModule extends BaseModule {
     return this.model.finalizeExecution(input);
   }
 
-  async getUnfinalizedExecutions() {
+  async getUnfinalizedExecutions(): Promise<AiTaskExecutionEntity[]> {
     await this.ensureConnection();
     return this.model.getUnfinalized();
   }
