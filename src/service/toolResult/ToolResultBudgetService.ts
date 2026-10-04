@@ -151,7 +151,7 @@ export class ToolResultBudgetService {
     readonly externalize: (body: ResultBody) => ResultBody;
   }): ReductionResult {
     const before = input.bodies.reduce((sum, b) => sum + this.countTokens(b), 0);
-    let working = input.bodies.map((b) => ({ ...b }));
+    const working = input.bodies.map((b) => ({ ...b }));
     let total = working.reduce((sum, b) => sum + this.countTokens(b), 0);
     let reducedAny = false;
 
@@ -188,6 +188,15 @@ export class ToolResultBudgetService {
     }
 
     // Step 2: externalize the largest inline bodies first.
+    //
+    // Progress guard: if a pass externalizes a body but `total` does not
+    // decrease (e.g. the caller's `externalize` callback is a no-op because
+    // preparation already ran this turn and there is nothing further to move
+    // out-of-line), the next pass would pick the same body again and the loop
+    // would never terminate. Detect a no-progress pass and break so the
+    // post-loop check surfaces the truthful CONTEXT_REQUIRED_CONTENT_TOO_LARGE
+    // error instead of spinning forever.
+    let previousTotal = total;
     while (total > input.allocation.resultsBudget) {
       let targetIndex = -1;
       let targetTokens = 0;
@@ -206,11 +215,15 @@ export class ToolResultBudgetService {
       total -= targetTokens - this.countTokens(receipt);
       working[targetIndex] = receipt;
       reducedAny = true;
+      if (total >= previousTotal) break;
+      previousTotal = total;
     }
 
     if (total > input.allocation.resultsBudget) {
-      // Every body is already a receipt and they still do not fit. Say so
-      // truthfully instead of removing a result or altering a call id.
+      // The bodies still do not fit after every available reduction. Say so
+      // truthfully instead of removing a result or altering a call id: this
+      // covers both "every body is already a receipt" and "the externalize
+      // callback could not shrink any body further".
       return {
         bodies: working,
         reducedAny,
