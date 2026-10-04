@@ -8,8 +8,8 @@
 - **Owner**: AiFetchly Desktop Engineering
 - **Related documents**:
   - [AI Chat V2 Scheduled Loop Technical Design](./ai-chat-scheduled-loop-technical-design.md)
-  - [Scheduled AI Task Completion and Premature-Stop Recovery PRD](./scheduled-loop-premature-stop-recovery-advice.md)
-  - [Scheduled Task Completion Technical Design](./scheduled-loop-premature-stop-recovery-technical-design.md)
+  - [Shared AI Task Completion and Premature-Stop Recovery PRD](./scheduled-loop-premature-stop-recovery-advice.md)
+  - [Shared Task Completion Technical Design](./scheduled-loop-premature-stop-recovery-technical-design.md)
   - [AI Chat V2 Goal and Loop Commands PRD](./ai-chat-goal-loop-prd.md)
   - [AI Chat V2 Goal and Loop Technical Design](./ai-chat-goal-loop-technical-design.md)
   - `docs/skills/ai-message-task-prd/README.md`
@@ -22,7 +22,7 @@
 
 ## 1. Executive Summary
 
-Completion-policy addendum (2026-10-04): the linked task-completion PRD defines proposed evidence-based completion and bounded premature-stop recovery for enrolled occurrences. For those runs, a model response or normal chat-turn ending is not sufficient to record schedule success. This does not add schedule-wide natural-language stop conditions or change recurrence semantics.
+Completion-policy addendum (2026-10-04): the linked task-completion PRD defines proposed shared evidence-based completion and bounded premature-stop recovery for manually started Chat V2 tasks and enrolled scheduled occurrences. Scheduling supplies the trigger/accounting, not the completion controller. For those runs, a model response or normal chat-turn ending is not sufficient to record schedule success. This does not add schedule-wide natural-language stop conditions or change recurrence semantics.
 
 AiFetchly should extend AI Chat V2 `/loop` with a persistent, interval-based
 scheduled-message mode:

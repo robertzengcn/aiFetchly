@@ -2,6 +2,8 @@
 
 ## 1. Overview
 
+Completion-policy addendum (2026-10-04): the [shared task-completion PRD](./scheduled-loop-premature-stop-recovery-advice.md) and [technical design](./scheduled-loop-premature-stop-recovery-technical-design.md) extend the engine with automatic completion checks and bounded premature-stop recovery for manually started Chat V2 tasks as well as scheduled executions. No schedule, `/goal`, or task-mode toggle is required. Ordinary answers end naturally; task success requires evidence, and transport completion is separate from task outcome.
+
 AiFetchly should add a lightweight AI chat query engine to improve the reliability, maintainability, and extensibility of the current AI chat v2 flow.
 
 This query engine is not a new search database and not a replacement for the existing knowledge-library RAG system. AiFetchly already has a `knowledge_library_search` tool backed by hybrid vector and keyword retrieval, reranking, neighbor expansion, and citation-aware output. The new query engine should instead own the conversation lifecycle: request preparation, transcript assembly, tool loop execution, pause/resume state, plan-mode coordination, persistence, and stream event emission.
