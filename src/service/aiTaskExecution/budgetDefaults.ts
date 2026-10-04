@@ -1,11 +1,17 @@
 /**
- * Budget defaults and hard caps (PRD §8, technical-design §9).
+ * Budget defaults and hard caps (PRD FR-08, technical-design §9).
  *
  * Manual defaults are conservative; trusted settings may tune within the
  * hard caps. Scheduled origin uses min(task config, 3) continuations and
  * min(task.maxRuntimeMs, SCHEDULED_LOOP_RUN_TIMEOUT_MS) active runtime.
+ *
+ * SCHEDULED_LOOP_RUN_TIMEOUT_MS is re-exported from aiChatScheduledLoopConfig
+ * (the existing 10-minute scheduled-loop cap, PRD FR-08) rather than redefined
+ * here so the scheduled loop and the budget policy cannot drift apart.
  */
-export const SCHEDULED_LOOP_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+import { SCHEDULED_LOOP_RUN_TIMEOUT_MS } from "@/config/aiChatScheduledLoopConfig";
+
+export { SCHEDULED_LOOP_RUN_TIMEOUT_MS };
 
 export interface BudgetLimitsInput {
   readonly maxContinuations: number;
@@ -35,23 +41,40 @@ export const HARD_CAPS = {
 } as const;
 
 /**
+ * Coerce a task-configured limit to a non-negative safe integer per
+ * technical-design §9 ("Validate all configured limits as positive safe
+ * integers and enforce hard caps"). NaN, non-finite, non-integer, and
+ * negative values collapse to 0 (fail-closed: no budget granted for the
+ * invalid field) so a malformed task config can never produce an unbounded
+ * budget. Zero is preserved (a legitimate "no allowance" configuration).
+ */
+function asPositiveSafeInt(value: number): number {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/**
  * Build scheduled-origin limits from task configuration. Continuations are
  * min(task.maxContinueCalls, 3) per §9; tool executions use the task's
  * configured maxToolCalls; active runtime is the minimum of the task's
- * configured runtime and the scheduled-loop run timeout.
+ * configured runtime and the scheduled-loop run timeout. All three
+ * task-configured numbers are validated to non-negative safe integers first;
+ * invalid values fail-closed to 0.
  */
 export function buildScheduledBudgetLimits(input: {
   readonly maxContinueCalls: number;
   readonly maxToolCalls: number;
   readonly maxRuntimeMs: number;
 }): BudgetLimitsInput {
+  const safeContinueCalls = asPositiveSafeInt(input.maxContinueCalls);
+  const safeToolCalls = asPositiveSafeInt(input.maxToolCalls);
+  const safeRuntimeMs = asPositiveSafeInt(input.maxRuntimeMs);
   return {
-    maxContinuations: Math.min(input.maxContinueCalls, 3),
+    maxContinuations: Math.min(safeContinueCalls, 3),
     maxProviderAttempts: 60,
     maxCheckerAttempts: 6,
-    maxToolExecutions: input.maxToolCalls,
+    maxToolExecutions: safeToolCalls,
     maxTokens: 128_000,
-    maxActiveRuntimeMs: Math.min(input.maxRuntimeMs, SCHEDULED_LOOP_RUN_TIMEOUT_MS),
+    maxActiveRuntimeMs: Math.min(safeRuntimeMs, SCHEDULED_LOOP_RUN_TIMEOUT_MS),
     maxWaitMs: 60 * 60 * 1000,
     maxNoProgressStreak: 3,
   };

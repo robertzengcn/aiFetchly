@@ -10,6 +10,12 @@
  * ledger; an explicit new attempt gets a separate ledger. The in-memory
  * object here is a shadow mirror of the authoritative ledger row — it is
  * never itself the source of truth for spent allowance.
+ *
+ * Dedup keyspace: all four `reserve*` methods share a single dedup set
+ * (`reservedRequestIds`), so caller-supplied IDs MUST be unique across
+ * reservation types. Token reconciliation uses a separate
+ * (`tokenReconciledIds`) set so a token reconcile for request "X" never
+ * collides with a provider/continuation/tool/checker reservation of "X".
  */
 export { MANUAL_BUDGET_DEFAULTS, HARD_CAPS, SCHEDULED_LOOP_RUN_TIMEOUT_MS } from "@/service/aiTaskExecution/budgetDefaults";
 
@@ -46,6 +52,7 @@ export interface BudgetLimits {
 export class TaskRunBudget {
   private readonly limits: BudgetLimits;
   private readonly reservedRequestIds: Set<string> = new Set();
+  private readonly tokenReconciledIds: Set<string> = new Set();
   private consumed: BudgetConsumed;
 
   constructor(limits: BudgetLimits) {
@@ -169,13 +176,18 @@ export class TaskRunBudget {
 
   /** Reconcile actual token usage after a dispatch (§9). */
   reconcileTokens(requestId: string, actualTokens: number): void {
-    // Dedup: if this request was already counted for tokens, do not double-count.
-    // We track token-reconciled IDs separately to allow a reservation + later reconcile.
-    const reconcileKey = `tokens:${requestId}`;
-    if (this.reservedRequestIds.has(reconcileKey)) {
+    // Dedup on a SEPARATE set from reservedRequestIds. The four reserve*
+    // methods share `reservedRequestIds`; token reconciliation tracks its
+    // own keyspace so a reservation of "X" and a token reconcile of "X"
+    // (the same logical request) both count independently. Sharing one set
+    // with a `tokens:`-prefixed key caused bidirectional collisions: a
+    // reservation of "tokens:foo" silently dropped a later reconcile of
+    // "foo", and a reconcile of "x" silently absorbed a later reservation
+    // of "tokens:x".
+    if (this.tokenReconciledIds.has(requestId)) {
       return;
     }
-    this.reservedRequestIds.add(reconcileKey);
+    this.tokenReconciledIds.add(requestId);
     this.consumed = {
       ...this.consumed,
       tokens: this.consumed.tokens + Math.max(0, Math.floor(actualTokens)),
