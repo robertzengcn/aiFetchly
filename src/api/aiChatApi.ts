@@ -543,6 +543,14 @@ export interface OpenAIChatCompletionRequest {
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
   user?: string;
+  /**
+   * Optional response-format hint (FR-026). When set to `{ type: "json_object" }`
+   * the provider is asked to emit valid JSON only — used by the strict-reply
+   * generation path so the model is less likely to wrap JSON in prose. Servers
+   * that ignore `response_format` simply disregard it; local strict parsing
+   * remains authoritative regardless of this hint.
+   */
+  response_format?: { readonly type: "json_object" | "text" };
 }
 
 /** OpenAI-compatible model object */
@@ -2170,6 +2178,9 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
+    if (request.response_format !== undefined) {
+      data.response_format = request.response_format;
+    }
     this.copyEnabledReasoningOption(request, data);
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
     try {
@@ -2296,6 +2307,9 @@ export class AiChatApi {
     }
     if (request.user !== undefined) {
       data.user = request.user;
+    }
+    if (request.response_format !== undefined) {
+      data.response_format = request.response_format;
     }
     this.copyEnabledReasoningOption(request, data);
     // Ask the server to include token usage in the final stream chunk so we
