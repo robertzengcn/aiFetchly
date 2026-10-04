@@ -35,6 +35,11 @@ export type EmailReplyPolicyStage = "pre_draft" | "pre_send";
 /**
  * Machine-readable policy reason codes. UI maps each code to a translated
  * string; backend free-form English is never shown as primary copy (FR-023).
+ *
+ * The duplicate/unknown/conflict codes (FR-028/029) are returned by the
+ * message-level guard layer and surfaced through tool/IPC failure envelopes.
+ * They never originate from the legacy evaluator; {@link mapLegacyDecision}
+ * continues to emit the historical `allowed`/`bounce`/etc. codes.
  */
 export type EmailReplyPolicyCode =
   | "allowed"
@@ -53,7 +58,19 @@ export type EmailReplyPolicyCode =
   | "context_ambiguous"
   | "draft_not_approved"
   | "approval_stale"
-  | "draft_terminal";
+  | "draft_terminal"
+  // FR-028/029: message-level duplicate guard codes. Refuse drafting or sending
+  // when the inbound message already has a reply, an in-flight attempt, an
+  // unresolved delivery, or contradictory records. See PRD §5 for precedence.
+  | "already_replied"
+  | "reply_in_progress"
+  | "generation_in_progress"
+  | "reply_state_conflict"
+  | "reply_state_unknown"
+  // FR-027: generation produced invalid content twice; no draft persisted.
+  | "needs_human_review"
+  // FR-036: ambiguous delivery outcome on a prior attempt for this message.
+  | "delivery_unknown";
 
 /** Authoritative decision returned by the policy orchestrator. */
 export interface EmailReplyPolicyDecision {
