@@ -24,7 +24,6 @@ export class EmailServiceModel extends BaseDb {
   async read(id: number): Promise<EmailServiceEntity | undefined> {
     const entity = await this.repository
       .createQueryBuilder("service")
-      .leftJoinAndSelect("service.tag", "tag")
       .where("service.id = :id", { id })
       .getOne();
     return entity ?? undefined;
@@ -80,21 +79,23 @@ export class EmailServiceModel extends BaseDb {
     untagged?: boolean,
     sort?: SortBy
   ): Promise<EmailServiceEntity[]> {
-    let queryBuilder = this.repository
-      .createQueryBuilder("service")
-      .leftJoinAndSelect("service.tag", "tag");
+    let queryBuilder = this.repository.createQueryBuilder("service");
     if (search) {
       queryBuilder = queryBuilder.where("(service.name LIKE :search OR service.from LIKE :search)", {
         search: `%${search}%`,
       });
     }
     if (tagId !== undefined) {
-      queryBuilder = queryBuilder.andWhere("service.tagId = :tagId", {
-        tagId,
-      });
+      // EXISTS subquery avoids row duplication when a service has many tags.
+      queryBuilder = queryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      );
     }
     if (untagged === true) {
-      queryBuilder = queryBuilder.andWhere("service.tagId IS NULL");
+      queryBuilder = queryBuilder.andWhere(
+        `NOT EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id)`
+      );
     }
     if (sort?.key && sort?.order) {
       const lowsersortkey = sort.key.toLowerCase();
@@ -129,10 +130,15 @@ export class EmailServiceModel extends BaseDb {
       queryBuilder.andWhere("(service.name LIKE :search OR service.from LIKE :search)", { search: `%${search}%` });
     }
     if (tagId !== undefined) {
-      queryBuilder.andWhere("service.tagId = :tagId", { tagId });
+      queryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      );
     }
     if (untagged === true) {
-      queryBuilder.andWhere("service.tagId IS NULL");
+      queryBuilder.andWhere(
+        `NOT EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id)`
+      );
     }
     return await queryBuilder.getCount();
   }
@@ -145,10 +151,14 @@ export class EmailServiceModel extends BaseDb {
   }
 
   async findAllByTagId(tagId: number): Promise<EmailServiceEntity[]> {
+    // Services having this tag via the junction table. Use a subquery on the
+    // junction so each service appears once even if it has many tags.
     return await this.repository
       .createQueryBuilder("service")
-      .leftJoinAndSelect("service.tag", "tag")
-      .where("service.tagId = :tagId", { tagId })
+      .where(
+        `EXISTS (SELECT 1 FROM email_service_tag_relation r WHERE r."emailServiceId" = service.id AND r."tagId" = :tagId)`,
+        { tagId }
+      )
       .orderBy("service.id", "DESC")
       .getMany();
   }

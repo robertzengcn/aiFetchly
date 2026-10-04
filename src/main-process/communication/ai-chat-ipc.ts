@@ -44,6 +44,9 @@ import {
   StreamEventProcessor,
   StreamState,
 } from "@/service/StreamEventProcessor";
+import { ToolResultModule } from "@/modules/ToolResultModule";
+import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
+import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 // import { SearchResult } from '@/service/VectorSearchService';
 import {
   AI_CHAT_MESSAGE,
@@ -600,6 +603,46 @@ let currentStreamAbortController: AbortController | null = null;
 let currentStreamEventProcessor: StreamEventProcessor | null = null;
 
 /**
+ * Shared tool-result collaborators for the StreamEventProcessor (T15a).
+ *
+ * `ToolResultModule` resolves the DB path via the Token service on each call,
+ * and `ToolResultStorageService` is stateless beyond its root path, so a single
+ * process-wide instance is safe and matches how `AIChatQueryLoop` resolves them.
+ *
+ * LAZY: constructed on first use inside the IPC handler, NOT at module load.
+ * `ToolResultModule extends BaseModule`, whose constructor calls
+ * `new Token().getValue(USERSDBPATH)`. Constructing it at module top level
+ * would run that Token lookup during module evaluation — which breaks test
+ * suites that `vi.mock("@/modules/token")` with a closure over a `const`
+ * declared later in the file (the closure hits the temporal dead zone before
+ * the `const` initializer runs). Deferring construction until the first IPC
+ * handler call means the Token lookup happens only after module evaluation
+ * completes, when every `const` is initialized. The stream-state object
+ * still always carries present collaborators: the handler builds streamState
+ * lazily too, so the first call constructs the module before streamState
+ * references it. The storage root is safe to read after `app.whenReady`, which
+ * has run by the time IPC handlers fire.
+ */
+let sharedToolResultModule: ToolResultModule | null = null;
+let sharedToolResultStorage: ToolResultStorageService | null = null;
+
+function getSharedToolResultModule(): ToolResultModule {
+  if (!sharedToolResultModule) {
+    sharedToolResultModule = new ToolResultModule();
+  }
+  return sharedToolResultModule;
+}
+
+function getSharedToolResultStorage(): ToolResultStorageService {
+  if (!sharedToolResultStorage) {
+    sharedToolResultStorage = new ToolResultStorageService({
+      root: getToolResultStorageRoot(),
+    });
+  }
+  return sharedToolResultStorage;
+}
+
+/**
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
@@ -995,6 +1038,12 @@ export function registerAiChatIpcHandlers(): void {
         currentPlan: null,
         planThreadId: undefined,
         awaitingSkillPermissionGrant: false,
+        // Recoverable large tool results (T15a): inject the same collaborators
+        // `AIChatQueryLoop` uses so server/local tool results are routed through
+        // the bounded pipeline. The module resolves the DB path via Token and
+        // the storage root is process-constant, so one shared instance is safe.
+        toolResultModule: getSharedToolResultModule(),
+        toolResultStorage: getSharedToolResultStorage(),
       };
 
       // Create stream event processor

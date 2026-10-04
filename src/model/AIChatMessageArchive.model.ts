@@ -398,6 +398,79 @@ export class AIChatMessageArchiveModel extends BaseDb {
   }
 
   /**
+   * Bounded cross-conversation scan of oversized legacy rows above a global
+   * `(timestamp, id)` cursor, in ASC order (T14 / design §10.2). Used by the
+   * resumable projection backfill — the bounded, offline alternative to
+   * re-materializing payloads on the read hot path. Each call returns at most
+   * `batchRows` rows whose `content` byte length exceeds `minContentBytes`,
+   * plus a cursor to resume from. Rows are returned raw (the caller builds a
+   * bounded projection and never re-reads the full payload on the read path).
+   *
+   * NOT cursor-epoch-scoped: legacy rows predate the archive-state epoch, and
+   * the backfill owns its own resume cursor via the bootstrap marker. The
+   * `(timestamp, id)` keyset is globally monotonic across conversations, so a
+   * single walk covers every conversation without per-conversation state.
+   */
+  async scanOversizedRowsAboveCursor(input: {
+    afterTimestampMs: number;
+    afterRowId: number;
+    minContentBytes: number;
+    batchRows: number;
+  }): Promise<{
+    rows: AIChatMessageEntity[];
+    nextCursor: { timestampMs: number; rowId: number } | null;
+    hasMore: boolean;
+  }> {
+    const limit = Math.min(
+      Math.max(input.batchRows, 1),
+      AI_CHAT_RECOVERABLE_DEFAULTS.metadataPageRows
+    );
+    // Fetch a bounded page above the cursor; the oversized filter is applied
+    // in-process because SQLite `length(content)` counts characters, not bytes,
+    // and a SQL WHERE on a text column's length cannot respect the byte budget
+    // without a function index. The page is bounded, so the in-process scan is
+    // bounded too.
+    const fetchLimit = limit * 4; // overshoot to skip non-oversized rows cheaply
+    const qb = this.repository
+      .createQueryBuilder("m")
+      .where(
+        new Brackets((b) => {
+          b.where("m.timestamp > :ts", {
+            ts: new Date(input.afterTimestampMs),
+          }).orWhere("m.timestamp = :ts2 AND m.id > :rid", {
+            ts2: new Date(input.afterTimestampMs),
+            rid: input.afterRowId,
+          });
+        })
+      )
+      .orderBy("m.timestamp", "ASC")
+      .addOrderBy("m.id", "ASC")
+      .take(fetchLimit + 1);
+
+    const fetched = await qb.getMany();
+    const reachedEnd = fetched.length <= fetchLimit;
+    const oversized = fetched.filter(
+      (r) => Buffer.byteLength(r.content ?? "", "utf8") >= input.minContentBytes
+    );
+    const kept = oversized.slice(0, limit);
+    const hasMore = !reachedEnd || oversized.length > limit;
+    // The cursor advances past the last kept row; when the page was filtered
+    // to nothing and there is more data, advance past the last fetched row so
+    // the next call does not re-scan the same non-oversized page.
+    const anchor =
+      kept.length > 0
+        ? kept[kept.length - 1]
+        : reachedEnd
+          ? null
+          : (fetched[fetched.length - 1] ?? null);
+    const nextCursor =
+      anchor && hasMore
+        ? { timestampMs: anchor.timestamp.getTime(), rowId: anchor.id }
+        : null;
+    return { rows: kept, nextCursor, hasMore };
+  }
+
+  /**
    * Count raw source rows for a conversation above a resume cursor. Used by
    * the indexer to report remaining backfill work (telemetry), bounded to a
    * single COUNT query.

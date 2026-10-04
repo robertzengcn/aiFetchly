@@ -68,8 +68,15 @@ rounded class="elevation-0" density="compact" variant="solo" label="Search"
 v-model="selected" v-model:page="currentPage" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
-        <template v-slot:[`item.tag`]="{ item }">
-            <v-chip v-if="item.tag" size="small">{{ item.tag }}</v-chip>
+        <template v-slot:[`item.tags`]="{ item }">
+            <template v-if="item.tags && item.tags.length > 0">
+                <v-chip
+                    v-for="tag in item.tags"
+                    :key="tag.id"
+                    size="small"
+                    class="ma-1"
+                >{{ tag.name }}</v-chip>
+            </template>
             <span v-else>{{ t('emailservice.untagged') || 'Untagged' }}</span>
         </template>
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -185,10 +192,10 @@ const headers = computed<Array<Header>>(() => [
         key: 'from',
     },
     {
-        title: CapitalizeFirstLetter(t("emailservice.tag") || "Tag"),
+        title: CapitalizeFirstLetter(t("emailservice.tags") || "Tags"),
         align: 'start',
         sortable: false,
-        key: 'tag',
+        key: 'tags',
     },
     {
         title: CapitalizeFirstLetter(t("common.created_time")),

@@ -905,7 +905,12 @@ import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
-import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
+import {
+  extractArtifactMetadata,
+  extractToolOutputDescriptors,
+  ensureArtifactMetadata,
+  ensureToolOutputMetadata,
+} from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
   mergeFileOperationRecords,
@@ -3245,8 +3250,14 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // shortcut. Re-derive it on load so artifact cards reappear on history
     // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
     // tool_result chunks auto-open.
-    const persistedMessages = (resp?.messages ?? []).map(
-      ensureArtifactMetadata
+    //
+    // The same nesting applies to the preserved-output descriptors
+    // (`toolOutputRefs`/`toolOutputPreservation`/`toolOutputPreview`): they
+    // live under `metadata.toolResult` in persisted rows but are read at the
+    // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
+    // receipt card visible after a restart (PRD §11 cross-restart durability).
+    const persistedMessages = (resp?.messages ?? []).map((m) =>
+      ensureToolOutputMetadata(ensureArtifactMetadata(m))
     );
     const runtime = conversationRuntime.value.get(conversationId);
     messages.value =
@@ -3568,6 +3579,13 @@ const upsertToolResultMessage = (
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
     artifact: extractArtifactMetadata(toolResult),
+    // Preserved-output descriptors (recoverable large tool results): the
+    // capture pipeline spreads these into the live `tool_result` payload via
+    // `toolResultReceiptUiMetadata`, so extract them to the metadata top level
+    // on the same boundary as `artifact`. Without this the receipt card never
+    // renders during a live stream — the descriptors are present but nested
+    // under `metadata.toolResult`, where `preservedOutput` does not read.
+    ...(extractToolOutputDescriptors(toolResult) ?? {}),
   };
 
   if (existingIdx !== -1) {

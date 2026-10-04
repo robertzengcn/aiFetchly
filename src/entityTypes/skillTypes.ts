@@ -279,6 +279,16 @@ export interface SkillExecutionContext {
   readonly sourceUserMessageId?: string;
 
   /**
+   * Trusted identity of the agent that owns this execution (main process
+   * supplied, never tool args).
+   *
+   * Used by preserved-output retrieval to scope the per-turn allowance per
+   * agent, so a sub-agent cannot spend the parent's budget and cannot be
+   * silently merged into it.
+   */
+  readonly ownerAgentId?: string;
+
+  /**
    * Persisted outbound-email intent decision id for this turn. Null when no
    * outbound-email intent was resolved. Supplied by the main process.
    */
