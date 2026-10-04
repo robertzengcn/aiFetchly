@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   parseReplyJson,
   validateLlmRawResult,
@@ -11,6 +11,17 @@ import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
 } from "@/api/aiChatApi";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+
+// createDraft is AI-gated; the guard/reuse tests must pass the gate so they
+// reach the code under test instead of short-circuiting on the enable check.
+vi.mock("@/service/AiFeatureGate", () => ({
+  ensureHostedAiEnabled: vi.fn(async () => true),
+  isAiEnabled: vi.fn(() => true),
+}));
 
 /** Build a minimal non-streaming completion response for a content string. */
 function completionResponse(
@@ -188,6 +199,152 @@ describe("callLlmRaw payload + transport-error classification (FR-027)", () => {
     ).rejects.toBeInstanceOf(LlmTransportError);
     // Exactly one provider call attempted — no silent retry, no strike consumed.
     expect(requests).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createDraft message-level guard + reuse (FR-028)
+// ---------------------------------------------------------------------------
+describe("createDraft guard + reuse (FR-028)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4244;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("reuses an eligible existing draft with zero LLM calls", async () => {
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.code).toBe("allowed");
+    expect(result.draftId).toBe(draftId);
+    expect(result.subject).toBe("Re: Hi");
+    expect(result.bodyText).toBe("Hello back");
+    // No generation happened — the existing draft was returned as-is.
+    expect(requests).toHaveLength(0);
+  });
+
+  it("reuses an approved draft (not just a plain draft)", async () => {
+    const messageId = await seedMessage();
+    const draftId = await seedDraft(messageId, "approved");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("refuses already_replied with zero LLM calls when replyStatus is sent", async () => {
+    const messageId = await seedMessage({ replyStatus: "sent" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("already_replied");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("generates fresh (reused: false) on a clean message", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(false);
+    expect(result.draftId).toBeGreaterThan(0);
+    expect(requests).toHaveLength(1);
+    // The generated draft is persisted and visible to subsequent calls.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("discards generated content when replyStatus flips to sent during generation", async () => {
+    const messageId = await seedMessage();
+    // The LLM call is slow; a concurrent send flips replyStatus mid-flight.
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const flippingFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        await messageModule.updateReplyStatus(messageId, "sent");
+        const real = factory();
+        return real.openAIChatCompletion(req);
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: flippingFactory,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("already_replied");
+    // No duplicate draft was persisted despite a valid generation.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
   });
 });
 

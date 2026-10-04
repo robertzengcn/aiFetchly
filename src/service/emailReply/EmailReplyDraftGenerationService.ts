@@ -25,7 +25,10 @@ import {
 } from "@/service/emailReply/EmailReplyPromptBuilder";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
-import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import {
+  EmailReplyPolicyOrchestrator,
+  pickReusableDraft,
+} from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 import {
   incrementReplyMetric,
@@ -222,6 +225,48 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
+    // 2c. Reuse an eligible existing draft instead of regenerating (FR-028).
+    //     The message-level guard (FR-029) already cleared the message: there
+    //     is at most one live draft (status draft/approved) and no sent/in-flight
+    //     /unknown/conflict state. If such a draft exists, return it with
+    //     reused=true and make NO LLM call, NO edit, NO approval, NO send.
+    //     Audit the reuse as a message_read_by_ai event (not a refusal).
+    const existingDrafts = await this.draftModule.listByMessage(message.id);
+    const reusable = pickReusableDraft(existingDrafts);
+    if (reusable) {
+      try {
+        const audit = new EmailReplyAuditLogEntity();
+        audit.emailServiceId = message.emailServiceId;
+        audit.messageId = message.id;
+        audit.draftId = reusable.id;
+        audit.action = "message_read_by_ai";
+        audit.actor = "ai";
+        audit.reason = `[reused] existing draft ${reusable.id} (status ${reusable.status}) reused; no regeneration`;
+        audit.metadataJson = JSON.stringify({
+          correlationId: correlationIdForMessage(message.id),
+          stage: "pre_draft",
+        });
+        await this.replyAuditModule.create(audit);
+      } catch (e) {
+        console.error("Failed to write draft-reuse audit:", e);
+      }
+      return {
+        success: true,
+        draftId: reusable.id,
+        messageId: message.id,
+        subject: reusable.subject,
+        bodyText: reusable.bodyText,
+        bodyHtml: reusable.bodyHtml,
+        classification: (message.classification ??
+          "unknown") as EmailMessageClassification,
+        knowledgeSources: [],
+        confidence: reusable.confidence ?? null,
+        warnings: [],
+        reused: true,
+        code: "allowed",
+      };
+    }
+
     // 3. Load owner-voice profile + derive its version stamp (FR-013): id@updatedAt
     //    identifies the exact profile content used; the identity-update handler
     //    invalidates unsent drafts when this changes.
@@ -383,6 +428,64 @@ export class EmailReplyDraftGenerationService {
     const classification = generated.intentSuggestion;
     const confidence = clamp(Number(generated.confidence), 0, 1);
 
+    // 6c. Race recheck (FR-028 Phase-1 slice): the message-level guard ran
+    //     before generation, but the awaited LLM call can take seconds. If
+    //     replyStatus flipped to sent (or a sibling draft appeared) during that
+    //     window, refuse to persist — a duplicate draft would create a second
+    //     reply. Phase 2's atomic reservation (FR-035) closes this window more
+    //     strongly; Phase 1 rechecks here and discards the generated content.
+    //     The generation cost is already spent (LLM call completed), so we
+    //     audit the discard and return already_replied without persisting.
+    const recheckMessage = await this.messageModule.read(message.id);
+    if (recheckMessage?.replyStatus === "sent") {
+      await this.recordFailure(
+        message.emailServiceId,
+        message.id,
+        "[already_replied] replyStatus flipped to sent during generation; generated content discarded"
+      );
+      return {
+        success: false,
+        error:
+          "[already_replied] Message was replied to during generation; no draft persisted",
+      };
+    }
+    const recheckDrafts = await this.draftModule.listByMessage(message.id);
+    const recheckLive = recheckDrafts.filter((d) =>
+      d.status === "draft" || d.status === "approved" || d.status === "sending"
+    );
+    if (recheckLive.length > 0) {
+      // A sibling draft appeared during the LLM call. Reuse the newest
+      // eligible one rather than persisting a duplicate.
+      const reusableNow = pickReusableDraft(recheckDrafts);
+      if (reusableNow) {
+        return {
+          success: true,
+          draftId: reusableNow.id,
+          messageId: message.id,
+          subject: reusableNow.subject,
+          bodyText: reusableNow.bodyText,
+          bodyHtml: reusableNow.bodyHtml,
+          classification: (message.classification ??
+            "unknown") as EmailMessageClassification,
+          knowledgeSources: [],
+          confidence: reusableNow.confidence ?? null,
+          warnings: [],
+          reused: true,
+          code: "allowed",
+        };
+      }
+      await this.recordFailure(
+        message.emailServiceId,
+        message.id,
+        "[reply_state_conflict] a live sibling draft appeared during generation; generated content discarded"
+      );
+      return {
+        success: false,
+        error:
+          "[reply_state_conflict] A live draft for this message appeared during generation; no duplicate persisted",
+      };
+    }
+
     // 7. Persist draft.
     const draft = new EmailReplyDraftEntity();
     draft.messageId = message.id;
@@ -487,6 +590,7 @@ export class EmailReplyDraftGenerationService {
       knowledgeSources: [...knowledge.sources],
       confidence,
       warnings,
+      reused: false,
     };
   }
 

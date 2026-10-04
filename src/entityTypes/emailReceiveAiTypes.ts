@@ -3,6 +3,7 @@ import type {
   EmailMessageClassification,
   EmailReplyStatus,
 } from "@/entityTypes/emailReceiveTypes";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
  * Result envelope for email receive/reply AI tools. Mirrors the
@@ -139,4 +140,18 @@ export interface AiEmailReplyDraftResult {
   knowledgeSources: EmailReplyKnowledgeSource[];
   confidence: number | null;
   warnings: string[];
+  /**
+   * True when an eligible existing draft was reused instead of regenerating
+   * (FR-028). The generation service sets this when the message-level guard
+   * finds a live `draft`/`approved` draft for the same message; no LLM call
+   * is made in that case. False on a fresh generation.
+   */
+  reused: boolean;
+  /**
+   * Present only when the call was refused (e.g. `already_replied`) or reused
+   * an existing draft. Carries the stable policy code so the tool/IPC envelope
+   * can surface a machine-readable reason instead of parsing English. Omitted
+   * on a fresh-generation success.
+   */
+  code?: EmailReplyPolicyCode;
 }
