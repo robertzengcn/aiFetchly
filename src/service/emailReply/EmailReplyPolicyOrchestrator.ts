@@ -10,6 +10,7 @@ import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
+import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 
 /**
  * Single authoritative policy gate for the reply pipeline (technical design
@@ -20,6 +21,15 @@ import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
  * draft states, recipient validity, approval freshness/hash, and the existing
  * deterministic hard blocks from {@link evaluateAutoReplyPolicy}. Model
  * confidence never authorizes anything (AD-008).
+ *
+ * FR-029 (Phase-1 slice): a message-level duplicate guard runs BEFORE the
+ * legacy classification/rule checks in both stages. It refuses drafting or
+ * sending when the inbound message already has a reply, an in-flight attempt,
+ * an unresolved delivery, or contradictory sibling records. The guard is
+ * local-only in Phase 1 (no IMAP `\Answered` probe — that is Phase 2's
+ * FR-030/031). It fixes the reported sequential duplicate-reply bug for the
+ * in-app path; concurrent double-generate of a clean message is a known
+ * Phase-1 limitation closed by Phase-2 atomic reservation (FR-035).
  */
 export class EmailReplyPolicyOrchestrator {
   private readonly draftModule = new EmailReplyDraftModule();
@@ -40,6 +50,19 @@ export class EmailReplyPolicyOrchestrator {
         return deny("invalid_recipient", "Original message no longer exists");
       }
 
+      // FR-029: message-level duplicate guard runs first in BOTH stages. A
+      // refusal here blocks before any LLM/SMTP side effects (no draft
+      // generated, no send attempted). When an eligible existing draft is
+      // found, the guard allows pre_draft so the generation service can reuse
+      // it instead of regenerating.
+      const messageLevel = await this.evaluateMessageLevelState(
+        message.id,
+        message.replyStatus
+      );
+      if (messageLevel !== null) {
+        return messageLevel;
+      }
+
       if (input.stage === "pre_draft") {
         return this.evaluatePreDraft(message);
       }
@@ -51,6 +74,91 @@ export class EmailReplyPolicyOrchestrator {
         "Policy evaluation failed; denying by default"
       );
     }
+  }
+
+  /**
+   * Inspect authoritative local records for the message-level reply state
+   * (FR-029, Phase-1 local-only slice). Returns `null` when the message is
+   * clean (proceed to the legacy checks); otherwise returns a refusal decision.
+   *
+   * Precedence (PRD §5):
+   *  1. `replyStatus === "sent"` or any draft `sent` → `already_replied`.
+   *  2. Any draft/attempt `delivery_unknown` → `delivery_unknown` (ambiguous
+   *     outcome on a prior attempt; never auto-retry).
+   *  3. Any draft `sending` or attempt `claimed`/`submitted` →
+   *     `reply_in_progress`.
+   *  4. Multiple LIVE (non-terminal) drafts, or contradictory records
+   *     (e.g. replyStatus=not_started but a sent draft exists) →
+   *     `reply_state_conflict`.
+   *  5. `replyStatus === "failed"` with no live drafts → `reply_state_unknown`
+   *     (a prior generation failed; surface for human triage rather than
+   *     silently regenerating).
+   *
+   * When an eligible existing draft (status `draft` or `approved`) exists,
+   * the guard returns `null` so the caller can REUSE it (Step 6 wires the
+   * generation service to do so). This is the dedup-by-reuse path.
+   */
+  private async evaluateMessageLevelState(
+    messageId: number,
+    replyStatus: string | null
+  ): Promise<EmailReplyPolicyDecision | null> {
+    const drafts = await this.draftModule.listByMessage(messageId);
+    const liveDrafts = drafts.filter((d) =>
+      isLiveDraftStatus(d.status)
+    );
+    const sentDrafts = drafts.filter((d) => d.status === "sent");
+    const sendingDrafts = drafts.filter((d) => d.status === "sending");
+    const unknownDrafts = drafts.filter(
+      (d) => d.status === "delivery_unknown"
+    );
+
+    // 1. Already replied: explicit message state OR a sent draft.
+    if (replyStatus === "sent" || sentDrafts.length > 0) {
+      return deny(
+        "already_replied",
+        "Message already has a sent reply; refusing duplicate"
+      );
+    }
+    // 2. Ambiguous delivery on a prior attempt.
+    if (unknownDrafts.length > 0) {
+      return deny(
+        "delivery_unknown",
+        "A prior send attempt for this message has an ambiguous delivery outcome; requires human triage"
+      );
+    }
+    // 3. In-flight send.
+    if (sendingDrafts.length > 0) {
+      return deny(
+        "reply_in_progress",
+        "A send for this message is already in flight"
+      );
+    }
+    // 4. Contradictory records: multiple live drafts, or replyStatus says
+    //    replied but no sent draft was found, etc.
+    if (liveDrafts.length > 1) {
+      return deny(
+        "reply_state_conflict",
+        `Multiple live drafts (${liveDrafts.length}) exist for this message; requires reconciliation`
+      );
+    }
+    if (
+      replyStatus === "blocked" ||
+      replyStatus === "skipped"
+    ) {
+      // The message was deliberately skipped/blocked by policy previously.
+      // Allow the legacy evaluator to re-decide (it may have been un-blocked).
+      return null;
+    }
+    // 5. Prior generation failed with no live draft — surface for triage
+    //    rather than silently regenerating.
+    if (replyStatus === "failed" && liveDrafts.length === 0) {
+      return deny(
+        "reply_state_unknown",
+        "A prior reply attempt failed; requires human triage before regenerating"
+      );
+    }
+    // Clean (or has exactly one eligible live draft for reuse). Fall through.
+    return null;
   }
 
   private async evaluatePreDraft(message: {
@@ -307,4 +415,36 @@ export function isValidReplyAddress(address: string): boolean {
   if (!trimmed || trimmed.length > 320) return false;
   // One local part token, one @, a domain with at least one dot. Conservative.
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
+}
+
+/**
+ * Draft statuses that count as "live" (non-terminal) for the message-level
+ * guard. A live draft may still be edited/approved/sent, so a second draft for
+ * the same message is a conflict.
+ *
+ * `failed` is NOT live: a failed draft is a dead end that the user discarded or
+ * the system abandoned; the message may be regenerated. `delivery_unknown` and
+ * `sent` are terminal and handled by their own precedence branches above.
+ */
+function isLiveDraftStatus(status: string): boolean {
+  return status === "draft" || status === "approved" || status === "sending";
+}
+
+/**
+ * Find an eligible existing draft for a message that the generation service
+ * can REUSE instead of regenerating (FR-028). Returns the most recent draft
+ * with status `draft` (editable) or `approved` (ready to send), or `null` when
+ * none exists. The message-level guard must have already cleared the message
+ * (no `sent`/in-flight/unknown/conflict state) for reuse to be safe.
+ */
+export function pickReusableDraft(
+  drafts: readonly EmailReplyDraftEntity[]
+): EmailReplyDraftEntity | null {
+  // listByMessage orders by id DESC, so the first eligible is the newest.
+  for (const d of drafts) {
+    if (d.status === "draft" || d.status === "approved") {
+      return d;
+    }
+  }
+  return null;
 }
