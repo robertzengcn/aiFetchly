@@ -388,6 +388,17 @@ jobs:
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
+          # Retry transient Apple timestamp-service failures during codesign.
+          # @electron/osx-sign signs every file with `codesign --timestamp`,
+          # and Apple's timestamp service intermittently returns "The timestamp
+          # service is not available" under runner load — one failure used to
+          # abort the whole ~2h packaging step (runs 09-21, 09-27, 09-28,
+          # 10-02). The shim retries only that error (default 5 attempts, 30s
+          # apart) and passes everything else through; --timestamp stays because
+          # notarization requires it. Prepend to PATH so Node's bare-name
+          # execFile('codesign') resolves to the shim.
+          export PATH="$GITHUB_WORKSPACE/scripts/codesign-retry-shim:$PATH"
+          command -v codesign
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
           if [ "$BUILD_MODE" = "production" ]; then
             NODE_ENV=production node scripts/run-packaging-with-hang-guard.js --platform=darwin

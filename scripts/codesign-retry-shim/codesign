@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# codesign retry shim for release.yml build-macos (see README.md in this dir).
+#
+# @electron/osx-sign runs a per-file `codesign --timestamp` pass; every call
+# round-trips Apple's remote timestamp service, which intermittently returns
+# "The timestamp service is not available" under GHA runner load. One transient
+# failure aborts the whole packaging step. --timestamp itself cannot be dropped
+# (Apple notarization requires a secure timestamp), so this shim transparently
+# retries only that transient error and passes everything else through.
+#
+# Invoked by @electron/osx-sign via bare name (`child.execFile('codesign',
+# ...)`), so Node's PATH lookup resolves to this file when this directory is
+# prepended to PATH.
+#
+# Config:
+#   CODESIGN_SHIM_RETRIES          retries after the first try (default 5)
+#   CODESIGN_SHIM_BACKOFF_SECONDS  sleep between retries (default 30)
+#   CODESIGN_SHIM_REAL_BIN         real codesign binary (default
+#                                  /usr/bin/codesign; overridable so the
+#                                  regression tests can exercise the retry
+#                                  logic with a fake binary on any platform)
+
+set -u
+
+REAL_CODESIGN="${CODESIGN_SHIM_REAL_BIN:-/usr/bin/codesign}"
+TRANSIENT_MARKER="The timestamp service is not available"
+
+if [ ! -x "$REAL_CODESIGN" ]; then
+  echo "codesign-retry-shim: $REAL_CODESIGN not found or not executable" >&2
+  exit 127
+fi
+
+RETRIES="${CODESIGN_SHIM_RETRIES:-5}"
+BACKOFF_SECONDS="${CODESIGN_SHIM_BACKOFF_SECONDS:-30}"
+
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+
+  # Capture output so the transient-error check can inspect it, while still
+  # streaming it to our stderr for the job log.
+  output_file="$(mktemp "${TMPDIR:-/tmp}/codesign-shim.XXXXXX")"
+  "$REAL_CODESIGN" "$@" >"$output_file" 2>&1
+  exit_code=$?
+  cat "$output_file" >&2
+
+  if [ "$exit_code" -eq 0 ]; then
+    rm -f "$output_file"
+    exit 0
+  fi
+
+  if grep -q "$TRANSIENT_MARKER" "$output_file"; then
+    rm -f "$output_file"
+    if [ "$attempt" -gt "$RETRIES" ]; then
+      echo "codesign-retry-shim: transient timestamp-service error persisted; giving up after $attempt attempts (exit $exit_code)" >&2
+      exit "$exit_code"
+    fi
+    echo "codesign-retry-shim: transient timestamp-service error (attempt $attempt/$((RETRIES + 1))); retrying in ${BACKOFF_SECONDS}s" >&2
+    sleep "$BACKOFF_SECONDS"
+    continue
+  fi
+
+  # Non-transient failure: pass the real exit code through untouched so real
+  # errors (entitlements, keychain, bad args, ...) still fail the build loudly.
+  rm -f "$output_file"
+  exit "$exit_code"
+done
