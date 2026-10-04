@@ -96,7 +96,15 @@ export class TaskCompletionContractService {
       sourceUserMessageId: input.sourceUserMessageId,
       approvedSourceMessageIds: [...input.approvedSourceMessageIds],
       mode: input.mode,
-      criteria: input.criteria.map((c) => ({ ...c })),
+      // Deep-copy each criterion: `sourceRefs` (all variants), plus
+      // `requiredContentChecks` (artifact) and `sourceSelectorKeys`
+      // (qualitative) are nested arrays. A shallow `.map((c) => ({ ...c }))`
+      // would share those arrays by reference, so a post-freeze caller
+      // mutation would silently alter the frozen contract and cause
+      // `verifyHash` to return false for an untampered contract. A full
+      // `structuredClone` deep-copies all plain-data nested arrays in one
+      // call and keeps the frozen contract independent of caller state.
+      criteria: input.criteria.map((c) => structuredClone(c)),
     };
   }
 
