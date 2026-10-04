@@ -1,720 +1,602 @@
-# AI Email Reply Validation And Duplicate-Reply Guard - Technical Design
+# AI Email Reply Validation and Duplicate Guard — Technical Design
 
-## 1. Purpose
+## Document information
 
-This document specifies the implementation for the two defects and one new
-capability defined in
-`ai-email-reply-validation-and-duplicate-guard-prd.md`:
+- **Status:** Revised design proposal; new symbols/contracts below are not implemented.
+- **Reviewed:** 2026-10-05 against the current checkout.
+- **Requirements:** [PRD](ai-email-reply-validation-and-duplicate-guard-prd.md), FR-025–FR-039.
+- **Foundations:** [Receive/reply design](ai-email-receive-auto-reply-technical-design.md), [reply reliability](ai-email-thread-aware-reply-reliability-technical-design.md), [outbound delivery](ai-outbound-email-intent-aware-delivery-technical-design.md).
+- **Architecture constraints:** main-process services coordinate network I/O;
+  Modules/Models own database operations through TypeORM and Token/`USERSDBPATH`.
+  IPC never accesses repositories; workers never access the database.
 
-1. Fix the `create_email_reply_draft` validation regression (field-name
-   mismatch, no JSON mode, token-budget truncation).
-2. Add server-side guards so an already-replied message cannot be re-drafted
-   or re-sent — covering in-app replies and mailbox-`\Answered` replies.
-3. Add a `check_email_replied` AI tool that probes the Sent folder for a
-   manual reply when `\Answered` is not set.
+## 1. Review findings and source of truth
 
-It is a delta on the existing receive-and-reply architecture; it does not
-restate it. See `ai-email-receive-auto-reply-technical-design.md` and
-`ai-email-thread-aware-reply-reliability-technical-design.md` for the
-foundational layers.
+| Current source | Verified behavior / correction to the earlier design |
+|---|---|
+| `src/service/emailReply/EmailReplyPromptBuilder.ts`, `buildReplySystemMessage` | Requests `classification`, while schema requires `intentSuggestion`. |
+| `src/service/emailReply/EmailReplyGenerationSchema.ts` | Required fields have type/length/enum limits; optional review fields exist. `extractJson` tolerates fences/prose. Zod object parsing is not rejection of every extra key. |
+| `src/service/emailReply/EmailReplyDraftGenerationService.ts`, `createDraft` / `callLlmRaw` | Uses 700 tokens, drops completion metadata, drops original context in correction, and persists draft/revision/message state separately. |
+| `src/api/aiChatApi.ts`, `OpenAIChatCompletionRequest` / `openAIChatCompletionHosted`; `src/service/aiProvider/OpenAIRequestPayload.ts` | Neither request typing nor explicit payload-copy paths expose `response_format` today. Local `complete` uses the shared payload builder. |
+| `src/service/emailReceive/EmailReceiveSyncService.ts`, `toEntity`; `src/model/EmailReceivedMessage.model.ts`, `upsertByProviderUid` | Already promotes observed answered flags to `replyStatus = sent`. It does not persist flag provenance. Upsert loads and saves a full entity, risking concurrent local-state clobber. |
+| `src/service/emailReceive/ImapEmailReceiveClient.ts`, `fetchFromConnectedClient` | Default fetch is unread-only/bounded. It opens configured inbox and stores bare UID as `providerUid`; no source folder/UIDVALIDITY provenance. |
+| `src/model/EmailReplyDraft.model.ts`, `listByMessage` / `claimApprovedRevisionForSend` / `finalizeSendOutcome` | Draft lookup already exists. Send claim protects a draft/revision/approval, not the inbound message across siblings. Successful finalization updates received-message state atomically. |
+| `src/service/emailReply/EmailReplyPolicyOrchestrator.ts` | Both stages exist, but neither enforces the complete message-level duplicate evidence described here. |
+| `src/service/emailReply/EmailReplySendRecoveryService.ts`; `src/model/EmailReplyDraft.model.ts`, `reconcileDelivery` | Stale sends become `delivery_unknown`; reconciliation exists. Preserve this behavior and make guard updates conditional on authoritative outcome. |
+| `src/config/SqliteDb.ts`, DataSource options | Uses `synchronize: true` and `migrations: []`. There is no registered release migration to cite. `yarn init` references `src/runcli.ts`, absent in this checkout. |
 
-## 2. Current System Summary
+Line numbers are intentionally omitted because they drift. Symbol/file pairs
+above distinguish current behavior from proposed methods below. Truncation and
+production frequency remain hypotheses until completion/error metrics confirm them.
 
-### 2.1 Draft generation pipeline
+## 2. Design decisions and invariants
 
-`EmailReplyDraftGenerationService.createDraft`
-(`src/service/emailReply/EmailReplyDraftGenerationService.ts:77`) runs:
+1. **Central evidence service:** generation, delivery, policy, and diagnostic tool
+   use one reply-eligibility contract. The model is not the enforcement boundary.
+2. **Separate projections from authority:** message `replyStatus` remains the
+   existing union (`not_started`, `draft_created`, `sent`, `skipped`, `blocked`,
+   `failed`). Read draft/attempt records for `sending`/`delivery_unknown`.
+3. **Persist a message-level guard:** a new guard entity gives atomic ownership
+   across LLM/network awaits and process restart. Existing draft idempotency is
+   retained. An in-memory mutex alone cannot provide restart/fencing protection.
+4. **Network work outside transactions:** reserve → perform bounded I/O → recheck
+   and commit. SMTP remains outside the claim/finalization transaction.
+5. **Unknown stays unknown:** inability to inspect a mailbox is never a successful
+   negative. Positive evidence remains sticky. Fresh negative means only that
+   configured sources were checked at that time.
+6. **No global exactly-once claim:** message guard serializes app submissions;
+   mailbox checks cannot atomically prevent an external client from replying.
+   Guards apply within one database/configured service. Separate installations
+   or duplicate service IDs for the same mailbox do not share a reservation.
 
-1. AI-enable gate (`ensureHostedAiEnabled`).
-2. Load message (`EmailReceivedMessageModule.read`).
-3. Optional model classification refinement.
-4. Pre-draft policy gate (`EmailReplyPolicyOrchestrator.evaluate` with
-   `stage: "pre_draft"`).
-5. Load owner-voice profile + knowledge-library context + conversation context.
-6. Build prompt (`buildReplySystemMessage` + `buildReplyUserMessage`).
-7. LLM call (`callLlmRaw`) + strict parse (`parseStrictGeneratedReply`); one
-   bounded correction round; two failures → `needs_human_review`, no draft.
-8. Post-validation (banned phrase, leakage, empty body).
-9. Persist draft + materialize revision 1 + write audit rows.
+### Alternatives considered
 
-The validation gate is at step 7. The error under fix is at lines 262-274.
+| Approach | Assessment |
+|---|---|
+| Check `replyStatus` and leave Sent detection to the AI | Small patch, but stale flags, sibling drafts, concurrent requests, and tool omission bypass protection. Insufficient for the PRD. |
+| Add only an in-memory message mutex | Reduces same-process races, but has no persisted generation owner/lease or crash fencing. Useful as an optimization, not authority. |
+| Persist evidence and a unique message guard; extend current transactions | Selected. Adds one small entity and changes draft/send persistence, but expresses ownership and recovery without holding a DB lock over network I/O. |
 
-### 2.2 Send path
+## 3. Component ownership and flow
 
-`sendEmailReply` (`src/service/EmailReceiveAiTools.ts:261`) reads the draft,
-approves it via `EmailReplyApprovalService.approveDraft`, and calls
-`EmailReplyDeliveryService.sendApprovedReply`. On `outcome === "sent"`,
-`finalizeSendOutcome` (`src/model/EmailReplyDraft.model.ts:402`) updates the
-received-message `replyStatus` to `"sent"` in the same transaction as the
-attempt/draft/approval/audit finalize (lines 445-450).
-
-### 2.3 Receive sync path
-
-`EmailReceiveSyncService.syncUnread`
-(`src/service/emailReceive/EmailReceiveSyncService.ts`) calls
-`ImapEmailReceiveClient.fetchMessages`, which returns `ParsedInboundEmail[]`.
-`ParsedInboundEmail.isAnswered` is already declared
-(`src/service/emailReceive/EmailReceiveClient.ts:28`) and already parsed from
-the `\Answered` flag (`ImapEmailReceiveClient.ts:170`). The sync upserts
-parsed messages into `EmailReceivedMessageEntity`, which has no `isAnswered`
-column today — the value is dropped.
-
-### 2.4 Policy gate
-
-`EmailReplyPolicyOrchestrator.evaluatePreDraft`
-(`src/service/emailReply/EmailReplyPolicyOrchestrator.ts:56`) reads
-classification, confidence, and the effective rule. It does not read
-`replyStatus`. `evaluatePreSend` (line 80) does enforce the draft state
-machine (terminal states denied) but that is draft-state, not message-state.
-
-## 3. Target Architecture
-
-No new top-level component. The changes are additive:
-
-- **Entity extension:** `EmailReceivedMessageEntity` gains `isAnswered`,
-  `manualReplyDetectedAt`, `manualReplyCheckAt`.
-- **Sync extension:** `EmailReceiveSyncService` persists `isAnswered`.
-- **Generation service guard:** `createDraft` checks `replyStatus` and
-  `isAnswered` before any model call.
-- **Policy guard:** `evaluatePreDraft` denies `replyStatus === "sent"`.
-- **New service:** `EmailReplyDetectionService` performs the Sent-folder
-  search and caches the result.
-- **New AI tool:** `check_email_replied` wraps the detection service.
-- **Prompt + call-shape fixes:** prompt field name, `response_format`, token
-  budget.
-
-### 3.1 Layering and ownership
-
-```
-AI tool (EmailReceiveAiTools.ts)
-   │
-   ├── create_email_reply_draft
-   │       └── EmailReplyDraftGenerationService.createDraft
-   │             ├── GUARD: replyStatus / isAnswered  (NEW)
-   │             ├── EmailReplyPolicyOrchestrator.evaluatePreDraft
-   │             │     └── GUARD: replyStatus === "sent"  (NEW)
-   │             ├── buildReplySystemMessage  (FIX: field name)
-   │             ├── callLlmRaw  (FIX: response_format, max_tokens)
-   │             └── parseStrictGeneratedReply  (unchanged)
-   │
-   └── check_email_replied  (NEW)
-           └── EmailReplyDetectionService.checkReplied
-                 ├── ImapEmailReceiveClient.searchSentForReply  (NEW method)
-                 └── cache on EmailReceivedMessageEntity
+```mermaid
+flowchart TD
+  Entry[AI tools / gated IPC / background reply service] --> Eligibility[Reply eligibility service]
+  Eligibility --> Modules[Message, draft, attempt and guard Modules]
+  Modules --> Models[TypeORM Models / transaction coordinator]
+  Models --> DB[(SQLite)]
+  Eligibility --> Detect[Reply detection service]
+  Detect --> IMAP[IMAP adapter: flags and Sent headers]
+  Entry --> Gen[Draft generation service]
+  Gen --> Eligibility
+  Gen --> LLM[Existing AI API: JSON hint and bounded correction]
+  Gen --> Modules
+  Entry --> Send[Delivery service]
+  Send --> Eligibility
+  Send --> Modules
+  Send --> SMTP[SMTP after atomic claim]
 ```
 
-All guards run in the main process. Workers never touch the database
-(existing mandate). The new Sent-folder search is network I/O only in
-`ImapEmailReceiveClient`; the detection service coordinates caching.
+Proposed responsibilities:
 
-## 4. Dependencies
+- `EmailReplyEligibilityService`: resolve canonical reply identity, inspect
+  authoritative local records, request detection when necessary, produce typed
+  decision. Policy adds existing classification/recipient/rate rules.
+- `EmailReplyDetectionService`: coalesce probes, coordinate config-scoped cache,
+  call the receive adapter, and persist observations through Modules.
+- `ImapEmailReceiveClient`: connect using existing TLS/endpoint handling, resolve
+  folders, refresh flags, search/fetch headers, enforce bounds, close connection.
+- `EmailReplyGuardModule` / `EmailReplyGuardModel`: atomic reservation and guard
+  transitions. Extend the existing draft Model's transaction code for draft
+  commit, send claim, finalization, and reconciliation; never nest independent
+  Module transactions inside one another.
+- Outer generation/delivery service owns one refusal audit per invocation.
+  Evidence/policy helpers return decisions without writing refusal audit rows.
 
-No new runtime dependencies.
+## 4. Identity, evidence and public contracts
 
-- `imapflow` — already used by `ImapEmailReceiveClient`; supports
-  `mailboxOpen`, `search`, `fetchOne` with header source. Used for the
-  Sent-folder search.
-- `zod/v4` — already used for the generation schema and tool input schemas.
-- No new MCP or AI-provider dependencies. `response_format` is an
-  OpenAI-compatible field forwarded by the existing hosted path.
+### 4.1 Canonical identity
 
-## 5. Data Model
+Use `(emailServiceId, replyKey)`, where:
 
-### 5.1 Extend `EmailReceivedMessageEntity`
+- Valid canonical inbound RFC ID: `replyKey = "rfc:" + sha256(normalizedId)`.
+- Missing/malformed RFC ID: `replyKey = "row:" + storedMessageId` for local
+  protection; mailbox detection still returns `unknown` unless positive local
+  evidence already settles it.
 
-File: `src/entity/EmailReceivedMessage.entity.ts`
+Reuse `normalizeMessageId`/`normalizeThreadHeaders` for identifier conventions,
+preserving identifier case. Do not key by subject, sender alone, conversation,
+or a globally shared RFC ID. Scope all lookup and cache operations to the resolved
+mailbox. Conflicting rows with the same RFC ID but different underlying message
+identity produce `reply_state_conflict`, not automatic merging.
 
-Add three columns:
+For legacy rows without normalized IDs, normalize relevant stored raw IDs before
+binding their guard. Resolve all canonical-equivalent rows in the mailbox before
+allowing work; an incomplete legacy identity scan is a conflict, not eligibility.
+Guard checks include drafts/attempts linked to every equivalent row.
+
+IMAP UID is valid only with folder and UIDVALIDITY. Add provenance at receive
+time and namespace new provider keys by those values (section 5). Legacy bare
+UIDs may only refresh flags after a fetched header verifies the expected RFC ID;
+otherwise locate the source via Message-ID search and exact header validation.
+Never attribute a reused UID's flags to the old message.
+
+### 4.2 Typed detection result (proposed)
 
 ```typescript
-  // ---- Duplicate-reply detection (validation-and-duplicate-guard PRD) ----
+export type ReplyDetectionSource =
+  | "local_state"
+  | "mailbox_flag"
+  | "sent_search"
+  | "unavailable";
 
-  /** Boolean-as-int mirror of the IMAP \Answered system flag. Set by sync
-   *  only; never written by the send path. POP3 rows are 0 (no flags). */
-  @Column("integer", { default: 0 })
-  isAnswered: number;
+export type ReplyDetectionUnknownCode =
+  | "reply_in_progress"
+  | "delivery_unknown"
+  | "unsupported_protocol"
+  | "missing_message_id"
+  | "receive_unavailable"
+  | "sent_folder_unavailable"
+  | "ambiguous_match"
+  | "identity_conflict"
+  | "probe_timeout"
+  | "probe_limit_exceeded"
+  | "probe_failed";
 
-  /** Most recent Sent-folder search timestamp, regardless of outcome.
-   *  Set only by the check_email_replied tool path. Null until first check. */
-  @Column("datetime", { nullable: true })
-  manualReplyCheckAt: Date | null;
-
-  /** Timestamp of the most recent Sent-folder search that FOUND a matching
-   *  reply. Null when never checked or when the last check found no reply. */
-  @Column("datetime", { nullable: true })
-  manualReplyDetectedAt: Date | null;
-```
-
-No index is required for these columns; lookups are by primary key after the
-message is loaded. `isAnswered` mirrors the `isUnread` storage convention
-(boolean-as-int) for consistency with the existing row.
-
-### 5.2 Update SQL init
-
-The migration adds the three columns with defaults. Existing rows get
-`isAnswered = 0` and null timestamps. The schema sync (TypeORM `synchronize`
-in dev, explicit migration in `yarn init`) handles this; no data backfill is
-performed.
-
-### 5.3 No other entity changes
-
-`EmailReplyDraftEntity`, `EmailReplyAuditLogEntity`, and
-`EmailAutoReplyAuditLogEntity` are unchanged. The `reply_skipped` audit
-action already exists in the `EmailReplyAuditAction` union
-(`src/entityTypes/emailReceiveTypes.ts:157`). The new refusal codes
-(`already_replied`, `mailbox_answered`) reuse the existing `reason` text
-field on the audit row; no schema change to the audit entity.
-
-## 6. Models And Modules
-
-### 6.1 Model changes
-
-`src/model/EmailReceivedMessage.model.ts`:
-
-- `upsertMessage` (or the existing insert/update path) writes `isAnswered`
-  from the parsed input. The field is read-only here for the sync path.
-- New method `setManualReplyCheck(messageId, { detected }): Promise<void>`
-  writes `manualReplyCheckAt = now` and, when `detected`, also
-  `manualReplyDetectedAt = now`. Uses `manager.update` directly; no
-  transaction needed (single-row update).
-
-### 6.2 Module changes
-
-`src/modules/EmailReceivedMessageModule.ts`:
-
-- `upsertFromParsed` (or the existing sync entry) forwards `isAnswered`.
-- New method `setManualReplyCheck(messageId, detected)` delegates to the
-  model.
-
-No changes to `EmailReplyDraftModule` or `EmailReplyDraftModel`; the send
-path's `finalizeSendOutcome` already sets `replyStatus`.
-
-## 7. Receive Service Changes
-
-### 7.1 Sync path
-
-`EmailReceiveSyncService.syncUnread` already calls
-`client.fetchMessages(...)` and maps `ParsedInboundEmail[]` to entity rows.
-The only change is forwarding `isAnswered`:
-
-```typescript
-// In the upsert mapping (existing code, add one field):
-entity.isAnswered = parsed.isAnswered ? 1 : 0;
-```
-
-The upsert must not overwrite `replyStatus` or `processedAt` (those are owned
-by the send path). The existing upsert already preserves `replyStatus` on
-re-sync; `isAnswered` follows the same pattern — it is refreshed from the
-server each sync, which is correct (the flag can be set after the initial
-fetch if the user replies between syncs).
-
-### 7.2 POP3
-
-`Pop3EmailReceiveClient.fetchMessages` returns `ParsedInboundEmail` with
-`isAnswered: false` (POP3 does not expose system flags). The sync upsert
-writes `0`. No special-casing; the field is simply always false for POP3
-rows. Documented as a known limitation in the PRD.
-
-## 8. Reply Generation Changes
-
-### 8.1 Prompt field-name fix (FR-025)
-
-`src/service/emailReply/EmailReplyPromptBuilder.ts:88` — change the example
-JSON and field list to use `intentSuggestion`:
-
-```typescript
-// Before:
-'Reply with valid JSON only: {"subject": string, "bodyText": string, "classification": string, "confidence": number}.'
-
-// After:
-'Reply with valid JSON only: {"subject": string, "bodyText": string, "intentSuggestion": string, "confidence": number}.',
-```
-
-Line 91 already lists the enum values for `classification`; relabel that line
-to `intentSuggestion` and keep the same value list (it matches the schema's
-`CLASSIFICATIONS` constant). No change to the enum values themselves.
-
-### 8.2 JSON response mode (FR-026)
-
-`src/api/aiChatApi.ts`:
-
-- Extend `OpenAIChatCompletionRequest` with
-  `response_format?: { type: "json_object" | "text" }`.
-- In `openAIChatCompletionHosted`, forward `response_format` when set:
-  ```typescript
-  if (request.response_format) {
-    data.response_format = request.response_format;
-  }
-  ```
-  The local-client path (`localClient(...).complete`) should also forward it;
-  if a local provider rejects the field, the existing retry/error path
-  applies.
-
-`src/service/emailReply/EmailReplyDraftGenerationService.ts:431-442`
-(`callLlmRaw`):
-
-```typescript
-const resp = await api.openAIChatCompletion({
-  messages: [systemMsg, userMsg],
-  temperature: 0.4,
-  max_tokens: 1500,
-  response_format: { type: "json_object" },
-});
-```
-
-The strict local parser (`parseStrictGeneratedReply`) stays authoritative.
-`response_format` reduces `no_json_object` failures; it does not replace
-validation (the comment at `EmailReplyGenerationSchema.ts:6-9` holds).
-
-### 8.3 Token budget (FR-027)
-
-Raise `max_tokens` from `700` to `1500` in the same call (shown above). 1500
-tokens comfortably fits a 400-word body (~500-600 tokens) plus subject,
-classification, confidence, and the JSON envelope. The prompt's "under 400
-words" cap (line 90) is retained; it is below the budget.
-
-### 8.4 In-app reply guard (FR-028)
-
-`EmailReplyDraftGenerationService.createDraft`, after loading the message
-(after line 92), before the classification refinement:
-
-```typescript
-// 2c. Duplicate-reply guard (validation-and-duplicate-guard PRD FR-028/FR-031).
-//     Refuse before any model call; write a reply_skipped audit row.
-if (message.replyStatus === "sent") {
-  await this.recordReplySkipped(
-    message.emailServiceId,
-    message.id,
-    "already_replied",
-    "Message already replied to (replyStatus=sent); no new draft created"
-  );
-  return {
-    success: false,
-    error:
-      "Message already replied to (replyStatus=sent); no new draft created",
-  };
-}
-if (message.replyStatus === "draft_created") {
-  // Surface the existing draft rather than creating a second one.
-  const existing = await this.draftModule.listByMessageId(message.id);
-  if (existing && existing.length > 0) {
-    return {
-      success: false,
-      error: `A draft already exists for this message (draft id ${existing[0].id}); edit or approve it instead of creating a new one`,
-    };
-  }
-  // Status says draft_created but no draft row exists (data drift); fall
-  // through and let generation proceed.
-}
-if (message.isAnswered === 1) {
-  await this.recordReplySkipped(
-    message.emailServiceId,
-    message.id,
-    "mailbox_answered",
-    "Message was already answered in the mailbox"
-  );
-  return {
-    success: false,
-    error: "Message was already answered in the mailbox",
-  };
-}
-```
-
-`recordReplySkipped` is a new private method that writes an
-`EmailReplyAuditLogEntity` with `action: "reply_skipped"`, `actor: "ai"`,
-`reason: "[<code>] <message>"`, and the correlation id. It is a thin variant
-of the existing `recordFailure` (line 509) using the `reply_skipped` action
-instead of `send_failed`.
-
-`listByMessageId` is a new `EmailReplyDraftModule` method that returns drafts
-by `messageId` (the `messageId` index already exists on the entity,
-`EmailReplyDraft.entity.ts:14`). It is a simple repository find.
-
-### 8.5 Policy guard (FR-029)
-
-`EmailReplyPolicyOrchestrator.evaluatePreDraft`, at the top of the method
-(after line 62, before the rule lookup), add:
-
-```typescript
-if (message.replyStatus === "sent") {
-  return deny("already_replied", "Message already has a sent reply");
-}
-```
-
-`message.replyStatus` must be added to the inline message type signature on
-`evaluatePreDraft` (it currently omits it). The `deny` helper and the
-audit-on-deny path already exist upstream (`createDraft` lines 155-177 write
-the pre-draft audit from `policyDecision`), so the `already_replied` code
-flows through to the audit row without further changes.
-
-This is defense in depth behind FR-028. If `createDraft` is called from
-another path that bypasses the in-method guard, the policy gate still blocks.
-
-## 9. Sent-Folder Reply Detection
-
-### 9.1 New service
-
-`src/service/emailReply/EmailReplyDetectionService.ts`:
-
-```typescript
-export interface CheckRepliedResult {
-  replied: boolean;
-  matchedMessageId: string | null;
-  checkedAt: string;
-  /** "flag" when the \Answered guard already settled it; "sent_search" when
-   *  the Sent-folder search ran. */
-  source: "flag" | "sent_search";
+interface ReplyDetectionBase {
+  readonly checkedAt: string | null;
+  readonly fromCache: boolean;
+  readonly coverage: "local_only" | "configured_imap" | "partial";
 }
 
-export class EmailReplyDetectionService {
-  async checkReplied(messageId: number): Promise<CheckRepliedResult> {
-    // 1. AI-enable gate (CLAUDE.md mandate for AI tools).
-    if (!(await ensureHostedAiEnabled())) {
-      throw new Error("AI email reply detection is disabled for this user.");
-    }
-
-    // 2. Load message + email service config.
-    const messageModule = new EmailReceivedMessageModule();
-    await messageModule.ensureConnection();
-    const message = await messageModule.read(messageId);
-    if (!message) throw new Error("Message not found");
-    if (!message.messageId) {
-      // No RFC Message-ID to match against; cannot search Sent folder.
-      return { replied: false, matchedMessageId: null, checkedAt: new Date().toISOString(), source: "sent_search" };
-    }
-    if (message.replyStatus === "sent" || message.isAnswered === 1) {
-      return { replied: true, matchedMessageId: null, checkedAt: new Date().toISOString(), source: "flag" };
-    }
-
-    // 3. Load email service connection config (main-process only).
-    const serviceModule = new EmailServiceModule();
-    await serviceModule.ensureConnection();
-    const service = await serviceModule.getEmailService(message.emailServiceId);
-    const connConfig = buildReceiveConnectionConfig(service); // existing helper
-    if (!connConfig) throw new Error("Email service receive config unavailable");
-
-    // 4. Search the Sent folder.
-    const client = new ImapEmailReceiveClient();
-    const matched = await client.searchSentForReply(connConfig, message.messageId);
-
-    // 5. Cache the result on the message row.
-    await messageModule.setManualReplyCheck(message.id, matched !== null);
-
-    return {
-      replied: matched !== null,
-      matchedMessageId: matched,
-      checkedAt: new Date().toISOString(),
-      source: "sent_search",
-    };
-  }
-}
+export type ReplyDetectionResult =
+  | (ReplyDetectionBase & {
+      readonly state: "replied";
+      readonly replied: true;
+      readonly source: "local_state" | "mailbox_flag" | "sent_search";
+      readonly matchedMessageId: string | null;
+      readonly reasonCode: "already_replied";
+    })
+  | (ReplyDetectionBase & {
+      readonly state: "not_replied";
+      readonly replied: false;
+      readonly source: "sent_search";
+      readonly matchedMessageId: null;
+      readonly reasonCode: "no_reply_observed";
+    })
+  | (ReplyDetectionBase & {
+      readonly state: "unknown";
+      readonly replied: null;
+      readonly source: "local_state" | "unavailable";
+      readonly matchedMessageId: null;
+      readonly reasonCode: ReplyDetectionUnknownCode;
+    });
 ```
 
-### 9.2 IMAP Sent-folder search
+An unknown attempted probe can have `checkedAt`, but that does not become a
+successful-negative cache timestamp. Local historical state with unknown
+observation time uses null. A cached result retains its original observation time.
 
-`src/service/emailReceive/ImapEmailReceiveClient.ts` — add a method:
+`check_email_replied` accepts `{ message_id: positiveInteger }` (stored row ID,
+not RFC header), returns this result with snake_case DTO fields plus `message_id`,
+and uses the existing `success` envelope. A completed inconclusive check is
+`success: true, state: "unknown", replied: null`; invalid input, AI-disabled,
+missing record, and internal persistence failures are `success: false`.
+
+Draft/send refusal adds stable `code`, nullable `existing_draft_id`, safe
+`next_action`, and request `correlation_id` to the existing failure envelope.
+Codes: `already_replied`, `delivery_unknown`, `reply_in_progress`,
+`reply_state_conflict`, `generation_in_progress`, `reply_state_unknown`,
+`needs_human_review`. Extend the typed failure union so wrappers preserve these
+fields; do not smuggle them through untyped casts or error-message parsing.
+Existing-draft reuse preserves the success draft DTO and adds `reused: true`.
+
+## 5. Persistence and upgrade
+
+### 5.1 Received-message additions (proposed)
+
+| Field | Storage/default | Ownership and meaning |
+|---|---|---|
+| `isAnswered` | integer, 0 | Latest observed IMAP flag; not proof of no reply. |
+| `answeredFlagCheckedAt` | nullable datetime | Observation time; null for legacy/unobserved/POP3. |
+| `replyDetectedAt` | nullable datetime | First positive external evidence; sticky. |
+| `replyDetectionSource` | nullable varchar | `mailbox_flag` or `sent_search` for positive evidence. |
+| `replyMatchedMessageId` | nullable varchar(998) | Matched outgoing RFC ID when provided; absence does not negate a match. |
+| `replyNegativeCheckAt` | nullable datetime | Last complete, successful negative detection. |
+| `replyNegativeContextHash` | nullable varchar(64) | Account/folder/sender/algorithm context for that negative. |
+| `providerFolder` | nullable varchar(255) | Source IMAP folder. |
+| `providerUidValidity` | nullable varchar | Source UIDVALIDITY stored losslessly. |
+
+Use explicit write methods: sync updates flags/provenance/provider content only;
+detection writes evidence/cache only; app send finalization owns delivery
+projection. Positive observation updates must be atomic and never erased by a
+later zero/negative result. Keep original positive time/source; enrich a missing
+matched ID without replacing stronger local send evidence.
+
+Update `src/schemas/entity/emailReceivedMessage.ts` explicitly: current
+`parseAndStrip` removes unknown keys, so adding only entity fields would silently
+drop sync data. Update `ParsedInboundEmail`, sync `toEntity`, Model upsert, Module
+methods, and renderer-safe DTO mappings together.
+
+Replace full-entity read/modify/save upsert updates with targeted provider-field
+updates and conditional positive-evidence changes. Do not save a stale snapshot
+of `replyStatus`, `processedAt`, classification, or cache after awaited I/O.
+Historical `sent` stays protected. Future sync stores answered provenance rather
+than labeling new mailbox-only evidence as an app delivery.
+
+New IMAP `providerUid` encodes a protocol prefix, folder hash, UIDVALIDITY, and UID
+within the existing length limit. Adopt a legacy bare-UID row only after source
+identity validation; otherwise insert a new namespaced row without overwriting
+the old message. Canonical reply keys protect duplicate stored copies. POP3 UIDL
+behavior remains unchanged. This is a targeted safety requirement, not a general
+conversation migration.
+
+### 5.2 New guard entity (proposed)
+
+`src/entity/EmailReplyGuard.entity.ts`, table `email_reply_guard`:
+
+| Field | Meaning |
+|---|---|
+| `id`, `emailServiceId`, `replyKey` | Primary ID and unique `(emailServiceId, replyKey)`; replyKey varchar(80). |
+| `messageId` | Representative received row, used for navigation, not sole identity authority. |
+| `phase` | `idle`, `generating`, `draft_ready`, `sending`, `sent`, `delivery_unknown`, `conflict`. |
+| `ownerToken`, `leaseExpiresAt` | Nullable generation fencing token and lease. |
+| `activeDraftId`, `activeAttemptId` | Nullable bindings to existing records. |
+| `updatedAt` | Last transition time. |
+
+The guard is an ownership index; reconcile it with existing draft/attempt records
+inside every mutation. Never trust `idle` while a related sent/unknown/in-flight
+record exists. Do not add a unique constraint to historical draft `messageId`:
+multiple discarded/legacy drafts are valid history.
+
+### 5.3 Upgrade mechanism and compatibility
+
+Current DataSource initialization synchronizes registered entities in every
+environment. Register the new entity in `SqliteDb`; additive columns/table are
+created by that mechanism. There is no existing explicit release migration or
+working `yarn init` entry point to rely on in this checkout.
+
+Test against a populated old-schema copy, not just an empty database. Verify
+preserved IDs/statuses/approvals/attempts/revisions and repeat initialization.
+Guard rows materialize lazily after inspecting related history. Multiple live
+drafts become `conflict`; do not pick the newest or delete others automatically.
+Default flag zero with null observation time requires a live check on use.
+
+Rollback must not run an older synchronized schema against new guard data and
+resume automated replies. Prefer a forward fix; disable the reply workflow if
+upgrade validation fails, preserve the database, and report the failure.
+
+## 6. Generation correctness (FR-025–FR-027)
+
+### 6.1 Shared prompt contract
+
+Export/reuse schema enum values instead of duplicating the classification list.
+Prompt uses `intentSuggestion`; required schema caps remain subject 120 characters,
+body 20,000 characters, finite confidence in [0,1], and the existing optional review
+fields. Keep the under-400-word concision instruction, without treating it as a
+hard token guarantee. Bump the prompt version when changing this contract.
+
+For correction, use the same system message, original bounded user/context
+message, and one additional user message from sanitized validation codes. Do not
+replace the original user message with correction alone or echo malformed model
+output. For length failure, add a bounded instruction to produce a shorter reply.
+Preserve the one-correction/two-validation-attempt rule and output safety checks.
+
+### 6.2 JSON option propagation and fallback
+
+Proposed request field:
 
 ```typescript
-/** Search the mailbox's Sent folder for a reply to the given RFC Message-ID.
- *  Returns the matched reply's Message-ID, or null if no match. */
-async searchSentForReply(
-  config: EmailReceiveConnectionConfig,
-  originalMessageId: string
-): Promise<string | null> {
-  const sentFolders = candidateSentFolders(config.folder); // see 9.3
-  let client = this.createClient(config);
-  try {
-    await client.connect();
-    for (const folder of sentFolders) {
-      try {
-        await client.mailboxOpen(folder);
-      } catch {
-        continue; // folder not present on this provider
-      }
-      // Search headers for In-Reply-To / References containing the original
-      // Message-ID. ImapFlow supports a header search criterion.
-      const uids = await client.search({ header: ["in-reply-to", originalMessageId] }, { uid: true });
-      if (uids.length === 0) {
-        // also try References
-        const uids2 = await client.search({ header: ["references", originalMessageId] }, { uid: true });
-        if (uids2.length === 0) continue;
-      }
-      // Fetch one matched message's Message-ID header.
-      const firstUid = (uids[0] ?? (await client.search({ header: ["references", originalMessageId] }, { uid: true }))[0]);
-      if (!firstUid) continue;
-      const msg = await client.fetchOne(firstUid, { headers: true, envelope: true }, { uid: true });
-      return extractMessageIdHeader(msg);
-    }
-    return null;
-  } finally {
-    await closeClient(client);
-  }
-}
+response_format?: { readonly type: "json_object" | "text" };
 ```
 
-The exact ImapFlow search-criteria shape should be verified against the
-installed version; the existing `fetchFromConnectedClient` (line 103) already
-uses `client.search` and `client.fetchOne` with `{ source: true, flags: true,
-internalDate: true }`, so the patterns are established. For the header search,
-ImapFlow accepts a `search` object with `header: [name, value]`.
+Forward it in both `openAIChatCompletionHosted` and shared
+`buildOpenAIPayload` (local `OpenAICompatibleProviderClient.complete` uses it).
+Apply it only where requested; unrelated chat behavior must remain compatible.
+Generate with 1,500 output tokens, clamped to known model/provider limits after
+accounting for bounded prompt/context. Hosted server acceptance/pass-through is
+an integration gate; this repository does not prove that remote capability.
 
-### 9.3 Candidate Sent folders
+Fallback rules are per logical attempt: known unsupported capability omits the
+hint; an explicit structured rejection identifying unsupported `response_format`
+allows one retry without it. If the hosted error contract discards that detail,
+do not guess from a generic 400; require capability configuration or extend the
+server error contract. A second failure surfaces as provider failure. Authentication,
+rate limit, network/timeout, generic 5xx, or model refusal is not format fallback.
+
+Enforce the reply-content two-validation/four-submission ceiling across API
+wrappers; existing model-alias retries must not silently expand it. Classification
+calls have a separate bounded budget within the same overall invocation deadline.
+Keep fallback and content-correction counts separate in telemetry.
+
+### 6.3 Retain completion metadata
+
+Replace the generation-only string return with a typed result containing content,
+finish reason, returned model, and optional usage. Treat `length` as a validation
+failure even if content parses. Refusal/filter/tool-call/empty-choice responses
+are not sendable. Missing finish reason is explicitly recorded, and still needs
+schema and content validation. No raw provider output is persisted for diagnostics.
+
+Return `needs_human_review` after two invalid generations, with bounded codes.
+Transport failure returns a separate provider error, not a fabricated second
+validation strike. Release generation ownership on either failure.
+
+## 7. IMAP detection and caching (FR-030–FR-032, FR-037)
+
+### 7.1 Algorithm
+
+1. Load message/config through Modules and resolve canonical identity. Inspect
+   local sent/unknown/in-flight records first; a diagnostic check reports local
+   sent as `replied`, pending as `unknown/reply_in_progress`, and unresolved
+   delivery as `unknown/delivery_unknown`, without a mailbox round trip.
+2. Return sticky positive evidence when present. Otherwise reuse a negative only
+   for draft checks, with age 0–60 seconds and matching current context hash.
+   Future timestamps, changed configuration, and changed algorithm invalidate it.
+3. If protocol is POP3, config unavailable, or no valid inbound RFC ID exists,
+   return typed `unknown`. Never construct an IMAP client from POP3 credentials.
+4. Connect using existing receive config from
+   `EmailServiceModule.getEmailServiceReceiveConfig`, normalization/validation,
+   and TLS helpers. No invented `buildReceiveConnectionConfig` helper.
+5. Refresh original flags using validated source folder/UIDVALIDITY/UID; for legacy
+   rows locate/verify exact RFC identity. Unresolved identity is `unknown`.
+   A positive flag settles `replied`. Missing source after expunge/move may still
+   allow a verified direct Sent match, but cannot produce a complete negative.
+6. Resolve Sent folders and search candidate headers. Verify exact direct parent
+   and outbound sender. A verified match settles `replied`, even if other folders
+   are unavailable. Without a match, all required sources must complete before
+   returning `not_replied`; ambiguity/incomplete coverage yields `unknown`.
+7. Before storing a negative, confirm account context has not changed during I/O.
+   Use a targeted update that cannot overwrite positive evidence. Store the
+   observation time/context, not the response-return time. Close the connection
+   in `finally`, including timeout/cancellation paths.
+
+### 7.2 Folder discovery and header matching
+
+Use mailbox LIST special-use `\Sent` attributes. Search all advertised Sent
+folders up to a cap of five. If none are advertised, inspect actually listed
+folders for conservative known-name fallbacks (`Sent`, `Sent Items`,
+`[Gmail]/Sent Mail`, `INBOX/Sent`). One unambiguous fallback may be used; multiple
+unverified fallbacks or no accessible candidate yields `sent_folder_unavailable`.
+Do not swallow authentication/permission/connection failures as folder absence.
+
+The installed `node_modules/imapflow/lib/imap-flow.d.ts` defines a header **map**,
+not the earlier design's tuple. Example search shape:
 
 ```typescript
-function candidateSentFolders(inboxFolder: string): string[] {
-  // Common Sent-folder names. Ordered by likelihood; first match wins.
-  const defaults = ["Sent", "[Gmail]/Sent Mail", "Sent Items", "INBOX/Sent"];
-  // De-duplicate and put an inbox-derived guess first if it looks like a
-  // Gmail-style "[Gmail]/..." prefix.
-  return Array.from(new Set(defaults));
-}
-```
-
-A per-service `sentFolder` override is desirable for v2 but not required for
-v1. The candidate list covers the common providers (Gmail, Outlook, generic
-cPanel, Fastmail). The `for` loop tries each and `continue`s on
-mailbox-open failure, so a provider with a non-standard name simply yields no
-match (the system fails closed only when the AI explicitly asks; the default
-draft path does not call this).
-
-### 9.4 AI tool wrapper
-
-`src/service/EmailReceiveAiTools.ts` — add:
-
-```typescript
-// ---- check_email_replied ----
-
-export async function checkEmailReplied(args: unknown): Promise<
-  EmailReceiveAiToolResult<{
-    message_id: number;
-    replied: boolean;
-    matched_message_id: string | null;
-    checked_at: string;
-    source: "flag" | "sent_search";
-  }>
-> {
-  try {
-    const input = checkEmailRepliedSchema.parse(args);
-    const service = new EmailReplyDetectionService();
-    const result = await service.checkReplied(input.message_id);
-    return {
-      success: true,
-      message_id: input.message_id,
-      replied: result.replied,
-      matched_message_id: result.matchedMessageId,
-      checked_at: result.checkedAt,
-      source: result.source,
-    };
-  } catch (error) {
-    return error instanceof ZodError ? validationFailure(error) : failure(error);
-  }
-}
-```
-
-`checkEmailRepliedSchema` is added to
-`src/entityTypes/emailReceiveAiTypes.ts`:
-
-```typescript
-export const checkEmailRepliedSchema = z.object({
-  message_id: z.number().int().positive(),
-});
-```
-
-## 10. AI Tool Catalog Changes
-
-### 10.1 New tool entry
-
-`src/config/skillsRegistry.ts` — add `check_email_replied` alongside the
-existing email-receive tools:
-
-```javascript
-{
-  name: "check_email_replied",
-  description:
-    "Check whether an inbound message has already been replied to — in-app, " +
-    "via the mailbox \\Answered flag, or by a reply found in the Sent folder. " +
-    "Call this BEFORE create_email_reply_draft when replyStatus is not 'sent' " +
-    "and you are unsure if the user already answered. Read-only; does not " +
-    "send or modify anything. AI must be enabled.",
-  parameters: {
-    type: "object",
-    properties: {
-      message_id: {
-        type: "number",
-        description: "Stored received message id to check.",
-      },
-    },
-    required: ["message_id"],
+const candidates = await client.search(
+  {
+    or: [
+      { header: { "in-reply-to": originalMessageId } },
+      { header: { references: originalMessageId } },
+    ],
   },
-  tier: "main",
-  requiresConfirmation: false,
-  permissionCategory: "automation",
-  source: "built-in",
-  execute: async (args) => {
-    const result = await checkEmailReplied(args);
-    return result;
-  },
-}
+  { uid: true }
+);
 ```
 
-Import `checkEmailReplied` from `@/service/EmailReceiveAiTools` at the top of
-`skillsRegistry.ts`.
+Handle the declared `number[] | false` result; `false` is a failed/incomplete
+search, not no matches. IMAP HEADER search is substring-based. Fetch bounded
+headers (`Message-ID`, `In-Reply-To`, `References`, `From`, `To`, `Date`) and
+flags using read-only/PEEK semantics; do not retrieve bodies, set `\Seen`,
+append mail, or store flags. Validate normalized token equality locally.
 
-### 10.2 Update `create_email_reply_draft` description
+Count as a direct reply only when `In-Reply-To` contains the exact original token
+and the parsed sender matches the configured sending identity for this mailbox.
+Multiple well-formed parent tokens can match an explicit parent; malformed or
+truncated header parsing is ambiguous. The outgoing message's own missing
+Message-ID does not negate a verified parent match; report null matched ID.
 
-`src/config/skillsRegistry.ts:2423` — extend the description:
+An ancestor-only References match is not a direct reply. A References-only
+candidate is `ambiguous_match` in V1; do not infer its final token is always an
+immediate reply. A candidate from an unrecognized sender/alias is likewise
+ambiguous. A verified direct match takes precedence over ambiguity. An unrelated
+substring candidate may be rejected only after complete header parsing.
 
-```javascript
-description:
-  "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
-  "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
-  "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
-  "Do NOT call this if the message replyStatus is 'sent' or 'draft_created' — the server " +
-  "will refuse and no draft will be created. When unsure whether the user already answered " +
-  "manually, call check_email_replied first. AI must be enabled. Returns the persisted " +
-  "draft for human review.",
-```
+Reuse identifier conventions, but do not interpret existing helpers' silent
+chain truncation as complete coverage. Overlong/partially parsed headers yield
+unknown. No subject-based or arbitrary recent-date heuristic establishes negative
+coverage; search by the original identifier across the resolved Sent scope.
 
-### 10.3 IPC wiring
+### 7.3 Operational bounds and cache
 
-`src/main-process/communication/emailReceive-ipc.ts` — register the new
-channel `EMAIL_REPLY_CHECK_REPLIED`. Add the channel constant to
-`src/config/channellist.ts`:
+- One single-flight probe per message/context, one active IMAP probe per mailbox.
+  Queue wait is included in a 15-second overall deadline; discard late results.
+- At most five resolved Sent folders and 200 candidate header fetches in total.
+  If more candidates exist, stop with `probe_limit_exceeded` unless a verified
+  direct reply already settles the outcome. Configure server/search response
+  limits and cancel excessive responses; bounded fetch alone is insufficient.
+- No cacheable negative on timeout, unsupported protocol, empty/missing source
+  identity, partial search, `false` search, or folder/auth errors.
+- Context hash covers account endpoint/protocol/username, source/Sent scope,
+  configured sender, and detector version. Exclude passwords/secrets. Identity
+  changes with existing evidence require conflict review; do not reset protection.
+- Generation/reuse may consume the 60-second negative cache. Delivery requests
+  `forceRefresh: true`; diagnostic tool uses ordinary cache behavior. Sticky
+  positive observations need no repeated network scan.
+- A forced send check may join a live network probe begun for the same unchanged
+  context during that send invocation, but never a cached/pre-invocation negative.
 
-```typescript
-export const EMAIL_REPLY_CHECK_REPLIED = "email:reply:check:replied";
-```
+## 8. Atomic generation and existing drafts (FR-028–FR-029, FR-035)
 
-Wire it in the IPC handler alongside the existing reply handlers, validating
-input with `checkEmailRepliedSchema` and calling `checkEmailReplied`. Add it
-to `src/preload.ts` and `src/views/api/emailreply.ts` for UI access. The
-handler is AI-gated (the service checks AI enable internally; the handler
-also checks `USER_AI_ENABLED` first per the CLAUDE.md mandate).
+### 8.1 Reserve
 
-## 11. Validation Logic (Unchanged)
+Before classification/retrieval/LLM calls, transactionally materialize the guard,
+inspect all related history, and apply the PRD state precedence. Return a unique
+existing live draft rather than relying on `replyStatus = draft_created` or
+arbitrarily taking the first `listByMessage` row. Unknown/sending history always
+blocks, including attempts attached to a discarded draft.
 
-`parseStrictGeneratedReply` and `generatedEmailReplySchema` are unchanged.
-The two-strike `needs_human_review` policy (FR-011 in the reliability PRD)
-is preserved. The fixes make the first attempt succeed on well-formed
-output; genuinely malformed output still routes to human review after the
-correction round. No safety property is relaxed.
+New generation uses a random owner token and a five-minute lease. Acquire via a
+conditional update/insert under the existing database coordination mechanism;
+unique key conflicts reread the winner. Do not hold the transaction over model
+or mailbox work. Renew the lease conditionally before long stages; cap each model
+call at 120 seconds or the remaining invocation budget, whichever is smaller;
+cap the complete generation invocation at five minutes, including queueing,
+classification, provider compatibility retries, and mailbox refreshes.
+An expired/replaced owner cannot renew, commit, or release the current lease.
 
-## 12. Audit
+Check fresh mailbox evidence before model work. Unknown/positive results audit
+and release the generation reservation. For reuse, perform the same mailbox
+eligibility check and reload draft bindings afterward; never silently return a
+newly sent/unknown draft as editable.
 
-### 12.1 Refused-draft audit
+### 8.2 Commit and recovery
 
-`recordReplySkipped` (new private method on
-`EmailReplyDraftGenerationService`) writes:
+After validation, recheck local records and evidence. If the successful-negative
+observation has expired during model work, refresh it before committing. Commit
+only with the same unexpired owner and unchanged identity/configuration.
 
-```typescript
-const log = new EmailReplyAuditLogEntity();
-log.emailServiceId = emailServiceId;
-log.messageId = messageId;
-log.action = "reply_skipped";
-log.actor = "ai";
-log.reason = `[${code}] ${message}`; // e.g. "[already_replied] Message already..."
-log.metadataJson = JSON.stringify({ correlationId: correlationIdForMessage(messageId) });
-await this.replyAuditModule.create(log);
-```
+One Model transaction creates draft, initial revision/hash, message projection,
+guard active-draft binding, and creation audit. Refactor existing best-effort
+revision materialization into transaction-aware persistence; failure rolls back
+all draft creation. It must not leave an unbound sendable draft.
 
-The `reply_skipped` action already exists in the union
-(`src/entityTypes/emailReceiveTypes.ts:157`), so no type change is needed.
-The audit list/detail UI already renders `reply_skipped` (it is in the
-existing action set); the new `already_replied` and `mailbox_answered`
-codes appear inside the `reason` text and need no separate mapping. If the UI
-should localize them, the i18n patch script
-(`scripts/i18n-patch-email-receive.cjs`) can be extended in a follow-up; v1
-surfaces the English reason string.
+On generation failure, release only the matching owner. Startup/on-use recovery
+can reclaim an expired generation lease only after checking related records.
+Late LLM results from expired owners are discarded. `sending` is never reclaimed
+using generation lease expiry; current send recovery remains authoritative.
 
-### 12.2 Policy denial audit
+## 9. Delivery, failure and reconciliation (FR-029, FR-031, FR-036)
 
-`createDraft` already writes a pre-draft audit row when
-`!policyDecision.allowed` (lines 155-177). The `already_replied` code from
-FR-029 flows through this path unchanged.
+1. Resolve draft/message/guard and apply local duplicate rules before approval
+   and before network work. Keep existing permission and approval requirements.
+2. Run a forced mailbox detection. Positive/unknown refuses before SMTP and
+   records one `reply_skipped` event. A pending approval does not override it.
+3. In `claimApprovedRevisionForSend`, atomically inspect all equivalent message
+   rows, sibling drafts, attempts, sticky evidence, guard binding, and existing
+   approval/revision/hash/mailbox validations. Bind guard to this draft/attempt
+   and `sending` in the same transaction as claim/audit. A stale negative must
+   refresh; require the forced observation to be at most five seconds old when
+   claiming. Do not await the mailbox inside this transaction.
+4. Submit SMTP immediately after the successful claim, using the existing send
+   adapter and approval binding. If execution is delayed past the five-second
+   observation window before SMTP starts, rerun detection outside the transaction
+   while retaining the send claim. A refusal before SMTP finalizes that unsent
+   claim safely; it must not manufacture an accepted/unknown send.
+   Recognize only this operation's exact attempt as the current owner during
+   that refresh; every other pending/sent/unknown record still blocks. This
+   internal ownership handle is never a tool/IPC bypass parameter. Allow one
+   delayed refresh; further delay refuses with no SMTP submission.
+5. `finalizeSendOutcome` updates existing attempt/draft/approval/message/audit
+   and guard together: `sent` keeps protection; `delivery_unknown` keeps protection;
+   definite pre-acceptance failure returns to this draft's retryable state, never
+   creates a sibling. Retain existing fresh-approval rules where applicable.
 
-## 13. Test Plan
+Same-attempt repeated calls preserve existing idempotent delivery results and
+never submit SMTP again. A new approval or sibling draft is not an escape from
+sent/in-flight/unknown state. Discard releases an active-draft binding only after
+checking no related send/unknown evidence; history remains intact.
 
-### 13.1 Validation fixes
+Existing stale-send recovery converts pending attempts to `delivery_unknown`
+(current threshold five minutes, periodic sweep ten minutes), without resubmission.
+Extend it to transition guard state atomically. Do not release a send guard merely
+because its process died or a timer elapsed.
 
-- `test/vitest/utilitycode/EmailReplyPromptBuilder.test.ts`: assert the
-  system prompt contains `intentSuggestion` in the example JSON and that
-  `classification` is no longer the example field name.
-- `test/vitest/utilitycode/EmailReplyGenerationSchema.test.ts`: assert a
-  well-formed `{ subject, bodyText, intentSuggestion, confidence }` object
-  parses successfully on the first attempt.
-- `test/vitest/main/EmailReplyDraftGeneration.test.ts`: mock the LLM to
-  return a well-formed object; assert `createDraft` persists a draft with
-  `max_tokens: 1500` and `response_format: { type: "json_object" }` on the
-  call. Assert a genuinely malformed return (no JSON) still routes to
-  `needs_human_review` after two failures.
+`reconcileDelivery` must conditionally transition eligible unknown attempts under
+the same message guard: verified sent sets terminal protection; verified not sent
+reopens the existing draft and clears only that unknown binding; unresolved leaves
+protection intact. Negative Sent search alone does not prove non-delivery.
+Reconciliation cannot reopen a known `sent` record; check for positive evidence on
+other siblings. Late successful SMTP finalization outranks an earlier negative
+reconciliation and reinstates terminal protection. While an original submitter
+could still be running, reconciliation cannot authorize retry; require quiescence
+or fencing plus delivery evidence. Test this race explicitly.
 
-### 13.2 In-app reply guard
+## 10. Tool, IPC, audit and UI integration (FR-033–FR-034)
 
-- `test/vitest/main/EmailReceiveAiTools.test.ts`: seed a message with
-  `replyStatus: "sent"`; call `createEmailReplyDraft`; assert it returns the
-  structured refusal, writes a `reply_skipped` audit row, and makes zero
-  LLM calls (mock the chat API and assert it is not called).
-- Same for `replyStatus: "draft_created"` with an existing draft row; assert
-  the existing draft id is referenced.
-- Same for `isAnswered: 1` with `replyStatus: "not_started"`; assert the
-  mailbox-answered refusal.
-- `test/vitest/utilitycode/EmailReplyPolicyOrchestrator.test.ts`: seed a
-  message with `replyStatus: "sent"`; assert `evaluatePreDraft` returns
-  `code: "already_replied"`.
+- Add `checkEmailReplied` and schema/DTO in `EmailReceiveAiTools.ts` and
+  `emailReceiveAiTypes.ts`; register in `skillsRegistry.ts`. Resolve account from
+  stored message, never a caller-supplied host or credentials.
+- Check AI enable at the tool boundary before input parsing or Module creation.
+  IPC checks `Token`/`USER_AI_ENABLED` first and returns the existing disabled
+  `{ status: false, msg, data: null }` shape. Existing generation service gating
+  remains defense in depth; an internal delivery safeguard must still run for
+  already-approved user sends regardless of AI-tool availability.
+- For UI diagnostic/recheck access, add the new channel through `channellist.ts`,
+  `emailReceive-ipc.ts`, `preload.ts`, and `src/views/api/emailreply.ts`, using
+  validated inputs and existing renderer-safe response conventions.
+- Map stable codes to translated messages in all six language files. Safe audit
+  metadata: stage, code, correlation ID, detector version, source, coverage,
+  timestamps, cache indicator, draft/attempt IDs. Do not log bodies, credentials,
+  approval tokens, raw provider errors, or invalid model prose.
+- Extend `EmailReplyPolicyCode` in `src/entityTypes/emailReplyReliabilityTypes.ts`
+  with the duplicate/unknown/conflict codes and preserve them across policy,
+  draft/send outcomes, tool results, IPC DTOs, and audit serialization.
+- Reuse is a `message_read_by_ai` event with bounded reuse metadata; refusals
+  are one `reply_skipped` event owned by the outer service. Centralize that
+  write so fast-path/policy/claim denial cannot double-log. Audit failure stops
+  further work; no refusal can proceed to SMTP.
+- Update affected component tests when UI states/results change. Existing-draft
+  reuse, unknown-check retry, and blocked send are user-visible behavior and
+  cannot defer tests/translations to a later patch.
 
-### 13.3 Sync persistence
+## 11. Implementation sequence and traceability
 
-- `test/vitest/main/EmailReceiveSyncService.test.ts` (new or extended): mock
-  the IMAP client to return a `ParsedInboundEmail` with `isAnswered: true`;
-  assert the upserted row has `isAnswered: 1`. Re-sync with `isAnswered:
-  false` (flag cleared); assert the row updates to `0` without touching
-  `replyStatus`.
-- POP3 path: assert `isAnswered` is `0` on the upserted row.
+| Unit | Main changes | PRD mapping |
+|---|---|---|
+| Generation contract | Shared enum/prompt, metadata result, preserved correction context, bounded route fallback and token budget | 025–027 |
+| Persistence foundations | Entity/schema/DTO provenance, targeted sync updates, IMAP namespaced keys, guard registration/Model/Module, old-schema tests | 030, 035, 037–038 |
+| Eligibility and generation | Authoritative state reader, atomic reservation/commit, transactional revision materialization, reuse and policy codes | 028–029, 035 |
+| Mailbox detection | Fresh flags, special-use folders, exact header verification, three-state cache, bounds/single-flight | 031–032, 037, 039 |
+| Delivery integration | Forced probe, message-scoped atomic claim/finalize, discard/recovery/reconciliation guard transitions | 029, 031, 036 |
+| Tool/operator integration | Catalog/IPC/DTOs, one audit owner, six-language UI, component/E2E tests | 033–034 |
+| Release verification | Populated upgrade, concurrent fake-IMAP/SMTP flows, metrics and IMAP pilot | 038–039 |
 
-### 13.4 Sent-folder detection
+Commit completed logical units with their tests, following repository rules.
+Independent validation repairs can ship first; do not describe full duplicate
+protection as implemented until mailbox enforcement and message-level claims
+are both integrated.
 
-- `test/vitest/main/EmailReplyDetectionService.test.ts` (new): mock
-  `ImapEmailReceiveClient.searchSentForReply` to return a matched Message-ID;
-  assert `checkReplied` returns `replied: true`, caches
-  `manualReplyDetectedAt` and `manualReplyCheckAt` on the message row.
-- Mock returns null; assert `replied: false`, only `manualReplyCheckAt` set.
-- Assert the AI-enable gate throws when AI is disabled.
-- Assert a message with `replyStatus: "sent"` short-circuits to
-  `replied: true, source: "flag"` without a Sent-folder round-trip.
+## 12. Test strategy and release gates
 
-### 13.5 Tool catalog and IPC
+Extend existing tests at their actual locations:
 
-- `test/vitest/main/service/ToolCatalogService.test.ts`: assert
-  `check_email_replied` is in the catalog with the correct parameter schema.
-- `test/vitest/main/EmailReceiveAiTools.test.ts`: assert the
-  `create_email_reply_draft` tool description contains the do-not-redraft
-  instruction.
+- `test/vitest/main/EmailReplyPromptBuilder.test.ts` and
+  `test/vitest/utilitycode/EmailReplyGenerationSchema.test.ts`: shared contract,
+  optional fields, fenced/prose parsing, invalid shape/types/limits.
+- `test/vitest/main/EmailReplyDraftGeneration.test.ts`: original context preserved
+  on correction, metadata/truncation, bounded fallback, no model calls for local
+  denials, correct reuse, transactional failure leaves no draft.
+- `test/vitest/utilitycode/EmailReplyPolicyOrchestrator.test.ts` and
+  `test/vitest/main/modules/EmailReplyPreDraftPolicy.test.ts`: both stages,
+  authoritative sibling/attempt precedence, policy compatibility.
+- `test/vitest/main/modules/EmailReplySendClaim.integration.test.ts`,
+  `EmailReplyDeliveryFakeSmtp.test.ts`, `EmailReplyRecovery.model.test.ts`: same-
+  and sibling-draft races, one SMTP submit, unknown recovery, verified reconciliation,
+  late completion race, forced mailbox refresh after manual reply.
+- Add detection, guard reservation, sync/UIDVALIDITY, and populated schema-upgrade
+  suites under `test/vitest/main/`; use fake IMAP/SMTP and real isolated SQLite
+  transactions for concurrency assertions. Mocks alone do not prove atomicity.
+- Extend `EmailReceiveAiTools.test.ts`, provider payload/API tests, tool catalog
+  tests, and affected `test/vitest/main/components/` tests. Cross-component
+  draft/approval/recheck flows require specs under `test/e2e/specs/`.
 
-### 13.6 Type-check gate
+Cover every scenario in the PRD matrix, including false search returns, malformed
+headers, ancestor-only matches, unrecognized aliases, limits/timeouts, config
+change during I/O, read source messages, cache races, expired-owner fencing,
+legacy siblings, and audit failures. Assert no LLM/SMTP side effects on refusal.
 
-All new and changed files must pass `yarn tsc` / `npx tsc --noEmit` clean
-(the vitest `globalSetup` runs it). No `as any` casts on untrusted input;
-`checkEmailRepliedSchema.parse(args)` is the boundary.
+Implementation checks: non-watch `yarn exec tsc --noEmit`, `yarn testmain`, the
+relevant utility suites via `yarn vitest-puppeteer --run`, `yarn test:components`,
+and `yarn test:e2e` for changed critical flows. Use the repository runners/native
+dependency setup rather than treating watch-mode `yarn tsc` as a terminating gate.
+These are future implementation gates, not tests claimed by this document review.
 
-## 14. Rollout
+Release requires old-schema upgrade/reinitialization tests and an IMAP pilot
+with verified Sent discovery and hosted JSON support/fallback. Compare first-pass
+validation, correction/truncation rates, unknown reasons, detection p95, and
+duplicate/guard conflicts against a captured baseline. No fabricated numeric target.
+Disable guarded automation for unavailable mailbox detection; never fall back to
+unsafe automatic sending. Keep local duplicate protections active during rollback.
 
-- The entity change is additive (new columns with defaults). The TypeORM
-  schema sync adds them on next app start; `yarn init` is not required for
-  existing installs in dev, but the release migration includes the columns.
-- The prompt and call-shape fixes take effect on the next draft generation;
-  no migration of existing drafts is needed.
-- The new `check_email_replied` tool appears in the AI tool catalog on next
-  app start. The model can call it immediately; no user configuration is
-  required.
-- The `isAnswered` sync takes effect on the next inbox sync per service.
-  Existing rows remain `0` until the next sync for that mailbox.
+## 13. References and unresolved external dependencies
 
-## 15. Out Of Scope
-
-- Per-service Sent-folder name override (v2; the candidate list covers v1).
-- Retroactive backfill of `isAnswered` for historical rows (next sync
-  populates forward-only).
-- Inline auto-call of `check_email_replied` inside `create_email_reply_draft`
-  (v1 leaves it as an explicit AI tool call to keep network I/O opt-in).
-- Localized UI strings for the new refusal codes (v1 surfaces the English
-  reason; i18n patch is a follow-up).
+- [RFC 5322 §3.6.4](https://www.rfc-editor.org/rfc/rfc5322.html#section-3.6.4): exact parent identifiers versus conversation ancestry.
+- [RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html): flags, UIDVALIDITY identity and HEADER substring searches.
+- [RFC 6154 §2](https://www.rfc-editor.org/rfc/rfc6154.html#section-2): optional/multiple Sent special-use folders.
+- Installed ImapFlow declarations: `node_modules/imapflow/lib/imap-flow.d.ts`
+  (`SearchObject.header`, `search`, mailbox special-use fields, fetch headers).
+- Remote hosted JSON-mode forwarding/error capability is an integration dependency,
+  not established by this checkout. Resolve by capability testing before rollout.
+- Provider/client coverage and the remaining external-send race are documented
+  limits; the design does not promise complete detection or distributed exactly-once.

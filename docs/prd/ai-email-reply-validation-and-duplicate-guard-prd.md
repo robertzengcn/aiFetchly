@@ -1,492 +1,339 @@
-# AI Email Reply Validation And Duplicate-Reply Guard - Product Requirements Document
-
-## Document Information
-
-- **Status:** Draft
-- **Owner:** Engineering
-- **Related PRDs:**
-  - `ai-email-receive-auto-reply-prd.md` (original receive + reply lifecycle)
-  - `ai-email-thread-aware-reply-reliability-prd.md` (FR-011/FR-012 generation + validation)
-  - `ai-outbound-email-intent-aware-delivery-prd.md` (send reliability)
-- **Related Technical Design:** `ai-email-reply-validation-and-duplicate-guard-technical-design.md`
-- **Scope:** Two production defects in the AI auto-reply email feature plus a manual-reply detection capability.
-
-## 1. Purpose
-
-This PRD specifies the fix for two defects reported against the AI auto-reply
-email feature, and introduces a new capability that lets the system recognize
-when a message has already been answered — including answers written manually
-outside the application.
-
-1. **Validation regression:** `create_email_reply_draft` frequently returns
-   `[needs_human_review] Generation failed validation twice (2 codes); no draft
-   persisted`, blocking draft creation even when the model output is usable.
-2. **Duplicate replies:** The AI drafts and sends replies to the same inbound
-   message more than once because nothing in the draft-generation path checks
-   whether the message was already replied to — by the app or by a human in
-   their mailbox.
-
-## 2. Executive Summary
-
-The validation defect has three compounding causes: the system prompt asks the
-model for a JSON field named `classification` while the strict schema requires
-`intentSuggestion`; the LLM call sets no JSON response mode so the model wraps
-output in prose; and `max_tokens: 700` can truncate a 400-word reply mid-JSON.
-All three are fixed with a small, surgical change to the prompt, the token
-budget, and the API call shape.
-
-The duplicate-reply defect is a missing guard: `EmailReplyDraftGenerationService`
-and the `pre_draft` policy gate never inspect `replyStatus`. The send path
-already flips `replyStatus` to `sent` on success, so the state exists — it is
-just not consulted. A server-side guard in both layers blocks re-drafting and
-re-sending.
-
-Manual replies (written in Gmail, Outlook, Apple Mail, or any IMAP client)
-cannot be detected from `replyStatus`, which the app never updated. The IMAP
-`\Answered` system flag is the cheapest signal, and the receive client already
-parses it — it is just not persisted or consulted. For servers that do not set
-`\Answered`, a Sent-folder reply search by `In-Reply-To` / `References`
-provides a precise per-message second signal. Together these three layers
-catch replies made in-app, replies made via IMAP clients that flag, and replies
-made via clients/providers that do not flag.
-
-## 3. Current-State Problem
-
-### 3.1 Draft generation fails validation twice
-
-`EmailReplyDraftGenerationService.createDraft` calls the LLM, runs
-`parseStrictGeneratedReply`, and on failure sends a bounded correction prompt
-and parses again. Two failures produce the error:
-
-```text
-[needs_human_review] Generation failed validation twice (2 codes); no draft persisted
-```
-
-The error is assembled at `src/service/emailReply/EmailReplyDraftGenerationService.ts:262-275`.
-Three independent causes make the failure common rather than rare:
-
-1. **Field-name mismatch.** The system prompt at
-   `src/service/emailReply/EmailReplyPromptBuilder.ts:88` asks for:
-   `{"subject", "bodyText", "classification", "confidence"}`.
-   The strict schema at
-   `src/service/emailReply/EmailReplyGenerationSchema.ts:36` requires the field
-   `intentSuggestion` (an enum), not `classification`. A model that obeys the
-   prompt returns `classification`, then fails validation with a code like
-   `intentSuggestion:invalid_enum_value`. The correction prompt
-   (`buildCorrectionPrompt`) only echoes the failure codes — it never tells the
-   model the correct field name — so the second attempt repeats the same shape.
-2. **No JSON response mode.** `callLlmRaw`
-   (`EmailReplyDraftGenerationService.ts:431-442`) calls
-   `api.openAIChatCompletion(...)` without `response_format`.
-   `openAIChatCompletionHosted` (`src/api/aiChatApi.ts:2145-2179`) never
-   forwards a `response_format` field. The model is free to wrap output in
-   prose or code fences, and `extractJson` then returns `no_json_object`.
-3. **Token budget can truncate the body.** The prompt allows "under 400 words"
-   (`EmailReplyPromptBuilder.ts:90`) but `max_tokens: 700`
-   (`EmailReplyDraftGenerationService.ts:439`) is tight for a 400-word reply
-   plus the surrounding JSON envelope and subject. A truncated JSON string
-   fails with `malformed_json` or `body_empty`.
-
-### 3.2 Nothing blocks re-drafting an already-replied message
-
-`EmailReplyDraftGenerationService.createDraft` loads the message
-(`EmailReplyDraftGenerationService.ts:77-92`) and proceeds straight to
-classification, policy, and generation. It never reads `message.replyStatus`.
-The `pre_draft` policy gate `evaluatePreDraft`
-(`src/service/emailReply/EmailReplyPolicyOrchestrator.ts:56-78`) only inspects
-`classification`, `classificationConfidence`, and the effective rule. So a
-message with `replyStatus === "sent"` passes the gate and gets a brand-new
-draft, which can then be sent again.
-
-The send path does eventually flip `replyStatus` to `"sent"`
-(`src/model/EmailReplyDraft.model.ts:445-450`, called from
-`src/service/emailReply/EmailReplyDeliveryService.ts:355-368`). The state is
-tracked — it is simply not consulted on the way back in.
-
-### 3.3 Manual replies are invisible to the application
-
-`replyStatus` only reflects replies sent through the application. A user who
-replies manually in Gmail, Outlook, or Apple Mail leaves `replyStatus` at
-`not_started`, so the server-side guard in 3.2 does not catch it and the AI
-drafts a duplicate.
-
-Two signals are available to close this gap:
-
-1. **IMAP `\Answered` flag.** The receive client already parses this:
-   `ImapEmailReceiveClient.ts:170` reads `normalizedFlags.has("\\answered")`
-   and `ParsedInboundEmail.isAnswered` is declared at
-   `src/service/emailReceive/EmailReceiveClient.ts:28`. But the field is not
-   persisted — `EmailReceivedMessageEntity` has no `isAnswered` column — and
-   the sync path drops it. Nothing downstream consults it.
-2. **Sent-folder reply search.** The entity already stores `messageId` (RFC
-   Message-ID, `EmailReceivedMessage.entity.ts:33`), `inReplyTo`, and
-   `referencesHeader` (lines 40, 43). A scan of the mailbox's Sent folder for a
-   reply whose `In-Reply-To`/`References` contains the original Message-ID
-   detects a manual reply with per-message precision. This catches replies
-   from any client on a provider that syncs the Sent folder over IMAP.
-
-## 4. Product Principles
-
-- **Fail closed on duplicate replies.** A duplicate reply is worse than a
-  missed draft. When the system cannot prove a message is unanswered, it
-  refuses to draft rather than risk sending twice.
-- **Server authority.** The server's reply-state is authoritative; the model
-  is told the state and asked not to redraft, but the server enforces the guard
-  regardless of model behavior.
-- **Defense in depth.** No single signal is complete (`\Answered` is not set
-  by every provider; Sent-folder sync is not available on every mailbox). The
-  product layers three cheap signals so each catches what the one above
-  misses.
-- **Surgical fixes.** The validation defect is fixed at its three root causes;
-  no relaxation of the strict schema or the two-strike `needs_human_review`
-  policy. Safety properties are preserved.
-
-## 5. Goals
-
-### 5.1 Primary goals
-
-- G1: `create_email_reply_draft` produces a persisted draft on well-formed
-  model output. The `Generation failed validation twice` error is reserved for
-  genuinely malformed output, not for prompt/schema field-name disagreement.
-- G2: The system refuses to create a new draft for a message whose
-  `replyStatus` is `sent` or `draft_created`, returning a clear structured
-  error instead.
-- G3: The system detects manual replies via the IMAP `\Answered` flag at sync
-  time and refuses to draft against a flagged message.
-- G4: A new AI tool lets the model (or the UI) probe whether a message has a
-  reply in the Sent folder when `\Answered` is not set, so the model can avoid
-  drafting on ambiguity.
-
-### 5.2 Secondary goals
-
-- G5: The `create_email_reply_draft` tool description instructs the model to
-  consult `replyStatus` and call the reply-check tool before drafting, so the
-  model behaves correctly without relying solely on the server guard.
-- G6: Audit rows are written for every refused-draft decision so operators
-  can see why a draft was not created.
-- G7: The manual-reply detection is cached on the message row so the AI does
-  not trigger a Sent-folder round-trip on every check.
-
-## 6. Non-Goals
-
-- Changing the strict generation schema's field set beyond the minimum needed
-  to align prompt and schema. The schema remains the authority.
-- Relaxing the two-strike `needs_human_review` policy (FR-011 in the
-  reliability PRD stays authoritative).
-- Detecting manual replies for POP3 mailboxes beyond the Sent-folder search,
-  where the Sent folder is not IMAP-synced. This is documented as a known
-  limitation.
-- Surfacing the new reply-state signals in the audit UI beyond the existing
-  audit list/detail pages. UI changes are limited to surfacing the new tool
-  and the new refusal reason.
-- Automatically reconciling `replyStatus` from `\Answered` retroactively for
-  historical rows. Sync-time capture is forward-only; a one-time backfill is
-  out of scope.
-
-## 7. Target Users And Jobs
-
-### 7.1 Marketing operator
-
-Wants AI-assisted drafting that does not embarrass them by replying twice to
-the same customer. The duplicate-reply defect directly damages their credibility
-with the recipient.
-
-### 7.2 Small business owner
-
-Replies from their phone or webmail and expects the AI assistant to notice.
-They do not want to have to mark messages as "already handled" manually in two
-places.
-
-### 7.3 Support or sales assistant
-
-Needs the AI to produce a usable draft on the first try. The validation
-regression makes the tool unreliable, forcing manual fallback.
-
-## 8. User Journeys
-
-### 8.1 Successful draft creation (fixed validation)
-
-The user asks the AI to reply to an inbound message. The AI calls
-`create_email_reply_draft`. The model returns JSON with the schema-aligned
-field name and a body under the token budget. The system validates on the first
-attempt, persists the draft, and returns it for review. The user sees the
-draft in the audit list and approves it.
-
-### 8.2 Already-replied in-app
-
-The user previously approved and sent a reply through the app. They ask the AI
-to "reply to this email" again. The AI calls `create_email_reply_draft`. The
-server sees `replyStatus === "sent"`, refuses, and returns a structured error:
-"Message already replied to (replyStatus=sent); no new draft created." The AI
-reports this to the user. No duplicate is sent.
-
-### 8.3 Already-replied manually (flag detected at sync)
-
-The user replied from their phone's mail app. The provider set `\Answered` on
-the original message. On the next inbox sync, the app persists
-`isAnswered = 1`. When the AI later tries to draft, the server refuses with
-"Message was already answered in the mailbox." The AI reports this. No
-duplicate is sent.
-
-### 8.4 Already-replied manually (flag not set, Sent-folder check)
-
-The user replied from a webmail client whose provider does not set `\Answered`.
-`\Answered` is absent. The AI, before drafting, calls `check_email_replied`
-(or the server calls it inline). The Sent-folder search finds a reply whose
-`In-Reply-To` matches the original Message-ID. The server refuses and surfaces
-the same structured error. No duplicate is sent.
-
-### 8.5 Genuinely malformed output still routes to human review
-
-A model return that is genuinely malformed (no JSON object, missing required
-fields after correction) still fails validation twice and still routes to
-`needs_human_review` with no persisted draft. The safety property is intact.
-
-## 9. Functional Requirements
-
-### FR-025 Prompt-schema field alignment
-
-The reply-generation system prompt must request the exact JSON field names
-the strict schema enforces.
-
-Acceptance criteria:
-
-- The prompt's example JSON object uses `intentSuggestion` (not
-  `classification`), matching `generatedEmailReplySchema`.
-- The prompt lists the valid enum values for `intentSuggestion` verbatim from
-  the schema's `CLASSIFICATIONS` constant.
-- The correction prompt (`buildCorrectionPrompt`) may carry only validation
-  codes; it must not contradict the schema field names.
-
-### FR-026 JSON response mode
-
-The LLM call for draft generation must request JSON-shaped output when the
-provider supports it, with the strict local parser remaining authoritative.
-
-Acceptance criteria:
-
-- `callLlmRaw` sets `response_format: { type: "json_object" }` (or the
-  equivalent in the chat API request shape).
-- When the provider rejects or ignores `response_format`, the strict local
-  parser (`parseStrictGeneratedReply`) still validates; no raw model prose is
-  persisted as a draft.
-- The comment at `EmailReplyGenerationSchema.ts:6-9` (local validation is
-  authoritative) is preserved.
-
-### FR-027 Sufficient token budget
-
-The LLM call must allow enough tokens for a maximum-length reply plus its JSON
-envelope, so output is not truncated mid-JSON.
-
-Acceptance criteria:
-
-- `max_tokens` is raised from `700` to a value that fits a 400-word body plus
-  subject, classification, confidence, and JSON envelope (nominally `1500`).
-- The body length cap in the prompt ("under 400 words") is reconciled with the
-  token budget so the model cannot be invited to produce more than the budget
-  allows.
-
-### FR-028 In-app reply guard in draft generation
-
-`createDraft` must refuse to create a new draft for a message already in a
-replied or draft-exists state.
-
-Acceptance criteria:
-
-- After loading the message, `createDraft` checks `message.replyStatus`.
-- `replyStatus === "sent"` returns `{ success: false, error: "Message already
-  replied to (replyStatus=sent); no new draft created" }` and writes a
-  `reply_skipped` audit row.
-- `replyStatus === "draft_created"` returns a structured error pointing the
-  model to the existing draft rather than creating a second one.
-- The guard runs before the policy gate, knowledge retrieval, and the LLM
-  call — no model call is spent on an already-replied message.
-
-### FR-029 In-app reply guard in pre-draft policy
-
-The `pre_draft` policy gate must deny messages with a terminal reply status,
-as defense in depth behind FR-028.
-
-Acceptance criteria:
-
-- `evaluatePreDraft` reads `message.replyStatus`.
-- `replyStatus === "sent"` denies with code `already_replied`.
-- The denial is audited through the existing pre-draft audit path.
-
-### FR-030 Persist IMAP `\Answered` flag
-
-The receive client must persist the `\Answered` flag on the received-message
-row so downstream guards can consult it.
-
-Acceptance criteria:
-
-- `EmailReceivedMessageEntity` gains an `isAnswered: number` column
-  (boolean-as-int, default `0`, mirroring `isUnread`).
-- `EmailReceiveSyncService` writes `isAnswered` from
-  `ParsedInboundEmail.isAnswered` during upsert.
-- The sync upsert is idempotent on the column; re-syncing a message does not
-  clobber a newer `replyStatus` set by the send path.
-- POP3 sync sets `isAnswered = 0` (POP3 does not expose flags) without error.
-
-### FR-031 Mailbox-flag reply guard
-
-`createDraft` must refuse to create a draft for a message flagged
-`\Answered` in the mailbox, even when `replyStatus` is not `sent`.
-
-Acceptance criteria:
-
-- After loading the message, `createDraft` checks `message.isAnswered`.
-- `isAnswered === 1` returns `{ success: false, error: "Message was already
-  answered in the mailbox" }` and writes a `reply_skipped` audit row.
-- The guard runs before the LLM call.
-
-### FR-032 Sent-folder reply detection tool
-
-A new AI tool must probe the mailbox's Sent folder for a reply to a given
-inbound message, for the case where `\Answered` is not set.
-
-Acceptance criteria:
-
-- The tool takes a `message_id` and returns `{ replied: boolean,
-  matched_message_id: string | null, checked_at: string }`.
-- The search matches the original message's RFC `Message-ID` against the
-  `In-Reply-To` and `References` headers of messages in the configured Sent
-  folder.
-- The result is cached on the received-message row
-  (`manualReplyDetectedAt: datetime | null`,
-  `manualReplyCheckAt: datetime | null`) so repeated checks do not re-scan.
-- The tool is AI-gated (AI enable checked first), runs in the main process,
-  and performs network I/O only through `ImapEmailReceiveClient`.
-- The tool's `requiresConfirmation` is `false` (read-only mailbox probe).
-
-### FR-033 Tool catalog and description updates
-
-The AI tool catalog must tell the model how to avoid duplicate replies.
-
-Acceptance criteria:
-
-- `create_email_reply_draft`'s description states: do not call for a message
-  whose `replyStatus` is `sent` or `draft_created`; call `check_email_replied`
-  first when unsure.
-- `fetch_unread_emails` and `get_email_message` summaries continue to surface
-  `replyStatus`; their descriptions note that the model should not draft for
-  messages in a replied state.
-- `check_email_replied` is registered in `skillsRegistry.ts` with accurate
-  parameters and description.
-
-### FR-034 Audit for refused drafts
-
-Every refused-draft decision must be auditable.
-
-Acceptance criteria:
-
-- A refused draft under FR-028, FR-029, or FR-031 writes a `reply_skipped`
-  audit row with the refusal reason and the correlation id.
-- The existing audit list/detail UI surfaces the refusal reason without code
-  changes beyond mapping the new `already_replied` and
-  `mailbox_answered` codes to translated strings.
-
-## 10. Data Requirements
-
-### 10.1 Received message extensions
-
-Required attributes (additions to `EmailReceivedMessageEntity`):
-
-- `isAnswered: number` — boolean-as-int, default `0`. Set by sync from the
-  IMAP `\Answered` flag.
-- `manualReplyDetectedAt: Date | null` — timestamp of the most recent
-  Sent-folder search that found a matching reply. Null when never checked or
-  when the last check found no reply.
-- `manualReplyCheckAt: Date | null` — timestamp of the most recent
-  Sent-folder search, regardless of outcome. Used to decide whether to
-  re-check on a subsequent `check_email_replied` call.
-
-### 10.2 No new entities
-
-No new top-level entity is introduced. The Sent-folder search is a service
-method over `ImapEmailReceiveClient`; its result is cached on the
-received-message row per 10.1.
-
-### 10.3 Idempotency and ordering
-
-- `isAnswered` is updated only by sync, never by the send path. The send path
-  continues to own `replyStatus`.
-- `manualReplyDetectedAt` / `manualReplyCheckAt` are updated only by the
-  `check_email_replied` tool path, never by sync.
-- A message with `replyStatus === "sent"` is never re-checked for manual
-  replies; the in-app state wins.
-
-## 11. Acceptance And Test Plan
-
-### 11.1 Validation fixes (FR-025, FR-026, FR-027)
-
-- Unit: `EmailReplyPromptBuilder.test.ts` asserts the prompt's example JSON
-  uses `intentSuggestion` and lists the enum values.
-- Unit: `EmailReplyGenerationSchema.test.ts` asserts a model return with
-  `intentSuggestion` passes on the first attempt (no correction round).
-- Unit: `EmailReplyDraftGeneration.test.ts` asserts a well-formed reply
-  produces a persisted draft with `max_tokens` raised and `response_format`
-  set.
-- Regression: a genuinely malformed return still routes to
-  `needs_human_review` after two failures.
-
-### 11.2 In-app reply guard (FR-028, FR-029)
-
-- Unit: `EmailReceiveAiTools.test.ts` asserts `createEmailReplyDraft` on a
-  `replyStatus === "sent"` message returns the structured refusal and writes a
-  `reply_skipped` audit row, with no LLM call made.
-- Unit: same for `replyStatus === "draft_created"`, asserting the existing
-  draft is referenced.
-- Unit: `EmailReplyPolicyOrchestrator.test.ts` asserts `evaluatePreDraft`
-  denies `replyStatus === "sent"` with code `already_replied`.
-
-### 11.3 Mailbox-flag guard (FR-030, FR-031)
-
-- Unit: `EmailReceiveSyncService` test (new) asserts `isAnswered` is
-  persisted from `ParsedInboundEmail.isAnswered` on insert and update.
-- Unit: `EmailReceiveAiTools.test.ts` asserts `createEmailReplyDraft` on an
-  `isAnswered === 1` message returns the mailbox-answered refusal and writes
-  a `reply_skipped` audit row, with no LLM call made.
-- Unit: POP3 sync sets `isAnswered = 0` without error.
-
-### 11.4 Sent-folder detection tool (FR-032)
-
-- Unit: `EmailReplyDetectionService.test.ts` (new) asserts a Sent-folder
-  search with a matching `In-Reply-To` returns `replied: true` and caches
-  `manualReplyDetectedAt`.
-- Unit: a search with no match returns `replied: false` and caches only
-  `manualReplyCheckAt`.
-- Unit: the tool is AI-gated (returns the disabled error when AI is off).
-- Integration (existing E2E harness): a manual reply seeded in the Sent
-  folder blocks `create_email_reply_draft`.
-
-### 11.5 Tool catalog (FR-033)
-
-- Unit: `ToolCatalogService.test.ts` asserts `check_email_replied` appears in
-  the catalog with the correct parameter schema.
-- Unit: `EmailReceiveAiTools.test.ts` asserts the
-  `create_email_reply_draft` description contains the do-not-redraft
-  instruction.
-
-### 11.6 Audit (FR-034)
-
-- Unit: every refusal path in 11.2 and 11.3 writes exactly one `reply_skipped`
-  audit row with the correct reason and correlation id.
-
-## 12. Risks And Open Questions
-
-- **Provider-specific `\Answered` behavior.** Gmail sets it reliably for IMAP
-  and web replies. Some providers do not. The Sent-folder search (FR-032) is
-  the backstop; where neither signal is available, the system fails closed
-  (no draft) only when the model calls `check_email_replied` and finds a
-  match, never by default.
-- **Sent folder naming.** Defaults must cover common names (`Sent`,
-  `[Gmail]/Sent Mail`, `Sent Items`). A per-service override is desirable but
-  not required for v1; the tool can try a short list of common names.
-- **Backfill.** Existing rows have `isAnswered = 0` and null
-  `manualReplyCheckAt`. The next sync and the next `check_email_replied` call
-  populate them. No offline backfill job is in scope.
-- **Open question:** should `check_email_replied` run inline inside
-  `create_email_reply_draft` automatically when `\Answered` is absent? v1
-  leaves it as an explicit AI tool call to keep network I/O opt-in and
-  cacheable. Revisit based on observed duplicate rates.
+# AI Email Reply Validation and Duplicate Guard — Product Requirements
+
+## Document information
+
+- **Status:** Revised draft; proposed behavior, not an implementation claim.
+- **Reviewed:** 2026-10-05 against this repository's current implementation.
+- **Owner:** Engineering; product owner reviews availability trade-offs before rollout.
+- **Technical design:** [Implementation design](ai-email-reply-validation-and-duplicate-guard-technical-design.md).
+- **Related requirements:** [Receive and auto-reply](ai-email-receive-auto-reply-prd.md), [thread-aware reply reliability](ai-email-thread-aware-reply-reliability-prd.md), and [outbound delivery](ai-outbound-email-intent-aware-delivery-prd.md).
+- **Requirement numbering:** FR-025–FR-034 retain the earlier document's identifiers. FR-035–FR-039 close review gaps. These identifiers are local to this feature document.
+
+## 1. Purpose and outcome
+
+Make AI reply generation reliable without weakening validation, and prevent the
+application from drafting or sending another reply to an inbound message that
+has already been answered, is being sent, or has an unresolved delivery outcome.
+Detect replies written outside the app using mailbox evidence, with explicit
+handling of unavailable or ambiguous evidence.
+
+Success means valid generated replies become reviewable drafts, concurrent
+requests cannot create independent sendable drafts for the same inbound message,
+and every actionable refusal explains what the operator can do next.
+
+## 2. What the code actually does today
+
+The previous draft identified a prompt/schema mismatch and missing message-level
+duplicate guards, but overstated several causes and guarantees.
+
+| Finding | Verified behavior | Product implication |
+|---|---|---|
+| Prompt contract disagrees with schema | `buildReplySystemMessage` requests `classification`; `generatedEmailReplySchema` requires `intentSuggestion`. | Align the contract at its source. This is a confirmed defect. |
+| JSON formatting | `callLlmRaw` does not request JSON mode; request paths copy explicit supported fields. However, `extractJson` already tolerates fences and surrounding prose. | JSON mode is useful, not proof that prose wrapping caused the reported failure. |
+| Output budget | Generation uses `max_tokens: 700` while asking for a reply under 400 words. It discards `finish_reason`. | Truncation is plausible; measure it and reject truncated completions explicitly. A larger budget cannot guarantee success across models/languages. |
+| Correction loses context | The second call contains the system prompt and validation codes, but drops the original email and retrieved context. | A syntactically repaired answer may no longer answer the email accurately. Preserve context. |
+| Manual reply flags already affect state | `EmailReceiveSyncService.toEntity` maps `isAnswered` to `replyStatus = "sent"`; `upsertByProviderUid` promotes existing rows to `sent`. | Observed `\Answered` replies are already represented. Missing provenance and stale observations remain problems. |
+| Sync freshness | Sync defaults to unread-only and fetches at most 50 messages. | A read/answered message may never be refreshed by the next ordinary sync. |
+| Draft creation | Generation does not inspect message reply state; draft, revision, and message status are persisted separately. | A status check is insufficient against concurrent generation. |
+| Sending | `claimApprovedRevisionForSend` protects one draft/revision/approval. Successful finalization updates message `replyStatus` atomically. | Sibling drafts can send independently. `replyStatus` does not represent in-flight or unknown delivery. |
+
+Source locations are listed in the technical design. The reported error does not
+establish failure rates or prove every failure has the same cause. Validation
+codes and completion telemetry are required to assess the fix.
+
+## 3. Scope and product decisions
+
+### 3.1 Included
+
+- Prompt/schema alignment, provider-compatible JSON hints, context-preserving
+  bounded correction, and completion-status checks.
+- Duplicate eligibility before generation and immediately before sending,
+  including atomic message-level concurrency protection.
+- Fresh IMAP flag checks and Sent-folder detection, with a diagnostic
+  `check_email_replied` tool using the same service.
+- Structured results, safe caching, audit, translated refusals, upgrade handling,
+  and tests for the required behavior.
+
+### 3.2 Explicit decisions
+
+1. **Detection is automatic.** Draft/send services enforce it; correctness cannot
+   depend on the AI choosing to call a tool first.
+2. **Three outcomes:** `replied`, `not_replied`, and `unknown`. `not_replied`
+   means no reply was observed in the successfully checked mailbox scope at a
+   stated time. It does not prove no external reply exists anywhere.
+3. **Fail closed:** known replies, pending sends, unresolved delivery, and
+   `unknown` mailbox results stop this automated workflow. Operators can retry
+   transient checks, correct settings, reconcile delivery, or reply in their
+   mailbox manually. V1 provides no AI-accessible bypass.
+4. **Reuse existing drafts.** Return an eligible draft for editing/review instead
+   of generating another. Approval remains separate.
+5. **Positive evidence is sticky.** A later empty search, cleared flag, or deleted
+   Sent copy cannot erase earlier evidence of a reply.
+6. **Message scope:** protection is per mailbox/inbound identity, not per
+   conversation. A new customer message in an answered thread gets its own checks.
+
+### 3.3 Limits and exclusions
+
+- POP3 has no comparable flag/Sent facility in the current abstraction. Without
+  local positive evidence, external detection is `unknown`; this guarded workflow
+  is unavailable for that message. Never use POP3 settings to connect via IMAP.
+- No provider-specific Gmail/Outlook APIs, full Sent body ingestion, mailbox-wide
+  backfill, or new automatic-send authority.
+- No guarantee for replies that are not saved/synchronized, lose identifying
+  headers, or are sent after the last mailbox check.
+- Fresh checks reduce the external manual-send race but cannot eliminate it:
+  the app cannot lock webmail, a phone, or SMTP delivery globally.
+- Atomic protection is scoped to one app database and configured email service.
+  Separate installations or duplicate service configurations sharing a mailbox
+  have no shared reservation; cross-installation coordination is out of scope.
+- Existing `sent` rows stay protected. Historical app sends and provider-flag
+  promotions cannot reliably be distinguished retroactively.
+
+## 4. Users and journeys
+
+| Situation | Required outcome |
+|---|---|
+| Operator requests a reply to an unanswered IMAP message | Check local state and fresh mailbox evidence, generate valid content, persist one revision-bound draft, and return it for review. |
+| User already replied through the app or an observed mailbox signal | Return `already_replied` with safe evidence; no classification/generation call or SMTP submission. |
+| User already has an editable draft | Return it with `reused: true`; do not alter content or approval. |
+| Two requests draft the same message | One holds the reservation; the other returns `generation_in_progress` or the committed draft. |
+| User replies from a phone after AI drafting | Forced detection before send finds the reply and refuses submission. |
+| SMTP may have accepted a prior reply | Return `delivery_unknown`; block all siblings until verified reconciliation. |
+| Sent folder is unavailable or search times out | Return `reply_state_unknown` with a safe next step, never `replied: false`. |
+| Generated content fails twice | Persist no draft; retain `needs_human_review` and sanitized diagnostics. |
+
+## 5. Reply eligibility and state semantics
+
+`replyStatus` is a coarse projection. Draft and send-attempt records remain
+authoritative for in-flight and ambiguous delivery states.
+
+| Evidence/state, evaluated in order | Draft action | Send action |
+|---|---|---|
+| Any local `sent` or persisted external positive evidence | Refuse `already_replied` | Refuse `already_replied` |
+| Any draft/attempt `delivery_unknown` | Refuse `delivery_unknown` | Refuse `delivery_unknown` |
+| Any draft `sending` or attempt `claimed`/`submitted` | Refuse `reply_in_progress` | Refuse `reply_in_progress`; retain idempotent same-attempt behavior |
+| Multiple live drafts or contradictory records | Refuse `reply_state_conflict` | Refuse `reply_state_conflict` |
+| One live `draft`/`approved`, or retryable `failed` draft | Return existing after mailbox check | Only this draft, valid approval, forced mailbox check |
+| Live generation reservation | Refuse `generation_in_progress` | Refuse `generation_in_progress` |
+| No local reply, fresh complete result `not_replied` | Eligible under existing policy | Eligible under existing approval/policy and atomic claim |
+| No local reply, result `unknown` | Refuse `reply_state_unknown` | Refuse `reply_state_unknown` |
+
+Discarded drafts do not block regeneration when no sent/in-flight/unknown
+attempt exists. Verified non-delivery can reopen the same draft through existing
+reconciliation; sending then needs fresh approval. Repair a stale `draft_created`
+projection only after checking authoritative records. A missing draft alone does
+not prove that no reply sent.
+
+## 6. Functional requirements
+
+### FR-025 — Align generation with the schema
+
+- Prompt names `subject`, `bodyText`, `intentSuggestion`, and `confidence`,
+  describes limits/types, and obtains enums from one shared contract. Optional
+  review fields remain supported.
+- Correction retains the original email, instructions, and bounded retrieved/
+  conversation context. Add sanitized validation codes; do not copy invalid raw
+  output into corrective instructions.
+- Local validation and existing content/policy checks remain mandatory. Model
+  confidence or suggested intent cannot override policy.
+
+### FR-026 — JSON with bounded provider compatibility
+
+- Request `response_format: { type: "json_object" }` on supported routes;
+  desktop typing and both hosted/local payload builders forward it.
+- Capability-confirmed unsupported routes omit the hint. An explicit
+  unsupported-parameter rejection may retry once without it per logical attempt.
+  Authentication, rate-limit, timeout, network, and generic server failures do
+  not trigger this compatibility fallback.
+- At most two reply-content validation attempts and four reply-generation
+  transport submissions, including compatibility retries. Classification calls
+  have a separate bounded budget within the overall generation deadline.
+- Ignored hints still require local validation. Verify hosted support end to end
+  instead of assuming it from desktop typing.
+
+### FR-027 — Bound output and handle truncation
+
+- Default allowance is 1,500 tokens, subject to actual model context/output
+  limits. Keep concise-reply instructions; word count is not a cross-language
+  token guarantee.
+- `finish_reason = "length"`, refusal/content filtering, empty choices, and
+  unexpected tool-call completions cannot create a draft even if JSON parses.
+  A missing finish reason may proceed only through all local validation checks
+  and is recorded as unavailable metadata.
+- Truncation may use the single correction with shortening instructions. Never
+  persist or silently repair a truncated answer.
+
+### FR-028 — Guard generation and reuse drafts
+
+- Check authoritative local evidence before classification/retrieval/model calls.
+  Positive/in-flight/unknown/conflict decisions follow section 5.
+- Return eligible existing drafts with ID and `reused: true`; no additional
+  generation, edit, approval, or send occurs.
+- Recheck eligibility when content commits. A reply detected during generation
+  prevents draft persistence and releases the reservation.
+
+### FR-029 — Shared policy enforcement
+
+- Both `pre_draft` and `pre_send` apply the message-level local rules. Services,
+  AI tools, IPC, and background automation cannot bypass them.
+- One detection service supplies mailbox evidence. Policy does not independently
+  repeat network probes or audit writes. Approval cannot override these denials.
+
+### FR-030 — Persist answered flags and provenance
+
+- Persist IMAP `isAnswered` plus observation time. Legacy rows have no observation
+  time; default zero is not a fresh negative check.
+- Targeted provider-metadata writes must not overwrite concurrently changed
+  reply lifecycle, approvals, caches, or reservations.
+- Preserve historical `sent` promotions. Future flags are recorded separately
+  from app delivery status; clearing a flag never erases positive evidence.
+- Eligibility probes refresh flags regardless of unread state. Bounded unread
+  sync is not the freshness mechanism.
+
+### FR-031 — Enforce mailbox evidence before draft and send
+
+- Positive flag evidence blocks generation/send. A clear/absent flag triggers
+  Sent detection; it does not establish `not_replied` alone.
+- Draft generation/reuse may use a successful negative detection for at most
+  60 seconds in the same mailbox configuration.
+- Immediately before SMTP, force fresh detection regardless of negative cache.
+  Require an observation at most five seconds old when claiming/submitting,
+  rechecking if delayed; refuse if bounded refresh cannot establish freshness.
+  Recheck local records atomically when claiming the send.
+
+### FR-032 — Detection service and diagnostic tool
+
+- `check_email_replied` accepts the positive integer **stored message row ID**
+  `message_id`; resolve mailbox and RFC Message-ID server-side.
+- Return `state`, `replied: boolean | null`, source/reason code, nullable check
+  time, optional matched reply RFC Message-ID, and cache/coverage metadata.
+  `unknown` always uses `replied: null`.
+- Resolve Sent folders via special-use metadata before name fallbacks; missing,
+  inaccessible, or ambiguous folders yield `unknown`.
+- Parse headers and compare exact normalized tokens. `In-Reply-To` identifies
+  direct parents; an occurrence anywhere in `References` is thread ancestry,
+  not necessarily a reply to this message.
+- Verify outbound sender against configured mailbox identity. References-only
+  or unverified-sender candidates are `unknown` in V1 unless a verified direct
+  reply is also found.
+- Missing IDs, POP3, auth failure, partial search, timeout, and exhausted bounds
+  return `unknown` with a safe bounded reason.
+- Tool does not mutate the mailbox and needs no confirmation; local cache/read
+  audit may update. Check AI enable at tool/IPC boundaries before parsing, DB
+  work, or network I/O.
+
+### FR-033 — Tool catalog and result compatibility
+
+- Register the tool; create/fetch/get descriptions explain reuse, three-state
+  evidence, and server enforcement.
+- Summaries expose safe evidence/freshness alongside `replyStatus`. Credentials,
+  connection objects, and raw mailbox errors stay in the main process.
+- Preserve `success`/`error`; add stable codes, existing draft ID, and safe next
+  actions. Never infer state by parsing English error strings.
+
+### FR-034 — Audit and localization
+
+- Each actionable refusal for a resolved message writes exactly one
+  `reply_skipped` event per invocation: stage, reason code, request correlation
+  ID, and bounded evidence. Layered checks share one audit owner. Disabled,
+  invalid, or unresolved-ID requests do not create message audits.
+- Reuse is a read/reuse event, not new creation/refusal. Audit persistence failure
+  stops generation/send.
+- Translate new/changed UI messages in `en`, `zh`, `es`, `fr`, `de`, and `ja`.
+  Renderer changes include component tests; approval/recheck/reconciliation
+  flows also require E2E coverage.
+
+### FR-035 — Atomic generation reservation
+
+- One persistent reservation per mailbox/inbound identity, acquired before model
+  work with a unique owner token, five-minute lease, and atomic claim. Only its
+  current owner can commit/release. The complete invocation has a five-minute
+  deadline; model calls use at most 120 seconds and cannot exceed remaining time.
+- Generate outside DB transactions. Commit draft, initial revision, message
+  projection, guard binding, and creation audit together.
+- After failure/crash, an expired lease may be reclaimed only without draft/send
+  conflict. A late expired generator cannot commit.
+
+### FR-036 — Message-level send protection
+
+- Extend atomic send claim to inspect all related drafts/attempts and claim the
+  message guard in the same transaction. Different approved sibling drafts
+  cannot both submit SMTP.
+- Sent/unknown outcomes keep protection. Confirmed failure before acceptance may
+  allow the same draft's approved retry under current reliability rules; failure
+  alone never authorizes a new sibling.
+- Preserve revision/hash/approval binding, same-attempt idempotency, kill switch,
+  recipient checks, and rate limits. SMTP stays outside the DB transaction.
+
+### FR-037 — Safe evidence caching
+
+- Store last complete negative result/time/context/version separately from
+  positive evidence. Retain matched reply ID when available.
+- Failed/partial probes never set successful-negative freshness. Later negative
+  observations never erase positive evidence.
+- Config/identity changes invalidate negative cache. Identity conflicts require
+  review and cannot silently discard protection.
+- Single-flight checks and mailbox concurrency bounds avoid repeated scans.
+
+### FR-038 — Upgrade and legacy consistency
+
+- Preserve statuses, approvals, attempts, IDs, and revision bindings in populated
+  DB upgrades. Repeated initialization is safe.
+- Resolve legacy siblings lazily: sent/in-flight/unknown blocks; multiple other
+  live drafts require review. Never automatically delete/send/select them.
+- Existing `sent` rows stay protected. No mailbox-wide backfill; check historical
+  messages on use, including read messages.
+
+### FR-039 — Bounds and rollout
+
+- Detection has a 15-second overall deadline, at most five Sent folders and 200
+  candidate header fetches per message, and one active probe per mailbox.
+  Exceeding a bound yields `unknown`, never a negative.
+- Measure validation codes, truncation, correction/fallback counts, duplicate
+  denials, unknown reasons, probe latency, cache hits, and guard conflicts. Never
+  log bodies, raw model output, or credentials.
+- Pilot with working IMAP/Sent access; verify availability impact before broad
+  rollout. Unsupported mailboxes remain clearly unavailable to this workflow.
+  Disabling features cannot bypass local duplicate checks or restore unsafe
+  automated sending.
+
+## 7. Acceptance and verification matrix
+
+| Area / requirements | Scenarios and assertions |
+|---|---|
+| Contract/correction / 025–027 | Valid first answer persists one draft; old field shape fails; correction retains context; truncated JSON and valid `length` completions persist nothing; two invalid attempts remain human review. |
+| Provider routes / 026 | Hosted/local hints forwarded; unsupported rejection retries once; ignored hints validate; 401/429/timeouts do not fall back; attempt cap holds. |
+| Local guards / 028–029 | Sent, sending, claimed/submitted, unknown, conflicts, reservations give stated codes with zero LLM calls; reuse preserves content/revision/approval. |
+| Flags/sync / 030–031 | Insert/update flags and time; read message probed; legacy zero/null not negative proof; concurrent sync preserves successful send; clearing flag retains positive. |
+| Matching / 032 | Exact parent, substring, unrelated ancestor, unverified sender, References-only, missing ID, multiple/localized Sent folders, POP3, inaccessible folder, false search return, deadline/cap. |
+| Cache / 037 | Fresh negative saves draft probe; expired/config-changed rechecks; send forces probe; timeout never extends negative freshness; positive sticks; cached match ID retained. |
+| Concurrency / 035–036 | At most one draft/revision for concurrent generation; expired owner cannot commit; sibling send race submits SMTP at most once; send completion during generation prevents commit. |
+| Uncertain delivery / 036 | Unknown sibling blocks new work; recovery never resubmits; verified non-delivery allows fresh approval; reconciliation races cannot reopen known sent. |
+| Tool/audit/UI / 033–034 | Disabled gate precedes parsing/I/O; codes survive wrappers; one refusal event; six languages; reuse and blocked-send component/E2E interactions. |
+| Upgrade / 038 | Old-schema DB with sent/draft/approved/unknown/siblings initialized twice; data survives, safe defaults, conflicts refused. |
+
+Release gates: deterministic cases pass; fake IMAP/SMTP integration proves
+network boundaries; pilot confirms hosted JSON option is accepted or safely
+omitted. Capture first-pass validation rate, unknown-check rate by reason, and
+detection p95 against a pre-change baseline. Do not claim numeric improvements
+until measured.
+
+## 8. Risks and trade-offs
+
+- Fail-closed checks reduce availability during outages and for POP3. Clear
+  codes and retriable checks belong in the release.
+- Flag behavior/Sent copies vary by provider and client. Do not claim Gmail or
+  Outlook always sets `\Answered` without provider-specific tests.
+- Header searches provide candidates. Conservative ambiguity handling may block
+  legitimate replies; operator review is safer than replying to the wrong turn.
+- Mailbox observations/SMTP cannot form a distributed transaction. The guarantee
+  is one application-controlled submission per unresolved reply identity, with
+  bounded detection of external replies.
+- Atomic guard/persistence work expands beyond the original surgical patch. It
+  is required for concurrency guarantees; unrelated refactoring is excluded.
+
+## 9. Protocol references
+
+- [RFC 5322 §3.6.4](https://www.rfc-editor.org/rfc/rfc5322.html#section-3.6.4): `In-Reply-To` identifies parents; `References` carries ancestry.
+- [RFC 9051 §2.3.1 and §6.4.4](https://www.rfc-editor.org/rfc/rfc9051.html): flags, mailbox/UIDVALIDITY/UID identity, substring header search.
+- [RFC 6154 §2](https://www.rfc-editor.org/rfc/rfc6154.html#section-2): optional, potentially multiple special-use `\Sent` mailboxes.
