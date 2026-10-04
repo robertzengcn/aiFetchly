@@ -20,7 +20,7 @@ import { Order } from "./order.decorator";
 @Entity("ai_tool_output_bootstrap")
 @Index(["profileId", "bootstrapKey"], { unique: true })
 export class AIToolOutputBootstrapEntity extends AuditableEntity {
-    @PrimaryColumn()
+    @PrimaryColumn("int")
     id: number;
 
     @Order(1)
