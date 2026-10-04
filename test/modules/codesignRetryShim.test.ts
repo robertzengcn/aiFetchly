@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -74,7 +74,7 @@ function makeFakeCodesign(
 }
 
 function attemptCount(counterFile: string): number {
-  return Number.parseInt(spawnSync("cat", [counterFile], { encoding: "utf8" }).stdout ?? "0", 10) || 0;
+  return Number.parseInt(readFileSync(counterFile, "utf8") ?? "0", 10) || 0;
 }
 
 function baseShimEnv(): Record<string, string> {
