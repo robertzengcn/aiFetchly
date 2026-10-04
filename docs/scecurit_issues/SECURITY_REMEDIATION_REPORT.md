@@ -32,3 +32,39 @@ Migrated 12 test fixtures to vitest 3 types (`vi.fn<[P],R>` → `vi.fn<(...args:
 
 > Net: of 165 open alerts, **~158 are resolved** (incl. all criticals and all high-severity with fixes). The residual ~7 are 4 no-upstream-fix packages (5 alerts) and 2 stale canvas alerts (not installed). Every alert that has a published fix is now closed — `minimatch` was the last, cleared by bumping `@vue/eslint-config-typescript` 12→13 (drops the `@typescript-eslint@6` peer that pulled in `typescript-estree@6`→`minimatch@9.0.3`; still eslint 8 legacy config).
 
+---
+
+## Round 2 — 2026-10-04 (5 open alerts: 4 Dependabot high + 1 code-scanning error)
+
+**Source:** `gh api repos/robertzengcn/aiFetchly/dependabot/alerts` and `/code-scanning/alerts`.
+
+### Fixed (version bumps via `resolutions`)
+
+| Package | From | To | Advisory | Mechanism |
+|---|---|---|---|---|
+| `http-cache-semantics` | 4.2.0 | 4.3.0 | GHSA-ch52-4w7c-c8xp (max-stale cross-user cache disclosure) | Added `"http-cache-semantics": "^4.3.0"` to `resolutions` (was unpinned; transitive via `got`). |
+| `basic-ftp` | 5.3.1 | 6.2.1 | GHSA-c475-qrg2-pj4r (quadratic-time ReDoS in `Client.list()` Unix parser) | Bumped existing pin `"basic-ftp": "^5.3.1"` → `"^6.2.1"`. The old pin held it on the vulnerable 5.x line. `basic-ftp` is not imported in `src/` (transitive via `get-uri`), so the 6.0 separate-transfer-host default change is a no-op. |
+
+Lockfile re-resolved via `yarn install` after surgically removing the vulnerable blocks (yarn 1.22 trusts existing lockfile entries). Both packages now single-instance at patched versions. Commit `4b55952a` on `test`; PR #88 → `master`.
+
+### Dismissed (no upstream patch — `tolerable_risk`)
+
+Both have **Patched: None** on the advisory — the vulnerable version *is* the latest published. Dismissed via `gh api -X PATCH` with documented justification, not a silent bypass.
+
+| Package | Version | Advisory | Dismissal rationale |
+|---|---|---|---|
+| `braces` | 3.0.3 | GHSA-vfj7-8cjw-p6xm (stack-exhaustion ReDoS via deeply-nested patterns) | Alert #279. ReDoS only triggers on deeply-nested brace patterns supplied to `chokidar`/`micromatch` glob expansion at dev-time — not user-controlled input. No upstream fix. Re-evaluate when one ships. |
+| `node-forge` | 1.4.0 | GHSA-86w9-cpqp-85rv (RSA PKCS#1 v1.5 sig verification accepts extra nested DigestAlgorithm elements) | Alert #278. Only reachable via `http-mitm-proxy`, which is declared but **never imported** in `src/`. No upstream fix; tracking `digitalbazaar/forge#1152`. Re-evaluate when a patched release ships. |
+
+### Code-scanning fix
+
+| Rule | File:line | Fix |
+|---|---|---|
+| `js/unnecessary-use-of-cat` (CWE-078) | `test/modules/codesignRetryShim.test.ts:77` | Replaced `spawnSync("cat", [counterFile], …)` with `fs.readFileSync(counterFile, "utf8")` (added `readFileSync` to the existing `node:fs` import). Clears the command-injection-class rule; `spawnSync` stays imported for the `runShim` helper. All 6 suite cases pass. Commit `128ce048` on `master`. |
+
+### Net after Round 2
+
+- Dependabot: 2 fixed by bump (pending PR #88 merge to land on default branch), 2 dismissed (no upstream patch) → **0 actionable open**.
+- Code scanning: 1 fixed (pending CodeQL rescan of `master` to close alert #67) → **0 actionable open**.
+- Follow-up (out of scope): remove the unused direct deps `http-mitm-proxy`, `basic-ftp`, `node-forge` from `package.json` — they are declared but never imported. Does not clear any no-patch alert on its own (braces still arrives via `chokidar`/`ts-loader`).
+
