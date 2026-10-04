@@ -297,7 +297,7 @@ const pageIndex = ref(0);
 
 /** Visited pages, oldest first, capped at MAX_CACHED_PAGES. */
 const history = ref<CachedPage[]>([]);
-let nextCursor = ref<string | null>(null);
+const nextCursor = ref<string | null>(null);
 let requestToken = 0;
 /** Current literal search query, bound with v-model on the search field. */
 const searchQuery = ref("");
