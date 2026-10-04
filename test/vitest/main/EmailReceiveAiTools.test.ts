@@ -9,7 +9,51 @@ vi.mock("@/service/MCPToolService", () => ({
   MCPToolService: { getAllTools: () => [], refresh: vi.fn() },
 }));
 
+// FR-033 stubs: mutable module-level handles the tool layer picks up. Each
+// mocked class is a real function declaration so `new MockedClass()` returns
+// the stub object (arrow functions don't work as constructors).
+const draftGenStub = { createDraft: vi.fn() };
+const deliveryStub = { sendApprovedReply: vi.fn() };
+const approvalStub = { approveDraft: vi.fn() };
+const draftModuleStub = { ensureConnection: vi.fn(), read: vi.fn() };
+
+vi.mock("@/service/emailReply/EmailReplyDraftGenerationService", () => ({
+  EmailReplyDraftGenerationService: function () {
+    return draftGenStub;
+  },
+}));
+vi.mock("@/service/emailReply/EmailReplyDeliveryService", () => ({
+  EmailReplyDeliveryService: function () {
+    return deliveryStub;
+  },
+}));
+vi.mock("@/service/emailReply/EmailReplyApprovalService", () => ({
+  EmailReplyApprovalService: function () {
+    return approvalStub;
+  },
+}));
+vi.mock("@/modules/EmailReplyDraftModule", () => ({
+  EmailReplyDraftModule: function () {
+    return draftModuleStub;
+  },
+}));
+vi.mock("@/config/featureFlags", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/config/featureFlags")>();
+  return {
+    ...actual,
+    isEmailReplyKillSwitchOn: () => false,
+  };
+});
+
 import { SkillRegistry } from "@/config/skillsRegistry";
+import {
+  createEmailReplyDraft,
+  sendEmailReply,
+} from "@/service/EmailReceiveAiTools";
+import {
+  SendPolicyRejection,
+  SendBindingError,
+} from "@/service/emailReply/EmailReplySendBinding";
 
 const READ_TOOLS = [
   "list_email_inboxes",
@@ -79,5 +123,173 @@ describe("Email reply draft/send AI tools", () => {
     expect(skill!.permissionCategory).toBe("automation");
     expect(skill!.requiresConfirmation).toBe(true);
     expect(skill!.parameters.required).toContain("draft_id");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stable refusal envelopes (FR-033)
+// ---------------------------------------------------------------------------
+
+describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
+  it("surfaces code=already_replied and next_action from an already-replied refusal", async () => {
+    draftGenStub.createDraft.mockResolvedValue({
+      success: false,
+      error:
+        "[already_replied] Message already has a sent reply; refusing duplicate",
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("already_replied");
+    // already_replied means the duplicate guard did its job — nothing for the
+    // model to do (no second reply), and nothing needs human review.
+    expect(result.next_action).toBe("no_action");
+    expect(result.error).toContain("already has a sent reply");
+  });
+
+  it("surfaces code=needs_human_review with await_human_review", async () => {
+    draftGenStub.createDraft.mockResolvedValue({
+      success: false,
+      error:
+        "[needs_human_review] Generation failed validation twice (2 codes); no draft persisted",
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("needs_human_review");
+    expect(result.next_action).toBe("await_human_review");
+  });
+
+  it("maps provider_error to discard_and_retry with no typed code slot", async () => {
+    // provider_error is a generation-path prefix, not a policy code; the typed
+    // `code` field is omitted but next_action still reflects it.
+    draftGenStub.createDraft.mockResolvedValue({
+      success: false,
+      error: "[provider_error] network timeout",
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBeUndefined();
+    expect(result.next_action).toBe("discard_and_retry");
+  });
+
+  it("returns the success DTO unchanged on a fresh generation", async () => {
+    draftGenStub.createDraft.mockResolvedValue({
+      success: true,
+      draftId: 42,
+      messageId: 1,
+      subject: "Re: Hi",
+      bodyText: "Hello",
+      bodyHtml: null,
+      classification: "interested",
+      knowledgeSources: [],
+      confidence: 0.8,
+      warnings: [],
+      reused: false,
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.draftId).toBe(42);
+    expect(result.reused).toBe(false);
+  });
+
+  it("returns a validation failure (no code) on bad input", async () => {
+    const result = await createEmailReplyDraft({ message_id: "not-a-number" });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBeUndefined();
+    expect(result.validation_errors).toBeDefined();
+  });
+});
+
+describe("sendEmailReply — stable refusal envelope (FR-033)", () => {
+  // The send tool loads the draft first, then approves + delivers. Stub the
+  // draft read to return a sendable draft so the delivery stub is reached.
+  function stubDraft(draftId: number): void {
+    draftModuleStub.read.mockResolvedValue({
+      id: draftId,
+      messageId: 1,
+      emailServiceId: 1,
+      subject: "Re: Hi",
+      bodyText: "Hello",
+      bodyHtml: null,
+      status: "draft",
+    });
+    approvalStub.approveDraft.mockResolvedValue({ token: "tok" });
+  }
+
+  it("surfaces the SendPolicyRejection code on a pre-send refusal", async () => {
+    stubDraft(10);
+    deliveryStub.sendApprovedReply.mockRejectedValue(
+      new SendPolicyRejection(
+        "Send rejected by policy: Message already has a sent reply; refusing duplicate",
+        "already_replied"
+      )
+    );
+    const result = await sendEmailReply({ draft_id: 10, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("already_replied");
+    // The duplicate guard refused before SMTP — no action, nothing to review.
+    expect(result.next_action).toBe("no_action");
+    expect(result.error).toContain("already has a sent reply");
+  });
+
+  it("surfaces a SendBindingError code (mapped) on a binding failure", async () => {
+    stubDraft(11);
+    deliveryStub.sendApprovedReply.mockRejectedValue(
+      new SendBindingError(
+        "Send rejected: approval is not bound to the draft's current revision",
+        "approval_stale"
+      )
+    );
+    const result = await sendEmailReply({ draft_id: 11, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("approval_stale");
+    expect(result.next_action).toBe("discard_and_retry");
+  });
+
+  it("surfaces code=delivery_unknown on an ambiguous outcome", async () => {
+    stubDraft(12);
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "delivery_unknown",
+      attemptId: 99,
+      error: "Connection dropped after DATA",
+    });
+    const result = await sendEmailReply({ draft_id: 12, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("delivery_unknown");
+    expect(result.next_action).toBe("await_human_review");
+  });
+
+  it("surfaces code=already_replied on an already-processed submission", async () => {
+    stubDraft(13);
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "already_processed",
+      attemptId: 5,
+    });
+    const result = await sendEmailReply({ draft_id: 13, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("already_replied");
+    expect(result.next_action).toBe("no_action");
+  });
+
+  it("returns the sent envelope on success", async () => {
+    stubDraft(14);
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "sent",
+      attemptId: 7,
+      sentAt: "2026-10-05T00:00:00.000Z",
+    });
+    const result = await sendEmailReply({ draft_id: 14, email_service_id: 1 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.draft_id).toBe(14);
+    expect(result.sent_at).toBe("2026-10-05T00:00:00.000Z");
   });
 });

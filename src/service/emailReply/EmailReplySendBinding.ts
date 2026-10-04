@@ -4,6 +4,7 @@ import {
   normalizeSmtpUsernameForHash,
 } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 
 /**
  * Pure mailbox + envelope binding validation for an approved send (FR-017,
@@ -87,6 +88,24 @@ export class SendBindingError extends Error {
   constructor(message: string, public readonly code: SendBindingErrorCode) {
     super(message);
     this.name = "SendBindingError";
+  }
+}
+
+/**
+ * Thrown when the send-time policy gate (FR-006/FR-029) refuses an approved
+ * send BEFORE the atomic claim — the message was already replied to, an
+ * in-flight attempt exists, the delivery is ambiguous, or sibling records
+ * conflict. Carries the stable {@link EmailReplyPolicyCode} so the AI tool /
+ * IPC failure envelope can surface a machine-readable reason instead of
+ * parsing English out of `error.message`. Mirrors {@link SendBindingError}.
+ */
+export class SendPolicyRejection extends Error {
+  constructor(
+    message: string,
+    public readonly code: EmailReplyPolicyCode
+  ) {
+    super(message);
+    this.name = "SendPolicyRejection";
   }
 }
 

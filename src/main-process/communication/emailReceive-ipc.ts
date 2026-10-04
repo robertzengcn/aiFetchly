@@ -404,6 +404,11 @@ export function registerEmailReceiveIpcHandlers(): void {
   // The reliable send path is authoritative (P0.1): every send requires a valid
   // approval token and goes through the idempotent delivery service. There is no
   // legacy branch and no mailbox override. The kill switch refuses new claims.
+  //
+  // FR-033: pre-send policy/binding refusals carry a stable code as a typed
+  // error property; format it into the leading `[code]` bracket of the message
+  // so the renderer / AI tool envelope can surface a machine-readable reason
+  // instead of parsing English. The envelope's `data` stays null on failure.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
@@ -421,10 +426,23 @@ export function registerEmailReceiveIpcHandlers(): void {
       const { EmailReplyDeliveryService } = await import(
         "@/service/emailReply/EmailReplyDeliveryService"
       );
-      return await new EmailReplyDeliveryService().sendApprovedReply({
-        draftId: input.draftId,
-        approvalToken: input.approvalToken,
-      });
+      const { SendPolicyRejection, SendBindingError } = await import(
+        "@/service/emailReply/EmailReplySendBinding"
+      );
+      try {
+        return await new EmailReplyDeliveryService().sendApprovedReply({
+          draftId: input.draftId,
+          approvalToken: input.approvalToken,
+        });
+      } catch (err) {
+        if (err instanceof SendPolicyRejection) {
+          throw new Error(`[${err.code}] ${err.message}`);
+        }
+        if (err instanceof SendBindingError) {
+          throw new Error(`[${err.code}] ${err.message}`);
+        }
+        throw err;
+      }
     }
   );
 

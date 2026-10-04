@@ -9,10 +9,31 @@ import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTy
  * Result envelope for email receive/reply AI tools. Mirrors the
  * {@link EmailMarketingAiToolResult} shape so the chat tool pipeline can treat
  * every tool result uniformly.
+ *
+ * The failure shape carries an optional stable `code` (FR-033) so the LLM and
+ * downstream UI can branch on a machine-readable reason instead of parsing
+ * English out of `error`. `existing_draft_id` is set when a draft already
+ * exists for the message (reuse path or a refusal that leaves a prior draft in
+ * place); `next_action` is a short hint the model can surface to the user
+ * ("approve_existing_draft" / "discard_and_retry" / "await_human_review").
  */
 export type EmailReceiveAiToolResult<T> =
   | ({ success: true } & T & Record<string, unknown>)
-  | { success: false; error: string; validation_errors?: string[] };
+  | {
+      success: false;
+      error: string;
+      validation_errors?: string[];
+      /** Stable policy reason code; present on policy refusals, absent on input errors. */
+      code?: EmailReplyPolicyCode;
+      /** Set when a live draft already exists for the message (reuse or refusal). */
+      existing_draft_id?: number;
+      /** Short machine-readable hint for the model to suggest a next step. */
+      next_action?:
+        | "approve_existing_draft"
+        | "discard_and_retry"
+        | "await_human_review"
+        | "no_action";
+    };
 
 // ---- Input schemas (zod, parsed inside the service layer) ----
 

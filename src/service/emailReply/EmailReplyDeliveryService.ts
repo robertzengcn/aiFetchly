@@ -15,6 +15,7 @@ import {
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import {
   SendBindingError,
+  SendPolicyRejection,
   validateSendBinding,
 } from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
@@ -248,7 +249,13 @@ export class EmailReplyDeliveryService {
       allowed: decision.allowed,
     });
     if (!decision.allowed) {
-      throw new Error(`Send rejected by policy: ${decision.reason}`);
+      // Surface the stable policy code (FR-033) so the AI tool / IPC envelope
+      // can carry a machine-readable reason instead of parsing English. This
+      // refusal happens BEFORE the atomic claim, so no SMTP side effect.
+      throw new SendPolicyRejection(
+        `Send rejected by policy: ${decision.reason}`,
+        decision.code
+      );
     }
 
     // 5. Idempotency: if this exact approval already claimed, return the prior

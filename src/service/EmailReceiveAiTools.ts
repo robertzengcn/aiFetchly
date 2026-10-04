@@ -3,9 +3,7 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
-import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
-import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
@@ -13,6 +11,10 @@ import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
 import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
+import {
+  SendBindingError,
+  SendPolicyRejection,
+} from "@/service/emailReply/EmailReplySendBinding";
 import {
   listEmailInboxesSchema,
   fetchUnreadEmailsSchema,
@@ -28,6 +30,7 @@ import type {
   AiEmailMessageDetail,
   AiEmailReplyDraftResult,
 } from "@/entityTypes/emailReceiveAiTypes";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 import type {
   EmailMessageClassification,
   EmailReplyStatus,
@@ -49,6 +52,142 @@ function validationFailure(error: ZodError) {
 
 function failure(error: unknown) {
   return { success: false as const, error: formatError(error) };
+}
+
+/**
+ * Policy reason codes the message-level guard and generation path emit into
+ * the leading `[code]` bracket of their refusal strings (FR-028/029/033). Used
+ * by {@link extractStableCode} to recover a machine-readable code from a
+ * refusal error string when the typed error class is not available (e.g. the
+ * generation service returns `{ success: false, error: "[already_replied] ..." }`
+ * rather than throwing).
+ */
+const POLICY_CODES = [
+  "already_replied",
+  "reply_in_progress",
+  "generation_in_progress",
+  "reply_state_conflict",
+  "reply_state_unknown",
+  "needs_human_review",
+  "delivery_unknown",
+  "bounce",
+  "unsubscribe",
+  "automated_sender",
+  "blocked_sender",
+  "blocked_domain",
+  "sensitive_topic",
+  "invalid_recipient",
+  "mailbox_mismatch",
+  "daily_limit",
+  "thread_limit",
+  "classification_unknown",
+  "context_ambiguous",
+  "draft_not_approved",
+  "approval_stale",
+  "draft_terminal",
+  "approval_required",
+  "provider_error",
+] as const;
+
+/**
+ * Recover a stable reason code from the leading `[code]` bracket of a refusal
+ * error string (FR-033). Returns `null` when the string carries no recognized
+ * code (e.g. a generic input error). The LLM and UI branch on `code` instead of
+ * parsing English out of `error`.
+ *
+ * Returns the raw code string (not narrowed to {@link EmailReplyPolicyCode})
+ * because the generation path also emits non-policy prefixes like
+ * `provider_error`; {@link policyFailure} narrows to the policy-code vocabulary
+ * for the envelope's typed `code` field.
+ */
+function extractStableCode(errorText: string): string | null {
+  const match = /^\[([a-z_]+)\]/.exec(errorText);
+  if (!match) return null;
+  const candidate = match[1];
+  return (POLICY_CODES as readonly string[]).includes(candidate)
+    ? candidate
+    : null;
+}
+
+/**
+ * Suggest a machine-readable next action for the model to surface to the user,
+ * given a stable refusal code (FR-033). The mapping is conservative: when in
+ * doubt, route to human review rather than auto-retry. Accepts the raw code
+ * string so non-policy prefixes (`provider_error`) can still map to an action.
+ */
+function nextActionForCode(
+  code: string | null,
+  existingDraftId: number | undefined
+):
+  | "approve_existing_draft"
+  | "discard_and_retry"
+  | "await_human_review"
+  | "no_action" {
+  if (code === "already_replied" && existingDraftId) {
+    return "approve_existing_draft";
+  }
+  if (code === "needs_human_review" || code === "delivery_unknown" ||
+      code === "reply_state_unknown" || code === "reply_state_conflict") {
+    return "await_human_review";
+  }
+  if (code === "reply_in_progress" || code === "generation_in_progress") {
+    return "no_action";
+  }
+  if (code === "provider_error") {
+    return "discard_and_retry";
+  }
+  return "no_action";
+}
+
+/**
+ * Build a stable failure envelope (FR-033) from a refusal error string. The
+ * leading `[code]` bracket is parsed into a machine-readable `code`; the rest
+ * of the message stays in `error` for the model transcript. When the caller
+ * knows the existing draft id (reuse path) it passes it through. The typed
+ * `code` field is set only when the prefix is a valid {@link EmailReplyPolicyCode};
+ * non-policy prefixes (e.g. `provider_error`) still drive `next_action` but are
+ * omitted from the typed `code` slot.
+ */
+function policyFailure(
+  errorText: string,
+  existingDraftId?: number
+): {
+  success: false;
+  error: string;
+  code?: EmailReplyPolicyCode;
+  existing_draft_id?: number;
+  next_action?:
+    | "approve_existing_draft"
+    | "discard_and_retry"
+    | "await_human_review"
+    | "no_action";
+} {
+  const rawCode = extractStableCode(errorText);
+  const next_action = nextActionForCode(rawCode, existingDraftId);
+  const envelope: {
+    success: false;
+    error: string;
+    code?: EmailReplyPolicyCode;
+    existing_draft_id?: number;
+    next_action?:
+      | "approve_existing_draft"
+      | "discard_and_retry"
+      | "await_human_review"
+      | "no_action";
+  } = { success: false, error: errorText };
+  // Narrow to the typed policy-code vocabulary. `allowed` is the success code,
+  // never surfaced on a failure envelope, so exclude it from the cast.
+  if (
+    rawCode &&
+    rawCode !== "provider_error" &&
+    rawCode !== "allowed" &&
+    (POLICY_CODES as readonly string[]).includes(rawCode)
+  ) {
+    envelope.code = rawCode as EmailReplyPolicyCode;
+  }
+  if (existingDraftId) envelope.existing_draft_id = existingDraftId;
+  envelope.next_action = next_action;
+  return envelope;
 }
 
 // ---- list_email_inboxes ----
@@ -245,9 +384,13 @@ export async function createEmailReplyDraft(
       useKnowledgeLibrary: input.use_knowledge_library,
     });
     if (!result.success) {
-      return { success: false, error: result.error };
+      // Surface the stable code + next_action (FR-033) instead of a bare English
+      // string. The generation service prefixes refusals with `[code]`; the
+      // reuse path returns success, so a failure here is always a refusal.
+      return policyFailure(result.error);
     }
-    const { success: _ignored, ...dto } = result;
+    const { success, ...dto } = result;
+    void success;
     return { success: true, ...dto };
   } catch (error) {
     return error instanceof ZodError
@@ -312,23 +455,69 @@ export async function sendEmailReply(args: unknown): Promise<
       };
     }
     if (outcome.status === "already_processed") {
+      // Stable code (FR-033): distinguish a duplicate submission from a fresh send.
       return {
         success: false,
         error: "A send was already submitted for this approved revision",
+        code: "already_replied",
+        next_action: "no_action",
       };
     }
-    return {
-      success: false,
-      error:
-        outcome.status === "delivery_unknown"
-          ? "Delivery unknown: verify the Sent folder manually"
-          : outcome.error,
-    };
+    // failed or delivery_unknown: surface the stable code + next_action.
+    if (outcome.status === "delivery_unknown") {
+      return {
+        success: false,
+        error: "Delivery unknown: verify the Sent folder manually",
+        code: "delivery_unknown",
+        next_action: "await_human_review",
+      };
+    }
+    return policyFailure(
+      outcome.error,
+      draft.id
+    );
   } catch (error) {
+    if (error instanceof SendPolicyRejection) {
+      // Pre-send policy refusal (FR-029): already_replied / reply_in_progress /
+      // reply_state_conflict / delivery_unknown / etc. Carries the stable code.
+      return {
+        success: false,
+        error: error.message,
+        code: error.code,
+        next_action: nextActionForCode(error.code, undefined),
+      };
+    }
+    if (error instanceof SendBindingError) {
+      // Binding failures carry their own stable code vocabulary; map to a hint.
+      return {
+        success: false,
+        error: error.message,
+        code: bindingCodeToPolicyCode(error.code),
+        next_action: "discard_and_retry",
+      };
+    }
     return error instanceof ZodError
       ? validationFailure(error)
       : failure(error);
   }
+}
+
+/**
+ * Map a {@link SendBindingError} code onto the policy code surface so the AI
+ * tool envelope presents a single coherent code vocabulary (FR-033). Binding
+ * failures are pre-send refusals, so they share the `draft_not_approved` family
+ * when not a more specific match.
+ */
+function bindingCodeToPolicyCode(
+  code: string
+): EmailReplyPolicyCode | undefined {
+  if (code === "approval_stale") return "approval_stale";
+  if (code === "mailbox_mismatch") return "mailbox_mismatch";
+  if (code === "service_missing" || code === "service_inactive") {
+    return "invalid_recipient";
+  }
+  if (code === "recipient_mismatch") return "invalid_recipient";
+  return "draft_not_approved";
 }
 
 // ---- DTO mappers ----
