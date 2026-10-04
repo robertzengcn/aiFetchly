@@ -192,3 +192,30 @@ export function enableToolResultFlags(): void {
   token.setValue(TOOL_RESULT_FLAGS.modelRefs, "true");
   token.setValue(TOOL_RESULT_FLAGS.ui, "true");
 }
+
+/**
+ * AI Task Completion Policy V1 rollout flag (PRD §12 slice 1; technical-design
+ * §17 rollout/rollback).
+ *
+ * DEFAULT OFF and FAIL CLOSED: a broken Token store must never silently
+ * enable the completion-policy enrollment path. The flag gates execution
+ * enrollment, request resolution, shadow evaluation, and contract freezing.
+ * Read live on each call (per user action, not a hot path) so support staff
+ * can toggle a stage without a restart.
+ *
+ * Rollback (§17): setting this OFF stops new enrollment/continuations.
+ * Active enrolled runs use frozen policy or stop incomplete/cancelled; no
+ * fallback success. Additive columns/operation records are retained.
+ */
+export const AI_TASK_COMPLETION_POLICY_V1_FLAG =
+  "ai_task_completion_policy_v1_enabled";
+
+export function isAiTaskCompletionPolicyV1Enabled(): boolean {
+  try {
+    return new Token().getValue(AI_TASK_COMPLETION_POLICY_V1_FLAG) === "true";
+  } catch {
+    // Unreadable store: keep the feature OFF so a storage hiccup cannot
+    // silently enroll tasks into completion-policy handling.
+    return false;
+  }
+}
