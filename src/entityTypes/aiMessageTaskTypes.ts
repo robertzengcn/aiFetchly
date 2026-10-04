@@ -19,7 +19,14 @@ export type AiMessageTaskRunStatus =
   // Recovery-visible states used by the scheduler (technical-design §9.4).
   | "waiting_for_conversation"
   | "coalesced"
-  | "interrupted";
+  | "interrupted"
+  // Task-completion-policy V1 statuses (technical-design §6.1).
+  // `incomplete`: enrolled execution ended without verified completion;
+  //   manual rows require neither task ID nor scheduled run ID (FR-12/24).
+  // `needs_user_input`: terminal needs-input when no resumable handle
+  //   remains (FR-07/12).
+  | "incomplete"
+  | "needs_user_input";
 
 /** Structured error codes for AI message task runs. */
 export type AiMessageTaskErrorCode =
