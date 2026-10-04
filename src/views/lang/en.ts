@@ -1452,6 +1452,8 @@ export default {
     smtp_username: "SMTP username",
     reply_to: "Reply-To",
     detail_not_found: "Send log record not found",
+    html_preview: "HTML preview",
+    source_text: "Source",
   },
   socialaccount: {
     create_account: "Create Tool Account",

@@ -1441,6 +1441,8 @@ export default {
     smtp_username: "SMTP-Benutzername",
     reply_to: "Antwortadresse",
     detail_not_found: "Sendeprotokoll-Eintrag nicht gefunden",
+    html_preview: "HTML-Vorschau",
+    source_text: "Quelle",
   },
   socialaccount: {
     create_account: "Werkzeugkonto erstellen",

@@ -1434,6 +1434,8 @@ export default {
     smtp_username: "utilisateur SMTP",
     reply_to: "adresse de réponse",
     detail_not_found: "Enregistrement du journal d’envoi introuvable",
+    html_preview: "Aperçu HTML",
+    source_text: "Source",
   },
   socialaccount: {
     create_account: "Créer un compte d’outil",

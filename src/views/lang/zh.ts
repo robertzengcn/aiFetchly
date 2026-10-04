@@ -1371,6 +1371,8 @@ export default {
     smtp_username: "SMTP 用户名",
     reply_to: "回复地址",
     detail_not_found: "未找到发送日志记录",
+    html_preview: "HTML 预览",
+    source_text: "原文",
   },
   socialaccount: {
     create_account: "创建工具账户",

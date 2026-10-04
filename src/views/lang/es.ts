@@ -1447,6 +1447,8 @@ export default {
     smtp_username: "usuario SMTP",
     reply_to: "dirección de respuesta",
     detail_not_found: "No se encontró el registro de envío",
+    html_preview: "Vista HTML",
+    source_text: "Fuente",
   },
   socialaccount: {
     create_account: "Crear cuenta de herramienta",

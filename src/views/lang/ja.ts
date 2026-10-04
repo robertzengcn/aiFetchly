@@ -1419,6 +1419,8 @@ export default {
     smtp_username: "SMTPユーザー名",
     reply_to: "返信先アドレス",
     detail_not_found: "送信ログ記録が見つかりません",
+    html_preview: "HTML プレビュー",
+    source_text: "ソース",
   },
   socialaccount: {
     create_account: "ツールアカウントを作成",
