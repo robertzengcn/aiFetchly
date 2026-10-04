@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import type { Transporter, SendMailOptions, TransportOptions } from "nodemailer";
 import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
 
 /**
@@ -12,7 +13,7 @@ import type { EmailServiceEntitydata } from "@/entityTypes/emailmarketingType";
  */
 export function createOutboundSmtpTransporter(
   param: EmailServiceEntitydata
-): nodemailer.Transporter {
+): Transporter {
   const transporter = nodemailer.createTransport({
     host: param.host,
     port: Number(param.port) || 0,
@@ -21,7 +22,7 @@ export function createOutboundSmtpTransporter(
       user: param.from,
       pass: param.password,
     },
-  } as nodemailer.TransportOptions);
+  } as TransportOptions);
   transporter.on("error", () => {
     // Failure is observed via `sendMail`'s rejected promise / catch.
   });

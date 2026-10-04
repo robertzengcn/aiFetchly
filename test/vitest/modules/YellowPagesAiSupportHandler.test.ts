@@ -39,7 +39,7 @@ vi.mock("@/modules/lib/function", () => ({
 describe("YellowPagesAiSupportHandler", () => {
   let handler: YellowPagesAiSupportHandler;
   let mockChildProcess: Partial<UtilityProcess>;
-  let mockPostMessage: ReturnType<typeof vi.fn>;
+  let mockPostMessage: import("vitest").Mock<(message: string) => void>;
 
   beforeEach(() => {
     // Reset all mocks

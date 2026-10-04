@@ -10,7 +10,7 @@ import {
 import { AIRecoveryResponse } from '@/entityTypes/processMessage-type';
 
 describe('AIRecoveryBridge', () => {
-    let mockPostMessage: ReturnType<typeof vi.fn>;
+    let mockPostMessage: import("vitest").Mock<(message: string) => void>;
     let mockParentPort: ParentPort;
 
     beforeEach(() => {

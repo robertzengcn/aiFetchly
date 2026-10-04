@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import type { Transporter, SendMailOptions } from "nodemailer";
 import {
   EmailRequestData,
   EmailServiceEntitydata,
@@ -9,7 +9,7 @@ import {
 } from "@/modules/lib/smtpTransport";
 
 export class EmailService {
-  private transporter: nodemailer.Transporter;
+  private transporter: Transporter;
   private emailSender: string;
 
   constructor(param: EmailServiceEntitydata) {
@@ -22,7 +22,7 @@ export class EmailService {
     errorCallback?: (errorMessage: string) => void,
     successCallback?: () => void
   ): Promise<void> {
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: this.emailSender,
       to: param.Receiver,
       subject: param.Title,

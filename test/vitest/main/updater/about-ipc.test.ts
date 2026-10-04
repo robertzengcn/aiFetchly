@@ -16,7 +16,7 @@ interface FakeWindow {
 
 function fakeWindow(
   destroyed: boolean,
-  send: ReturnType<typeof vi.fn>
+  send: (channel: string, payload: unknown) => void
 ): FakeWindow {
   return { isDestroyed: () => destroyed, webContents: { send } };
 }

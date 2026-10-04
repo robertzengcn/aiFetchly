@@ -13,7 +13,7 @@ import type {
 } from "@/modules/interface/BackgroundProcessMessages";
 
 describe("AiSupportBridge", () => {
-  let mockSendMessage: ReturnType<typeof vi.fn>;
+  let mockSendMessage: import("vitest").Mock<(message: string) => void>;
   let mockParentPort: ParentPort;
 
   beforeEach(() => {

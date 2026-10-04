@@ -388,7 +388,12 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     expect(caps.conversationReporting.enabled).toBe(true);
     expect(caps.acceptedSchemaVersions).toEqual([1, 2]);
@@ -400,7 +405,12 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     await service.getCapabilities();
     expect(client.get).toHaveBeenCalledWith(
       "/api/ai/content-reports/capabilities"
@@ -413,7 +423,12 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockRejectedValueOnce(new Error("network down"));
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     expect(caps.conversationReporting.enabled).toBe(false);
     expect(caps.acceptedSchemaVersions).toEqual([1]);
@@ -425,7 +440,12 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockResolvedValueOnce({ garbage: true });
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     expect(caps.conversationReporting.enabled).toBe(false);
     expect(caps.acceptedSchemaVersions).toEqual([1]);
@@ -442,7 +462,12 @@ describe("AIContentReportService.getCapabilities", () => {
       msg: "nope",
       data: null,
     });
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     expect(caps.conversationReporting.enabled).toBe(false);
   });
@@ -455,7 +480,12 @@ describe("AIContentReportService.getCapabilities", () => {
     client.get
       .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce(makeCapabilitiesEnvelope());
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     await service.getCapabilities();
     const caps = await service.getCapabilities();
     expect(client.get).toHaveBeenCalledTimes(2);
@@ -468,7 +498,12 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     await service.getCapabilities();
     await service.getCapabilities();
     expect(client.get).toHaveBeenCalledTimes(1);
@@ -480,8 +515,18 @@ describe("AIContentReportService.getCapabilities", () => {
     );
     const client = makeStubClient();
     client.get.mockResolvedValueOnce(makeCapabilitiesEnvelope());
-    const a = new AIContentReportService({ httpClient: client });
-    const b = new AIContentReportService({ httpClient: client });
+    const a = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
+    const b = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     await a.getCapabilities();
     await b.getCapabilities();
     expect(client.get).toHaveBeenCalledTimes(1);
@@ -511,7 +556,12 @@ describe("AIContentReportService.getCapabilities", () => {
         },
       },
     });
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     const cr = caps.conversationReporting;
     expect(cr.maxAIItems).toBe(10);
@@ -546,7 +596,12 @@ describe("AIContentReportService.getCapabilities", () => {
         },
       },
     });
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     const caps = await service.getCapabilities();
     const cr = caps.conversationReporting;
     expect(cr.maxAIItems).toBe(5);
@@ -581,7 +636,12 @@ describe("AIContentReportService.getCapabilities", () => {
         },
       },
     });
-    const service = new AIContentReportService({ httpClient: client });
+    const service = new AIContentReportService({
+      httpClient: client as unknown as Pick<
+        import("@/modules/lib/httpclient").HttpClient,
+        "get" | "postJson"
+      >,
+    });
     await service.getCapabilities();
     const caps = await service.getCapabilities();
     expect(caps.conversationReporting.maxAIItems).toBe(10);

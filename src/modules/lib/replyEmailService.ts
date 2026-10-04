@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import type { Transporter, SendMailOptions } from "nodemailer";
 import type {
   EmailServiceEntitydata,
   EmailSendResult,
@@ -26,7 +26,7 @@ export interface ReplyEmailRequestData {
  * Mirrors {@link EmailService} construction but adds a reply-specific send.
  */
 export class ReplyEmailService {
-  private transporter: nodemailer.Transporter;
+  private transporter: Transporter;
   private emailSender: string;
 
   constructor(param: EmailServiceEntitydata) {
@@ -36,7 +36,7 @@ export class ReplyEmailService {
 
   async sendReplyEmail(data: ReplyEmailRequestData): Promise<EmailSendResult> {
     const subject = ensureRePrefix(data.subject);
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: this.emailSender,
       to: data.receiver,
       subject,
