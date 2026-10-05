@@ -8,6 +8,7 @@ import {
   EmailMessageClassification,
   EmailReplyStatus,
 } from "@/entityTypes/emailReceiveTypes";
+import { normalizeStoredMessageId } from "@/service/emailReceive/EmailReplyIdentity";
 
 /**
  * Business-logic facade over {@link EmailReceivedMessageModel}.
@@ -164,6 +165,48 @@ export class EmailReceivedMessageModule extends BaseModule {
       return { records, total };
     } catch (error) {
       console.error("Error listing received messages:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve every received-message row in the same configured email service that
+   * shares the canonical inbound reply identity with the seed row (FR-029/
+   * FR-038, technical design §4.1).
+   *
+   * This is the cluster the duplicate guard inspects TOGETHER — equivalent rows,
+   * their drafts, and their send attempts — instead of just the single seed row.
+   * Subject, sender alone, and the whole conversation are explicitly NOT the
+   * duplicate key; only the normalized RFC Message-ID (or the `row:<id>`
+   * singleton fallback when no RFC ID exists).
+   *
+   * Legacy rows whose `normalizedMessageId` column was never populated are
+   * normalized on the fly from the raw stored `messageId` header so they join
+   * the right cluster. An incomplete legacy identity scan surfaces as a
+   * conflict in the guard, not silent eligibility (§4.1).
+   */
+  async findCanonicalEquivalents(
+    seedRow: EmailReceivedMessageEntity
+  ): Promise<EmailReceivedMessageEntity[]> {
+    try {
+      await this.ensureConnection();
+      const normalizedId =
+        seedRow.normalizedMessageId ??
+        normalizeStoredMessageId(seedRow.messageId);
+      const equivalents = await this.messageModel.findCanonicalEquivalents({
+        emailServiceId: seedRow.emailServiceId,
+        normalizedMessageId: normalizedId,
+      });
+      if (equivalents.length > 0) {
+        return equivalents;
+      }
+      // No RFC-id cluster (missing/malformed id, or legacy row that did not
+      // normalize). Return the seed row alone as a `row:<id>` singleton so the
+      // guard still inspects its own drafts/attempts.
+      const self = await this.messageModel.read(seedRow.id);
+      return self ? [self] : [];
+    } catch (error) {
+      console.error("Error resolving canonical equivalents:", error);
       throw error;
     }
   }

@@ -91,6 +91,40 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await this.repository.findOne({ where: { id } });
   }
 
+  /**
+   * Find every received-message row in the same configured email service that
+   * shares the canonical inbound reply identity with the seed row (FR-029,
+   * FR-038, technical design §4.1).
+   *
+   * Canonical equivalence is resolved by the normalized RFC Message-ID. The
+   * `(emailServiceId, normalizedMessageId)` index makes this lookup cheap. The
+   * seed row itself is always included in the result so callers can treat the
+   * cluster uniformly.
+   *
+   * Legacy rows whose `normalizedMessageId` was never populated are handled by
+   * the caller (the identity module normalizes their raw `messageId` on the fly
+   * before binding the guard). A row with no usable RFC ID falls back to a
+   * `row:<id>` singleton key and matches only itself — it is never merged with
+   * another missing-id row by subject or conversation.
+   */
+  async findCanonicalEquivalents(input: {
+    emailServiceId: number;
+    normalizedMessageId: string | null;
+  }): Promise<EmailReceivedMessageEntity[]> {
+    if (!input.normalizedMessageId) {
+      // No RFC id → singleton. Caller passes the seed row id separately if it
+      // wants the row included; here we just return nothing for an empty key.
+      return [];
+    }
+    return await this.repository.find({
+      where: {
+        emailServiceId: input.emailServiceId,
+        normalizedMessageId: input.normalizedMessageId,
+      },
+      order: { id: "ASC" },
+    });
+  }
+
   /** Associate a received message with a conversation (P1, FR-001). */
   async setConversation(
     messageId: number,

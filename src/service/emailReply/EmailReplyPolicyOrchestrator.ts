@@ -12,6 +12,8 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { parseNamespacedProviderUid } from "@/service/emailReceive/EmailReplyIdentity";
 
 /**
  * Single authoritative policy gate for the reply pipeline (technical design
@@ -114,6 +116,19 @@ export class EmailReplyPolicyOrchestrator {
    * survives draft/message projection drift (orphan attempts, stale replyStatus
    * after a mid-flip crash, etc.).
    *
+   * T02 (FR-029/FR-038): the guard inspects the FULL canonical cluster — every
+   * received-message row in the same configured email service that shares the
+   * normalized RFC Message-ID, plus the drafts and send attempts linked to
+   * each of those rows — instead of just the single seed message. Subject,
+   * sender alone, and the whole conversation are explicitly NOT the duplicate
+   * key. A `row:<id>` singleton fallback protects a missing-id row locally
+   * but never merges with another missing-id row.
+   *
+   * Legacy bare-UID rows (pre-namespace IMAP) are flagged as a
+   * `reply_state_conflict` until reconciled by a verified header match, never
+   * silently adopted as the same message. Multiple live drafts across the
+   * cluster are likewise a conflict — the guard blocks rather than picking one.
+   *
    * Precedence (PRD §5):
    *  1. `replyStatus === "sent"` or any draft `sent` OR any `sent` attempt →
    *     `already_replied`.
@@ -121,8 +136,8 @@ export class EmailReplyPolicyOrchestrator {
    *     outcome on a prior attempt; never auto-retry).
    *  3. Any draft `sending` or attempt `claimed`/`submitted` →
    *     `reply_in_progress`.
-   *  4. Multiple LIVE (non-terminal) drafts, or contradictory records
-   *     (e.g. replyStatus=not_started but a sent draft exists) →
+   *  4. Multiple LIVE (non-terminal) drafts across the cluster, contradictory
+   *     records, or a legacy bare-UID row whose namespace changed →
    *     `reply_state_conflict`.
    *  5. `replyStatus === "failed"` with no live drafts → `reply_state_unknown`
    *     (a prior generation failed; surface for human triage rather than
@@ -136,21 +151,35 @@ export class EmailReplyPolicyOrchestrator {
     messageId: number,
     replyStatus: string | null
   ): Promise<EmailReplyPolicyDecision | null> {
-    const drafts = await this.draftModule.listByMessage(messageId);
-    const liveDrafts = drafts.filter((d) =>
-      isLiveDraftStatus(d.status)
+    const seed = await this.messageModule.read(messageId);
+    if (!seed) {
+      // The public evaluate() already refused a missing message as
+      // invalid_recipient; this is a defensive second check.
+      return deny("reply_state_unknown", "Original message no longer exists");
+    }
+
+    // T02: resolve the canonical cluster — every equivalent row in the same
+    // configured email service — and inspect their drafts/attempts together.
+    const clusterRows = await this.messageModule.findCanonicalEquivalents(seed);
+    const clusterRowIds = clusterRows.map((r) => r.id);
+
+    const draftsPerRow = await Promise.all(
+      clusterRowIds.map((id) => this.draftModule.listByMessage(id))
     );
+    const drafts = draftsPerRow.flat();
+    const liveDrafts = drafts.filter((d) => isLiveDraftStatus(d.status));
     const sentDrafts = drafts.filter((d) => d.status === "sent");
     const sendingDrafts = drafts.filter((d) => d.status === "sending");
-    const unknownDrafts = drafts.filter(
-      (d) => d.status === "delivery_unknown"
-    );
+    const unknownDrafts = drafts.filter((d) => d.status === "delivery_unknown");
 
-    // B02: authoritative delivery ledger. Read every attempt for this message
-    // (including orphan rows whose linked draft was deleted, and stale rows
-    // left behind by a mid-flip crash). The attempt status is append-only and
-    // overrides stale draft/message projections.
-    const attempts = await this.attemptModule.listByMessage(messageId);
+    // B02: authoritative delivery ledger. Read every attempt for every row in
+    // the cluster (including orphan rows whose linked draft was deleted, and
+    // stale rows left behind by a mid-flip crash). The attempt status is
+    // append-only and overrides stale draft/message projections.
+    const attemptsPerRow = await Promise.all(
+      clusterRowIds.map((id) => this.attemptModule.listByMessage(id))
+    );
+    const attempts = attemptsPerRow.flat();
     const sentAttempts = attempts.filter((a) => a.status === "sent");
     const unknownAttempts = attempts.filter(
       (a) => a.status === "delivery_unknown"
@@ -158,6 +187,18 @@ export class EmailReplyPolicyOrchestrator {
     const inFlightAttempts = attempts.filter((a) =>
       isAttemptInFlight(a.status)
     );
+
+    // T02/FR-038: a legacy bare-UID row whose (folder, UIDVALIDITY) namespace
+    // changed cannot be safely adopted as the same message. Flag the cluster
+    // for reconciliation rather than silently merging. This applies only when
+    // the cluster spans more than one row (a single legacy row is fine until a
+    // namespace change is actually observed).
+    if (clusterRows.length > 1 && hasNamespaceConflict(clusterRows)) {
+      return deny(
+        "reply_state_conflict",
+        "Canonical cluster spans rows with conflicting provider-UID namespaces; requires reconciliation"
+      );
+    }
 
     // 1. Already replied: explicit message state OR a sent draft OR a sent
     //    attempt (the ledger is authoritative even if the draft row is gone).
@@ -181,12 +222,12 @@ export class EmailReplyPolicyOrchestrator {
         "A send for this message is already in flight"
       );
     }
-    // 4. Contradictory records: multiple live drafts, or replyStatus says
-    //    replied but no sent draft was found, etc.
+    // 4. Contradictory records: multiple live drafts across the cluster, or
+    //    replyStatus says replied but no sent draft was found, etc.
     if (liveDrafts.length > 1) {
       return deny(
         "reply_state_conflict",
-        `Multiple live drafts (${liveDrafts.length}) exist for this message; requires reconciliation`
+        `Multiple live drafts (${liveDrafts.length}) exist across equivalent rows; requires reconciliation`
       );
     }
     if (
@@ -490,6 +531,37 @@ function isAttemptInFlight(
   status: EmailReplySendAttemptStatus
 ): boolean {
   return status === "claimed" || status === "submitted";
+}
+
+/**
+ * T02/FR-038: detect a provider-UID namespace conflict inside a canonical
+ * cluster. A conflict exists when the cluster mixes legacy bare UIDs with
+ * namespaced (`imap:<folderHash>:<uidValidity>:<uid>`) UIDs, or when two
+ * namespaced rows disagree on folder hash or UIDVALIDITY. Either case means
+ * the rows cannot be safely treated as the same underlying message without a
+ * verified header match — surface for human reconciliation, never silently
+ * merge.
+ */
+function hasNamespaceConflict(
+  rows: readonly EmailReceivedMessageEntity[]
+): boolean {
+  const parsed = rows
+    .map((r) => parseNamespacedProviderUid(r.providerUid))
+    .filter((p): p is { folderHash: string; uidValidity: string; uid: string } => p !== null);
+  if (parsed.length === 0) {
+    // All legacy bare UIDs. Safe only as long as the cluster has a single row;
+    // a multi-row all-legacy cluster is itself suspicious (duplicate bare UIDs
+    // in one service is impossible under the unique index).
+    return rows.length > 1;
+  }
+  if (parsed.length < rows.length) {
+    // Mixed legacy + namespaced. Treat as a conflict until reconciled.
+    return true;
+  }
+  // All namespaced: a conflict exists if folder hash or UIDVALIDITY disagree.
+  const folderHashes = new Set(parsed.map((p) => p.folderHash));
+  const uidValidities = new Set(parsed.map((p) => p.uidValidity));
+  return folderHashes.size > 1 || uidValidities.size > 1;
 }
 
 /**

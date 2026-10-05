@@ -9,6 +9,10 @@ import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
+import type {
+  EmailMessageClassification,
+  EmailReplyStatus,
+} from "@/entityTypes/emailReceiveTypes";
 
 /**
  * P0.3: the pre-draft policy gate must block hard-blocked messages (bounce,
@@ -468,5 +472,303 @@ describe("B02 — guard inspects authoritative send-attempt evidence", () => {
     });
     expect(decision.allowed).toBe(true);
     expect(decision.code).toBe("allowed");
+  });
+});
+
+/**
+ * T02 (FR-029/FR-038): canonical inbound identity. The guard must inspect the
+ * FULL canonical cluster — every received row in the same configured email
+ * service that shares the normalized RFC Message-ID, plus the drafts and send
+ * attempts linked to each of those rows — instead of just the single seed row.
+ *
+ * Subject, sender alone, and the whole conversation are explicitly NOT the
+ * duplicate key. The same RFC Message-ID arriving in two different configured
+ * services is NOT a merge — each service has its own cluster. Legacy bare-UID
+ * rows whose (folder, UIDVALIDITY) namespace changed surface as a
+ * `reply_state_conflict` until reconciled, never silently adopted.
+ */
+describe("T02 — canonical inbound identity cluster guard", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+  const orchestrator = new EmailReplyPolicyOrchestrator();
+
+  // Distinct service id so cluster rows don't collide with other describe
+  // blocks' fixtures under the Token-fallback shared DB.
+  const SERVICE = 4260;
+  // Unique per-run suffix: the Token-fallback DB at ${tmpdir}/aifetchly-test is
+  // a persistent on-disk file shared across vitest invocations. Without a
+  // run-scoped nonce, re-running this file would upsert onto the same rows and
+  // accumulate stale drafts/attempts, making the cluster counts nondeterministic.
+  const RUN = Math.random().toString(36).slice(2);
+
+  async function seedRow(over: {
+    emailServiceId?: number;
+    messageId: string;
+    providerUid: string;
+    replyStatus?: string;
+    classification?: string;
+  }): Promise<number> {
+    // Namespaced UIDs and RFC ids are suffixed with the run nonce so this run's
+    // rows are distinct from prior runs' stale rows. The providerUid suffix is
+    // what makes the upsert create fresh rows; the messageId suffix is what
+    // isolates this run's cluster lookup (keyed on normalizedMessageId) from
+    // prior runs' stale rows. Null/empty ids stay null (row:<id> singleton).
+    const providerUid = `${over.providerUid}:${RUN}`;
+    const rawId = over.messageId;
+    const messageId =
+      typeof rawId === "string" && rawId.includes("@x")
+        ? rawId.replace("@x", `-${RUN}@x`)
+        : rawId;
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? SERVICE;
+    msg.providerUid = providerUid;
+    msg.messageId = messageId;
+    msg.threadKey = messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = (over.classification ?? "interested") as
+      | EmailMessageClassification
+      | null;
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = (over.replyStatus ?? "not_started") as EmailReplyStatus;
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    // Populate normalizedMessageId so the (emailServiceId, normalizedMessageId)
+    // index is the cluster lookup path (mirrors production sync). Both rows in
+    // a cluster must store the identical value; we use the suffixed raw id for
+    // both so the cluster query matches them together and stays isolated from
+    // prior runs' stale rows.
+    await messageModule.updateNormalization(saved.id, {
+      normalizedMessageId: messageId,
+    });
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = SERVICE;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  async function seedAttempt(
+    messageId: number,
+    status: EmailReplySendAttemptStatus
+  ): Promise<void> {
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `t02-${Math.random()}`;
+    attempt.draftId = 910000 + Math.floor(Math.random() * 9999);
+    attempt.revisionId = attempt.draftId;
+    attempt.approvalId = attempt.draftId;
+    attempt.messageId = messageId;
+    attempt.conversationId = null;
+    attempt.emailServiceId = SERVICE;
+    attempt.senderAddress = "owner@example.com";
+    attempt.recipientAddress = "person@example.com";
+    attempt.status = status;
+    attempt.claimedAt = new Date();
+    attempt.submittedAt = null;
+    attempt.completedAt = null;
+    attempt.providerMessageId = null;
+    attempt.failureCode = null;
+    attempt.sanitizedError = null;
+    await attemptModule.create(attempt);
+  }
+
+  it("same Message-ID in different configured services is NOT a duplicate", async () => {
+    // Two rows, same RFC id, different emailServiceId. Each is its own cluster;
+    // a sent attempt on service A must not block drafting on service B.
+    const idA = await seedRow({
+      emailServiceId: SERVICE,
+      messageId: "<shared@x>",
+      providerUid: "p-a",
+    });
+    await seedAttempt(idA, "sent");
+    const idB = await seedRow({
+      emailServiceId: SERVICE + 1,
+      messageId: "<shared@x>",
+      providerUid: "p-b",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+  });
+
+  it("duplicate rows in one service share a cluster: sent attempt on row A blocks drafting on row B", async () => {
+    // Two rows in the SAME service with the same normalized Message-ID (a
+    // re-delivery in the same folder — same UIDVALIDITY, different UIDs). The
+    // guard must inspect the cluster: a sent attempt linked to row A blocks
+    // drafting on row B (already_replied).
+    const idA = await seedRow({
+      messageId: "<dup@x>",
+      providerUid: "imap:cafecafecafecafe:777:101",
+    });
+    await seedAttempt(idA, "sent");
+    const idB = await seedRow({
+      messageId: "<dup@x>",
+      providerUid: "imap:cafecafecafecafe:777:102",
+      // B looks clean on its own projection; the cluster carries the truth.
+      replyStatus: "not_started",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("already_replied");
+  });
+
+  it("cluster catches a live draft on row A when drafting row B (reply_state_conflict)", async () => {
+    // A live draft on row A means the cluster already has an in-flight
+    // generation; drafting row B would create a second live draft across the
+    // cluster → conflict, never silent pick-one.
+    const idA = await seedRow({
+      messageId: "<multi-live@x>",
+      providerUid: "p-ml-a",
+    });
+    await seedDraft(idA, "draft");
+    const idB = await seedRow({
+      messageId: "<multi-live@x>",
+      providerUid: "p-ml-b",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_state_conflict");
+  });
+
+  it("missing RFC id falls back to row singleton — two null-id rows do NOT merge", async () => {
+    // Two rows in the same service, both with null/empty messageId. Each is a
+    // row:<id> singleton; a sent attempt on row A must not block row B.
+    const idA = await seedRow({
+      messageId: null as unknown as string,
+      providerUid: "p-null-a",
+    });
+    await seedAttempt(idA, "sent");
+    const idB = await seedRow({
+      messageId: null as unknown as string,
+      providerUid: "p-null-b",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+  });
+
+  it("legacy bare UID + namespaced UID for the same RFC id is a reply_state_conflict", async () => {
+    // FR-038: a legacy bare-UID row and a new namespaced row sharing the RFC id
+    // cannot be safely treated as the same underlying message without a
+    // verified header match. Surface for reconciliation.
+    const idLegacy = await seedRow({
+      messageId: "<ns@x>",
+      providerUid: "12345", // legacy bare UID
+    });
+    const idNamespaced = await seedRow({
+      messageId: "<ns@x>",
+      providerUid: "imap:deadbeefdeadbeef:999:12345", // namespaced, same uid
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idNamespaced,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_state_conflict");
+    // Symmetric: seeding from the legacy side also conflicts.
+    const decision2 = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idLegacy,
+    });
+    expect(decision2.allowed).toBe(false);
+    expect(decision2.code).toBe("reply_state_conflict");
+  });
+
+  it("changed UIDVALIDITY for the same folder is a reply_state_conflict", async () => {
+    // Two namespaced rows, same folder hash, different UIDVALIDITY → the
+    // folder's UID namespace was reset; the rows cannot be assumed the same.
+    const idA = await seedRow({
+      messageId: "<uv@x>",
+      providerUid: "imap:deadbeefdeadbeef:111:42",
+    });
+    const idB = await seedRow({
+      messageId: "<uv@x>",
+      providerUid: "imap:deadbeefdeadbeef:222:42",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_state_conflict");
+    expect(idA).toBeGreaterThan(0);
+  });
+
+  it("new inbound message in an already-answered cluster is blocked (already_replied)", async () => {
+    // A new inbound arrives in a conversation that was already answered. The
+    // guard inspects the cluster; a sent attempt on any equivalent row blocks.
+    const idAnswered = await seedRow({
+      messageId: "<answered-thread@x>",
+      providerUid: "imap:cafecafecafecafe:888:201",
+    });
+    await seedAttempt(idAnswered, "sent");
+    const idNew = await seedRow({
+      messageId: "<answered-thread@x>",
+      providerUid: "imap:cafecafecafecafe:888:202",
+      replyStatus: "not_started",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idNew,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("already_replied");
+  });
+
+  it("two namespaced rows in the same folder/UIDVALIDITY with one live draft do NOT conflict (reuse)", async () => {
+    // Two rows, same namespace, same RFC id, exactly one live draft on row A.
+    // This is the legitimate re-delivery case: the cluster has one live draft,
+    // so the guard falls through to allow (the generation service reuses row A's
+    // draft). NOT a conflict.
+    const idA = await seedRow({
+      messageId: "<reuse@x>",
+      providerUid: "imap:cafecafecafecafe:555:1",
+    });
+    await seedDraft(idA, "draft");
+    const idB = await seedRow({
+      messageId: "<reuse@x>",
+      providerUid: "imap:cafecafecafecafe:555:2",
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: idB,
+    });
+    expect(decision.allowed).toBe(true);
   });
 });

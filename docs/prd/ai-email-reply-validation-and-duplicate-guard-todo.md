@@ -162,11 +162,17 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### T02 — Canonical inbound identity and legacy conflicts (FR-029, FR-038)
 
-- [ ] Define one identity helper scoped to configured email service plus normalized RFC Message-ID hash, with receive-row fallback when unavailable.
-- [ ] Inspect equivalent receive rows, drafts, and attempts together. Do not use subject or the entire conversation as the duplicate key.
-- [ ] Namespace provider UIDs by mailbox/folder and UIDVALIDITY; safely handle folder/UID namespace changes.
-- [ ] Block conflicting legacy live drafts instead of silently choosing one; preserve historical sent protection and expose a safe remediation path.
-- [ ] Test same Message-ID in different configured services, duplicate rows in one service, missing IDs, changed UIDVALIDITY, and a new inbound message in an already-answered conversation.
+- [x] Define one identity helper scoped to configured email service plus normalized RFC Message-ID hash, with receive-row fallback when unavailable.
+- [x] Inspect equivalent receive rows, drafts, and attempts together. Do not use subject or the entire conversation as the duplicate key.
+- [x] Namespace provider UIDs by mailbox/folder and UIDVALIDITY; safely handle folder/UID namespace changes.
+- [x] Block conflicting legacy live drafts instead of silently choosing one; preserve historical sent protection and expose a safe remediation path.
+- [x] Test same Message-ID in different configured services, duplicate rows in one service, missing IDs, changed UIDVALIDITY, and a new inbound message in an already-answered conversation.
+
+**Evidence (commit pending):**
+- Pure helpers: `src/service/emailReceive/EmailReplyIdentity.ts` — `canonicalReplyKey` (`rfc:` / `row:` fallback), `normalizeStoredMessageId`, `normalizedIdsMatch` (no merge-by-absence), `buildNamespacedProviderUid` (`imap:<folderHash>:<uidValidity>:<uid>`, 255-char guard), `parseNamespacedProviderUid`, `isNamespacedProviderUid`. 24 unit tests in `test/vitest/utilitycode/EmailReplyIdentity.test.ts` (all pass).
+- Cluster lookup: `EmailReceivedMessageModel.findCanonicalEquivalents({emailServiceId, normalizedMessageId})` + `EmailReceivedMessageModule.findCanonicalEquivalents(seedRow)` (legacy rows normalized on the fly; missing RFC id → `row:<id>` singleton).
+- Orchestrator: `EmailReplyPolicyOrchestrator.evaluateMessageLevelState` now resolves the full canonical cluster (equivalent rows + their drafts + attempts) and calls `hasNamespaceConflict` BEFORE precedence — legacy-bare-vs-namespaced and folder/UIDVALIDITY mismatches surface as `reply_state_conflict`, never silent eligibility. Historical `sent` protection preserved across the cluster.
+- Integration tests: `test/vitest/main/modules/EmailReplyPreDraftPolicy.test.ts` `T02 — canonical inbound identity cluster guard` — 8 scenarios (cross-service isolation, duplicate-row cluster sent block, multi-live-draft conflict, null-id singleton non-merge, legacy+namespaced conflict, UIDVALIDITY-change conflict, already-answered cluster block, same-namespace reuse allow). 31/31 pass; tsc clean.
 
 ### T03 — Persist trustworthy reply evidence (FR-030)
 
