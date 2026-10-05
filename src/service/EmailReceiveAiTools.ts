@@ -16,6 +16,10 @@ import {
   SendPolicyRejection,
 } from "@/service/emailReply/EmailReplySendBinding";
 import {
+  nextActionForCode,
+  type EmailReplyNextAction,
+} from "@/service/emailReply/EmailReplyNextAction";
+import {
   listEmailInboxesSchema,
   fetchUnreadEmailsSchema,
   getEmailMessageSchema,
@@ -55,138 +59,60 @@ function failure(error: unknown) {
 }
 
 /**
- * Policy reason codes the message-level guard and generation path emit into
- * the leading `[code]` bracket of their refusal strings (FR-028/029/033). Used
- * by {@link extractStableCode} to recover a machine-readable code from a
- * refusal error string when the typed error class is not available (e.g. the
- * generation service returns `{ success: false, error: "[already_replied] ..." }`
- * rather than throwing).
- */
-const POLICY_CODES = [
-  "already_replied",
-  "reply_in_progress",
-  "generation_in_progress",
-  "reply_state_conflict",
-  "reply_state_unknown",
-  "needs_human_review",
-  "delivery_unknown",
-  "bounce",
-  "unsubscribe",
-  "automated_sender",
-  "blocked_sender",
-  "blocked_domain",
-  "sensitive_topic",
-  "invalid_recipient",
-  "mailbox_mismatch",
-  "daily_limit",
-  "thread_limit",
-  "classification_unknown",
-  "context_ambiguous",
-  "draft_not_approved",
-  "approval_stale",
-  "draft_terminal",
-  "approval_required",
-  "provider_error",
-] as const;
-
-/**
- * Recover a stable reason code from the leading `[code]` bracket of a refusal
- * error string (FR-033). Returns `null` when the string carries no recognized
- * code (e.g. a generic input error). The LLM and UI branch on `code` instead of
- * parsing English out of `error`.
+ * Build a stable failure envelope (FR-033, B12) from a typed refusal result.
  *
- * Returns the raw code string (not narrowed to {@link EmailReplyPolicyCode})
- * because the generation path also emits non-policy prefixes like
- * `provider_error`; {@link policyFailure} narrows to the policy-code vocabulary
- * for the envelope's typed `code` field.
+ * B12: the generation service's failure side is now a typed union carrying
+ * `code` / `existing_draft_id` / `next_action` / `requestCorrelationId`
+ * additively alongside the legacy `error` string. This composer consumes
+ * those typed fields directly -- it does NOT parse the leading `[code]`
+ * bracket out of `error` to recover a machine-readable reason. The previous
+ * implementation (`extractStableCode` + `POLICY_CODES`) regex-parsed English
+ * error text, which is exactly what B12 forbids.
+ *
+ * The typed `code` field is set only when the result carries a genuine
+ * {@link EmailReplyPolicyCode}; non-policy failures (provider_error, AI-disabled,
+ * message-not-found, audit-persistence) leave `code` undefined and the
+ * envelope's `error` still carries the human-readable text. `next_action` is
+ * derived from the typed code via {@link nextActionForCode} (typed-code→action
+ * derivation, not English parsing); when the result already carries a
+ * `next_action` (e.g. transport failures where the service knows the action
+ * without a policy code), that value is preserved.
  */
-function extractStableCode(errorText: string): string | null {
-  const match = /^\[([a-z_]+)\]/.exec(errorText);
-  if (!match) return null;
-  const candidate = match[1];
-  return (POLICY_CODES as readonly string[]).includes(candidate)
-    ? candidate
-    : null;
-}
-
-/**
- * Suggest a machine-readable next action for the model to surface to the user,
- * given a stable refusal code (FR-033). The mapping is conservative: when in
- * doubt, route to human review rather than auto-retry. Accepts the raw code
- * string so non-policy prefixes (`provider_error`) can still map to an action.
- */
-function nextActionForCode(
-  code: string | null,
-  existingDraftId: number | undefined
-):
-  | "approve_existing_draft"
-  | "discard_and_retry"
-  | "await_human_review"
-  | "no_action" {
-  if (code === "already_replied" && existingDraftId) {
-    return "approve_existing_draft";
-  }
-  if (code === "needs_human_review" || code === "delivery_unknown" ||
-      code === "reply_state_unknown" || code === "reply_state_conflict") {
-    return "await_human_review";
-  }
-  if (code === "reply_in_progress" || code === "generation_in_progress") {
-    return "no_action";
-  }
-  if (code === "provider_error") {
-    return "discard_and_retry";
-  }
-  return "no_action";
-}
-
-/**
- * Build a stable failure envelope (FR-033) from a refusal error string. The
- * leading `[code]` bracket is parsed into a machine-readable `code`; the rest
- * of the message stays in `error` for the model transcript. When the caller
- * knows the existing draft id (reuse path) it passes it through. The typed
- * `code` field is set only when the prefix is a valid {@link EmailReplyPolicyCode};
- * non-policy prefixes (e.g. `provider_error`) still drive `next_action` but are
- * omitted from the typed `code` slot.
- */
-function policyFailure(
-  errorText: string,
-  existingDraftId?: number
-): {
+function policyFailure(result: {
   success: false;
   error: string;
   code?: EmailReplyPolicyCode;
   existing_draft_id?: number;
-  next_action?:
-    | "approve_existing_draft"
-    | "discard_and_retry"
-    | "await_human_review"
-    | "no_action";
+  next_action?: EmailReplyNextAction;
+  requestCorrelationId?: string;
+}): {
+  success: false;
+  error: string;
+  code?: EmailReplyPolicyCode;
+  existing_draft_id?: number;
+  next_action?: EmailReplyNextAction;
+  requestCorrelationId?: string;
 } {
-  const rawCode = extractStableCode(errorText);
-  const next_action = nextActionForCode(rawCode, existingDraftId);
   const envelope: {
     success: false;
     error: string;
     code?: EmailReplyPolicyCode;
     existing_draft_id?: number;
-    next_action?:
-      | "approve_existing_draft"
-      | "discard_and_retry"
-      | "await_human_review"
-      | "no_action";
-  } = { success: false, error: errorText };
-  // Narrow to the typed policy-code vocabulary. `allowed` is the success code,
-  // never surfaced on a failure envelope, so exclude it from the cast.
-  if (
-    rawCode &&
-    rawCode !== "provider_error" &&
-    rawCode !== "allowed" &&
-    (POLICY_CODES as readonly string[]).includes(rawCode)
-  ) {
-    envelope.code = rawCode as EmailReplyPolicyCode;
+    next_action?: EmailReplyNextAction;
+    requestCorrelationId?: string;
+  } = { success: false, error: result.error };
+  // The generation service already narrowed `code` to EmailReplyPolicyCode;
+  // pass it through verbatim. Absent on provider_error / AI-disabled /
+  // message-not-found / audit-persistence failures.
+  if (result.code) envelope.code = result.code;
+  if (result.existing_draft_id) {
+    envelope.existing_draft_id = result.existing_draft_id;
   }
-  if (existingDraftId) envelope.existing_draft_id = existingDraftId;
-  envelope.next_action = next_action;
+  // Prefer the service-derived next_action when present (transport / empty-
+  // output failures derive it directly without a policy code); otherwise
+  // derive from the typed code.
+  envelope.next_action =
+    result.next_action ?? nextActionForCode(result.code, result.existing_draft_id);
   return envelope;
 }
 
@@ -384,10 +310,12 @@ export async function createEmailReplyDraft(
       useKnowledgeLibrary: input.use_knowledge_library,
     });
     if (!result.success) {
-      // Surface the stable code + next_action (FR-033) instead of a bare English
-      // string. The generation service prefixes refusals with `[code]`; the
-      // reuse path returns success, so a failure here is always a refusal.
-      return policyFailure(result.error);
+      // B12: surface the typed code + next_action + existing_draft_id directly
+      // from the widened failure union. The generation service already narrowed
+      // `code` to EmailReplyPolicyCode; policyFailure passes it through without
+      // parsing English. The reuse path returns success, so a failure here is
+      // always a refusal or a transport/validation/audit-persistence failure.
+      return policyFailure(result);
     }
     const { success, ...dto } = result;
     void success;
@@ -463,19 +391,30 @@ export async function sendEmailReply(args: unknown): Promise<
         next_action: "no_action",
       };
     }
-    // failed or delivery_unknown: surface the stable code + next_action.
-    if (outcome.status === "delivery_unknown") {
+    // failed: the delivery service surfaces a sanitized transport error string
+    // but no typed policy code (a failed SMTP submission is a provider-level
+    // failure, not a policy refusal). B12: build the typed envelope from the
+    // outcome's own fields -- no English parsing. next_action routes to retry
+    // since a transport failure is typically transient.
+    if (outcome.status === "failed") {
       return {
         success: false,
-        error: "Delivery unknown: verify the Sent folder manually",
-        code: "delivery_unknown",
-        next_action: "await_human_review",
+        error: outcome.error,
+        next_action: "discard_and_retry",
+        existing_draft_id: draft.id,
       };
     }
-    return policyFailure(
-      outcome.error,
-      draft.id
-    );
+    // delivery_unknown: ambiguous outcome after possible provider acceptance.
+    // Stable policy code so the model surfaces human review, never auto-retry.
+    // This is the final outcome status (sent / already_processed / failed are
+    // handled above); the fallthrough return satisfies exhaustiveness.
+    return {
+      success: false,
+      error: "Delivery unknown: verify the Sent folder manually",
+      code: "delivery_unknown",
+      next_action: "await_human_review",
+      existing_draft_id: draft.id,
+    };
   } catch (error) {
     if (error instanceof SendPolicyRejection) {
       // Pre-send policy refusal (FR-029): already_replied / reply_in_progress /
