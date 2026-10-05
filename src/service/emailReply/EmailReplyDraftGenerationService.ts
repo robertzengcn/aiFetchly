@@ -99,10 +99,58 @@ export interface LlmRawResult {
  * transport failure surfaces as a provider error with no draft persisted.
  */
 export class LlmTransportError extends Error {
-  constructor(message: string) {
+  /**
+   * True when the provider explicitly rejected the `response_format`
+   * JSON hint as an unsupported parameter (B06/FR-026). The caller retries
+   * once WITHOUT the hint; other transport failures (auth, throttling,
+   * generic network, server) do not set this and must NOT be retried.
+   */
+  readonly unsupportedResponseFormat: boolean;
+
+  constructor(
+    message: string,
+    options?: { readonly unsupportedResponseFormat?: boolean }
+  ) {
     super(message);
     this.name = "LlmTransportError";
+    this.unsupportedResponseFormat = options?.unsupportedResponseFormat ?? false;
   }
+}
+
+/**
+ * Detect an explicit provider rejection of the `response_format` JSON hint
+ * (B06/FR-026). The OpenAI-compatible API and most third-party gateways
+ * surface this as a 400 (sometimes 501) whose error body names `response_format`
+ * as unsupported/unrecognized/invalid. Auth (401/403), throttling (429), and
+ * generic server (5xx) errors are explicitly NOT matches — those are real
+ * failures, not capability gaps, and must not trigger the no-hint retry.
+ */
+const UNSUPPORTED_RESPONSE_FORMAT_PATTERNS: readonly RegExp[] = [
+  /response_format\b/i,
+  /unsupported[ _-]?parameter/i,
+  /unrecognized[ _-]?(parameter|request[ _-]?argument)/i,
+  /not[ _-]?supported/i,
+  /invalid[ _-]?parameter/i,
+];
+
+function isUnsupportedResponseFormatError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as { message?: unknown; status?: unknown; statusCode?: unknown };
+  const status = err.status ?? err.statusCode;
+  // Only client-side capability rejections (400/501) are candidates. Auth,
+  // throttling, and server errors are real failures, not capability gaps.
+  const isCapabilityStatus =
+    typeof status === "number" && (status === 400 || status === 501);
+  const messageText =
+    typeof err.message === "string" ? err.message : String(err.message ?? "");
+  if (!messageText && !isCapabilityStatus) return false;
+  const messageMatches = UNSUPPORTED_RESPONSE_FORMAT_PATTERNS.some((re) =>
+    re.test(messageText)
+  );
+  // A 400/501 whose message names response_format / unsupported-parameter is
+  // the canonical signal. Require BOTH a capability status AND a matching
+  // message so a generic 400 (e.g. malformed body) does not trigger the retry.
+  return isCapabilityStatus && messageMatches;
 }
 
 /**
@@ -368,12 +416,12 @@ export class EmailReplyDraftGenerationService {
     //    as a provider error with no draft persisted and no strike consumed.
     let generated: GeneratedEmailReply;
     try {
-      const firstRaw = await this.callLlmRaw(systemMsg, userMsg);
+      const firstRaw = await this.callLlmRawWithHintFallback(systemMsg, userMsg);
       const first = this.validateLlmResult(firstRaw);
       if (first.ok) {
         generated = first.value;
       } else {
-        const secondRaw = await this.callLlmRaw(systemMsg, {
+        const secondRaw = await this.callLlmRawWithHintFallback(systemMsg, {
           role: "user",
           content: buildCorrectionPrompt({
             originalUserContent: openAIContentToString(userMsg.content),
@@ -646,7 +694,8 @@ export class EmailReplyDraftGenerationService {
    */
   private async callLlmRaw(
     systemMsg: OpenAIChatMessage,
-    userMsg: OpenAIChatMessage
+    userMsg: OpenAIChatMessage,
+    options?: { readonly omitResponseFormat?: boolean }
   ): Promise<LlmRawResult> {
     const api = this.apiFactory();
     let resp;
@@ -655,11 +704,18 @@ export class EmailReplyDraftGenerationService {
         messages: [systemMsg, userMsg],
         temperature: 0.4,
         max_tokens: 1500,
-        response_format: { type: "json_object" },
+        // B06/FR-026: omit the JSON hint when retrying after an explicit
+        // unsupported-parameter rejection. The provider proved it does not
+        // honor response_format; local strict parsing still validates the body.
+        ...(options?.omitResponseFormat
+          ? {}
+          : { response_format: { type: "json_object" as const } }),
       });
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      throw new LlmTransportError(errMsg);
+      throw new LlmTransportError(errMsg, {
+        unsupportedResponseFormat: isUnsupportedResponseFormatError(error),
+      });
     }
     const choice = resp.choices?.[0];
     const refusalText = choice?.message?.refusal;
@@ -682,6 +738,36 @@ export class EmailReplyDraftGenerationService {
           ? messageToolCalls
           : null,
     };
+  }
+
+  /**
+   * Wrap {@link callLlmRaw} with the B06/FR-026 unsupported-parameter
+   * fallback: if the provider explicitly rejects the `response_format` JSON
+   * hint, retry ONCE without it. Auth, throttling, generic network, and
+   * server errors are NOT retried — they surface as {@link LlmTransportError}
+   * and are handled by the caller as provider failures (no validation strike
+   * consumed). The total transport ceiling per generation attempt is two
+   * submissions (hint, then no-hint), preserving the aggregate request budget.
+   */
+  private async callLlmRawWithHintFallback(
+    systemMsg: OpenAIChatMessage,
+    userMsg: OpenAIChatMessage
+  ): Promise<LlmRawResult> {
+    try {
+      return await this.callLlmRaw(systemMsg, userMsg);
+    } catch (error) {
+      if (
+        error instanceof LlmTransportError &&
+        error.unsupportedResponseFormat
+      ) {
+        // One no-hint retry. If this also fails, surface the error — do NOT
+        // loop or fall through to validation.
+        return await this.callLlmRaw(systemMsg, userMsg, {
+          omitResponseFormat: true,
+        });
+      }
+      throw error;
+    }
   }
 
   /**

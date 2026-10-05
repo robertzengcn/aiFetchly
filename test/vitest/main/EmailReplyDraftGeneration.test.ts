@@ -388,6 +388,196 @@ describe("callLlmRaw payload + transport-error classification (FR-027)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B06: JSON hint incompatibility fallback. An explicit unsupported-parameter
+// rejection of response_format triggers ONE no-hint retry; auth/throttling/
+// network/server errors do not.
+// ---------------------------------------------------------------------------
+describe("callLlmRawWithHintFallback retries once without the hint on unsupported-parameter (B06)", () => {
+  // Helper: build a factory whose first N calls throw, then return canned
+  // responses. Each thrown error carries a status so the detector can decide.
+  function stagedFactory(
+    stages: ReadonlyArray<
+      | { readonly kind: "throw"; readonly status?: number; readonly message: string }
+      | { readonly kind: "respond"; readonly content: string }
+    >
+  ): { factory: AiChatApiFactory; requests: OpenAIChatCompletionRequest[] } {
+    const requests: OpenAIChatCompletionRequest[] = [];
+    let i = 0;
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        requests.push(req);
+        const stage = stages[i++];
+        if (!stage) {
+          throw new Error("stagedFactory: no more stages");
+        }
+        if (stage.kind === "throw") {
+          const err = new Error(stage.message);
+          if (typeof stage.status === "number") {
+            (err as unknown as { status: number }).status = stage.status;
+          }
+          throw err;
+        }
+        return completionResponse(stage.content);
+      },
+    });
+    return { factory, requests };
+  }
+
+  it("an explicit unsupported-parameter 400 triggers one no-hint retry and succeeds", async () => {
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "Bad request: response_format is not supported by this model",
+      },
+      { kind: "respond", content: validReplyJson },
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmRawResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    const result = await fallback(
+      { role: "system", content: "sys" },
+      { role: "user", content: "u" }
+    );
+    expect(result.content).toBe(validReplyJson);
+    // Two calls: the first WITH the hint (rejected), the second WITHOUT it.
+    expect(requests).toHaveLength(2);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+    expect(requests[1].response_format).toBeUndefined();
+  });
+
+  it("auth (401), throttling (429), and server (500) errors are NOT retried", async () => {
+    for (const status of [401, 429, 500] as const) {
+      const { factory, requests } = stagedFactory([
+        { kind: "throw", status, message: `Server returned ${status}` },
+      ]);
+      const svc = new EmailReplyDraftGenerationService({
+        apiFactory: factory,
+      });
+      const fallback = (svc as unknown as {
+        callLlmRawWithHintFallback: (
+          a: unknown,
+          b: unknown
+        ) => Promise<LlmRawResult>;
+      }).callLlmRawWithHintFallback.bind(svc);
+      await expect(
+        fallback(
+          { role: "system", content: "sys" },
+          { role: "user", content: "u" }
+        )
+      ).rejects.toBeInstanceOf(LlmTransportError);
+      // Exactly one call — no retry for non-capability errors.
+      expect(requests).toHaveLength(1);
+    }
+  });
+
+  it("a generic 400 (no response_format mention) is NOT retried", async () => {
+    // A malformed-body 400 must not trigger the no-hint retry — only an
+    // explicit unsupported-parameter rejection does.
+    const { factory, requests } = stagedFactory([
+      { kind: "throw", status: 400, message: "Invalid request body shape" },
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmRawResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    await expect(
+      fallback(
+        { role: "system", content: "sys" },
+        { role: "user", content: "u" }
+      )
+    ).rejects.toBeInstanceOf(LlmTransportError);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("a network error with no status is NOT retried", async () => {
+    const { factory, requests } = stagedFactory([
+      { kind: "throw", message: "network timeout" },
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const fallback = (svc as unknown as {
+      callLlmRawWithHintFallback: (
+        a: unknown,
+        b: unknown
+      ) => Promise<LlmRawResult>;
+    }).callLlmRawWithHintFallback.bind(svc);
+    await expect(
+      fallback(
+        { role: "system", content: "sys" },
+        { role: "user", content: "u" }
+      )
+    ).rejects.toBeInstanceOf(LlmTransportError);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("createDraft caps total transport submissions at four across hint-fallback + correction", async () => {
+    // Worst case: first generation rejects response_format (1), no-hint retry
+    // returns invalid JSON (2); correction rejects response_format again (3),
+    // no-hint correction retry returns invalid JSON (4). Two validation
+    // strikes → needs_human_review. Exactly four transport submissions.
+    const badJson = "{not valid json";
+    const { factory, requests } = stagedFactory([
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format unsupported",
+      },
+      { kind: "respond", content: badJson },
+      {
+        kind: "throw",
+        status: 400,
+        message: "response_format unsupported",
+      },
+      { kind: "respond", content: badJson },
+    ]);
+    const messageModule = new EmailReceivedMessageModule();
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId: saved.id,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("needs_human_review");
+    // Bounded transport ceiling: hint + no-hint for generation, hint + no-hint
+    // for correction = 4. Never exceeds four.
+    expect(requests).toHaveLength(4);
+    expect(requests[0].response_format).toEqual({ type: "json_object" });
+    expect(requests[1].response_format).toBeUndefined();
+    expect(requests[2].response_format).toEqual({ type: "json_object" });
+    expect(requests[3].response_format).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createDraft message-level guard + reuse (FR-028)
 // ---------------------------------------------------------------------------
 describe("createDraft guard + reuse (FR-028)", () => {
