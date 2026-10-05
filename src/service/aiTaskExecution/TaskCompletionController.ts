@@ -104,7 +104,13 @@ export class TaskCompletionController {
         type: "finish",
         outcome: "verified_complete",
         reasonCode: "CRITERIA_SATISFIED",
-        evidenceIds: [...passed],
+        // Shadow mode (Slice 1) collects no real evidence — evidenceIds is
+        // the identity of TaskEvidence rows (§5.2), NOT the IDs of criteria
+        // that passed. Storing criterion IDs here (the previous behavior)
+        // would misattribute them as evidence rows and break §8.2
+        // reference-membership checks downstream. Emit [] until
+        // TaskEvidenceService (Slice 2) records real evidence.
+        evidenceIds: [],
         summary: this.boundedSummary(candidate.content),
         remainingWork: [],
       };
@@ -118,7 +124,9 @@ export class TaskCompletionController {
       type: "finish",
       outcome: "incomplete",
       reasonCode,
-      evidenceIds: [...passed],
+      // No evidence collected in shadow mode (see verified_complete branch
+      // above). Criterion pass/fail is reported via remainingWork + reasonCode.
+      evidenceIds: [],
       summary: this.boundedSummary(candidate.content),
       remainingWork: unmet,
     };

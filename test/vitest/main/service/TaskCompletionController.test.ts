@@ -119,4 +119,43 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
     // continuation. Live continue is Slice 2.
     expect(decision.type).not.toBe("continue");
   });
+
+  it("emits evidenceIds:[] in shadow mode (criterion IDs are not evidence, §5.2/§8.2, B9)", async () => {
+    // Shadow mode collects no real evidence. The previous behavior stuffed
+    // passed criterion IDs into evidenceIds, but TaskEvidence.evidenceId is
+    // a separate evidence identity — downstream §8.2 consumers would
+    // reject or misattribute them. evidenceIds must be [] until
+    // TaskEvidenceService (Slice 2) records real evidence rows.
+    const ctrl = new TaskCompletionController();
+
+    // verified_complete branch
+    const verified = await ctrl.decide(
+      baseCandidate({ content: "Saved 100 contacts." }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1", "rec-2"],
+        requiredCriterionIds: ["rec-1", "rec-2"],
+      }
+    );
+    expect(verified.type).toBe("finish");
+    if (verified.type === "finish") {
+      expect(verified.evidenceIds).toEqual([]);
+    }
+
+    // incomplete branch
+    const incomplete = await ctrl.decide(
+      baseCandidate({ content: "Saved 50/100.", finishReason: null }),
+      {
+        route: "task_verified",
+        passedCriterionIds: ["rec-1"],
+        requiredCriterionIds: ["rec-1", "rec-2"],
+      }
+    );
+    expect(incomplete.type).toBe("finish");
+    if (incomplete.type === "finish") {
+      expect(incomplete.evidenceIds).toEqual([]);
+      // Criterion pass/fail is reported via remainingWork, not evidenceIds.
+      expect(incomplete.remainingWork).toEqual(["rec-2"]);
+    }
+  });
 });
