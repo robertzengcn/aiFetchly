@@ -460,8 +460,7 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     expect(holders.saveUserMessageIfAbsent).toHaveBeenCalledTimes(1);
-    const saved = holders.saveUserMessageIfAbsent.mock
-      .calls.at(-1)?.[0] as {
+    const saved = holders.saveUserMessageIfAbsent.mock.calls.at(-1)?.[0] as {
       messageId: string;
       content: string;
     };
@@ -483,10 +482,14 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     const firstId = (
-      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     const secondId = (
-      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     expect(firstId).toBe(secondId);
     expect(firstId).toBe("user-sub_retry1");
@@ -505,10 +508,14 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     const firstId = (
-      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     const secondId = (
-      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     expect(firstId).not.toBe(secondId);
   });
@@ -524,8 +531,9 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
       },
     });
 
-    const saved = holders.saveUserMessageIfAbsent.mock.calls
-      .at(-1)?.[0] as { content: string };
+    const saved = holders.saveUserMessageIfAbsent.mock.calls.at(-1)?.[0] as {
+      content: string;
+    };
     expect(saved.content).toBe("plain");
   });
 
@@ -539,5 +547,40 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
 
     expect(holders.saveUserMessage).toHaveBeenCalledTimes(1);
     expect(holders.saveUserMessageIfAbsent).not.toHaveBeenCalled();
+  });
+
+  it("threads outboundSendPreAuthorized through runPersistedTurn into the loop input", async () => {
+    // Scheduled-loop pre-authorization must survive the submitMessage →
+    // runPersistedTurn split: the flag is main-process-only (the renderer
+    // cannot set it), and dropping it anywhere on that path would silently
+    // disable the pre-allowlisted outbound send gate.
+    const { engine, loop } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "scheduled outreach" },
+      outboundSendPreAuthorized: true,
+    });
+
+    expect(loop.run).toHaveBeenCalledTimes(1);
+    const loopInput = loop.run.mock.calls[0][0] as {
+      outboundSendPreAuthorized?: boolean;
+    };
+    expect(loopInput.outboundSendPreAuthorized).toBe(true);
+  });
+
+  it("leaves outboundSendPreAuthorized unset for ordinary interactive submits", async () => {
+    const { engine, loop } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "interactive" },
+    });
+
+    expect(loop.run).toHaveBeenCalledTimes(1);
+    const loopInput = loop.run.mock.calls[0][0] as {
+      outboundSendPreAuthorized?: boolean;
+    };
+    expect(loopInput.outboundSendPreAuthorized).toBeUndefined();
   });
 });
