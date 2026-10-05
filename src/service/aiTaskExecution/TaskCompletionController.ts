@@ -27,10 +27,6 @@ import type {
   TaskExecutionRoute,
 } from "@/entityTypes/aiTaskExecutionTypes";
 
-export interface ControllerDeps {
-  readonly executionId: string;
-}
-
 export interface DecideContext {
   readonly route: TaskExecutionRoute;
   readonly passedCriterionIds?: readonly string[];
@@ -39,11 +35,11 @@ export interface DecideContext {
 }
 
 export class TaskCompletionController {
-  private readonly deps: ControllerDeps;
-
-  constructor(deps: ControllerDeps) {
-    this.deps = deps;
-  }
+  // Slice 1 shadow-mode controller holds no mutable state. The previous
+  // `ControllerDeps`/`executionId` field was never read inside this class
+  // (F16) — the coordinator already has the executionId on its binding —
+  // so the constructor takes no args. Slice 2 may add continuation
+  // dispatch state here; do not re-add a dead field in the meantime.
 
   async decide(
     candidate: TaskEndCandidate,

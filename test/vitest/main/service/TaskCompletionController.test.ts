@@ -21,7 +21,7 @@ function baseCandidate(overrides: Partial<TaskEndCandidate>): TaskEndCandidate {
 
 describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   it("returns finish_response for a response-only route candidate (AC-14)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(baseCandidate({}), {
       route: "response_only",
     });
@@ -29,7 +29,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("returns finish verified_complete when all required evidence passes (AC-03)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({ content: "Saved 100 contacts." }),
       {
@@ -46,7 +46,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("returns finish incomplete when required criteria are unmet (first-response stop, AC-18)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({ content: "I will check.", finishReason: null }),
       {
@@ -62,7 +62,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("returns wait when a permission is pending (FR-06 stop conditions)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({ pendingPermission: true }),
       { route: "task_verified" }
@@ -74,7 +74,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("returns finish blocked_by_policy on a safety restriction (FR-06, no bypass)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({ safetyRestriction: true, content: "I can't help." }),
       { route: "task_verified" }
@@ -87,7 +87,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("records synthetic provenance for a missing-terminal candidate (AC-12, FR-16)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({
         provenance: "synthetic",
@@ -105,7 +105,7 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
   });
 
   it("shadow mode never returns continue (Slice 1: no live continuation dispatch)", async () => {
-    const ctrl = new TaskCompletionController({ executionId: "exec-1" });
+    const ctrl = new TaskCompletionController();
     const decision = await ctrl.decide(
       baseCandidate({ content: "Saved 50/100." }),
       {

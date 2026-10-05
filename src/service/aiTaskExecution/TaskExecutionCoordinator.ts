@@ -129,9 +129,7 @@ export class TaskExecutionCoordinator {
     });
 
     const budget = new TaskRunBudget(input.budgetLimits);
-    const controller = new TaskCompletionController({
-      executionId: started.executionId,
-    });
+    const controller = new TaskCompletionController();
 
     return {
       executionId: started.executionId,

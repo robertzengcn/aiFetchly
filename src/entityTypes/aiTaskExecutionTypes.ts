@@ -291,11 +291,9 @@ export const TASK_EXECUTION_REASON_CODES = [
 export type TaskExecutionReasonCode =
   (typeof TASK_EXECUTION_REASON_CODES)[number];
 
-// ----- Provenance (FR-16) -----
-
-export const TASK_END_PROVENANCE = [
-  "provider",
-  "adapter",
-  "synthetic",
-  "unknown",
-] as const;
+// Provenance (FR-16): the four provenance values are defined inline on
+// `taskEndCandidateSchema.provenance` (z.enum) above. There is no separate
+// exported const — a duplicate `TASK_END_PROVENANCE` array existed only to
+// shadow the schema enum and was never imported anywhere. Read provenance
+// from the schema (the single source of truth) or via z.infer on
+// `taskEndCandidateSchema`.

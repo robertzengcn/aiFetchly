@@ -11,11 +11,11 @@
  * object here is a shadow mirror of the authoritative ledger row — it is
  * never itself the source of truth for spent allowance.
  *
- * Dedup keyspace: all four `reserve*` methods share a single dedup set
- * (`reservedRequestIds`), so caller-supplied IDs MUST be unique across
- * reservation types. Token reconciliation uses a separate
- * (`tokenReconciledIds`) set so a token reconcile for request "X" never
- * collides with a provider/continuation/tool/checker reservation of "X".
+ * Dedup keyspace: the three `reserve*` methods (provider/continuation/tool)
+ * share a single dedup set (`reservedRequestIds`), so caller-supplied IDs
+ * MUST be unique across reservation types. Token reconciliation uses a
+ * separate (`tokenReconciledIds`) set so a token reconcile for request "X"
+ * never collides with a provider/continuation/tool reservation of "X".
  */
 export { MANUAL_BUDGET_DEFAULTS, HARD_CAPS, SCHEDULED_LOOP_RUN_TIMEOUT_MS } from "@/service/aiTaskExecution/budgetDefaults";
 
@@ -67,10 +67,6 @@ export class TaskRunBudget {
       waitMs: 0,
       noProgressStreak: 0,
     };
-  }
-
-  getLimits(): BudgetLimits {
-    return this.limits;
   }
 
   getConsumed(): BudgetConsumed {
@@ -159,24 +155,19 @@ export class TaskRunBudget {
     return BudgetReservationResult.Reserved;
   }
 
-  reserveCheckerAttempt(checkerRequestId: string): BudgetReservationResult {
-    if (this.reservedRequestIds.has(checkerRequestId)) {
-      return BudgetReservationResult.AlreadyReserved;
-    }
-    if (this.consumed.checkerAttempts >= this.limits.maxCheckerAttempts) {
-      return BudgetReservationResult.Exhausted;
-    }
-    this.reservedRequestIds.add(checkerRequestId);
-    this.consumed = {
-      ...this.consumed,
-      checkerAttempts: this.consumed.checkerAttempts + 1,
-    };
-    return BudgetReservationResult.Reserved;
-  }
-
-  /** Reconcile actual token usage after a dispatch (§9). */
+  /**
+   * Reconcile actual token usage after a dispatch (§9).
+   *
+   * Note: there is intentionally no `reserveCheckerAttempt` method here.
+   * Slice 1 shadow mode has no checker-dispatch path, so the method would
+   * be dead code with zero callers. The `checkerAttempts` counter and
+   * `maxCheckerAttempts` limit remain in the schema (consumed by
+   * getRemaining and asserted in tests); Slice 2's live verifier wiring
+   * will add the reserve method when it actually dispatches checker
+   * requests.
+   */
   reconcileTokens(requestId: string, actualTokens: number): void {
-    // Dedup on a SEPARATE set from reservedRequestIds. The four reserve*
+    // Dedup on a SEPARATE set from reservedRequestIds. The three reserve*
     // methods share `reservedRequestIds`; token reconciliation tracks its
     // own keyspace so a reservation of "X" and a token reconcile of "X"
     // (the same logical request) both count independently. Sharing one set
