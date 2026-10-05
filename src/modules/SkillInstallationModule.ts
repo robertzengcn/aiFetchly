@@ -2460,10 +2460,26 @@ export class SkillInstallationModule extends BaseModule {
     entity.enabled = false;
     entity.status = "disabled";
     await installations.save(entity);
-    getDefaultPromptSkillCatalog().setEnabled(
-      `prompt:user:${installationId}`,
-      false
-    );
+    // Ticket P2-9: lifecycle actions dispatch by KIND. Plugin/executable
+    // rows previously only flipped THIS row and touched a prompt catalog
+    // entry that does not exist for them — their owning registries stayed
+    // live (tools still registered/executable) while the manager reported
+    // disabled.
+    if (entity.kind === "plugin" || entity.kind === "executable") {
+      try {
+        const { SkillManagementModule } = await import(
+          "@/modules/SkillManagementModule"
+        );
+        await new SkillManagementModule().toggleSkill(entity.name, false);
+      } catch {
+        /* owning registry unavailable — the row state above still governs */
+      }
+    } else {
+      getDefaultPromptSkillCatalog().setEnabled(
+        `prompt:user:${installationId}`,
+        false
+      );
+    }
     // FR-19: a disabled skill must not keep instructing conversations that
     // invoked it — durable invocation state is deactivated across ALL
     // conversations (recovery reconciles with a structured diagnostic).
@@ -2490,7 +2506,8 @@ export class SkillInstallationModule extends BaseModule {
     }
   }
 
-  /** Re-enable a disabled installation (§24.3 mirror). */
+  /** Re-enable a disabled installation (§24.3 mirror; ticket P2-9 kind
+   *  dispatch mirrors disable()). */
   async enable(installationId: string): Promise<boolean> {
     const { installations } = await this.getModels();
     const entity = await installations.findByInstallationId(installationId);
@@ -2498,10 +2515,21 @@ export class SkillInstallationModule extends BaseModule {
     entity.enabled = true;
     entity.status = "ready";
     await installations.save(entity);
-    getDefaultPromptSkillCatalog().setEnabled(
-      `prompt:user:${installationId}`,
-      true
-    );
+    if (entity.kind === "plugin" || entity.kind === "executable") {
+      try {
+        const { SkillManagementModule } = await import(
+          "@/modules/SkillManagementModule"
+        );
+        await new SkillManagementModule().toggleSkill(entity.name, true);
+      } catch {
+        /* owning registry unavailable — the row state above still governs */
+      }
+    } else {
+      getDefaultPromptSkillCatalog().setEnabled(
+        `prompt:user:${installationId}`,
+        true
+      );
+    }
     return true;
   }
 
@@ -2530,6 +2558,31 @@ export class SkillInstallationModule extends BaseModule {
     );
     if (!entity) {
       return { ok: false, message: "Unknown installation." };
+    }
+
+    // Ticket P2-9: plugin/executable rows have NO activation path — their
+    // owning registries manage the files. Route to them instead of the
+    // activation service (which failed on the empty path) so the package's
+    // registered tools are actually removed, then finish the shared
+    // lifecycle bookkeeping below.
+    if (entity.kind === "plugin" || entity.kind === "executable") {
+      const owningRemoval = await this.uninstallRoutedPackage(entity);
+      if (!owningRemoval.ok) {
+        return { ok: false, message: owningRemoval.message };
+      }
+      const deactivatedInvocations = await this.deactivateInvocations(
+        input.installationId
+      );
+      await this.cleanupInstallationRecords(input.installationId, entity, {
+        deleteSecrets: input.deleteSecrets !== false,
+      });
+      return {
+        ok: true,
+        removed: "directory",
+        targetPreserved: null,
+        secretsDeleted: owningRemoval.secretsDeleted,
+        deactivatedInvocations,
+      };
     }
 
     // Ticket P1-1: verify the activation still belongs to THIS
@@ -2580,9 +2633,93 @@ export class SkillInstallationModule extends BaseModule {
     const deactivatedInvocations = await this.deactivateInvocations(
       input.installationId
     );
+    const secretsDeleted = await this.cleanupInstallationRecords(
+      input.installationId,
+      entity,
+      { deleteSecrets: input.deleteSecrets !== false, installations }
+    );
+    return {
+      ok: true,
+      removed: removed.removed,
+      targetPreserved: removed.targetPreserved,
+      secretsDeleted,
+      deactivatedInvocations,
+    };
+  }
 
+  /**
+   * Ticket P2-9: remove a plugin/executable package through its OWNING
+   * registry (the activation service cannot — routed rows carry no
+   * activation path). Failures are typed, never silently "success".
+   */
+  private async uninstallRoutedPackage(
+    entity: SkillInstallationEntity
+  ): Promise<{ ok: true; secretsDeleted: number } | { ok: false; message: string }> {
+    const secretsDeleted = 0;
+    if (entity.kind === "plugin") {
+      try {
+        const { PluginManagementModule } = await import(
+          "@/modules/PluginManagementModule"
+        );
+        const result = await new PluginManagementModule().uninstallPlugin(
+          entity.name
+        );
+        if (!result.removedPlugin) {
+          return {
+            ok: false,
+            message:
+              result.errors[0]?.message ??
+              `The plugin manager could not remove '${entity.name}'.`,
+          };
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          message: `The plugin manager could not remove '${entity.name}': ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+    } else {
+      try {
+        const { SkillManagementModule } = await import(
+          "@/modules/SkillManagementModule"
+        );
+        const removed = await new SkillManagementModule().uninstallSkill(
+          entity.name
+        );
+        if (!removed) {
+          return {
+            ok: false,
+            message: `The skill manager could not remove '${entity.name}'.`,
+          };
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          message: `The skill manager could not remove '${entity.name}': ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+    }
+    return { ok: true, secretsDeleted };
+  }
+
+  /**
+   * Shared uninstall bookkeeping (ticket P2-9): credential deletion,
+   * dependency-binding cleanup, and the terminal row update.
+   */
+  private async cleanupInstallationRecords(
+    installationId: string,
+    entity: SkillInstallationEntity,
+    opts: {
+      deleteSecrets: boolean;
+      installations?: SkillInstallationModel;
+    }
+  ): Promise<number> {
     let secretsDeleted = 0;
-    if (input.deleteSecrets !== false) {
+    if (opts.deleteSecrets) {
       try {
         // SkillCredentialModule (TODO 9): values from the encrypted store
         // AND binding rows from SQLite.
@@ -2590,7 +2727,7 @@ export class SkillInstallationModule extends BaseModule {
           "@/modules/SkillCredentialModule"
         );
         secretsDeleted = await new SkillCredentialModule().deleteAll(
-          input.installationId
+          installationId
         );
       } catch {
         /* credential store unavailable — files still removed */
@@ -2601,21 +2738,15 @@ export class SkillInstallationModule extends BaseModule {
     try {
       await (
         await this.getDependencyBindingModel()
-      ).deleteByInstallation(input.installationId);
+      ).deleteByInstallation(installationId);
     } catch {
       /* binding cleanup is best-effort — uninstall still completes */
     }
-
     entity.status = "revoked";
     entity.enabled = false;
+    const installations = opts.installations ?? (await this.getModels()).installations;
     await installations.save(entity);
-    return {
-      ok: true,
-      removed: removed.removed,
-      targetPreserved: removed.targetPreserved,
-      secretsDeleted,
-      deactivatedInvocations,
-    };
+    return secretsDeleted;
   }
 
   /**

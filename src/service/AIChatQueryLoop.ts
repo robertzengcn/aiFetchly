@@ -682,6 +682,10 @@ export class AIChatQueryLoop {
     canonicalUri: string | null;
   } | null = null;
   private installBoundaryDirty = true;
+  /** Ticket P2-6: which conversation the cached boundary belongs to —
+   *  one loop instance serves several conversations, and a switch must
+   *  not leak the previous conversation's session or approval. */
+  private installBoundaryConversation: string | null = null;
   /** FR-30: cached manual-action approval for the active session (fail
    *  closed until the audit lookup completes). Audit R8: a bound record
    *  carries the exact approved tool/operation/cwd. */
@@ -734,7 +738,10 @@ export class AIChatQueryLoop {
   }
 
   /** FR-30: async boundary refresh — caches the active session + its
-   *  manual-action approval; never blocks the critical path. */
+   *  manual-action approval; never blocks the critical path. Ticket P2-6:
+   *  records WHICH conversation the cache now speaks for (failure counts —
+   *  the fail-closed empty result is still scoped, so it is not re-probed
+   *  on every call). */
   private async refreshInstallBoundary(conversationId: string): Promise<void> {
     try {
       const { SkillInstallationModule } = await import(
@@ -747,11 +754,13 @@ export class AIChatQueryLoop {
       this.manualActionApprovedCache = this.activeInstallSession
         ? await module.hasApprovedManualAction(this.activeInstallSession.sessionId)
         : { approved: false };
+      this.installBoundaryConversation = conversationId;
     } catch (boundaryError) {
       log.warn(
         "[install-boundary] session lookup failed:",
         boundaryError
       );
+      this.installBoundaryConversation = conversationId;
     }
   }
 
@@ -1031,18 +1040,6 @@ export class AIChatQueryLoop {
           this.skillToolAllowlistDirty = false;
           void this.refreshSkillToolAllowlist(input.conversationId);
         }
-        if (this.skillToolAllowlist) {
-          const { applySkillToolNarrowing } = await import(
-            "@/service/PromptSkillToolNarrowing"
-          );
-          const keep = new Set(
-            applySkillToolNarrowing(
-              exposedTools.map((t) => t.function.name),
-              this.skillToolAllowlist
-            )
-          );
-          exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
-        }
         if (catalogActive && catalog && catalogModeDecision) {
           try {
             const filterResult = this.catalogService.filterForRound({
@@ -1067,8 +1064,23 @@ export class AIChatQueryLoop {
               filterError
             );
             toolCatalogCounters.increment("fallback_count");
-            exposedTools = currentTools;
           }
+        }
+        // Ticket P2-7: narrowing applies to the FINAL set — catalog
+        // filtering previously REPLACED the narrowed list with a filtered
+        // copy of the FULL tool set, undoing an invoked skill's
+        // allowed-tools restriction.
+        if (this.skillToolAllowlist) {
+          const { applySkillToolNarrowing } = await import(
+            "@/service/PromptSkillToolNarrowing"
+          );
+          const keep = new Set(
+            applySkillToolNarrowing(
+              exposedTools.map((t) => t.function.name),
+              this.skillToolAllowlist
+            )
+          );
+          exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
         }
         const hasExposedTools = exposedTools.length > 0;
 
@@ -1548,6 +1560,9 @@ export class AIChatQueryLoop {
           });
         }
 
+        // Ticket P2-8: handoff messages collected per tool batch — appended
+        // after the loop so tool responses stay contiguous.
+        const postToolHandoffs: OpenAIChatMessage[] = [];
         for (const call of parsedCalls) {
           if (!call.ok || !call.id || !call.name) {
             continue;
@@ -1966,14 +1981,21 @@ export class AIChatQueryLoop {
             toolCatalogCounters.increment(installFirstToolCounterKey(call.name));
           }
           let installRouting = skillInstallRouting;
+          // Ticket P2-6: the cached install boundary belongs to ONE
+          // conversation — one loop instance serves several. A conversation
+          // switch invalidates it for THIS call (fail closed: neither the
+          // previous conversation's session nor its manual-action approval
+          // applies) while a fresh resolve runs off the critical path.
+          const boundaryStale =
+            this.installBoundaryConversation !== input.conversationId;
           if (installRouting.confidence !== "explicit") {
-            if (this.installBoundaryDirty) {
+            if (this.installBoundaryDirty || boundaryStale) {
               this.installBoundaryDirty = false;
               // Off the critical path (see the narrowing note): the cached
               // session binds this and subsequent calls once resolved.
               void this.refreshInstallBoundary(input.conversationId);
             }
-            if (this.activeInstallSession) {
+            if (this.activeInstallSession && !boundaryStale) {
               installRouting = {
                 policyVersion: 1,
                 intent: "install-package",
@@ -1991,8 +2013,12 @@ export class AIChatQueryLoop {
             this.installBoundaryDirty = true;
           }
           // Cached by refreshInstallBoundary; false (fail closed) until the
-          // audit lookup completes — never awaited inline.
-          const manualActionApproved = this.manualActionApprovedCache;
+          // audit lookup completes — never awaited inline. Ticket P2-6: a
+          // boundary cached for a DIFFERENT conversation reads as
+          // not-approved here.
+          const manualActionApproved = boundaryStale
+            ? { approved: false }
+            : this.manualActionApprovedCache;
           if (
             installRouting.confidence === "explicit" &&
             !INSTALLER_TOOL_NAMES.has(call.name)
@@ -2161,8 +2187,13 @@ export class AIChatQueryLoop {
           // acknowledgement, append the verified instruction block as a
           // model-only message. Not persisted, not a user bubble, and marked
           // as untrusted repository guidance inside the block itself.
+          // Ticket P2-8: handoffs are COLLECTED and appended after the whole
+          // tool batch — a role:user message between two tool responses
+          // violates the Chat Completions contract (all tool responses for
+          // an assistant's tool_calls must precede any user message) and
+          // strict providers reject the next request.
           if (toolResult.success && toolResult.promptSkillContext) {
-            messages.push(
+            postToolHandoffs.push(
               buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
             );
           }
@@ -2179,7 +2210,7 @@ export class AIChatQueryLoop {
             toolResult.modelArtifacts &&
             toolResult.modelArtifacts.length > 0
           ) {
-            messages.push(
+            postToolHandoffs.push(
               buildImageArtifactHandoffMessage({
                 artifacts: toolResult.modelArtifacts,
                 originalUserRequest: input.request.message,
@@ -2191,6 +2222,9 @@ export class AIChatQueryLoop {
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
         }
+      // Ticket P2-8: all tool responses are contiguous; the handoff
+      // (model-only role:user) messages follow the batch.
+      messages.push(...postToolHandoffs);
       }
 
       // All tool calls for this round have executed and their results are
