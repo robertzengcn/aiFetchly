@@ -175,4 +175,14 @@ export interface AiEmailReplyDraftResult {
    * on a fresh-generation success.
    */
   code?: EmailReplyPolicyCode;
+  /**
+   * Per-invocation request correlation id (B11). Allocated fresh at the
+   * `createDraft` entry boundary by {@link newRequestCorrelationId}; distinct
+   * across two invocations for the same message. All audit events written
+   * during this invocation carry this id in their `metadataJson.correlationId`
+   * (alongside the deterministic per-message `messageCorrelationId`). The
+   * returned result carries it so a caller can correlate a tool/IPC response
+   * to the audit trail for the invocation that produced it.
+   */
+  requestCorrelationId: string;
 }

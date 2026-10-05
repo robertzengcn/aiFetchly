@@ -1522,6 +1522,216 @@ describe("createDraft failure-audit separation (B10)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B11: a per-invocation request correlation id is allocated at the createDraft
+// entry boundary. Two invocations for the same message get DISTINCT request ids;
+// all audit events written during one invocation carry that invocation's id in
+// metadataJson.correlationId (alongside the deterministic per-message
+// messageCorrelationId); the returned result carries it as requestCorrelationId.
+// ---------------------------------------------------------------------------
+describe("createDraft request correlation id (B11)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4249;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4249;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  /** All audit rows for a message, newest-first by list() ordering. */
+  async function auditsFor(
+    messageId: number
+  ): Promise<EmailReplyAuditLogEntity[]> {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 100,
+    });
+    return records;
+  }
+
+  it("two invocations for the same message get DISTINCT requestCorrelationIds and each result carries its own", async () => {
+    // Reuse path: two consecutive createDraft calls for the same message reuse
+    // the same existing draft. Each call must allocate a fresh request id and
+    // surface it on the returned result.
+    const messageId = await seedMessage();
+    await seedDraft(messageId, "draft");
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+
+    const result1 = await svc.createDraft({ messageId });
+    const result2 = await svc.createDraft({ messageId });
+
+    expect(result1.success).toBe(true);
+    expect(result2.success).toBe(true);
+    if (!result1.success || !result2.success) return;
+    // Each result carries a non-empty requestCorrelationId...
+    expect(typeof result1.requestCorrelationId).toBe("string");
+    expect(result1.requestCorrelationId.length).toBeGreaterThan(0);
+    expect(typeof result2.requestCorrelationId).toBe("string");
+    expect(result2.requestCorrelationId.length).toBeGreaterThan(0);
+    // ...and they are DISTINCT (per-invocation, not per-message).
+    expect(result1.requestCorrelationId).not.toBe(result2.requestCorrelationId);
+  });
+
+  it("all audit events within one invocation carry that invocation's requestCorrelationId (correlationId field)", async () => {
+    // A two-strike validation failure writes exactly ONE reply_skipped audit.
+    // That row's metadataJson.correlationId must equal the requestCorrelationId
+    // returned on the failed result, and metadataJson.messageCorrelationId must
+    // be the deterministic per-message id (stable across invocations).
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse("{not json", "stop"),
+      completionResponse("{also not json", "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    const requestCorrelationId = result.requestCorrelationId;
+    expect(requestCorrelationId).toBeTruthy();
+
+    const audits = await auditsFor(messageId);
+    const skips = audits.filter((r) => r.action === "reply_skipped");
+    expect(skips).toHaveLength(1);
+    const meta = JSON.parse(skips[0].metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+      stage?: string;
+      code?: string;
+    };
+    // The audit's correlationId is THIS invocation's request id.
+    expect(meta.correlationId).toBe(requestCorrelationId);
+    // The messageCorrelationId is the deterministic per-message id (stable
+    // across invocations for the same message).
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(requestCorrelationId);
+    expect(meta.messageCorrelationId).toMatch(/^erx-/);
+    expect(meta.stage).toBe("generation");
+    expect(meta.code).toBe("needs_human_review");
+  });
+
+  it("the deterministic messageCorrelationId is STABLE across two invocations for the same message", async () => {
+    // Two invocations for the same message -> two distinct requestCorrelationIds
+    // but the SAME messageCorrelationId on every audit row. This is the dual-id
+    // contract: request id separates invocations; message id groups them.
+    const messageId = await seedMessage();
+    await seedDraft(messageId, "draft");
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson),
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+
+    const r1 = await svc.createDraft({ messageId });
+    const r2 = await svc.createDraft({ messageId });
+    if (!r1.success || !r2.success) return;
+
+    const audits = await auditsFor(messageId);
+    const reuses = audits.filter((r) => r.action === "message_read_by_ai");
+    expect(reuses).toHaveLength(2);
+    // list() ordering is newest-first; match rows to results by request id
+    // rather than assuming index order, so the assertion is order-independent.
+    const rowFor = (reqId: string) =>
+      reuses.find(
+        (r) =>
+          (JSON.parse(r.metadataJson ?? "{}") as { correlationId?: string })
+            .correlationId === reqId
+      );
+    const row1 = rowFor(r1.requestCorrelationId);
+    const row2 = rowFor(r2.requestCorrelationId);
+    expect(row1).toBeTruthy();
+    expect(row2).toBeTruthy();
+    const meta1 = JSON.parse(row1?.metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+    };
+    const meta2 = JSON.parse(row2?.metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+    };
+    // Distinct request ids (one per invocation)...
+    expect(meta1.correlationId).not.toBe(meta2.correlationId);
+    expect(meta1.correlationId).toBe(r1.requestCorrelationId);
+    expect(meta2.correlationId).toBe(r2.requestCorrelationId);
+    // ...but the SAME deterministic per-message id on both rows.
+    expect(meta1.messageCorrelationId).toBe(meta2.messageCorrelationId);
+  });
+
+  it("a fresh-generation success carries requestCorrelationId and the draft_created audit matches it", async () => {
+    const messageId = await seedMessage();
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(false);
+    expect(result.requestCorrelationId).toBeTruthy();
+    expect(requests).toHaveLength(1);
+
+    const audits = await auditsFor(messageId);
+    const created = audits.filter((r) => r.action === "draft_created");
+    expect(created.length).toBeGreaterThanOrEqual(1);
+    const meta = JSON.parse(created[0].metadataJson ?? "{}") as {
+      correlationId?: string;
+      messageCorrelationId?: string;
+    };
+    expect(meta.correlationId).toBe(result.requestCorrelationId);
+    expect(meta.messageCorrelationId).toBeTruthy();
+    expect(meta.messageCorrelationId).not.toBe(result.requestCorrelationId);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
 // B03: post-generation recheck runs the FULL guard, not a live-draft filter
 // ---------------------------------------------------------------------------
 describe("createDraft post-generation recheck runs the full guard (B03)", () => {

@@ -29,7 +29,10 @@ import {
   EmailReplyPolicyOrchestrator,
   pickReusableDraft,
 } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
-import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
+import {
+  correlationIdForMessage,
+  newRequestCorrelationId,
+} from "@/service/emailReply/EmailReplyCorrelation";
 import {
   incrementReplyMetric,
   timedReplyStage,
@@ -60,7 +63,7 @@ export interface CreateDraftInput {
 /** Outcome returned to the AI tool / IPC handler. */
 export type CreateDraftOutcome =
   | ({ success: true } & AiEmailReplyDraftResult)
-  | { success: false; error: string };
+  | { success: false; error: string; requestCorrelationId: string };
 
 /**
  * Typed raw LLM call result (FR-027). Carries completion metadata so the
@@ -186,12 +189,22 @@ export class EmailReplyDraftGenerationService {
   }
 
   async createDraft(input: CreateDraftInput): Promise<CreateDraftOutcome> {
+    // B11: allocate a per-invocation request correlation id at the entry
+    //     boundary. Two independent createDraft calls for the same message
+    //     get DISTINCT request ids so one invocation's events can be told
+    //     apart from another's. The deterministic per-message workflow id
+    //     (correlationIdForMessage) is stamped separately as
+    //     messageCorrelationId in audit metadata so cross-invocation grouping
+    //     by message still works.
+    const requestCorrelationId = newRequestCorrelationId();
+
     // 1. AI-enable gate (CLAUDE.md mandate). Lazy-reconcile once when the
     //    gate is off so a user who just paid is unlocked without a remount.
     if (!(await ensureHostedAiEnabled())) {
       return {
         success: false,
         error: "AI email replies are disabled for this user.",
+        requestCorrelationId,
       };
     }
 
@@ -199,7 +212,11 @@ export class EmailReplyDraftGenerationService {
     await this.messageModule.ensureConnection();
     const message = await this.messageModule.read(input.messageId);
     if (!message) {
-      return { success: false, error: "Message not found" };
+      return {
+        success: false,
+        error: "Message not found",
+        requestCorrelationId,
+      };
     }
 
     // 2b. Pre-draft policy gate (FR-005, P0.3): run the authoritative policy
@@ -230,16 +247,22 @@ export class EmailReplyDraftGenerationService {
       // by this outer service (the policy layer returns decisions; it never
       // writes audit rows, AD-006). Audit persistence failure STOPS the work —
       // an unrecorded refusal must never be followed by proceeding to draft.
-      await this.writeRefusalAudit(message.emailServiceId, message.id, {
-        stage: "pre_draft",
-        code: policyDecision.code,
-        reason: policyDecision.reason,
-        policyVersion: policyDecision.policyVersion,
-        ruleId: policyDecision.ruleId,
-      });
+      await this.writeRefusalAudit(
+        message.emailServiceId,
+        message.id,
+        requestCorrelationId,
+        {
+          stage: "pre_draft",
+          code: policyDecision.code,
+          reason: policyDecision.reason,
+          policyVersion: policyDecision.policyVersion,
+          ruleId: policyDecision.ruleId,
+        }
+      );
       return {
         success: false,
         error: `[${policyDecision.code}] ${policyDecision.reason}`,
+        requestCorrelationId,
       };
     }
 
@@ -268,7 +291,12 @@ export class EmailReplyDraftGenerationService {
     const reusable = pickReusableDraft(existingDrafts);
     if (reusable) {
       try {
-        await this.writeReuseAudit(message.emailServiceId, message.id, reusable);
+        await this.writeReuseAudit(
+          message.emailServiceId,
+          message.id,
+          requestCorrelationId,
+          reusable
+        );
       } catch (auditError) {
         // B09: audit persistence failure STOPS the work — do not return a
         // successful audited outcome. Surface the persistence error instead.
@@ -277,6 +305,7 @@ export class EmailReplyDraftGenerationService {
         return {
           success: false,
           error: `Reuse audit persistence failed: ${auditErrMsg}`,
+          requestCorrelationId,
         };
       }
       return {
@@ -293,6 +322,7 @@ export class EmailReplyDraftGenerationService {
         warnings: decodeStoredWarnings(reusable.warningsJson),
         reused: true,
         code: "allowed",
+        requestCorrelationId,
       };
     }
 
@@ -438,6 +468,7 @@ export class EmailReplyDraftGenerationService {
         await this.recordFailure(
           message.emailServiceId,
           message.id,
+          requestCorrelationId,
           `[needs_human_review] generation failed validation twice: ${allCodes.join(
             ","
           )}`,
@@ -446,6 +477,7 @@ export class EmailReplyDraftGenerationService {
         return {
           success: false,
           error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
+          requestCorrelationId,
         };
       }
       // transport_error: not a validation strike. Persist a provider-error
@@ -454,12 +486,14 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
+        requestCorrelationId,
         `[provider_error] ${attempt.error.message}`,
         { stage: "generation", code: "provider_error" }
       );
       return {
         success: false,
         error: `[provider_error] ${attempt.error.message}`,
+        requestCorrelationId,
       };
     }
     const generated = attempt.value;
@@ -477,10 +511,15 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
+        requestCorrelationId,
         "Empty generated body",
         { stage: "generation", code: "empty_output" }
       );
-      return { success: false, error: "Generated reply body was empty" };
+      return {
+        success: false,
+        error: "Generated reply body was empty",
+        requestCorrelationId,
+      };
     }
 
     const banned = containsBannedPhrase(bodyText);
@@ -534,12 +573,14 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
+        requestCorrelationId,
         `[${recheckDecision.code}] ${recheckDecision.reason}`,
         { stage: "post_generation", code: recheckDecision.code }
       );
       return {
         success: false,
         error: `[${recheckDecision.code}] Message reply state changed during generation; no draft persisted`,
+        requestCorrelationId,
       };
     }
     // The guard allowed — meaning the message is clean OR has exactly one
@@ -559,6 +600,7 @@ export class EmailReplyDraftGenerationService {
         await this.writeReuseAudit(
           message.emailServiceId,
           message.id,
+          requestCorrelationId,
           reusableNow
         );
       } catch (auditError) {
@@ -567,6 +609,7 @@ export class EmailReplyDraftGenerationService {
         return {
           success: false,
           error: `Reuse audit persistence failed: ${auditErrMsg}`,
+          requestCorrelationId,
         };
       }
       return {
@@ -583,6 +626,7 @@ export class EmailReplyDraftGenerationService {
         warnings: decodeStoredWarnings(reusableNow.warningsJson),
         reused: true,
         code: "allowed",
+        requestCorrelationId,
       };
     }
 
@@ -664,6 +708,7 @@ export class EmailReplyDraftGenerationService {
     await this.writeReplyAudit(
       message.emailServiceId,
       message.id,
+      requestCorrelationId,
       savedDraft.id
     );
     await this.writeAutoAudit({
@@ -691,6 +736,7 @@ export class EmailReplyDraftGenerationService {
       confidence: authoritativeConfidence,
       warnings,
       reused: false,
+      requestCorrelationId,
     };
   }
 
@@ -857,6 +903,7 @@ export class EmailReplyDraftGenerationService {
   private async writeReplyAudit(
     emailServiceId: number,
     messageId: number,
+    requestCorrelationId: string,
     draftId: number
   ): Promise<void> {
     try {
@@ -868,7 +915,8 @@ export class EmailReplyDraftGenerationService {
       log.actor = "ai";
       log.reason = "AI generated knowledge-grounded reply draft";
       log.metadataJson = JSON.stringify({
-        correlationId: correlationIdForMessage(messageId),
+        correlationId: requestCorrelationId,
+        messageCorrelationId: correlationIdForMessage(messageId),
         promptVersion: REPLY_PROMPT_VERSION,
       });
       await this.replyAuditModule.create(log);
@@ -935,6 +983,7 @@ export class EmailReplyDraftGenerationService {
   private async recordFailure(
     emailServiceId: number,
     messageId: number,
+    requestCorrelationId: string,
     reason: string,
     metadata?: { readonly stage: string; readonly code: string }
   ): Promise<void> {
@@ -945,7 +994,8 @@ export class EmailReplyDraftGenerationService {
     log.actor = "ai";
     log.reason = reason;
     log.metadataJson = JSON.stringify({
-      correlationId: correlationIdForMessage(messageId),
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(messageId),
       ...(metadata ?? {}),
     });
     await this.replyAuditModule.create(log);
@@ -964,6 +1014,7 @@ export class EmailReplyDraftGenerationService {
   private async writeRefusalAudit(
     emailServiceId: number,
     messageId: number,
+    requestCorrelationId: string,
     decision: {
       readonly stage: "pre_draft";
       readonly code: string;
@@ -979,7 +1030,8 @@ export class EmailReplyDraftGenerationService {
     log.actor = "system";
     log.reason = `[${decision.code}] ${decision.reason}`;
     log.metadataJson = JSON.stringify({
-      correlationId: correlationIdForMessage(messageId),
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(messageId),
       stage: decision.stage,
       code: decision.code,
       policyVersion: decision.policyVersion,
@@ -1010,6 +1062,7 @@ export class EmailReplyDraftGenerationService {
   private async writeReuseAudit(
     emailServiceId: number,
     messageId: number,
+    requestCorrelationId: string,
     draft: EmailReplyDraftEntity
   ): Promise<void> {
     let knowledgeAuditCount = 0;
@@ -1034,7 +1087,8 @@ export class EmailReplyDraftGenerationService {
     log.actor = "ai";
     log.reason = `[reused] existing draft ${draft.id} (status ${draft.status}) reused; no regeneration`;
     log.metadataJson = JSON.stringify({
-      correlationId: correlationIdForMessage(messageId),
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(messageId),
       stage: "reuse",
       reusedDraftId: draft.id,
       reusedDraftStatus: draft.status,

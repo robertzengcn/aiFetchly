@@ -170,18 +170,25 @@ export type SendApprovedReplyOutcome =
       readonly status: "sent";
       readonly attemptId: number;
       readonly sentAt: string;
+      readonly requestCorrelationId: string;
     }
   | {
       readonly status: "failed";
       readonly attemptId: number;
       readonly error: string;
+      readonly requestCorrelationId: string;
     }
   | {
       readonly status: "delivery_unknown";
       readonly attemptId: number;
       readonly error: string;
+      readonly requestCorrelationId: string;
     }
-  | { readonly status: "already_processed"; readonly attemptId: number };
+  | {
+      readonly status: "already_processed";
+      readonly attemptId: number;
+      readonly requestCorrelationId: string;
+    };
 
 /**
  * How certain we are about an SMTP submission outcome (technical design §15.4).

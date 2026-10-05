@@ -8,7 +8,10 @@ import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { ReplyEmailService } from "@/modules/lib/replyEmailService";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
-import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
+import {
+  correlationIdForMessage,
+  newRequestCorrelationId,
+} from "@/service/emailReply/EmailReplyCorrelation";
 import { classifySubmissionResult } from "@/service/emailReply/EmailSubmissionClassifier";
 import {
   buildSendIdempotencyKey,
@@ -123,6 +126,10 @@ export class EmailReplyDeliveryService {
   async sendApprovedReply(
     input: SendApprovedReplyInput
   ): Promise<SendApprovedReplyOutcome> {
+    // B11: allocate a fresh per-invocation request correlation id at the entry
+    // boundary. Distinct across two invocations for the same message; all
+    // audit events and the returned outcome for THIS invocation carry it.
+    const requestCorrelationId = newRequestCorrelationId();
     // 1. Resolve the opaque one-time approval token to a trusted approval.
     const tokenHash = hashApprovalToken(input.approvalToken);
     const approval = await this.approvalModule.findActiveByTokenHash(tokenHash);
@@ -261,7 +268,11 @@ export class EmailReplyDeliveryService {
       idempotencyKey
     );
     if (existing) {
-      return { status: "already_processed", attemptId: existing.id };
+      return {
+        status: "already_processed",
+        attemptId: existing.id,
+        requestCorrelationId,
+      };
     }
 
     // 5. Send-time policy (reloaded, never cached). FR-006. Runs only when this
@@ -285,7 +296,12 @@ export class EmailReplyDeliveryService {
       // policy layer returns decisions; it never writes audit rows. Audit
       // persistence failure STOPS the work: an unrecorded refusal must never
       // be followed by proceeding to send.
-      await this.writeRefusalAudit(message, draft.id, decision);
+      await this.writeRefusalAudit(
+        message,
+        draft.id,
+        requestCorrelationId,
+        decision
+      );
       // Surface the stable policy code (FR-033) so the AI tool / IPC envelope
       // can carry a machine-readable reason instead of parsing English. This
       // refusal happens BEFORE the atomic claim, so no SMTP side effect.
@@ -312,7 +328,11 @@ export class EmailReplyDeliveryService {
     });
     if (claim.status === "already_processed") {
       incrementReplyMetric("send_claim", { outcome: "already_processed" });
-      return { status: "already_processed", attemptId: claim.attempt.id };
+      return {
+        status: "already_processed",
+        attemptId: claim.attempt.id,
+        requestCorrelationId,
+      };
     }
     if (claim.status === "precondition_failed") {
       incrementReplyMetric("send_claim", { outcome: "precondition_failed" });
@@ -401,12 +421,14 @@ export class EmailReplyDeliveryService {
         status: "sent",
         attemptId,
         sentAt: new Date().toISOString(),
+        requestCorrelationId,
       };
     }
     return {
       status: outcome,
       attemptId,
       error: sanitizedError ?? outcome,
+      requestCorrelationId,
     };
   }
 
@@ -425,6 +447,7 @@ export class EmailReplyDeliveryService {
   private async writeRefusalAudit(
     message: { id: number; emailServiceId: number },
     draftId: number,
+    requestCorrelationId: string,
     decision: {
       readonly code: EmailReplyPolicyCode;
       readonly reason: string;
@@ -440,7 +463,8 @@ export class EmailReplyDeliveryService {
     log.actor = "system";
     log.reason = `[${decision.code}] ${decision.reason}`;
     log.metadataJson = JSON.stringify({
-      correlationId: correlationIdForMessage(message.id),
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(message.id),
       stage: "pre_send",
       code: decision.code,
       policyVersion: decision.policyVersion,
