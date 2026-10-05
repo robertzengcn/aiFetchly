@@ -132,10 +132,16 @@ describe("Email reply draft/send AI tools", () => {
 
 describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
   it("surfaces code=already_replied and next_action from an already-replied refusal", async () => {
+    // B12: the generation service now returns a typed failure union carrying
+    // code/next_action additively alongside the legacy error string. The AI
+    // tool reads the typed fields directly -- no English parsing.
     draftGenStub.createDraft.mockResolvedValue({
       success: false,
       error:
         "[already_replied] Message already has a sent reply; refusing duplicate",
+      code: "already_replied",
+      next_action: "no_action",
+      requestCorrelationId: "erx-req-abc-1",
     });
     const result = await createEmailReplyDraft({ message_id: 1 });
     expect(result.success).toBe(false);
@@ -152,6 +158,9 @@ describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
       success: false,
       error:
         "[needs_human_review] Generation failed validation twice (2 codes); no draft persisted",
+      code: "needs_human_review",
+      next_action: "await_human_review",
+      requestCorrelationId: "erx-req-abc-2",
     });
     const result = await createEmailReplyDraft({ message_id: 1 });
     expect(result.success).toBe(false);
@@ -161,11 +170,14 @@ describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
   });
 
   it("maps provider_error to discard_and_retry with no typed code slot", async () => {
-    // provider_error is a generation-path prefix, not a policy code; the typed
-    // `code` field is omitted but next_action still reflects it.
+    // B12: provider_error is NOT a policy code, so the typed `code` slot stays
+    // undefined. The generation service derives next_action directly (it knows
+    // this is a transport failure) rather than from a policy code.
     draftGenStub.createDraft.mockResolvedValue({
       success: false,
       error: "[provider_error] network timeout",
+      next_action: "discard_and_retry",
+      requestCorrelationId: "erx-req-abc-3",
     });
     const result = await createEmailReplyDraft({ message_id: 1 });
     expect(result.success).toBe(false);
@@ -201,6 +213,25 @@ describe("createEmailReplyDraft — stable refusal envelope (FR-033)", () => {
     if (result.success) return;
     expect(result.code).toBeUndefined();
     expect(result.validation_errors).toBeDefined();
+  });
+
+  it("B12: does NOT recover a code by parsing English when the typed code is absent", async () => {
+    // The legacy error string still carries a [needs_human_review] bracket, but
+    // the widened failure union omits the typed `code` field (e.g. an
+    // audit-persistence failure whose error text happens to contain a bracket).
+    // The AI tool must NOT regex-parse the bracket -- code stays undefined and
+    // next_action falls back to no_action (no policy code to derive from).
+    draftGenStub.createDraft.mockResolvedValue({
+      success: false,
+      error:
+        "Reuse audit persistence failed: [needs_human_review] unrelated text",
+      requestCorrelationId: "erx-req-abc-4",
+    });
+    const result = await createEmailReplyDraft({ message_id: 1 });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBeUndefined();
+    expect(result.next_action).toBe("no_action");
   });
 });
 
