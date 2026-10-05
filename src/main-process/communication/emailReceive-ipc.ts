@@ -2,6 +2,7 @@ import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { StructuredIpcError } from "@/main-process/communication/_shared/StructuredIpcError";
 import {
   EMAIL_RECEIVE_SYNC,
   EMAIL_RECEIVE_CONNECTION_TEST,
@@ -303,8 +304,17 @@ export function registerEmailReceiveIpcHandlers(): void {
       const genService = new EmailReplyDraftGenerationService();
       const result = await genService.createDraft(input);
       if (!result.success) {
-        // Surface the failure reason via the standard envelope.
-        throw new Error(result.error);
+        // B12: throw a structured error so the validated-IPC catch duck-types
+        // the typed fields (code / existing_draft_id / next_action /
+        // requestCorrelationId) into the failure envelope instead of losing
+        // them. The message stays human-readable for legacy consumers; the
+        // typed fields are pure additions the renderer / AI tool branches on.
+        throw new StructuredIpcError(result.error, {
+          code: result.code,
+          existing_draft_id: result.existing_draft_id,
+          next_action: result.next_action,
+          requestCorrelationId: result.requestCorrelationId,
+        });
       }
       // Strip the transport-only `success` flag before returning over IPC.
       const { success, ...dto } = result;
@@ -405,10 +415,11 @@ export function registerEmailReceiveIpcHandlers(): void {
   // approval token and goes through the idempotent delivery service. There is no
   // legacy branch and no mailbox override. The kill switch refuses new claims.
   //
-  // FR-033: pre-send policy/binding refusals carry a stable code as a typed
-  // error property; format it into the leading `[code]` bracket of the message
-  // so the renderer / AI tool envelope can surface a machine-readable reason
-  // instead of parsing English. The envelope's `data` stays null on failure.
+  // FR-033/B12: pre-send policy/binding refusals (SendPolicyRejection /
+  // SendBindingError) are thrown with a typed `code` property. The validated-IPC
+  // catch duck-types that property into the failure envelope so the renderer /
+  // AI tool branches on `code` instead of parsing the leading `[code]` bracket
+  // out of `msg`. The envelope's `data` stays null on failure.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
@@ -426,23 +437,15 @@ export function registerEmailReceiveIpcHandlers(): void {
       const { EmailReplyDeliveryService } = await import(
         "@/service/emailReply/EmailReplyDeliveryService"
       );
-      const { SendPolicyRejection, SendBindingError } = await import(
-        "@/service/emailReply/EmailReplySendBinding"
-      );
-      try {
-        return await new EmailReplyDeliveryService().sendApprovedReply({
-          draftId: input.draftId,
-          approvalToken: input.approvalToken,
-        });
-      } catch (err) {
-        if (err instanceof SendPolicyRejection) {
-          throw new Error(`[${err.code}] ${err.message}`);
-        }
-        if (err instanceof SendBindingError) {
-          throw new Error(`[${err.code}] ${err.message}`);
-        }
-        throw err;
-      }
+      // B12: let typed errors (SendPolicyRejection / SendBindingError) propagate
+      // unchanged — dispatchValidated's catch duck-types their `code` property
+      // into the failure envelope. The previous handler re-formatted the message
+      // into `[code] message` AND stripped the typed code property, forcing
+      // callers to parse English to recover it.
+      return await new EmailReplyDeliveryService().sendApprovedReply({
+        draftId: input.draftId,
+        approvalToken: input.approvalToken,
+      });
     }
   );
 
