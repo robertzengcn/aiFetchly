@@ -687,6 +687,83 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         decision: { type: "finish" },
       });
     });
+
+    // B8 reverse interleaving (D1, /review): a finalizer that commits
+    // BETWEEN the shadow path's read and its CAS UPDATE must win, and the
+    // shadow decision must NOT clobber the committed terminal row. The
+    // previous full-row `saveExecution` had no WHERE predicate and would
+    // overwrite finalized=1, task_outcome, and finalized_at with the stale
+    // in-memory entity. The atomic CAS predicate
+    // (`finalized = 0 AND execution_state_version = :expected`) makes the
+    // shadow UPDATE affect 0 rows and silently no-op. Sequential awaits
+    // cannot prove this — we interleave by reading, finalizing, then
+    // completing the shadow write against the stale version.
+    it("finalizer commits between shadow read and CAS save → shadow no-ops, terminal outcome wins (D1, B8 reverse race)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const started = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-b8d1",
+        sourceUserMessageId: "msg-b8d1",
+        submissionId: "sub-b8d1",
+        requestHash: "sha256:b8d1",
+        origin: { type: "manual", submissionId: "sub-b8d1" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+
+      // Simulate the shadow path's read: load the entity at version 0. The
+      // shadow path will later write against THIS expectedVersion, by which
+      // point the row has moved on.
+      const readByShadow = await execRepo.findOne({
+        where: { execution_id: started.executionId },
+      });
+      expect(readByShadow?.execution_state_version).to.equal(0);
+      expect(readByShadow?.finalized).to.equal(false);
+
+      // A finalizer commits between the shadow read and the shadow write.
+      // It bumps execution_state_version to 1 and sets finalized=1.
+      const finalized = await mod.finalizeExecution({
+        executionId: started.executionId,
+        expectedVersion: 0,
+        outcome: "verified_complete",
+        reasonCode: "CRITERIA_SATISFIED",
+        summary: "terminal-wins",
+        evidenceIds: [],
+        remainingWork: [],
+      });
+      expect(finalized.ok).to.equal(true);
+
+      // Now the shadow path completes its write against the stale version 0
+      // it read above. The CAS predicate `finalized = 0 AND version = 0`
+      // matches zero rows (finalized is now 1, version is now 1), so the
+      // shadow decision is silently dropped — never clobbers the terminal
+      // outcome, finalized flag, or finalized_at.
+      await mod.recordShadowDecision({
+        executionId: started.executionId,
+        decision: { type: "finish", outcome: "incomplete" },
+      });
+
+      const after = await execRepo.findOne({
+        where: { execution_id: started.executionId },
+      });
+      // Terminal outcome preserved — NOT overwritten with "incomplete".
+      expect(after?.finalized).to.equal(true);
+      expect(after?.task_outcome).to.equal("verified_complete");
+      // Version bumped exactly once by the finalizer; the shadow path did
+      // NOT bump it (its UPDATE affected 0 rows).
+      expect(after?.execution_state_version).to.equal(1);
+      // execution_state_json holds the finalizer's checkpoint, not a
+      // shadowDecision key. (recordShadowDecision merges under
+      // "shadowDecision"; its absence proves the CAS no-op'd.)
+      const parsed = JSON.parse(
+        after?.execution_state_json ?? "{}"
+      ) as Record<string, unknown>;
+      expect(parsed.shadowDecision).to.equal(undefined);
+    });
   });
 
   // ----- GAP-S1 #27: worker guard on every model write method (NFR-03) -----

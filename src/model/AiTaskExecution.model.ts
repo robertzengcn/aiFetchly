@@ -512,10 +512,73 @@ export class AiTaskExecutionModel extends BaseDb {
    * `execution_state_json` for a shadow decision). Used by the module's
    * `recordShadowDecision` so it does not need bracket-access to a private
    * repository field.
+   *
+   * NOTE: this is a full-row UPSERT with no CAS guard. It is retained for
+   * callers that hold the executionCreateMutex or otherwise serialize access.
+   * `recordShadowDecision` does NOT hold that mutex and must use
+   * {@link applyShadowDecisionCas} instead, which guards against the
+   * finalize-then-shadow interleaving the full-row save would clobber.
    */
   async saveExecution(exec: AiTaskExecutionEntity): Promise<void> {
     assertNotWorker("saveExecution");
     await this.executionRepo.save(exec);
+  }
+
+  /**
+   * Atomically merge a shadow decision into `execution_state_json` and bump
+   * the CAS version, guarded by `finalized = 0` and the expected version.
+   *
+   * This is the CAS-protected counterpart to {@link saveExecution} for the
+   * shadow-decision path. The previous full-row `saveExecution` was a
+   * read-then-write UPSERT with no WHERE predicate: a finalizer that
+   * committed its atomic CAS UPDATE *between* the shadow path's `getById`
+   * read and its `saveExecution` would have its `finalized=1`, outcome, and
+   * `finalized_at` silently reverted to the stale in-memory entity's
+   * `finalized=0` — an inconsistent row with a released ledger but no
+   * outcome. The B8.2 version bump only protected the shadow-THEN-finalize
+   * ordering (the finalizer's stale CAS rejects); it did NOT protect
+   * finalize-THEN-shadow.
+   *
+   * This single atomic statement fixes both directions:
+   *  - finalize-THEN-shadow: the `finalized = 0` predicate fails (the
+   *    finalizer set `finalized = 1`), so `affected = 0` and the shadow
+   *    decision is silently dropped — the terminal outcome wins, as it must.
+   *  - shadow-THEN-finalize: the version bump (`+ 1` in the SET, matched
+   *    against `= :expectedVersion` in the WHERE) means the finalizer's
+   *    stale `expectedVersion` CAS no longer matches and it returns
+   *    STATE_CONFLICT — the shadow decision wins and the finalizer must
+   *    re-read.
+   *
+   * Returns true if the shadow decision was applied (1 row affected), false
+   * if the row was missing, already finalized, or at a different version
+   * (concurrent shadow or finalize won). The caller treats false as a no-op.
+   */
+  async applyShadowDecisionCas(input: {
+    executionId: string;
+    expectedVersion: number;
+    mergedStateJson: string;
+  }): Promise<boolean> {
+    assertNotWorker("applyShadowDecisionCas");
+    const runner = this.sqliteDb.connection.createQueryRunner();
+    try {
+      const result = (await runner.query(
+        `UPDATE ai_task_execution
+            SET execution_state_json = ?,
+                execution_state_version = execution_state_version + 1
+          WHERE execution_id = ?
+            AND finalized = 0
+            AND execution_state_version = ?`,
+        [
+          input.mergedStateJson,
+          input.executionId,
+          input.expectedVersion,
+        ],
+        true // useStructuredResult — exposes .affected (see finalizeExecution)
+      )) as { affected?: number };
+      return (result.affected ?? 0) === 1;
+    } finally {
+      await runner.release();
+    }
   }
 
   /**

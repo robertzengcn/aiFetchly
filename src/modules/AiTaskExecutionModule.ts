@@ -100,12 +100,23 @@ export class AiTaskExecutionModule extends BaseModule {
       [SHADOW_KEY]: input.decision,
     };
 
-    exec.execution_state_json = JSON.stringify(merged);
-    // B8.2: bump the CAS version so a concurrent finalizer's stale-version
-    // CAS does not match. finalizeExecution's atomic UPDATE predicate
-    // (WHERE execution_state_version = :expectedVersion) will reject the
-    // stale version and return STATE_CONFLICT.
-    exec.execution_state_version = exec.execution_state_version + 1;
-    await this.model.saveExecution(exec);
+    // B8.2: atomic CAS update of execution_state_json + version bump. The
+    // `finalized = 0` predicate guards the finalize-THEN-shadow interleaving
+    // (a finalizer that committed between our read and this UPDATE sets
+    // finalized = 1, so affected = 0 and we silently drop the shadow
+    // decision — the terminal outcome wins, as it must). The
+    // `execution_state_version = :expectedVersion` predicate guards the
+    // shadow-THEN-finalize ordering (a concurrent finalizer's stale CAS
+    // rejects with STATE_CONFLICT). The previous full-row `saveExecution`
+    // had no WHERE predicate and would clobber a concurrent finalizer's
+    // committed `finalized = 1`, outcome, and `finalized_at` with the stale
+    // in-memory entity — an inconsistent row with a released ledger but no
+    // outcome. Returns false (no-op) if the row was missing, already
+    // finalized, or at a different version (a concurrent shadow won).
+    await this.model.applyShadowDecisionCas({
+      executionId: input.executionId,
+      expectedVersion: exec.execution_state_version,
+      mergedStateJson: JSON.stringify(merged),
+    });
   }
 }
