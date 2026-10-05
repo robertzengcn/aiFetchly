@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import type { StartBindingResult } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 
 // Mock the module layer so the coordinator is tested in isolation from
 // the DB. The coordinator's contract: create execution identity + binding
@@ -9,6 +10,7 @@ vi.mock("@/modules/AiTaskExecutionModule", () => {
   return {
     AiTaskExecutionModule: class {
       async startExecution(input: unknown): Promise<{
+        status: "created";
         executionId: string;
         ledgerId: string;
         executionRowId: number;
@@ -16,12 +18,13 @@ vi.mock("@/modules/AiTaskExecutionModule", () => {
         const executionId = `exec-${(input as { conversationId: string }).conversationId}`;
         store.set(executionId, input);
         return {
+          status: "created",
           executionId,
           ledgerId: `ledger-${(input as { conversationId: string }).conversationId}`,
           executionRowId: 1,
         };
       }
-      async getExecution(_id: string): Promise<null> {
+      async getExecution(): Promise<null> {
         return null;
       }
       async finalizeExecution(): Promise<{ ok: true }> {
@@ -37,6 +40,14 @@ vi.mock("@/modules/AiTaskExecutionModule", () => {
 import { TaskExecutionCoordinator } from "@/service/aiTaskExecution/TaskExecutionCoordinator";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import type { TaskExecutionBindingSnapshot } from "@/entityTypes/aiTaskExecutionTypes";
+
+/** Narrow the discriminated StartBindingResult to the `created` binding. */
+function unwrap(result: StartBindingResult) {
+  if (result.status !== "created") {
+    throw new Error(`expected created, got ${result.status}`);
+  }
+  return result.binding;
+}
 
 beforeEach(() => {
   // Reset the module mock store between tests. vi.mock is hoisted above
@@ -54,14 +65,14 @@ afterEach(() => {
 describe("TaskExecutionCoordinator.startManual (FR-17/20)", () => {
   it("creates a binding with manual origin and standalone owner before slow resolution", async () => {
     const coord = new TaskExecutionCoordinator();
-    const binding = await coord.startManual({
+    const binding = unwrap(await coord.startManual({
       conversationId: "conv-1",
       sourceUserMessageId: "msg-1",
       submissionId: "sub-1",
       requestHash: "sha256:abc",
       route: "task_verified",
       completionOwner: "standalone",
-    });
+    }));
     expect(binding.executionId).toBe("exec-conv-1");
     expect(binding.origin).toEqual({
       type: "manual",
@@ -75,7 +86,7 @@ describe("TaskExecutionCoordinator.startManual (FR-17/20)", () => {
 
   it("creates a binding with scheduled origin and the occurrence link", async () => {
     const coord = new TaskExecutionCoordinator();
-    const binding = await coord.startScheduled({
+    const binding = unwrap(await coord.startScheduled({
       conversationId: "conv-2",
       sourceUserMessageId: "msg-2",
       requestHash: "sha256:def",
@@ -93,7 +104,7 @@ describe("TaskExecutionCoordinator.startManual (FR-17/20)", () => {
         maxWaitMs: 60 * 60 * 1000,
         maxNoProgressStreak: 3,
       },
-    });
+    }));
     expect(binding.origin).toEqual({
       type: "scheduled",
       taskId: 7,
@@ -104,21 +115,18 @@ describe("TaskExecutionCoordinator.startManual (FR-17/20)", () => {
 
   it("serializes to a snapshot that excludes runtime controller/budget objects", async () => {
     const coord = new TaskExecutionCoordinator();
-    return coord
-      .startManual({
-        conversationId: "conv-3",
-        sourceUserMessageId: "msg-3",
-        submissionId: "sub-3",
-        requestHash: "sha256:ghi",
-        route: "response_only",
-        completionOwner: "standalone",
-      })
-      .then((binding) => {
-        const snap = coord.toSnapshot(binding);
-        const keys = Object.keys(snap) as (keyof TaskExecutionBindingSnapshot)[];
-        expect(keys).not.toContain("controller");
-        expect(keys).not.toContain("budget");
-        expect(snap.contractHash).toBeNull();
-      });
+    const binding = unwrap(await coord.startManual({
+      conversationId: "conv-3",
+      sourceUserMessageId: "msg-3",
+      submissionId: "sub-3",
+      requestHash: "sha256:ghi",
+      route: "response_only",
+      completionOwner: "standalone",
+    }));
+    const snap = coord.toSnapshot(binding);
+    const keys = Object.keys(snap) as (keyof TaskExecutionBindingSnapshot)[];
+    expect(keys).not.toContain("controller");
+    expect(keys).not.toContain("budget");
+    expect(snap.contractHash).toBeNull();
   });
 });

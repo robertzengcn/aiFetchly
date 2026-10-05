@@ -2,6 +2,7 @@ import { BaseModule } from "./baseModule";
 import { AiTaskExecutionModel } from "@/model/AiTaskExecution.model";
 import type {
   CreateExecutionInput,
+  CreateExecutionResult,
   FinalizeInput,
   FinalizeResult,
 } from "@/model/AiTaskExecution.model";
@@ -28,7 +29,7 @@ export class AiTaskExecutionModule extends BaseModule {
 
   async startExecution(
     input: CreateExecutionInput
-  ): Promise<{ executionId: string; ledgerId: string; executionRowId: number }> {
+  ): Promise<CreateExecutionResult> {
     await this.ensureConnection();
     return this.model.createExecution(input);
   }

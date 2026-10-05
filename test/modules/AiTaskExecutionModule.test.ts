@@ -31,6 +31,23 @@ async function ensureInitialized(): Promise<void> {
   await SqliteDb.ensureInitialized();
 }
 
+/**
+ * Narrow `startExecution`'s discriminated result to the `created` variant.
+ * Every test in this suite starts from a unique conversation/submission pair,
+ * so the result must be `created` — anything else is a test failure (not a
+ * throw) so the assertion message names the actual status.
+ */
+function unwrapCreated(
+  result: import("@/model/AiTaskExecution.model").CreateExecutionResult
+): { executionId: string; ledgerId: string; executionRowId: number } {
+  if (result.status !== "created") {
+    throw new Error(
+      `expected startExecution to create a new row, got status=${result.status}`
+    );
+  }
+  return result;
+}
+
 describe("AiTaskExecutionModule (Mocha)", function () {
   this.timeout(15000);
 
@@ -48,7 +65,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
 
   it("startExecution creates an execution + ledger row with version 0", async () => {
     const mod = new AiTaskExecutionModule();
-    const result = await mod.startExecution({
+    const result = unwrapCreated(await mod.startExecution({
       conversationId: "conv-1",
       sourceUserMessageId: "msg-1",
       submissionId: "sub-1",
@@ -57,7 +74,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       route: "task_verified",
       completionOwner: "standalone",
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
-    });
+    }));
     expect(result.executionId).to.match(/^exec-/);
     expect(result.ledgerId).to.match(/^ledger-/);
 
@@ -85,7 +102,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
 
   it("freezes budget limits into policy_limits_json clamped to HARD_CAPS (GAP-S1, §9)", async () => {
     const mod = new AiTaskExecutionModule();
-    const result = await mod.startExecution({
+    const result = unwrapCreated(await mod.startExecution({
       conversationId: "conv-clamp",
       sourceUserMessageId: "msg-clamp",
       submissionId: "sub-clamp",
@@ -104,7 +121,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         maxWaitMs: 60 * 60 * 1000,
         maxNoProgressStreak: 3,
       },
-    });
+    }));
 
     const ledgerRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
       AiTaskExecutionLedgerEntity
@@ -159,9 +176,206 @@ describe("AiTaskExecutionModule (Mocha)", function () {
     expect(input.maxContinuations).to.equal(1000);
   });
 
+  // ----- GAP-S1 #29: scoped submission uniqueness (AC-26, §4A.1) -----
+  describe("startExecution submission uniqueness (AC-26)", () => {
+    it("reuses the existing execution on a transport retry with the same request_hash (no new row, no renewed limits)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const first = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ac26-reuse",
+        sourceUserMessageId: "msg-ac26",
+        submissionId: "sub-ac26-reuse",
+        requestHash: "sha256:same",
+        origin: { type: "manual", submissionId: "sub-ac26-reuse" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+
+      // Transport retry: same conversation + submission + request_hash.
+      const second = await mod.startExecution({
+        conversationId: "conv-ac26-reuse",
+        sourceUserMessageId: "msg-ac26",
+        submissionId: "sub-ac26-reuse",
+        requestHash: "sha256:same",
+        origin: { type: "manual", submissionId: "sub-ac26-reuse" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      });
+
+      // Reused — the caller must NOT re-dispatch or renew limits.
+      expect(second.status).to.equal("reused");
+      if (second.status !== "reused") return; // narrow for TS
+      expect(second.existing.executionId).to.equal(first.executionId);
+      expect(second.existing.ledgerId).to.equal(first.ledgerId);
+      expect(second.existing.submissionId).to.equal("sub-ac26-reuse");
+      expect(second.existing.requestHash).to.equal("sha256:same");
+      expect(second.existing.finalized).to.equal(false);
+      expect(second.existing.stage).to.equal("resolving");
+
+      // No duplicate row was inserted — still exactly one execution.
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const rows = await execRepo.find({
+        where: { conversation_id: "conv-ac26-reuse" },
+      });
+      expect(rows.length).to.equal(1);
+    });
+
+    it("returns SUBMISSION_CONFLICT when the same submission_id arrives with a different request_hash", async () => {
+      const mod = new AiTaskExecutionModule();
+      await mod.startExecution({
+        conversationId: "conv-ac26-conflict",
+        sourceUserMessageId: "msg-ac26",
+        submissionId: "sub-ac26-conflict",
+        requestHash: "sha256:original",
+        origin: { type: "manual", submissionId: "sub-ac26-conflict" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      });
+
+      // Same submission ID, different request payload — must NOT persist a
+      // second row and must NOT overwrite the original request_hash.
+      const second = await mod.startExecution({
+        conversationId: "conv-ac26-conflict",
+        sourceUserMessageId: "msg-ac26",
+        submissionId: "sub-ac26-conflict",
+        requestHash: "sha256:changed",
+        origin: { type: "manual", submissionId: "sub-ac26-conflict" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      });
+
+      expect(second.status).to.equal("conflict");
+      if (second.status !== "conflict") return; // narrow for TS
+      expect(second.reasonCode).to.equal("SUBMISSION_CONFLICT");
+      expect(second.existing.requestHash).to.equal("sha256:original");
+
+      // The original row is untouched — no second row, no overwrite.
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const rows = await execRepo.find({
+        where: { conversation_id: "conv-ac26-conflict" },
+      });
+      expect(rows.length).to.equal(1);
+      expect(rows[0]?.request_hash).to.equal("sha256:original");
+    });
+
+    it("allows the same submission_id across different conversations (scope is conversation+submission)", async () => {
+      const mod = new AiTaskExecutionModule();
+      const a = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ac26-scope-a",
+        sourceUserMessageId: "msg-a",
+        submissionId: "sub-shared",
+        requestHash: "sha256:a",
+        origin: { type: "manual", submissionId: "sub-shared" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const b = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ac26-scope-b",
+        sourceUserMessageId: "msg-b",
+        submissionId: "sub-shared",
+        requestHash: "sha256:b",
+        origin: { type: "manual", submissionId: "sub-shared" },
+        route: "task_verified",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      // Different conversations → different executions, no conflict.
+      expect(a.executionId).to.not.equal(b.executionId);
+    });
+
+    it("does not dedup on null submission_id (scheduled origin is exempt — lineage key is occurrence_key)", async () => {
+      const mod = new AiTaskExecutionModule();
+      // Two scheduled-origin executions with null submission_id in the same
+      // conversation must both insert (the partial unique index skips NULLs).
+      const a = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ac26-null",
+        sourceUserMessageId: "msg-null-a",
+        submissionId: null,
+        requestHash: "sha256:null-a",
+        origin: {
+          type: "scheduled",
+          taskId: 1,
+          runId: 1,
+          occurrenceKey: "scheduled-loop:1:1",
+        },
+        route: "task_best_effort",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      const b = unwrapCreated(await mod.startExecution({
+        conversationId: "conv-ac26-null",
+        sourceUserMessageId: "msg-null-b",
+        submissionId: null,
+        requestHash: "sha256:null-b",
+        origin: {
+          type: "scheduled",
+          taskId: 1,
+          runId: 2,
+          occurrenceKey: "scheduled-loop:1:2",
+        },
+        route: "task_best_effort",
+        completionOwner: "standalone",
+        budgetLimits: MANUAL_BUDGET_DEFAULTS,
+      }));
+      expect(a.executionId).to.not.equal(b.executionId);
+    });
+
+    it("resolves a true concurrent same-submission insert race to reused (no raw UNIQUE error)", async () => {
+      const mod = new AiTaskExecutionModule();
+      // Two startExecution calls with the same (conversation, submission)
+      // race via Promise.all. The executionCreateMutex serializes the
+      // dedup-lookup + insert so the second caller's lookup sees the first
+      // caller's committed row and resolves to reused (the partial unique
+      // index is the SQL-level backstop). Neither caller surfaces a raw
+      // SQLite UNIQUE/transaction-collision error.
+      const [first, second] = await Promise.all([
+        mod.startExecution({
+          conversationId: "conv-ac26-race",
+          sourceUserMessageId: "msg-race",
+          submissionId: "sub-ac26-race",
+          requestHash: "sha256:race",
+          origin: { type: "manual", submissionId: "sub-ac26-race" },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        }),
+        mod.startExecution({
+          conversationId: "conv-ac26-race",
+          sourceUserMessageId: "msg-race",
+          submissionId: "sub-ac26-race",
+          requestHash: "sha256:race",
+          origin: { type: "manual", submissionId: "sub-ac26-race" },
+          route: "task_verified",
+          completionOwner: "standalone",
+          budgetLimits: MANUAL_BUDGET_DEFAULTS,
+        }),
+      ]);
+
+      // Exactly one created, the other reused — never a throw, never two rows.
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).to.deep.equal(["created", "reused"]);
+
+      const execRepo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+        AiTaskExecutionEntity
+      );
+      const rows = await execRepo.find({
+        where: { conversation_id: "conv-ac26-race" },
+      });
+      expect(rows.length).to.equal(1);
+    });
+  });
+
   it("finalizeExecution (manual) sets outcome + final-event identity without touching schedules (AC-32)", async () => {
     const mod = new AiTaskExecutionModule();
-    const started = await mod.startExecution({
+    const started = unwrapCreated(await mod.startExecution({
       conversationId: "conv-2",
       sourceUserMessageId: "msg-2",
       submissionId: "sub-2",
@@ -170,7 +384,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       route: "task_verified",
       completionOwner: "standalone",
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
-    });
+    }));
 
     const result = await mod.finalizeExecution({
       executionId: started.executionId,
@@ -199,7 +413,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
 
   it("concurrent CAS finalization — second finalizer returns existing outcome (no double increment, §6.3)", async () => {
     const mod = new AiTaskExecutionModule();
-    const started = await mod.startExecution({
+    const started = unwrapCreated(await mod.startExecution({
       conversationId: "conv-3",
       sourceUserMessageId: "msg-3",
       submissionId: "sub-3",
@@ -208,7 +422,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       route: "task_verified",
       completionOwner: "standalone",
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
-    });
+    }));
 
     const first = await mod.finalizeExecution({
       executionId: started.executionId,
@@ -261,7 +475,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
   // ----- B2: TRUE concurrent CAS (not sequential) -----
   it("true concurrent CAS finalization — Promise.all race resolves to exactly one winner (B2, §6.3)", async () => {
     const mod = new AiTaskExecutionModule();
-    const started = await mod.startExecution({
+    const started = unwrapCreated(await mod.startExecution({
       conversationId: "conv-race",
       sourceUserMessageId: "msg-race",
       submissionId: "sub-race",
@@ -270,7 +484,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       route: "task_verified",
       completionOwner: "standalone",
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
-    });
+    }));
 
     // Two finalizers race on the same expectedVersion (0). With the atomic
     // UPDATE…WHERE execution_state_version=? AND finalized=0, exactly one
@@ -319,7 +533,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
   // ----- B6: evidence checkpoint + assistantResultMessageId persistence -----
   it("finalizeExecution persists evidenceIds/remainingWork/assistantResultMessageId into execution_state_json (B6, §6.3, FR-12)", async () => {
     const mod = new AiTaskExecutionModule();
-    const started = await mod.startExecution({
+    const started = unwrapCreated(await mod.startExecution({
       conversationId: "conv-b6",
       sourceUserMessageId: "msg-b6",
       submissionId: "sub-b6",
@@ -328,7 +542,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       route: "task_verified",
       completionOwner: "standalone",
       budgetLimits: MANUAL_BUDGET_DEFAULTS,
-    });
+    }));
 
     const result = await mod.finalizeExecution({
       executionId: started.executionId,
@@ -368,7 +582,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
   describe("recordShadowDecision (B8, §6.1)", () => {
     it("merges the decision under a stable key instead of clobbering existing state", async () => {
       const mod = new AiTaskExecutionModule();
-      const started = await mod.startExecution({
+      const started = unwrapCreated(await mod.startExecution({
         conversationId: "conv-b8a",
         sourceUserMessageId: "msg-b8a",
         submissionId: "sub-b8a",
@@ -377,7 +591,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         route: "task_verified",
         completionOwner: "standalone",
         budgetLimits: MANUAL_BUDGET_DEFAULTS,
-      });
+      }));
 
       // Seed execution_state_json with a prior checkpoint (simulating a
       // contract snapshot or earlier shadow decision).
@@ -422,7 +636,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
 
     it("no-ops on a finalized (terminal) execution — terminal rows are immutable", async () => {
       const mod = new AiTaskExecutionModule();
-      const started = await mod.startExecution({
+      const started = unwrapCreated(await mod.startExecution({
         conversationId: "conv-b8b",
         sourceUserMessageId: "msg-b8b",
         submissionId: "sub-b8b",
@@ -431,7 +645,7 @@ describe("AiTaskExecutionModule (Mocha)", function () {
         route: "task_verified",
         completionOwner: "standalone",
         budgetLimits: MANUAL_BUDGET_DEFAULTS,
-      });
+      }));
       await mod.finalizeExecution({
         executionId: started.executionId,
         expectedVersion: 0,

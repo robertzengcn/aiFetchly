@@ -26,6 +26,10 @@ import { MANUAL_BUDGET_DEFAULTS } from "@/service/aiTaskExecution/budgetDefaults
 import type { BudgetLimitsInput } from "@/service/aiTaskExecution/budgetDefaults";
 import { AiTaskExecutionModule } from "@/modules/AiTaskExecutionModule";
 import { TaskCompletionController } from "@/service/aiTaskExecution/TaskCompletionController";
+import type {
+  CreateExecutionResult,
+  ExistingExecutionSnapshot,
+} from "@/model/AiTaskExecution.model";
 
 export interface TaskExecutionBinding {
   readonly executionId: string;
@@ -41,6 +45,31 @@ export interface TaskExecutionBinding {
   readonly controller: TaskCompletionController;
   readonly budget: TaskRunBudget;
 }
+
+/**
+ * Discriminated result of `startManual`/`startScheduled` (AC-26, §4A.1).
+ *
+ * - `created`: a new execution was inserted; a fresh binding (with a fresh
+ *   budget/controller) is returned for the caller to drive.
+ * - `reused`: a same-(conversation, submission) execution with the same
+ *   request_hash already exists. This is a transport retry — the caller must
+ *   NOT re-dispatch effects or renew limits. No fresh budget/controller is
+ *   constructed (AC-26: "no duplicated effects or renewed limits"); the
+ *   existing execution's current/final status is authoritative. Resurrecting
+ *   the live budget from the ledger is Slice 2 (live ledger-backed
+ *   reservations).
+ * - `conflict`: same submission ID, different request_hash →
+ *   `SUBMISSION_CONFLICT`. The caller surfaces the conflict and must not
+ *   persist a second row.
+ */
+export type StartBindingResult =
+  | { readonly status: "created"; readonly binding: TaskExecutionBinding }
+  | { readonly status: "reused"; readonly existing: ExistingExecutionSnapshot }
+  | {
+      readonly status: "conflict";
+      readonly reasonCode: "SUBMISSION_CONFLICT";
+      readonly existing: ExistingExecutionSnapshot;
+    };
 
 export interface StartManualInput {
   readonly conversationId: string;
@@ -70,7 +99,7 @@ export class TaskExecutionCoordinator {
     this.module = module ?? new AiTaskExecutionModule();
   }
 
-  async startManual(input: StartManualInput): Promise<TaskExecutionBinding> {
+  async startManual(input: StartManualInput): Promise<StartBindingResult> {
     const origin: TaskExecutionOrigin = {
       type: "manual",
       submissionId: input.submissionId,
@@ -89,7 +118,7 @@ export class TaskExecutionCoordinator {
 
   async startScheduled(
     input: StartScheduledInput
-  ): Promise<TaskExecutionBinding> {
+  ): Promise<StartBindingResult> {
     const origin: TaskExecutionOrigin = {
       type: "scheduled",
       taskId: input.taskId,
@@ -117,8 +146,8 @@ export class TaskExecutionCoordinator {
     origin: TaskExecutionOrigin;
     budgetLimits: BudgetLimitsInput;
     submissionId: string | null;
-  }): Promise<TaskExecutionBinding> {
-    const started = await this.module.startExecution({
+  }): Promise<StartBindingResult> {
+    const started: CreateExecutionResult = await this.module.startExecution({
       conversationId: input.conversationId,
       sourceUserMessageId: input.sourceUserMessageId,
       submissionId: input.submissionId,
@@ -129,22 +158,40 @@ export class TaskExecutionCoordinator {
       budgetLimits: input.budgetLimits,
     });
 
+    // AC-26: a reused or conflicting submission must NOT construct a fresh
+    // budget/controller — that would renew limits or duplicate the binding.
+    // Propagate the typed result; Slice 2 resurrects the live budget from
+    // the ledger on the reused path.
+    if (started.status === "reused") {
+      return { status: "reused", existing: started.existing };
+    }
+    if (started.status === "conflict") {
+      return {
+        status: "conflict",
+        reasonCode: "SUBMISSION_CONFLICT",
+        existing: started.existing,
+      };
+    }
+
     const budget = new TaskRunBudget(input.budgetLimits);
     const controller = new TaskCompletionController();
 
     return {
-      executionId: started.executionId,
-      conversationId: input.conversationId,
-      sourceUserMessageId: input.sourceUserMessageId,
-      origin: input.origin,
-      route: input.route,
-      completionOwner: input.completionOwner,
-      leaseGeneration: 0,
-      ledgerId: started.ledgerId,
-      contract: null,
-      contractHash: null,
-      controller,
-      budget,
+      status: "created",
+      binding: {
+        executionId: started.executionId,
+        conversationId: input.conversationId,
+        sourceUserMessageId: input.sourceUserMessageId,
+        origin: input.origin,
+        route: input.route,
+        completionOwner: input.completionOwner,
+        leaseGeneration: 0,
+        ledgerId: started.ledgerId,
+        contract: null,
+        contractHash: null,
+        controller,
+        budget,
+      },
     };
   }
 

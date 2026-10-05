@@ -3,6 +3,7 @@ import { Repository } from "typeorm";
 import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
 import { assertNotWorker } from "@/model/workerDbGuard";
+import { AsyncMutex } from "@/utils/asyncMutex";
 import { randomUUID } from "node:crypto";
 import {
   clampToHardCaps,
@@ -15,6 +16,19 @@ import type {
   TaskExecutionRoute,
   TaskOutcome,
 } from "@/entityTypes/aiTaskExecutionTypes";
+
+/**
+ * Process-wide serializer for execution-create transactions. See
+ * {@link AsyncMutex}: TypeORM's `connection.transaction()` over the
+ * better-sqlite3 driver cannot run two transaction bodies concurrently on the
+ * shared single connection — the second `BEGIN` throws "cannot start a
+ * transaction within a transaction". Serializing the dedup-lookup + insert
+ * makes the check-then-insert atomic relative to concurrent callers (the
+ * second caller's lookup sees the first caller's committed row and resolves
+ * to reused/conflict instead of colliding). The partial unique index remains
+ * the SQL-level guarantee; the mutex removes the connection overlap.
+ */
+const executionCreateMutex = new AsyncMutex();
 
 export interface CreateExecutionInput {
   readonly conversationId: string;
@@ -30,6 +44,61 @@ export interface CreateExecutionInput {
    * or hostile task config can never produce an unbounded budget ledger.
    */
   readonly budgetLimits: BudgetLimitsInput;
+}
+
+/**
+ * Discriminated result of `createExecution` (AC-26, §4A.1).
+ *
+ * - `created`: a brand-new execution row was inserted. The caller proceeds
+ *   with resolver/maker dispatch.
+ * - `reused`: a row with the same `(conversation_id, submission_id)` and the
+ *   same `request_hash` already exists. This is a transport retry of the same
+ *   accepted submission; the caller must NOT re-dispatch effects or renew
+ *   limits — the existing execution's current/final status is authoritative.
+ *   `existing` carries that status snapshot.
+ * - `conflict`: a row with the same `(conversation_id, submission_id)` exists
+ *   but with a different `request_hash`. Same submission ID, different request
+ *   payload — `SUBMISSION_CONFLICT`. The caller must surface the conflict and
+ *   must not persist a second row.
+ *
+ * Note that `submission_id` is nullable: scheduled-origin executions carry
+ * `null` and are exempt from this dedup (their lineage key is the
+ * `occurrence_key`); the partial unique index skips them.
+ */
+export type CreateExecutionResult =
+  | {
+      readonly status: "created";
+      readonly executionId: string;
+      readonly ledgerId: string;
+      readonly executionRowId: number;
+    }
+  | {
+      readonly status: "reused";
+      readonly reasonCode?: never;
+      readonly existing: ExistingExecutionSnapshot;
+    }
+  | {
+      readonly status: "conflict";
+      readonly reasonCode: "SUBMISSION_CONFLICT";
+      readonly existing: ExistingExecutionSnapshot;
+    };
+
+/**
+ * Read-only snapshot of an existing execution returned on reuse/conflict. We
+ * return a typed projection rather than the raw entity so the coordinator
+ * layer does not depend on TypeORM column shapes.
+ */
+export interface ExistingExecutionSnapshot {
+  readonly executionId: string;
+  readonly ledgerId: string;
+  readonly conversationId: string | null;
+  readonly submissionId: string | null;
+  readonly requestHash: string | null;
+  readonly stage: string;
+  readonly finalized: boolean;
+  readonly taskOutcome: string | null;
+  readonly outcomeReasonCode: string | null;
+  readonly executionStateVersion: number;
 }
 
 export interface FinalizeInput {
@@ -73,7 +142,14 @@ export interface FinalizeResult {
  *
  * `createExecution` writes the ledger and execution rows in a single
  * transaction so a crash between them cannot leave an orphan ledger whose
- * `active_execution_id` points at a nonexistent execution (B3).
+ * `active_execution_id` points at a nonexistent execution (B3). The dedup
+ * lookup + insert run under a process-wide `AsyncMutex` so concurrent
+ * same-(conversation, submission) callers serialize: the second sees the
+ * first's committed row and resolves to `reused`/`conflict` instead of
+ * colliding on the shared better-sqlite3 connection (AC-26, §4A.1). The
+ * partial unique index on `(conversation_id, submission_id) WHERE
+ * submission_id IS NOT NULL` is the SQL-level guarantee; the mutex removes
+ * the connection overlap.
  *
  * Manual executions finalize without touching schedule rows; scheduled
  * origin (Slice 2) will share the transaction to update occurrence/schedule
@@ -107,78 +183,186 @@ export class AiTaskExecutionModel extends BaseDb {
 
   async createExecution(
     input: CreateExecutionInput
-  ): Promise<{ executionId: string; ledgerId: string; executionRowId: number }> {
+  ): Promise<CreateExecutionResult> {
     assertNotWorker("createExecution");
+
+    // Serialize the dedup-lookup + insert. The mutex makes check-then-insert
+    // atomic relative to concurrent callers: a racing same-(conversation,
+    // submission) caller that reads null before the first inserts instead
+    // waits, then sees the committed row and resolves to reused/conflict.
+    // It also prevents two `connection.transaction()` bodies from overlapping
+    // on the shared better-sqlite3 connection (which would raise "cannot start
+    // a transaction within a transaction"). See {@link AsyncMutex}.
+    return executionCreateMutex.run(() => this.createExecutionInner(input));
+  }
+
+  private async createExecutionInner(
+    input: CreateExecutionInput
+  ): Promise<CreateExecutionResult> {
+    // AC-26 / §4A.1: scoped submission uniqueness. A non-null submissionId is
+    // a transport-retry correlation key — the renderer generates and retains
+    // it across retries. Before inserting, look up the existing row by
+    // (conversation_id, submission_id). A null submissionId (scheduled origin)
+    // is exempt: the partial unique index skips it, and the lineage key is the
+    // occurrence_key, not the submission_id.
+    if (input.submissionId !== null) {
+      const existing = await this.executionRepo.findOne({
+        where: {
+          conversation_id: input.conversationId,
+          submission_id: input.submissionId,
+        },
+      });
+      if (existing) {
+        // Same submission ID, different request payload — the canonical
+        // request_hash mismatch means this is NOT a retry of the same
+        // accepted message (§4A.1: "Same ID with a different request hash is
+        // SUBMISSION_CONFLICT"). Surface the conflict; do not persist a
+        // second row and do not overwrite the existing request.
+        if (existing.request_hash !== input.requestHash) {
+          return {
+            status: "conflict",
+            reasonCode: "SUBMISSION_CONFLICT",
+            existing: this.toSnapshot(existing),
+          };
+        }
+        // Same ID, same request hash — a genuine transport retry of the same
+        // accepted submission. Return the existing execution's current/final
+        // status; the caller must NOT re-dispatch effects or renew limits
+        // (AC-26: "no duplicated effects or renewed limits").
+        return {
+          status: "reused",
+          existing: this.toSnapshot(existing),
+        };
+      }
+    }
+
     const executionId = `exec-${randomUUID()}`;
     const ledgerId = `ledger-${randomUUID()}`;
 
     // Both rows in one transaction so a crash between saves cannot leave an
-    // orphan ledger pointing at a nonexistent execution (B3, §6.2).
-    return this.sqliteDb.connection.transaction(async (manager) => {
-      const ledger = new AiTaskExecutionLedgerEntity();
-      ledger.ledger_id = ledgerId;
-      // GAP-S1: freeze the clamped budget limits into policy_limits_json so
-      // the persisted ledger never exceeds HARD_CAPS, even if the in-memory
-      // TaskRunBudget is later tampered with. Previously this wrote "{}",
-      // losing the budget entirely.
-      ledger.policy_limits_json = JSON.stringify(
-        clampToHardCaps(input.budgetLimits)
-      );
-      ledger.consumed_continuations = 0;
-      ledger.consumed_provider_attempts = 0;
-      ledger.consumed_tool_executions = 0;
-      ledger.consumed_checker_attempts = 0;
-      ledger.consumed_tokens = 0;
-      ledger.consumed_active_ms = 0;
-      ledger.consumed_wait_ms = 0;
-      ledger.no_progress_streak = 0;
-      ledger.active_execution_id = executionId;
-      ledger.owner_generation = 0;
-      ledger.status = "active";
-      await manager.getRepository(AiTaskExecutionLedgerEntity).save(ledger);
+    // orphan ledger pointing at a nonexistent execution (B3, §6.2). The mutex
+    // guarantees no concurrent transaction overlaps this one on the shared
+    // connection, so the unique-constraint catch below is defense-in-depth.
+    try {
+      const saved = await this.sqliteDb.connection.transaction(async (manager) => {
+        const ledger = new AiTaskExecutionLedgerEntity();
+        ledger.ledger_id = ledgerId;
+        // GAP-S1: freeze the clamped budget limits into policy_limits_json so
+        // the persisted ledger never exceeds HARD_CAPS, even if the in-memory
+        // TaskRunBudget is later tampered with. Previously this wrote "{}",
+        // losing the budget entirely.
+        ledger.policy_limits_json = JSON.stringify(
+          clampToHardCaps(input.budgetLimits)
+        );
+        ledger.consumed_continuations = 0;
+        ledger.consumed_provider_attempts = 0;
+        ledger.consumed_tool_executions = 0;
+        ledger.consumed_checker_attempts = 0;
+        ledger.consumed_tokens = 0;
+        ledger.consumed_active_ms = 0;
+        ledger.consumed_wait_ms = 0;
+        ledger.no_progress_streak = 0;
+        ledger.active_execution_id = executionId;
+        ledger.owner_generation = 0;
+        ledger.status = "active";
+        await manager.getRepository(AiTaskExecutionLedgerEntity).save(ledger);
 
-      const exec = new AiTaskExecutionEntity();
-      exec.execution_id = executionId;
-      exec.conversation_id = input.conversationId;
-      exec.source_user_message_id = input.sourceUserMessageId;
-      exec.submission_id = input.submissionId;
-      exec.assistant_result_message_id = null;
-      exec.request_hash = input.requestHash;
-      exec.origin_type = input.origin.type;
-      exec.route = input.route;
-      exec.completion_owner = input.completionOwner;
-      exec.stage = "resolving";
-      exec.schedule_id =
-        input.origin.type === "scheduled" ? input.origin.taskId : null;
-      exec.run_id =
-        input.origin.type === "scheduled" ? input.origin.runId : null;
-      exec.occurrence_key =
-        input.origin.type === "scheduled" ? input.origin.occurrenceKey : null;
-      exec.ledger_id = ledgerId;
-      exec.lineage_ledger_id = ledgerId;
-      exec.parent_execution_id = null;
-      exec.contract_snapshot_json = null;
-      exec.policy_snapshot_json = null;
-      exec.execution_state_json = null;
-      exec.contract_hash = null;
-      exec.execution_state_version = 0;
-      exec.finalized = false;
-      exec.finalized_at = null;
-      exec.task_outcome = null;
-      exec.outcome_reason_code = null;
-      exec.outcome_summary = null;
-      exec.final_event_identity = null;
-      exec.delivery_state = null;
-      const saved = await manager
-        .getRepository(AiTaskExecutionEntity)
-        .save(exec);
+        const exec = new AiTaskExecutionEntity();
+        exec.execution_id = executionId;
+        exec.conversation_id = input.conversationId;
+        exec.source_user_message_id = input.sourceUserMessageId;
+        exec.submission_id = input.submissionId;
+        exec.assistant_result_message_id = null;
+        exec.request_hash = input.requestHash;
+        exec.origin_type = input.origin.type;
+        exec.route = input.route;
+        exec.completion_owner = input.completionOwner;
+        exec.stage = "resolving";
+        exec.schedule_id =
+          input.origin.type === "scheduled" ? input.origin.taskId : null;
+        exec.run_id =
+          input.origin.type === "scheduled" ? input.origin.runId : null;
+        exec.occurrence_key =
+          input.origin.type === "scheduled" ? input.origin.occurrenceKey : null;
+        exec.ledger_id = ledgerId;
+        exec.lineage_ledger_id = ledgerId;
+        exec.parent_execution_id = null;
+        exec.contract_snapshot_json = null;
+        exec.policy_snapshot_json = null;
+        exec.execution_state_json = null;
+        exec.contract_hash = null;
+        exec.execution_state_version = 0;
+        exec.finalized = false;
+        exec.finalized_at = null;
+        exec.task_outcome = null;
+        exec.outcome_reason_code = null;
+        exec.outcome_summary = null;
+        exec.final_event_identity = null;
+        exec.delivery_state = null;
+        const savedExec = await manager
+          .getRepository(AiTaskExecutionEntity)
+          .save(exec);
+        return savedExec;
+      });
 
       return {
+        status: "created",
         executionId,
         ledgerId,
         executionRowId: saved.id,
       };
-    });
+    } catch (error) {
+      // Defense-in-depth: the mutex serializes callers, so a unique-constraint
+      // violation here means the row appeared between the lookup and the
+      // insert within this same critical section (only possible if a separate
+      // code path inserts without the mutex — none exists today). Resolve to
+      // reused/conflict instead of surfacing a raw SQLite UNIQUE error, then
+      // fall through to re-throw for any other error.
+      if (this.isUniqueConstraintError(error) && input.submissionId !== null) {
+        const winner = await this.executionRepo.findOne({
+          where: {
+            conversation_id: input.conversationId,
+            submission_id: input.submissionId,
+          },
+        });
+        if (winner) {
+          if (winner.request_hash !== input.requestHash) {
+            return {
+              status: "conflict",
+              reasonCode: "SUBMISSION_CONFLICT",
+              existing: this.toSnapshot(winner),
+            };
+          }
+          return {
+            status: "reused",
+            existing: this.toSnapshot(winner),
+          };
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Project a loaded entity into the read-only snapshot returned on
+   * reuse/conflict. Centralizes the column→field mapping so the coordinator
+   * layer never touches TypeORM column shapes.
+   */
+  private toSnapshot(
+    exec: AiTaskExecutionEntity
+  ): ExistingExecutionSnapshot {
+    return {
+      executionId: exec.execution_id,
+      ledgerId: exec.ledger_id,
+      conversationId: exec.conversation_id,
+      submissionId: exec.submission_id,
+      requestHash: exec.request_hash,
+      stage: exec.stage,
+      finalized: exec.finalized,
+      taskOutcome: exec.task_outcome,
+      outcomeReasonCode: exec.outcome_reason_code,
+      executionStateVersion: exec.execution_state_version,
+    };
   }
 
   async getById(executionId: string): Promise<AiTaskExecutionEntity | null> {
@@ -332,5 +516,21 @@ export class AiTaskExecutionModel extends BaseDb {
   async saveExecution(exec: AiTaskExecutionEntity): Promise<void> {
     assertNotWorker("saveExecution");
     await this.executionRepo.save(exec);
+  }
+
+  /**
+   * Detect a SQLite unique-constraint violation from a thrown driver error.
+   * better-sqlite3 surfaces `SQLITE_CONSTRAINT_UNIQUE` messages containing
+   * "UNIQUE constraint failed"; TypeORM wraps these in `QueryFailedError`.
+   * Mirrors `AiTaskOperation.model.ts`. Reachable only via the
+   * defense-in-depth catch in `createExecutionInner` — the
+   * `executionCreateMutex` serializes callers so concurrent inserts cannot
+   * both reach the INSERT, but a unique-constraint violation is still the
+   * typed fallback if a row appears between the lookup and the insert.
+   */
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      error instanceof Error && /unique constraint/i.test(error.message)
+    );
   }
 }

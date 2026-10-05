@@ -19,6 +19,17 @@ import type {
 @Entity("ai_task_execution")
 @Index(["execution_id"], { unique: true })
 @Index(["conversation_id"])
+// AC-26 / §4A.1: scoped submission uniqueness. A transport retry reuses the
+// same (conversation_id, submission_id); a partial unique index enforces this
+// only when submission_id IS NOT NULL. SQLite treats NULLs as distinct in a
+// unique index, so scheduled-origin rows (submission_id = null) coexist — the
+// dedup key is the occurrence_key lineage, not the submission_id. The `where`
+// predicate must use quoted identifiers so TypeORM synchronize emits it as raw
+// SQL on the partial index without re-quoting.
+@Index("idx_execution_submission_unique", ["conversation_id", "submission_id"], {
+  unique: true,
+  where: '"submission_id" IS NOT NULL',
+})
 @Index(["submission_id"])
 @Index(["schedule_id"])
 @Index(["ledger_id"])
