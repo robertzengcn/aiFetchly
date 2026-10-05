@@ -4231,19 +4231,6 @@ const HISTORY_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Retrieval tools for preserved outputs are ALWAYS in the core tool set, not
- * deferred behind `tool_catalog_search`.
- *
- * They are the only way the model can reach an output it was just told about.
- * If a receipt names an output_id but the reader sits behind a discovery tool,
- * the model cannot act on the reference and will report the data as missing.
- */
-const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
-  TOOL_RESULT_READ_TOOL_NAME,
-  TOOL_RESULT_SEARCH_TOOL_NAME,
-]);
-
-/**
  * True when the retrieval tools may run for this conversation.
  *
  * Two independent reasons, both required by the design:
@@ -4256,18 +4243,78 @@ const TOOL_RESULT_RETRIEVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
 async function isToolResultRetrievalAvailable(
   context: { conversationId: string }
 ): Promise<boolean> {
+  // The two rollout flags short-circuit the registry lookup entirely: when
+  // either is on, retrieval is unconditionally available regardless of
+  // whether this conversation has ever saved an output.
   if (isToolOutputModelRefsEnabled()) return true;
   if (isToolOutputCaptureEnabled()) return true;
+
+  // Both flags are off. Retrieval is still allowed IF this conversation
+  // already holds a committed artifact (TD §13.4: turning capture off must
+  // not erase readability of what was already saved). Otherwise the gate
+  // denies — and a denied `tool_result_read`/`tool_result_search` call
+  // returns the opaque `OUTPUT_NOT_AVAILABLE` to the model.
+  let committed = false;
+  let registryError: unknown = null;
   try {
     const { ToolResultModule } = await import("@/modules/ToolResultModule");
     const { hasCommittedOutputs } = await import(
       "@/service/toolResult/toolResultAvailability"
     );
-    return await hasCommittedOutputs(new ToolResultModule(), context.conversationId);
-  } catch {
+    committed = await hasCommittedOutputs(
+      new ToolResultModule(),
+      context.conversationId
+    );
+  } catch (e) {
     // Fail closed: an unreadable registry must not expose retrieval.
-    return false;
+    registryError = e;
   }
+
+  if (committed) return true;
+
+  // Diagnose WHY the gate denied, without changing the model-facing code.
+  // The gate collapses feature-off / no-committed-outputs / registry-error
+  // into one opaque `OUTPUT_NOT_AVAILABLE` (correct for the contract:
+  // existence must not leak). But that leaves a human debugging a ~3ms
+  // bail with no signal as to which condition fired. This log line makes
+  // the three cases distinguishable at a glance in the main-process log:
+  //   - flags_off_no_committed_outputs: rollout flags off AND this
+  //     conversation never saved an output (the common hallucinated-id
+  //     case — the model is calling tool_result_read against an id that
+  //     was never issued here).
+  //   - registry_error: the registry lookup itself threw (e.g. DB not
+  //     openable), which fail-closed into denial.
+  logRetrievalDenialReason(
+    context.conversationId,
+    registryError
+      ? "registry_error"
+      : "flags_off_no_committed_outputs",
+    registryError instanceof Error
+      ? registryError.message
+      : registryError
+        ? String(registryError)
+        : undefined
+  );
+  return false;
+}
+
+/**
+ * Diagnostic helper: record WHY retrieval was denied for a conversation.
+ *
+ * Kept separate from the gate so the gate stays branch-free and fast on
+ * the happy path (flags on → immediate `true`, no extra work). Only the
+ * denial path pays for stringifying the reason.
+ */
+function logRetrievalDenialReason(
+  conversationId: string,
+  detail: "flags_off_no_committed_outputs" | "registry_error",
+  extra?: string
+): void {
+  console.warn(
+    `[SkillRegistry] tool_result retrieval unavailable for conversation "${conversationId}" (${detail})${
+      extra ? `: ${extra}` : ""
+    }`
+  );
 }
 
 function isSkillRuntimeEnabled(
