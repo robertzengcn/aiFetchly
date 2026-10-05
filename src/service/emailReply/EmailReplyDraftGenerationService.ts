@@ -188,8 +188,9 @@ export class EmailReplyDraftGenerationService {
     // 2b. Pre-draft policy gate (FR-005, P0.3): run the authoritative policy
     //     BEFORE knowledge retrieval or the LLM. A hard-blocked message (bounce,
     //     unsubscribe, automated sender, blocked sender/domain) yields no draft
-    //     and no model call. Audit the decision (best-effort) and surface a
-    //     structured code so the UI can map it to a translated reason.
+    //     and no model call. The refusal is audited exactly once (FR-034) with
+    //     stage + code + bounded evidence, and a structured code is surfaced so
+    //     the UI can map it to a translated reason.
     const policyDecision = await timedReplyStage("policy", () =>
       new EmailReplyPolicyOrchestrator().evaluate({
         stage: "pre_draft",
@@ -202,23 +203,17 @@ export class EmailReplyDraftGenerationService {
       allowed: policyDecision.allowed,
     });
     if (!policyDecision.allowed) {
-      try {
-        const audit = new EmailReplyAuditLogEntity();
-        audit.emailServiceId = message.emailServiceId;
-        audit.messageId = message.id;
-        audit.action = "auto_reply_blocked";
-        audit.actor = "system";
-        audit.reason = `[${policyDecision.code}] ${policyDecision.reason}`;
-        audit.metadataJson = JSON.stringify({
-          correlationId: correlationIdForMessage(message.id),
-          policyVersion: policyDecision.policyVersion,
-          ruleId: policyDecision.ruleId,
-          stage: "pre_draft",
-        });
-        await this.replyAuditModule.create(audit);
-      } catch (e) {
-        console.error("Failed to write pre-draft policy audit:", e);
-      }
+      // FR-034: exactly ONE reply_skipped audit per refusal invocation, written
+      // by this outer service (the policy layer returns decisions; it never
+      // writes audit rows, AD-006). Audit persistence failure STOPS the work —
+      // an unrecorded refusal must never be followed by proceeding to draft.
+      await this.writeRefusalAudit(message.emailServiceId, message.id, {
+        stage: "pre_draft",
+        code: policyDecision.code,
+        reason: policyDecision.reason,
+        policyVersion: policyDecision.policyVersion,
+        ruleId: policyDecision.ruleId,
+      });
       return {
         success: false,
         error: `[${policyDecision.code}] ${policyDecision.reason}`,
@@ -363,7 +358,8 @@ export class EmailReplyDraftGenerationService {
             message.id,
             `[needs_human_review] generation failed validation twice: ${allCodes.join(
               ","
-            )}`
+            )}`,
+            { stage: "generation", code: "needs_human_review" }
           );
           return {
             success: false,
@@ -380,7 +376,8 @@ export class EmailReplyDraftGenerationService {
         await this.recordFailure(
           message.emailServiceId,
           message.id,
-          `[provider_error] ${error.message}`
+          `[provider_error] ${error.message}`,
+          { stage: "generation", code: "provider_error" }
         );
         return { success: false, error: `[provider_error] ${error.message}` };
       }
@@ -406,7 +403,8 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
-        "Empty generated body"
+        "Empty generated body",
+        { stage: "generation", code: "empty_output" }
       );
       return { success: false, error: "Generated reply body was empty" };
     }
@@ -441,7 +439,8 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
-        "[already_replied] replyStatus flipped to sent during generation; generated content discarded"
+        "[already_replied] replyStatus flipped to sent during generation; generated content discarded",
+        { stage: "post_generation", code: "already_replied" }
       );
       return {
         success: false,
@@ -477,7 +476,8 @@ export class EmailReplyDraftGenerationService {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
-        "[reply_state_conflict] a live sibling draft appeared during generation; generated content discarded"
+        "[reply_state_conflict] a live sibling draft appeared during generation; generated content discarded",
+        { stage: "post_generation", code: "reply_state_conflict" }
       );
       return {
         success: false,
@@ -716,23 +716,68 @@ export class EmailReplyDraftGenerationService {
    * NOT a send failure — no SMTP submission was attempted — so the audit action
    * is `reply_skipped`, not `send_failed`. The `send_failed` action is reserved
    * for the delivery service path where an actual SMTP submission failed.
+   *
+   * The optional metadata carries the structured `stage` + `code` so the audit
+   * row is machine-queryable without parsing the `reason` text (FR-034).
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work — an
+   * unrecorded refusal must never be followed by a silent success return. The
+   * caller surfaces the persistence failure instead.
    */
   private async recordFailure(
     emailServiceId: number,
     messageId: number,
-    reason: string
+    reason: string,
+    metadata?: { readonly stage: string; readonly code: string }
   ): Promise<void> {
-    try {
-      const log = new EmailReplyAuditLogEntity();
-      log.emailServiceId = emailServiceId;
-      log.messageId = messageId;
-      log.action = "reply_skipped";
-      log.actor = "ai";
-      log.reason = reason;
-      await this.replyAuditModule.create(log);
-    } catch (e) {
-      console.error("Failed to write failure audit:", e);
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = emailServiceId;
+    log.messageId = messageId;
+    log.action = "reply_skipped";
+    log.actor = "ai";
+    log.reason = reason;
+    log.metadataJson = JSON.stringify({
+      correlationId: correlationIdForMessage(messageId),
+      ...(metadata ?? {}),
+    });
+    await this.replyAuditModule.create(log);
+  }
+
+  /**
+   * Write the ONE reply_skipped audit row for a pre_draft policy refusal
+   * (FR-034). Called by this outer service before the refusal result is
+   * returned; the policy orchestrator itself never writes audit rows (AD-006).
+   * Evidence is bounded: stage + code + policy version + correlation id + rule
+   * id — no bodies, no credentials, no raw model output, no raw error text.
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work. An
+   * unrecorded draft refusal must never be followed by proceeding to draft.
+   */
+  private async writeRefusalAudit(
+    emailServiceId: number,
+    messageId: number,
+    decision: {
+      readonly stage: "pre_draft";
+      readonly code: string;
+      readonly reason: string;
+      readonly policyVersion: string;
+      readonly ruleId: number | null;
     }
+  ): Promise<void> {
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = emailServiceId;
+    log.messageId = messageId;
+    log.action = "reply_skipped";
+    log.actor = "system";
+    log.reason = `[${decision.code}] ${decision.reason}`;
+    log.metadataJson = JSON.stringify({
+      correlationId: correlationIdForMessage(messageId),
+      stage: decision.stage,
+      code: decision.code,
+      policyVersion: decision.policyVersion,
+      ruleId: decision.ruleId,
+    });
+    await this.replyAuditModule.create(log);
   }
 }
 

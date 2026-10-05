@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
+import { SendPolicyRejection } from "@/service/emailReply/EmailReplySendBinding";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
@@ -29,7 +31,11 @@ const FAKE_MAILBOX = {
   ssl: 1,
 };
 
-async function seedValidApproval(): Promise<{ draftId: number; token: string }> {
+async function seedValidApproval(): Promise<{
+  draftId: number;
+  token: string;
+  messageId: number;
+}> {
   const messageModule = new EmailReceivedMessageModule();
   const draftModule = new EmailReplyDraftModule();
 
@@ -81,7 +87,7 @@ async function seedValidApproval(): Promise<{ draftId: number; token: string }> 
     draftId: savedDraft.id,
     approvedByType: "user",
   });
-  return { draftId: savedDraft.id, token: approval.token };
+  return { draftId: savedDraft.id, token: approval.token, messageId: savedMsg.id };
 }
 
 type Behavior = "accept" | "reject" | "disconnect";
@@ -178,5 +184,75 @@ describe("P0.6 — delivery state machine via fake SMTP", () => {
     const already = [a, b].filter((o) => o.status === "already_processed").length;
     expect(sent + already).toBe(2);
     expect(calls).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One refusal audit per invocation (FR-034, Phase-1 slice) — pre_send stage
+// ---------------------------------------------------------------------------
+describe("sendApprovedReply refusal audits (FR-034 pre_send)", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function refusalAuditsFor(messageId: number) {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  it("writes exactly ONE reply_skipped audit on a pre_send already_replied refusal, with stage + code", async () => {
+    // Seed a clean message + approval, then flip replyStatus to sent so the
+    // send-time policy guard refuses the duplicate.
+    const { draftId, token, messageId } = await seedValidApproval();
+    await new EmailReceivedMessageModule().updateReplyStatus(
+      messageId,
+      "sent",
+      new Date()
+    );
+    let smtpCalls = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async () => {
+          smtpCalls += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: CLEAN_BODY,
+            info: `<prov-${smtpCalls}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+    });
+    await expect(
+      delivery.sendApprovedReply({ draftId, approvalToken: token })
+    ).rejects.toBeInstanceOf(SendPolicyRejection);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reason).toContain("[already_replied]");
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      correlationId?: string;
+    };
+    expect(meta.stage).toBe("pre_send");
+    expect(meta.code).toBe("already_replied");
+    expect(meta.correlationId).toBeTruthy();
+    // The refusal happened before the atomic claim — no SMTP side effect.
+    expect(smtpCalls).toBe(0);
+  });
+
+  it("writes ZERO refusal audit rows on the accepted happy path", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const outcome = await buildDelivery("accept").sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
   });
 });

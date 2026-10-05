@@ -13,8 +13,10 @@ import type {
 } from "@/api/aiChatApi";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import type { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 
 // createDraft is AI-gated; the guard/reuse tests must pass the gate so they
 // reach the code under test instead of short-circuiting on the enable check.
@@ -345,6 +347,174 @@ describe("createDraft guard + reuse (FR-028)", () => {
     // No duplicate draft was persisted despite a valid generation.
     const drafts = await draftModule.listByMessage(messageId);
     expect(drafts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One refusal audit per invocation (FR-034, Phase-1 slice)
+// ---------------------------------------------------------------------------
+describe("createDraft refusal audits (FR-034)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4245;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4245;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  async function refusalAuditsFor(messageId: number): Promise<EmailReplyAuditLogEntity[]> {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "reply_skipped");
+  }
+
+  it("writes exactly ONE reply_skipped audit row on an already_replied refusal, with stage + code", async () => {
+    const messageId = await seedMessage({ replyStatus: "sent" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].action).toBe("reply_skipped");
+    expect(refusals[0].reason).toContain("[already_replied]");
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+      correlationId?: string;
+    };
+    expect(meta.stage).toBe("pre_draft");
+    expect(meta.code).toBe("already_replied");
+    expect(meta.correlationId).toBeTruthy();
+    // Zero LLM calls — the guard refused before any generation work.
+    expect(requests).toHaveLength(0);
+  });
+
+  it("writes exactly ONE reply_skipped audit row on a policy hard-block (bounce), with stage + code", async () => {
+    const messageId = await seedMessage({ classification: "bounce" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.stage).toBe("pre_draft");
+    expect(meta.code).toBe("bounce");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("writes ZERO refusal audit rows on the reuse path (reuse is not a refusal)", async () => {
+    const messageId = await seedMessage({ replyStatus: "draft_created" });
+    await seedDraft(messageId, "draft");
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+  });
+
+  it("writes ZERO refusal audit rows on the clean-message happy path", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([
+      completionResponse(validReplyJson, "stop"),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: factory,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(0);
+    // The happy path writes a draft_created audit, not a refusal.
+    const { records } = await auditModule.list({ messageId, page: 0, size: 50 });
+    expect(records.some((r) => r.action === "draft_created")).toBe(true);
+  });
+
+  it("writes exactly ONE reply_skipped audit row when a race flips replyStatus to sent mid-generation", async () => {
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const flippingFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        await messageModule.updateReplyStatus(messageId, "sent");
+        const real = factory();
+        return real.openAIChatCompletion(req);
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: flippingFactory,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    const refusals = await refusalAuditsFor(messageId);
+    expect(refusals).toHaveLength(1);
+    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
+      stage?: string;
+      code?: string;
+    };
+    expect(meta.stage).toBe("post_generation");
+    expect(meta.code).toBe("already_replied");
   });
 });
 

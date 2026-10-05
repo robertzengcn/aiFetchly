@@ -4,8 +4,11 @@ import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { ReplyEmailService } from "@/modules/lib/replyEmailService";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 import { classifySubmissionResult } from "@/service/emailReply/EmailSubmissionClassifier";
 import {
   buildSendIdempotencyKey,
@@ -32,6 +35,7 @@ import type {
   EmailReplyApprovalEnvelopeV2,
   SendApprovedReplyInput,
   SendApprovedReplyOutcome,
+  EmailReplyPolicyCode,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import type { EmailReplyStatus } from "@/entityTypes/emailReceiveTypes";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
@@ -98,6 +102,7 @@ export class EmailReplyDeliveryService {
   private readonly attemptModule = new EmailReplySendAttemptModule();
   private readonly messageModule = new EmailReceivedMessageModule();
   private readonly serviceModule = new EmailServiceModule();
+  private readonly auditModule = new EmailReplyAuditLogModule();
   private readonly policy = new EmailReplyPolicyOrchestrator();
   private readonly senderFactory: ReplySenderFactory;
   private readonly serviceLoader: (id: number) => Promise<BoundMailbox | null>;
@@ -249,6 +254,13 @@ export class EmailReplyDeliveryService {
       allowed: decision.allowed,
     });
     if (!decision.allowed) {
+      // FR-034 (Phase-1 slice): exactly ONE reply_skipped audit per actionable
+      // pre_send refusal, written here (the outer service) with stage + code +
+      // bounded evidence — no bodies, no credentials, no raw model output. The
+      // policy layer returns decisions; it never writes audit rows. Audit
+      // persistence failure STOPS the work: an unrecorded refusal must never
+      // be followed by proceeding to send.
+      await this.writeRefusalAudit(message, draft.id, decision);
       // Surface the stable policy code (FR-033) so the AI tool / IPC envelope
       // can carry a machine-readable reason instead of parsing English. This
       // refusal happens BEFORE the atomic claim, so no SMTP side effect.
@@ -386,6 +398,44 @@ export class EmailReplyDeliveryService {
       attemptId,
       error: sanitizedError ?? outcome,
     };
+  }
+
+  /**
+   * Write the ONE reply_skipped audit row for a pre_send policy refusal
+   * (FR-034, Phase-1 slice). Called by the outer delivery service before the
+   * SendPolicyRejection is thrown; the policy orchestrator itself never writes
+   * audit rows (AD-006). Evidence is bounded: stage + code + policy version +
+   * correlation id — no bodies, no credentials, no raw model output, no raw
+   * error text.
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work. An
+   * unrecorded send refusal must never be followed by proceeding to send —
+   * the caller surfaces the persistence failure instead.
+   */
+  private async writeRefusalAudit(
+    message: { id: number; emailServiceId: number },
+    draftId: number,
+    decision: {
+      readonly code: EmailReplyPolicyCode;
+      readonly reason: string;
+      readonly policyVersion: string;
+    }
+  ): Promise<void> {
+    await this.auditModule.ensureConnection();
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = message.emailServiceId;
+    log.messageId = message.id;
+    log.draftId = draftId;
+    log.action = "reply_skipped";
+    log.actor = "system";
+    log.reason = `[${decision.code}] ${decision.reason}`;
+    log.metadataJson = JSON.stringify({
+      correlationId: correlationIdForMessage(message.id),
+      stage: "pre_send",
+      code: decision.code,
+      policyVersion: decision.policyVersion,
+    });
+    await this.auditModule.create(log);
   }
 }
 
