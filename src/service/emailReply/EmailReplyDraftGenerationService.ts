@@ -15,6 +15,7 @@ import type {
   AiEmailReplyDraftResult,
   EmailReplyKnowledgeSourceAudit,
 } from "@/entityTypes/emailReceiveAiTypes";
+import type { EmailReplyPolicyCode } from "@/entityTypes/emailReplyReliabilityTypes";
 import { retrieveReplyKnowledge } from "@/service/emailReply/EmailReplyKnowledgeService";
 import {
   buildReplySystemMessage,
@@ -33,6 +34,10 @@ import {
   correlationIdForMessage,
   newRequestCorrelationId,
 } from "@/service/emailReply/EmailReplyCorrelation";
+import {
+  nextActionForCode,
+  type EmailReplyNextAction,
+} from "@/service/emailReply/EmailReplyNextAction";
 import {
   incrementReplyMetric,
   timedReplyStage,
@@ -60,10 +65,42 @@ export interface CreateDraftInput {
   useKnowledgeLibrary?: boolean;
 }
 
-/** Outcome returned to the AI tool / IPC handler. */
+/**
+ * Outcome returned to the AI tool / IPC handler.
+ *
+ * B12: the failure side carries typed, machine-readable fields so callers
+ * (IPC envelope, renderer API, AI tool) can branch on `code` /
+ * `existing_draft_id` / `next_action` instead of parsing English out of
+ * `error`. The legacy `error` + `requestCorrelationId` fields are retained
+ * additively for every existing consumer.
+ *
+ * Field semantics on the failure side:
+ *  - `code`: present ONLY for genuine {@link EmailReplyPolicyCode} refusals
+ *    (policy refusal, race-recheck refusal, validation_failed → needs_human_review,
+ *    reuse-eligible already_replied). Absent for `provider_error` (NOT a policy
+ *    code), AI-disabled, message-not-found, and audit-persistence failures —
+ *    those carry no typed code so the AI tool's `code` slot stays undefined
+ *    rather than holding a non-policy string. The `error` text still carries
+ *    a leading `[provider_error]` bracket for those transport failures.
+ *  - `existing_draft_id`: set when a refusal leaves a live draft in place
+ *    (e.g. `already_replied` with an eligible draft) so the UI can route the
+ *    user to approve it. Absent when no reusable draft exists.
+ *  - `next_action`: derived from `code` via {@link nextActionForCode} (typed
+ *    derivation, not English parsing). Absent when `code` is absent.
+ */
 export type CreateDraftOutcome =
   | ({ success: true } & AiEmailReplyDraftResult)
-  | { success: false; error: string; requestCorrelationId: string };
+  | {
+      success: false;
+      error: string;
+      requestCorrelationId: string;
+      /** Stable policy code; present on policy refusals, absent on input/transport errors. */
+      code?: EmailReplyPolicyCode;
+      /** Set when a live draft already exists for the message (reuse or refusal). */
+      existing_draft_id?: number;
+      /** Short machine-readable hint for the model to suggest a next step. */
+      next_action?: EmailReplyNextAction;
+    };
 
 /**
  * Typed raw LLM call result (FR-027). Carries completion metadata so the
@@ -263,6 +300,8 @@ export class EmailReplyDraftGenerationService {
         success: false,
         error: `[${policyDecision.code}] ${policyDecision.reason}`,
         requestCorrelationId,
+        code: policyDecision.code,
+        next_action: nextActionForCode(policyDecision.code, undefined),
       };
     }
 
@@ -306,6 +345,7 @@ export class EmailReplyDraftGenerationService {
           success: false,
           error: `Reuse audit persistence failed: ${auditErrMsg}`,
           requestCorrelationId,
+          existing_draft_id: reusable.id,
         };
       }
       return {
@@ -478,6 +518,8 @@ export class EmailReplyDraftGenerationService {
           success: false,
           error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
           requestCorrelationId,
+          code: "needs_human_review",
+          next_action: nextActionForCode("needs_human_review", undefined),
         };
       }
       // transport_error: not a validation strike. Persist a provider-error
@@ -494,6 +536,11 @@ export class EmailReplyDraftGenerationService {
         success: false,
         error: `[provider_error] ${attempt.error.message}`,
         requestCorrelationId,
+        // provider_error is NOT a member of EmailReplyPolicyCode, so the typed
+        // `code` slot stays absent — the leading bracket in `error` is the only
+        // signal. The next_action is still derived here (the service knows this
+        // is a transport failure) so the AI tool does not parse English to get it.
+        next_action: "discard_and_retry",
       };
     }
     const generated = attempt.value;
@@ -519,6 +566,7 @@ export class EmailReplyDraftGenerationService {
         success: false,
         error: "Generated reply body was empty",
         requestCorrelationId,
+        next_action: "await_human_review",
       };
     }
 
@@ -577,10 +625,24 @@ export class EmailReplyDraftGenerationService {
         `[${recheckDecision.code}] ${recheckDecision.reason}`,
         { stage: "post_generation", code: recheckDecision.code }
       );
+      // B12: surface the typed code + a stable next_action. If a usable draft
+      // appeared during the LLM call, surface its id so the UI can route the
+      // user to approve it. The guard may have refused because of an
+      // already-replied/in-flight sibling; pickReusableDraft returns null when
+      // no eligible reusable draft exists (sent/claimed/etc.), so
+      // existing_draft_id stays undefined in that case.
+      const refusalDrafts = await this.draftModule.listByMessage(message.id);
+      const refusalReusable = pickReusableDraft(refusalDrafts);
       return {
         success: false,
         error: `[${recheckDecision.code}] Message reply state changed during generation; no draft persisted`,
         requestCorrelationId,
+        code: recheckDecision.code,
+        existing_draft_id: refusalReusable?.id,
+        next_action: nextActionForCode(
+          recheckDecision.code,
+          refusalReusable?.id
+        ),
       };
     }
     // The guard allowed — meaning the message is clean OR has exactly one
@@ -610,6 +672,7 @@ export class EmailReplyDraftGenerationService {
           success: false,
           error: `Reuse audit persistence failed: ${auditErrMsg}`,
           requestCorrelationId,
+          existing_draft_id: reusableNow.id,
         };
       }
       return {
