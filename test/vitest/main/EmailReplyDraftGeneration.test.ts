@@ -14,9 +14,12 @@ import type {
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import type { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
 
 // createDraft is AI-gated; the guard/reuse tests must pass the gate so they
 // reach the code under test instead of short-circuiting on the enable check.
@@ -515,6 +518,216 @@ describe("createDraft refusal audits (FR-034)", () => {
     };
     expect(meta.stage).toBe("post_generation");
     expect(meta.code).toBe("already_replied");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B03: post-generation recheck runs the FULL guard, not a live-draft filter
+// ---------------------------------------------------------------------------
+describe("createDraft post-generation recheck runs the full guard (B03)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const attemptModule = new EmailReplySendAttemptModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4246;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"],
+    emailServiceId = 4246
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = emailServiceId;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  async function seedAttempt(
+    messageId: number,
+    status: EmailReplySendAttemptStatus,
+    emailServiceId = 4246
+  ): Promise<void> {
+    const attempt = new EmailReplySendAttemptEntity();
+    attempt.idempotencyKey = `key-${Math.random()}`;
+    attempt.draftId = 900000 + Math.floor(Math.random() * 9999);
+    attempt.revisionId = attempt.draftId;
+    attempt.approvalId = attempt.draftId;
+    attempt.messageId = messageId;
+    attempt.conversationId = null;
+    attempt.emailServiceId = emailServiceId;
+    attempt.senderAddress = "owner@example.com";
+    attempt.recipientAddress = "person@example.com";
+    attempt.status = status;
+    attempt.claimedAt = new Date();
+    attempt.submittedAt = null;
+    attempt.completedAt = null;
+    attempt.providerMessageId = null;
+    attempt.failureCode = null;
+    attempt.sanitizedError = null;
+    await attemptModule.create(attempt);
+  }
+
+  /**
+   * Build a factory that injects a state change during the awaited LLM call.
+   * The mutation runs AFTER the model returns but BEFORE the recheck, so the
+   * recheck observes the freshly written sibling/attempt state.
+   */
+  function factoryThatMutatesDuringCall(
+    mutation: () => Promise<void>,
+    response: OpenAIChatCompletionResponse = completionResponse(validReplyJson)
+  ): AiChatApiFactory {
+    return () => ({
+      openAIChatCompletion: async () => {
+        const resp = response;
+        await mutation();
+        return Promise.resolve(resp);
+      },
+    });
+  }
+
+  it("discards generated content when a sent sibling appears during generation (not reuse)", async () => {
+    const messageId = await seedMessage();
+    // During the LLM call, a sibling draft finalizes as sent.
+    const factory = factoryThatMutatesDuringCall(async () => {
+      const siblingId = await seedDraft(messageId, "draft");
+      await draftModule.markSent(siblingId, new Date());
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("already_replied");
+    // No NEW draft persisted (the sibling is the only draft row).
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].status).toBe("sent");
+  });
+
+  it("discards generated content when a delivery_unknown sibling appears during generation", async () => {
+    const messageId = await seedMessage();
+    const factory = factoryThatMutatesDuringCall(async () => {
+      await seedDraft(messageId, "delivery_unknown");
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("delivery_unknown");
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].status).toBe("delivery_unknown");
+  });
+
+  it("discards generated content when a sending sibling appears during generation", async () => {
+    const messageId = await seedMessage();
+    const factory = factoryThatMutatesDuringCall(async () => {
+      await seedDraft(messageId, "sending");
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("reply_in_progress");
+  });
+
+  it("discards generated content when a sent send-attempt appears during generation (no draft)", async () => {
+    // The attempt ledger is authoritative even with no draft row — the
+    // previous recheckLive filter would have missed this entirely.
+    const messageId = await seedMessage();
+    const factory = factoryThatMutatesDuringCall(async () => {
+      await seedAttempt(messageId, "sent");
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("already_replied");
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(0);
+  });
+
+  it("refuses reply_state_conflict when multiple live siblings appear during generation", async () => {
+    const messageId = await seedMessage();
+    const factory = factoryThatMutatesDuringCall(async () => {
+      await seedDraft(messageId, "draft");
+      await seedDraft(messageId, "draft");
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("reply_state_conflict");
+    // The two siblings remain; no third draft persisted.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(2);
+  });
+
+  it("still reuses a single eligible live sibling that appears during generation", async () => {
+    // Regression: the full guard allows one eligible live draft, and the
+    // recheck path reuses it instead of persisting a duplicate.
+    const messageId = await seedMessage();
+    const factory = factoryThatMutatesDuringCall(async () => {
+      await seedDraft(messageId, "draft");
+    });
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    // Exactly one draft — the sibling, not a newly persisted duplicate.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
   });
 });
 

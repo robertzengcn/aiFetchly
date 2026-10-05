@@ -67,11 +67,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B03 — Post-generation recheck bypasses denial precedence [P1]
 
-- [ ] **Fix.** Re-run the full authoritative eligibility policy using freshly read state before reusing or persisting a draft. Do not substitute a live-draft filter for the guard. Also implement T07 to close the remaining check/write race.
-- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:437–487`; `recheckLive` at `452–454` excludes `sent` and `delivery_unknown`. `pickReusableDraft` at `src/service/emailReply/EmailReplyPolicyOrchestrator.ts:434–449` requires the full guard to have cleared unsafe/conflicting states first.
+- [x] **Fix.** Re-run the full authoritative eligibility policy using freshly read state before reusing or persisting a draft. Do not substitute a live-draft filter for the guard. Also implement T07 to close the remaining check/write race.
+- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:429–483` now calls `new EmailReplyPolicyOrchestrator().evaluate({ stage: "pre_draft", messageId })` instead of the old `recheckLive` filter (which excluded `sent` and `delivery_unknown`). The post-B02 guard reads drafts + the send-attempt ledger + `replyStatus` with correct precedence, so any sibling/attempt state change during the awaited LLM call is caught. On refusal the generated content is discarded and the guard's code is audited at `post_generation`; on allow, `pickReusableDraft` reuses the newest eligible sibling (null → fall through to persist).
 - Trigger: while generation awaits the model, a sibling becomes sent or delivery-unknown and the message projection remains stale.
-- Current result: if that is the only sibling, generation persists another draft. With an editable sibling plus sent/unknown/sending evidence, it can return that editable draft as `allowed`. Multiple editable siblings also return the newest instead of a conflict.
-- Acceptance: introduce each sibling state during the awaited model call. Assert the appropriate sent/unknown/in-flight/conflict denial and no newly persisted draft. Test mixed-state siblings as well as one sibling. This omission exists even before considering a change occurring after the final recheck.
+- Current result: fixed — sent/delivery_unknown/sending siblings, sent/claimed/submitted attempts, and multi-live-draft conflicts introduced during the call all deny with the correct code and persist no new draft; a single eligible sibling is reused.
+- Acceptance: `test/vitest/main/EmailReplyDraftGeneration.test.ts` "createDraft post-generation recheck runs the full guard (B03)" — 7 cases cover each sibling state, a sent send-attempt with no draft, mixed-state siblings, multi-live conflict, and the reuse regression. All pass. (T07 — atomic reservation closing the check→write window — remains Phase 2.)
 
 ### B04 — Same-attempt send replay returns the wrong outcome [P2]
 

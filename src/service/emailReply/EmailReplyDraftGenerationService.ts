@@ -426,63 +426,59 @@ export class EmailReplyDraftGenerationService {
     const classification = generated.intentSuggestion;
     const confidence = clamp(Number(generated.confidence), 0, 1);
 
-    // 6c. Race recheck (FR-028 Phase-1 slice): the message-level guard ran
-    //     before generation, but the awaited LLM call can take seconds. If
-    //     replyStatus flipped to sent (or a sibling draft appeared) during that
-    //     window, refuse to persist — a duplicate draft would create a second
-    //     reply. Phase 2's atomic reservation (FR-035) closes this window more
-    //     strongly; Phase 1 rechecks here and discards the generated content.
-    //     The generation cost is already spent (LLM call completed), so we
-    //     audit the discard and return already_replied without persisting.
-    const recheckMessage = await this.messageModule.read(message.id);
-    if (recheckMessage?.replyStatus === "sent") {
+    // 6c. Race recheck (FR-028 Phase-1 slice, B03): the message-level guard
+    //     ran before generation, but the awaited LLM call can take seconds.
+    //     Re-run the FULL authoritative eligibility policy against freshly
+    //     read state — not a hand-rolled live-draft filter. The guard (post-B02)
+    //     reads drafts, the send-attempt ledger, and replyStatus with the
+    //     correct precedence, so a sibling that became sent / delivery_unknown
+    //     / sending, or a sent/claimed/submitted attempt that appeared during
+    //     the awaited call, is caught here. The previous `recheckLive` filter
+    //     excluded `sent` and `delivery_unknown`, so it could reuse an editable
+    //     sibling even when a sent/unknown/sending sibling existed.
+    //     Phase 2's atomic reservation (FR-035/T07) closes the check→write
+    //     window more strongly; Phase 1 rechecks here and discards the
+    //     generated content on refusal. The generation cost is already spent
+    //     (LLM call completed), so we audit the discard and return the guard's
+    //     code without persisting.
+    const recheckDecision = await new EmailReplyPolicyOrchestrator().evaluate({
+      stage: "pre_draft",
+      messageId: message.id,
+    });
+    if (!recheckDecision.allowed) {
       await this.recordFailure(
         message.emailServiceId,
         message.id,
-        "[already_replied] replyStatus flipped to sent during generation; generated content discarded",
-        { stage: "post_generation", code: "already_replied" }
+        `[${recheckDecision.code}] ${recheckDecision.reason}`,
+        { stage: "post_generation", code: recheckDecision.code }
       );
       return {
         success: false,
-        error:
-          "[already_replied] Message was replied to during generation; no draft persisted",
+        error: `[${recheckDecision.code}] Message reply state changed during generation; no draft persisted`,
       };
     }
+    // The guard allowed — meaning the message is clean OR has exactly one
+    // eligible live draft for reuse. Re-read drafts and reuse the newest
+    // eligible one rather than persisting a duplicate (a sibling may have
+    // appeared during the LLM call). pickReusableDraft returns null when the
+    // guard allowed a clean message with no drafts — fall through to persist.
     const recheckDrafts = await this.draftModule.listByMessage(message.id);
-    const recheckLive = recheckDrafts.filter((d) =>
-      d.status === "draft" || d.status === "approved" || d.status === "sending"
-    );
-    if (recheckLive.length > 0) {
-      // A sibling draft appeared during the LLM call. Reuse the newest
-      // eligible one rather than persisting a duplicate.
-      const reusableNow = pickReusableDraft(recheckDrafts);
-      if (reusableNow) {
-        return {
-          success: true,
-          draftId: reusableNow.id,
-          messageId: message.id,
-          subject: reusableNow.subject,
-          bodyText: reusableNow.bodyText,
-          bodyHtml: reusableNow.bodyHtml,
-          classification: (message.classification ??
-            "unknown") as EmailMessageClassification,
-          knowledgeSources: [],
-          confidence: reusableNow.confidence ?? null,
-          warnings: [],
-          reused: true,
-          code: "allowed",
-        };
-      }
-      await this.recordFailure(
-        message.emailServiceId,
-        message.id,
-        "[reply_state_conflict] a live sibling draft appeared during generation; generated content discarded",
-        { stage: "post_generation", code: "reply_state_conflict" }
-      );
+    const reusableNow = pickReusableDraft(recheckDrafts);
+    if (reusableNow) {
       return {
-        success: false,
-        error:
-          "[reply_state_conflict] A live draft for this message appeared during generation; no duplicate persisted",
+        success: true,
+        draftId: reusableNow.id,
+        messageId: message.id,
+        subject: reusableNow.subject,
+        bodyText: reusableNow.bodyText,
+        bodyHtml: reusableNow.bodyHtml,
+        classification: (message.classification ??
+          "unknown") as EmailMessageClassification,
+        knowledgeSources: [],
+        confidence: reusableNow.confidence ?? null,
+        warnings: [],
+        reused: true,
+        code: "allowed",
       };
     }
 
