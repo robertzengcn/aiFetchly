@@ -244,6 +244,40 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 - [ ] Measure generation/validation/truncation/correction/fallback outcomes, duplicate denials/reuse, detection latency/unknown rate/cache outcomes, reservation conflicts, and audit failures without logging private message content.
 - [ ] Run hosted and local provider compatibility pilots and define unknown-rate baselines, rollout thresholds, and rollback controls from the revised design.
 
+## Phase boundaries (recorded 2026-10-05, after T01 contract sync)
+
+The revised PRD (`fd23dd55`) raises the bar beyond the original Phase-1 plan
+(`glowing-frolicking-deer.md`, written against the older PRD covering only
+FR-025–FR-034). To prevent Phase-1 progress from being presented as full-feature
+completion, FR IDs are mapped to phase and current status below. A requirement
+is "complete" only when its entire revised acceptance contract has
+implementation evidence and passing acceptance tests (including adversarial
+concurrency and stale-state cases).
+
+| FR | Phase | Status | Notes |
+|---|---|---|---|
+| FR-025 — generation contract | 1 | Partial | Field alignment + correction context improved; authoritative classification can still be overwritten (B07). |
+| FR-026 — JSON hints | 1 | Partial | Request forwarding exists; unsupported-parameter fallback + bounded transport budget missing (B06, T09). |
+| FR-027 — output budget + completion checks | 1 | Partial | Larger budget + selected finish reasons checked; refusal/tool-call payloads + persisted completion metadata missing (B05, T09). |
+| FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, failed drafts mishandled, warnings disappear, race reuse unsafe (B01, B03, B08, B09). |
+| FR-029 — local duplicate eligibility | 1 | Partial | Draft/message projections checked at entry; authoritative attempts + complete post-generation recheck missing (B02, B03). |
+| FR-030 — persisted mailbox evidence | 2 | Not started | T03. |
+| FR-031 — automatic fresh detection | 2 | Not started | T04–T05. |
+| FR-032 — diagnostic reply-check tool | 2 | Not started | T06. |
+| FR-033 — structured results | 1→2 | Partial | Some service/tool codes; IPC discards typed outcomes, wrappers parse error text (B12, T06, T10). |
+| FR-034 — audit + user feedback | 1→2 | Partial | Narrow skip auditing added; reuse/audit failure + request correlation incomplete; translated end-to-end feedback missing (B09–B11, T10). |
+| FR-035 — persistent generation reservation | 2 | Not started | T07. |
+| FR-036 — message-level send claim + recovery | 2 | Not started | T08. |
+| FR-037 — detection cache | 2 | Not started | T05. |
+| FR-038 — legacy conflicts + upgrade | 2 | Partial | Some multi-draft conflict checks; canonical duplicates, populated upgrades, recovery guarantees unverified (B03, T02, T11). |
+| FR-039 — budgets, metrics, rollout | 2 | Not started | T09, T12. |
+
+Phase-1 scope (this branch, in progress): FR-025, FR-026, FR-027, FR-028, FR-029,
+and the Phase-1 slices of FR-033/FR-034 (stable codes + one refusal audit per
+invocation). These remain Partial until their P1/P2 defects are fixed. The
+Phase-2 scope (FR-030–FR-032, FR-035–FR-039, and the full FR-033/FR-034 UI
+slice) is NOT implemented on this branch and must not be claimed as complete.
+
 ## Suggested execution order and completion gate
 
 1. Synchronize the contract (T01), fix unsafe local-state handling (B02/B03/B05/B07), and make canonical identity explicit (T02).
