@@ -49,8 +49,77 @@ async function dispatchValidated<TInput, TOutput>(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     log.error(`[${channel}] handler error: ${msg}`);
-    return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    // B12: preserve structured-failure fields from typed error classes
+    // (SendPolicyRejection / SendBindingError) or errors built from a widened
+    // CreateDraftOutcome failure. Structural duck-typing on a string `code`
+    // property avoids importing service error classes into this shared wrapper.
+    // `msg` still carries the human-readable text (unchanged legacy contract);
+    // `code` / `existing_draft_id` / `next_action` / `requestCorrelationId`
+    // are pure additions that stay undefined when the error carries no code,
+    // so existing failure consumers continue to work.
+    const structured = extractStructuredFailure(err);
+    return {
+      status: false,
+      msg,
+      data: null,
+      ...structured,
+    } satisfies CommonMessage<null>;
   }
+}
+
+/**
+ * B12: copy safe structured-failure fields off an error object via structural
+ * duck-typing. Returns an empty object when the error carries no string
+ * `code` (input errors, AI-disabled, generic internal exceptions), so the
+ * failure envelope keeps only the legacy `{status, msg, data: null}` shape.
+ *
+ * Never parses English: the `code` must be a property on the error object, not
+ * a prefix recovered from `err.message`. The typed error classes
+ * ({@link SendPolicyRejection}, {@link SendBindingError}) and the IPC-layer
+ * structured errors (built from a widened {@link CreateDraftOutcome} failure)
+ * set `code` as a real property.
+ */
+function extractStructuredFailure(err: unknown): {
+  code?: string;
+  existing_draft_id?: number;
+  next_action?: string;
+  requestCorrelationId?: string;
+} {
+  if (!err || typeof err !== "object") return {};
+  const e = err as {
+    code?: unknown;
+    existing_draft_id?: unknown;
+    existingDraftId?: unknown;
+    next_action?: unknown;
+    nextAction?: unknown;
+    requestCorrelationId?: unknown;
+  };
+  const code = typeof e.code === "string" ? e.code : undefined;
+  if (!code) return {};
+  const existingDraftId =
+    typeof e.existing_draft_id === "number"
+      ? e.existing_draft_id
+      : typeof e.existingDraftId === "number"
+      ? e.existingDraftId
+      : undefined;
+  const nextAction =
+    typeof e.next_action === "string"
+      ? e.next_action
+      : typeof e.nextAction === "string"
+      ? e.nextAction
+      : undefined;
+  const requestCorrelationId =
+    typeof e.requestCorrelationId === "string" ? e.requestCorrelationId : undefined;
+  const result: {
+    code?: string;
+    existing_draft_id?: number;
+    next_action?: string;
+    requestCorrelationId?: string;
+  } = { code };
+  if (existingDraftId !== undefined) result.existing_draft_id = existingDraftId;
+  if (nextAction !== undefined) result.next_action = nextAction;
+  if (requestCorrelationId !== undefined) result.requestCorrelationId = requestCorrelationId;
+  return result;
 }
 
 /**
