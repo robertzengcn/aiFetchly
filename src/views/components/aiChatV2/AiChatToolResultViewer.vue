@@ -331,6 +331,11 @@ const errorLabel = computed(() => {
         t("aiChatV2.toolOutput.not_available") ||
         "This saved output is not available"
       );
+    case "RETRIEVAL_NOT_ENABLED":
+      return (
+        t("aiChatV2.toolOutput.retrieval_not_enabled") ||
+        "Saved-output retrieval is not enabled for this conversation"
+      );
     case "OUTPUT_FORMAT_UNSUPPORTED":
       return (
         t("aiChatV2.toolOutput.binary_unsupported") ||

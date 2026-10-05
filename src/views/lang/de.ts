@@ -2801,6 +2801,8 @@ export default {
       quota_reached: "Speicherkontingent erreicht; nur ein Teil des Ergebnisses wurde behalten",
       deleted: "Diese gespeicherte Ausgabe ist nicht mehr verfügbar",
       not_available: "Diese gespeicherte Ausgabe ist nicht verfügbar",
+      retrieval_not_enabled:
+        "Die Abruf gespeicherter Ausgaben ist für diese Konversation nicht aktiviert",
       binary_unsupported: "Diese Ausgabe kann nicht als Text angezeigt werden; bitte exportieren",
       close: "Schließen",
     },

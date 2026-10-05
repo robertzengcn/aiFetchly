@@ -2655,6 +2655,7 @@ export default {
       quota_reached: "存储配额已用尽，仅保留了部分结果",
       deleted: "该保存输出已不可用",
       not_available: "该保存输出不可用",
+      retrieval_not_enabled: "该会话未启用保存输出的读取功能",
       binary_unsupported: "该输出无法以文本展示，请改为导出",
       close: "关闭",
     },
