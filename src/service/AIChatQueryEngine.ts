@@ -2597,8 +2597,13 @@ export class AIChatQueryEngine {
         replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
       });
 
+      // TODO-02 (FR-006/017): the approved tool's result is a REQUIRED write —
+      // await it before ANY continuation (next model round, message mutation,
+      // or re-parking) on every branch. A rejected save fails the segment via
+      // the catch below; the approved tool is never re-run.
+      await this.flushEventSaves(eventSink);
+
       if (isPermissionPromptResult(toolResult)) {
-        await this.flushEventSaves(eventSink);
         // Permission still required — park again; the fresh prompt was
         // emitted above so the surface re-renders the decision card.
         this.activeTurns.delete(conversationId);

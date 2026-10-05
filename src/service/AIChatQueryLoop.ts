@@ -1315,7 +1315,11 @@ export class AIChatQueryLoop {
         }
         const event = step.value;
         eventSink.emit(event);
-        if (event.type === "tool_call") {
+        if (event.type === "tool_call" || event.type === "tool_result") {
+          // §8 table (TODO-01): BOTH required writes gate advancement — a
+          // tool result must be durable before the next model round starts,
+          // and a rejected save must fail the segment here, not after the
+          // next request is already in flight.
           await eventSink.flush?.();
         }
       }
