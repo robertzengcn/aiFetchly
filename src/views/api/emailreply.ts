@@ -20,6 +20,7 @@ import type {
   AutoReplyAuditDto,
 } from "@/entityTypes/emailReceiveTypes";
 import type { AiEmailReplyDraftResult } from "@/entityTypes/emailReceiveAiTypes";
+import type { SendApprovedReplyOutcome } from "@/entityTypes/emailReplyReliabilityTypes";
 
 // ---- Identity profile ----
 
@@ -91,12 +92,15 @@ export async function sendEmailReply(input: {
   draftId: number;
   emailServiceId?: number;
   approvalToken?: string;
-}): Promise<{
-  success: boolean;
-  draft_id: number;
-  message_id: number;
-  sent_at: string;
-}> {
+}): Promise<SendApprovedReplyOutcome> {
+  // B12: the IPC handler returns SendApprovedReplyOutcome (sent / failed /
+  // delivery_unknown / already_processed), each carrying attemptId +
+  // requestCorrelationId. The previous return type was a stale {success,
+  // draft_id, message_id, sent_at} shape that never matched the actual
+  // delivery-service outcome. Callers that need a typed failure should
+  // catch IpcRequestError (apirequest.ts) and read its `code` /
+  // `next_action` / `requestCorrelationId` fields instead of parsing the
+  // leading [code] bracket out of the message.
   return await windowInvoke(EMAIL_REPLY_SEND, input);
 }
 
