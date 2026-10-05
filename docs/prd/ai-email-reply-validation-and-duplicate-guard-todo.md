@@ -263,8 +263,8 @@ concurrency and stale-state cases).
 | FR | Phase | Status | Notes |
 |---|---|---|---|
 | FR-025 — generation contract | 1 | Partial | Field alignment + correction context improved; authoritative classification can still be overwritten (B07). |
-| FR-026 — JSON hints | 1 | Partial | Request forwarding exists; unsupported-parameter fallback + bounded transport budget missing (B06, T09). |
-| FR-027 — output budget + completion checks | 1 | Partial | Larger budget + selected finish reasons checked; refusal/tool-call payloads + persisted completion metadata missing (B05, T09). |
+| FR-026 — JSON hints | 1 | Partial | Request forwarding exists; unsupported-parameter fallback fixed (B06); bounded transport budget + persisted completion metadata still missing (T09). |
+| FR-027 — output budget + completion checks | 1 | Partial | Larger budget + selected finish reasons checked; refusal/tool-call payloads fixed (B05); persisted completion metadata still missing (T09). |
 | FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, failed drafts mishandled, warnings disappear, race reuse unsafe (B01, B03, B08, B09). |
 | FR-029 — local duplicate eligibility | 1 | Partial | Draft/message projections checked at entry; authoritative attempts + complete post-generation recheck missing (B02, B03). |
 | FR-030 — persisted mailbox evidence | 2 | Not started | T03. |
