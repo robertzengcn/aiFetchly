@@ -14,9 +14,10 @@
  * remains unverified unless evidence establishes every required criterion.
  */
 import { createHash, randomUUID } from "node:crypto";
-import type {
-  TaskCompletionContract,
-  TaskCriterion,
+import {
+  taskCompletionContractSchema,
+  type TaskCompletionContract,
+  type TaskCriterion,
 } from "@/entityTypes/aiTaskExecutionTypes";
 
 export interface FreezeInput {
@@ -40,8 +41,15 @@ function sortKeys(value: unknown): unknown {
   }
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    // Use a null-prototype object so assigning to an `__proto__` key
+    // (present as an own key on JSON.parse'd untrusted input) cannot mutate
+    // the prototype chain of the intermediate sorted object. Skipping
+    // `constructor`/`hasOwnProperty` defensively too.
+    const out: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(obj).sort()) {
+      if (key === "__proto__" || key === "constructor" || key === "hasOwnProperty") {
+        continue;
+      }
       out[key] = sortKeys(obj[key]);
     }
     return out;
@@ -88,7 +96,7 @@ export class TaskCompletionContractService {
 
     const contractId = `contract-${randomUUID()}`;
     const contractHash = this.computeHash(input);
-    return {
+    const contract: TaskCompletionContract = {
       schemaVersion: 1,
       contractId,
       contractHash,
@@ -106,6 +114,13 @@ export class TaskCompletionContractService {
       // call and keeps the frozen contract independent of caller state.
       criteria: input.criteria.map((c) => structuredClone(c)),
     };
+    // Schema-validate the frozen output so contracts the schema rejects
+    // (empty objective, negative offsets, overlong fields, duplicate criterion
+    // IDs) never leave freeze(). The ad-hoc checks above catch only the
+    // common cases; this is the boundary the type system and downstream
+    // loaders will enforce.
+    taskCompletionContractSchema.parse(contract);
+    return contract;
   }
 
   /** Recompute the hash for an existing contract to verify integrity on load. */
@@ -121,18 +136,27 @@ export class TaskCompletionContractService {
   }
 
   private computeHash(input: FreezeInput): string {
+    // Sort criteria by id so two contracts with the same criteria in different
+    // array order hash identically (§5.1: "an unchanged Continue contract
+    // remains comparable"). Without this, reordering criteria silently
+    // produces a different hash, defeating scope-change detection.
+    const sortedCriteria = [...input.criteria]
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const payload = {
       objective: input.objective,
       mode: input.mode,
       sourceUserMessageId: input.sourceUserMessageId,
       approvedSourceMessageIds: [...input.approvedSourceMessageIds].sort(),
-      criteria: input.criteria.map((c) => ({
+      // Spread the kind-specific fields first, then set the canonical fields
+      // explicitly so `id`/`required`/`kind` always win — previously the
+      // spread ran AFTER, so a kind-specific field shadowing one of these
+      // would silently override it (N4: fragile duplicate-key behavior).
+      criteria: sortedCriteria.map((c) => ({
+        ...(c as Record<string, unknown>),
         id: c.id,
         required: c.required,
         kind: c.kind,
-        // Include only kind-specific fields via a stable canonical form.
-        // The discriminated-union spread is canonicalized by sortKeys.
-        ...(c as Record<string, unknown>),
       })),
     };
     const hash = createHash("sha256");
