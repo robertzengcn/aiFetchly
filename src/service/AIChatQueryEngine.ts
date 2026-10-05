@@ -1360,6 +1360,10 @@ export class AIChatQueryEngine {
       historySelectionChangedIds,
       historySelectionRejectedIds,
       outboundSendPreAuthorized,
+      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+      ...(input.ownerNotifiesTerminal !== undefined
+        ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+        : {}),
     });
   }
 
@@ -3166,6 +3170,16 @@ export class AIChatQueryEngine {
       case "failed": {
         const { conversationId, assistantMessageId } = result;
         void redirectToLoginOnAuthExpired(result.error);
+        // Reactive compaction (dev): a budget-preflight rejection means the
+        // context no longer fits — compact it through the SAME bounded
+        // coordinator (trigger "reactive-overflow"), never a secondary
+        // unbounded path. Fire-and-forget; the error below still surfaces.
+        if (
+          result.error instanceof RecoverableHistoryError &&
+          result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+        ) {
+          this.requestReactiveCompaction(conversationId, result.model);
+        }
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -3386,6 +3400,7 @@ export class AIChatQueryEngine {
               toolArguments: event.toolArguments,
               model: latestUsage?.model,
               tokensUsed: latestUsage?.totalTokens,
+              turnId: this.activeTurns.get(event.conversationId)?.turnId,
             }),
           });
         }
@@ -3402,6 +3417,7 @@ export class AIChatQueryEngine {
               toolResult: event.toolResult,
               replacesPermissionPromptForToolId:
                 event.replacesPermissionPromptForToolId,
+              turnId: this.activeTurns.get(event.conversationId)?.turnId,
             }),
           });
         }

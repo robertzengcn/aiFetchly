@@ -29,26 +29,32 @@ const mockCreateConversationIfNeeded = vi
 const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
     getConversationMessages: mockGetConversationMessages,
+    getRecentMessages: vi.fn().mockResolvedValue([]),
     saveUserMessage: mockSaveUserMessage,
     saveAssistantMessage: mockSaveAssistantMessage,
     saveToolCallMessage: mockSaveToolCallMessage,
     saveToolResultMessage: mockSaveToolResultMessage,
     createConversationIfNeeded: mockCreateConversationIfNeeded,
     getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+    };
+  }),
 }));
 
 vi.mock("@/modules/AIChatAttachmentModule", () => ({
-  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
+  AIChatAttachmentModule: vi.fn().mockImplementation(function () {
+    return {
     saveUploadedFiles: vi.fn().mockResolvedValue(undefined),
-  })),
+    };
+  }),
 }));
 
 const mockGetPlanState = vi.fn().mockResolvedValue(null);
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
     getPlanState: mockGetPlanState,
     getPlanStateByPlanId: vi.fn().mockResolvedValue(null),
     saveQuestion: vi.fn().mockResolvedValue(undefined),
@@ -59,28 +65,40 @@ vi.mock("@/modules/AIChatPlanModule", () => ({
     }),
     ensurePlanForConversation: vi.fn().mockResolvedValue(null),
     cancelDraft: vi.fn().mockResolvedValue(undefined),
-  })),
+    };
+  }),
 }));
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
     getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+    };
+  }),
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
     getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+    };
+  }),
 }));
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return {
     listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+    };
+  }),
 }));
 
 vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
-  return { ...actual, AiChatApi: vi.fn().mockImplementation(() => ({})) };
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(function () {
+      return {};
+    }),
+  };
 });
 
 const mockNotifyShow = vi.fn().mockResolvedValue(false);
@@ -101,7 +119,9 @@ vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: { execute: vi.fn() },
 }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn().mockImplementation(function () {
+    return { getValue: vi.fn() };
+  }),
 }));
 
 function createEngineWithFakeLoop(
