@@ -16,6 +16,7 @@
  * user-approved repository command.
  */
 
+import * as os from "os";
 import type {
   DependencyPlanItem,
   VerificationProbe,
@@ -300,6 +301,12 @@ export function detectDependencyProposals(
  * (requirements.txt / pyproject.toml / package.json) produce their own
  * skill-SPECIFIC environment plan items — a `pip install`/`npm install`
  * prose mention alone says nothing about an isolated environment.
+ *
+ * Review D4a: these items carry NO probes and stay "unknown" — the managed
+ * environment under skill-environments/<installation-id>/ does not exist
+ * at plan time, so a passing system-interpreter probe would have REPORTED
+ * the environment as satisfied when only the interpreter exists. The item
+ * is a visible setup decision, never a fake pass.
  */
 function environmentProposals(
   stagedFiles?: readonly string[]
@@ -322,13 +329,7 @@ function environmentProposals(
       requiresElevation: false,
       approvalRisk: "medium",
       shared: false,
-      probes: [
-        {
-          command: "python3 --version",
-          expectedPattern: "Python",
-          description: "python interpreter for the managed environment",
-        },
-      ],
+      probes: [],
     });
   }
   if (files.has("package.json")) {
@@ -342,13 +343,7 @@ function environmentProposals(
       requiresElevation: false,
       approvalRisk: "medium",
       shared: false,
-      probes: [
-        {
-          command: "node --version",
-          expectedPattern: "v",
-          description: "node runtime for the managed environment",
-        },
-      ],
+      probes: [],
     });
   }
   return out;
@@ -407,6 +402,15 @@ export interface ProbeOutcome {
 }
 
 /**
+ * Review RV9: probes NEVER execute with the staged repository as their
+ * working directory. Version probes (`ffmpeg -version`) and the
+ * which/where resolution need no cwd, and a repo-controlled cwd is an
+ * execution-lookup hazard on Windows (a repository-supplied `where.exe`
+ * could shadow the resolution). A neutral system directory is used.
+ */
+const PROBE_CWD = os.tmpdir();
+
+/**
  * Run a dependency's probes through the platform provider. A dependency is
  * satisfied only when EVERY declared probe passes (multi-probe rule).
  * Audit R9: the first passing probe's output yields the DETECTED VERSION,
@@ -414,7 +418,7 @@ export interface ProbeOutcome {
  */
 export async function probeDependency(
   item: DependencyPlanItem,
-  cwd: string
+  _cwd: string
 ): Promise<ProbeOutcome> {
   const provider = getPlatformProcessProvider();
   let allPassed = true;
@@ -425,7 +429,7 @@ export async function probeDependency(
     const result = await provider.execute({
       executable: parts[0],
       args: parts.slice(1),
-      cwd,
+      cwd: PROBE_CWD,
       environment: buildChildEnvironment(),
       timeoutMs: 15_000,
       outputLimitBytes: 64 * 1024,
@@ -453,20 +457,18 @@ export async function probeDependency(
     passed: allPassed,
     evidence: evidence.join("; "),
     ...(detectedVersion !== undefined ? { detectedVersion } : {}),
-    ...(allPassed
-      ? { resolvedPath: await resolveBinaryPath(item, cwd) }
-      : {}),
+    ...(allPassed ? { resolvedPath: await resolveBinaryPath(item) } : {}),
   };
 }
 
 /**
  * Resolve the on-disk path of the item's primary binary through the
  * platform provider (`which` on POSIX, `where` on Windows). Best-effort:
- * an unresolvable path never fails detection.
+ * an unresolvable path never fails detection. Review RV9: runs from the
+ * NEUTRAL probe cwd, never the staged repository.
  */
 async function resolveBinaryPath(
-  item: DependencyPlanItem,
-  cwd: string
+  item: DependencyPlanItem
 ): Promise<string | undefined> {
   if (item.probes.length === 0) return undefined;
   const binary = item.probes[0].command.split(/\s+/)[0];
@@ -475,7 +477,7 @@ async function resolveBinaryPath(
     const result = await provider.execute({
       executable: process.platform === "win32" ? "where" : "which",
       args: [binary],
-      cwd,
+      cwd: PROBE_CWD,
       environment: buildChildEnvironment(),
       timeoutMs: 10_000,
       outputLimitBytes: 8 * 1024,

@@ -72,9 +72,12 @@ export type ToolPolicyVerdict =
  * clone <target>` and `git --depth 1 clone <target>` carry options between
  * the verb and the action, so the pattern allows tokens between them and
  * stops at shell separators (| ; &&) — each segment is judged on its own.
+ * Recursive copies/extractions cover BOTH short and long flag forms
+ * (review RV5): `cp -r`, `cp -R`, `cp -a`, `cp --recursive`, `tar -x`,
+ * `tar --extract` are all acquisition-shaped.
  */
 const SHELL_INSTALL_RE =
-  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\s-[xf]|\bcp\b[^\n|;&]*\s-r\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
+  /\b(?:git|gh)\b[^\n|;&]*\b(?:clone|repo\s+clone)\b|\b(?:curl|wget)\b[^\n|;&]*\b(?:\.zip|\.tar\.gz|\.tgz)\b|\b(?:pip|npm|brew|apt(?:-get)?|winget|uv)\b[^\n|;&]*\binstall\b|\bunzip\b|\btar\b[^\n|;&]*\s-[xf]|\btar\b[^\n|;&]*\s--(?:extract|get)\b|\bcp\b[^\n|;&]*\s-(?:r|R|a|A)\b|\bcp\b[^\n|;&]*\s--recursive\b|\bmv\b[^\n|;&]*\.(?:aifetchly|claude)\b[^\n|;&]*\bskills\b|\bln\b[^\n|;&]*\b-s\b/i;
 
 /** File writes that mutate the install destination. */
 const INSTALL_DEST_RE =
@@ -129,12 +132,14 @@ export function evaluateSkillInstallationToolPolicy(
       approvedTargetStr !== undefined &&
       target &&
       approvedTargetStr.toLowerCase() === target;
-    // Operation binding (audit R8): when the record names the approved
-    // operation, ONLY that operation is authorized — the tool name must
-    // match, the command line must match exactly (normalized
-    // whitespace), and, when the approval names a cwd, the call's
-    // working directory must match it. A target-only record keeps the
-    // legacy target scope (never broader).
+    // Operation binding (audit R8 + review RV6): when the record names the
+    // approved operation, ONLY that operation is authorized — the tool name
+    // must match, the command line must match exactly (normalized SPACES
+    // and TABS only — newlines are shell command separators and never
+    // collapse, so a multi-line variant of an approved single-line command
+    // is refused), and, when the approval names a cwd, the call's working
+    // directory must match it. A target-only record keeps the legacy target
+    // scope (never broader).
     if (
       approvedTool !== undefined ||
       approvedOperation !== undefined ||
@@ -144,10 +149,10 @@ export function evaluateSkillInstallationToolPolicy(
         approvedTool === undefined || approvedTool === input.toolName;
       const command = String(
         input.toolArguments.command ?? ""
-      ).replace(/\s+/g, " ").trim();
+      ).replace(/[ \t]+/g, " ").trim();
       const operationMatches =
         approvedOperation === undefined ||
-        approvedOperation.replace(/\s+/g, " ").trim() === command;
+        approvedOperation.replace(/[ \t]+/g, " ").trim() === command;
       // Fail closed: an approval naming a cwd refuses calls that omit it.
       const callCwd = String(input.toolArguments.cwd ?? "").trim();
       const cwdMatches =

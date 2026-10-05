@@ -39,6 +39,10 @@ const SKILL_TABLES = [
   "skill_installation_sessions",
   "skill_installation_events",
   "skill_credential_bindings",
+  // Review RV4: the dependency-bindings table must exist on a CLEAN
+  // (packaged-build) database — it has its own additive migration 0004,
+  // because packaged builds run migrations, not synchronize.
+  "skill_dependency_bindings",
 ];
 
 describe("DB baseline + feature migration (TODO 2)", () => {

@@ -539,10 +539,14 @@ const stateLabel = computed(() => {
 /** Structured plan fields when the snapshot carries a safePlan (TODO 8). */
 const safePlan = computed(() => snapshotView.value?.safePlan ?? null);
 
-/** Missing plan dependencies — the approveDependency targets (PRD §18). */
+/** Missing plan dependencies — the approveDependency targets (PRD §18).
+ *  Review RV8/D4a: only `missing` items get Install controls; `incompatible`
+ *  (old version) and `unknown` (classification items) stay visible in the
+ *  checklist with their labels — the typed installer has no action for
+ *  them, and a dead button misleads. */
 const missingDependencies = computed(
   () =>
-    safePlan.value?.dependencies.filter((d) => d.status !== "satisfied") ?? []
+    safePlan.value?.dependencies.filter((d) => d.status === "missing") ?? []
 );
 
 /**

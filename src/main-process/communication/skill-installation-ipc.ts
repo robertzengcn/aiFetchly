@@ -502,6 +502,11 @@ const invokeSkillSchema = z.object({
  */
 export function registerPromptSkillInvokeIpcHandler(): void {
   ipcMain.handle(PROMPT_SKILL_INVOKE, async (_event, data: unknown) => {
+    // Review RV10 (mandatory AI-feature IPC rule): check AI enablement
+    // BEFORE parsing the request — /skill invocation persists active AI
+    // instructions, so it is gated exactly like the model-driven path.
+    if (!isAiEnabled())
+      return denied("AI functionality is only available to subscribers.");
     const decoded = decode(invokeSkillSchema, data);
     if (!decoded.ok) return denied(decoded.message);
     try {

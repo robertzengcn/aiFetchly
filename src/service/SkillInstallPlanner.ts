@@ -295,10 +295,12 @@ export function collectCommandTemplatesWithEnv(
     // Quoting-aware parse (audit R1): a shell word scanner keeps quoted
     // segments intact — `node -e "console.log(1)"` yields the argument
     // console.log(1) WITHOUT the surrounding quotes (the runner spawns with
-    // shell disabled, so literal quotes would evaluate a string). Any
-    // substitution ( $ ` * ) still marks the command unparsable, keeping
-    // the whole-line executable fallback for review.
-    const parts = shellSplit(command);
+    // shell disabled, so literal quotes would evaluate a string). An
+    // UNTERMINATED quote is unparsable (review RV3): fall back to the
+    // whitespace split so the template keeps a whole-line executable for
+    // review instead of `undefined`. Any substitution ( $ ` * ) still marks
+    // the command unparsable, keeping the fallback for review.
+    const parts = shellSplit(command) ?? command.split(/\s+/).filter(Boolean);
     const plainArgs = (privileged ? parts.slice(2) : parts.slice(1)).filter(
       isPlainArg
     );
@@ -314,7 +316,7 @@ export function collectCommandTemplatesWithEnv(
         .update(command)
         .digest("hex")
         .slice(0, 8)}`,
-      executable: privileged ? parts[1] ?? command : parts[0],
+      executable: privileged ? parts[1] ?? command : parts[0] ?? command,
       args: plainArgs,
       workingDirectory: "<skill source root>",
       environmentNames: envNames,
@@ -349,11 +351,13 @@ function isPlainArg(arg: string): boolean {
 
 /**
  * Split a shell command line into words honoring single/double quotes
- * (audit R1). Returns null when the line contains an unterminated quote —
- * callers fall back to the whitespace split so the whole line surfaces for
- * review.
+ * (audit R1). Inside double quotes, \" and \\ unescape (review RV3);
+ * single quotes have no escapes (POSIX). Returns null when the line
+ * contains an unterminated quote — callers fall back to the whitespace
+ * split so the whole line surfaces for review instead of producing an
+ * executable-less template.
  */
-export function shellSplit(line: string): string[] {
+export function shellSplit(line: string): string[] | null {
   const words: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
@@ -365,9 +369,23 @@ export function shellSplit(line: string): string[] {
   };
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if (quote !== null) {
-      if (ch === quote) {
+    if (quote === "'") {
+      if (ch === "'") {
         quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+      } else if (
+        ch === "\\" &&
+        (line[i + 1] === '"' || line[i + 1] === "\\")
+      ) {
+        current += line[i + 1];
+        i += 1;
       } else {
         current += ch;
       }
@@ -385,7 +403,7 @@ export function shellSplit(line: string): string[] {
     current += ch;
     started = true;
   }
-  if (quote !== null) return [];
+  if (quote !== null) return null;
   push();
   return words.length > 0 ? words : [line.trim()].filter(Boolean);
 }

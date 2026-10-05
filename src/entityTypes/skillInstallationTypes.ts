@@ -212,6 +212,12 @@ export interface SkillInstallPlan {
    *  request contract (read-order, wait/do-not-transcribe, explicit
    *  dependency asks) across retry and recovery. */
   readonly constraints?: readonly string[];
+  /** Review RV1+RV2: the APPROVED-COMMAND verification baseline — the tree
+   *  hash of the plan's acquiredRoot (the inspection sub-root when one was
+   *  requested) at approval time, advanced after every successful approved
+   *  command so multi-command setup writes are sanctioned ACROSS process
+   *  restarts. Falls back to source.contentHash when absent (legacy plans). */
+  readonly commandBaselineHash?: string;
 }
 
 // ---------------------------------------------------------------------------

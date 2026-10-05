@@ -36,6 +36,10 @@ export interface ApprovedCommandRunResult {
   readonly timedOut: boolean;
   /** Names of the declared env vars that were injected (names only). */
   readonly injectedEnvNames: readonly string[];
+  /** Review RV1: the tree hash AFTER this successful run — the caller
+   *  persists it as the plan's commandBaselineHash so the NEXT approved
+   *  command (possibly in a fresh process) sanctions this run's writes. */
+  readonly postRunBaselineHash?: string;
   readonly errorCode?:
     | "COMMAND_NOT_FOUND"
     | "COMMAND_MISMATCH"
@@ -195,14 +199,14 @@ export class SkillApprovedCommandRunner {
       injected.push(name);
     }
 
-    // Audit finding 4 + R1: the approved command is bound to the staged
-    // source — but multi-command setup WRITES to the tree by design. The
-    // FIRST approved command verifies against the plan's approved hash;
-    // every subsequent command verifies against the tree state left by the
-    // PREVIOUS approved command (recorded after each successful run), so
-    // sanctioned writes never trip the gate while external tampering
-    // between runs still does. Hashing UNAVAILABILITY is a hard refusal
-    // (the earlier silent proceed let an unhashable root skip the gate).
+    // Audit finding 4 + R1 (review RV1/RV2): the approved command is bound
+    // to the staged source — but multi-command setup WRITES to the tree by
+    // design. The baseline is the PLAN's persisted commandBaselineHash
+    // (seeded from the inspection-root hash at approval and advanced by the
+    // module after each successful run), so sanctioned writes survive fresh
+    // processes and restarts; external tampering between runs still trips
+    // the gate. Hashing UNAVAILABILITY is a hard refusal (the earlier
+    // silent proceed let an unhashable root skip the gate).
     let sourceUnchanged = true;
     let hashVerified = false;
     try {
@@ -211,6 +215,7 @@ export class SkillApprovedCommandRunner {
       );
       const baseline =
         this.treeBaselines.get(plan.source.acquiredRoot) ??
+        plan.commandBaselineHash ??
         plan.source.contentHash;
       sourceUnchanged = hashTree(plan.source.acquiredRoot) === baseline;
       hashVerified = true;
@@ -255,14 +260,18 @@ export class SkillApprovedCommandRunner {
       outputLimitBytes: 256 * 1024,
     });
 
-    // R1: a successful run re-baselines the tree for the NEXT approved
-    // command in this runner instance (its own writes are sanctioned).
+    // R1 + review RV1: a successful run re-baselines the tree for the NEXT
+    // approved command — in this runner instance AND, via the returned
+    // postRunBaselineHash persisted by the module into the plan, across
+    // fresh processes and restarts (its own writes are sanctioned).
+    let postRunBaselineHash: string | undefined;
     if (result.exitCode === 0) {
       try {
         const { hashTree } = await import(
           "@/childprocess/skill-installation/stagePackage"
         );
-        this.treeBaselines.set(plan.source.acquiredRoot, hashTree(plan.source.acquiredRoot));
+        postRunBaselineHash = hashTree(plan.source.acquiredRoot);
+        this.treeBaselines.set(plan.source.acquiredRoot, postRunBaselineHash);
       } catch {
         /* next command re-checks and refuses on an unhashable root */
       }
@@ -317,6 +326,9 @@ export class SkillApprovedCommandRunner {
       stderrPreview,
       timedOut: false,
       injectedEnvNames: injected,
+      ...(postRunBaselineHash !== undefined
+        ? { postRunBaselineHash }
+        : {}),
     };
   }
 }

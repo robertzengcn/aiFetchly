@@ -555,6 +555,20 @@ export class SkillInstallationModule extends BaseModule {
       prePlan.dependencies,
       acquired.source.acquiredRoot
     );
+    // Review RV2: seed the approved-command verification baseline from the
+    // INSPECTION root (the plan's acquiredRoot — the subdirectory when one
+    // was requested). plan.source.contentHash covers the WHOLE acquired
+    // repository, so comparing it against the sub-root's tree hash made a
+    // subdirectory install's first approved command always fail.
+    let commandBaselineHash: string | undefined;
+    try {
+      const { hashTree } = await import(
+        "@/childprocess/skill-installation/stagePackage"
+      );
+      commandBaselineHash = hashTree(inspectionRoot);
+    } catch {
+      /* hashing unavailable — the runner hard-refuses instead */
+    }
     const plan: SkillInstallPlan = {
       ...prePlan,
       // Audit finding 11: the request's non-secret constraints join the
@@ -563,6 +577,7 @@ export class SkillInstallationModule extends BaseModule {
       ...(request.constraints && request.constraints.length > 0
         ? { constraints: request.constraints }
         : {}),
+      ...(commandBaselineHash !== undefined ? { commandBaselineHash } : {}),
       dependencies: detectedDeps,
     };
 
@@ -1261,6 +1276,12 @@ export class SkillInstallationModule extends BaseModule {
               }
             : c
         ),
+        // Review RV1: persist the post-run tree hash so the NEXT approved
+        // command — possibly in a fresh process — sanctions this run's
+        // writes instead of failing with SOURCE_CHANGED_AFTER_APPROVAL.
+        ...(result.postRunBaselineHash !== undefined
+          ? { commandBaselineHash: result.postRunBaselineHash }
+          : {}),
       };
       await sessions.savePlan(
         sessionId,
@@ -1310,8 +1331,17 @@ export class SkillInstallationModule extends BaseModule {
     const fresh = async (): Promise<SkillInstallationSessionEntity> =>
       (await sessions.findBySessionId(sessionId)) ?? session;
 
-    // 1. Missing dependencies hold FIRST (the ElevenLabs sequence).
-    if (plan.dependencies.some((d) => d.currentStatus === "missing")) {
+    // 1. Missing dependencies hold FIRST (the ElevenLabs sequence). Review
+    //    RV8: an INCOMPATIBLE dependency (probe passed but the version is
+    //    below the declared constraint) holds exactly like a missing one —
+    //    activation on a known-broken dependency was silent. Classification
+    //    items (mcp-server / model-artifact, permanently "unknown") do NOT
+    //    hold: they are visible setup decisions without an install path.
+    if (
+      plan.dependencies.some(
+        (d) => d.currentStatus === "missing" || d.currentStatus === "incompatible"
+      )
+    ) {
       await this.transition(sessions, events, sessionId, "installing_dependencies");
       return this.snapshotFromEntity(await fresh(), plan);
     }
@@ -1382,7 +1412,16 @@ export class SkillInstallationModule extends BaseModule {
           identity
         );
       }
-      if (last && last.state === "failed") return last;
+      // Review RV7: stop on EVERY unsuccessful terminal — a candidate that
+      // ended in rollback_required used to be concealed by the next
+      // candidate reporting ready, leaving the session's recovery state
+      // overwritten and the user misled.
+      if (
+        last &&
+        (last.state === "failed" || last.state === "rollback_required")
+      ) {
+        return last;
+      }
     }
     return last as InstallSnapshot;
   }

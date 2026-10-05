@@ -28,6 +28,7 @@ import {
   applySkillToolNarrowing,
 } from "@/service/PromptSkillToolNarrowing";
 import { parseManualActionApprovalDetail } from "@/entityTypes/skillInstallationTypes";
+import { shellSplit } from "@/service/SkillInstallPlanner";
 
 // ---------------------------------------------------------------------------
 // Intent guard — FR-01 / FR-26 / FR-27 boundary matrix (design §21.1)
@@ -715,5 +716,112 @@ describe("installFirstToolCounterKey — first-tool-category correlation (audit 
     expect(installFirstToolCounterKey("get_current_time")).toBe(
       "install_first_tool_other"
     );
+  });
+});
+
+describe("shellSplit — quoting-aware parse (audit R1 + review RV3)", () => {
+  it("keeps quoted segments intact without the quotes", () => {
+    expect(shellSplit('node -e "console.log(1)"')).toEqual([
+      "node",
+      "-e",
+      "console.log(1)",
+    ]);
+    expect(shellSplit("echo 'two words' tail")).toEqual([
+      "echo",
+      "two words",
+      "tail",
+    ]);
+  });
+
+  it("unescapes \\\" and \\\\ inside double quotes (RV3)", () => {
+    expect(shellSplit('node -e "console.log(\\"ready\\")"')).toEqual([
+      "node",
+      "-e",
+      'console.log("ready")',
+    ]);
+  });
+
+  it("returns null on an unterminated quote so the caller falls back", () => {
+    expect(shellSplit("cd user's folder")).toBeNull();
+  });
+
+  it("collectCommandTemplates never produces an undefined executable (RV3)", async () => {
+    const { collectCommandTemplatesWithEnv } = await import(
+      "@/service/SkillInstallPlanner"
+    );
+    // Unterminated quote (stray apostrophe) previously produced a template
+    // with executable === undefined; the whitespace fallback now keeps the
+    // whole line reviewable.
+    const templates = collectCommandTemplatesWithEnv(
+      ["cd user's folder && python -m pip install -r requirements.txt"],
+      []
+    );
+    expect(templates.length).toBeGreaterThan(0);
+    for (const t of templates) {
+      expect(typeof t.executable).toBe("string");
+      expect(t.executable.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("shell policy long-form flags + newline-exact operation match (RV5/RV6)", () => {
+  const routing = classifySkillRequestIntent(
+    "Set up https://github.com/browser-use/video-use for me"
+  );
+
+  it("blocks cp --recursive, cp -a, cp -R, and tar --extract (RV5)", () => {
+    for (const command of [
+      "cp --recursive video-use ~/.aifetchly/skills/video-use",
+      "cp -a video-use ~/.aifetchly/skills/video-use",
+      "cp -R video-use ~/.aifetchly/skills/video-use",
+      "tar --extract -f bundle.tar",
+      "tar --get -f bundle.tar",
+    ] as const) {
+      const verdict = evaluateSkillInstallationToolPolicy({
+        routing,
+        toolName: "shell_execute",
+        toolArguments: { command },
+      });
+      expect(verdict.allowed, command).toBe(false);
+    }
+    // Benign commands stay legal.
+    expect(
+      evaluateSkillInstallationToolPolicy({
+        routing,
+        toolName: "shell_execute",
+        toolArguments: { command: "cp a.txt b.txt" },
+      }).allowed
+    ).toBe(true);
+  });
+
+  it("a NEWLINE variant of an approved command is refused (RV6)", () => {
+    const approved = {
+      target: "https://github.com/browser-use/video-use",
+      toolName: "shell_execute",
+      operation: "git clone https://github.com/browser-use/video-use # npm install x",
+    };
+    // The exact single-line command passes.
+    const exact = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command:
+          "git clone https://github.com/browser-use/video-use # npm install x",
+      },
+      manualActionApproved: approved,
+    });
+    expect(exact.allowed).toBe(true);
+    // A newline where the space was turns the comment into a SECOND
+    // command — whitespace collapse used to authorize it.
+    const newlineVariant = evaluateSkillInstallationToolPolicy({
+      routing,
+      toolName: "shell_execute",
+      toolArguments: {
+        command:
+          "git clone https://github.com/browser-use/video-use #\nnpm install x",
+      },
+      manualActionApproved: approved,
+    });
+    expect(newlineVariant.allowed).toBe(false);
   });
 });
