@@ -5,22 +5,24 @@ Source PRDs (both `Proposed`, implementation has now **started in Slice 1 only**
 - `docs/prd/scheduled-loop-premature-stop-recovery-advice.md` (v3.0) — FR-01…FR-24, NFR-01…NFR-12, AC-01…AC-32
 - `docs/prd/scheduled-loop-premature-stop-recovery-technical-design.md` (v2.0) — §§1…18, delivery slices §16
 
-Branch: `worktree-task-completion-policy-v1-slice1` (16 commits on top of `7ce133b2`,
-`+6293/−2`, confined to `src/{entity,entityTypes,model,modules,service/aiTaskExecution,config}` + tests).
+Branch: `worktree-task-completion-policy-v1-slice1` (26 commits on top of `7ce133b2`,
+`+8306/−10`, confined to `src/{entity,entityTypes,model,modules,service/aiTaskExecution,config}` + tests).
 
 **Headline verdict**
 
-- Slice 1 foundation is landed as library code and its 42 service tests pass
-  (`yarn vitest run --config vitest.service.config.mjs test/vitest/main/service/Task*.test.ts` → 5 files, 42 passed).
+- Slice 1 foundation is landed as library code and **all Slice 1 tests pass**: 115 tests
+  across 12 files (58 + 27 vitest via `vitest.service.config.mjs`, 30 Mocha via
+  `scripts/run-module-tests.js`); `tsc --noEmit` clean.
+- **All 10 audit bugs (B1–B10) + R1 are fixed** — see checkboxes below for commit SHAs.
+  The "missing unit tests for landed fixes" gap (structuredClone, verifyHash, NaN/Infinity,
+  true-concurrent CAS) is also closed.
 - **Nothing is wired into the live loop**: the gate `isAiTaskCompletionPolicyV1Enabled()`
   (`src/config/featureFlags.ts:213`) has zero production call sites; `AIChatQueryLoop`,
   `AIChatQueryEngine`, `ScheduledLoopEventSink`, `ScheduledAiMessageRunner` are untouched
   (old `goalTextStop` / `shouldAutoContinueGoal` / `complete→completed` still live).
-  That is *correct* for Slice 1 (shadow-only by design), but it means **every AC that
-  requires live recovery still fails**, and the shadow evaluation itself is never invoked.
-- 10 bugs found in landed code (B1–B10 below, all verified against source; R1 probe
-  executed live: `save 100 qualifying contacts` without template → `response_only`).
-  Fix B1, B2, B4, B7, B8, R1 before building Slice 2 on these paths.
+  That is *correct* for Slice 1 (shadow-only by design, B10 decision), but it means
+  **every AC that requires live recovery still fails**, and the shadow evaluation itself
+  is never invoked. Slice 2 owns the live wiring.
 
 How to use this file: `[BUG]` = fix in landed code. `[GAP-Sn]` = unimplemented work
 belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
@@ -29,15 +31,10 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
 
 ## A. Bugs in landed Slice 1 code (fix before Slice 2)
 
-- [ ] **[BUG] B1 — NaN poisons `TaskRunBudget` accounting.** `src/service/aiTaskExecution/TaskRunBudget.ts:191-210`
-      (`reconcileTokens`, `addActiveRuntime`, `addWaitMs`).
-      `Math.max(0, Math.floor(NaN))` is `NaN` (any NaN operand wins), so one missing/invalid
-      provider `usage` value — explicitly anticipated by §9 ("conservative estimates if usage
-      is missing") — permanently sets `consumed.*` to `NaN` and corrupts every later
-      `getConsumed`/`getRemaining` computation. `Infinity` likewise unhandled. No test covers
-      NaN input.
-      Fix: `Number.isFinite` guard on every numeric input (fail-closed to 0 / estimated), plus tests.
-      PRD: FR-08, §9.
+- [x] **[BUG] B1 — NaN poisons `TaskRunBudget` accounting.** ✅ Done (commit 2380328a):
+      `reconcileTokens`, `addActiveRuntime`, `addWaitMs` now `Number.isFinite`-guard every
+      numeric input (fail-closed to 0). Tests in `TaskRunBudget.test.ts:95-166` cover NaN and
+      Infinity on every accumulator (FR-08, §9). `src/service/aiTaskExecution/TaskRunBudget.ts`.
 
 - [x] **[BUG] B2 — "CAS" finalization is check-then-act, not atomic.** ✅ Done (commit 1653ba90):
       `finalizeExecution` is a single `UPDATE … WHERE execution_state_version = :v AND finalized = 0`
@@ -61,22 +58,17 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
       Fix: wrap both saves in a TypeORM transaction (combine with AC-26 submission-dedup lookup work).
       PRD: §6.2.
 
-- [ ] **[BUG] B4 — Operation create: race + silent intent collision.** `src/model/AiTaskOperation.model.ts:62-87`.
-      (a) Two concurrent creates with the same key both read `null`, both insert → raw unique-constraint
-      exception instead of `{ alreadyExists: true }`; must catch the constraint violation.
-      (b) Same key + *different* `intentHash`/`executionId`/`toolIdentity` returns `alreadyExists: true`
-      with no comparison — a changed target reusing an operation key is silently accepted, violating the
-      entity's own contract ("the canonical intent_hash **prevents a changed target from reusing an
-      operation**", `src/entity/AiTaskOperation.entity.ts:10-12`).
-      Fix: catch constraint violation; compare intent fields and return an `INTENT_CONFLICT`-style result.
-      PRD: §10.1 (Slice 3 load-bearing).
+- [x] **[BUG] B4 — Operation create: race + silent intent collision.** ✅ Done (commit 77676058):
+      `create` now catches the unique-constraint violation and returns `{ alreadyExists: true }` instead
+      of throwing raw; same key + *different* `intentHash`/`executionId`/`toolIdentity` returns an
+      `INTENT_CONFLICT`-style result instead of silently accepting a changed target. Tests in
+      `AiTaskOperationModule.test.ts` cover the concurrent same-key race and the intent-collision
+      branch (§10.1). `src/model/AiTaskOperation.model.ts`.
 
-- [ ] **[BUG] B5 — `claimed_at` is never written.** `src/model/AiTaskOperation.model.ts:109-122` stamps
-      `dispatched_at`/`settled_at` but has no `claimed` branch, and no other writer exists — the
-      `claimed_at` column (`src/entity/AiTaskOperation.entity.ts:57-58`) is permanently null, breaking
-      §10 claim-ordering evidence.
-      Fix: stamp `claimed_at` on the `claimed` transition.
-      PRD: §10.2.
+- [x] **[BUG] B5 — `claimed_at` is never written.** ✅ Done (commit 77676058): `updateState` stamps
+      `claimed_at` on the `claimed` transition (test:
+      `AiTaskOperationModule.test.ts` "stamps claimed_at on the 'claimed' transition (§10.2)").
+      `src/model/AiTaskOperation.model.ts`.
 
 - [x] **[BUG] B6 — `finalizeExecution` silently drops evidence linkage.** ✅ Done (commit 1653ba90):
       `evidenceIds`/`remainingWork`/`assistantResultMessageId` now persist into `execution_state_json`
@@ -90,19 +82,14 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
       lands; silent drop is the worst option.
       PRD: §6.3, FR-12.
 
-- [ ] **[BUG] B7 — `freeze` output not schema-validated; hash order-sensitive.**
-      `src/service/aiTaskExecution/TaskCompletionContractService.ts:53-137`.
-      `freeze` does ad-hoc checks but never runs `taskCompletionContractSchema.parse`, so it accepts
-      contracts its own schema rejects: empty `objective` (`""` passes, schema requires `min(1)`), negative
-      offsets (only `end < start` checked, schema requires `min(0)`), overlong strings, duplicate criterion
-      `id`s (§8.2 checker contract requires "no duplicates", nothing enforces it). Separately, `computeHash`
-      maps `input.criteria` in caller order without normalizing (contrast `approvedSourceMessageIds`, which
-      *is* sorted at `:128`): semantically identical freezes with criteria in different order hash
-      differently, breaking §5.1 ("an unchanged Continue contract remains comparable") and causing false
-      scope-change detection. Same for `sourceRefs` order and duplicate approved IDs (`["m","m"]` vs `["m"]`).
-      Fix: `schema.parse` the frozen output; sort criteria by `id` (dedupe/validate) and normalize
-      `sourceRefs`/approved IDs before hashing; add tests.
-      PRD: FR-19, §5.1, §8.2.
+- [x] **[BUG] B7 — `freeze` output not schema-validated; hash order-sensitive.** ✅ Done (commit
+      ad3141c8): `freeze` now runs `taskCompletionContractSchema.parse` on the frozen output (rejects
+      empty `objective`, negative offsets, overlong strings, duplicate criterion `id`s), and `computeHash`
+      sorts criteria by `id` and normalizes `sourceRefs`/`approvedSourceMessageIds` before hashing —
+      semantically identical freezes hash identically regardless of caller order. Tests in
+      `TaskCompletionContractService.test.ts:118-240` cover order-independence (criteria + approved IDs),
+      schema-parity rejections, `verifyHash` round-trip + tamper detection, and `structuredClone`
+      post-freeze immunity (FR-19, §5.1, §8.2). `src/service/aiTaskExecution/TaskCompletionContractService.ts`.
 
 - [x] **[BUG] B8 — `recordShadowDecision` clobbers checkpoint, can mutate terminal rows.** ✅ Done
       (commit 1653ba90): merges the decision under a stable `shadowDecision` key instead of overwriting
@@ -116,23 +103,15 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
       misattribute criterion IDs as evidence identities. `src/service/aiTaskExecution/TaskCompletionController.ts:110,125`.
       PRD: §5.2, §8.2.
 
-- [ ] **[BUG] R1 — Resolver misses the PRD's own headline scenarios without a template.**
-      `src/service/aiTaskExecution/TaskRequestResolver.ts:103-149`. Verified live (probe test, 2026-10-05):
-      `classify({ userMessage: "save 100 qualifying contacts", hasApprovedTaskTemplate: false })` →
-      **`response_only`**; `"Find 20 leads, save them, and draft an email"` → `response_only`;
-      `"Please check the deployment status now"` → `response_only` (leading "please" defeats `startsWith`).
-      Only template-backed tasks, `check/monitor/verify`-leading, `write/draft`-leading, and short
-      `send/post` messages route to task routes. But FR-17 demands automatic enrollment of "action requests,
-      information-gathering tasks, and requested text/artifact deliverables" with **no extra task-mode
-      switch**, and FR-18 requires "structured request analysis where templates do not cover the request".
-      AC-01/AC-17's `save 100 contacts` and §5.13/AC-20's multi-part `find+save+draft` are therefore
-      unprotected unless an approved template happens to exist — the existing test only covers the
-      with-template case (`TaskRequestResolver.test.ts:6-13`).
-      Fix: add deterministic matchers for `save/collect/find/search/gather/add/import` task verbs (and
-      conjunctions), tolerate leading politeness/scoping prefixes, keep definition-question and
-      ambiguity guards; add no-template tests for AC-01/AC-17/AC-19/AC-20. Do NOT fix by keyword-matching
-      alone per FR-18 (structural verb+target analysis, template path unchanged).
-      PRD: FR-17, FR-18, AC-01, AC-17, AC-19, AC-20.
+- [x] **[BUG] R1 — Resolver misses the PRD's own headline scenarios without a template.** ✅ Done
+      (commit bd332e26): `classify` now uses structural verb+target matchers for
+      `save/collect/find/search/gather/add/import` task verbs (and conjunctions like `find+save+draft`),
+      tolerates leading politeness/scoping prefixes (`please`, `now`, etc.), and keeps the
+      definition-question and ambiguity guards. Tests in `TaskRequestResolver.test.ts` cover the
+      no-template headline scenarios AC-01/AC-17/AC-19/AC-20 (`save 100 qualifying contacts`,
+      `find 20 leads, save them, and draft an email`, `please check the deployment status now`) —
+      all now route to task routes, not `response_only`. Template path unchanged (FR-18: structural
+      verb+target analysis, not keyword matching alone). `src/service/aiTaskExecution/TaskRequestResolver.ts`.
 
 ---
 
@@ -170,9 +149,11 @@ belonging to Slice n (§16 traceability). Checkboxes are ordered by dependency.
 - [x] **[GAP-S1] Worker-guard tests.** ✅ Done (commit 399d8f8c): tests in
       `test/modules/AiTaskExecutionModule.test.ts` assert `createExecution`/`finalizeExecution`/
       `getExecution`/`getUnfinalizedExecutions` throw under `process.env.WORKER_TYPE` (NFR-03).
-- [ ] **[GAP-S1] Missing unit tests for landed fixes:** `structuredClone` deep-copy fix in
-      `TaskCompletionContractService.freeze`, `verifyHash` round-trip, NaN/Infinity budget inputs (see B1),
-      true-concurrent CAS (see B2).
+- [x] **[GAP-S1] Missing unit tests for landed fixes:** ✅ Done across commits 2380328a / 1653ba90 /
+      399d8f8c / ad3141c8: `structuredClone` deep-copy post-freeze immunity + `verifyHash` round-trip +
+      tamper detection (`TaskCompletionContractService.test.ts:200-240`), NaN/Infinity budget inputs
+      (`TaskRunBudget.test.ts:95-166`), true-concurrent CAS race via `Promise.all`
+      (`AiTaskExecutionModule.test.ts:331` resolves to exactly one created + one reused).
 - [x] **[GAP-S1] `HARD_CAPS` declared but unenforced.** ✅ Done (commit ab9caf7c): `clampToHardCaps`
       in `budgetDefaults.ts` clamps `maxContinuations`/`maxActiveRuntimeMs` at the ledger freeze
       boundary; `AiTaskExecutionModel.createExecution` serializes
@@ -319,12 +300,18 @@ Desktop completion control must work without server metadata; all fields optiona
 
 ## D. Audit trail
 
-- Audited 2026-10-05 on branch `worktree-task-completion-policy-v1-slice1`.
+- Audited 2026-10-05 on branch `worktree-task-completion-policy-v1-slice1`; re-verified 2026-10-05 after
+  bug-fix commits landed.
 - Method: full read of both PRDs; full read of all 6 `src/service/aiTaskExecution/*` files, all 3 entities,
   both models, both modules, `entityTypes`, feature gate; grep-confirmed zero live call sites in
-  `AIChatQueryLoop`/`AIChatQueryEngine`/`ScheduledLoopEventSink`/`ScheduledAiMessageRunner`; ran 5 Slice 1
-  service suites (42/42 pass with `vitest.service.config.mjs` — note: bare `yarn vitest run` without the
-  config fails `@/` alias resolution, a harness-invocation detail, not a repo bug); executed a throwaway
-  resolver probe (deleted afterward) proving R1.
+  `AIChatQueryLoop`/`AIChatQueryEngine`/`ScheduledLoopEventSink`/`ScheduledAiMessageRunner`; ran all
+  Slice 1 test suites (115/115 pass: 58 + 27 vitest via `vitest.service.config.mjs`, 30 Mocha via
+  `scripts/run-module-tests.js` — note: bare `yarn vitest run` without the config fails `@/` alias
+  resolution, a harness-invocation detail, not a repo bug); `tsc --noEmit` clean; executed a throwaway
+  resolver probe (deleted afterward) proving R1 before the fix landed.
 - Prior audit claims incorporated: B1–B8 (parallel audit agents, each verified by quoted source); B9/R1/B10
   added by lead audit. Slice 2/3/4 absence cross-checked against `git log 7ce133b2..HEAD` file list.
+- Bug-fix commits: `1653ba90` (B2/B3/B6/B8), `97250c43` (B9), `2380328a` (B1), `77676058` (B4/B5),
+  `ad3141c8` (B7), `bd332e26` (R1), `399d8f8c` (concurrent CAS + worker-guard tests),
+  `ab9caf7c` (HARD_CAPS + policy_limits_json), `b872f221` (scoped submission uniqueness AC-26),
+  `4521ff44` (B10 decision). B10 call-site wiring explicitly deferred to Slice 2 per §17.
