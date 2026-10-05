@@ -69,14 +69,22 @@ vi.mock("@/controller/UserController", () => ({
 }));
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({ Signout: vi.fn() })),
+  User: class {
+    constructor() {
+      return { Signout: vi.fn() };
+    }
+  },
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn().mockReturnValue(""),
     setValue: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/tokenRefresh", () => ({

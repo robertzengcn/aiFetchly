@@ -80,7 +80,7 @@ describe("AIChatRecoveryClassifier", () => {
       );
     });
 
-    it("classifies 500/502/503/504 as server_error", () => {
+    it("classifies 500/502/503/504/520 as server_error", () => {
       expect(classifier.classifyHttpFailure({ status: 500 }).reason).toBe(
         "server_error"
       );
@@ -91,6 +91,9 @@ describe("AIChatRecoveryClassifier", () => {
         "server_error"
       );
       expect(classifier.classifyHttpFailure({ status: 504 }).reason).toBe(
+        "server_error"
+      );
+      expect(classifier.classifyHttpFailure({ status: 520 }).reason).toBe(
         "server_error"
       );
     });
@@ -193,6 +196,35 @@ describe("AIChatRecoveryClassifier", () => {
         "AI server error code=500: database connection is not open"
       );
       expect(classifier.classifyThrown(err).reason).toBe("server_error");
+    });
+
+    it("classifies a thrown HTTP 520 envelope as server_error", () => {
+      const err = new Error("HTTP 520: <none>");
+      const result = classifier.classifyThrown(err);
+      expect(result.reason).toBe("server_error");
+      expect(result.status).toBe(520);
+      expect(result.originalError).toBe(err);
+    });
+
+    it("classifies Cloudflare 521-524 envelopes as server_error", () => {
+      expect(classifier.classifyThrown(new Error("HTTP 521")).reason).toBe(
+        "server_error"
+      );
+      expect(
+        classifier.classifyThrown(new Error("HTTP 522: Connection timed out"))
+          .status
+      ).toBe(522);
+      expect(
+        classifier.classifyThrown(new Error("HTTP 524: <none>")).reason
+      ).toBe("server_error");
+    });
+
+    it("classifies a thrown error with a numeric status field as that HTTP failure", () => {
+      const err = new Error("<none>");
+      (err as { status?: number }).status = 520;
+      const result = classifier.classifyThrown(err);
+      expect(result.reason).toBe("server_error");
+      expect(result.status).toBe(520);
     });
 
     it("classifies unknown errors as non_recoverable", () => {

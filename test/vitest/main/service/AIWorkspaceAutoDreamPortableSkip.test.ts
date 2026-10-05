@@ -21,17 +21,20 @@ const getPortableState = vi.fn();
 const resolveLegacyScope = vi.fn();
 
 vi.mock("@/modules/AIWorkspaceMemoryModule", () => ({
-  AIWorkspaceMemoryModule: vi.fn().mockImplementation(() => ({
+  AIWorkspaceMemoryModule: vi.fn(function AIWorkspaceMemoryModuleMock() {
+      return {
     createMemory,
     updateMemory,
     archiveMemory,
     applyPlanAndCompleteRun,
     listActiveForRetrieval: listActive,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/modules/AIWorkspaceMemoryConsolidationRunModule", () => ({
-  AIWorkspaceMemoryConsolidationRunModule: vi.fn().mockImplementation(() => ({
+  AIWorkspaceMemoryConsolidationRunModule: vi.fn(function AIWorkspaceMemoryConsolidationRunModuleMock() {
+      return {
     startRun,
     completeRun,
     failRun,
@@ -39,23 +42,30 @@ vi.mock("@/modules/AIWorkspaceMemoryConsolidationRunModule", () => ({
     getLatestSuccessfulRun: getLatest,
     getRunningRun: getRunning,
     recoverStaleRunningRuns: recoverStale,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/modules/WorkspaceMemoryScopeModule", () => ({
-  WorkspaceMemoryScopeModule: vi.fn().mockImplementation(() => ({
+  WorkspaceMemoryScopeModule: vi.fn(function WorkspaceMemoryScopeModuleMock() {
+      return {
     resolveLegacyScope,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/modules/PortableWorkspaceMemoryModule", () => ({
-  PortableWorkspaceMemoryModule: vi.fn().mockImplementation(() => ({
+  PortableWorkspaceMemoryModule: vi.fn(function PortableWorkspaceMemoryModuleMock() {
+      return {
     getPortableState,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
-  AIAutoDreamSourceCollector: vi.fn().mockImplementation(() => ({ collect })),
+  AIAutoDreamSourceCollector: vi.fn(function AIAutoDreamSourceCollectorMock() {
+      return { collect };
+    }),
   groupByWorkspace: (
     packets: ReadonlyArray<{ workspace?: { workspaceKey: string } }>
   ) => {
@@ -72,16 +82,20 @@ vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
+  Token: vi.fn(function TokenMock() {
+      return { getValue: vi.fn() };
+    }),
 }));
 
 const { applyAutoDreamFileMutations } = vi.hoisted(() => ({
   applyAutoDreamFileMutations: vi.fn(),
 }));
 vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
-  PortableWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+  PortableWorkspaceMemoryService: vi.fn(function PortableWorkspaceMemoryServiceMock() {
+      return {
     applyAutoDreamFileMutations,
-  })),
+      };
+    }),
 }));
 
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";

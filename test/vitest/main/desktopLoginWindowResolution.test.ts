@@ -81,34 +81,50 @@ vi.mock("@/service/AIChatConversationUpdateBroadcaster", () => ({
 
 // --- Mocks for completeDesktopLogin's dependency tree ---------------------
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn((key: string) =>
       key === "user_dbpath" ? mockState.dbPath : ""
     ),
     setValue: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/controller/UserController", () => ({
-  UserController: vi.fn().mockImplementation(() => ({
+  UserController: class {
+    constructor() {
+      return {
     updateUserInfo: vi
       .fn()
       .mockResolvedValue({ id: 1, email: "t@example.com", name: "t" }),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/deviceFingerprint", () => ({
-  DeviceFingerprintService: vi.fn().mockImplementation(() => ({
+  DeviceFingerprintService: class {
+    constructor() {
+      return {
     getDeviceIdHash: vi.fn().mockReturnValue("hash"),
     getDeviceName: vi.fn().mockReturnValue("name"),
     storeDeviceIdHash: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/api/deviceApi", () => ({
-  DeviceApi: vi.fn().mockImplementation(() => ({
+  DeviceApi: class {
+    constructor() {
+      return {
     registerDevice: vi.fn().mockResolvedValue(undefined),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/config/SqliteDb", () => ({

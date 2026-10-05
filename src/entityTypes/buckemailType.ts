@@ -54,9 +54,15 @@ export interface EmailMarketingSendLogDetailDisplay {
  * (source, id) pair (each half has its own id space). Optional fields are
  * populated only on the half that owns them:
  *
- *  - legacy:    content, log, taskId
+ *  - legacy:    content, log, taskId, emailServiceId, fromAddress,
+ *               smtpUsername, replyTo (identity columns, FR-014)
  *  - authorized: sender, actor, bodyText, providerMessageId, errorCode,
- *                submittedAt, completedAt, batchId, draftId, revisionId, attemptId
+ *               submittedAt, completedAt, batchId, draftId, revisionId, attemptId,
+ *               emailServiceId, smtpUsername, replyTo (revision identity, FR-014)
+ *
+ * Identity fields are non-secret by construction: the legacy columns come
+ * from the child-process send result, the authorized ones from the frozen
+ * revision. Neither ever carries a password.
  *
  * bodyHtml is deliberately NOT included: the detail view is diagnostic and
  * renders stored email content as plain text only (never v-html).
@@ -72,6 +78,12 @@ export interface UnifiedSendLogDetailEntry {
   content?: string;
   log?: string;
   taskId?: number;
+  // identity metadata (FR-014) — both halves; visible From is `fromAddress`
+  // on legacy and `sender` on authorized.
+  emailServiceId?: number;
+  fromAddress?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
   // authorized half
   sender?: string;
   actor?: string;

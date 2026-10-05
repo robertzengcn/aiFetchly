@@ -50,11 +50,20 @@
               <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.completed_at") }}</div>
               <div>{{ formatRecordTime(detail.completedAt) }}</div>
             </template>
-            <!-- Legacy half: task link -->
+            <!-- Legacy half: task link + visible From -->
             <template v-else>
               <div class="text-subtitle-2">{{ t("emailtasksendlog.task_id") }}</div>
               <div>{{ detail.taskId ?? "—" }}</div>
+              <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.from_address") }}</div>
+              <div>{{ detail.fromAddress || "—" }}</div>
             </template>
+            <!-- Identity metadata (FR-014): service record + SMTP login + Reply-To -->
+            <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.email_service") }}</div>
+            <div>{{ detail.emailServiceId ?? "—" }}</div>
+            <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.smtp_username") }}</div>
+            <div>{{ detail.smtpUsername || "—" }}</div>
+            <div class="mt-2 text-subtitle-2">{{ t("emailtasksendlog.reply_to") }}</div>
+            <div>{{ detail.replyTo || "—" }}</div>
           </v-col>
         </v-row>
       </v-card>

@@ -22,6 +22,12 @@ import type { ChatV2GeneratedImageExportResult } from "@/views/api/aiChatV2";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  subscribeCompactionProgress: vi.fn().mockReturnValue(() => undefined),
+  unsubscribeCompactionProgress: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
   awaitChatV2Turn: vi.fn(() => ({
     promise: Promise.resolve(),
     detach: vi.fn(),

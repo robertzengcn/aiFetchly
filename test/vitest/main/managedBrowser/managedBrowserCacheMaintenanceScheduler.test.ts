@@ -11,27 +11,38 @@ import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsMo
 
 function makeHarness(
   overrides: {
-    enforce?: (settings: { readonly cacheMaxBytes: number }) => Promise<{
+    resume?: () => Promise<void>;
+    enforce?: (settings: {
+      readonly cacheMaxBytes: number;
+    }) => Promise<{
       plannedScopes: number;
       plannedBytes: number;
       skipped: boolean;
     }>;
-    resume?: () => Promise<void>;
     cacheMaxBytes?: number;
   } = {}
 ) {
   const enforce =
     overrides.enforce ??
     (vi.fn(
-      async (): Promise<{ plannedScopes: number; plannedBytes: number; skipped: boolean }> => ({
+      async (settings: { readonly cacheMaxBytes: number }) => ({
         plannedScopes: 2,
         plannedBytes: 1024,
         skipped: false,
+        settings,
       })
-    ) as unknown as NonNullable<typeof overrides.enforce>);
+    ) as unknown as ReturnType<typeof vi.fn> & {
+      (settings: { readonly cacheMaxBytes: number }): Promise<{
+        plannedScopes: number;
+        plannedBytes: number;
+        skipped: boolean;
+      }>;
+    });
   const resume =
     overrides.resume ??
-    (vi.fn(async () => undefined) as unknown as NonNullable<typeof overrides.resume>);
+    (vi.fn(async () => undefined) as unknown as ReturnType<typeof vi.fn> & {
+      (): Promise<void>;
+    });
   const scheduler = new ManagedBrowserCacheMaintenanceScheduler({
     cacheModule: {
       resumePendingDeletions: resume,

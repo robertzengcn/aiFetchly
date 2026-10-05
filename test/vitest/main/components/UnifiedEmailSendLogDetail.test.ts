@@ -48,6 +48,11 @@ const i18n = createI18n({
         revision_id: "revision id",
         attempt_id: "send attempt id",
         detail_not_found: "Send log record not found",
+        // FR-014 identity metadata block (shared by both sources).
+        from_address: "from address",
+        email_service: "email service",
+        smtp_username: "smtp username",
+        reply_to: "reply-to",
       },
     },
   },
@@ -103,6 +108,12 @@ const LEGACY_DETAIL: UnifiedSendLogDetailEntry = {
   content: "full legacy body",
   log: "smtp transcript",
   taskId: 1001,
+  // FR-014: legacy rows now record which service sent and what identity it
+  // presented (visible From + non-secret SMTP login + Reply-To).
+  emailServiceId: 7,
+  fromAddress: "sales@svc.com",
+  smtpUsername: "login@svc.com",
+  replyTo: "replies@svc.com",
 };
 
 const AUTHORIZED_DETAIL: UnifiedSendLogDetailEntry = {
@@ -123,6 +134,10 @@ const AUTHORIZED_DETAIL: UnifiedSendLogDetailEntry = {
   draftId: 7,
   revisionId: 9,
   attemptId: 3,
+  // FR-014: authorized rows surface the revision's frozen identity.
+  emailServiceId: 3,
+  smtpUsername: "authorized-login@svc.com",
+  replyTo: "authorized-reply@svc.com",
 };
 
 async function mountDetail(source: string, id: string) {
@@ -156,6 +171,11 @@ describe("SendLogDetail (unified send-log detail page)", () => {
     expect(wrapper.text()).toContain("full legacy body");
     expect(wrapper.text()).toContain("smtp transcript");
     expect(wrapper.text()).toContain("1001");
+    // FR-014: legacy identity metadata renders (service record, visible From,
+    // non-secret SMTP login, Reply-To).
+    expect(wrapper.text()).toContain("sales@svc.com");
+    expect(wrapper.text()).toContain("login@svc.com");
+    expect(wrapper.text()).toContain("replies@svc.com");
     // The authorized-only envelope card is absent on a legacy row.
     expect(wrapper.text()).not.toContain("provider message id");
   });
@@ -174,6 +194,10 @@ describe("SendLogDetail (unified send-log detail page)", () => {
     expect(wrapper.text()).toContain("sender@example.com");
     expect(wrapper.text()).toContain("prov-123");
     expect(wrapper.text()).toContain("smtp_rejected");
+    // FR-014: authorized identity metadata renders (revision's frozen
+    // service record, SMTP login, Reply-To).
+    expect(wrapper.text()).toContain("authorized-login@svc.com");
+    expect(wrapper.text()).toContain("authorized-reply@svc.com");
     // The legacy-only log card is absent on an authorized row.
     expect(wrapper.text()).not.toContain("smtp transcript");
   });

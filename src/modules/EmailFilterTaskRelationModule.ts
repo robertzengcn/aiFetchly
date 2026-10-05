@@ -19,6 +19,10 @@ export class EmailFilterTaskRelationModule extends BaseModule implements EmailFi
         return await this.model.getEmailFiltersByBuckemailTaskId(buckemailTaskId);
     }
 
+    async getEmailFilterIdsByTaskId(buckemailTaskId: number): Promise<number[]> {
+        return await this.model.listEmailFilterIdsByTaskId(buckemailTaskId);
+    }
+
     async updateByBuckemailTaskId(buckemailTaskId: number, relations: EmailFilterTaskRelationEntityType[]): Promise<void> {
         return await this.model.updateByBuckemailTaskId(buckemailTaskId, relations);
     }

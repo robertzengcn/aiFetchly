@@ -8,9 +8,11 @@ const mockTokenGetValue = vi.hoisted(() =>
 );
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: vi.fn(function TokenMock() {
+      return {
     getValue: mockTokenGetValue,
-  })),
+      };
+    }),
 }));
 
 const mockRefreshOnce = vi.hoisted(() =>

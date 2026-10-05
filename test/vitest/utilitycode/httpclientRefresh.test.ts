@@ -11,18 +11,19 @@ const mockTokenSetValue = vi.hoisted(() =>
 );
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: mockTokenGetValue,
-    setValue: mockTokenSetValue,
-  })),
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
+  Token: class {
+    getValue = mockTokenGetValue;
+    setValue = mockTokenSetValue;
+  },
 }));
 
 const mockRemoveToken = vi.hoisted(() => vi.fn<(...args: []) => void>());
 
 vi.mock("@/modules/user", () => ({
-  User: vi.fn().mockImplementation(() => ({
-    removeToken: mockRemoveToken,
-  })),
+  User: class {
+    removeToken = mockRemoveToken;
+  },
 }));
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
@@ -42,14 +43,13 @@ const MockRefreshTokenInvalidError = vi.hoisted(() => {
 
 vi.mock("@/modules/tokenRefresh", () => {
   // Constructor-callable stub: HttpClient does `new TokenRefreshService()`
-  // in its constructor. We attach a static `refreshOnce` method that the
-  // source code calls for refreshes.
-  const Stub = vi.fn().mockImplementation(() => ({}));
-  (Stub as unknown as { refreshOnce: typeof mockRefreshOnce }).refreshOnce =
-    mockRefreshOnce;
+  // in its constructor. Static `refreshOnce` matches the source call site.
+  class TokenRefreshService {
+    static refreshOnce = mockRefreshOnce;
+  }
   return {
     RefreshTokenInvalidError: MockRefreshTokenInvalidError,
-    TokenRefreshService: Stub,
+    TokenRefreshService,
   };
 });
 
@@ -252,5 +252,22 @@ describe("HttpClient token-refresh behavior", () => {
 
     expect(mockRefreshOnce).not.toHaveBeenCalled();
     expect(mockRemoveToken).not.toHaveBeenCalled();
+  });
+
+  it("returns Cloudflare HTTP 520 stream responses instead of throwing", async () => {
+    const cf520 = {
+      ok: false,
+      status: 520,
+      statusText: "<none>",
+    } as unknown as Response;
+    fetchSpy.mockResolvedValueOnce(cf520);
+
+    const res = await client.postStream("/api/ai/v1/chat/completions", {
+      message: "hi",
+    });
+
+    expect(res.status).toBe(520);
+    expect(res.ok).toBe(false);
+    expect(res.statusText).toBe("<none>");
   });
 });

@@ -11,6 +11,7 @@ import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 import { EmailTemplateTaskRelationEntity } from "@/entity/EmailTemplateTaskRelation.entity";
 import { EmailFilterTaskRelationEntity } from "@/entity/EmailFilterTaskRelation.entity";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
+import { EmailServiceTagEntity } from "@/entity/EmailServiceTag.entity";
 import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
 // import {VideoDownloadTagEntity} from "@/entity/VideoDownloadTag.entity"
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
@@ -73,6 +74,13 @@ import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
+import { AIChatArchiveStateEntity } from "@/entity/AIChatArchiveState.entity";
+import { AIChatArchiveTurnEntity } from "@/entity/AIChatArchiveTurn.entity";
+import { AIChatArchiveEntryEntity } from "@/entity/AIChatArchiveEntry.entity";
+import { AIChatCompactionRunEntity } from "@/entity/AIChatCompactionRun.entity";
+import { AIChatCompactionSectionEntity } from "@/entity/AIChatCompactionSection.entity";
+import { AIChatContextGenerationEntity } from "@/entity/AIChatContextGeneration.entity";
+import { AIChatArchiveSearchFragmentEntity } from "@/entity/AIChatArchiveSearchFragment.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { AIChatPendingMessageEntity } from "@/entity/AIChatPendingMessage.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
@@ -527,6 +535,7 @@ export class SqliteDb {
           EmailTemplateTaskRelationEntity,
           EmailFilterTaskRelationEntity,
           EmailServiceEntity,
+          EmailServiceTagEntity,
           EmailServiceTaskRelationEntity,
           SocialAccountEntity,
           YellowPagesTaskEntity,
@@ -586,6 +595,13 @@ export class SqliteDb {
           AIChatGoalEvidenceEntity,
           AIChatSessionMemoryEntity,
           AIChatCompactSummaryEntity,
+          AIChatArchiveStateEntity,
+          AIChatArchiveTurnEntity,
+          AIChatArchiveEntryEntity,
+          AIChatCompactionRunEntity,
+          AIChatCompactionSectionEntity,
+          AIChatContextGenerationEntity,
+          AIChatArchiveSearchFragmentEntity,
           AgentDefinitionEntity,
           AgentTaskEntity,
           AgentTaskMessageEntity,

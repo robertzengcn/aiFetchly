@@ -12,40 +12,42 @@ export class EmailServiceModel extends BaseDb {
       this.sqliteDb.connection.getRepository(EmailServiceEntity);
   }
 
+  protected override onSqliteDbRebound(): void {
+    this.repository = this.sqliteDb.connection.getRepository(EmailServiceEntity);
+  }
+
   async create(entity: EmailServiceEntity): Promise<number> {
     const savedEntity = await this.repository.save(entity);
     return savedEntity.id;
   }
 
   async read(id: number): Promise<EmailServiceEntity | undefined> {
-    const entity = await this.repository.findOne({ where: { id } });
-    if (!entity) return undefined;
-
-    return entity;
+    const entity = await this.repository
+      .createQueryBuilder("service")
+      .leftJoinAndSelect("service.tag", "tag")
+      .where("service.id = :id", { id })
+      .getOne();
+    return entity ?? undefined;
   }
 
   /**
-   * Envelope From address for a service. TypeORM maps `from`; the legacy SQL
-   * schema used `from_email`. Prefer the entity field, then COALESCE both
-   * columns so older rows still resolve a sender for outbound drafts.
+   * Read the complete effective identity for a service (§22.2). Returns null
+   * when the service does not exist. Does not decrypt passwords.
    */
-  async readSenderAddress(id: number): Promise<string | null> {
+  async readIdentity(id: number): Promise<{
+    smtpUsername: string | null;
+    from: string;
+    replyTo: string | null;
+    receiveUsername: string | null;
+  } | null> {
     const entity = await this.read(id);
-    const fromEntity = (entity?.from ?? "").trim();
-    if (fromEntity.length > 0) {
-      return fromEntity;
-    }
-    try {
-      const rows = (await this.sqliteDb.connection.query(
-        'SELECT "from" AS fromCol, from_email AS fromEmail FROM email_service WHERE id = ? LIMIT 1',
-        [id]
-      )) as Array<{ fromCol?: string | null; fromEmail?: string | null }>;
-      const fallback = (rows[0]?.fromCol ?? rows[0]?.fromEmail ?? "").trim();
-      return fallback.length > 0 ? fallback : null;
-    } catch {
-      // from_email may not exist on TypeORM-synchronized schemas.
-      return null;
-    }
+    if (!entity) return null;
+    return {
+      smtpUsername: entity.smtpUsername ?? null,
+      from: entity.from,
+      replyTo: entity.replyTo ?? null,
+      receiveUsername: entity.receiveUsername ?? null,
+    };
   }
 
   async update(id: number, service: EmailServiceEntity): Promise<void> {
@@ -74,13 +76,25 @@ export class EmailServiceModel extends BaseDb {
     page: number,
     size: number,
     search?: string,
+    tagId?: number,
+    untagged?: boolean,
     sort?: SortBy
   ): Promise<EmailServiceEntity[]> {
-    let queryBuilder = this.repository.createQueryBuilder("service");
+    let queryBuilder = this.repository
+      .createQueryBuilder("service")
+      .leftJoinAndSelect("service.tag", "tag");
     if (search) {
-      queryBuilder = queryBuilder.where("service.name LIKE :search", {
+      queryBuilder = queryBuilder.where("(service.name LIKE :search OR service.from LIKE :search)", {
         search: `%${search}%`,
       });
+    }
+    if (tagId !== undefined) {
+      queryBuilder = queryBuilder.andWhere("service.tagId = :tagId", {
+        tagId,
+      });
+    }
+    if (untagged === true) {
+      queryBuilder = queryBuilder.andWhere("service.tagId IS NULL");
     }
     if (sort?.key && sort?.order) {
       const lowsersortkey = sort.key.toLowerCase();
@@ -109,8 +123,18 @@ export class EmailServiceModel extends BaseDb {
     return entities;
   }
 
-  async countEmailServices(): Promise<number> {
-    return await this.repository.count();
+  async countEmailServices(tagId?: number, untagged?: boolean, search?: string): Promise<number> {
+    const queryBuilder = this.repository.createQueryBuilder("service");
+    if (search) {
+      queryBuilder.andWhere("(service.name LIKE :search OR service.from LIKE :search)", { search: `%${search}%` });
+    }
+    if (tagId !== undefined) {
+      queryBuilder.andWhere("service.tagId = :tagId", { tagId });
+    }
+    if (untagged === true) {
+      queryBuilder.andWhere("service.tagId IS NULL");
+    }
+    return await queryBuilder.getCount();
   }
 
   async findByName(name: string): Promise<EmailServiceEntity | undefined> {
@@ -118,6 +142,15 @@ export class EmailServiceModel extends BaseDb {
     if (!entity) return undefined;
 
     return entity;
+  }
+
+  async findAllByTagId(tagId: number): Promise<EmailServiceEntity[]> {
+    return await this.repository
+      .createQueryBuilder("service")
+      .leftJoinAndSelect("service.tag", "tag")
+      .where("service.tagId = :tagId", { tagId })
+      .orderBy("service.id", "DESC")
+      .getMany();
   }
 
   async findByHost(host: string): Promise<EmailServiceEntity[]> {

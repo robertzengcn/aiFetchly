@@ -1,5 +1,5 @@
 <template>
-  <v-form ref="form" @submit.prevent="handleSubmit">
+  <v-form @submit.prevent="handleSubmit">
     <v-container fluid>
       <!-- Basic Information -->
       <v-row>
@@ -53,7 +53,12 @@
         <YandexMapsSelectTable @change="handleYandexMapsChanged" />
       </v-row>
       <v-row v-if="formData.task_type==TaskType.AI_MESSAGE">
-        <AiMessageTaskForm :initial-task-data="aiMessageTaskData" :is-edit="isEdit" @change="handleAiMessageTaskChanged" />
+        <AiMessageTaskForm
+          ref="aiMessageTaskFormRef"
+          :initial-task-data="aiMessageTaskData"
+          :is-edit="isEdit"
+          @change="handleAiMessageTaskChanged"
+        />
       </v-row>
 
       <v-row v-if="formData.task_type!==TaskType.AI_MESSAGE">
@@ -204,7 +209,7 @@
           <v-btn
             color="primary"
             type="submit"
-            :loading="loading"
+            :loading="submitLoading"
             :disabled="!isFormValid"
           >
             {{ isEdit ? t('schedule.update_schedule') : t('schedule.create_schedule') }}
@@ -250,6 +255,7 @@ interface Props {
     max_tool_calls?: number;
     max_runtime_ms?: number;
     max_continue_calls?: number;
+    workspace_path?: string | null;
   }
 }
 
@@ -265,8 +271,13 @@ const emit = defineEmits<{
   error: [message: string]
 }>()
 
-// Form ref
-const form = ref<HTMLFormElement>()
+interface AiMessageTaskFormExpose {
+  getFormState: () => AiMessageTaskFormState | undefined
+}
+
+const aiMessageTaskFormRef = ref<AiMessageTaskFormExpose | null>(null)
+const savingAiTask = ref(false)
+const submitLoading = computed(() => props.loading || savingAiTask.value)
 
 // Form data
 const formData = ref<ScheduleCreateRequest>({
@@ -334,20 +345,23 @@ const dependencyConditionOptions = [
 
 // Computed properties
 const isFormValid = computed(() => {
-  if (!form.value) return false
-  
-  const isValid = form.value.validate()
-  
-  // Additional validation for trigger types
+  if (!formData.value.name?.trim()) return false
+  if (
+    formData.value.task_type !== TaskType.AI_MESSAGE &&
+    !(Number(formData.value.task_id) > 0)
+  ) {
+    return false
+  }
+
   if (formData.value.trigger_type === TriggerType.CRON) {
-    return isValid && !!formData.value.cron_expression && !cronValidationError.value
+    return !!formData.value.cron_expression && !cronValidationError.value
   }
-  
+
   if (formData.value.trigger_type === TriggerType.DEPENDENCY) {
-    return isValid && !!formData.value.parent_schedule_id && !!formData.value.dependency_condition
+    return !!formData.value.parent_schedule_id && !!formData.value.dependency_condition
   }
-  
-  return isValid
+
+  return true
 })
 const handleSearchtaskChanged = (newValue: SearchtaskItem[]|undefined) => {
   // console.log(`selectedProxy changed to ${newValue}`);
@@ -478,6 +492,13 @@ const loadParentSchedules = async () => {
 const handleSubmit = async () => {
   if (!isFormValid.value) return
 
+  if (formData.value.task_type === TaskType.AI_MESSAGE) {
+    const liveState = aiMessageTaskFormRef.value?.getFormState()
+    if (liveState) {
+      aiMessageFormState.value = liveState
+    }
+  }
+
   const submitData = { ...formData.value }
 
   // For AI_MESSAGE task type, create or update the AI task first
@@ -485,6 +506,7 @@ const handleSubmit = async () => {
     if (!aiMessageFormState.value) {
       return
     }
+    savingAiTask.value = true
     try {
       if (props.isEdit && submitData.task_id > 0) {
         // Update existing AI task
@@ -499,6 +521,7 @@ const handleSubmit = async () => {
           maxToolCalls: aiMessageFormState.value.maxToolCalls,
           maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
           maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+          workspacePath: aiMessageFormState.value.workspacePath.trim() || null,
         })
       } else {
         // Create new AI task and link to schedule
@@ -512,15 +535,18 @@ const handleSubmit = async () => {
           maxToolCalls: aiMessageFormState.value.maxToolCalls,
           maxRuntimeMs: aiMessageFormState.value.maxRuntimeMs,
           maxContinueCalls: aiMessageFormState.value.maxContinueCalls,
+          workspacePath: aiMessageFormState.value.workspacePath.trim() || undefined,
         })
         submitData.task_id = taskId
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to create/update AI message task:', error)
       const message =
         error instanceof Error ? error.message : String(error)
       emit('error', message)
       return
+    } finally {
+      savingAiTask.value = false
     }
   }
 

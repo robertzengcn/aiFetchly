@@ -130,6 +130,24 @@ export class RAGDocumentEntity extends AuditableEntity {
   @Column("datetime", { nullable: true })
   crawledAt?: Date;
 
+  // Phase 3 document metadata (nullable: existing rows stay null).
+  // language: ISO/BPC-47 language tag (e.g. "en", "zh-CN"), max 16 chars.
+  // documentDate: user-supplied date the document refers to (distinct from
+  //   uploadedAt, which is when it entered the library).
+  // customMetadata: JSON.stringify of a strict allowlist object
+  //   (product/customer/campaign/category). Empty object stored as null.
+  @Order(27)
+  @Column("varchar", { length: 16, nullable: true })
+  language?: string;
+
+  @Order(28)
+  @Column("datetime", { nullable: true })
+  documentDate?: Date;
+
+  @Order(29)
+  @Column("text", { nullable: true })
+  customMetadata?: string;
+
   // Relationships
   @OneToMany(() => RAGChunkEntity, (chunk) => chunk.document)
   chunks?: RAGChunkEntity[];

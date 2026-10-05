@@ -30,7 +30,9 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/controller/UserController", () => ({
-  UserController: vi.fn().mockImplementation(() => ({
+  UserController: class {
+    constructor() {
+      return {
     getUserInfo: () => ({
       name: "Test User",
       email: "test@example.com",
@@ -53,7 +55,9 @@ vi.mock("@/controller/UserController", () => ({
       }
       return { name: "Test User", email: "test@example.com", id: 1, roles: [] };
     }),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -72,7 +76,9 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     // Return a non-empty access token so the no-token skip (TODO-6) does not
     // short-circuit reconcile in these tests. Other keys stay empty.
     getValue: vi.fn((key: string) =>
@@ -81,7 +87,9 @@ vi.mock("@/modules/token", () => ({
     setValue: vi.fn((key: string, value: string) => {
       state.tokenSets.push({ key, value });
     }),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/Logger", () => ({

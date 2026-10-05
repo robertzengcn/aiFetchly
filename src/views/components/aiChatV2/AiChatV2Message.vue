@@ -228,7 +228,7 @@
         </template>
       </template>
       <template v-else>
-        <div v-if="message.content" class="v2-message__content">
+        <div v-if="displayContent" class="v2-message__content">
           <template v-if="directionSegments.length > 1">
             <template
               v-for="(segment, index) in directionSegments"
@@ -244,16 +244,21 @@
               <span>{{ segment }}</span>
             </template>
           </template>
-          <template v-else>{{ message.content }}</template>
+          <template v-else>{{ displayContent }}</template>
         </div>
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
+          data-testid="reasoning"
           :open="hasReasoning"
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
-            {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+            {{
+              status === "streaming"
+                ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
+                : t("aiChatV2.reasoning_title") || "Reasoning"
+            }}
           </summary>
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
@@ -442,8 +447,24 @@
           </details>
         </span>
       </div>
-      <div v-if="isReportableAssistant" class="v2-message__report">
+      <div v-if="isReportableAssistant" class="v2-message__actions">
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          data-testid="copy-message-btn"
+          :disabled="copied"
+          :aria-label="copyAriaLabel"
+          :title="copied ? copiedLabel : copyLabel"
+          class="v2-message__copy-btn"
+          @click="onCopy"
+        >
+          <v-icon size="x-small">
+            {{ copied ? "mdi-check" : "mdi-content-copy" }}
+          </v-icon>
+        </v-btn>
         <AIContentReportButton
+          compact
           :descriptor="reportDescriptor!"
           :reported="reported"
           @report="emit('report', reportDescriptor!)"
@@ -454,7 +475,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
@@ -480,6 +501,10 @@ import { buildChatV2Descriptor } from "@/views/components/aiContentReport/report
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
+import {
+  buildPastedContentsFromBlocks,
+  expandPastedTextForDisplay,
+} from "@/service/pastedText/PastedTextDisplay";
 import { windowInvoke } from "@/views/utils/apirequest";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
@@ -564,6 +589,57 @@ const isReportableAssistant = computed(() => {
 const reportDescriptor = computed(() =>
   isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
 );
+
+// Copy assistant output (mirrors the V1 AiChatBox copy affordance). Shows
+// alongside the report button on completed assistant text/image messages.
+// Flips to a check icon for 2s on success so the user sees confirmation.
+const copied = ref(false);
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+const copyLabel = computed(
+  () => t("aiChatV2.copy_message") || "Copy message"
+);
+const copiedLabel = computed(() => t("aiChatV2.copied") || "Copied");
+const copyAriaLabel = computed(
+  () => t("aiChatV2.copy_message_aria") || "Copy this AI response"
+);
+
+function plainTextFromMessage(content: string): string {
+  // The assistant content may carry inline HTML (e.g. markdown-rendered
+  // artifacts). Strip tags so the clipboard receives readable plain text,
+  // matching the V1 handleCopyMessage behavior.
+  const temp = document.createElement("div");
+  temp.innerHTML = content;
+  return (temp.textContent || temp.innerText || "").trim();
+}
+
+async function onCopy(): Promise<void> {
+  if (copied.value) return;
+  const content = props.message.content ?? "";
+  const text = plainTextFromMessage(content);
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Fallback for environments without the async clipboard API.
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand("copy");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+  copied.value = true;
+  if (copyResetTimer) clearTimeout(copyResetTimer);
+  copyResetTimer = setTimeout(() => {
+    copied.value = false;
+    copyResetTimer = null;
+  }, 2000);
+}
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -817,6 +893,51 @@ const executionPending = computed(
 const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
+
+/**
+ * Display content with pasted-text references expanded (§13.3 preview):
+ * inline blocks render directly; hashed blocks expand once their cached
+ * body loads. The raw placeholder ([Pasted text #N ...]) never shows when
+ * the body is available.
+ */
+const pastedBlocksFromMeta = computed<readonly ChatV2PastedBlockMetadata[]>(
+  () => {
+    if (props.message.role !== "user") return [];
+    const meta = props.message.metadata as
+      | { pastedBlocks?: ChatV2PastedBlockMetadata[] }
+      | undefined;
+    return meta?.pastedBlocks ?? [];
+  }
+);
+const readyPasteByHash = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {};
+  for (const [hash, state] of Object.entries(pastePreviewByHash.value)) {
+    if (state.status === "ready") {
+      out[hash] = state.content;
+    }
+  }
+  return out;
+});
+const displayContent = computed((): string => {
+  const raw = props.message.content ?? "";
+  if (props.message.role !== "user") return raw;
+  return expandPastedTextForDisplay(
+    raw,
+    buildPastedContentsFromBlocks(
+      pastedBlocksFromMeta.value,
+      readyPasteByHash.value
+    )
+  );
+});
+
+// Prefetch hashed paste bodies on mount so the bubble expands without a
+// details toggle (the toggle path still refreshes on demand).
+onMounted(() => {
+  for (const chip of pastedChips.value) {
+    if (!chip.contentHash || chip.inlineContent) continue;
+    void onPasteDetailsToggle(chip, true);
+  }
+});
 /**
  * Direction marker segments (FR-29/30): the persisted assistant row carries
  * metadata.directionTransitions[].contentOffset — split the visible content

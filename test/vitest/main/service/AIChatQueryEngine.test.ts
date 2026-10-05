@@ -15,6 +15,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { GeneratedImageReferenceError } from "@/entityTypes/generatedImageReferenceTypes";
@@ -32,6 +33,7 @@ import type { AIChatQueryEngineDeps } from "@/service/AIChatQueryEngine";
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
 const mockGetConversationMessages = vi.fn().mockResolvedValue([]);
+const mockGetRecentMessages = vi.fn().mockResolvedValue([]);
 const mockSaveAssistantMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolCallMessage = vi.fn().mockResolvedValue({});
 const mockSaveToolResultMessage = vi.fn().mockResolvedValue({});
@@ -39,23 +41,28 @@ const mockCreateConversationIfNeeded = vi.fn().mockReturnValue("v2-test-conv");
 const mockGetDefaultSystemPrompt = vi.fn().mockReturnValue("You are helpful.");
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
-    saveUserMessage: mockSaveUserMessage,
-    getConversationMessages: mockGetConversationMessages,
-    saveAssistantMessage: mockSaveAssistantMessage,
-    saveToolCallMessage: mockSaveToolCallMessage,
-    saveToolResultMessage: mockSaveToolResultMessage,
-    createConversationIfNeeded: mockCreateConversationIfNeeded,
-    getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
-  })),
+  AIChatV2Module: vi.fn().mockImplementation(function () {
+    return {
+      saveUserMessage: mockSaveUserMessage,
+      getConversationMessages: mockGetConversationMessages,
+      getRecentMessages: mockGetRecentMessages,
+      saveAssistantMessage: mockSaveAssistantMessage,
+      saveToolCallMessage: mockSaveToolCallMessage,
+      saveToolResultMessage: mockSaveToolResultMessage,
+      createConversationIfNeeded: mockCreateConversationIfNeeded,
+      getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
+    };
+  }),
 }));
 
 // --- Mock AIChatAttachmentModule (attachment byte persistence) ----------
 const mockSaveUploadedFiles = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/modules/AIChatAttachmentModule", () => ({
-  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
-    saveUploadedFiles: mockSaveUploadedFiles,
-  })),
+  AIChatAttachmentModule: vi.fn().mockImplementation(function () {
+    return {
+      saveUploadedFiles: mockSaveUploadedFiles,
+    };
+  }),
 }));
 
 // --- Mock AIChatPlanModule ---------------------------------------------
@@ -64,29 +71,46 @@ const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
 const mockApprovePlan = vi.fn();
 
 vi.mock("@/modules/AIChatPlanModule", () => ({
-  AIChatPlanModule: vi.fn().mockImplementation(() => ({
-    getPlanState: mockGetPlanState,
-    ensurePlanForConversation: mockEnsurePlanForConversation,
-    approvePlan: mockApprovePlan,
-  })),
+  AIChatPlanModule: vi.fn().mockImplementation(function () {
+    return {
+      getPlanState: mockGetPlanState,
+      ensurePlanForConversation: mockEnsurePlanForConversation,
+      approvePlan: mockApprovePlan,
+    };
+  }),
+}));
+
+const mockGetActiveGoal = vi.fn().mockResolvedValue(null);
+vi.mock("@/modules/AIChatGoalModule", () => ({
+  AIChatGoalModule: vi.fn().mockImplementation(function () {
+    return {
+      getActiveGoal: mockGetActiveGoal,
+    };
+  }),
 }));
 
 // --- Mock compact modules (used by default AIChatContextAssembler) -----
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
-    getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatSessionMemoryModule: vi.fn().mockImplementation(function () {
+    return {
+      getByConversation: vi.fn().mockResolvedValue(null),
+    };
+  }),
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
-  AIChatCompactModule: vi.fn().mockImplementation(() => ({
-    getActiveSummary: vi.fn().mockResolvedValue(null),
-  })),
+  AIChatCompactModule: vi.fn().mockImplementation(function () {
+    return {
+      getActiveSummary: vi.fn().mockResolvedValue(null),
+    };
+  }),
 }));
 
 vi.mock("@/modules/AgentDefinitionModule", () => ({
-  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
-    listActiveForRuntime: vi.fn().mockResolvedValue([]),
-  })),
+  AgentDefinitionModule: vi.fn().mockImplementation(function () {
+    return {
+      listActiveForRuntime: vi.fn().mockResolvedValue([]),
+    };
+  }),
 }));
 
 // --- Mock AiChatApi ----------------------------------------------------
@@ -94,7 +118,9 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
   return {
     ...actual,
-    AiChatApi: vi.fn().mockImplementation(() => ({})),
+    AiChatApi: vi.fn().mockImplementation(function () {
+      return {};
+    }),
   };
 });
 
@@ -121,9 +147,11 @@ vi.mock("@/service/SkillExecutor", () => ({
 
 // --- Mock Token --------------------------------------------------------
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockReturnValue("true"),
-  })),
+  Token: vi.fn().mockImplementation(function () {
+    return {
+      getValue: vi.fn().mockReturnValue("true"),
+    };
+  }),
 }));
 
 // --- Mock usersetting --------------------------------------------------
@@ -164,6 +192,7 @@ describe("AIChatQueryEngine", () => {
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockApprovePlan.mockReset();
+    mockGetActiveGoal.mockResolvedValue(null);
     HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
@@ -465,6 +494,9 @@ describe("AIChatQueryEngine", () => {
         toolCallId: "call-1",
         toolName: "get_time",
         toolArguments: { timezone: "UTC" },
+        turnId: expect.any(String),
+        model: undefined,
+        tokensUsed: undefined,
       });
       expect(mockSaveToolResultMessage).toHaveBeenCalledWith({
         conversationId: "v2-test-conv",
@@ -474,6 +506,7 @@ describe("AIChatQueryEngine", () => {
         content: '{"success":true}',
         toolResult: { success: true, summary: "12:00 UTC" },
         replacesPermissionPromptForToolId: undefined,
+        turnId: expect.any(String),
       });
     });
 
@@ -691,6 +724,68 @@ describe("AIChatQueryEngine", () => {
       expect(loopInput.planContext).toBeUndefined();
       // …and autoPlan stays off so the loop would reject any stray call.
       expect(loopInput.autoPlan).toBeUndefined();
+    });
+
+    it("sets goalAutoContinue in chat mode when a conversation goal is active", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "chat",
+          message: "Plan approved. Please begin executing the plan now.",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(true);
+    });
+
+    it("does not set goalAutoContinue in plan mode even with an active goal", async () => {
+      mockGetActiveGoal.mockResolvedValue({
+        goalId: "goal-1",
+        conversationId: "v2-test-conv",
+        status: "draft",
+        objective: "Collect 1000 distributors",
+      });
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "ok",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          mode: "plan",
+          message: "Plan how to accomplish this goal",
+        },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledOnce();
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.goalAutoContinue).toBe(false);
     });
 
     it("advertises EnterPlanMode in plain chat mode with no approved plan", async () => {
@@ -1819,5 +1914,65 @@ describe("AIChatQueryEngine generated-image rehoming", () => {
     } else {
       throw new Error("expected a complete event");
     }
+  });
+});
+
+describe("AIChatQueryEngine reactive compaction sentinel", () => {
+  // Finding 4: the fallback compaction path (no coordinator) must not pass
+  // Number.MAX_SAFE_INTEGER as promptTokens. That sentinel poisons
+  // lastPromptTokens with 9e15, skewing the next turn's session-memory gate.
+  // The engine now resolves the model's real context window as a finite
+  // sentinel that still meets the 0.8 * contextWindow threshold.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockGetActiveGoal.mockResolvedValue(null);
+    HookRegistry.unregisterSource("plugin:test-hooks");
+  });
+
+  it("passes a finite prompt-token sentinel (not MAX_SAFE_INTEGER) on reactive overflow", async () => {
+    const enqueueAutoCompact = vi.fn().mockResolvedValue(true);
+    const fakeAgent = {
+      enqueueAutoCompact,
+    } as unknown as AIChatCompactAgentService;
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "failed" as const,
+      conversationId: "v2-reactive",
+      assistantMessageId: "assistant-reactive",
+      error: new RecoverableHistoryError(
+        "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+        "context too large"
+      ),
+      partialContent: "",
+      model: "gpt-4o-mini",
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, {
+      compactAgent: fakeAgent,
+    });
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: { message: "hi" },
+      eventSink: sink,
+    });
+
+    // requestReactiveCompaction is fire-and-forget: the sentinel resolves
+    // (model catalog lookup) then enqueues. Wait for the async chain to flush.
+    await vi.waitFor(
+      () => expect(enqueueAutoCompact).toHaveBeenCalledTimes(1),
+      { timeout: 3000 }
+    );
+    const input = enqueueAutoCompact.mock
+      .calls[0][0] as SessionMemoryUpdateInput;
+    // The sentinel must be a finite positive number, never the 9e15 poison.
+    expect(input.promptTokens).not.toBe(Number.MAX_SAFE_INTEGER);
+    expect(typeof input.promptTokens).toBe("number");
+    expect(Number.isFinite(input.promptTokens)).toBe(true);
+    expect(input.promptTokens).toBeGreaterThan(0);
+    // It must still clear the threshold gate (>= the resolved context window,
+    // which is >= 0.8 * window). The recovery default (128k) is the floor.
+    expect(input.promptTokens).toBeGreaterThanOrEqual(128_000);
   });
 });

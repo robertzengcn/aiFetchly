@@ -51,10 +51,14 @@ export function isExplicitSkipReviewReason(
 }
 
 /**
- * True when trusted app code may create a direct-send authorization without
- * the Review UI. Covers an explicit Review waiver AND a chat confirmation
- * ("yes, send it") after the assistant presented the draft. A model-supplied
- * tool argument must never be used for this.
+ * True when trusted phrase matching may create a direct-send authorization
+ * without the Review UI. Covers an explicit Review waiver in the user text
+ * AND a chat confirmation ("yes, send it") after the assistant presented
+ * the draft.
+ *
+ * A model-supplied `skip_review` argument is a separate fallback — see
+ * {@link isModelDeclaredSkipReview} and {@link canHonorModelDeclaredSkipReview}.
+ * That path still cannot override review_first / do-not-send / conflicts.
  */
 export function allowsOutboundDirectSendAuthorization(
   reasonCode: OutboundEmailIntentReasonCode
@@ -63,6 +67,50 @@ export function allowsOutboundDirectSendAuthorization(
     reasonCode === "explicit_skip_review" ||
     reasonCode === "contextual_affirmation"
   );
+}
+
+/**
+ * Boolean `skip_review` on `start_email_send_task`. Extra keys are ignored.
+ * Only a real boolean `true` counts — strings such as `"true"` do not.
+ */
+export const outboundSkipReviewArgumentSchema = z
+  .object({
+    skip_review: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * True when the send-tool arguments contain `skip_review: true`.
+ */
+export function isModelDeclaredSkipReview(args: unknown): boolean {
+  const parsed = outboundSkipReviewArgumentSchema.safeParse(args);
+  return parsed.success && parsed.data.skip_review === true;
+}
+
+/**
+ * Whether `skip_review: true` may skip the Review UI (and drafting when
+ * no batch exists yet).
+ *
+ * Phrase matching misses many natural waivers. The model can declare the
+ * waiver and send this call's recipients/content immediately, but it cannot
+ * override a user who asked to review, not to send, or whose instructions
+ * conflict, and a resolver failure stays fail-closed.
+ */
+export function canHonorModelDeclaredSkipReview(intent: {
+  mode: OutboundEmailDeliveryMode;
+  reasonCode: OutboundEmailIntentReasonCode;
+}): boolean {
+  if (intent.mode === "review_first") {
+    return false;
+  }
+  if (
+    intent.reasonCode === "explicit_do_not_send" ||
+    intent.reasonCode === "conflicting_instruction" ||
+    intent.reasonCode === "resolver_failure"
+  ) {
+    return false;
+  }
+  return intent.mode === "send_now" || intent.mode === "draft_only";
 }
 
 export const outboundEmailBatchStatusSchema = z.enum([
@@ -222,6 +270,47 @@ export type AuthorizedEmailWorkerPayloadV2 = Omit<
 > & { emailServices: EmailServiceEntitydata[] };
 
 // ---------------------------------------------------------------------------
+// §16 Version-3 authorized envelope payload (carries v2 identity)
+// ---------------------------------------------------------------------------
+
+/** Version-3 authorized envelope (§16.1) — carries v2 identity. */
+export const authorizedOutboundEnvelopeV3Schema = z.object({
+  envelopeVersion: z.literal(2),
+  draftId: z.number().int(),
+  revisionId: z.number().int(),
+  revisionNumber: z.number().int(),
+  recipientAddress: z.string().max(320),
+  emailServiceId: z.number().int(),
+  smtpUsername: z.string().min(1).max(255),
+  senderAddress: z.string().min(1).max(320),
+  replyToAddress: z.string().max(320).nullable(),
+  subject: z.string().max(500),
+  bodyText: z.string(),
+  bodyHtml: z.string().nullable(),
+  envelopeHash: z.string().length(64),
+});
+
+/** v3 envelope carrying v2 identity (smtpUsername + replyToAddress). */
+export type AuthorizedOutboundEnvelopeV3 = z.infer<
+  typeof authorizedOutboundEnvelopeV3Schema
+>;
+
+export const authorizedEmailWorkerPayloadV3Schema = z.object({
+  version: z.literal(3),
+  mode: z.literal("authorized_envelopes"),
+  batchId: z.number().int(),
+  sendAttemptId: z.number().int(),
+  batchHash: z.string().length(64),
+  envelopes: z.array(authorizedOutboundEnvelopeV3Schema),
+  emailServices: z.array(z.unknown()),
+});
+
+export type AuthorizedEmailWorkerPayloadV3 = Omit<
+  z.infer<typeof authorizedEmailWorkerPayloadV3Schema>,
+  "emailServices"
+> & { emailServices: EmailServiceEntitydata[] };
+
+// ---------------------------------------------------------------------------
 // §6.4 Typed worker events (correlated by batch+attempt+draft+revision+hash)
 // ---------------------------------------------------------------------------
 
@@ -298,6 +387,7 @@ export type AuthorizedEmailWorkerEventSchema = z.infer<
 export type OutboundEmailToolGateResult =
   | {
       allowed: true;
+      skipReviewDirectSend?: false;
       batchId: number;
       authorizationId: number;
       /**
@@ -306,6 +396,15 @@ export type OutboundEmailToolGateResult =
        * the send tool can claim without re-reading the batch.
        */
       batchHash: string;
+    }
+  | {
+      allowed: true;
+      /**
+       * `skip_review: true` on `start_email_send_task` with no draft batch.
+       * The send tool uses this call's recipients/content (legacy path)
+       * instead of claiming a reviewed batch.
+       */
+      skipReviewDirectSend: true;
     }
   | {
       allowed: false;

@@ -63,6 +63,9 @@ export interface RagSearchCandidate {
     name: string;
     title?: string;
     fileType: string;
+    author?: string;
+    description?: string;
+    tags?: string[];
   };
 }
 
@@ -81,6 +84,19 @@ export interface KnowledgeSearchRequest {
     start: string;
     end: string;
   };
+  // Phase 3 filters (optional; omitted when not supplied).
+  language?: string;
+  documentDateRange?: {
+    start: string;
+    end: string;
+  };
+  /** Equality filters for the fixed custom-metadata allowlist. */
+  customMetadata?: {
+    product?: string;
+    customer?: string;
+    campaign?: string;
+    category?: string;
+  };
   includeNeighborChunks?: boolean;
 }
 
@@ -90,6 +106,9 @@ export interface KnowledgeSearchResultItem {
   documentName: string;
   title?: string;
   fileType: string;
+  author?: string;
+  tags?: string[];
+  description?: string;
   chunkId: number;
   chunkIndex: number;
   /** Combined or rerank score */

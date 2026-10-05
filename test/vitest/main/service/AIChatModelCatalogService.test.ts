@@ -233,4 +233,80 @@ describe("AIChatModelCatalogService", () => {
     await service.refresh();
     expect(await service.getSmallModelCapability()).toBeNull();
   });
+
+  describe("resolveLimits", () => {
+    it("uses the 128k catalog fallback before the catalog is loaded", () => {
+      const { service } = buildApiMock({ object: "list", data: [] });
+      const limits = service.resolveLimits("gpt-4o");
+      expect(limits.contextLimit).toBe(128_000);
+      expect(limits.outputLimit).toBe(16_384);
+      expect(limits.limitSource).toBe("fallback");
+    });
+
+    it("uses provider limits after the catalog is loaded", async () => {
+      const { service } = buildApiMock({
+        object: "list",
+        data: [
+          {
+            id: "gpt-4o",
+            object: "model",
+            created: 1,
+            owned_by: "test",
+            context_window: 128_000,
+            max_tokens: 16_384,
+          },
+        ],
+      });
+      await service.refresh();
+      expect(service.resolveLimits("gpt-4o")).toEqual({
+        contextLimit: 128_000,
+        outputLimit: 16_384,
+        limitSource: "provider",
+      });
+    });
+
+    it("falls back to the default model when the request omits a model id", async () => {
+      const { service } = buildApiMock({
+        object: "list",
+        data: [
+          {
+            id: "hosted-default",
+            object: "model",
+            created: 1,
+            owned_by: "test",
+            context_size: 200_000,
+            max_tokens: 8_192,
+          },
+        ],
+        default_model: "hosted-default",
+      });
+      await service.refresh();
+      expect(service.resolveLimits(undefined)).toEqual({
+        contextLimit: 200_000,
+        outputLimit: 8_192,
+        limitSource: "provider",
+      });
+    });
+
+    // Regression: models without a server-reported context window must
+    // default to 256k (not 128k) so long scheduled-loop turns are not
+    // rejected with "request budget rejected ... exceeds context (128000)".
+    it("defaults to 256k when constructed with the production default", () => {
+      const listOpenAIModels = vi.fn().mockResolvedValue({
+        object: "list",
+        data: [],
+      } as OpenAIModelsResponse);
+      const api = {
+        listOpenAIModels,
+      } as unknown as ConstructorParameters<
+        typeof AIChatModelCatalogService
+      >[0];
+      // No explicit fallback arg → uses AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens (256k).
+      const service = new AIChatModelCatalogService(api);
+      const limits = service.resolveLimits("agnes-3.0-flash");
+      expect(limits.contextLimit).toBe(256_000);
+      expect(limits.outputLimit).toBe(16_384);
+      expect(limits.limitSource).toBe("fallback");
+    });
+  });
 });

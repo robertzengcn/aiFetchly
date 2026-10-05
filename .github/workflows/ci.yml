@@ -187,41 +187,38 @@ jobs:
 
       # electron-packager's finalize/prune phase (galactus building an in-memory
       # map of the whole dependency tree) produces transient memory spikes that
-      # can OOM-kill the process on a ~7 GB runner, surfacing as "lost
-      # communication with the server" mid-"Finalizing package" and killing the
-      # step as an opaque exit 143 with NO [package-guard] diagnostics. A 4 GB
-      # swap file absorbs those spikes. This was introduced by 7e1e14eb and
-      # accidentally dropped when the job was reworked; restored here.
+      # can OOM-kill the runner, surfacing as a bare "The runner has received a
+      # shutdown signal" / "The operation was canceled" mid-"Finalizing package"
+      # with no exit code and no error — the kernel OOM-kills the runner agent
+      # process itself. A swap file absorbs those spikes.
       #
-      # Harden the step: the previous version masked every command with `|| true`,
-      # so a silently-failed swap (fallocate/swapon error, or swap already
-      # present) left the finalize phase UNPROTECTED — and the next run OOM'd
-      # into the exact exit-143 the hang-guard now also catches. Instead, fail
-      # THIS step loudly (with a clear "swap setup failed" message) if swap is
-      # not actually active after the attempt, so we never ship a packaging run
-      # whose OOM protection was silently absent. A leftover /swapfile from a
-      # prior run (swapon: file already in use) is treated as success.
+      # The runner image already mounts a swapfile at /swapfile, so re-using that
+      # path silently no-ops ("fallocate failed: Text file busy" / "mkswap:
+      # /swapfile is mounted" / "swapon failed: Device or resource busy"). The
+      # previous `|| true` step therefore reported success while adding ZERO
+      # swap — leaving the job with only the runner's 3 GB of swap, which is not
+      # enough for galactus's finalize spike on this node_modules tree. Use a
+      # fresh path (/swapfile-ci) so the extra swap is actually created, and
+      # fail the step (not swallow) if it can't be enabled — a broken mitigation
+      # must be loud, not silent.
       - name: Add swap to absorb finalize memory spikes
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          if swapon --show 2>/dev/null | grep -q swapfile; then
-            echo "/swapfile already active — skipping creation."
-          else
-            sudo fallocate -l 4G /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile >/dev/null
-            sudo swapon /swapfile
-          fi
+          # Use a path the runner image does not pre-mount.
+          sudo fallocate -l 4G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci >/dev/null
+          sudo swapon /swapfile-ci
           echo "Memory/swap after:"; free -h
-          # Verify swap is actually active; fail loudly if not so the run
-          # never reaches the OOM-prone finalize phase unprotected.
-          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
-          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
-            echo "::error::Swap is not active after setup (got ${ACTIVE_KB:-0} KB). Aborting so packaging doesn't OOM into an opaque exit 143."
+          # Hard-fail if swap did not actually increase: a no-op mitigation is
+          # worse than an explicit failure because it hides the OOM root cause.
+          # Runner ships ~3 GB swap; the 4 GB addition should bring total > 6 GB.
+          AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+          if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
+            echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before the packaging step OOM-kills the runner."
             exit 1
           fi
-          echo "Swap active: ${ACTIVE_KB} KB"
 
       - name: Guard forge asar unpack before packaging
         run: yarn verify-forge-asar-unpack

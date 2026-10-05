@@ -265,10 +265,8 @@ describe("EmailMarketingAiTools", () => {
         throw new Error(result.error);
       }
       expect(result.recipient_count).to.equal(1);
-      expect(result.email_content).to.deep.equal({
-        subject: "Hello from content mode",
-        content: "<p>Inline HTML body</p>",
-      });
+      expect(result.email_subject).to.equal("Hello from content mode");
+      expect(result.email_html_content).to.equal("Inline HTML body");
       expect(result.template_ids).to.equal(undefined);
     });
 
@@ -283,7 +281,7 @@ describe("EmailMarketingAiTools", () => {
         throw new Error("Expected validation failure");
       }
       expect(result.validation_errors).to.include(
-        "Provide either template_ids or email_subject and email_html_content"
+        "Provide either template_ids or email_subject and email_content"
       );
     });
   });
@@ -315,7 +313,7 @@ describe("EmailMarketingAiTools", () => {
 
       const startArgs = startStub.firstCall.args[0] as Buckemailstruct;
       expect(startArgs.email_subject).to.equal("Campaign subject");
-      expect(startArgs.email_html_content).to.equal("<p>Body</p>");
+      expect(startArgs.email_html_content).to.equal("Body");
       expect(startArgs.EmailServicelist).to.deep.equal([3]);
     });
 

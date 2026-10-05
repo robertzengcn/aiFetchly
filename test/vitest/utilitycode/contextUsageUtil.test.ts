@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeContextPercent,
+  estimateVisibleContextTokens,
   resolveContextWindow,
   toneForPercent,
   DEFAULT_CONTEXT_WINDOW,
@@ -135,5 +136,17 @@ describe("toneForPercent", () => {
 
   it("treats NaN as low", () => {
     expect(toneForPercent(Number.NaN)).toBe("low");
+  });
+});
+
+describe("estimateVisibleContextTokens", () => {
+  it("returns 0 for empty content", () => {
+    expect(estimateVisibleContextTokens([{ content: "" }])).toBe(0);
+  });
+
+  it("estimates about one token per four characters", () => {
+    expect(estimateVisibleContextTokens([{ content: "a".repeat(400) }])).toBe(
+      100
+    );
   });
 });

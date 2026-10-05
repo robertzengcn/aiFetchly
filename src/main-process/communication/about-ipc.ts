@@ -7,7 +7,11 @@ import {
   APP_INSTALL_UPDATE,
   APP_UPDATE_STATUS_EVENT,
 } from "@/config/channellist";
-import { AIFETCHLY_WEBSITE_URL } from "@/config/appInfo";
+import {
+  AIFETCHLY_WEBSITE_URL,
+  resolveAboutWebsiteUrl,
+} from "@/config/appInfo";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { CommonMessage } from "@/entityTypes/commonType";
 import type { UpdateStatusSnapshot } from "@/main-process/updater/UpdateStatus";
 import { getManualUpdateService } from "@/main-process/updater/createManualUpdateService";
@@ -44,11 +48,28 @@ export function createWindowStatusSink(
 }
 
 /**
+ * Resolve the About-page website URL for the main process.
+ *
+ * Prefers `VITE_LOGIN_URL` (embedded at build time via `vite.main.config.mjs`
+ * `define`, see `src/config/viteLoginUrl.ts`) and falls back to the
+ * `AIFETCHLY_WEBSITE_URL` constant when it is missing or invalid. Exported
+ * for unit testing.
+ */
+export function resolveAboutWebsiteUrlForMain(): string {
+  const raw: string | undefined = resolveViteLoginBase()?.value;
+  if (raw === undefined) {
+    return AIFETCHLY_WEBSITE_URL;
+  }
+  return resolveAboutWebsiteUrl(raw);
+}
+
+/**
  * Register About-page IPC handlers and wire update-status push events.
  *
  * All four channels are no-input invoke handlers: the renderer cannot supply an
- * arbitrary URL or feed, so website-open is limited to the fixed allowlisted
- * constant (FR-3.3) and the feed repo is a main-process constant (FR-7.3).
+ * arbitrary URL or feed, so website-open is limited to the allowlisted
+ * `VITE_LOGIN_URL` / fallback constant (FR-3.3) and the feed repo is a
+ * main-process constant (FR-7.3).
  */
 export function registerAboutIpcHandlers(
   getWin: () => BrowserWindow | null
@@ -59,9 +80,10 @@ export function registerAboutIpcHandlers(
   service.setStatusSink(createWindowStatusSink(getWin));
 
   ipcMain.handle(APP_OPEN_WEBSITE, async (): Promise<CommonMessage<null>> => {
+    const websiteUrl: string = resolveAboutWebsiteUrlForMain();
     try {
-      await shell.openExternal(AIFETCHLY_WEBSITE_URL);
-      log.info(`[about] opened website: ${AIFETCHLY_WEBSITE_URL}`);
+      await shell.openExternal(websiteUrl);
+      log.info(`[about] opened website: ${websiteUrl}`);
       return { status: true, msg: "ok", data: null };
     } catch (err) {
       log.error(`[about] failed to open website: ${describeError(err)}`);

@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EmailServiceTable from "@/views/pages/emailservice/widgets/EmailServiceTable.vue";
@@ -9,18 +9,24 @@ const apiMocks = vi.hoisted(() => ({
   getEmailServiceList: vi.fn(),
   deleteEmailService: vi.fn(),
   exportEmailServices: vi.fn(),
+  importEmailServices: vi.fn(),
+  getEmailServiceTags: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/views/api/emailservice", () => ({
+  getEmailServiceTags: (...args: unknown[]) => apiMocks.getEmailServiceTags(...args),
   getEmailServiceList: (...args: unknown[]) =>
     apiMocks.getEmailServiceList(...args),
   deleteEmailService: (...args: unknown[]) =>
     apiMocks.deleteEmailService(...args),
   exportEmailServices: (...args: unknown[]) =>
     apiMocks.exportEmailServices(...args),
+  importEmailServices: (...args: unknown[]) =>
+    apiMocks.importEmailServices(...args),
 }));
 
 // Stub vue-router's useRouter — component pushes routes on edit/create.
+// (Hoisted mocks are required so navigation tests can assert push calls.)
 const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push: routerMocks.push }),
@@ -38,6 +44,14 @@ const i18n = createI18n({
         export_success: "Export successful",
         export_failed: "Export failed",
         export_cancelled: "Export cancelled",
+        import: "Import",
+        import_success: "Import successful",
+        import_partial: "Imported {imported}, skipped {skipped} invalid rows",
+        import_partial_skipped: ": {errors}",
+        import_cancelled: "Import cancelled",
+        import_failed: "Import failed",
+        import_no_valid_rows: "No valid services found in file",
+        import_invalid_file: "Invalid file format",
         actions: "Actions",
         created_time: "created time",
       },
@@ -56,6 +70,8 @@ const i18n = createI18n({
 });
 
 const stubs = {
+  VSelect: { name: "VSelect", props: ["modelValue", "items"], emits: ["update:modelValue"], template: "<select />" },
+  EmailServiceTagDialog: { name: "EmailServiceTagDialog", props: ["modelValue"], emits: ["changed", "update:modelValue"], template: "<div />" },
   VTextField: { template: "<input />" },
   VBtn: {
     props: ["loading", "prependIcon", "variant", "color"],
@@ -80,6 +96,13 @@ const stubs = {
   },
   VIcon: true,
   DeleteDialog: true,
+  EmailServiceImportDialog: {
+    name: "EmailServiceImportDialog",
+    props: ["modelValue"],
+    emits: ["update:modelValue", "imported"],
+    template:
+      '<div data-testid="email-service-import-dialog" v-if="modelValue" />',
+  },
   NoticeSnackbar: {
     props: ["modelValue", "message", "type"],
     emits: ["update:modelValue"],
@@ -92,6 +115,8 @@ const SAMPLE: EmailServiceListdata[] = [
   {
     id: 1,
     name: "Primary SMTP",
+    tagId: null,
+    tag: null,
     from: "a@example.com",
     host: "smtp.example.com",
     receiveProtocol: "imap",
@@ -107,6 +132,28 @@ function mountTable(props: Record<string, unknown> = {}) {
 }
 
 describe("EmailServiceTable export", () => {
+  it("filters by tag and untagged, then refreshes rows after tag changes", async () => {
+    apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
+    apiMocks.getEmailServiceTags.mockResolvedValue([{ id: 4, name: "Sales", serviceCount: 1, normalizedName: "sales" }]);
+    const wrapper = mountTable();
+    await flushPromises();
+    const filter = wrapper.findComponent({ name: "VSelect" });
+    filter.vm.$emit("update:modelValue", 4);
+    await flushPromises();
+    expect(apiMocks.getEmailServiceList).toHaveBeenLastCalledWith(expect.objectContaining({ page: 0, tagId: 4 }));
+    filter.vm.$emit("update:modelValue", "untagged");
+    await flushPromises();
+    expect(apiMocks.getEmailServiceList).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: undefined, untagged: true }));
+    await wrapper.get('[data-testid="email-service-manage-tags-btn"]').trigger("click");
+    const dialog = wrapper.findComponent({ name: "EmailServiceTagDialog" });
+    expect(dialog.props("modelValue")).toBe(true);
+    const calls = apiMocks.getEmailServiceList.mock.calls.length;
+    dialog.vm.$emit("changed");
+    await flushPromises();
+    expect(apiMocks.getEmailServiceList.mock.calls.length).toBeGreaterThan(calls);
+    wrapper.unmount();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
@@ -170,6 +217,64 @@ describe("EmailServiceTable export", () => {
       const snackbar = wrapper.find('[data-testid="notice-snackbar"]');
       expect(snackbar.exists()).toBe(true);
       expect(snackbar.attributes("data-message")).toContain("disk full");
+    });
+  });
+});
+
+describe("EmailServiceTable import", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.getEmailServiceList.mockResolvedValue({ data: SAMPLE, total: 1 });
+  });
+
+  it("renders an import button (standalone list mode)", () => {
+    const wrapper = mountTable();
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(true);
+  });
+
+  it("hides the import button in selection mode (isSelectedtable=true)", () => {
+    const wrapper = mountTable({ isSelectedtable: true });
+    expect(
+      wrapper.find('[data-testid="email-service-import-btn"]').exists()
+    ).toBe(false);
+  });
+
+  it("opens the import dialog instead of calling the import IPC directly", async () => {
+    const wrapper = mountTable();
+
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+
+    await vi.waitFor(() => {
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
+    });
+    expect(apiMocks.importEmailServices).not.toHaveBeenCalled();
+  });
+
+  it("reloads the list when the dialog reports an import", async () => {
+    const wrapper = mountTable();
+    await wrapper
+      .find('[data-testid="email-service-import-btn"]')
+      .trigger("click");
+    await vi.waitFor(() => {
+      expect(
+        wrapper.find('[data-testid="email-service-import-dialog"]').exists()
+      ).toBe(true);
+    });
+
+    const callsBefore = apiMocks.getEmailServiceList.mock.calls.length;
+    await wrapper
+      .findComponent({ name: "EmailServiceImportDialog" })
+      .vm.$emit("imported");
+    await vi.waitFor(() => {
+      expect(apiMocks.getEmailServiceList.mock.calls.length).toBeGreaterThan(
+        callsBefore
+      );
     });
   });
 });

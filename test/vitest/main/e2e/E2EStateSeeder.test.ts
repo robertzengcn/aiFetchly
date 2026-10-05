@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -77,9 +77,9 @@ describe("E2EStateSeeder", () => {
     const keys = tokenSetStub.getCalls().map((c) => c.args[0]);
     expect(keys).toContain("user_dbpath"); // USERSDBPATH
     expect(keys).toContain("user_ai_enabled"); // USER_AI_ENABLED
-    const aiCall = tokenSetStub.getCalls().find(
-      (c) => c.args[0] === "user_ai_enabled"
-    );
+    const aiCall = tokenSetStub
+      .getCalls()
+      .find((c) => c.args[0] === "user_ai_enabled");
     expect(aiCall?.args[1]).toBe("false");
     expect(setModeStub.calledWith("hosted")).toBe(true);
     expect(saveProviderStub.called).toBe(false);
@@ -101,14 +101,14 @@ describe("E2EStateSeeder", () => {
     expect(input.baseUrl).toBe("http://127.0.0.1:6000/v1");
     expect(input.clearApiKey).toBe(true);
     expect(setModeStub.calledWith("local")).toBe(true);
-    const aiCall = tokenSetStub.getCalls().find(
-      (c) => c.args[0] === "user_ai_enabled"
-    );
+    const aiCall = tokenSetStub
+      .getCalls()
+      .find((c) => c.args[0] === "user_ai_enabled");
     expect(aiCall?.args[1]).toBe("true");
     // USERSDBPATH is pinned to the isolated root.
-    const dbCall = tokenSetStub.getCalls().find(
-      (c) => c.args[0] === "user_dbpath"
-    );
+    const dbCall = tokenSetStub
+      .getCalls()
+      .find((c) => c.args[0] === "user_dbpath");
     expect(dbCall?.args[1]).toBe(env.databasePath);
   });
 
@@ -119,5 +119,36 @@ describe("E2EStateSeeder", () => {
     const keys = tokenSetStub.getCalls().map((c) => c.args[0]);
     expect(keys).toContain("user_email");
     expect(keys).toContain("user_name");
+  });
+
+  it("tokenOverrides are applied after the standard seed", () => {
+    const file = path.join(root, "state.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        authState: "authenticated",
+        aiState: "local-enabled",
+        locale: "en",
+        fakeAiBaseUrl: "http://127.0.0.1:6000/v1",
+        workspacePath: "/tmp/aifetchly-e2e/ws",
+        tokenOverrides: {
+          ai_chat_archive_reads_flag: "true",
+          ai_chat_new_compaction_flag: "true",
+        },
+      }),
+      "utf8"
+    );
+    seedE2EState(makeEnv(root, file));
+
+    const archiveCall = tokenSetStub
+      .getCalls()
+      .find((c) => c.args[0] === "ai_chat_archive_reads_flag");
+    const compactionCall = tokenSetStub
+      .getCalls()
+      .find((c) => c.args[0] === "ai_chat_new_compaction_flag");
+    expect(archiveCall?.args[1]).toBe("true");
+    expect(compactionCall?.args[1]).toBe("true");
   });
 });

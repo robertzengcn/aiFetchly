@@ -220,6 +220,98 @@
             </v-list>
           </div>
           
+          <!-- Upload metadata: one set of values for every file in this upload.
+               Rendered whenever the dialog is open so the user can fill author,
+               tags, and description before choosing files (PRD §14.1). The Upload
+               button stays disabled until a file is selected (PRD §14.2). -->
+          <div v-if="showUploadDialog" class="upload-metadata mt-4">
+            <div class="text-caption text-grey mb-2">
+              {{ t('knowledge.upload_metadata_hint') || 'Optional. Applied to every file in this upload.' }}
+            </div>
+            <v-text-field
+              v-model="uploadAuthor"
+              :label="t('knowledge.author') || 'Author'"
+              maxlength="255"
+              density="compact"
+              class="mb-2"
+            />
+            <v-combobox
+              v-model="uploadTags"
+              :label="t('knowledge.tags') || 'Tags'"
+              :hint="t('knowledge.tags_hint') || 'Press Enter to add tags'"
+              multiple
+              chips
+              closable-chips
+              density="compact"
+              class="mb-2"
+            />
+            <v-textarea
+              v-model="uploadDescription"
+              :label="t('knowledge.description') || 'Description'"
+              maxlength="2000"
+              rows="2"
+              density="compact"
+            />
+            <v-text-field
+              v-model="uploadLanguage"
+              :label="t('knowledge.metadata_language') || 'Language'"
+              :hint="t('knowledge.metadata_language_hint') || 'e.g. en, zh-CN'"
+              maxlength="16"
+              density="compact"
+              class="mb-2"
+            />
+            <v-text-field
+              v-model="uploadDocumentDate"
+              :label="t('knowledge.metadata_document_date') || 'Document date'"
+              :hint="t('knowledge.metadata_document_date_hint') || 'YYYY-MM-DD'"
+              maxlength="32"
+              density="compact"
+              class="mb-2"
+            />
+            <div class="d-flex align-center mb-1">
+              <v-btn
+                size="small"
+                variant="text"
+                :prepend-icon="showMoreUploadFields ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                @click="showMoreUploadFields = !showMoreUploadFields"
+              >
+                {{ t('knowledge.metadata_more_fields') || 'More fields' }}
+              </v-btn>
+            </div>
+            <div v-if="showMoreUploadFields" class="mb-2">
+              <div class="text-caption text-grey mb-2">
+                {{ t('knowledge.metadata_more_fields_hint') || 'Optional custom keys applied to every file in this upload.' }}
+              </div>
+              <v-text-field
+                v-model="uploadCustomProduct"
+                :label="t('knowledge.metadata_custom_product') || 'Product'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCustomer"
+                :label="t('knowledge.metadata_custom_customer') || 'Customer'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCampaign"
+                :label="t('knowledge.metadata_custom_campaign') || 'Campaign'"
+                maxlength="200"
+                density="compact"
+                class="mb-2"
+              />
+              <v-text-field
+                v-model="uploadCustomCategory"
+                :label="t('knowledge.metadata_custom_category') || 'Category'"
+                maxlength="200"
+                density="compact"
+              />
+            </div>
+          </div>
+          
           <v-alert
             v-if="uploadError"
             type="error"
@@ -481,7 +573,12 @@ import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
 import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
-import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
+import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, uploadDocument as uploadDocumentAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
+import {
+  buildFileUploadMetadata,
+  FileUploadMetadataError,
+  resolveUploadErrorMessage,
+} from '@/views/pages/knowledge/fileUploadMetadata';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
@@ -550,6 +647,79 @@ const uploading = ref(false);
 const uploadError = ref('');
 const isDragOver = ref(false);
 const fileInput = ref<HTMLInputElement>();
+const uploadAuthor = ref<string>('');
+const uploadDescription = ref<string>('');
+const uploadTags = ref<string[]>([]);
+// Phase 3 upload metadata (optional). Custom values are limited to the four
+// allowlist keys (product/customer/campaign/category) shown in the More row.
+const uploadLanguage = ref<string>('');
+const uploadDocumentDate = ref<string>('');
+const showMoreUploadFields = ref<boolean>(false);
+const uploadCustomProduct = ref<string>('');
+const uploadCustomCustomer = ref<string>('');
+const uploadCustomCampaign = ref<string>('');
+const uploadCustomCategory = ref<string>('');
+
+function clearUploadMetadata(): void {
+  uploadAuthor.value = '';
+  uploadDescription.value = '';
+  uploadTags.value = [];
+  uploadLanguage.value = '';
+  uploadDocumentDate.value = '';
+  showMoreUploadFields.value = false;
+  uploadCustomProduct.value = '';
+  uploadCustomCustomer.value = '';
+  uploadCustomCampaign.value = '';
+  uploadCustomCategory.value = '';
+}
+
+/**
+ * Build the custom-metadata object for upload from the four More-row fields.
+ * Empty/whitespace values are omitted; an all-empty object yields undefined
+ * so the column stores NULL rather than "{}" (technical design §6.2).
+ */
+function buildUploadCustomMetadata(): Record<string, string> | undefined {
+  const entries: Array<[string, string]> = [];
+  const product = uploadCustomProduct.value.trim();
+  const customer = uploadCustomCustomer.value.trim();
+  const campaign = uploadCustomCampaign.value.trim();
+  const category = uploadCustomCategory.value.trim();
+  if (product.length > 0) entries.push(['product', product]);
+  if (customer.length > 0) entries.push(['customer', customer]);
+  if (campaign.length > 0) entries.push(['campaign', campaign]);
+  if (category.length > 0) entries.push(['category', category]);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function isNativePathObject(file: File): boolean {
+  const maybePath: unknown = (file as unknown as { path?: unknown }).path;
+  return typeof maybePath === 'string' && (maybePath as string).length > 0 && !(file instanceof File);
+}
+
+function toUploadedDocumentFromResponse(response: unknown, fallbackName: string, fallbackPath: string): UploadedDocument {
+  if (typeof response === 'object' && response !== null && 'document' in response) {
+    const doc: unknown = (response as { document: unknown }).document;
+    if (typeof doc === 'object' && doc !== null && 'name' in doc) {
+      return doc as UploadedDocument;
+    }
+  }
+  if (typeof response === 'object' && response !== null && 'id' in response && 'name' in response) {
+    return response as unknown as UploadedDocument;
+  }
+  return {
+    id: Date.now(),
+    name: fallbackName,
+    title: fallbackName.replace(/\.[^/.]+$/, ''),
+    filePath: fallbackPath,
+    status: 'pending',
+    description: `Uploaded document: ${fallbackName}`,
+    tags: ['uploaded', 'knowledge'],
+    author: 'User',
+  } as UploadedDocument;
+}
 
 // Progress tracking
 const uploadProgress = ref<Map<string, FileUploadProgress>>(new Map());
@@ -645,8 +815,11 @@ function handleLocalRuntimeRequired(): void {
   void ensureLocalEmbeddingRuntime(null);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function handleSearchCompleted(results: { totalResults: number; [key: string]: any }) {
+interface SearchCompletedPayload {
+  totalResults: number;
+}
+
+function handleSearchCompleted(results: SearchCompletedPayload): void {
   showStatus(t('knowledge.found_results', { count: results.totalResults }), 'success');
 }
 
@@ -1012,6 +1185,7 @@ function cancelUpload() {
   isDragOver.value = false;
   currentUploadingFile.value = '';
   uploadProgress.value.clear();
+  clearUploadMetadata();
 }
 
 async function confirmUpload() {
@@ -1060,7 +1234,15 @@ async function confirmUpload() {
     // No duplicates - proceed with all files
     await doUpload(uploadFiles.value);
   } catch (error) {
-    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    // Metadata-validation errors (tag too long, too many tags, etc.) carry a
+    // translatable code; resolve them to the active UI language (PRD §9).
+    // Keep the typed author/tags/description so the user can correct and retry
+    // — do not call cancelUpload() here.
+    if (error instanceof FileUploadMetadataError) {
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => (params ? t(key, params) : t(key)));
+    } else {
+      uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    }
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;
@@ -1096,24 +1278,63 @@ async function doUpload(files: File[]) {
   uploadProgress.value.clear();
 
   try {
-    // Upload each file with progress tracking
+    // Phase 3 metadata: one set of values for every file in this batch.
+    // customMetadata is normalized so an all-empty object yields undefined.
+    const customMetadata = buildUploadCustomMetadata();
+    const language = uploadLanguage.value.trim() || undefined;
+    const documentDate = uploadDocumentDate.value.trim() || undefined;
+
+    // Upload each file with progress tracking. One metadata set applies to
+    // every file in this batch; the default description still uses each file's name.
     const uploadPromises = files.map(async (file): Promise<UploadedDocument | null> => {
-      // For Electron, we can access the file path directly if available
-      // Otherwise, use the webkitRelativePath or create a temporary file
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let filePath = (file as any).path || file.webkitRelativePath;
-      
+      const metadata = buildFileUploadMetadata(file.name, {
+        author: uploadAuthor.value,
+        description: uploadDescription.value,
+        tags: uploadTags.value,
+      });
+      const rawPath: unknown = (file as unknown as { path?: unknown }).path;
+      const nativePath: string | null =
+        typeof rawPath === 'string' && rawPath.length > 0 && isNativePathObject(file) ? rawPath : null;
+      // Electron augments File with a non-standard `path` property; cast it
+      // through a typed shape rather than `any`. `webkitRelativePath` is the
+      // standard string fallback for sandboxed browse inputs.
+      const electronFile = file as File & { path?: unknown };
+      const pathFromFs: string =
+        typeof electronFile.path === 'string' && electronFile.path.length > 0
+          ? electronFile.path
+          : '';
+      let filePath: string = nativePath || pathFromFs || file.webkitRelativePath;
+
+      if (nativePath) {
+        const response: unknown = await uploadDocumentAPI({
+          filePath: nativePath,
+          name: file.name,
+          modelName: currentModel.value || 'text-embedding-3-small',
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
+        });
+        return toUploadedDocumentFromResponse(response, file.name, nativePath);
+      }
+
       if (!filePath) {
         // Set current uploading file for progress display
         currentUploadingFile.value = file.name;
-        
-        // Fallback: create temporary file for browser-like behavior with progress callbacks
+
+        // Sandboxed drag/drop + browse path: no usable File.path, goes through copyFileToTemp.
         const uploadResult = await copyFileToTempAPI(file, {
-          title: file.name.replace(/\.[^/.]+$/, ""),
-          description: `Uploaded document: ${file.name}`,
-          tags: ['uploaded', 'knowledge'],
-          // model_name: currentModel.value
-        }, 
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
+        },
         // Progress callback
         (progress: FileUploadProgress) => {
           uploadProgress.value.set(file.name, progress);
@@ -1123,13 +1344,13 @@ async function doUpload(files: File[]) {
         (result: FileUploadComplete) => {
           console.log(`Complete for ${file.name}:`, result);
           uploadProgress.value.delete(file.name);
-         
+
         });
-        
+
         console.log("uploadResult is ready")
         console.log(uploadResult)
         filePath = uploadResult.tempFilePath;
-        
+
         // Return document info from temp file upload result (already processed)
         if (uploadResult.document) {
           return uploadResult.document;
@@ -1138,25 +1359,47 @@ async function doUpload(files: File[]) {
           return {
             id: Date.now(), // Temporary ID
             name: file.name,
-            title: file.name.replace(/\.[^/.]+$/, ""),
+            title: metadata.title,
             filePath: filePath,
             status: 'pending',
-            description: `Uploaded document: ${file.name}`,
-            tags: ['uploaded', 'knowledge'],
-            author: 'User'
+            description: metadata.description,
+            tags: metadata.tags,
+            author: metadata.author
           } as UploadedDocument;
         }
       } else {
-        // Fallback document info if no database document available
+        // Real File that carries a path stays on copyFileToTemp: RAG_UPLOAD_DOCUMENT
+        // rejects paths that were not granted by the native dialog.
+        currentUploadingFile.value = file.name;
+        const uploadResult = await copyFileToTempAPI(file, {
+          title: metadata.title,
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author,
+          language,
+          documentDate,
+          customMetadata,
+        },
+        (progress: FileUploadProgress) => {
+          uploadProgress.value.set(file.name, progress);
+        },
+        (result: FileUploadComplete) => {
+          void result;
+          uploadProgress.value.delete(file.name);
+        });
+        filePath = uploadResult.tempFilePath;
+        if (uploadResult.document) {
+          return uploadResult.document;
+        }
         return {
           id: Date.now(), // Temporary ID
           name: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ""),
+          title: metadata.title,
           filePath: filePath,
           status: 'pending',
-          description: `Uploaded document: ${file.name}`,
-          tags: ['uploaded', 'knowledge'],
-          author: 'User'
+          description: metadata.description,
+          tags: metadata.tags,
+          author: metadata.author
         } as UploadedDocument;
       }
     });
@@ -1172,7 +1415,15 @@ async function doUpload(files: File[]) {
     
     cancelUpload();
   } catch (error) {
-    uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    // Metadata-validation errors (tag too long, too many tags, etc.) carry a
+    // translatable code; resolve them to the active UI language (PRD §9).
+    // Keep the typed author/tags/description so the user can correct and retry
+    // — do not call cancelUpload() here.
+    if (error instanceof FileUploadMetadataError) {
+      uploadError.value = resolveUploadErrorMessage(error, (key, params) => (params ? t(key, params) : t(key)));
+    } else {
+      uploadError.value = t('knowledge.upload_failed') + ': ' + (error instanceof Error ? error.message : 'Unknown error');
+    }
     console.error('Upload error:', error);
   } finally {
     uploading.value = false;

@@ -13,6 +13,8 @@ import {
   authorizedEmailWorkerEventSchema,
   isExplicitSkipReviewReason,
   allowsOutboundDirectSendAuthorization,
+  isModelDeclaredSkipReview,
+  canHonorModelDeclaredSkipReview,
 } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 describe("outboundEmailDeliveryTypes schemas", () => {
@@ -60,6 +62,53 @@ describe("outboundEmailDeliveryTypes schemas", () => {
     ).toBe(true);
     expect(
       allowsOutboundDirectSendAuthorization("explicit_send_instruction")
+    ).toBe(false);
+  });
+
+  it("treats only boolean skip_review true as a model-declared waiver", () => {
+    expect(isModelDeclaredSkipReview({ skip_review: true })).toBe(true);
+    expect(isModelDeclaredSkipReview({ skip_review: false })).toBe(false);
+    expect(isModelDeclaredSkipReview({ skip_review: "true" })).toBe(false);
+    expect(isModelDeclaredSkipReview({ emails: ["a@b.com"] })).toBe(false);
+    expect(isModelDeclaredSkipReview(undefined)).toBe(false);
+  });
+
+  it("refuses model skip_review when the user asked to review or not send", () => {
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "draft_only",
+        reasonCode: "ambiguous_instruction",
+      })
+    ).toBe(true);
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "send_now",
+        reasonCode: "explicit_send_instruction",
+      })
+    ).toBe(true);
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "review_first",
+        reasonCode: "explicit_review_instruction",
+      })
+    ).toBe(false);
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "draft_only",
+        reasonCode: "explicit_do_not_send",
+      })
+    ).toBe(false);
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "send_now",
+        reasonCode: "conflicting_instruction",
+      })
+    ).toBe(false);
+    expect(
+      canHonorModelDeclaredSkipReview({
+        mode: "draft_only",
+        reasonCode: "resolver_failure",
+      })
     ).toBe(false);
   });
 

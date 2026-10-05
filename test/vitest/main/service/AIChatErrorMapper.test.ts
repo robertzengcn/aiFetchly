@@ -13,6 +13,7 @@ import {
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
 import { log } from "@/modules/Logger";
+import { UnresolvedPastedTextError } from "@/service/pastedText/UnresolvedPastedTextError";
 
 describe("AIChatErrorMapper - userSafeError", () => {
   it("returns the quota sentinel on 402 / insufficient_quota", () => {
@@ -85,6 +86,14 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
+  it("surfaces UnresolvedPastedTextError instead of the generic fallback", () => {
+    expect(
+      userSafeError(
+        new UnresolvedPastedTextError([1])
+      )
+    ).toBe("Pasted text is no longer available. Please paste it again.");
+  });
+
   it("returns a model-missing message on 404", () => {
     expect(userSafeError(new Error("404 Not Found"))).toBe(
       "Selected model is not available."
@@ -146,6 +155,12 @@ describe("AIChatErrorMapper - userSafeError", () => {
         })
       )
     ).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
+  it("maps a thrown HTTP 520 envelope to the transient-issue message", () => {
+    expect(userSafeError(new Error("HTTP 520: <none>"))).toBe(
       "The AI service is busy or had a transient issue. Please try again in a moment."
     );
   });
@@ -213,6 +228,9 @@ describe("AIChatErrorMapper - isTransientRetryableError", () => {
     expect(
       isTransientRetryableError(new Error("database connection is not open"))
     ).toBe(true);
+    expect(isTransientRetryableError(new Error("HTTP 520: <none>"))).toBe(
+      true
+    );
   });
 
   it("never classifies aborts or non-Error values as retryable", () => {

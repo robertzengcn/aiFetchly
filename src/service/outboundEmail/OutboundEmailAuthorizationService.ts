@@ -7,6 +7,7 @@ import {
   hashApprovalToken,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import type { OutboundEmailAuthorizationType } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 
 /**
  * Trusted authorization for the outbound-email pipeline (technical design §13).
@@ -18,7 +19,10 @@ import type { OutboundEmailAuthorizationType } from "@/entityTypes/outboundEmail
 
 const DIRECT_TTL_MS = 15 * 60 * 1000;
 const REVIEW_TTL_MS = 30 * 60 * 1000;
-const SUPPORTED_RESOLVER_VERSION = "outbound-resolver-v1";
+const SUPPORTED_RESOLVER_VERSIONS: ReadonlySet<string> = new Set([
+  "outbound-resolver-v1",
+  OUTBOUND_RESOLVER_VERSION,
+]);
 
 export interface DirectSendAuthorizationInput {
   readonly intentDecisionId: number;
@@ -26,6 +30,12 @@ export interface DirectSendAuthorizationInput {
   readonly sourceUserMessageId: string;
   readonly conversationId: string;
   readonly batchHash: string;
+  /**
+   * When true, a `draft_only` intent may still receive a direct-send
+   * authorization. Used for `skip_review: true` on start_email_send_task
+   * after phrase matching missed a user waiver. review_first still fails.
+   */
+  readonly allowDraftOnlyIntent?: boolean;
 }
 
 export interface DirectSendAuthorizationResult {
@@ -54,6 +64,10 @@ export interface ResolveDirectSendForTurnInput {
    * directly without review") of a previously presented draft.
    */
   readonly inheritConversationDraft?: boolean;
+  /**
+   * When true, authorize a `draft_only` intent (model skip_review fallback).
+   */
+  readonly allowDraftOnlyIntent?: boolean;
 }
 
 export interface LookupTurnAuthorizationInput {
@@ -134,9 +148,14 @@ export class OutboundEmailAuthorizationService {
       return { success: false, code: "intent_not_found" };
     }
 
-    // §13.1 — intent mode must be send_now.
+    // §13.1 — intent mode must be send_now, unless this is the model
+    // skip_review fallback for a phrase-matcher miss (draft_only only).
     if (intent.mode !== "send_now") {
-      return { success: false, code: "intent_not_send_now" };
+      if (
+        !(input.allowDraftOnlyIntent === true && intent.mode === "draft_only")
+      ) {
+        return { success: false, code: "intent_not_send_now" };
+      }
     }
 
     // §13.1 — decision conversation and source message match the batch.
@@ -148,7 +167,7 @@ export class OutboundEmailAuthorizationService {
     }
 
     // §13.1 — resolver version supported.
-    if (intent.resolverVersion !== SUPPORTED_RESOLVER_VERSION) {
+    if (!SUPPORTED_RESOLVER_VERSIONS.has(intent.resolverVersion)) {
       return { success: false, code: "resolver_version_unsupported" };
     }
 
@@ -242,8 +261,9 @@ export class OutboundEmailAuthorizationService {
    * id, it locates the turn's latest authorizable batch, creates (or reuses)
    * an `explicit_user_instruction` authorization, and returns the claim
    * triple. Ordinary send-tool gating must NOT call this — it would skip
-   * Review. The query loop may call it only for `explicit_skip_review` or
-   * `contextual_affirmation` (chat "yes, send it" after a presented draft).
+   * Review. The query loop may call it for phrase-matched skip-review,
+   * chat confirmation, or a boolean skip_review argument on the send tool
+   * when the intent is not review_first / do-not-send / conflicting.
    *
    * Returns null when the turn has no authorizable batch or the intent is not
    * send_now. A missing batch maps to `draft_required`, so preparation can
@@ -258,64 +278,81 @@ export class OutboundEmailAuthorizationService {
   async resolveDirectSendForTurn(
     input: ResolveDirectSendForTurnInput
   ): Promise<ResolvedDirectSend | null> {
-    // Find the turn's latest non-terminal batch. Returns null when only
-    // terminal batches exist (sent/failed/discarded) or the turn has no
-    // batch at all — a stale turn never authorizes a second send (AD-009).
-    let batch = await this.draftModel.findLatestBatchForTurn(
+    // Find every non-terminal batch for this turn. Per-recipient draft
+    // calls create one batch each; skip-review send must bind a unique
+    // batch per start_email_send_task instead of only the newest.
+    let batches = await this.draftModel.findAuthorizableBatchesForTurn(
       input.conversationId,
       input.sourceUserMessageId
     );
-    if (!batch && input.inheritConversationDraft) {
-      batch = await this.draftModel.findLatestAuthorizableBatchForConversation(
-        input.conversationId
+    if (batches.length === 0 && input.inheritConversationDraft) {
+      const inherited =
+        await this.draftModel.findLatestAuthorizableBatchForConversation(
+          input.conversationId
+        );
+      if (inherited) {
+        batches = [inherited];
+      }
+    }
+    if (batches.length === 0) {
+      return null;
+    }
+
+    for (const batch of batches) {
+      const batchHash = batch.batchHash;
+      if (!batchHash) {
+        continue;
+      }
+
+      const existing = await this.authorizationModel.findActiveByBatch(
+        batch.id
       );
-    }
-    if (!batch) {
-      return null;
-    }
+      if (existing) {
+        continue;
+      }
 
-    // AD-005: authorization binds to the batch's immutable envelope hash. A
-    // batch whose hash has not been set (pre-preflight or malformed) has
-    // nothing to bind an authorization to — it must not be authorized. This
-    // also narrows the type to `string` for the returned triple.
-    const batchHash = batch.batchHash;
-    if (!batchHash) {
-      return null;
-    }
-
-    // Reuse an already-active authorization for this batch if one exists.
-    // This handles the idempotent retry path: after the gate allows and the
-    // model re-calls the send tool, we must not error with
-    // authorization_already_active — we return the same triple.
-    const existing = await this.authorizationModel.findActiveByBatch(batch.id);
-    if (existing) {
-      return {
+      const created = await this.createDirectSendAuthorization({
+        intentDecisionId: input.intentDecisionId,
         batchId: batch.id,
-        authorizationId: existing.id,
+        sourceUserMessageId: input.sourceUserMessageId,
+        conversationId: input.conversationId,
         batchHash,
-      };
+        allowDraftOnlyIntent: input.allowDraftOnlyIntent,
+      });
+      if (created.success && created.authorizationId != null) {
+        return {
+          batchId: batch.id,
+          authorizationId: created.authorizationId,
+          batchHash,
+        };
+      }
     }
 
-    // Create a fresh explicit_user_instruction authorization (§13.1). All
-    // conditions (send_now, source/conversation match, resolver version,
-    // batch hash match) are checked inside; a failure code means the turn is
-    // not eligible for direct send and the gate must block.
-    const created = await this.createDirectSendAuthorization({
-      intentDecisionId: input.intentDecisionId,
-      batchId: batch.id,
-      sourceUserMessageId: input.sourceUserMessageId,
-      conversationId: input.conversationId,
-      batchHash,
-    });
-    if (!created.success) {
-      return null;
+    // Every authorizable batch already has an active authorization (retry
+    // of a single-batch turn). Reuse the newest so the claim stays
+    // idempotent instead of erroring with authorization_already_active.
+    for (let i = batches.length - 1; i >= 0; i--) {
+      const batch = batches[i];
+      if (!batch) {
+        continue;
+      }
+      const batchHash = batch.batchHash;
+      if (!batchHash) {
+        continue;
+      }
+      const existing = await this.authorizationModel.findActiveByBatch(
+        batch.id
+      );
+      if (existing) {
+        return {
+          batchId: batch.id,
+          authorizationId: existing.id,
+          batchHash,
+        };
+      }
     }
 
-    return {
-      batchId: batch.id,
-      authorizationId: created.authorizationId!,
-      batchHash,
-    };
+    return null;
   }
 
   /**

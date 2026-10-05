@@ -22,6 +22,7 @@ import {
 import { OpenAIStreamParser } from "./OpenAIStreamParser";
 import { toProviderError, toNetworkProviderError } from "./AIProviderError";
 import { AIProviderError } from "./AIProviderError";
+import { isSmallModelAlias } from "./SmallModelAlias";
 
 type FetchImpl = typeof fetch;
 
@@ -61,6 +62,19 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   }
 
   private readonly fetchImpl: FetchImpl;
+
+  /**
+   * Resolve the model id to send to the provider. The virtual "small"/"haiku"
+   * aliases belong to the hosted aiFetchly server and are unknown to
+   * third-party providers, so they are served with the configured default
+   * model instead of being sent literally (which would 404).
+   */
+  private resolveModel(requestModel?: string): string {
+    if (isSmallModelAlias(requestModel)) {
+      return this.config.defaultModel;
+    }
+    return requestModel ?? this.config.defaultModel;
+  }
 
   private url(path: "/models" | "/chat/completions"): string {
     return `${this.config.baseUrl}${path}`;
@@ -171,7 +185,7 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   ): Promise<OpenAIChatCompletionResponse> {
     const payload = buildNonStreamingPayload({
       ...request,
-      model: request.model ?? this.config.defaultModel,
+      model: this.resolveModel(request.model),
     });
     let res: Response;
     try {
@@ -210,7 +224,7 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const payload = buildStreamingPayload({
       ...request,
-      model: request.model ?? this.config.defaultModel,
+      model: this.resolveModel(request.model),
     });
     let res: Response;
     try {

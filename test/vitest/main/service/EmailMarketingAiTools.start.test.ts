@@ -92,8 +92,54 @@ describe("startBulkEmailSendTask", () => {
         EmailServicelist: [3],
         NotDuplicate: true,
         email_subject: "Campaign subject",
-        email_html_content: "<p>Body</p>",
+        email_html_content: "Body",
       },
+      { waitForExit: true }
+    );
+  });
+
+  it("keeps service_ids when skip_review is set on the send tool args", async () => {
+    const outcome = await startBulkEmailSendTask({
+      emails: [{ address: "1093968009@qq.com" }],
+      service_ids: [1],
+      email_subject: "Test Email",
+      email_html_content: "<p>This is a test email sent from aiFetchly.</p>",
+      skip_review: true,
+    });
+
+    expect(outcome.success).toBe(true);
+    expect(moduleMocks.startCampaign).toHaveBeenCalledWith(
+      expect.objectContaining({
+        EmailServicelist: [1],
+        email_subject: "Test Email",
+        EmailList: [
+          {
+            address: "1093968009@qq.com",
+            source: DIRECT_EMAIL_SOURCE,
+            title: undefined,
+          },
+        ],
+        email_html_content: "This is a test email sent from aiFetchly.",
+      }),
+      { waitForExit: true }
+    );
+  });
+
+  it("sends email_content as plain text and ignores a legacy HTML body", async () => {
+    const outcome = await startBulkEmailSendTask({
+      emails: ["buyer@example.com"],
+      service_ids: [3],
+      email_subject: "Hello",
+      email_content: "Hello,\n\nThis is plain text.",
+      email_html_content: "<p>HTML</p>",
+    });
+
+    expect(outcome.success).toBe(true);
+    expect(moduleMocks.startCampaign).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email_subject: "Hello",
+        email_html_content: "Hello,\n\nThis is plain text.",
+      }),
       { waitForExit: true }
     );
   });

@@ -14,9 +14,10 @@ vi.mock("@/config/SqliteDb", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
-    getValue: vi.fn().mockReturnValue("/tmp/test-db"),
-  })),
+  // Vitest 4 invokes class mocks with new; an arrow mock is not constructable.
+  Token: vi.fn(function TokenMock() {
+    return { getValue: vi.fn().mockReturnValue("/tmp/test-db") };
+  }),
 }));
 
 import { BaseModule } from "@/modules/baseModule";

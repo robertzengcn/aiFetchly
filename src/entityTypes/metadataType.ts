@@ -9,6 +9,10 @@ export interface DocumentMetadata {
     // model_name:string;
     tags?: string[];
     author?: string;
+    // Phase 3 document metadata (optional; validated on the upload boundary).
+    language?: string;
+    documentDate?: string;
+    customMetadata?: Record<string, string>;
 }
 
 // Metadata for vector search results

@@ -30,6 +30,7 @@ import {
   getEmailServiceConfigInputSchema,
   getEmailSearchTaskEmailsInputSchema,
 } from "@/entityTypes/emailMarketingAiTypes";
+import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -143,13 +144,14 @@ function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
 
   const templateIds = parsed.template_ids ?? [];
   const subject = parsed.email_subject?.trim();
-  const html = parsed.email_html_content?.trim();
+  // The DB column is still named email_html_content; the value sent is text.
+  const bodyText = resolveInlineOutboundBody(parsed);
   const usesTemplates = templateIds.length > 0;
-  const usesInlineContent = Boolean(subject && html);
+  const usesInlineContent = Boolean(subject && bodyText);
 
   if (!usesTemplates && !usesInlineContent) {
     throw new Error(
-      "Provide either template_ids or email_subject and email_html_content"
+      "Provide either template_ids or email_subject and email_content"
     );
   }
 
@@ -161,7 +163,7 @@ function parseBulkEmailTaskInput(args: unknown): ParsedBulkEmailTaskInput {
     service_ids: parsed.service_ids,
     not_duplicate: parsed.not_duplicate,
     email_subject: usesInlineContent ? subject : undefined,
-    email_html_content: usesInlineContent ? html : undefined,
+    email_html_content: usesInlineContent ? bodyText : undefined,
     uses_templates: usesTemplates,
     uses_inline_content: usesInlineContent,
   };
@@ -223,6 +225,7 @@ function toEmailItem(email: EmailMarketingDirectEmailInput): EmailItem {
 function sanitizeEmailService(service: {
   id: number;
   name: string;
+  tag?: { name: string } | null;
   from: string;
   host: string;
   port: string;
@@ -232,6 +235,7 @@ function sanitizeEmailService(service: {
   return {
     id: service.id,
     name: service.name,
+    tag: service.tag?.name ?? null,
     address: service.from,
     source: service.host,
     port: String(service.port),
@@ -395,9 +399,16 @@ export async function getEmailServiceConfig(
     const module = new EmailServiceModule();
     await module.ensureConnection();
 
-    const service = await module.getEmailService(input.service_id);
+    const service =
+      input.tag !== undefined
+        ? await module.findEmailServiceByTag(input.tag)
+        : await module.getEmailService(input.service_id!);
     if (!service) {
-      throw new Error(`Email service ${input.service_id} not found`);
+      throw new Error(
+        input.tag !== undefined
+          ? `Email service tag ${input.tag} not found`
+          : `Email service ${input.service_id} not found`
+      );
     }
 
     return {
@@ -475,6 +486,7 @@ export async function previewBulkEmailSendTask(
   try {
     const input = bulkEmailTaskInputSchema.parse(args);
     const recipients = await resolveBulkRecipients(input);
+    const bodyText = resolveInlineOutboundBody(input);
 
     return {
       success: true,
@@ -484,11 +496,10 @@ export async function previewBulkEmailSendTask(
       filter_ids: input.filter_ids,
       service_ids: input.service_ids,
       not_duplicate: input.not_duplicate,
-      ...(input.email_subject !== undefined &&
-      input.email_html_content !== undefined
+      ...(input.email_subject !== undefined && bodyText !== undefined
         ? {
             email_subject: input.email_subject,
-            email_html_content: input.email_html_content,
+            email_html_content: bodyText,
           }
         : {}),
     };
@@ -508,7 +519,7 @@ export async function startBulkEmailSendTask(
 
     // §27.2 rule 4 — deprecation telemetry for AI calls using legacy inline
     // content arguments. New sends should go through the domain gate and the
-    // authorized draft pipeline; inline subject/HTML is the pre-gate shape.
+    // authorized draft pipeline; inline subject/text is the pre-gate shape.
     incrementOutboundMetric("legacy_inline_content_send", {
       uses_inline_content: parsed.uses_inline_content,
     });

@@ -1,40 +1,51 @@
-import type { Transporter, SendMailOptions } from "nodemailer";
+import type { SendMailOptions } from "nodemailer";
 import {
   EmailRequestData,
   EmailServiceEntitydata,
+  SendEmailError,
 } from "@/entityTypes/emailmarketingType";
-import {
-  createOutboundSmtpTransporter,
-  smtpErrorMessage,
-} from "@/modules/lib/smtpTransport";
+import { OutboundSmtpSession } from "@/modules/lib/smtpTransport";
+import { resolveEmailServiceIdentity } from "@/modules/lib/EmailServiceIdentityResolver";
+import { classifySmtpFailure } from "@/modules/lib/smtpErrorClassifier";
 
 export class EmailService {
-  private transporter: Transporter;
-  private emailSender: string;
+  private session: OutboundSmtpSession;
+  private readonly fromAddress: string;
+  private readonly replyToAddress: string | null;
 
   constructor(param: EmailServiceEntitydata) {
-    this.emailSender = param.from;
-    this.transporter = createOutboundSmtpTransporter(param);
+    const identity = resolveEmailServiceIdentity({
+      smtpUsername: param.smtpUsername,
+      from: param.from,
+      replyTo: param.replyTo,
+    });
+    this.fromAddress = identity.fromAddress;
+    this.replyToAddress = identity.replyToAddress;
+    this.session = new OutboundSmtpSession(param);
   }
 
   public async sendEmail(
     param: EmailRequestData,
-    errorCallback?: (errorMessage: string) => void,
+    errorCallback?: (error: SendEmailError) => void,
     successCallback?: () => void
   ): Promise<void> {
     const mailOptions: SendMailOptions = {
-      from: this.emailSender,
+      from: this.fromAddress,
+      ...(this.replyToAddress ? { replyTo: this.replyToAddress } : {}),
       to: param.Receiver,
       subject: param.Title,
       text: param.Content,
     };
 
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      console.log("Email sent:", info.response);
+      await this.session.sendMail(mailOptions);
       successCallback?.();
     } catch (error: unknown) {
-      errorCallback?.(smtpErrorMessage(error));
+      const classified = classifySmtpFailure(error);
+      errorCallback?.({
+        message: classified.sanitizedMessage,
+        code: classified.code,
+      });
     }
   }
 }

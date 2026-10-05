@@ -58,4 +58,48 @@ describe("AiMessageTaskModule.createTask", () => {
     const task = await mod.getTask(taskId);
     expect(task?.conversation_id).toBe("v2-existing-conv");
   });
+
+  it("stores a canonical workspace directory and approves it for the task conversation", async () => {
+    const mod = new AiMessageTaskModule();
+    await SqliteDb.ensureInitialized();
+    const folder = path.join(tmpDir, "scheduled-workspace");
+    fs.mkdirSync(folder, { recursive: true });
+    const taskId = await mod.createTask({
+      name: "Workspace recap",
+      message: "Summarize the folder",
+      workspacePath: folder,
+    });
+    const task = await mod.getTask(taskId);
+    expect(task?.workspace_path).toBe(await fs.promises.realpath(folder));
+    expect(task?.conversation_id?.startsWith("v2-")).toBe(true);
+  });
+});
+
+describe("AiMessageTaskModule.updateTask", () => {
+  it("persists a removed allowed tool when the workspace path is unchanged", async () => {
+    const mod = new AiMessageTaskModule();
+    await SqliteDb.ensureInitialized();
+    const folder = path.join(tmpDir, "tool-update-workspace");
+    fs.mkdirSync(folder, { recursive: true });
+    const taskId = await mod.createTask({
+      name: "Outreach",
+      message: "Send the batch",
+      allowedTools: ["file_read", "file_write"],
+      workspacePath: folder,
+    });
+    const created = await mod.getTask(taskId);
+    const canonical = created?.workspace_path ?? "";
+
+    await mod.updateTask({
+      id: taskId,
+      allowedTools: ["file_read"],
+      workspacePath: canonical,
+    });
+
+    const updated = await mod.getTask(taskId);
+    expect(JSON.parse(updated?.allowed_tools_json ?? "[]")).toEqual([
+      "file_read",
+    ]);
+    expect(updated?.workspace_path).toBe(canonical);
+  });
 });

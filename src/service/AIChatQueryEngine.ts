@@ -28,6 +28,17 @@ import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatGoalModule } from "@/modules/AIChatGoalModule";
+import { AIChatHistoryRetrievalService } from "@/service/AIChatHistoryRetrievalService";
+import {
+  buildSelectedHistoryContextBlock,
+  toSelectedHistoryExcerptInputs,
+  type SelectedHistoryExcerptInput,
+} from "@/service/SelectedHistoryContextBlock";
+import { isArchiveReadsEnabled } from "@/config/featureFlags";
+import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
+import { AIChatArchiveModule } from "@/modules/AIChatArchiveModule";
+import type { ChatV2HistorySelectionMetadata } from "@/entityTypes/aiChatV2Types";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
@@ -68,6 +79,7 @@ import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import {
   EnvAIChatStreamImplementationConfig,
   type AIChatStreamImplementationConfigProvider,
@@ -322,6 +334,12 @@ export interface AIChatQuerySubmitInput {
    */
   scheduledContext?: AIChatScheduledTurnContext;
   /**
+   * Main-process-only trusted signal: true only for unattended scheduled-loop
+   * turns where the user pre-allowlisted `start_email_send_task` via the typed
+   * confirmation at loop creation. The renderer cannot forge this flag.
+   */
+  outboundSendPreAuthorized?: boolean;
+  /**
    * Stage A §3.2 (FR-021): owner-supplied lifecycle listener. The engine
    * calls onAwaiting exactly once when it parks this turn and onResumed when
    * a claimed resume starts executing. Synchronous, non-throwing; the owner
@@ -404,6 +422,14 @@ export interface AIChatQueryEngineDeps {
     outcome: "completed" | "cancelled" | "failed"
   ) => void;
   /**
+   * Optional factory for the selection re-resolution service (§13.3). When
+   * omitted the engine builds its own archive-backed service; tests inject a
+   * stub so selection resolution does not need a live database.
+   */
+  historyRetrievalServiceFactory?: () => AIChatHistoryRetrievalService;
+  /** Optional compaction coordinator for budget-pressure relief (dev §8.5). */
+  compactionCoordinator?: import("@/service/AIChatCompactionCoordinator").AIChatCompactionCoordinator;
+  /**
    * Stage B §16 (FR-018): delivery-mode provider. Default reads
    * AI_CHAT_STREAM_IMPLEMENTATION once (invalid/absent → callback). The mode
    * is captured at acceptance; every segment and resume of that run uses it.
@@ -438,6 +464,7 @@ interface ActiveTurnState {
   abortController: AbortController;
   assistantMessageId: string;
   eventSink: AIChatQueryEventSink;
+  turnId?: string;
   /** Steering mailbox for this turn; absent when steering is unavailable. */
   control?: AIChatTurnControl;
   /** Stage A §3.2 (FR-021): owner listener notified when the turn parks. */
@@ -490,6 +517,9 @@ export class AIChatQueryEngine {
   /** Persists steering instructions consumed by active turns' mailboxes. */
   private readonly steeringPromoter?: AIChatQueryEngineDeps["steeringPromoter"];
   private readonly onTurnTerminalCb?: AIChatQueryEngineDeps["onTurnTerminal"];
+  private readonly historyRetrievalServiceFactory?: AIChatQueryEngineDeps["historyRetrievalServiceFactory"];
+  private readonly compactionCoordinator?: AIChatQueryEngineDeps["compactionCoordinator"];
+  private readonly modelCatalogService = new AIChatModelCatalogService();
   private readonly streamImplementation: AIChatStreamImplementationConfigProvider;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
@@ -520,6 +550,8 @@ export class AIChatQueryEngine {
     this.onTurnTerminalCb = deps?.onTurnTerminal;
     this.streamImplementation =
       deps?.streamImplementation ?? new EnvAIChatStreamImplementationConfig();
+    this.historyRetrievalServiceFactory = deps?.historyRetrievalServiceFactory;
+    this.compactionCoordinator = deps?.compactionCoordinator;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -836,7 +868,8 @@ export class AIChatQueryEngine {
    * inferring completion from the absence of a terminal event.
    */
   async runTurn(input: AIChatQuerySubmitInput): Promise<AIChatSegmentOutcome> {
-    const { eventSink, request, scheduledContext } = input;
+    const { eventSink, request, scheduledContext, outboundSendPreAuthorized } =
+      input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -858,15 +891,29 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     let conversationId: string;
     let assistantMessageId: string;
+    let turnId: string;
     let messages: OpenAIChatMessage[];
+    let reassembleMessages: (() => Promise<OpenAIChatMessage[]>) | null = null;
     let textApprovedPlanState: AIChatPlanStateView | null = null;
     let intentDecisionId: number | null = null;
     let sourceUserMessageId: string | undefined;
+    /** Opaque refs accepted for this turn (§13.3), reported on `start`. */
+    let historySelectionAcceptedIds: readonly string[] = [];
+    /** Submitted refs whose source moved (§4.2), reported on `start`. */
+    let historySelectionChangedIds: readonly string[] = [];
+    /** Submitted refs hard-rejected (unavailable/oversized), reported on `start`. */
+    let historySelectionRejectedIds: readonly string[] = [];
 
     try {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
+      // Generate the turn id once, at accept time (technical-design §4.3).
+      // Scheduled turns reuse the stable scheduled id so a crash-retry stamps
+      // the same turn association on replayed rows (§14.2).
+      turnId = scheduledContext
+        ? scheduledContext.userMessageId
+        : `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -955,10 +1002,38 @@ export class AIChatQueryEngine {
           pastedTextResolution.modelMessage
         );
       const modelUserMessage = atMentionResolution.modelMessage;
+
+      // Re-resolve user-selected archived passages (§13.3). The renderer sends
+      // opaque source ids only; the backend re-validates epoch/revision and the
+      // final budget. Accepted excerpts become the "current user + selected"
+      // context block below; the references (never the text) are persisted with
+      // the user row. Rejected/unavailable selections never block the turn.
+      const selectionResolution = await this.resolveSelectedHistory(
+        conversationId,
+        turnId,
+        request.historySelectionIds ?? []
+      );
+      const selectedHistoryBlock = buildSelectedHistoryContextBlock(
+        selectionResolution.excerpts
+      );
+      historySelectionAcceptedIds = selectionResolution.metadata.map(
+        (m) => m.sourceId
+      );
+      historySelectionChangedIds = selectionResolution.changedIds;
+      historySelectionRejectedIds = selectionResolution.rejectedIds;
+
+      // "Current user + selected" allocation slot: the selected archive
+      // passages are folded into the SAME user message the user authored, so
+      // preflight can never evict them as an independent optional block
+      // (technical-design line 372) and they are included exactly once.
+      const userMessageForModel =
+        selectedHistoryBlock.length > 0
+          ? `${modelUserMessage}\n\n${selectedHistoryBlock}`
+          : modelUserMessage;
       if (currentUserContentParts && currentUserContentParts.length > 0) {
-        // Fold the @-mention context into the multimodal text part.
+        // Fold the @-mention context (+ selected passages) into the multimodal text part.
         currentUserContentParts = [
-          { type: "text", text: modelUserMessage },
+          { type: "text", text: userMessageForModel },
           ...currentUserContentParts.slice(1),
         ];
       }
@@ -1040,29 +1115,46 @@ export class AIChatQueryEngine {
       if (pastedTextResolution.pastedBlocks.length > 0) {
         userMetadata.pastedBlocks = pastedTextResolution.pastedBlocks;
       }
+      // Persist only the ACCEPTED references (provenance, never the text).
+      if (selectionResolution.metadata.length > 0) {
+        userMetadata.historySelections = selectionResolution.metadata;
+      }
       const hasUserMetadataBeyondSource =
         !!attachmentMetadata ||
         atMentionResolution.metadata.length > 0 ||
         pastedTextResolution.pastedBlocks.length > 0 ||
         !!scheduledContext ||
-        !!generatedImageRefMetadata;
+        !!generatedImageRefMetadata ||
+        selectionResolution.metadata.length > 0;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
       // Scheduled turns use a stable message id + insert-if-absent so a
       // crash-retry does not duplicate the transcript row (technical-design §14.2).
-      const savedUser = scheduledContext
-        ? await module.saveUserMessageIfAbsent({
-            conversationId,
-            content: messageToSave,
-            messageId: scheduledContext.userMessageId,
-            metadata: userMetadata,
-          })
-        : await module.saveUserMessage({
-            conversationId,
-            content: messageToSave,
-            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
-          });
+      // Interactive turns with a submissionId take the same idempotent path with
+      // a derived stable id so a transport retry reuses the accepted user row
+      // (§13.3) instead of writing a second one.
+      const idempotentMessageId = scheduledContext
+        ? scheduledContext.userMessageId
+        : request.submissionId
+        ? `user-${request.submissionId}`
+        : undefined;
+      const savedUser =
+        (scheduledContext && scheduledContext.userMessageId) ||
+        request.submissionId
+          ? await module.saveUserMessageIfAbsent({
+              conversationId,
+              content: messageToSave,
+              messageId: idempotentMessageId ?? "",
+              metadata: userMetadata,
+              turnId,
+            })
+          : await module.saveUserMessage({
+              conversationId,
+              content: messageToSave,
+              metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+              turnId,
+            });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {
@@ -1149,7 +1241,7 @@ export class AIChatQueryEngine {
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: modelUserMessage,
+        currentUserMessage: userMessageForModel,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
@@ -1217,6 +1309,21 @@ export class AIChatQueryEngine {
           }
         }
       }
+      const assembleInput = {
+        conversationId,
+        currentUserMessage: userMessageForModel,
+        currentUserMessageId: savedUser.messageId,
+        baseSystemPrompt: basePrompt,
+        mode: (isPlanMode ? "plan" : "chat") as "plan" | "chat",
+        model: request.model,
+        maxTokens: request.maxTokens,
+        planState,
+        currentUserContentParts,
+      };
+      reassembleMessages = async () => {
+        const again = await this.contextAssembler.assemble(assembleInput);
+        return [...again.messages];
+      };
     } catch (err) {
       log.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
@@ -1246,11 +1353,13 @@ export class AIChatQueryEngine {
       planState,
       textApprovedPlanState,
       sourceUserMessageId,
+      reassembleMessages,
       intentDecisionId,
-      ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
-      ...(input.ownerNotifiesTerminal !== undefined
-        ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
-        : {}),
+      turnId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
+      outboundSendPreAuthorized,
     });
   }
 
@@ -1514,6 +1623,12 @@ export class AIChatQueryEngine {
     readonly scheduledContext?: AIChatScheduledTurnContext;
     readonly sourceUserMessageId?: string;
     readonly intentDecisionId?: number | null;
+    readonly turnId?: string;
+    readonly historySelectionAcceptedIds?: readonly string[];
+    readonly historySelectionChangedIds?: readonly string[];
+    readonly historySelectionRejectedIds?: readonly string[];
+    readonly reassembleMessages?: (() => Promise<OpenAIChatMessage[]>) | null;
+    readonly outboundSendPreAuthorized?: boolean;
     readonly lifecycle?: AIChatTurnLifecycleListener;
     readonly ownerNotifiesTerminal?: boolean;
   }): Promise<AIChatTurnTerminalEvent> {
@@ -1528,6 +1643,12 @@ export class AIChatQueryEngine {
       textApprovedPlanState,
       sourceUserMessageId,
       intentDecisionId,
+      turnId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
+      reassembleMessages,
+      outboundSendPreAuthorized,
       lifecycle,
       ownerNotifiesTerminal,
     } = input;
@@ -1617,6 +1738,7 @@ export class AIChatQueryEngine {
       recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
       hasRecentGeneratedImages: messagesHaveGeneratedImages(messages),
+      contextWindowTokens: await this.resolveContextWindowTokens(request.model),
     });
 
     // Load persisted discovered-tool state so tools discovered in earlier turns
@@ -1639,9 +1761,9 @@ export class AIChatQueryEngine {
     this.activeTurns.set(conversationId, {
       abortController,
       assistantMessageId,
+      turnId,
       eventSink,
       ...(control ? { control } : {}),
-      ...(lifecycle ? { lifecycle } : {}),
     });
 
     // ------------------------------------------------------------------
@@ -1651,6 +1773,9 @@ export class AIChatQueryEngine {
       type: "start",
       conversationId,
       messageId: assistantMessageId,
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
     });
     if (textApprovedPlanState) {
       eventSink.emit({
@@ -1728,10 +1853,20 @@ export class AIChatQueryEngine {
       ...(control ? { steeringControl: control } : {}),
       sourceUserMessageId,
       intentDecisionId,
+      turnId,
+      outboundSendPreAuthorized,
+      goalAutoContinue: await this.shouldAutoContinueGoal(
+        conversationId,
+        isPlanMode
+      ),
       ...(lifecycle ? { lifecycle } : {}),
       ...(ownerNotifiesTerminal !== undefined
         ? { ownerNotifiesTerminal }
         : {}),
+      relieveBudgetPressure: async () => {
+        await this.compactBeforeDispatch(conversationId, request.model);
+        return reassembleMessages ? reassembleMessages() : null;
+      },
     };
 
     try {
@@ -1825,6 +1960,345 @@ export class AIChatQueryEngine {
         log.error("[ai-chat-v2] generator cleanup failed:", cleanupError);
       }
     );
+  }
+
+  private async shouldAutoContinueGoal(
+    conversationId: string,
+    isPlanMode: boolean
+  ): Promise<boolean> {
+    if (isPlanMode || !conversationId) {
+      return false;
+    }
+    try {
+      const goal = await new AIChatGoalModule().getActiveGoal(conversationId);
+      return goal !== null;
+    } catch (err) {
+      console.warn("[ai-chat-v2] goal lookup for auto-continue failed:", err);
+      return false;
+    }
+  }
+
+  private async resolveSelectedHistory(
+    conversationId: string,
+    turnId: string,
+    sourceIds: readonly string[]
+  ): Promise<{
+    readonly metadata: ChatV2HistorySelectionMetadata[];
+    readonly excerpts: SelectedHistoryExcerptInput[];
+    readonly rejectedCount: number;
+    readonly changedIds: readonly string[];
+    readonly rejectedIds: readonly string[];
+  }> {
+    const empty = {
+      metadata: [] as ChatV2HistorySelectionMetadata[],
+      excerpts: [] as SelectedHistoryExcerptInput[],
+      rejectedCount: 0,
+      changedIds: [] as readonly string[],
+      rejectedIds: [] as readonly string[],
+    };
+    if (sourceIds.length === 0) return empty;
+    if (!isArchiveReadsEnabled()) return empty;
+    try {
+      const factory =
+        this.historyRetrievalServiceFactory ??
+        (() => new AIChatHistoryRetrievalService(new AIChatArchiveModule()));
+      const svc = factory();
+      const result = await svc.resolveSelections(
+        conversationId,
+        sourceIds,
+        turnId
+      );
+      // Every selection rejected for size ⇒ the send would ship with zero
+      // selected context while the chips still render as attached. FR-10
+      // requires the user to narrow the selection, so the turn fails with an
+      // actionable capacity error BEFORE persist/send; drafts survive.
+      if (result.errorCode === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE") {
+        throw new RecoverableHistoryError(
+          "CONTEXT_REQUIRED_CONTENT_TOO_LARGE",
+          `selected history passages do not fit this turn (${result.rejected.length} rejected); remove or narrow a selection and resend`
+        );
+      }
+      const metadata: ChatV2HistorySelectionMetadata[] = result.resolved.map(
+        (e, i) => ({
+          // Prefer the SUBMITTED reference so the renderer can reconcile this
+          // back to its own chip; the archive re-encodes `e.sourceId`.
+          sourceId: result.acceptedSubmittedIds?.[i] ?? e.sourceId,
+          messageId: e.messageId,
+          role: e.role,
+          timestamp: e.timestamp,
+          exact: e.exact,
+        })
+      );
+      const changed = (result.refreshed ?? []).map((r) => r.submittedId);
+      const changedSet = new Set(changed);
+      return {
+        metadata,
+        excerpts: toSelectedHistoryExcerptInputs(result.resolved),
+        rejectedCount: result.rejected.length,
+        // Stale references are quoted nowhere; their chips survive for
+        // explicit user re-confirmation (§4.2, AC-18).
+        changedIds: changed,
+        // Hard rejections (unavailable/oversized, not stale) mark chips
+        // rejected so the user can remove or replace them (P2-10, AC-18).
+        rejectedIds: result.rejected.filter((id) => !changedSet.has(id)),
+      };
+    } catch (err) {
+      // Capacity rejections are turn-blocking, not degrade-to-empty.
+      if (
+        err instanceof RecoverableHistoryError &&
+        err.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE"
+      ) {
+        throw err;
+      }
+      console.warn("[ai-chat-v2] history selection resolution failed:", err);
+      return {
+        ...empty,
+        rejectedCount: sourceIds.length,
+        rejectedIds: [...sourceIds],
+      };
+    }
+  }
+
+  private async compactBeforeDispatch(
+    conversationId: string,
+    model?: string
+  ): Promise<void> {
+    if (this.compactionCoordinator) {
+      await this.compactionCoordinator.requestCompactionForTurn(
+        conversationId,
+        { trigger: "reactive-overflow", model }
+      );
+      return;
+    }
+    if (this.compactAgent) {
+      // Pass the model's real context window as the prompt-token sentinel
+      // rather than Number.MAX_SAFE_INTEGER. The threshold in
+      // enqueueAutoCompact is 0.8 * contextWindow, so the window itself is
+      // always >= threshold and reliably trips compaction — and the value
+      // stored in lastPromptTokens stays a realistic finite count instead
+      // of poisoning the next turn's session-memory gate with 9e15.
+      const promptTokens = await this.resolveCompactionSentinel(model);
+      await this.compactAgent.enqueueAutoCompact({
+        conversationId,
+        reason: "budget-pressure",
+        promptTokens,
+        model,
+      });
+    }
+  }
+
+  private requestReactiveCompaction(
+    conversationId: string,
+    model?: string
+  ): void {
+    try {
+      if (this.compactionCoordinator) {
+        const coordinator = this.compactionCoordinator;
+        Promise.resolve(
+          coordinator.requestCompactionForTurn(conversationId, {
+            trigger: "reactive-overflow",
+            model,
+          })
+        ).catch((err: unknown) =>
+          console.error(
+            "[ai-chat-compaction] reactive-overflow request failed:",
+            err
+          )
+        );
+      } else if (this.compactAgent) {
+        const compactAgent = this.compactAgent;
+        // Resolve the model's real context window as the prompt-token
+        // sentinel (see compactBeforeDispatch): it reliably exceeds the
+        // 0.8 * contextWindow threshold without storing 9e15 in
+        // lastPromptTokens. The async resolution happens inside the
+        // fire-and-forget chain so this method stays synchronous.
+        void this.resolveCompactionSentinel(model)
+          .then((promptTokens) =>
+            compactAgent.enqueueAutoCompact({
+              conversationId,
+              reason: "reactive-overflow",
+              promptTokens,
+              model,
+            })
+          )
+          .catch((err: unknown) =>
+            console.error(
+              "[ai-chat-compact] reactive-overflow auto-compact failed:",
+              err
+            )
+          );
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] reactive-overflow dispatch failed:",
+        err
+      );
+    }
+  }
+
+  private async resolveCompactionSentinel(model?: string): Promise<number> {
+    try {
+      const contextWindow = await this.modelCatalogService.getContextWindow(
+        model
+      );
+      if (contextWindow > 0) {
+        return contextWindow;
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-compaction] sentinel context-window lookup failed:",
+        err
+      );
+    }
+    // The catalog is unloaded/unavailable (e.g. VITEST skips the fetch).
+    // Use the recovery default (128k) — still finite and above the 8,192
+    // unknown-model threshold the compact agent falls back to.
+    return AI_CHAT_RECOVERY_DEFAULTS.defaultContextWindowTokens;
+  }
+
+  private async resolveContextWindowTokens(
+    model?: string
+  ): Promise<number | undefined> {
+    if (process.env.VITEST === "true") {
+      return undefined;
+    }
+    return this.modelCatalogService.getContextWindow(model);
+  }
+
+  async denyToolPermission(
+    request: ResumeToolAfterPermissionRequest
+  ): Promise<ResumeTurnResult> {
+    const convId = request.conversationId;
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
+      return {
+        ok: false,
+        error: "No active permission-gated tool call to continue.",
+      };
+    }
+    if (
+      request.conversationId &&
+      request.conversationId !== matchedByToolId.conversationId
+    ) {
+      return {
+        ok: false,
+        error: "Conversation mismatch for pending tool call.",
+      };
+    }
+
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    const denySink = this.takePendingSink(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      turnId: matchedByToolId.turnId,
+      eventSink: denySink,
+    });
+    const module = new AIChatV2Module();
+    const eventSink = this.createPersistingEventSink(module, denySink);
+
+    try {
+      // Synthesize the denied tool result — do NOT re-execute the tool. The
+      // renderer's deny path (AiChatV2.vue handleSkillPermissionDeny) already
+      // expects a denied-message content, so we match that shape here.
+      const deniedPayload = {
+        success: false,
+        executionTimeMs: 0,
+        error: "Permission denied. The tool will not be executed.",
+      };
+      const toolContent = JSON.stringify(deniedPayload);
+      eventSink.emit({
+        type: "tool_result",
+        conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
+        fullContent: toolContent,
+        toolResult: deniedPayload,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
+      });
+
+      matchedByToolId.conversationMessages.push({
+        role: "tool",
+        tool_call_id: matchedByToolId.toolCallId,
+        content: toolContent,
+      });
+
+      // Rebuild the deferred catalog (mirrors resumeToolAfterPermission).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: matchedByToolId.openAITools,
+        conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
+        autoPlanEnabled: false,
+        userMessage: matchedByToolId.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          matchedByToolId.conversationMessages
+        ),
+        model: matchedByToolId.request.model,
+        contextWindowTokens: await this.resolveContextWindowTokens(
+          matchedByToolId.request.model
+        ),
+      });
+
+      const loopInput: AIChatQueryLoopInput = {
+        conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
+        eventSink,
+        skillRegistry: SkillRegistry,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: matchedByToolId.toolCatalogState,
+        sourceUserMessageId: matchedByToolId.sourceUserMessageId,
+        intentDecisionId: matchedByToolId.intentDecisionId,
+        turnId: matchedByToolId.turnId,
+        outboundSendPreAuthorized: matchedByToolId.outboundSendPreAuthorized,
+        goalAutoContinue: await this.shouldAutoContinueGoal(
+          conversationId,
+          Boolean(matchedByToolId.planContext)
+        ),
+      };
+
+      void this.loop
+        .run(loopInput)
+        .then(async (result) => {
+          await this.handleLoopResult(result, module, eventSink);
+        })
+        .catch((err) => {
+          console.error("[ai-chat-v2] deny-resume loop failed:", err);
+          void redirectToLoginOnAuthExpired(err);
+          denySink.emit({
+            type: "error",
+            conversationId,
+            messageId: matchedByToolId.assistantMessageId,
+            errorMessage: userSafeError(err),
+          });
+          this.clearConversationTurnState(conversationId);
+        });
+
+      return { ok: true };
+    } catch (err) {
+      this.clearActiveTurnState(conversationId);
+      return { ok: false, error: userSafeError(err) };
+    }
   }
 
   private dispatchStop(

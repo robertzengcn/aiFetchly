@@ -39,22 +39,31 @@ let capturedChunkHandler: ChunkHandler | null = null;
 let capturedCompleteHandler: CompleteHandler | null = null;
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   detachChatV2ConversationStreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
-  awaitChatV2Turn: vi
-    .fn()
-    .mockImplementation(
-      (
-        _conversationId: string,
-        handler: ChunkHandler,
-        onComplete: CompleteHandler
-      ) => {
-        capturedChunkHandler = handler;
-        capturedCompleteHandler = onComplete;
-        return { promise: Promise.resolve(), detach: vi.fn() };
-      }
-    ),
+  awaitChatV2Turn: vi.fn().mockImplementation(
+    (
+      _conversationId: string,
+      handler: ChunkHandler,
+      onComplete: CompleteHandler
+    ) => {
+      capturedChunkHandler = handler;
+      capturedCompleteHandler = onComplete;
+      return { promise: Promise.resolve(), detach: vi.fn() };
+    }
+  ),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
+  getChatV2Conversations: vi.fn().mockResolvedValue([]),
+  getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
+  streamChatV2Message: vi.fn().mockResolvedValue(undefined),
   createChatV2PendingMessage: vi.fn().mockImplementation(
     async (_clientRequestId: string, request: { conversationId: string }) => ({
       conversationId: request.conversationId,
@@ -76,13 +85,10 @@ vi.mock("@/views/api/aiChatV2", () => ({
   cancelChatV2PendingMessage: vi.fn(),
   resumeChatV2PendingQueue: vi.fn(),
   subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
-  subscribeAutoCompacted: vi.fn(),
-  unsubscribeAutoCompacted: vi.fn(),
-  getChatV2Conversations: vi.fn().mockResolvedValue([]),
-  getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),

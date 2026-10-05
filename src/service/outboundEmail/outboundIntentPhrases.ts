@@ -137,6 +137,8 @@ export const COMPOSE_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
     "write an email",
     "write a test email to",
     "write an email to",
+    "write email",
+    "write emails",
     "compose a test email",
     "compose an email",
   ],
@@ -191,6 +193,7 @@ export const SKIP_REVIEW_PHRASES: Record<OutboundIntentPhraseLang, string[]> = {
   en: [
     "without review",
     "without a review",
+    "without reviewing",
     "skip review",
     "skip the review",
     "no review needed",

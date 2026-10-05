@@ -49,6 +49,7 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("read_attachment_content", "builtin")).toBe("always");
     expect(classify("knowledge_library_search", "builtin")).toBe("always");
     expect(classify("run_subagent", "builtin")).toBe("always");
+    expect(classify("conversation_tool_history", "builtin")).toBe("always");
   });
 
   it("keeps attach_local_images deferred by default (not always-loaded)", () => {
@@ -330,6 +331,43 @@ describe("ToolLoadPolicyService.classify", () => {
         currentUserMessage: "show this as an interactive dashboard",
       })
     ).toBe("contextual");
+  });
+
+  it("promotes AI message task tools for schedule intent and keeps them deferred otherwise", () => {
+    // Schedule phrasing promotes them (create_schedule needs an existing task
+    // id, so the task tools ride the same intent).
+    expect(
+      classify("list_ai_message_tasks", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "create a schedule to run this task every morning",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("get_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("update_ai_message_task", "builtin", {
+        currentUserMessage:
+          "please update the schedule and replace the instruction text",
+      })
+    ).toBe("contextual");
+    // Unrelated chat leaves them deferred (discoverable via catalog search).
+    expect(classify("list_ai_message_tasks", "builtin")).toBe("deferred");
+    expect(classify("get_ai_message_task", "builtin")).toBe("deferred");
+    expect(classify("create_ai_message_task", "builtin")).toBe("deferred");
+    expect(classify("update_ai_message_task", "builtin")).toBe("deferred");
+    expect(
+      classify("create_ai_message_task", "builtin", {
+        currentUserMessage: "what is the weather today",
+      })
+    ).toBe("deferred");
   });
 
   it("promotes create_html_artifact for 'show/render/display ... in html' phrasings", () => {

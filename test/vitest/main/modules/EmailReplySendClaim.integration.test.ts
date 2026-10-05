@@ -4,7 +4,6 @@ import path from "node:path";
 import fs from "node:fs";
 import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReplyDraftModel } from "@/model/EmailReplyDraft.model";
-import { EmailReplyDraftRevisionModel } from "@/model/EmailReplyDraftRevision.model";
 import { EmailReplyApprovalModel } from "@/model/EmailReplyApproval.model";
 import { EmailReplySendAttemptModel } from "@/model/EmailReplySendAttempt.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -25,7 +24,6 @@ import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabi
 describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
   let dbpath: string;
   let draftModel: EmailReplyDraftModel;
-  let revisionModel: EmailReplyDraftRevisionModel;
   let approvalModel: EmailReplyApprovalModel;
   let attemptModel: EmailReplySendAttemptModel;
 
@@ -39,7 +37,6 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
     await SqliteDb.resetInstance(dbpath);
     await SqliteDb.ensureInitialized();
     draftModel = new EmailReplyDraftModel(dbpath);
-    revisionModel = new EmailReplyDraftRevisionModel(dbpath);
     approvalModel = new EmailReplyApprovalModel(dbpath);
     attemptModel = new EmailReplySendAttemptModel(dbpath);
   });
@@ -108,8 +105,7 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       savedDraft.id,
       appended.revision.id,
       contentHash,
-      "policy-1",
-      new Date()
+      "policy-1"
     );
     expect(ok).toBe(true);
 

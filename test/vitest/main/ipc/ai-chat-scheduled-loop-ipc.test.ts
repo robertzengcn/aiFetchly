@@ -22,19 +22,27 @@ const aiEnabled = vi.hoisted(() => ({ value: "true" }));
 
 vi.mock("electron", () => ({ ipcMain: mockIpcMain }));
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn(() => aiEnabled.value),
-  })),
+  };
+    }
+  },
 }));
 vi.mock("@/modules/AIChatScheduledLoopModule", () => ({
-  AIChatScheduledLoopModule: vi.fn().mockImplementation(() => ({
+  AIChatScheduledLoopModule: class {
+    constructor() {
+      return {
     create: mockCreate,
     getStatus: mockGetStatus,
     pause: mockPause,
     resume: mockResume,
     stop: mockStop,
     stopCurrentRun: mockStopCurrentRun,
-  })),
+  };
+    }
+  },
   ScheduledLoopError: class extends Error {
     code: string;
     constructor(code: string) {

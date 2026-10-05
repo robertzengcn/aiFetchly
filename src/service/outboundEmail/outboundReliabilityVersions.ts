@@ -4,7 +4,7 @@
  * them (technical design §9.2, §12, §23). Bump these when the deterministic
  * intent phrases, hashing rules, preflight checks, or worker protocol change.
  */
-export const OUTBOUND_RESOLVER_VERSION = "outbound-resolver-v1";
+export const OUTBOUND_RESOLVER_VERSION = "outbound-resolver-v2";
 
 export const OUTBOUND_POLICY_VERSION = "outbound-policy-v1";
 

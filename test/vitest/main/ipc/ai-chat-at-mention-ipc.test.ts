@@ -10,9 +10,13 @@ const suggestMock = vi.hoisted(() => vi.fn());
 vi.mock("electron", () => ({ ipcMain: mockIpcMain }));
 
 vi.mock("@/service/aiChatAtMentions/AtMentionSuggestionService", () => ({
-  AtMentionSuggestionService: vi.fn().mockImplementation(() => ({
+  AtMentionSuggestionService: class {
+    constructor() {
+      return {
     suggest: suggestMock,
-  })),
+  };
+    }
+  },
 }));
 
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";

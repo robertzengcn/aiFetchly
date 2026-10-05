@@ -37,6 +37,35 @@ function recipients(): EmailItem[] {
 }
 
 /**
+ * Seed an email-service row with id=1 whose resolved identity matches what
+ * `generateBatch` freezes into the revision (from=sender@example.com,
+ * smtpUsername=null→resolves to from, replyTo=null). The §15.5 identity-reload
+ * gate reads this row at claim time; without it, `readIdentity(1)` returns
+ * null and the claim aborts with `sender_identity_changed`.
+ */
+async function seedEmailService(overrides?: {
+  from?: string;
+  smtpUsername?: string | null;
+  replyTo?: string | null;
+}): Promise<void> {
+  const { EmailServiceModel } = await import("@/model/EmailService.model");
+  const { EmailServiceEntity } = await import("@/entity/EmailService.entity");
+  const model = new EmailServiceModel(tmpDir);
+  const entity = new EmailServiceEntity();
+  entity.id = 1;
+  entity.name = "Primary";
+  entity.from = overrides?.from ?? "sender@example.com";
+  entity.smtpUsername = overrides?.smtpUsername ?? null;
+  entity.replyTo = overrides?.replyTo ?? null;
+  entity.password = "secret";
+  entity.host = "smtp.example.com";
+  entity.port = "465";
+  entity.ssl = 1;
+  entity.status = 1;
+  await model.create(entity);
+}
+
+/**
  * Seed a fully-authorized batch + intent decision + active authorization, then
  * claim it (worker starts successfully). Returns the handles recovery mutates.
  */
@@ -48,6 +77,7 @@ async function seedClaimedBatch(): Promise<{
 }> {
   SqliteDb.getInstance(tmpDir);
   await SqliteDb.ensureInitialized();
+  await seedEmailService();
   const draftService = new OutboundEmailDraftService(tmpDir, {
     aiEnabledOverride: true,
   });
@@ -108,12 +138,15 @@ async function seedClaimedBatch(): Promise<{
     batchHash: generated.batchHash!,
   });
   expect(claim.status).toBe("claimed");
+  if (!("attemptId" in claim)) {
+    throw new Error("expected claim to carry an attemptId");
+  }
 
   return {
     batchId: generated.batchId!,
     batchHash: generated.batchHash!,
     authorizationId: auth.authorizationId!,
-    attemptId: claim.attemptId!,
+    attemptId: claim.attemptId,
   };
 }
 
@@ -155,9 +188,9 @@ describe("OutboundEmailRecoveryService", () => {
     // Audit rule 6 — every transition is audited.
     const auditModel = new OutboundEmailAuditLogModel(tmpDir);
     const logs = await auditModel.listByBatch(seed.batchId);
-    expect(
-      logs.some((l) => l.eventCode === "authorization_expired")
-    ).toBe(true);
+    expect(logs.some((l) => l.eventCode === "authorization_expired")).toBe(
+      true
+    );
 
     // Rule 5 — recovery never created a new send attempt.
     const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
@@ -189,9 +222,7 @@ describe("OutboundEmailRecoveryService", () => {
     expect(attempt?.lastErrorCode).toBe("worker_never_started");
 
     // Pending outcomes → failed (definite pre-acceptance rejection only).
-    const outcomes = await deliveryModel.listOutcomesByAttempt(
-      seed.attemptId
-    );
+    const outcomes = await deliveryModel.listOutcomesByAttempt(seed.attemptId);
     expect(outcomes.every((o) => o.status === "failed")).toBe(true);
 
     // Batch recomputed to failed (rule 4).
@@ -202,9 +233,9 @@ describe("OutboundEmailRecoveryService", () => {
     // Audit rule 6.
     const auditModel = new OutboundEmailAuditLogModel(tmpDir);
     const logs = await auditModel.listByBatch(seed.batchId);
-    expect(
-      logs.some((l) => l.eventCode === "recovery_attempt_failed")
-    ).toBe(true);
+    expect(logs.some((l) => l.eventCode === "recovery_attempt_failed")).toBe(
+      true
+    );
   });
 
   // §21 rule 3 — sending attempt with a dead worker and pending/submitted
@@ -232,9 +263,7 @@ describe("OutboundEmailRecoveryService", () => {
     expect(attempt?.lastErrorCode).toBe("recovery_timeout");
 
     // Uncertain (pending/submitted) outcomes → delivery_unknown, NOT failed.
-    const outcomes = await deliveryModel.listOutcomesByAttempt(
-      seed.attemptId
-    );
+    const outcomes = await deliveryModel.listOutcomesByAttempt(seed.attemptId);
     expect(outcomes.every((o) => o.status === "delivery_unknown")).toBe(true);
 
     // Batch recomputed to delivery_unknown (rule 4).
@@ -245,9 +274,9 @@ describe("OutboundEmailRecoveryService", () => {
     // Audit rule 6.
     const auditModel = new OutboundEmailAuditLogModel(tmpDir);
     const logs = await auditModel.listByBatch(seed.batchId);
-    expect(
-      logs.some((l) => l.eventCode === "recovery_delivery_unknown")
-    ).toBe(true);
+    expect(logs.some((l) => l.eventCode === "recovery_delivery_unknown")).toBe(
+      true
+    );
   });
 
   // §21 rule 5 — recovery NEVER creates a new send attempt.
@@ -288,9 +317,7 @@ describe("OutboundEmailRecoveryService", () => {
     const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
 
     // Mark the single outcome sent, then ask recovery to recompute.
-    const outcomes = await deliveryModel.listOutcomesByAttempt(
-      seed.attemptId
-    );
+    const outcomes = await deliveryModel.listOutcomesByAttempt(seed.attemptId);
     for (const o of outcomes) {
       await deliveryModel.updateOutcomeStatus(o.id, "sent", {
         completedAt: new Date(),

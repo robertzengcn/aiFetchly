@@ -1,6 +1,30 @@
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { SortBy, ListData } from "@/entityTypes/commonType";
 
+export interface ValidateEmailServiceOptions {
+  readonly mode: "create" | "update" | "send";
+  readonly hasStoredPassword?: boolean;
+}
+
+export interface EmailServiceValidationError {
+  readonly code: EmailServiceValidationCode;
+  readonly message: string;
+}
+
+export type EmailServiceValidationCode =
+  | "service_name_required"
+  | "smtp_username_required" // co-fires with from_required (resolver falls back to From)
+  | "smtp_username_too_long"
+  | "from_required"
+  | "from_invalid"
+  | "reply_to_invalid"
+  | "email_header_break_forbidden"
+  | "password_required"
+  | "host_required"
+  | "port_required"
+  | "port_invalid"
+  | "receive_config_invalid";
+
 export interface EmailServiceModuleInterface {
   /**
    * Create a new email service
@@ -38,6 +62,9 @@ export interface EmailServiceModuleInterface {
 
   /**
    * List email services with pagination and sorting
+   * NOTE: records are NOT credential-decrypted (passwords stay as stored).
+   * List callers only need non-secret fields; use getEmailService() for
+   * a single row when plaintext credentials are required.
    * @param page Page number (offset)
    * @param size Page size (limit)
    * @param sort Sort parameters (optional)
@@ -47,14 +74,23 @@ export interface EmailServiceModuleInterface {
     page: number,
     size: number,
     search?: string,
+    tagId?: number,
+    untagged?: boolean,
     sort?: SortBy
   ): Promise<ListData<EmailServiceEntity>>;
 
   /**
    * Get total number of email services
+   * @param tagId Optional tag filter (matches listEmailServices)
+   * @param untagged Optional untagged-only filter (matches listEmailServices)
+   * @param search Optional name/from filter (matches listEmailServices)
    * @returns Total count of services
    */
-  countEmailServices(): Promise<number>;
+  countEmailServices(
+    tagId?: number,
+    untagged?: boolean,
+    search?: string
+  ): Promise<number>;
 
   /**
    * Find email service by name
@@ -62,6 +98,9 @@ export interface EmailServiceModuleInterface {
    * @returns The email service entity
    */
   findEmailServiceByName(name: string): Promise<EmailServiceEntity | undefined>;
+
+  /** Find an email service by its user-defined tag. */
+  findEmailServiceByTag(tagName: string): Promise<EmailServiceEntity | undefined>;
 
   /**
    * Find email services by host
@@ -77,13 +116,26 @@ export interface EmailServiceModuleInterface {
   getActiveEmailServices(): Promise<EmailServiceEntity[]>;
 
   /**
-   * Validate email service configuration
-   * @param service The email service entity to validate
-   * @returns Validation result with validity status and error messages
+   * Validate an email service configuration with operation context (§8.1).
+   * @param service The entity to validate
+   * @param options Operation mode + stored-password availability
+   * @returns Validation result with stable field/error codes
    */
   validateEmailService(
-    service: EmailServiceEntity
-  ): Promise<{ valid: boolean; errors: string[] }>;
+    service: EmailServiceEntity,
+    options: ValidateEmailServiceOptions
+  ): Promise<{ valid: boolean; errors: EmailServiceValidationError[] }>;
+
+  /**
+   * Read the complete effective identity snapshot for a service (§22.2).
+   * Returns null when the service does not exist.
+   */
+  readIdentity(id: number): Promise<{
+    smtpUsername: string;
+    fromAddress: string;
+    replyToAddress: string | null;
+    receiveUsername: string;
+  } | null>;
 
   /**
    * List ALL email services for export (no pagination, no search filter).

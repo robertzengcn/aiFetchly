@@ -94,7 +94,9 @@ export function expandPastedTextRefs(
   displayText: string,
   pastedContents: Record<string, string> | undefined
 ): ExpandPastedTextRefsResult {
-  if (!pastedContents || Object.keys(pastedContents).length === 0) {
+  const refs = parsePastedTextRefs(displayText);
+
+  if (refs.length === 0) {
     return {
       expandedText: displayText,
       replacedPasteIds: [],
@@ -103,13 +105,11 @@ export function expandPastedTextRefs(
     };
   }
 
-  const refs = parsePastedTextRefs(displayText);
-
-  if (refs.length === 0) {
+  if (!pastedContents || Object.keys(pastedContents).length === 0) {
     return {
       expandedText: displayText,
       replacedPasteIds: [],
-      unknownPasteIds: [],
+      unknownPasteIds: refs.map((ref) => ref.pasteId),
       pastedBlocks: [],
     };
   }

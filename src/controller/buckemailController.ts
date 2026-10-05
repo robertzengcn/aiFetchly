@@ -1,8 +1,4 @@
 import { BuckemailTaskStartInput } from "@/entityTypes/emailmarketingType";
-import { EmailMarketingTemplateApi } from "@/api/emailMarketingTemplateApi";
-
-import { EmailMarketingFilterApi } from "@/api/emailMarketingFilterApi";
-import { EmailServiceApi } from "@/api/emailServiceApi";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
 import { OutboundEmailSendLogModule } from "@/modules/OutboundEmailSendLogModule";
@@ -16,17 +12,11 @@ import {
 import { getStatusName } from "@/modules/lib/function";
 
 export class BuckemailController {
-  private emailtemAPI: EmailMarketingTemplateApi;
-  private emailfilterAPI: EmailMarketingFilterApi;
-  private emailserviceAPI: EmailServiceApi;
   private buckEmailTaskMoudule: BuckEmailTaskModule;
   private emailMarketingSendlogModule: EmailMarketingSendLogModule;
   private unifiedSendLogModule: OutboundEmailSendLogModule;
   constructor() {
-    this.emailtemAPI = new EmailMarketingTemplateApi();
-    this.emailfilterAPI = new EmailMarketingFilterApi();
     this.buckEmailTaskMoudule = new BuckEmailTaskModule();
-    this.emailserviceAPI = new EmailServiceApi();
     this.emailMarketingSendlogModule = new EmailMarketingSendLogModule();
     this.unifiedSendLogModule = new OutboundEmailSendLogModule();
   }

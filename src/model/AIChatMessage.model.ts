@@ -44,10 +44,109 @@ export class AIChatMessageModel extends BaseDb {
   }
 
   /**
+   * Bounded recent-message read (newest `limit` rows, returned chronological).
+   * Never materializes the full conversation (FR-01/FR-07). Enforces a
+   * decoded-text byte allowance newest-first so oversized payloads cannot blow
+   * the read boundary; always keeps at least the newest row so pagination and
+   * continuity can advance (design §6 — row-count limits alone are
+   * insufficient).
+   */
+  async getRecentMessages(
+    conversationId: string,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    const capped = Math.max(1, Math.min(limit, 256));
+    const rows = await this.repository.find({
+      where: { conversationId },
+      order: { timestamp: "DESC", id: "DESC" },
+      take: capped,
+    });
+    const byteBudget = 64 * 1024;
+    let bytes = 0;
+    const keptNewestFirst: AIChatMessageEntity[] = [];
+    for (const row of rows) {
+      const rowBytes = Buffer.byteLength(row.content ?? "", "utf8");
+      if (keptNewestFirst.length > 0 && bytes + rowBytes > byteBudget) break;
+      keptNewestFirst.push(row);
+      bytes += rowBytes;
+    }
+    return keptNewestFirst.reverse();
+  }
+
+  /**
+   * Scoped lookup of a boundary row within a conversation. Returns the single
+   * matching row, or null when there is none. Conversation-scoped so a
+   * caller-supplied messageId can never resolve into another conversation.
+   * A duplicated messageId is ambiguous — returns null rather than guessing
+   * latest, so callers defer to a bounded coordinator rebuild instead of
+   * permanently skipping the messages between duplicates.
+   */
+  async findBoundaryInConversation(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    const rows = await this.repository.find({
+      where: { conversationId, messageId },
+      order: { timestamp: "DESC", id: "DESC" },
+      take: 2,
+    });
+    if (rows.length !== 1) return null;
+    return rows[0];
+  }
+
+  /**
    * Get message by ID
    */
   async getMessageById(id: number): Promise<AIChatMessageEntity | null> {
     return await this.repository.findOne({ where: { id } });
+  }
+
+  /**
+   * Bounded existence check: true when any message row exists strictly after
+   * (afterTimestamp, afterRowId) in (timestamp, id) order. Single COUNT query;
+   * never materializes the conversation (FR-01/FR-07 bounded reads).
+   */
+  async hasMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId = 0
+  ): Promise<boolean> {
+    const count = await this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId })
+      .andWhere(
+        "(message.timestamp > :ts OR (message.timestamp = :ts AND message.id > :id))",
+        { ts: afterTimestamp, id: afterRowId }
+      )
+      .take(1)
+      .getCount();
+    return count > 0;
+  }
+
+  /**
+   * Bounded delta read strictly after (afterTimestamp, afterRowId) in
+   * (timestamp, id) ASC order, capped at `limit` rows. Callers enforce
+   * decoded-text budgets; row-count limits alone do not bound oversized
+   * payloads (design §6).
+   */
+  async getMessagesAfter(
+    conversationId: string,
+    afterTimestamp: Date,
+    afterRowId: number,
+    limit: number
+  ): Promise<AIChatMessageEntity[]> {
+    const capped = Math.max(1, Math.min(limit, 64));
+    return await this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId })
+      .andWhere(
+        "(message.timestamp > :ts OR (message.timestamp = :ts AND message.id > :id))",
+        { ts: afterTimestamp, id: afterRowId }
+      )
+      .orderBy("message.timestamp", "ASC")
+      .addOrderBy("message.id", "ASC")
+      .take(capped)
+      .getMany();
   }
 
   /**

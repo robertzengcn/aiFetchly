@@ -1,5 +1,8 @@
 import { OutboundEmailEnvelopeHasher } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
-import type { BatchEnvelopeEntry } from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
+import type {
+  BatchEnvelopeEntry,
+  BatchEnvelopeEntryV2,
+} from "@/service/outboundEmail/OutboundEmailEnvelopeHasher";
 import type { OutboundEmailDraftEntity } from "@/entity/OutboundEmailDraft.entity";
 import type { OutboundEmailDraftRevisionEntity } from "@/entity/OutboundEmailDraftRevision.entity";
 import type {
@@ -34,7 +37,7 @@ export interface PreflightDraftView {
 /** A single recipient's preflight input: its draft view, recomputed envelope, and stored content hash. */
 export interface PreflightEntry {
   readonly view: PreflightDraftView;
-  readonly envelope: BatchEnvelopeEntry | null;
+  readonly envelope: BatchEnvelopeEntry | BatchEnvelopeEntryV2 | null;
   /** The hash currently stored on the draft/revision. Null when no revision exists. */
   readonly storedHash: string | null;
 }
@@ -180,11 +183,17 @@ export class OutboundEmailPreflightService {
         });
       }
 
-      // §12.13 — envelope hash recomputation.
+      // §12.13 — envelope hash recomputation (version-aware: v1 or v2).
       if (entry.envelope) {
-        const recomputed = OutboundEmailEnvelopeHasher.hashEnvelope(
-          entry.envelope
-        );
+        const envelope = entry.envelope;
+        const recomputed =
+          envelope.version === 2
+            ? OutboundEmailEnvelopeHasher.hashEnvelopeV2(
+                envelope as BatchEnvelopeEntryV2
+              )
+            : OutboundEmailEnvelopeHasher.hashEnvelope(
+                envelope as BatchEnvelopeEntry
+              );
         if (entry.storedHash && recomputed !== entry.storedHash) {
           findings.push({
             recipientAddress: address || null,
@@ -216,13 +225,29 @@ export class OutboundEmailPreflightService {
     }
 
     // Happy path: compute the batch hash from the (validated) envelopes.
-    const envelopes = entries
+    // Version-aware: v2 envelopes → hashBatchV2; v1 → hashBatch.
+    const allEnvelopes = entries
       .map((e) => e.envelope)
-      .filter((x): x is BatchEnvelopeEntry => x !== null);
-    const batchHash =
-      envelopes.length === 0
-        ? null
-        : OutboundEmailEnvelopeHasher.hashBatch(envelopes);
+      .filter(
+        (x): x is BatchEnvelopeEntry | BatchEnvelopeEntryV2 => x !== null
+      );
+    const v2Envelopes = allEnvelopes.filter(
+      (e): e is BatchEnvelopeEntryV2 => e.version === 2
+    );
+    const v1Envelopes = allEnvelopes.filter(
+      (e): e is BatchEnvelopeEntry => e.version === 1
+    );
+    let batchHash: string | null;
+    if (allEnvelopes.length === 0) {
+      batchHash = null;
+    } else if (v2Envelopes.length > 0 && v1Envelopes.length === 0) {
+      batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes);
+    } else if (v1Envelopes.length > 0 && v2Envelopes.length === 0) {
+      batchHash = OutboundEmailEnvelopeHasher.hashBatch(v1Envelopes);
+    } else {
+      // Mixed versions: use v2 hash (new revisions dominate the batch state).
+      batchHash = OutboundEmailEnvelopeHasher.hashBatchV2(v2Envelopes);
+    }
 
     return {
       passed: true,

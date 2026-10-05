@@ -11,9 +11,11 @@ vi.mock("@/entityTypes/agentTypes", () => ({}));
 // Mock the Token service so executeAsyncTool's defense-in-depth AI-enabled
 // gate passes (same pattern as AIChatQueryLoopAsyncPoll.test.ts).
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: vi.fn(function TokenMock() {
+      return {
     getValue: vi.fn().mockReturnValue("true"),
-  })),
+      };
+    }),
 }));
 
 import {

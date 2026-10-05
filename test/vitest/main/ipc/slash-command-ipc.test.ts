@@ -48,18 +48,26 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/modules/SlashCommandModule", () => ({
-  SlashCommandModule: vi.fn().mockImplementation(() => ({
+  SlashCommandModule: class {
+    constructor() {
+      return {
     listCommands: moduleMocks.listCommands,
     dispatch: moduleMocks.dispatch,
     reloadConfig: moduleMocks.reloadConfig,
     getStatus: moduleMocks.getStatus,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/aifetchlyConfig/AIFetchlyConfigManager", () => ({

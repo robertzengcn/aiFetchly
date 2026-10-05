@@ -5,18 +5,26 @@ vi.mock("@/service/ToolExecutor", () => ({
   ToolExecutor: { execute: vi.fn().mockResolvedValue({ results: [] }) },
 }));
 vi.mock("@/service/MCPToolService", () => ({
-  MCPToolService: vi.fn().mockImplementation(() => ({
+  MCPToolService: class {
+    constructor() {
+      return {
     getEnabledMCPToolsAsFunctions: vi.fn().mockResolvedValue([]),
-  })),
+  };
+    }
+  },
 }));
 const tokenStore: Record<string, string> = {};
 vi.mock("@/modules/token", () => ({
-  Token: vi.fn().mockImplementation(() => ({
+  Token: class {
+    constructor() {
+      return {
     getValue: vi.fn((key: string) => tokenStore[key] || ""),
     setValue: vi.fn((key: string, value: string) => {
       tokenStore[key] = value;
     }),
-  })),
+  };
+    }
+  },
 }));
 
 import { SkillExecutor } from "@/service/SkillExecutor";

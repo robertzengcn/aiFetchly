@@ -76,6 +76,8 @@ export type ItemSearchparam = {
   where?: string;
   sortby?: SortBy;
   search?: string;
+  tagId?: number;
+  untagged?: boolean;
 };
 export interface CommonApiresp<Type> {
   status: boolean;

@@ -65,6 +65,8 @@ vi.mock("@/views/api/slashCommands", () => ({
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
   awaitChatV2Turn: vi.fn(() => ({
     promise: Promise.resolve(),
     detach: vi.fn(),
@@ -81,7 +83,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
   streamChatV2Message: vi.fn(),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  isHistoryUiEnabled: vi.fn().mockResolvedValue(true),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -94,6 +97,9 @@ vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2Conversation: vi.fn(),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  subscribeCompactionProgress: vi.fn(),
+  unsubscribeCompactionProgress: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChat", () => ({

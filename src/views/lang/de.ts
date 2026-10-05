@@ -61,6 +61,14 @@ export default {
     log_content: "Protokollinhalt",
     optional: "Optional",
     import: "Importieren",
+    import_success: "Import erfolgreich",
+    import_partial:
+      "{imported} importiert, {skipped} ungültige Zeilen übersprungen",
+    import_partial_skipped: ": {errors}",
+    import_cancelled: "Import abgebrochen",
+    import_failed: "Import fehlgeschlagen",
+    import_no_valid_rows: "Keine gültigen Dienste in der Datei gefunden",
+    import_invalid_file: "Ungültiges Dateiformat",
     export: "Exportieren",
     clear_filters: "Filter löschen",
     columns: "Spalten",
@@ -74,6 +82,7 @@ export default {
     export_cancelled: "Export abgebrochen",
     exporting: "Exportiere...",
     download_template: "Vorlage herunterladen",
+    select_file_import: "Datei auswählen und importieren",
     drag_drop_file:
       "Datei hierher ziehen oder klicken, um eine Datei auszuwählen",
     search: "Markteinblicke",
@@ -232,6 +241,22 @@ export default {
     description: "Beschreibung",
     tags: "Tags",
     tags_hint: "Enter drücken zum Hinzufügen",
+    author: "Autor",
+    upload_metadata_hint: "Optional. Gilt für jede Datei dieses Uploads.",
+    tag_error_tag_too_long: "Tag #{index} überschreitet {max} Zeichen.",
+    tag_error_too_many_tags: "Es sind maximal {maxCount} Tags erlaubt.",
+    tag_error_author_too_long: "Der Autor überschreitet {max} Zeichen.",
+    tag_error_description_too_long: "Die Beschreibung überschreitet {max} Zeichen.",
+    metadata_language: "Sprache",
+    metadata_language_hint: "z. B. en, zh-CN",
+    metadata_document_date: "Dokumentdatum",
+    metadata_document_date_hint: "YYYY-MM-DD",
+    metadata_more_fields: "Weitere Felder",
+    metadata_more_fields_hint: "Optionale benutzerdefinierte Schlüssel, die auf jede Datei dieses Uploads angewendet werden.",
+    metadata_custom_product: "Produkt",
+    metadata_custom_customer: "Kunde",
+    metadata_custom_campaign: "Kampagne",
+    metadata_custom_category: "Kategorie",
     loading_content: "Inhalt wird geladen...",
     confirm_delete_document:
       'Sind Sie sicher, dass Sie "{name}" löschen möchten?',
@@ -1245,9 +1270,22 @@ export default {
     retry: "Erneut versuchen",
   },
   emailservice: {
+    delete_tag: "Tag löschen",
+    create_missing_tags: "Fehlende Tags erstellen",
+    tag_invalid_characters: "Steuerzeichen und Zeilenumbrüche sind nicht erlaubt.",
+    tag_duplicate: "Ein Tag mit diesem Namen existiert bereits.",
+    tag_not_found: "Dieser Tag existiert nicht mehr. Aktualisieren Sie die Liste und wählen Sie einen anderen.",
+    tag_operation_failed: "Tags konnten nicht geladen oder gespeichert werden. Bitte erneut versuchen.",
     id: "ID",
-    from: "Absenderkonto",
-    from_hint: "E-Mail-Absenderkonto eingeben",
+    smtp_username: "SMTP-Benutzername",
+    smtp_username_hint:
+      "Das E-Mail-Konto, mit dem Sie sich bei Ihrem SMTP-Server anmelden.",
+    reply_to: "Antwort an",
+    reply_to_hint:
+      "Antworten gehen hier ein. Leer lassen, um auf die From-Adresse zu antworten.",
+    from: "From",
+    from_hint:
+      "Die Adresse, die Empfänger sehen. Sie muss von Ihrem E-Mail-Anbieter zugelassen sein.",
     password: "Passwort",
     password_hint: "E-Mail-Passwort eingeben",
     host: "SMTP-Host",
@@ -1256,6 +1294,20 @@ export default {
     port_hint: "E-Mail-Port eingeben",
     name: "Name",
     name_hint: "E-Mail-Name eingeben",
+    tag: "Tag",
+    tag_hint: "Optionales Label zur Auswahl dieses E-Mail-Dienstes.",
+    tag_filter: "Nach Tag filtern",
+    all_tags: "Alle Tags",
+    untagged: "Ohne Tag",
+    manage_tags: "Tags verwalten",
+    new_tag: "Neuer Tag",
+    rename_tag: "Tag umbenennen",
+    create_tag: "Tag erstellen",
+    no_tags: "Noch keine Tags",
+    tag_required: "Tag-Name ist erforderlich",
+    tag_too_long: "Der Tag darf höchstens 64 Zeichen enthalten",
+    tag_service_count: "Von {count} E-Mail-Dienst(en) verwendet",
+    delete_tag_confirm: "Tag {name} löschen? {count} Dienst(e) werden ohne Tag fortgeführt.",
     ssl: "SSL",
     ssl_hint: "E-Mail-SSL eingeben",
     email_service_deleted:
@@ -1275,6 +1327,60 @@ export default {
     send_test_email_error: "Fehler beim Senden der Test-E-Mail",
     email_send_success: "E-Mail erfolgreich gesendet",
     required_fields_missing: "Bitte füllen Sie alle Pflichtfelder aus",
+    smtp_error_auth_failed:
+      "SMTP-Authentifizierung fehlgeschlagen. Prüfen Sie SMTP-Benutzername und Passwort für diesen Dienst.",
+    smtp_error_from_rejected:
+      "Die From-Adresse wurde von Ihrem E-Mail-Anbieter abgelehnt. Prüfen Sie, dass dieser Alias für diese Anmeldung zum Senden zugelassen ist.",
+    smtp_error_recipient_rejected:
+      "Die Empfängeradresse wurde vom E-Mail-Anbieter abgelehnt.",
+    smtp_error_tls_failed:
+      "TLS- oder Zertifikatsfehler beim Verbinden mit dem SMTP-Server. Prüfen Sie die SSL/TLS-Einstellung und den Port (465 verwendet implizites SSL, 587 verwendet STARTTLS).",
+    smtp_error_connection_failed:
+      "Verbindung zum SMTP-Server nicht möglich. Prüfen Sie Host, Port und Netzwerk.",
+    smtp_error_submission_failed:
+      "Der SMTP-Server hat die Nachrichtenübermittlung abgelehnt.",
+    smtp_error_unknown:
+      "Die E-Mail konnte aus unbekanntem Grund nicht gesendet werden. Die Serverantwort wird unten angezeigt.",
+    identity_missing_smtp_username:
+      "Für diesen Dienst ist ein SMTP-Benutzername erforderlich.",
+    identity_from_invalid: "Die From-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_reply_to_invalid:
+      "Die Antwort-An-Adresse ist keine gültige E-Mail-Adresse.",
+    identity_changed_after_approval:
+      "Die Sendeidentität (SMTP-Benutzername, From oder Antwort an) wurde nach der Freigabe geändert. Eine erneute Prüfung vor dem Senden ist erforderlich.",
+    identity_import_password_required:
+      "Zum Importieren dieser E-Mail-Dienstzeile ist ein Passwort erforderlich.",
+    identity_header_break_forbidden:
+      "Zeilenumbrüche sind in diesem Feld nicht zulässig.",
+    import_dialog_title: "E-Mail-Dienste importieren",
+    import_dialog_hint:
+      "Laden Sie die CSV-Vorlage herunter, tragen Sie Ihre Dienste ein (Passwort für neue Dienste erforderlich) und wählen Sie dann die Datei für den Import.",
+  },
+  emailReplyBinding: {
+    draft_token_mismatch:
+      "Die Sendefreigabe passt nicht zu diesem Entwurf. Genehmigen Sie die Antwort erneut.",
+    approval_stale:
+      "Die Antwort wurde nach der Freigabe bearbeitet. Prüfen und genehmigen Sie sie erneut.",
+    hash_mismatch:
+      "Der genehmigte Antwortinhalt stimmt nicht mehr überein. Prüfen und genehmigen Sie sie erneut.",
+    revision_hash_mismatch:
+      "Die Antwortrevision stimmt nicht mehr mit dem genehmigten Umschlag überein. Prüfen und genehmigen Sie sie erneut.",
+    mailbox_mismatch:
+      "Antwortentwurf, Originalnachricht und E-Mail-Dienst teilen sich nicht dasselbe Postfach.",
+    service_inactive:
+      "Der E-Mail-Dienst dieser Antwort ist deaktiviert. Aktivieren Sie ihn und versuchen Sie es erneut.",
+    service_missing:
+      "Der E-Mail-Dienst dieser Antwort wurde nicht gefunden. Wählen Sie den Dienst im Entwurf erneut aus.",
+    sender_mismatch:
+      "Die From-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    recipient_mismatch:
+      "Der Empfänger stimmt nicht mehr mit dem ursprünglichen Absender oder dessen Antwortadresse überein.",
+    smtp_username_mismatch:
+      "Der SMTP-Benutzername wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    reply_to_mismatch:
+      "Die Antwort-An-Adresse wurde nach der Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
+    legacy_reply_identity_requires_review:
+      "Die Identität des E-Mail-Dienstes hat sich seit dieser Freigabe geändert. Prüfen und genehmigen Sie die Antwort erneut.",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",
@@ -1329,6 +1435,10 @@ export default {
     draft_id: "Entwurfs-ID",
     revision_id: "Revisions-ID",
     attempt_id: "Sendeversuchs-ID",
+    from_address: "From-Adresse",
+    email_service: "E-Mail-Dienst",
+    smtp_username: "SMTP-Benutzername",
+    reply_to: "Antwortadresse",
     detail_not_found: "Sendeprotokoll-Eintrag nicht gefunden",
   },
   socialaccount: {
@@ -1930,6 +2040,9 @@ export default {
     ai_message_task_model: "KI-Modell",
     ai_message_task_model_hint:
       "'Auto' verwendet das Standardmodell des Servers. Wähle ein spezifisches Modell zum Überschreiben.",
+    ai_message_task_workspace_path: "Arbeitsbereichspfad",
+    ai_message_task_workspace_path_hint:
+      "Absoluter Ordner, den die geplante KI-Nachricht als Arbeitsbereich verwendet",
     ai_message_task_allowed_tools: "Erlaubte Werkzeuge",
     ai_message_task_allowed_tools_hint:
       "Wählen Sie integrierte Werkzeuge, die die KI bei unbeaufsichtigten Ausführungen verwenden darf",
@@ -2465,6 +2578,8 @@ export default {
       hide_content: "Eingefügten Inhalt ausblenden",
       removed: "Eingefügter Inhalt entfernt",
       loading: "Eingefügter Inhalt wird geladen...",
+      missing_contents:
+        "Der eingefügte Text ist nicht mehr verfügbar. Bitte füge ihn erneut ein.",
     },
     goalLoop: {
       objectiveRequired: "Gib ein Ziel an. Verwendung: /goal <Ziel>",
@@ -2518,9 +2633,9 @@ export default {
         "Schreibgeschützte Tools werden automatisch genehmigt",
       automationTools: "Automatisierungs-Tools",
       automationToolsHint: "Optional — Netzwerkprüfungen auswählen",
-      highImpactTools: "Schreib-/E-Mail-Tools — Namen eingeben zum Aktivieren",
+      highImpactTools: "Schreib-/E-Mail-Tools",
       highImpactWarning:
-        "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Geben Sie jeden Tool-Namen ein, um zu bestätigen.",
+        "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Haken Sie jedes Tool an, um es zu aktivieren.",
       typeToConfirm: "{name} eingeben zum Bestätigen",
       errors: {
         INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",
@@ -2624,6 +2739,9 @@ export default {
     reasoning_unavailable: "Für dieses Modell ist kein Denkvorgang verfügbar.",
     copy_reasoning: "Denkvorgang kopieren",
     reasoning_copied: "Denkvorgang kopiert",
+    copy_message: "Nachricht kopieren",
+    copied: "Kopiert",
+    copy_message_aria: "Diese KI-Antwort kopieren",
     new_conversation: "Neue Unterhaltung",
     empty_title: "Unterhaltung starten",
     empty_description: "Frag alles. Dein Verlauf bleibt auf diesem Gerät.",
@@ -2634,6 +2752,7 @@ export default {
     clear_conversation: "Unterhaltung löschen",
     clear_all: "Alles löschen",
     clear_chat: "Chat löschen",
+    scroll_to_bottom: "Nach unten scrollen",
     compact_conversation: "Unterhaltung komprimieren",
     compact_completed: "Unterhaltung wurde in den Speicher komprimiert.",
     context_usage: "Kontext",
@@ -2691,6 +2810,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    permission_requested_scheduled:
+      "Eine geplante Aufgabe fragt nach der Berechtigung, ein Tool zu verwenden. Überprüfen und genehmigen oder ablehnen.",
     auth_expired:
       "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
     quota_exhausted:
@@ -2886,6 +3007,65 @@ export default {
     status_rejected: "Abgelehnt",
     status_completed: "Abgeschlossen",
     status_cancelled: "Abgebrochen",
+  },
+  aiChatHistory: {
+    drawer_title: "Unterhaltungsverlauf",
+    close: "Verlauf schließen",
+    tab_browse: "Durchsuchen",
+    tab_search: "Suchen",
+    search_button: "Suchen",
+    search_placeholder: "Archivierten Verlauf durchsuchen…",
+    search_query_too_long: "Die Suche darf höchstens 200 Zeichen lang sein.",
+    no_match: "Keine übereinstimmenden Nachrichten gefunden.",
+    partial_scan:
+      "Teilergebnisse — der vollständige Scan ist noch nicht abgeschlossen.",
+    index_incomplete:
+      "Die Verlaufsindexierung läuft noch; Ergebnisse können unvollständig sein.",
+    read_more: "Mehr lesen",
+    go_to_message: "Zur Nachricht",
+    select_passage: "Abschnitt auswählen",
+    selected_context: "Ausgewählter Kontext",
+    estimated_cost: "Geschätzte Kosten: {tokens} Tokens",
+    clear_selections: "Auswahl löschen",
+    source_changed:
+      "Dieser Abschnitt hat sich seit der Auswahl geändert und wurde aktualisiert.",
+    source_unavailable: "Dieser Abschnitt ist nicht mehr verfügbar.",
+    scope_invalid: "Ungültiger Verlaufsbereich. Bitte erneut versuchen.",
+    load_error: "Verlauf konnte nicht geladen werden. {message}",
+    empty: "Noch kein archivierter Verlauf für diese Unterhaltung.",
+  },
+  aiChatCompaction: {
+    status_idle: "Inaktiv",
+    status_queued: "In Warteschlange",
+    status_running: "Komprimierung…",
+    status_joined: "Beigetreten",
+    status_paused: "Pausiert",
+    status_completed: "Komprimiert",
+    status_failed: "Komprimierung fehlgeschlagen",
+    status_cancelled: "Abgebrochen",
+    panel_title: "Komprimierung",
+    in_progress_note:
+      "Arbeitet in begrenzten Stapeln — Sie können weiter chatten.",
+    view_history: "Frühere Nachrichten ansehen",
+    completed_detail:
+      "Frühere Nachrichten bleiben durchsuchbar. Die aktive Ansicht behält aktuelle Runden und eine begrenzte Übersicht.",
+    failed_detail:
+      "Die Komprimierung wurde mit einem Fehler gestoppt. Ihre Unterhaltung ist intakt — versuchen Sie es später erneut.",
+    cancelled_detail:
+      "Komprimierung abgebrochen. Gespeicherte Abschnitte bleiben für den nächsten Lauf erhalten.",
+    joined_detail: "Einer bereits laufenden Komprimierung beigetreten.",
+    running_detail:
+      "Frühere Verläufe werden in begrenzten Abschnitten komprimiert.",
+    idle_detail: "Die Komprimierung ist inaktiv.",
+    compaction_in_progress:
+      "Komprimierung läuft ({packed} Abschnitte gepackt).",
+    compaction_paused:
+      "Komprimierung pausiert. Sie wird automatisch fortgesetzt.",
+    compaction_start_failed: "Komprimierung konnte nicht gestartet werden.",
+    compaction_failed: "Komprimierung fehlgeschlagen: {message}",
+    compaction_retry: "Erneut versuchen",
+    compaction_cancel: "Komprimierung abbrechen",
+    cancel_failed: "Komprimierung konnte nicht abgebrochen werden. {message}",
   },
   subagents: {
     title: "Unteragenten",

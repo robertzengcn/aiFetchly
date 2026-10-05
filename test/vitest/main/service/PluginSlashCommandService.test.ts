@@ -20,16 +20,24 @@ vi.mock("@/service/AiFeatureGate", () => ({
 }));
 
 vi.mock("@/service/PluginMarketplaceService", () => ({
-  PluginMarketplaceService: vi.fn().mockImplementation(() => ({
+  PluginMarketplaceService: class {
+    constructor() {
+      return {
     addMarketplace: mocks.addMarketplace,
     installMarketplacePlugin: mocks.installMarketplacePlugin,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/PluginInstallService", () => ({
-  PluginInstallService: vi.fn().mockImplementation(() => ({
+  PluginInstallService: class {
+    constructor() {
+      return {
     installFromSource: mocks.installFromSource,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/PluginComponentRegistryService", () => ({

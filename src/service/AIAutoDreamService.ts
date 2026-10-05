@@ -27,6 +27,7 @@ import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
 
 /** Frozen profile for the user_auto_dream workload. */
 const AUTO_DREAM_PROFILE = getLightweightProfile("user_auto_dream");
+import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES = 5;
@@ -70,9 +71,12 @@ export class AIAutoDreamService {
   async evaluateAfterChatTurn(input: {
     conversationId: string;
     reason: "assistant_turn_completed";
+    /** Model used by the triggering chat turn; sent as the fallback when the
+     * hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       log.error("[ai-auto-dream] chat trigger failed:", err);
     }
@@ -81,9 +85,12 @@ export class AIAutoDreamService {
   async evaluateAfterAgentTask(input: {
     agentTaskId: string;
     reason: "agent_task_completed";
+    /** Effective model of the completed agent task, used as the fallback when
+     * the hosted server has no small-model row flagged for the "small" alias. */
+    model?: string;
   }): Promise<void> {
     try {
-      await this.maybeRun({ reason: input.reason });
+      await this.maybeRun({ reason: input.reason, model: input.model });
     } catch (err) {
       log.error("[ai-auto-dream] agent trigger failed:", err);
     }
@@ -95,12 +102,16 @@ export class AIAutoDreamService {
     /** Caller cancellation signal, propagated to every lightweight request
      * and checked before retry/repair/transactional apply (SMBW-011). */
     signal?: AbortSignal;
+    /** Explicit fallback model for the "small"-alias retry. When omitted the
+     * retry (if needed) carries no model and the server applies its default. */
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
       signal: input?.signal,
+      model: input?.model,
     });
     if (!result) {
       throw new Error("Auto-dream run skipped");
@@ -126,6 +137,7 @@ export class AIAutoDreamService {
     force?: boolean;
     reason: string;
     signal?: AbortSignal;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -141,6 +153,7 @@ export class AIAutoDreamService {
     force?: boolean;
     reason: string;
     signal?: AbortSignal;
+    model?: string;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;

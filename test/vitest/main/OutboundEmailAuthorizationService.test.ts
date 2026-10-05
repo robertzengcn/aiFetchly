@@ -127,6 +127,50 @@ describe("OutboundEmailAuthorizationService.createDirectSendAuthorization", () =
     expect(result.code).toBe("intent_not_send_now");
   });
 
+  it("authorizes draft_only when allowDraftOnlyIntent is set", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent({ mode: "draft_only", reasonCode: "ambiguous_instruction" }),
+      makeBatch()
+    );
+
+    const result = await service.createDirectSendAuthorization({
+      intentDecisionId: intentId,
+      batchId,
+      sourceUserMessageId: "msg-1",
+      conversationId: "conv-1",
+      batchHash: "a".repeat(64),
+      allowDraftOnlyIntent: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.authorizationId).toBeGreaterThan(0);
+  });
+
+  it("still rejects review_first when allowDraftOnlyIntent is set", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    const { intentId, batchId } = await seedIntentAndBatch(
+      draftModel,
+      makeIntent({ mode: "review_first" }),
+      makeBatch()
+    );
+
+    const result = await service.createDirectSendAuthorization({
+      intentDecisionId: intentId,
+      batchId,
+      sourceUserMessageId: "msg-1",
+      conversationId: "conv-1",
+      batchHash: "a".repeat(64),
+      allowDraftOnlyIntent: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("intent_not_send_now");
+  });
+
   it("rejects when the source user message does not match the intent", async () => {
     const draftModel = new OutboundEmailDraftModel(tmpDir);
     const service = new OutboundEmailAuthorizationService(tmpDir);
@@ -331,32 +375,42 @@ describe("OutboundEmailAuthorizationService.resolveDirectSendForTurn", () => {
     expect(result).toBeNull();
   });
 
-  it("picks the newest authorizable batch when several exist for the turn", async () => {
+  it("binds the oldest unauthorized batch, then the next, when several exist", async () => {
+    // Per-recipient draft calls create one batch each. Parallel
+    // start_email_send_task calls must each bind a different batch or only
+    // the newest email would send.
     const draftModel = new OutboundEmailDraftModel(tmpDir);
     const service = new OutboundEmailAuthorizationService(tmpDir);
-    const { intentId } = await seedIntentAndBatch(
+    const { intentId, batchId: olderId } = await seedIntentAndBatch(
       draftModel,
       makeIntent(),
       makeBatch({ batchHash: "a".repeat(64) })
     );
-    // A second, newer draft_ready batch for the SAME turn.
     const newer = await draftModel.createBatch(
       makeBatch({ batchHash: "b".repeat(64) })
     );
-    // Point the newer batch at the same intent (seedIntentAndBatch wired the
-    // first batch's intentDecisionId; the newer one reuses the id too).
     await draftModel.updateBatchStatus(newer.id, "draft_ready", {
       intentDecisionId: intentId,
     });
 
-    const result = await service.resolveDirectSendForTurn({
+    const first = await service.resolveDirectSendForTurn({
       conversationId: "conv-1",
       sourceUserMessageId: "msg-1",
       intentDecisionId: intentId,
     });
-    expect(result).not.toBeNull();
-    expect(result!.batchId).toBe(newer.id);
-    expect(result!.batchHash).toBe("b".repeat(64));
+    expect(first).not.toBeNull();
+    expect(first!.batchId).toBe(olderId);
+    expect(first!.batchHash).toBe("a".repeat(64));
+
+    const second = await service.resolveDirectSendForTurn({
+      conversationId: "conv-1",
+      sourceUserMessageId: "msg-1",
+      intentDecisionId: intentId,
+    });
+    expect(second).not.toBeNull();
+    expect(second!.batchId).toBe(newer.id);
+    expect(second!.batchHash).toBe("b".repeat(64));
+    expect(second!.authorizationId).not.toBe(first!.authorizationId);
   });
 
   it("inherits the conversation's latest draft when inheritConversationDraft is set", async () => {

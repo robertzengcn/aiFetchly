@@ -21,7 +21,6 @@ const spies = vi.hoisted(() => ({
 const {
   mockCreate,
   mockList,
-  mockUpdate,
   mockArchive,
   mockDelete,
   mockRunNow,
@@ -29,26 +28,38 @@ const {
 } = spies;
 
 vi.mock("@/service/AIUserMemoryService", () => ({
-  AIUserMemoryService: vi.fn().mockImplementation(() => ({
+  AIUserMemoryService: class {
+    constructor() {
+      return {
     createManualMemory: spies.mockCreate,
     list: spies.mockList,
     update: spies.mockUpdate,
     archive: spies.mockArchive,
     delete: spies.mockDelete,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/service/AIAutoDreamService", () => ({
-  AIAutoDreamService: vi.fn().mockImplementation(() => ({
+  AIAutoDreamService: class {
+    constructor() {
+      return {
     runNow: spies.mockRunNow,
     getStatus: spies.mockGetStatus,
-  })),
+  };
+    }
+  },
 }));
 
 vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
+  AiChatApi: class {
+    constructor() {
+      return {
     openAIChatCompletion: vi.fn(),
-  })),
+  };
+    }
+  },
 }));
 
 const handlers: Record<string, (e: unknown, data: string) => Promise<unknown>> =
@@ -152,6 +163,49 @@ describe("ai-user-memory-ipc", () => {
       expect.objectContaining({ force: true })
     );
     expect(r.status).toBe(true);
+  });
+
+  it("run-auto-dream forwards an optional model to runNow", async () => {
+    mockRunNow.mockResolvedValue({ runId: "run-1", status: "completed" });
+    const r = (await handlers[AI_USER_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ force: true, model: "deepseek-v4-flash" })
+    )) as { status: boolean };
+    expect(mockRunNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        force: true,
+        model: "deepseek-v4-flash",
+      })
+    );
+    expect(r.status).toBe(true);
+  });
+
+  it("run-auto-dream omits model when the payload has none", async () => {
+    mockRunNow.mockResolvedValue({ runId: "run-1", status: "completed" });
+    const r = (await handlers[AI_USER_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ force: true })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    const arg = mockRunNow.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(arg).toBeDefined();
+    expect(arg).not.toHaveProperty("model");
+  });
+
+  it("run-auto-dream drops a blank model string", async () => {
+    mockRunNow.mockResolvedValue({ runId: "run-1", status: "completed" });
+    const r = (await handlers[AI_USER_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ force: true, model: "   " })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    const arg = mockRunNow.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(arg).toBeDefined();
+    expect(arg).not.toHaveProperty("model");
   });
 
   it("status returns the auto-dream status view", async () => {

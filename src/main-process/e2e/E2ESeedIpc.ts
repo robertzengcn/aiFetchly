@@ -67,6 +67,12 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       entity.port = input.port;
       entity.ssl = input.ssl ?? 1;
       entity.status = input.status ?? 1;
+      // P0.3 identity columns: the scenarios seed a service whose SMTP
+      // username differs from From (scenario 1) and/or a Reply-To
+      // independent of From. null when absent mirrors the production
+      // create/update merge (candidate.smtpUsername ?? null).
+      entity.smtpUsername = input.smtpUsername ?? null;
+      entity.replyTo = input.replyTo ?? null;
       const model = new EmailServiceModel(dbpath);
       const id = await model.create(entity);
       return { id };

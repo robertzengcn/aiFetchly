@@ -1780,6 +1780,10 @@ The script prints machine-readable JSON and exits nonzero on failure.
 
 ## 25. GitHub Actions Design
 
+Implementation: runtime packaging is owned by `.github/workflows/local-ai-runtime-release.yml`.
+It rebuilds only when the runtime fingerprint changes. App installer releases
+(`release.yml`) do not wait on those jobs. See `docs/ci/local-ai-runtime-release.md`.
+
 ### 25.0 Trigger and permission model
 
 The workflow may remain manually triggered. Runtime packaging is considered automated when GitHub Actions performs every build, verification, checksum, catalog, and optional release-upload step without a developer assembling archives locally.

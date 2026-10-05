@@ -12,24 +12,30 @@ const mockListToolCalls = vi.fn();
 const mockResolveWithKey = vi.fn();
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: vi.fn().mockImplementation(() => ({
+  AIChatV2Module: vi.fn(function AIChatV2ModuleMock() {
+      return {
     getConversations: mockGetConversations,
     getConversationMessages: mockGetConversationMessages,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/modules/AgentTaskModule", () => ({
-  AgentTaskModule: vi.fn().mockImplementation(() => ({
+  AgentTaskModule: vi.fn(function AgentTaskModuleMock() {
+      return {
     listFinishedAfter: mockListFinishedAfter,
     listMessages: mockListMessages,
     listToolCalls: mockListToolCalls,
-  })),
+      };
+    }),
 }));
 
 vi.mock("@/service/WorkspaceResolver", () => ({
-  WorkspaceResolver: vi.fn().mockImplementation(() => ({
+  WorkspaceResolver: vi.fn(function WorkspaceResolverMock() {
+      return {
     resolveWithKey: mockResolveWithKey,
-  })),
+      };
+    }),
 }));
 
 function conv(

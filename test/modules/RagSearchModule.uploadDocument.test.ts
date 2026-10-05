@@ -13,6 +13,7 @@ import {
   LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
   LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
 } from "@/service/embedding/LocalEmbeddingModels";
+import type { EmbeddingHeaderSource } from "@/service/knowledgeMetadataHeader";
 
 interface TestableRagSearchModule {
   uploadDocument(options: DocumentUploadOptions): Promise<unknown>;
@@ -43,7 +44,8 @@ interface GenerateEmbeddingsHarness {
   generateChunkEmbeddings(
     chunks: RAGChunkEntity[],
     modelName: string,
-    dimension: number
+    dimension: number,
+    headerSource: EmbeddingHeaderSource
   ): Promise<{
     vectorIndexPath: string;
     modelName: string;
@@ -156,10 +158,25 @@ describe("RagSearchModule.uploadDocument", () => {
       },
     });
 
+    // Phase 3 metadata: generateChunkEmbeddings now takes a headerSource so the
+    // embedding text can be prefixed with document metadata. The production
+    // caller (uploadDocument) builds it via toEmbeddingHeaderSource(document).
+    // Use a realistic source here so the fallback path also exercises header
+    // construction, not just the empty-content shortcut.
+    const headerSource: EmbeddingHeaderSource = {
+      fileName: "source.pdf",
+      title: "Source Document",
+      author: "Jane Doe",
+      tags: ["uploaded", "knowledge"],
+      description: "Uploaded document: source.pdf",
+      language: "en",
+    };
+
     const result = await moduleUnderTest.generateChunkEmbeddings(
       [chunk],
       remoteProvider.modelName,
-      remoteProvider.dimensions
+      remoteProvider.dimensions,
+      headerSource
     );
 
     expect(result?.modelName).to.equal(LOCAL_XENOVA_ALL_MINILM_MODEL_ID);
