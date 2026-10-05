@@ -107,11 +107,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B08 — Definitely failed drafts cannot be reused safely [P2]
 
-- [ ] **Fix.** Distinguish definite delivery rejection from ambiguous delivery. Reuse an eligible definitely-failed draft by its existing ID; unknown delivery must remain blocked.
-- Evidence: `src/service/emailReply/EmailReplyPolicyOrchestrator.ts:154–158,425–449`; failed drafts are excluded from live-state and reusable-state checks.
-- Trigger/result: `message.replyStatus = failed` with a definitely-failed draft produces generic unknown-state refusal. If the message projection remains `draft_created`, the same failed draft is ignored and another draft may be generated.
-- Impact: legitimate retry is stranded or creates an unnecessary sibling, depending on projection state.
-- Acceptance: definite SMTP rejection followed by create-draft returns the same draft, without AI work; stale projection behaves consistently. An ambiguous failure must never become reusable merely because it is labeled failed.
+- [x] **Fix.** Distinguish definite delivery rejection from ambiguous delivery. Reuse an eligible definitely-failed draft by its existing ID; unknown delivery must remain blocked.
+- Evidence: `src/service/emailReply/EmailReplyPolicyOrchestrator.ts` — `pickReusableDraft` now returns the most recent `draft`/`approved`, falling back to a definitely-`failed` draft (never `delivery_unknown`/`sent`); precedence-5 only refuses `reply_state_unknown` when no reusable draft exists (truly stranded state, e.g. the failed row was deleted). A `failed` draft is reusable consistently whether `replyStatus` is `failed` or stale (`draft_created`).
+- Trigger/result: `message.replyStatus = failed` with a definitely-failed draft now allows reuse (no AI work) instead of the generic `reply_state_unknown` refusal. Stale projection behaves the same way; no unnecessary sibling is generated.
+- Impact: legitimate retry reuses the existing failed draft by ID; ambiguous `delivery_unknown` stays blocked at precedence-2 regardless of the `failed` label.
+- Acceptance: `test/vitest/main/modules/EmailReplyPreDraftPolicy.test.ts` "B08 — definitely-failed drafts are reusable, delivery_unknown is not" — 7 cases (failed+replyStatus=failed allowed, failed+stale projection allowed consistently, delivery_unknown NOT reusable even with replyStatus=failed, reply_state_unknown still fires when no reusable draft exists, `pickReusableDraft` returns the failed draft / prefers live over failed / never returns delivery_unknown). `test/vitest/main/EmailReplyDraftGeneration.test.ts` — 3 createDraft cases (reuse failed draft with zero LLM calls, consistent projection when replyStatus=failed, delivery_unknown draft NOT reused and refused with zero LLM calls). 88/88 pass across both files; tsc clean.
 
 ### B09 — Reused drafts lose warnings and audit/provenance [P2]
 
@@ -265,7 +265,7 @@ concurrency and stale-state cases).
 | FR-025 — generation contract | 1 | Partial | Field alignment + correction context improved; authoritative classification can still be overwritten (B07). |
 | FR-026 — JSON hints | 1 | Partial | Request forwarding exists; unsupported-parameter fallback fixed (B06); bounded transport budget + persisted completion metadata still missing (T09). |
 | FR-027 — output budget + completion checks | 1 | Partial | Larger budget + selected finish reasons checked; refusal/tool-call payloads fixed (B05); persisted completion metadata still missing (T09). |
-| FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, failed drafts mishandled, warnings disappear, race reuse unsafe (B01, B03, B08, B09). |
+| FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, definitely-failed drafts reusable (B08 fixed), warnings disappear, race reuse unsafe (B01, B03, B09). |
 | FR-029 — local duplicate eligibility | 1 | Partial | Draft/message projections checked at entry; authoritative attempts + complete post-generation recheck missing (B02, B03). |
 | FR-030 — persisted mailbox evidence | 2 | Not started | T03. |
 | FR-031 — automatic fresh detection | 2 | Not started | T04–T05. |

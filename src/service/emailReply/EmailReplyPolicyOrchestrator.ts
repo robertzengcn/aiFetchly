@@ -238,15 +238,28 @@ export class EmailReplyPolicyOrchestrator {
       // Allow the legacy evaluator to re-decide (it may have been un-blocked).
       return null;
     }
-    // 5. Prior generation failed with no live draft — surface for triage
-    //    rather than silently regenerating.
+    // 5. Prior generation failed with no live draft. A definitely-`failed`
+    //    draft (B08) is REUSABLE — a definite SMTP rejection means no email was
+    //    delivered, so the user may re-approve and retry the same draft without
+    //    regenerating. Only when there is no reusable draft at all (truly
+    //    stranded state, e.g. replyStatus=failed but the failed draft row was
+    //    deleted) do we surface reply_state_unknown for human triage.
+    //    `delivery_unknown` drafts are NOT reusable (precedence-2 already
+    //    blocked them): an ambiguous outcome might have delivered, and reuse
+    //    would risk a duplicate send.
     if (replyStatus === "failed" && liveDrafts.length === 0) {
-      return deny(
-        "reply_state_unknown",
-        "A prior reply attempt failed; requires human triage before regenerating"
-      );
+      const failedDrafts = drafts.filter((d) => d.status === "failed");
+      if (pickReusableDraft(failedDrafts) === null) {
+        return deny(
+          "reply_state_unknown",
+          "A prior reply attempt failed; requires human triage before regenerating"
+        );
+      }
+      // A reusable definitely-failed draft exists — fall through so the
+      // generation service reuses it by its existing ID (no AI work).
     }
-    // Clean (or has exactly one eligible live draft for reuse). Fall through.
+    // Clean (or has exactly one eligible live/failed draft for reuse). Fall
+    // through.
     return null;
   }
 
@@ -566,17 +579,41 @@ function hasNamespaceConflict(
 
 /**
  * Find an eligible existing draft for a message that the generation service
- * can REUSE instead of regenerating (FR-028). Returns the most recent draft
- * with status `draft` (editable) or `approved` (ready to send), or `null` when
- * none exists. The message-level guard must have already cleared the message
- * (no `sent`/in-flight/unknown/conflict state) for reuse to be safe.
+ * can REUSE instead of regenerating (FR-028, B08). Returns the most recent
+ * draft with status `draft` (editable), `approved` (ready to send), or `failed`
+ * (definitely-rejected; safe to re-approve and retry — no email was
+ * delivered), or `null` when none exists.
+ *
+ * `draft`/`approved` are preferred over `failed`: when a live editable draft
+ * and a failed sibling both exist, the newer live work wins (a `failed`
+ * sibling is a dead end the user already abandoned or the system retried
+ * from). `listByMessage` orders by `id DESC`, so iterating in order and
+ * picking the first eligible yields the newest eligible draft of the
+ * highest-precedence status class.
+ *
+ * `delivery_unknown` is NEVER reusable (B08): an ambiguous outcome might have
+ * delivered, and reuse would risk a duplicate send. The message-level guard
+ * blocks `delivery_unknown` at precedence-2 before this function is reached,
+ * but the exclusion here is defense-in-depth.
+ *
+ * The message-level guard must have already cleared the message
+ * (no `sent`/in-flight/`delivery_unknown`/conflict state) for reuse to be safe.
  */
 export function pickReusableDraft(
   drafts: readonly EmailReplyDraftEntity[]
 ): EmailReplyDraftEntity | null {
   // listByMessage orders by id DESC, so the first eligible is the newest.
+  // First pass: prefer a live editable/approved draft.
   for (const d of drafts) {
     if (d.status === "draft" || d.status === "approved") {
+      return d;
+    }
+  }
+  // Second pass: a definitely-failed draft is reusable (B08). No email was
+  // delivered on a definite SMTP rejection, so the user may re-approve and
+  // retry the same draft without regenerating.
+  for (const d of drafts) {
+    if (d.status === "failed") {
       return d;
     }
   }

@@ -663,6 +663,62 @@ describe("createDraft guard + reuse (FR-028)", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("reuses a definitely-failed draft with zero LLM calls (B08)", async () => {
+    // A definitely-`failed` draft (SMTP server rejected; no email delivered) is
+    // reusable by its existing ID — the user can re-approve and retry without
+    // regenerating. This holds regardless of the message replyStatus projection.
+    const messageId = await seedMessage({ replyStatus: "draft_created" });
+    const failedId = await seedDraft(messageId, "failed");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(failedId);
+    expect(result.subject).toBe("Re: Hi");
+    expect(result.bodyText).toBe("Hello back");
+    // No generation happened — the failed draft was returned as-is.
+    expect(requests).toHaveLength(0);
+  });
+
+  it("reuses a definitely-failed draft even when replyStatus is failed (B08, consistent projection)", async () => {
+    // The projection is consistent: whether replyStatus is `failed` or stale
+    // `draft_created`, a reusable definitely-failed draft is returned by its
+    // existing ID with no AI work.
+    const messageId = await seedMessage({ replyStatus: "failed" });
+    const failedId = await seedDraft(messageId, "failed");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(failedId);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does NOT reuse a delivery_unknown draft (B08: ambiguous stays blocked)", async () => {
+    // An ambiguous delivery outcome might have delivered; reuse would risk a
+    // duplicate send. The guard refuses with delivery_unknown and no LLM call
+    // fires.
+    const messageId = await seedMessage({ replyStatus: "failed" });
+    await seedDraft(messageId, "delivery_unknown");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("delivery_unknown");
+    expect(requests).toHaveLength(0);
+  });
+
   it("refuses already_replied with zero LLM calls when replyStatus is sent", async () => {
     const messageId = await seedMessage({ replyStatus: "sent" });
     const { factory, requests } = fakeApiFactory([

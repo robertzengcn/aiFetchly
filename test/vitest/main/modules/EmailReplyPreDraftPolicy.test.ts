@@ -772,3 +772,143 @@ describe("T02 — canonical inbound identity cluster guard", () => {
     expect(decision.allowed).toBe(true);
   });
 });
+
+/**
+ * B08 [P2]: a definitely-`failed` draft (SMTP server rejected the submission;
+ * no email was delivered) is REUSABLE by its existing ID — the user can
+ * re-approve and retry without regenerating. This must hold consistently
+ * regardless of the message `replyStatus` projection. An ambiguous
+ * `delivery_unknown` draft is NEVER reusable: it might have delivered, and
+ * reuse would risk a duplicate send.
+ */
+describe("B08 — definitely-failed drafts are reusable, delivery_unknown is not", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const orchestrator = new EmailReplyPolicyOrchestrator();
+  const pickReusableDraftModule = () => import("@/service/emailReply/EmailReplyPolicyOrchestrator");
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4280;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = over.classificationConfidence ?? 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"],
+    emailServiceId = 4280
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = emailServiceId;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("a definitely-failed draft with replyStatus=failed is allowed (reusable, not reply_state_unknown)", async () => {
+    const id = await seedMessage({ replyStatus: "failed" });
+    const failedId = await seedDraft(id, "failed");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+    expect(failedId).toBeGreaterThan(0);
+  });
+
+  it("a definitely-failed draft with stale projection (replyStatus=draft_created) is allowed consistently", async () => {
+    // The projection can lag the authoritative draft state (a mid-flip crash
+    // left replyStatus at draft_created while the draft went failed). The guard
+    // must behave consistently: a reusable failed draft is allowed regardless
+    // of the projection.
+    const id = await seedMessage({ replyStatus: "draft_created" });
+    const failedId = await seedDraft(id, "failed");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe("allowed");
+    expect(failedId).toBeGreaterThan(0);
+  });
+
+  it("a delivery_unknown draft is NOT reusable even when replyStatus=failed", async () => {
+    // An ambiguous failure must never become reusable merely because it is
+    // labeled failed. The delivery_unknown draft blocks at precedence-2.
+    const id = await seedMessage({ replyStatus: "failed" });
+    await seedDraft(id, "delivery_unknown");
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("delivery_unknown");
+  });
+
+  it("reply_state_unknown still fires when replyStatus=failed and no reusable draft exists", async () => {
+    // The failed draft row was deleted (orphan state); there is nothing to
+    // reuse. Surface for human triage rather than silently regenerating.
+    const id = await seedMessage({ replyStatus: "failed" });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("reply_state_unknown");
+  });
+
+  it("pickReusableDraft returns the failed draft when no live draft exists", async () => {
+    const { pickReusableDraft } = await pickReusableDraftModule();
+    const failed = { id: 1, status: "failed" } as EmailReplyDraftEntity;
+    expect(pickReusableDraft([failed])).toBe(failed);
+    expect(pickReusableDraft([])).toBe(null);
+  });
+
+  it("pickReusableDraft prefers a live draft over a failed sibling (newest live wins)", async () => {
+    // listByMessage orders by id DESC. When a live draft and a failed sibling
+    // both exist, the newer live work wins — a failed sibling is a dead end.
+    const { pickReusableDraft } = await pickReusableDraftModule();
+    const failed = { id: 10, status: "failed" } as EmailReplyDraftEntity;
+    const liveNewer = { id: 20, status: "draft" } as EmailReplyDraftEntity;
+    expect(pickReusableDraft([liveNewer, failed])).toBe(liveNewer);
+    // Even when the failed draft is newer, the live draft is preferred.
+    const failedNewer = { id: 30, status: "failed" } as EmailReplyDraftEntity;
+    const liveOlder = { id: 20, status: "approved" } as EmailReplyDraftEntity;
+    expect(pickReusableDraft([failedNewer, liveOlder])).toBe(liveOlder);
+  });
+
+  it("pickReusableDraft never returns a delivery_unknown draft", async () => {
+    const { pickReusableDraft } = await pickReusableDraftModule();
+    const unknown = { id: 5, status: "delivery_unknown" } as EmailReplyDraftEntity;
+    expect(pickReusableDraft([unknown])).toBe(null);
+  });
+});
