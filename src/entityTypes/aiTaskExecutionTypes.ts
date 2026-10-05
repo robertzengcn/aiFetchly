@@ -186,7 +186,10 @@ export const taskExecutionOriginSchema = z.discriminatedUnion("type", [
     type: z.literal("scheduled"),
     taskId: z.number().int().min(1),
     runId: z.number().int().min(1),
-    occurrenceKey: z.string().min(1).max(200),
+    // §9.4 occurrence key. Capped at 160 to match the AiTaskExecution.entity.ts
+    // occurrence_key column (length: 160); a 200-char key would pass Zod but
+    // fail the SQLite INSERT. See entity column for the authoritative bound.
+    occurrenceKey: z.string().min(1).max(160),
   }),
 ]);
 export type TaskExecutionOrigin = z.infer<typeof taskExecutionOriginSchema>;

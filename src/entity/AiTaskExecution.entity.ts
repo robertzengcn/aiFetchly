@@ -137,6 +137,7 @@ export class AiTaskExecutionEntity extends AuditableEntity {
   @Column("varchar", { length: 160, nullable: true })
   final_event_identity: string | null;
 
+  /** Slice 3: delivery notification state — "persisted" | "notified" | "notification_failed" (PRD FR-15). Null in Slice 1. */
   @Column("varchar", { length: 32, nullable: true })
   delivery_state: string | null;
 }

@@ -133,7 +133,10 @@ export class TaskCompletionController {
   }
 
   private incompleteReasonCode(candidate: TaskEndCandidate): string {
-    // FR-16 provenance-aware reason codes.
+    // FR-16 provenance-aware reason codes. Precedence: a synthetic/missing-
+    // terminal candidate wins over the boundary signal — the stream never
+    // truly ended, so CONTINUATION_LIMIT would mislabel it. Reordering these
+    // silently changes reason-code distribution downstream.
     if (candidate.provenance === "synthetic" || !candidate.streamTerminalSeen) {
       return "STREAM_INCOMPLETE";
     }
