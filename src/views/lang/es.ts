@@ -2811,6 +2811,8 @@ export default {
       quota_reached: "Cuota de almacenamiento agotada; solo se conservó parte del resultado",
       deleted: "Esta salida guardada ya no está disponible",
       not_available: "Esta salida guardada no está disponible",
+      retrieval_not_enabled:
+        "La recuperación de salidas guardadas no está habilitada para esta conversación",
       binary_unsupported: "Esta salida no puede mostrarse como texto; expórtela",
       close: "Cerrar",
     },

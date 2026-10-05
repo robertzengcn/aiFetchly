@@ -1344,12 +1344,12 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       // Available while reference delivery is on OR this conversation already
       // holds committed references (technical design §8.1). Gating on the
       // `capture` flag instead would make a default install return
-      // OUTPUT_NOT_AVAILABLE for artifacts it already saved, which is exactly
+      // RETRIEVAL_NOT_ENABLED for artifacts it already saved, which is exactly
       // what PRD §12 and TD §13.4 forbid.
       if (!(await isToolResultRetrievalAvailable(context))) {
         return {
           success: false,
-          result: { error: "OUTPUT_NOT_AVAILABLE" },
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
         };
       }
       const { handleToolResultRead } = await import(
@@ -1404,7 +1404,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       if (!(await isToolResultRetrievalAvailable(context))) {
         return {
           success: false,
-          result: { error: "OUTPUT_NOT_AVAILABLE" },
+          result: { error: "RETRIEVAL_NOT_ENABLED" },
         };
       }
       const { handleToolResultSearch } = await import(

@@ -2747,6 +2747,7 @@ export default {
       quota_reached: "ストレージ富度に達しましたため、結果の一部だけを保持しました",
       deleted: "この保存出力は引き続き使用できません",
       not_available: "この保存出力は使用できません",
+      retrieval_not_enabled: "この会話では保存出力の取得が有効になっていません",
       binary_unsupported: "この出力はテキストとして表示できません。エクスポートしてください",
       close: "閉じる",
     },

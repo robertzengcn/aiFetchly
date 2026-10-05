@@ -126,7 +126,13 @@ export interface ToolResultOutputPolicy {
  *
  * Every one of these is surfaced to the UI as a translated message; the raw
  * code is what crosses the boundary. `OUTPUT_NOT_AVAILABLE` deliberately
- * covers both "missing" and "unauthorized" so existence is never leaked.
+ * covers both "missing" and "unauthorized" so existence is never leaked
+ * (AC-11). That collapse is id-scoped: it applies to codes returned AFTER an
+ * output id was looked up. The conversation-scoped availability gate returns
+ * `RETRIEVAL_NOT_ENABLED` instead — it never inspects the id, so returning a
+ * distinct code leaks no existence information and lets the model (and a
+ * human debugging a fast bail) tell "feature off / nothing saved here" from
+ * "this specific id is missing/unauthorized."
  */
 export type ToolResultErrorCode =
   | "OUTPUT_SERIALIZATION_FAILED"
@@ -151,7 +157,16 @@ export type ToolResultErrorCode =
    * was not preserved. Reported so the model and the user are told the body is
    * unavailable instead of silently losing it.
    */
-  | "OUTPUT_CAPTURE_DISABLED";
+  | "OUTPUT_CAPTURE_DISABLED"
+  /**
+   * The retrieval tools are not available for this conversation: the rollout
+   * flags are off AND this conversation has no committed preserved outputs.
+   * Returned by the availability gate BEFORE any output id is inspected, so it
+   * does not collapse with `OUTPUT_NOT_AVAILABLE` and leaks no existence
+   * information. Lets the model distinguish "retrieval is off here" from "this
+   * specific id is missing/unauthorized" and stop retrying a hallucinated id.
+   */
+  | "RETRIEVAL_NOT_ENABLED";
 
 /** Mode carried by a retrieval cursor. A search cursor is not a read cursor. */
 export type ToolResultCursorMode = "read" | "search";

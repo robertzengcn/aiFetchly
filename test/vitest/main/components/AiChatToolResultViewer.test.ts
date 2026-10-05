@@ -54,6 +54,8 @@ const i18n = createI18n({
           copied: "Copied",
           loading: "Loading…",
           not_available: "This saved output is not available",
+          retrieval_not_enabled:
+            "Saved-output retrieval is not enabled for this conversation",
           binary_unsupported: "Cannot display as text; export it instead",
           quota_reached: "Storage quota reached",
         },
@@ -314,6 +316,28 @@ describe("AiChatToolResultViewer — truthful states", () => {
     // The raw machine code is translated, never shown as prose.
     expect(error.text()).toBe("This saved output is not available");
     expect(error.text()).not.toContain("OUTPUT_NOT_AVAILABLE");
+    expect(wrapper.find('[data-testid="viewer-page"]').exists()).toBe(false);
+  });
+
+  it("shows a distinct message when retrieval is not enabled for the conversation", async () => {
+    // The conversation-scoped availability gate returns RETRIEVAL_NOT_ENABLED
+    // (not OUTPUT_NOT_AVAILABLE) so the model and the user can tell "retrieval
+    // is off here" from "this specific id is missing/unauthorized." The viewer
+    // must translate that distinct code to a distinct, actionable message
+    // rather than collapsing it back onto the generic "not available" string.
+    readToolOutput.mockRejectedValue(new Error("RETRIEVAL_NOT_ENABLED"));
+    const wrapper = mountViewer();
+    await flushPromises();
+    const error = wrapper.find('[data-testid="viewer-error"]');
+    expect(error.exists()).toBe(true);
+    expect(error.text()).toBe(
+      "Saved-output retrieval is not enabled for this conversation"
+    );
+    // The raw machine code is never shown as prose.
+    expect(error.text()).not.toContain("RETRIEVAL_NOT_ENABLED");
+    // And the distinct code must NOT collapse onto the generic message — that
+    // would erase the diagnostic separation this code exists to provide.
+    expect(error.text()).not.toBe("This saved output is not available");
     expect(wrapper.find('[data-testid="viewer-page"]').exists()).toBe(false);
   });
 

@@ -2792,6 +2792,8 @@ export default {
       quota_reached: "Quota de stockage atteint ; seul un extrait du résultat a été conservé",
       deleted: "Cette sortie enregistrée n'est plus disponible",
       not_available: "Cette sortie enregistrée n'est pas disponible",
+      retrieval_not_enabled:
+        "La récupération des sorties enregistrées n'est pas activée pour cette conversation",
       binary_unsupported: "Cette sortie ne peut pas être affichée comme du texte ; exportez-la",
       close: "Fermer",
     },

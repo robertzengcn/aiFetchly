@@ -2794,6 +2794,8 @@ export default {
       quota_reached: "Storage quota reached; only part of this result was kept",
       deleted: "This saved output is no longer available",
       not_available: "This saved output is not available",
+      retrieval_not_enabled:
+        "Saved-output retrieval is not enabled for this conversation",
       binary_unsupported: "This output cannot be displayed as text; export it instead",
       close: "Close",
     },
