@@ -534,6 +534,131 @@ describe("createDraft guard + reuse (FR-028)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B01: local duplicate eligibility + reuse run BEFORE classification
+// ---------------------------------------------------------------------------
+describe("createDraft runs guard + reuse before classification (B01)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  // Reuse the same seed shape as the FR-028 block above, but default to an
+  // UNKNOWN classification — the B01 regression is that the OLD code refined
+  // classification (an AI round-trip) before consulting the guard or reuse,
+  // so an already-sent or reusable message with an absent classification paid
+  // for a classifier call before being refused/reused.
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    // Unknown by default — the whole point of B01 is that an inconclusive
+    // deterministic classification never triggers an AI refinement call when
+    // the guard or reuse already settles the outcome.
+    msg.classification = over.classification ?? null;
+    msg.classificationConfidence = over.classificationConfidence ?? null;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraft(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"]
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4244;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  it("refuses already_replied with zero AI calls even when classification is unknown", async () => {
+    // Sent evidence + absent classification. OLD behavior: refined the
+    // classification (1 AI call) then refused. B01: refuse first, zero calls.
+    const messageId = await seedMessage({
+      classification: null,
+      replyStatus: "sent",
+    });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toContain("already_replied");
+    // No classifier call AND no generator call — the guard ran first.
+    expect(requests).toHaveLength(0);
+  });
+
+  it("reuses an eligible draft with zero AI calls even when classification is unknown", async () => {
+    // Reusable draft + absent classification. OLD behavior: refined the
+    // classification (1 AI call) then reused. B01: reuse first, zero calls.
+    const messageId = await seedMessage({ classification: null });
+    const draftId = await seedDraft(messageId, "draft");
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    // No classifier call AND no generator call — reuse ran before classification.
+    expect(requests).toHaveLength(0);
+  });
+
+  it("still refines classification when the guard allows and no draft is reusable", async () => {
+    // Clean message, unknown classification, no reusable draft → the guard
+    // allows, reuse finds nothing, THEN classification fires before generation.
+    // This proves B01 did not drop classification entirely; it only reordered
+    // it after the cheap local checks.
+    const messageId = await seedMessage({ classification: null });
+    // First call: classifier JSON verdict. Second call: generation JSON.
+    const classifierJson = JSON.stringify({
+      classification: "interested",
+      confidence: 0.9,
+    });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(classifierJson),
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(false);
+    // Both calls fired: classification refinement + generation.
+    expect(requests).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // One refusal audit per invocation (FR-034, Phase-1 slice)
 // ---------------------------------------------------------------------------
 describe("createDraft refusal audits (FR-034)", () => {

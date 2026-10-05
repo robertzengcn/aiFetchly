@@ -154,57 +154,18 @@ export class EmailReplyDraftGenerationService {
       return { success: false, error: "Message not found" };
     }
 
-    // 2a. Constrained model classification (FR-007 stage 2, P2.2): when the
-    //     deterministic stage stored at sync time was inconclusive, refine it
-    //     on demand — this handler is AI-gated, so the gate rule holds. A
-    //     deterministic classification is NEVER overwritten; only null/unknown
-    //     values are refined, with source+version provenance.
-    if (
-      message.classification == null ||
-      message.classification === "unknown"
-    ) {
-      try {
-        const refined = await classifyMessage(
-          {
-            fromAddress: message.fromAddress,
-            subject: message.subject,
-            bodyText: message.newContentText ?? message.bodyText,
-            replyToAddress: message.replyToAddress,
-            autoSubmittedHeader: message.autoSubmittedHeader,
-            precedenceHeader: message.precedenceHeader,
-            listIdHeader: message.listIdHeader,
-            listUnsubscribeHeader: message.listUnsubscribeHeader,
-          },
-          buildLlmClassifier()
-        );
-        if (refined.classification !== "unknown") {
-          await this.messageModule.updateClassification(
-            message.id,
-            refined.classification,
-            refined.confidence
-          );
-          await this.messageModule.updateClassificationProvenance(
-            message.id,
-            refined.source,
-            refined.version
-          );
-          message.classification = refined.classification;
-          message.classificationConfidence = refined.confidence;
-        }
-      } catch (e) {
-        console.error(
-          "Model classification stage failed; continuing with stored value:",
-          e
-        );
-      }
-    }
-
     // 2b. Pre-draft policy gate (FR-005, P0.3): run the authoritative policy
-    //     BEFORE knowledge retrieval or the LLM. A hard-blocked message (bounce,
-    //     unsubscribe, automated sender, blocked sender/domain) yields no draft
-    //     and no model call. The refusal is audited exactly once (FR-034) with
-    //     stage + code + bounded evidence, and a structured code is surfaced so
-    //     the UI can map it to a translated reason.
+    //     BEFORE knowledge retrieval, classification, or the LLM. A hard-blocked
+    //     message (bounce, unsubscribe, automated sender, blocked sender/domain)
+    //     yields no draft and no model call. The refusal is audited exactly once
+    //     (FR-034) with stage + code + bounded evidence, and a structured code is
+    //     surfaced so the UI can map it to a translated reason.
+    //
+    //     B01: the guard runs BEFORE classification so an already-sent message
+    //     or one with an eligible reusable draft never pays for a classifier
+    //     round-trip (zero-AI-call requirement). Classification is deferred to
+    //     step 2d, after the reuse check, so it only fires when we are actually
+    //     committed to generating.
     const policyDecision = await timedReplyStage("policy", () =>
       new EmailReplyPolicyOrchestrator().evaluate({
         stage: "pre_draft",
@@ -240,6 +201,11 @@ export class EmailReplyDraftGenerationService {
     //     /unknown/conflict state. If such a draft exists, return it with
     //     reused=true and make NO LLM call, NO edit, NO approval, NO send.
     //     Audit the reuse as a message_read_by_ai event (not a refusal).
+    //
+    //     B01: this check also runs BEFORE classification — a reusable draft
+    //     means no generation, hence no need to refine an inconclusive
+    //     deterministic classification. The stored classification (or "unknown")
+    //     is returned as-is.
     const existingDrafts = await this.draftModule.listByMessage(message.id);
     const reusable = pickReusableDraft(existingDrafts);
     if (reusable) {
@@ -274,6 +240,56 @@ export class EmailReplyDraftGenerationService {
         reused: true,
         code: "allowed",
       };
+    }
+
+    // 2a. Constrained model classification (FR-007 stage 2, P2.2): when the
+    //     deterministic stage stored at sync time was inconclusive, refine it
+    //     on demand — this handler is AI-gated, so the gate rule holds. A
+    //     deterministic classification is NEVER overwritten; only null/unknown
+    //     values are refined, with source+version provenance.
+    //
+    //     B01: now runs AFTER the guard and reuse check, so it only fires when
+    //     we are committed to generating. Uses the injected AI transport
+    //     (apiFactory) instead of constructing a bare AiChatApi, so tests can
+    //     stub the classifier the same way they stub generation.
+    if (
+      message.classification == null ||
+      message.classification === "unknown"
+    ) {
+      try {
+        const refined = await classifyMessage(
+          {
+            fromAddress: message.fromAddress,
+            subject: message.subject,
+            bodyText: message.newContentText ?? message.bodyText,
+            replyToAddress: message.replyToAddress,
+            autoSubmittedHeader: message.autoSubmittedHeader,
+            precedenceHeader: message.precedenceHeader,
+            listIdHeader: message.listIdHeader,
+            listUnsubscribeHeader: message.listUnsubscribeHeader,
+          },
+          buildLlmClassifier(this.apiFactory)
+        );
+        if (refined.classification !== "unknown") {
+          await this.messageModule.updateClassification(
+            message.id,
+            refined.classification,
+            refined.confidence
+          );
+          await this.messageModule.updateClassificationProvenance(
+            message.id,
+            refined.source,
+            refined.version
+          );
+          message.classification = refined.classification;
+          message.classificationConfidence = refined.confidence;
+        }
+      } catch (e) {
+        console.error(
+          "Model classification stage failed; continuing with stored value:",
+          e
+        );
+      }
     }
 
     // 3. Load owner-voice profile + derive its version stamp (FR-013): id@updatedAt
@@ -916,9 +932,9 @@ function clamp(n: number, min: number, max: number): number {
  * SEPARATE from prose generation (FR-007) — this prompt only asks for the
  * constrained JSON verdict and treats the email body as untrusted data.
  */
-function buildLlmClassifier(): ModelClassifier {
+function buildLlmClassifier(apiFactory: AiChatApiFactory): ModelClassifier {
   return async (input) => {
-    const api = new AiChatApi();
+    const api = apiFactory();
     const resp = await api.openAIChatCompletion({
       messages: [
         {

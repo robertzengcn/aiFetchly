@@ -51,11 +51,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B01 — Classification calls the model before local denial or reuse [P2]
 
-- [ ] **Fix.** Run authoritative local duplicate eligibility and eligible-draft reuse before classification. Use the injected AI transport for classification too.
-- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:148–165,194–205,229`; `buildLlmClassifier` at `872–887` constructs a real `AiChatApi` rather than using the generation transport factory.
+- [x] **Fix.** Run authoritative local duplicate eligibility and eligible-draft reuse before classification. Use the injected AI transport for classification too.
+- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts` `createDraft` reordered — the pre-draft policy guard (2b) and reusable-draft check (2c) now run BEFORE the constrained-model classification (2a); classification only fires when the guard allows AND no reusable draft exists (i.e., we are committed to generating). `buildLlmClassifier(apiFactory)` now takes the injected `AiChatApiFactory` and calls `apiFactory()` instead of constructing `new AiChatApi()`, so the classifier transport is stubbable the same way as generation.
 - Trigger: an already-sent message or a message with an eligible draft has an absent/unknown classification.
-- Current result: classification can make an AI request before the subsequent guard refuses or returns the existing draft. That violates the zero-classification/zero-generation requirement and can turn a cheap local outcome into a provider failure or delay.
-- Acceptance: seed unknown classification plus sent evidence or a reusable draft; assert no classifier or generator call and the correct denial/reuse result. Current zero-call coverage seeds an already-known classification and misses this path.
+- Current result: fixed — an unknown classification on a sent or reusable message no longer pays for a classifier round-trip; the guard/refusal or reuse settles the outcome with zero AI calls.
+- Acceptance: `test/vitest/main/EmailReplyDraftGeneration.test.ts` "createDraft runs guard + reuse before classification (B01)" — 3 cases: (1) unknown classification + sent evidence → `already_replied` with zero requests; (2) unknown classification + reusable draft → `reused: true` with zero requests; (3) clean message + unknown classification → guard allows, reuse finds nothing, THEN classification + generation fire (2 requests). All pass; the existing FR-028/FR-034 tests still pass.
 
 ### B02 — Guard ignores authoritative send-attempt evidence [P1]
 
