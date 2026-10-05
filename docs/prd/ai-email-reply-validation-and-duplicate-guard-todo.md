@@ -32,7 +32,7 @@ The existing passing tests do not cover the failure scenarios below. Live hosted
 | FR-025 — generation contract | Partial | Field alignment and correction context improved; authoritative classification can still be overwritten (B07). Make the prompt/schema contract consistently shared. |
 | FR-026 — compatible JSON hints | Partial | Request forwarding exists; unsupported-parameter fallback and bounded transport budget do not (B06, T09). |
 | FR-027 — output budget and completion checks | Partial | Larger budget and selected finish reasons checked; refusal/tool-call payloads and persisted completion metadata missing (B05, T09). |
-| FR-028 — existing-draft reuse | Partial | Reuse exists; classification runs first, failed drafts are mishandled, warnings disappear, and race reuse is unsafe (B01, B03, B08, B09). |
+| FR-028 — existing-draft reuse | Partial | Reuse exists; classification runs first, definitely-failed drafts reusable (B08 fixed), stored warnings decoded on reuse (B09 fixed), race reuse records one audit (B09 fixed); race reuse unsafe at the persistence-reservation layer (B01, B03 — Phase 2 FR-035). |
 | FR-029 — local duplicate eligibility | Partial | Draft/message projections checked at draft/send entry; authoritative attempts and a complete post-generation recheck missing (B02, B03). |
 | FR-030 — persisted mailbox evidence | Not implemented | No required flag provenance, identity-safe refresh, or sticky evidence model (T02–T03). |
 | FR-031 — automatic fresh detection | Not implemented | No automatic fresh IMAP/Sent evidence enforcement before generation/send (T04–T05). |
@@ -115,11 +115,13 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B09 — Reused drafts lose warnings and audit/provenance [P2]
 
-- [ ] **Fix.** Decode persisted warning/source metadata into the safe reuse result and record the reuse decision consistently, with persistence failure reported to the caller.
+- [x] **Fix.** Decode persisted warning/source metadata into the safe reuse result and record the reuse decision consistently, with persistence failure reported to the caller.
 - Evidence: initial reuse at `src/service/emailReply/EmailReplyDraftGenerationService.ts:245–259` swallows audit errors and returns empty warnings/sources. Race reuse at `459–474` returns empty metadata without a reuse audit. The original draft writes `knowledgeSourcesJson`/`warningsJson` at `501,511`.
 - Trigger: a draft with safety/review warnings or source provenance is reused; alternatively, the reuse audit write fails.
 - Current result: the response hides stored review signals, and may report success without the required audit. Reconstruct only metadata that was actually stored; do not invent source excerpts.
 - Acceptance: both initial and post-generation reuse preserve stored warnings/provenance and record exactly one decision event. Audit failure must not return a successful audited outcome.
+- Fix detail: added `writeReuseAudit` (private) writing exactly ONE `message_read_by_ai` row with `stage=reuse`, `reusedDraftId`, `reusedDraftStatus`, `knowledgeAuditCount` (provenance without inventing excerpts — the stored JSON is `EmailReplyKnowledgeSourceAudit` shape, no `content`, so `knowledgeSources` stays `[]`), and `correlationId`. Replaced the swallowed try/catch on the initial reuse path with a propagating call — audit failure returns `success: false` with the persistence error. Added exported pure helper `decodeStoredWarnings(warningsJson)` that decodes the stored warning strings into the result (null/missing/malformed/non-array → `[]`; non-string entries filtered). Applied the same to the race-reuse path (it previously wrote NO reuse audit and returned `warnings: []`).
+- Acceptance verification: `test/vitest/main/EmailReplyDraftGeneration.test.ts` — "createDraft reuse preserves stored warnings + audit (B09)" (5 cases: initial reuse decodes stored warnings, initial reuse writes exactly ONE `message_read_by_ai` with stage=reuse + provenance count, initial reuse records ZERO refusals, race reuse writes the audit, audit-persistence-failure-on-reuse returns `success: false` not swallowed) + "decodeStoredWarnings (B09)" (5 pure unit cases: stored strings, null/undefined/empty, malformed JSON, non-array value, mixed-array filtering). 60/60 pass in the file; 38/38 in `EmailReplyPreDraftPolicy.test.ts`; tsc clean. The 3 failures in the full `yarn testmain` run were the known SQLite shared-db parallel-worker flake (vitest-sqlite-busy-shared-db-flake) in unrelated files (`EmailReplyDeliveryFakeSmtp`, `StreamEventProcessorToolResults`, schema sync) — each passes in isolation; not B09-related.
 
 ### B10 — Audit failures are misreported as model failures [P2]
 
@@ -265,7 +267,7 @@ concurrency and stale-state cases).
 | FR-025 — generation contract | 1 | Partial | Field alignment + correction context improved; authoritative classification can still be overwritten (B07). |
 | FR-026 — JSON hints | 1 | Partial | Request forwarding exists; unsupported-parameter fallback fixed (B06); bounded transport budget + persisted completion metadata still missing (T09). |
 | FR-027 — output budget + completion checks | 1 | Partial | Larger budget + selected finish reasons checked; refusal/tool-call payloads fixed (B05); persisted completion metadata still missing (T09). |
-| FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, definitely-failed drafts reusable (B08 fixed), warnings disappear, race reuse unsafe (B01, B03, B09). |
+| FR-028 — existing-draft reuse | 1 | Partial | Reuse exists; classification runs first, definitely-failed drafts reusable (B08 fixed), stored warnings decoded + one reuse audit on both paths (B09 fixed); race reuse unsafe at the persistence-reservation layer (B01, B03 — Phase 2 FR-035). |
 | FR-029 — local duplicate eligibility | 1 | Partial | Draft/message projections checked at entry; authoritative attempts + complete post-generation recheck missing (B02, B03). |
 | FR-030 — persisted mailbox evidence | 2 | Not started | T03. |
 | FR-031 — automatic fresh detection | 2 | Not started | T04–T05. |

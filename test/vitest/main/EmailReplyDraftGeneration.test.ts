@@ -4,6 +4,7 @@ import {
   validateLlmRawResult,
   LlmTransportError,
   EmailReplyDraftGenerationService,
+  decodeStoredWarnings,
   type LlmRawResult,
   type AiChatApiFactory,
 } from "@/service/emailReply/EmailReplyDraftGenerationService";
@@ -1069,6 +1070,254 @@ describe("createDraft refusal audits (FR-034)", () => {
     };
     expect(meta.stage).toBe("post_generation");
     expect(meta.code).toBe("already_replied");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B09: reuse decodes stored warnings + records exactly ONE decision event,
+// and audit persistence failure on reuse propagates (not swallowed).
+// ---------------------------------------------------------------------------
+describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+  const auditModule = new EmailReplyAuditLogModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4247;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = over.classification ?? "interested";
+    msg.classificationConfidence = 0.95;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  async function seedDraftWithWarnings(
+    messageId: number,
+    status: EmailReplyDraftEntity["status"],
+    warnings: string[],
+    knowledgeAuditCount = 0
+  ): Promise<number> {
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = messageId;
+    draft.emailServiceId = 4247;
+    draft.subject = "Re: Hi";
+    draft.bodyText = "Hello back";
+    draft.bodyHtml = null;
+    draft.status = status;
+    draft.generationSource = "ai";
+    draft.warningsJson = JSON.stringify(warnings);
+    // Build minimal audit-metadata records (no `content` field) so we can
+    // assert the provenance count is recorded without inventing excerpts.
+    const audits = Array.from({ length: knowledgeAuditCount }, (_, i) => ({
+      toolName: "knowledge_search",
+      query: `q${i}`,
+      chunkId: `c${i}`,
+      documentId: `d${i}`,
+      documentName: `Doc ${i}`,
+      score: 0.5,
+    }));
+    draft.knowledgeSourcesJson =
+      audits.length > 0 ? JSON.stringify(audits) : null;
+    const saved = await draftModule.create(draft);
+    return saved.id;
+  }
+
+  async function reuseAuditsFor(
+    messageId: number
+  ): Promise<EmailReplyAuditLogEntity[]> {
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    return records.filter((r) => r.action === "message_read_by_ai");
+  }
+
+  it("initial reuse decodes stored warnings into the result", async () => {
+    const messageId = await seedMessage();
+    const draftId = await seedDraftWithWarnings(messageId, "draft", [
+      "owner-voice profile is stale",
+      "recipient is an autoresponder",
+    ]);
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
+    // B09: warnings are the stored strings, not an empty array.
+    expect(result.warnings).toEqual([
+      "owner-voice profile is stale",
+      "recipient is an autoresponder",
+    ]);
+    // knowledgeSources stays [] — the stored JSON has audit metadata, no
+    // source excerpts, so we do not invent content/score.
+    expect(result.knowledgeSources).toEqual([]);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("initial reuse writes exactly ONE message_read_by_ai audit with stage=reuse + provenance count", async () => {
+    const messageId = await seedMessage();
+    const draftId = await seedDraftWithWarnings(
+      messageId,
+      "draft",
+      ["w1"],
+      2 /* knowledgeAuditCount */
+    );
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const reuses = await reuseAuditsFor(messageId);
+    expect(reuses).toHaveLength(1);
+    const meta = JSON.parse(reuses[0].metadataJson ?? "{}") as {
+      stage?: string;
+      reusedDraftId?: number;
+      reusedDraftStatus?: string;
+      knowledgeAuditCount?: number;
+      correlationId?: string;
+    };
+    expect(meta.stage).toBe("reuse");
+    expect(meta.reusedDraftId).toBe(draftId);
+    expect(meta.reusedDraftStatus).toBe("draft");
+    expect(meta.knowledgeAuditCount).toBe(2);
+    expect(meta.correlationId).toBeTruthy();
+  });
+
+  it("initial reuse records ZERO refusal audits (reuse is a decision event, not a refusal)", async () => {
+    const messageId = await seedMessage();
+    await seedDraftWithWarnings(messageId, "draft", ["w1"]);
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({ messageId });
+    expect(result.success).toBe(true);
+    const { records } = await auditModule.list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    expect(records.filter((r) => r.action === "reply_skipped")).toHaveLength(0);
+  });
+
+  it("race reuse (sibling appeared mid-generation) writes the message_read_by_ai audit", async () => {
+    // A clean message with no drafts enters generation; a sibling draft is
+    // inserted during the awaited LLM call, so the post-generation recheck
+    // reuses it instead of persisting a duplicate. B09: that race-reuse path
+    // must also record exactly ONE decision event.
+    const messageId = await seedMessage();
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const siblingInsertingFactory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        // Simulate a concurrent approval/insert producing a reusable draft.
+        await seedDraftWithWarnings(messageId, "draft", [
+          "race-inserted sibling",
+        ]);
+        const real = factory();
+        return real.openAIChatCompletion(req);
+      },
+    });
+    const svc = new EmailReplyDraftGenerationService({
+      apiFactory: siblingInsertingFactory,
+    });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.reused).toBe(true);
+    expect(result.warnings).toEqual(["race-inserted sibling"]);
+    const reuses = await reuseAuditsFor(messageId);
+    expect(reuses).toHaveLength(1);
+    expect(JSON.parse(reuses[0].metadataJson ?? "{}")).toMatchObject({
+      stage: "reuse",
+    });
+    // No duplicate draft was persisted — the sibling is the only one.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+  });
+
+  it("audit persistence failure on initial reuse propagates as success:false (not swallowed)", async () => {
+    // B09 acceptance: "Audit failure must not return a successful audited
+    // outcome." Stub the audit module to throw on create and assert the reuse
+    // result is a failure carrying the persistence error.
+    const messageId = await seedMessage();
+    await seedDraftWithWarnings(messageId, "draft", ["w1"]);
+    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    // Force the audit write to throw by monkey-patching the module method.
+    const original = svc["replyAuditModule"].create.bind(
+      svc["replyAuditModule"]
+    );
+    svc["replyAuditModule"].create = async () => {
+      throw new Error("audit DB write failed (simulated)");
+    };
+    try {
+      const result = await svc.createDraft({ messageId });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain("Reuse audit persistence failed");
+      expect(result.error).toContain("audit DB write failed (simulated)");
+    } finally {
+      svc["replyAuditModule"].create = original;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B09: decodeStoredWarnings — pure unit cases on the stored payload.
+// ---------------------------------------------------------------------------
+describe("decodeStoredWarnings (B09)", () => {
+  it("returns the stored warning strings", () => {
+    expect(
+      decodeStoredWarnings(JSON.stringify(["a", "b", "c"]))
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  it("returns [] for null / undefined / empty", () => {
+    expect(decodeStoredWarnings(null)).toEqual([]);
+    expect(decodeStoredWarnings(undefined)).toEqual([]);
+    expect(decodeStoredWarnings("")).toEqual([]);
+  });
+
+  it("returns [] for malformed JSON (decoding fallback, not an invented value)", () => {
+    expect(decodeStoredWarnings("{not json")).toEqual([]);
+    expect(decodeStoredWarnings("[oops")).toEqual([]);
+  });
+
+  it("returns [] for a non-array JSON value", () => {
+    expect(decodeStoredWarnings(JSON.stringify({ a: 1 }))).toEqual([]);
+    expect(decodeStoredWarnings(JSON.stringify("single"))).toEqual([]);
+    expect(decodeStoredWarnings(JSON.stringify(42))).toEqual([]);
+  });
+
+  it("filters out non-string entries from a mixed array", () => {
+    expect(
+      decodeStoredWarnings(JSON.stringify(["ok", 123, null, { x: 1 }, "ok2"]))
+    ).toEqual(["ok", "ok2"]);
   });
 });
 

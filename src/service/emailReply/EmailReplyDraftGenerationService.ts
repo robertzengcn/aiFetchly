@@ -245,33 +245,39 @@ export class EmailReplyDraftGenerationService {
 
     // 2c. Reuse an eligible existing draft instead of regenerating (FR-028).
     //     The message-level guard (FR-029) already cleared the message: there
-    //     is at most one live draft (status draft/approved) and no sent/in-flight
-    //     /unknown/conflict state. If such a draft exists, return it with
-    //     reused=true and make NO LLM call, NO edit, NO approval, NO send.
-    //     Audit the reuse as a message_read_by_ai event (not a refusal).
+    //     is at most one eligible draft (status draft/approved/failed per B08)
+    //     and no sent/in-flight/delivery_unknown/conflict state. If such a
+    //     draft exists, return it with reused=true and make NO LLM call, NO
+    //     edit, NO approval, NO send. Audit the reuse as a message_read_by_ai
+    //     event (not a refusal).
     //
     //     B01: this check also runs BEFORE classification — a reusable draft
     //     means no generation, hence no need to refine an inconclusive
     //     deterministic classification. The stored classification (or "unknown")
     //     is returned as-is.
+    //
+    //     B09: decode the stored warnings (complete strings — safe to surface)
+    //     and record exactly ONE reuse decision event. The audit write is NOT
+    //     swallowed: a persistence failure propagates as a failed outcome so an
+    //     unrecorded reuse is never reported as a successful audited outcome.
+    //     knowledgeSources stays [] on reuse — the stored JSON holds audit
+    //     metadata (no source excerpts), and we do not invent `content`/`score`
+    //     to satisfy the full-source type; the audit count is recorded in the
+    //     reuse audit metadata as provenance.
     const existingDrafts = await this.draftModule.listByMessage(message.id);
     const reusable = pickReusableDraft(existingDrafts);
     if (reusable) {
       try {
-        const audit = new EmailReplyAuditLogEntity();
-        audit.emailServiceId = message.emailServiceId;
-        audit.messageId = message.id;
-        audit.draftId = reusable.id;
-        audit.action = "message_read_by_ai";
-        audit.actor = "ai";
-        audit.reason = `[reused] existing draft ${reusable.id} (status ${reusable.status}) reused; no regeneration`;
-        audit.metadataJson = JSON.stringify({
-          correlationId: correlationIdForMessage(message.id),
-          stage: "pre_draft",
-        });
-        await this.replyAuditModule.create(audit);
-      } catch (e) {
-        console.error("Failed to write draft-reuse audit:", e);
+        await this.writeReuseAudit(message.emailServiceId, message.id, reusable);
+      } catch (auditError) {
+        // B09: audit persistence failure STOPS the work — do not return a
+        // successful audited outcome. Surface the persistence error instead.
+        const auditErrMsg =
+          auditError instanceof Error ? auditError.message : String(auditError);
+        return {
+          success: false,
+          error: `Reuse audit persistence failed: ${auditErrMsg}`,
+        };
       }
       return {
         success: true,
@@ -284,7 +290,7 @@ export class EmailReplyDraftGenerationService {
           "unknown") as EmailMessageClassification,
         knowledgeSources: [],
         confidence: reusable.confidence ?? null,
-        warnings: [],
+        warnings: decodeStoredWarnings(reusable.warningsJson),
         reused: true,
         code: "allowed",
       };
@@ -554,6 +560,25 @@ export class EmailReplyDraftGenerationService {
     const recheckDrafts = await this.draftModule.listByMessage(message.id);
     const reusableNow = pickReusableDraft(recheckDrafts);
     if (reusableNow) {
+      // B09: the race-reuse path must record exactly ONE reuse decision event,
+      //     just like the initial reuse path. A sibling appeared (or this same
+      //     draft's status resolved) during the awaited LLM call; we reuse
+      //     rather than persist a duplicate. Audit failure STOPS the work — an
+      //     unrecorded reuse is never reported as a successful audited outcome.
+      try {
+        await this.writeReuseAudit(
+          message.emailServiceId,
+          message.id,
+          reusableNow
+        );
+      } catch (auditError) {
+        const auditErrMsg =
+          auditError instanceof Error ? auditError.message : String(auditError);
+        return {
+          success: false,
+          error: `Reuse audit persistence failed: ${auditErrMsg}`,
+        };
+      }
       return {
         success: true,
         draftId: reusableNow.id,
@@ -565,7 +590,7 @@ export class EmailReplyDraftGenerationService {
           "unknown") as EmailMessageClassification,
         knowledgeSources: [],
         confidence: reusableNow.confidence ?? null,
-        warnings: [],
+        warnings: decodeStoredWarnings(reusableNow.warningsJson),
         reused: true,
         code: "allowed",
       };
@@ -916,6 +941,87 @@ export class EmailReplyDraftGenerationService {
     });
     await this.replyAuditModule.create(log);
   }
+
+  /**
+   * Write the ONE message_read_by_ai audit row for a draft reuse decision
+   * (FR-028 / B09). Called by this outer service for BOTH the initial reuse
+   * path (pre-classification) and the post-generation race-reuse path. The
+   * policy orchestrator itself never writes audit rows (AD-006).
+   *
+   * Provenance is preserved without inventing source excerpts: the stored
+   * `knowledgeSourcesJson` holds {@link EmailReplyKnowledgeSourceAudit} records
+   * (toolName/query/chunkId/documentId/.../score — no `content`), which cannot
+   * truthfully populate {@link EmailReplyKnowledgeSource[]} (requires
+   * `content` + `score`). We therefore surface the audit COUNT as provenance
+   * metadata in the reuse audit row, and return `knowledgeSources: []` in the
+   * result. Stored warnings (complete strings) ARE decoded into the result by
+   * the caller via {@link decodeStoredWarnings}.
+   *
+   * Intentionally NOT caught: audit persistence failure STOPS the work. An
+   * unrecorded reuse must never be reported as a successful audited outcome
+   * (B09).
+   */
+  private async writeReuseAudit(
+    emailServiceId: number,
+    messageId: number,
+    draft: EmailReplyDraftEntity
+  ): Promise<void> {
+    let knowledgeAuditCount = 0;
+    if (draft.knowledgeSourcesJson) {
+      try {
+        const parsed = JSON.parse(draft.knowledgeSourcesJson) as unknown;
+        if (Array.isArray(parsed)) {
+          knowledgeAuditCount = parsed.length;
+        }
+      } catch {
+        // Malformed stored JSON — treat as zero known provenance records
+        // rather than failing the reuse. The count is metadata only; the
+        // warnings (decoded separately) are the user-facing payload.
+        knowledgeAuditCount = 0;
+      }
+    }
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = emailServiceId;
+    log.messageId = messageId;
+    log.draftId = draft.id;
+    log.action = "message_read_by_ai";
+    log.actor = "ai";
+    log.reason = `[reused] existing draft ${draft.id} (status ${draft.status}) reused; no regeneration`;
+    log.metadataJson = JSON.stringify({
+      correlationId: correlationIdForMessage(messageId),
+      stage: "reuse",
+      reusedDraftId: draft.id,
+      reusedDraftStatus: draft.status,
+      knowledgeAuditCount,
+    });
+    await this.replyAuditModule.create(log);
+  }
+}
+
+/**
+ * Decode the persisted warnings JSON of a reused draft (B09). Returns the
+ * stored warning strings so a reused draft surfaces the same warnings the
+ * original generation recorded, instead of an empty array. Pure and total on
+ * the stored payload: `null`/missing/malformed JSON → `[]` (a decoding
+ * fallback, NOT an invented value). Non-string array entries are filtered out.
+ * Exported for unit testing.
+ */
+export function decodeStoredWarnings(
+  warningsJson: string | null | undefined
+): string[] {
+  if (!warningsJson) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(warningsJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter((w): w is string => typeof w === "string");
 }
 
 /**
