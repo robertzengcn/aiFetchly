@@ -434,11 +434,22 @@ export class EmailReplyDraftGenerationService {
       warnings.push(`Possible prompt leakage detected: "${leakage}"`);
     }
 
-    // The strict schema guarantees a valid enum + finite 0..1 confidence, so no
-    // silent coercion is needed (FR-011); the model's suggestion is metadata
-    // only and never overwrites a deterministic classification (FR-007).
-    const classification = generated.intentSuggestion;
-    const confidence = clamp(Number(generated.confidence), 0, 1);
+    // B07: the model's intentSuggestion is METADATA ONLY — it never overwrites
+    // the message's authoritative classification (the deterministic + provenance-
+    // tracked value persisted on the message row at 2a above, FR-007). Persist the
+    // suggestion on the draft (intentSuggestion / intentSuggestionConfidence) so
+    // consumers can surface it as a non-authoritative hint; later policy
+    // decisions read message.classification, not this suggestion. The draft's
+    // `confidence` column keeps the authoritative classification confidence.
+    const authoritativeClassification = (message.classification ??
+      "unknown") as EmailMessageClassification;
+    const authoritativeConfidence = message.classificationConfidence ?? 0;
+    const intentSuggestion = generated.intentSuggestion;
+    const intentSuggestionConfidence = clamp(
+      Number(generated.confidence),
+      0,
+      1
+    );
 
     // 6c. Race recheck (FR-028 Phase-1 slice, B03): the message-level guard
     //     ran before generation, but the awaited LLM call can take seconds.
@@ -507,7 +518,10 @@ export class EmailReplyDraftGenerationService {
     draft.generationSource = "ai";
     draft.modelName = "openai-compatible";
     draft.promptVersion = REPLY_PROMPT_VERSION;
-    draft.confidence = confidence;
+    draft.confidence = authoritativeConfidence;
+    // B07: persist the model's intent suggestion as metadata only.
+    draft.intentSuggestion = intentSuggestion;
+    draft.intentSuggestionConfidence = intentSuggestionConfidence;
     draft.knowledgeSourcesJson = JSON.stringify(knowledge.audits);
     draft.ownerStyleProfileJson = profile
       ? JSON.stringify({
@@ -562,13 +576,10 @@ export class EmailReplyDraftGenerationService {
       console.error("Failed to materialize revision 1 for draft:", error);
     }
 
-    // 8. Update message state.
+    // 8. Update message state. B07: only replyStatus is bumped here — the
+    //     authoritative classification was set at stage 2a (with provenance) and
+    //     must NOT be overwritten by the model's draft-time intentSuggestion.
     await this.messageModule.updateReplyStatus(message.id, "draft_created");
-    await this.messageModule.updateClassification(
-      message.id,
-      classification,
-      confidence
-    );
 
     // 9. Audit rows.
     await this.writeReplyAudit(
@@ -580,8 +591,8 @@ export class EmailReplyDraftGenerationService {
       emailServiceId: message.emailServiceId,
       messageId: message.id,
       draftId: savedDraft.id,
-      classification,
-      confidence,
+      classification: authoritativeClassification,
+      confidence: authoritativeConfidence,
       knowledgeQuery: knowledge.query,
       knowledgeAudits: knowledge.audits,
       generatedSubject: subject,
@@ -596,9 +607,9 @@ export class EmailReplyDraftGenerationService {
       subject,
       bodyText,
       bodyHtml: null,
-      classification,
+      classification: authoritativeClassification,
       knowledgeSources: [...knowledge.sources],
-      confidence,
+      confidence: authoritativeConfidence,
       warnings,
       reused: false,
     };

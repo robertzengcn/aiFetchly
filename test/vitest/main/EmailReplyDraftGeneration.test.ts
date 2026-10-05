@@ -911,6 +911,118 @@ describe("createDraft post-generation recheck runs the full guard (B03)", () => 
   });
 });
 
+// ---------------------------------------------------------------------------
+// B07: model intentSuggestion is metadata only; authoritative classification
+// is preserved.
+// ---------------------------------------------------------------------------
+describe("createDraft preserves authoritative classification (B07)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const draftModule = new EmailReplyDraftModule();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4247;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    // Authoritative classification set BEFORE generation — must survive.
+    msg.classification = over.classification ?? "support_request";
+    msg.classificationConfidence = over.classificationConfidence ?? 0.97;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    return saved.id;
+  }
+
+  it("does NOT overwrite authoritative classification with a disagreeing intentSuggestion", async () => {
+    const messageId = await seedMessage({
+      classification: "support_request",
+      classificationConfidence: 0.97,
+    });
+    // Model suggests "interested" — disagrees with authoritative "support_request".
+    const { factory } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({
+          subject: "Re: Hi",
+          bodyText: "Happy to help with that.",
+          intentSuggestion: "interested",
+          confidence: 0.6,
+        })
+      ),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Authoritative classification preserved on the message.
+    const after = await messageModule.read(messageId);
+    expect(after?.classification).toBe("support_request");
+    expect(after?.classificationConfidence).toBe(0.97);
+    // Returned draft carries the authoritative value, not the suggestion.
+    expect(result.classification).toBe("support_request");
+    expect(result.confidence).toBe(0.97);
+    // The suggestion is persisted on the draft as metadata only.
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].intentSuggestion).toBe("interested");
+    expect(drafts[0].intentSuggestionConfidence).toBe(0.6);
+    expect(drafts[0].confidence).toBe(0.97);
+  });
+
+  it("preserves a disagreeing authoritative classification in the other direction", async () => {
+    // Authoritative "interested" with high confidence; model suggests
+    // "support_request" (disagreeing the other way). The authoritative value
+    // must still win; the suggestion is metadata only.
+    const messageId = await seedMessage({
+      classification: "interested",
+      classificationConfidence: 0.92,
+    });
+    const { factory } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({
+          subject: "Re: Hi",
+          bodyText: "Let me look into that for you.",
+          intentSuggestion: "support_request",
+          confidence: 0.4,
+        })
+      ),
+    ]);
+    const svc = new EmailReplyDraftGenerationService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const after = await messageModule.read(messageId);
+    expect(after?.classification).toBe("interested");
+    expect(after?.classificationConfidence).toBe(0.92);
+    expect(result.classification).toBe("interested");
+    const drafts = await draftModule.listByMessage(messageId);
+    expect(drafts[0].intentSuggestion).toBe("support_request");
+    expect(drafts[0].intentSuggestionConfidence).toBe(0.4);
+    expect(drafts[0].confidence).toBe(0.92);
+  });
+});
+
 describe("parseReplyJson", () => {
   it("parses a clean JSON reply", () => {
     const r = parseReplyJson(

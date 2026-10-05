@@ -99,11 +99,11 @@ Priorities: **P1** should be fixed before enabling this guarded workflow; **P2**
 
 ### B07 — Generated intent replaces authoritative classification [P1, retained defect]
 
-- [ ] **Fix.** Persist the model's `intentSuggestion` as suggestion metadata while preserving the existing authoritative classification, confidence, and provenance.
-- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts:423–426,557–560`; the comment says the suggestion is metadata only, but the assignment is later persisted as classification.
+- [x] **Fix.** Persist the model's `intentSuggestion` as suggestion metadata while preserving the existing authoritative classification, confidence, and provenance.
+- Evidence: `src/service/emailReply/EmailReplyDraftGenerationService.ts` now reads `authoritativeClassification = message.classification ?? "unknown"` and `authoritativeConfidence = message.classificationConfidence ?? 0` (set at stage 2a with provenance, never overwritten); the draft persists `intentSuggestion`/`intentSuggestionConfidence` as separate metadata columns; the post-persist `updateClassification` call that overwrote the message classification is removed; the audit rows and return envelope carry the authoritative values. New entity fields `EmailReplyDraftEntity.intentSuggestion`/`intentSuggestionConfidence` + write-schema entries in `src/schemas/entity/emailReplyDraft.ts`.
 - Trigger: deterministic/stored classification disagrees with generated `intentSuggestion`, for example a support request versus `interested`.
-- Current result: generation can change later policy behavior by overwriting authoritative classification. This behavior predates the phase-1 changes and remains relevant to the revised contract.
-- Acceptance: generate a disagreeing suggestion and assert the authoritative fields remain unchanged while the suggestion remains visible as metadata.
+- Current result: fixed — the authoritative classification/confidence/provenance survive generation; the model suggestion is visible on the draft as metadata only; later policy reads `message.classification`.
+- Acceptance: `test/vitest/main/EmailReplyDraftGeneration.test.ts` "createDraft preserves authoritative classification (B07)" — 2 cases: (1) authoritative `support_request`/0.97 vs model `interested`/0.6 — message + result + draft.confidence stay `support_request`/0.97, draft.intentSuggestion=`interested`/0.6; (2) authoritative `interested`/0.92 vs model `support_request`/0.4 — same invariant in the other direction. Both pass; existing generation tests (authoritative and suggestion agree on `interested`) still pass.
 
 ### B08 — Definitely failed drafts cannot be reused safely [P2]
 

@@ -14,6 +14,10 @@ export const emailReplyDraftWriteSchema = lazySchema(() =>
     modelName: z.string().nullable().optional(),
     promptVersion: z.string().nullable().optional(),
     confidence: z.number().nullable().optional(),
+    // B07: model intent suggestion, metadata only — never overwrites the
+    // authoritative message classification.
+    intentSuggestion: z.string().nullable().optional(),
+    intentSuggestionConfidence: z.number().nullable().optional(),
     knowledgeSourcesJson: z.string().nullable().optional(),
     ownerStyleProfileJson: z.string().nullable().optional(),
     warningsJson: z.string().nullable().optional(),

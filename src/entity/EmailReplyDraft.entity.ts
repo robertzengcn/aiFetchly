@@ -47,6 +47,20 @@ export class EmailReplyDraftEntity extends AuditableEntity {
   @Column("real", { nullable: true })
   confidence: number | null;
 
+  /**
+   * The model's draft-time intent suggestion (FR-007/B07), persisted as
+   * METADATA ONLY. This NEVER overwrites the message's authoritative
+   * classification (the deterministic + provenance-tracked value stored on the
+   * message row). Consumers may surface it as a non-authoritative hint; later
+   * policy decisions must read the message classification, not this field.
+   */
+  @Column("varchar", { length: 50, nullable: true })
+  intentSuggestion: string | null;
+
+  /** Confidence the model reported for {@code intentSuggestion}, in [0,1]. */
+  @Column("real", { nullable: true })
+  intentSuggestionConfidence: number | null;
+
   /** Serialized {@code EmailReplyKnowledgeSourceAudit[]}. */
   @Column("text", { nullable: true })
   knowledgeSourcesJson: string | null;
