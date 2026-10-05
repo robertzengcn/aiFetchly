@@ -158,4 +158,160 @@ describe("TaskCompletionController.decide (shadow mode, FR-05/06/16)", () => {
       expect(incomplete.remainingWork).toEqual(["rec-2"]);
     }
   });
+
+  // ----- D2: incompleteReasonCode 4 branches (FR-16, §14) -----
+  // Precedence is documented on TaskCompletionController.incompleteReasonCode:
+  // synthetic/missing-terminal wins over boundary; then boundary; then
+  // unknown provenance; then no-signal fallthrough. Reordering these would
+  // silently shift the reason-code distribution downstream. Each branch is
+  // asserted on its own so a precedence swap cannot hide behind another.
+  it("incompleteReasonCode: synthetic provenance → STREAM_INCOMPLETE (provenance wins over boundary)", async () => {
+    const ctrl = new TaskCompletionController();
+    // synthetic + budget_cap: synthetic must win — the stream never truly
+    // ended, so CONTINUATION_LIMIT would mislabel it.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "synthetic",
+        streamTerminalSeen: false,
+        boundary: "budget_cap",
+        finishReason: null,
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
+  });
+
+  it("incompleteReasonCode: missing terminal + budget_cap boundary → STREAM_INCOMPLETE (stream-never-ended wins)", async () => {
+    const ctrl = new TaskCompletionController();
+    // provider provenance but streamTerminalSeen=false (e.g. an error
+    // truncated the stream). Boundary is budget_cap. The stream never
+    // truly ended, so STREAM_INCOMPLETE wins over CONTINUATION_LIMIT.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: false,
+        boundary: "budget_cap",
+        finishReason: null,
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("STREAM_INCOMPLETE");
+    }
+  });
+
+  it("incompleteReasonCode: budget_cap boundary with a real terminal → CONTINUATION_LIMIT", async () => {
+    const ctrl = new TaskCompletionController();
+    // streamTerminalSeen=true + boundary=budget_cap → the stream ended
+    // cleanly but hit a continuation cap. CONTINUATION_LIMIT, not
+    // STREAM_INCOMPLETE.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "budget_cap",
+        finishReason: "length",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("incompleteReasonCode: round_cap boundary with a real terminal → CONTINUATION_LIMIT", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "round_cap",
+        finishReason: "length",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("CONTINUATION_LIMIT");
+    }
+  });
+
+  it("incompleteReasonCode: unknown provenance with a real terminal → EVIDENCE_UNAVAILABLE", async () => {
+    const ctrl = new TaskCompletionController();
+    // unknown provenance + response_end boundary (no cap hit) → cannot
+    // attribute a clear reason, so EVIDENCE_UNAVAILABLE. This is the
+    // third-precedence branch: synthetic/missing-terminal already
+    // returned above; boundary didn't match; provenance is unknown.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "unknown",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("EVIDENCE_UNAVAILABLE");
+    }
+  });
+
+  it("incompleteReasonCode: provider provenance + response_end + no signal → NO_PROGRESS (fallthrough)", async () => {
+    const ctrl = new TaskCompletionController();
+    // The fallthrough: real provider terminal, response_end boundary (no
+    // cap), known provenance — none of the above. The work simply made no
+    // progress against the criteria.
+    const decision = await ctrl.decide(
+      baseCandidate({
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+        content: "I looked but found nothing.",
+      }),
+      { route: "task_verified", requiredCriterionIds: ["rec-1"] }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      expect(decision.reasonCode).toBe("NO_PROGRESS");
+    }
+  });
+
+  // ----- D2: FR-04 best-effort route never verifies -----
+  // FR-04: a best-effort task can never reach verified_complete — even if
+  // every required criterion passes, the absence of a verified contract
+  // means the outcome is at most "incomplete". A future refactor that drops
+  // the `route === "task_verified"` guard on canVerify would silently
+  // upgrade best-effort tasks to verified — a correctness violation users
+  // would notice. This test locks the invariant.
+  it("task_best_effort + all required criteria pass → incomplete, never verified_complete (FR-04)", async () => {
+    const ctrl = new TaskCompletionController();
+    const decision = await ctrl.decide(
+      baseCandidate({
+        content: "Saved 100 contacts.",
+        provenance: "provider",
+        streamTerminalSeen: true,
+        boundary: "response_end",
+        finishReason: "stop",
+      }),
+      {
+        route: "task_best_effort",
+        passedCriterionIds: ["rec-1", "rec-2"],
+        requiredCriterionIds: ["rec-1", "rec-2"],
+      }
+    );
+    expect(decision.type).toBe("finish");
+    if (decision.type === "finish") {
+      // FR-04: best-effort never verifies, even with all criteria passing.
+      expect(decision.outcome).toBe("incomplete");
+      expect(decision.outcome).not.toBe("verified_complete");
+    }
+  });
 });

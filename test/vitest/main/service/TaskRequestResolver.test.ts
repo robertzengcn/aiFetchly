@@ -166,4 +166,50 @@ describe("TaskRequestResolver.classify (FR-18)", () => {
     });
     expect(route).toBe<TaskExecutionRoute>("preparation");
   });
+
+  // ----- D2: FR-18 whole-word boundary negative -----
+  // detectActionVerb matches the verb followed by a word boundary (space,
+  // comma, period, or end-of-string), NOT a substring scan. So a message
+  // beginning with a present-participle form like "Searching the inbox"
+  // must NOT match the "search" verb — "searching" is not "search" + a
+  // boundary. A substring matcher (the pre-F8 bug class) would misroute
+  // this to task_best_effort. The whole-word guard is what keeps FR-18
+  // honest: keyword-only matching is forbidden.
+  it("FR-18 whole-word boundary: 'Searching the inbox' does NOT match the 'search' verb (no substring scan)", () => {
+    const resolver = new TaskRequestResolver();
+    // "Searching" starts with "search" as a substring, but the verb match
+    // requires "search" + (space | "," | "." | end). "Searching" is
+    // "search" + "ing" — no boundary — so it falls through to the default
+    // conversational response. (If it matched, it would enroll as
+    // task_best_effort or preparation, neither of which is correct for a
+    // present-participle opener.)
+    const route = resolver.classify({
+      userMessage: "Searching the inbox for invoices.",
+      hasApprovedTaskTemplate: false,
+    });
+    expect(route).toBe<TaskExecutionRoute>("response_only");
+  });
+
+  it("FR-18 whole-word boundary: 'Searching' alone (no trailing context) stays response_only", () => {
+    // Minimal case: the participle with no recipient/quantity. Must not
+    // enroll as a task — the whole-word guard rejects the "search" match.
+    const resolver = new TaskRequestResolver();
+    const route = resolver.classify({
+      userMessage: "Searching.",
+      hasApprovedTaskTemplate: false,
+    });
+    expect(route).toBe<TaskExecutionRoute>("response_only");
+  });
+
+  // Positive control: the bare imperative "Search" DOES match (whole-word
+  // at the imperative position). This proves the negative tests above are
+  // testing the boundary, not a broken verb list.
+  it("FR-18 whole-word boundary: bare 'Search the inbox' DOES match the 'search' verb (positive control)", () => {
+    const resolver = new TaskRequestResolver();
+    const route = resolver.classify({
+      userMessage: "Search the inbox for invoices.",
+      hasApprovedTaskTemplate: false,
+    });
+    expect(route).toBe<TaskExecutionRoute>("task_best_effort");
+  });
 });
