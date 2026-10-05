@@ -195,6 +195,9 @@ export function createChatV2StreamSink(
             images: e.images,
             model: e.model,
             finishReason: e.finishReason,
+            ...(e.reasoningContent !== undefined
+              ? { reasoningContent: e.reasoningContent }
+              : {}),
             promptTokens: e.promptTokens,
             completionTokens: e.completionTokens,
             totalTokens: e.totalTokens,

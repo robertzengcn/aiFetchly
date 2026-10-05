@@ -159,6 +159,59 @@ vi.mock("@/api/aiChatApi", async (importOriginal) => {
     AiChatApi: class {
       openAIChatCompletionStream = mockOpenAIChatCompletionStream;
       listOpenAIModels = mockListOpenAIModels;
+      // Stage B: the loop prefers native iteration; bridge the SAME per-test
+      // callback mock through a live handoff queue so existing stream
+      // scenarios keep driving onChunk.
+      openAIChatCompletionStreamEvents = (
+        request: unknown,
+        options: unknown
+      ) => ({
+        async *[Symbol.asyncIterator]() {
+          const queue: Array<{ type: "chunk"; chunk: unknown }> = [];
+          let done = false;
+          let failure: unknown;
+          let failed = false;
+          const waiters: Array<() => void> = [];
+          const notify = (): void => {
+            while (waiters.length > 0) waiters.shift()!();
+          };
+          const wait = (): Promise<void> =>
+            new Promise((resolve) => {
+              waiters.push(resolve);
+            });
+          void mockOpenAIChatCompletionStream(
+            request as never,
+            (chunk: unknown) => {
+              queue.push({ type: "chunk", chunk });
+              notify();
+            },
+            options as never
+          ).then(
+            () => {
+              done = true;
+              notify();
+            },
+            (err: unknown) => {
+              failure = err;
+              failed = true;
+              notify();
+            }
+          );
+          for (;;) {
+            while (queue.length === 0 && !done && !failed) {
+              await wait();
+            }
+            if (queue.length > 0) {
+              yield queue.shift();
+              continue;
+            }
+            if (failed) {
+              throw failure;
+            }
+            return;
+          }
+        },
+      });
     },
   };
 });

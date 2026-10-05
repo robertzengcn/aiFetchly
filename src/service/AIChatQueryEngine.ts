@@ -3075,6 +3075,7 @@ export class AIChatQueryEngine {
           totalTokens: result.totalTokens,
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
+          reasoningContent: result.reasoningContent,
         });
         const compactAgent = this.compactAgent;
         if (compactAgent) {
