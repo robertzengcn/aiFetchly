@@ -224,11 +224,25 @@ export function registerRagIpcHandlers(): void {
             documentDate?: string;
             customMetadata?: unknown;
           };
-          const parsedMetadata = saveTempFileMetadataSchema.safeParse(metadataTyped);
+          const parsedMetadata =
+            saveTempFileMetadataSchema.safeParse(metadataTyped);
           if (!parsedMetadata.success) {
+            // The staged upload is orphaned the moment this rejection
+            // returns tempFilePath: "" — nobody else owns the file. Delete it
+            // so rejected uploads cannot accumulate under userData/uploads.
+            try {
+              fs.unlinkSync(appDataFilePath);
+            } catch (unlinkError) {
+              log.warn(
+                "Failed to delete staged upload after metadata rejection:",
+                unlinkError
+              );
+            }
             const errorResponse: CommonMessage<SaveTempFileResponse> = {
               status: false,
-              msg: `Invalid upload metadata: ${parsedMetadata.error.issues.map((i) => i.message).join("; ")}`,
+              msg: `Invalid upload metadata: ${parsedMetadata.error.issues
+                .map((i) => i.message)
+                .join("; ")}`,
               data: {
                 tempFilePath: "",
                 databaseSaved: false,
@@ -237,14 +251,18 @@ export function registerRagIpcHandlers(): void {
             };
             (
               event as { sender: { send: (c: string, m: string) => void } }
-            ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+            ).sender.send(
+              SAVE_TEMP_FILE_COMPLETE,
+              JSON.stringify(errorResponse)
+            );
             return;
           }
           const uploadOptions = {
             filePath: appDataFilePath,
             name: originalFileName,
             title:
-              parsedMetadata.data.title || originalFileName.replace(/\.[^/.]+$/, ""),
+              parsedMetadata.data.title ||
+              originalFileName.replace(/\.[^/.]+$/, ""),
             description:
               parsedMetadata.data.description ||
               `Uploaded document: ${originalFileName}`,
