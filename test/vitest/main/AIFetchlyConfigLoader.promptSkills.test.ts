@@ -181,3 +181,22 @@ describe("snapshot → PromptSkillCatalog registration", () => {
     expect(getDefaultPromptSkillCatalog().size()).toBe(0);
   });
 });
+
+describe("AIFetchlyConfigLoader — review ticket P1-4 residual", () => {
+  it("pre-fix backup directories beside a skill are skipped, not registered as twins", async () => {
+    writeSkillDir("video-use", {
+      "SKILL.md":
+        "---\nname: video-use\ndescription: Edit videos\n---\n\n# Usage\n\nSteps.",
+    });
+    // The pre-fix activation shape: <name>.backup-<ts> INSIDE skills/,
+    // carrying a valid SKILL.md with the SAME manifest name.
+    writeSkillDir("video-use.backup-1788088086796", {
+      "SKILL.md":
+        "---\nname: video-use\ndescription: OLD instructions\n---\n\n# Usage\n\nOld.",
+    });
+    const snapshot = await new AIFetchlyConfigLoader(root).scanGlobalRoot();
+    expect(snapshot.promptSkills).toHaveLength(1);
+    const draft = snapshot.promptSkills?.[0] as { name: string };
+    expect(draft.name).toBe("video-use");
+  });
+});

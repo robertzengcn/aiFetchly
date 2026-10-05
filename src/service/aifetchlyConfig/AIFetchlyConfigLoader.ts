@@ -100,6 +100,16 @@ export interface LocalPromptSkillDraft {
   readonly canonicalRoot: string;
   readonly skillMarkdownPath: string;
   readonly contentHash: string;
+  /**
+   * Ticket P1-3: when the scanned directory belongs to a PERSISTED
+   * installation row (matched by activation path), the row's real
+   * installation id and enabled state — so a restart keeps installer
+   * identities stable (enable/disable and invocation recovery target the
+   * same runtime id) and a DISABLED skill stays disabled. Absent when no
+   * row matches (unmanaged portable skills keep the derived identity).
+   */
+  readonly persistedInstallationId?: string;
+  readonly persistedEnabled?: boolean;
 }
 
 const settingsSchema = lazySchema(() =>
@@ -1025,12 +1035,51 @@ export class AIFetchlyConfigLoader {
       return;
     }
 
+    // Ticket P1-3: persisted installer rows for this scope — a scanned
+    // directory that matches a row's activation path keeps the ROW's
+    // installation identity and enabled state instead of a fresh
+    // name-derived one. Best-effort: without DB access, unmanaged identity
+    // derivation stands (pre-restart behavior).
+    let persistedRows: readonly {
+      installationId: string;
+      activationPath: string;
+      enabled: boolean;
+      kind: string;
+    }[] = [];
+    try {
+      const { Token } = await import("@/modules/token");
+      const { USERSDBPATH } = await import("@/config/usersetting");
+      const { SkillInstallationModel } = await import(
+        "@/model/SkillInstallation.model"
+      );
+      const dbpath = new Token().getValue(USERSDBPATH);
+      if (dbpath) {
+        persistedRows = (
+          await new SkillInstallationModel(dbpath).listByScope("user", 0)
+        )
+          .filter((row) => row.kind === "prompt" && Boolean(row.activationPath))
+          .map((row) => ({
+            installationId: row.installationId,
+            activationPath: row.activationPath as string,
+            enabled: row.enabled,
+            kind: row.kind,
+          }));
+      }
+    } catch {
+      /* DB unavailable — derived identities apply */
+    }
+
     for (const entry of entries) {
       // Directories, symlinks, and Windows junctions are all candidates.
       // A symlink to a directory reports isSymbolicLink(); a junction on
       // Windows may report either way depending on Node version, so accept
       // both and let realpath + stat decide.
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      // Ticket P1-4 (residual): pre-existing activation backups written
+      // beside the active skill (pre-fix shape `<name>.backup-<ts>`) carry
+      // a valid SKILL.md and would register as a SECOND skill with the
+      // same manifest name — skip them (new backups live outside skills/).
+      if (/\.backup-\d+$/.test(entry.name)) continue;
 
       if (promptSkills.length >= AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource) {
         diagnostics.push({
@@ -1099,6 +1148,12 @@ export class AIFetchlyConfigLoader {
         contentHash: loaded.file.contentHash,
       });
 
+      // Ticket P1-3: reconcile with the persisted installer row (matched
+      // on the row's recorded activation path, realpath'd the same way).
+      const persistedRow = persistedRows.find(
+        (row) =>
+          row.activationPath === candidateDir || row.activationPath === canonicalRoot
+      );
       promptSkills.push({
         id: `${sourceId}:prompt-skill:${loaded.file.manifest.name}`,
         name: loaded.file.manifest.name,
@@ -1106,6 +1161,12 @@ export class AIFetchlyConfigLoader {
         canonicalRoot,
         skillMarkdownPath: path.join(canonicalRoot, SKILL_MD_FILE),
         contentHash: loaded.file.contentHash,
+        ...(persistedRow
+          ? {
+              persistedInstallationId: persistedRow.installationId,
+              persistedEnabled: persistedRow.enabled,
+            }
+          : {}),
       });
     }
   }

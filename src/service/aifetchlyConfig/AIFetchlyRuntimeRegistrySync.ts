@@ -287,7 +287,13 @@ function applyPromptSkillsFromSnapshot(
   const catalog = getDefaultPromptSkillCatalog();
   const typed = (drafts ?? []) as readonly LocalPromptSkillDraft[];
   const definitions: PromptSkillDefinition[] = typed.map((draft) => {
-    const installationId = stablePromptInstallationId(sourceId, draft.name);
+    // Ticket P1-3: a draft reconciled with a persisted installer row keeps
+    // the ROW's identity and enabled state — restarts no longer mint fresh
+    // name-derived ids (which broke enable/disable targeting and left
+    // DISABLED skills resurrected as enabled).
+    const installationId =
+      draft.persistedInstallationId ??
+      stablePromptInstallationId(sourceId, draft.name);
     const isWorkspace = sourceId.startsWith("workspace:");
     const workspaceId = isWorkspace
       ? Number(sourceId.replace(/^workspace:/, "")) || 0
@@ -307,7 +313,7 @@ function applyPromptSkillsFromSnapshot(
       skillMarkdownPath: draft.skillMarkdownPath,
       contentHash: draft.contentHash,
       manifest: draft.manifest,
-      enabled: true,
+      enabled: draft.persistedEnabled ?? true,
     };
   });
   const { diagnostics } = catalog.replaceSource(sourceId, definitions);

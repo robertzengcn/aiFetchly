@@ -49,6 +49,14 @@ export type ActivationResult =
 
 export const SKILL_ACTIVATION_DIR_NAME = "skills";
 export const OWNERSHIP_FILE = ".aifetchly-install.json";
+/**
+ * Ticket P1-4: activation backups live OUTSIDE the discovery root — a
+ * backup beside the active skill carries a valid SKILL.md, and the config
+ * loader scans the skills directory, so a restart could process the backup
+ * and replace the ACTIVE definition with the old instructions (same
+ * manifest name → same derived runtime id).
+ */
+export const SKILL_BACKUP_DIR_NAME = "skill-backups";
 
 export function resolvePromptSkillRoot(override?: string): string {
   if (override) return override;
@@ -99,10 +107,21 @@ export class SkillActivationService {
       };
     }
 
-    // Back up any existing owned activation for rollback.
+    // Back up any existing owned activation for rollback — OUTSIDE the
+    // discovery root (ticket P1-4: a backup beside the active skill is a
+    // second scannable skill, and the loader could resurrect the old
+    // instructions over the active definition on restart).
     let backupPath: string | null = null;
     if (fs.existsSync(target)) {
-      backupPath = `${target}.backup-${Date.now()}`;
+      const backupDir = path.join(
+        path.dirname(this.skillRoot),
+        SKILL_BACKUP_DIR_NAME
+      );
+      fs.mkdirSync(backupDir, { recursive: true });
+      backupPath = path.join(
+        backupDir,
+        `${path.basename(target)}.backup-${Date.now()}`
+      );
       fs.renameSync(target, backupPath);
     }
 
@@ -210,9 +229,17 @@ export class SkillActivationService {
    * Remove one activation. Managed copies must present ownership metadata;
    * links are unlinked and their EXTERNAL TARGET IS NEVER DELETED.
    * Returns a description of what was removed for user reporting (§24.4).
+   *
+   * Review ticket P1-1: pass `expectedInstallationId` to bind the delete to
+   * the CALLING installation. A same-name replacement leaves the superseded
+   * row pointing at the SAME activationPath; without the identity check,
+   * uninstalling the OLD row deleted the NEW installation's files (the
+   * ownership file only proves "AiFetchly owns this", not "this row owns
+   * it" — the replacement's activation rewrote it with its own id).
    */
   uninstall(
-    activationPath: string
+    activationPath: string,
+    expectedInstallationId?: string
   ): { ok: true; removed: "directory" | "link"; targetPreserved: string | null } | { ok: false; message: string } {
     let stat: fs.Stats;
     try {
@@ -251,6 +278,21 @@ export class SkillActivationService {
       ) as OwnershipMetadata;
       if (metadata.owned !== true) {
         return { ok: false, message: "Ownership metadata invalid." };
+      }
+      // Ticket P1-1: the activation must still belong to the CALLING
+      // installation — a replacement's activation rewrote the ownership
+      // file with its own id, and the superseded row must not delete it.
+      if (
+        expectedInstallationId !== undefined &&
+        metadata.installationId !== expectedInstallationId
+      ) {
+        return {
+          ok: false,
+          message:
+            "This activation was replaced by a different installation; " +
+            "refusing to delete the replacement's files. Uninstall the " +
+            "current installation instead.",
+        };
       }
     } catch {
       return { ok: false, message: "Ownership metadata unreadable." };

@@ -1079,7 +1079,15 @@ export class SkillInstallationModule extends BaseModule {
     dependencyName: string
   ): Promise<InstallSnapshot> {
     let rollbackDetail = "";
-    if (session.installationId) {
+    // Ticket P1-2 (decline path): only roll back when THIS session actually
+    // activated — a held UPDATE session adopted the existing identity but
+    // wrote nothing; declining its dependency must not delete the working
+    // installation's files.
+    const activated = await this.sessionActivatedAnything(
+      events,
+      session.sessionId
+    );
+    if (session.installationId && activated) {
       const entity = await installations.findByInstallationId(
         session.installationId
       );
@@ -1485,6 +1493,32 @@ export class SkillInstallationModule extends BaseModule {
     return this.snapshotFromEntity(session, plan ?? undefined);
   }
 
+  /**
+   * Ticket P1-2: did THIS session reach activation? An UPDATE session
+   * adopts the EXISTING installation's identity at update() time, so a
+   * held update (installing_dependencies) carries a non-null
+   * installationId while having activated nothing — rolling it back would
+   * delete or stale-restore the WORKING installation's files. A session
+   * whose own history shows the activating/verifying transition wrote the
+   * current activation; the installing_dependencies hold exists both
+   * BEFORE (approve-time hold) and AFTER (post-activation deps hold)
+   * activation, so the history is the discriminator. Unreadable history
+   * fails SAFE for the user's files: no rollback.
+   */
+  private async sessionActivatedAnything(
+    events: SkillInstallationEventModel,
+    sessionId: string
+  ): Promise<boolean> {
+    try {
+      const history = await events.listBySession(sessionId);
+      return history.some(
+        (e) => e.toState === "activating" || e.toState === "verifying"
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async cancel(
     sessionId: string,
     conversationId?: string
@@ -1514,11 +1548,15 @@ export class SkillInstallationModule extends BaseModule {
     // activation back IMMEDIATELY (§10.1 / NFR-05) — cancelling must not
     // leave a half-activated skill behind. A rollback failure surfaces
     // rollback_required with the recovery detail instead of cancelling.
-    if (
-      ["activating", "verifying", "installing_dependencies"].includes(
-        session.state
-      )
-    ) {
+    // Ticket P1-2: the installing_dependencies hold fires BOTH before
+    // activation (approve-time hold — an update session here adopted the
+    // existing identity but wrote nothing) and after (post-activation deps
+    // hold); only a session that ACTUALLY activated gets rolled back.
+    const reachedActivation =
+      ["activating", "verifying"].includes(session.state) ||
+      (session.state === "installing_dependencies" &&
+        (await this.sessionActivatedAnything(events, sessionId)));
+    if (reachedActivation) {
       let rollbackDetail = "";
       if (session.installationId) {
         const { installations } = await this.getModels();
@@ -2494,6 +2532,46 @@ export class SkillInstallationModule extends BaseModule {
       return { ok: false, message: "Unknown installation." };
     }
 
+    // Ticket P1-1: verify the activation still belongs to THIS
+    // installation BEFORE any mutation — a same-name replacement leaves
+    // the superseded row pointing at the replacement's files, and the old
+    // row must neither delete them nor unregister the live catalog entry.
+    const activation = new SkillActivationService();
+    if (
+      entity.activationMode === "symbolic-link" ||
+      entity.activationMode === "junction"
+    ) {
+      // Links carry no ownership file; bind to the recorded link target —
+      // a replacement re-pointed the link at ITS source.
+      try {
+        const recorded = (
+          JSON.parse(entity.metadataJson ?? "{}") as {
+            linkedTargetPath?: string;
+          }
+        ).linkedTargetPath;
+        const current = fs.realpathSync(entity.activationPath);
+        if (recorded && fs.realpathSync(recorded) !== current) {
+          return {
+            ok: false,
+            message:
+              "This link was replaced by a different installation; " +
+              "refusing to remove the replacement's link. Uninstall the " +
+              "current installation instead.",
+          };
+        }
+      } catch {
+        /* broken/missing link or unreadable metadata — the service's own
+         * guards govern removal below */
+      }
+    }
+    const removed = activation.uninstall(
+      entity.activationPath,
+      input.installationId
+    );
+    if (!removed.ok) {
+      return { ok: false, message: removed.message };
+    }
+
     // Disable discovery first, then deactivate any durable invocations so
     // no conversation keeps following instructions from the removed skill.
     getDefaultPromptSkillCatalog().remove(
@@ -2502,12 +2580,6 @@ export class SkillInstallationModule extends BaseModule {
     const deactivatedInvocations = await this.deactivateInvocations(
       input.installationId
     );
-
-    const activation = new SkillActivationService();
-    const removed = activation.uninstall(entity.activationPath);
-    if (!removed.ok) {
-      return { ok: false, message: removed.message };
-    }
 
     let secretsDeleted = 0;
     if (input.deleteSecrets !== false) {
@@ -2682,23 +2754,6 @@ export class SkillInstallationModule extends BaseModule {
       }
     }
 
-    const result = await activation.activate({
-      sourceRoot,
-      skillName: selected.name,
-      mode: isLinkedMode ? ("linked" as const) : ("managed-copy" as const),
-      contentHash: plan.source.contentHash,
-      installationId: sessionId,
-    });
-    if (!result.ok) {
-      await this.fail(sessions, events, sessionId, result.code, result.message);
-      return this.errorSnapshot(
-        "failed",
-        result.code,
-        result.message,
-        sessionId
-      );
-    }
-
     // Persist the installation record. The identity came from the session
     // (created at prepare) so credentials stored during awaiting_secret
     // bind to the SAME installation (review C3). Multi-candidate installs
@@ -2712,6 +2767,28 @@ export class SkillInstallationModule extends BaseModule {
     // An override identity must NOT sync back onto the session (the
     // session keeps its own id; the override rows stand alone).
     const syncSessionIdentity = identityOverride === undefined;
+
+    // Ticket P1-1: the ownership file must carry the INSTALLATION identity
+    // (it previously recorded the session id, so identity-bound uninstall
+    // could never match). Resolving the identity BEFORE activation keeps
+    // the ownership file, the installation row, and the catalog entry in
+    // agreement.
+    const result = await activation.activate({
+      sourceRoot,
+      skillName: selected.name,
+      mode: isLinkedMode ? ("linked" as const) : ("managed-copy" as const),
+      contentHash: plan.source.contentHash,
+      installationId,
+    });
+    if (!result.ok) {
+      await this.fail(sessions, events, sessionId, result.code, result.message);
+      return this.errorSnapshot(
+        "failed",
+        result.code,
+        result.message,
+        sessionId
+      );
+    }
     const entity = new SkillInstallationEntity();
     entity.installationId = installationId;
     entity.name = selected.name;
@@ -2784,6 +2861,32 @@ export class SkillInstallationModule extends BaseModule {
           );
           session.installationId = priorRow.installationId;
         }
+        // Ticket P1-1: the freshly written ownership file still names the
+        // PRE-adopted identity — rewrite it so identity-bound uninstall
+        // matches the row that now owns the activation. Managed copies
+        // only (links carry no ownership file).
+        if (
+          entity.activationMode !== "symbolic-link" &&
+          entity.activationMode !== "junction"
+        ) {
+          try {
+            const ownershipPath = path.join(
+              result.activationPath,
+              ".aifetchly-install.json"
+            );
+            const ownership = JSON.parse(
+              fs.readFileSync(ownershipPath, "utf-8")
+            ) as { owned: boolean; installationId: string };
+            ownership.installationId = priorRow.installationId;
+            fs.writeFileSync(
+              ownershipPath,
+              JSON.stringify(ownership, null, 2),
+              "utf-8"
+            );
+          } catch {
+            /* unreadable/unwritable ownership — uninstall's guards govern */
+          }
+        }
       }
     } else {
       // Audit finding 3: an UPDATE session carries the EXISTING identity
@@ -2815,6 +2918,18 @@ export class SkillInstallationModule extends BaseModule {
       row.enabled = false;
       try {
         await installations.save(row);
+        // Ticket P1-5: unregister the superseded runtime's catalog entry
+        // BEFORE the replacement registers. The two share one SKILL.md
+        // real path, and the catalog's cross-source real-path dedup lets
+        // the OLD entry win by scope precedence — without this removal the
+        // replacement never registers while the session still reports
+        // ready with invocation pointed at the stale entry.
+        getDefaultPromptSkillCatalog().remove(
+          `prompt:user:${row.installationId}`
+        );
+        // FR-19 parity with disable(): conversations that invoked the
+        // superseded runtime stop following its instructions.
+        await this.deactivateInvocations(row.installationId);
         await this.appendEvent(
           events,
           sessionId,
@@ -2935,11 +3050,17 @@ export class SkillInstallationModule extends BaseModule {
       manifest: loaded.file.manifest,
       enabled: true,
     };
-    getDefaultPromptSkillCatalog().replaceSource(
+    // Ticket P1-5: registration must be VERIFIED, not assumed — a same-path
+    // twin from a stale entry (scope-precedence loser) or a catalog cap can
+    // refuse the new definition while the session would still report ready.
+    const result = getDefaultPromptSkillCatalog().replaceSource(
       `installer:${installationId}`,
       [definition]
     );
-    return definition;
+    const actuallyRegistered = result.registered.some(
+      (entry) => entry.runtimeId === definition.runtimeId
+    );
+    return actuallyRegistered ? definition : null;
   }
 
   private async setInstallationId(

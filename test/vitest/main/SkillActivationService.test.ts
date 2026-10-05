@@ -220,3 +220,77 @@ describe("skill name slugs (shared normalizeFallbackName)", () => {
     expect(normalizeFallbackName("../etc/passwd", "")).toBe("etc-passwd");
   });
 });
+
+describe("SkillActivationService — review tickets P1-1/P1-4", () => {
+  it("uninstall is identity-bound: a superseded installation cannot delete its replacement's files (P1-1)", async () => {
+    const src = writeSource();
+    const service = new SkillActivationService(skillRoot);
+    // First installation activates at the shared target.
+    const first = await service.activate({
+      sourceRoot: src,
+      skillName: "video-use",
+      mode: "managed-copy",
+      contentHash: "hash-1",
+      installationId: "inst-old",
+    });
+    expect(first.ok).toBe(true);
+    // A DIFFERENT installation replaces it (same name → same target).
+    const replacement = await service.activate({
+      sourceRoot: src,
+      skillName: "video-use",
+      mode: "managed-copy",
+      contentHash: "hash-2",
+      installationId: "inst-new",
+    });
+    expect(replacement.ok).toBe(true);
+    if (!first.ok || !replacement.ok) return;
+
+    // Uninstalling the OLD identity is REFUSED — the ownership file now
+    // names the replacement, and the old row must not delete its files.
+    const refused = service.uninstall(
+      replacement.activationPath,
+      "inst-old"
+    );
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.message).toContain("replaced by a different installation");
+    }
+    expect(fs.existsSync(path.join(replacement.activationPath, "SKILL.md"))).toBe(true);
+
+    // Uninstalling the CURRENT identity succeeds.
+    const removed = service.uninstall(replacement.activationPath, "inst-new");
+    expect(removed.ok).toBe(true);
+  });
+
+  it("backups land OUTSIDE the discovery root (P1-4)", async () => {
+    const src = writeSource();
+    const service = new SkillActivationService(skillRoot);
+    const first = await service.activate({
+      sourceRoot: src,
+      skillName: "video-use",
+      mode: "managed-copy",
+      contentHash: "hash-1",
+      installationId: "inst-b",
+    });
+    expect(first.ok).toBe(true);
+    const second = await service.activate({
+      sourceRoot: src,
+      skillName: "video-use",
+      mode: "managed-copy",
+      contentHash: "hash-2",
+      installationId: "inst-b",
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.backupPath).not.toBeNull();
+    // The backup must NOT be inside the skills root (a scannable twin).
+    const backup = second.backupPath as string;
+    expect(backup.startsWith(skillRoot + path.sep)).toBe(false);
+    expect(fs.existsSync(backup)).toBe(true);
+    // ... and rollback still restores from the new location.
+    expect(service.rollback(second.activationPath, backup).ok).toBe(true);
+    expect(
+      fs.existsSync(path.join(second.activationPath, "SKILL.md"))
+    ).toBe(true);
+  });
+});
