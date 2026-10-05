@@ -41,6 +41,31 @@ export const HARD_CAPS = {
 } as const;
 
 /**
+ * Clamp budget limits to the hard caps (PRD §9, FR-08). Trusted task
+ * configuration may tune limits, but never above the hard cap — a malformed
+ * or hostile task config that sets maxContinuations=1000 collapses to 10.
+ * Applies to the two fields that have hard caps; the rest pass through
+ * unchanged (they are already bounded by their manual defaults and have no
+ * ceiling). The result is what gets frozen into ledger.policy_limits_json at
+ * createExecution time so the persisted budget can never exceed the caps,
+ * even if the in-memory TaskRunBudget is later tampered with.
+ *
+ * GAP-S1: HARD_CAPS was previously declared but no function consumed it —
+ * the caps were advisory, not enforced. This makes them enforced at the
+ * freeze boundary.
+ */
+export function clampToHardCaps(limits: BudgetLimitsInput): BudgetLimitsInput {
+  return {
+    ...limits,
+    maxContinuations: Math.min(limits.maxContinuations, HARD_CAPS.maxContinuations),
+    maxActiveRuntimeMs: Math.min(
+      limits.maxActiveRuntimeMs,
+      HARD_CAPS.maxActiveRuntimeMs
+    ),
+  };
+}
+
+/**
  * Coerce a task-configured limit to a non-negative safe integer per
  * technical-design §9 ("Validate all configured limits as positive safe
  * integers and enforce hard caps"). NaN, non-finite, non-integer, and

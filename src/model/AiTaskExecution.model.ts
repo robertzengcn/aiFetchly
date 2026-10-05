@@ -4,6 +4,12 @@ import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
 import { assertNotWorker } from "@/model/workerDbGuard";
 import { randomUUID } from "node:crypto";
+import {
+  clampToHardCaps,
+} from "@/service/aiTaskExecution/budgetDefaults";
+import type {
+  BudgetLimitsInput,
+} from "@/service/aiTaskExecution/budgetDefaults";
 import type {
   TaskExecutionOrigin,
   TaskExecutionRoute,
@@ -18,6 +24,12 @@ export interface CreateExecutionInput {
   readonly origin: TaskExecutionOrigin;
   readonly route: TaskExecutionRoute;
   readonly completionOwner: "standalone" | "goal";
+  /**
+   * Budget limits to freeze into ledger.policy_limits_json at creation time
+   * (PRD §9, GAP-S1). Clamped to HARD_CAPS before persistence so a malformed
+   * or hostile task config can never produce an unbounded budget ledger.
+   */
+  readonly budgetLimits: BudgetLimitsInput;
 }
 
 export interface FinalizeInput {
@@ -105,7 +117,13 @@ export class AiTaskExecutionModel extends BaseDb {
     return this.sqliteDb.connection.transaction(async (manager) => {
       const ledger = new AiTaskExecutionLedgerEntity();
       ledger.ledger_id = ledgerId;
-      ledger.policy_limits_json = "{}";
+      // GAP-S1: freeze the clamped budget limits into policy_limits_json so
+      // the persisted ledger never exceeds HARD_CAPS, even if the in-memory
+      // TaskRunBudget is later tampered with. Previously this wrote "{}",
+      // losing the budget entirely.
+      ledger.policy_limits_json = JSON.stringify(
+        clampToHardCaps(input.budgetLimits)
+      );
       ledger.consumed_continuations = 0;
       ledger.consumed_provider_attempts = 0;
       ledger.consumed_tool_executions = 0;

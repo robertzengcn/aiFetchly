@@ -126,6 +126,7 @@ export class TaskExecutionCoordinator {
       origin: input.origin,
       route: input.route,
       completionOwner: input.completionOwner,
+      budgetLimits: input.budgetLimits,
     });
 
     const budget = new TaskRunBudget(input.budgetLimits);
